@@ -149,15 +149,38 @@ CFs with delta-based state (e.g. `addr_balance`, `script_info`, `token_holders`,
 - Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
 - Rollback replays entries for `block > rollback_to` in reverse order
 
+The **outpoint reverse index** in `CF_STATS_SPORE` (`outpoint -> id` and
+`id -> outpoint`, written by Spore, did:ckb, `.bit Cell` and `.cell` through
+`BatchWriter::put_object_outpoint_rows`) belongs to this column, not to the
+repair stage. The repair cleans those rows only for entries it can still see
+with `created_at_block > rollback_to`: a rolled-back mint's entry is already
+gone by then (undo replay runs first), and a rolled-back TRANSFER leaves the
+item alive, so it is never a delete candidate while its stale outpoint row
+remains. See POSTMORTEM PROTO-010.
+
 ### Direct Deletion (for activity/event CFs)
 
 Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
 
 - `CF_ACTIVITIES`, `CF_ADDR_TXS` — scan all keys, delete where `block_num > rollback_to`
+- `CF_ADDR_TXS_BY_PREFIX` — same, and with tx-contexts available the exact keys are derived from
+  the rolled-back `TxActions` rows' `LockPrefix` participants (cells cannot enumerate a party that
+  holds none); a missing row aborts the rollback
 - `CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES` — same approach
 - Stats CFs (`ACTIVITY_DAILY`, `ACTIVITY_HOURLY` prefixes in `CF_STATS_CHAIN`) — deleted via `should_delete_stats_for_replay`
 
 No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
+
+### Prefix Participation Counters (reversed by deleted rows)
+
+`addr_prefix_stats` counts the transactions a protocol named a 20-byte lock-hash prefix in without
+that party holding a cell. It carries **no** undo pre-image. Stage 8c' counts the
+`addr_txs_by_prefix` rows it deletes per prefix, subtracts that from the counter, and asserts the
+result **equals** the rows that survive; a counter reaching zero has its row deleted, and a prefix
+with deleted rows but no counter row aborts the rollback. This is the same contract
+`addr_balance.txs_count` uses against `addr_txs`, and it is the only exact one: a live batch spans
+many blocks, so a pre-image recorded on one block of the batch is not replayed when the fork point
+lands on a later block of that same batch, while the rows written after it are still deleted.
 
 ### Entity Statistics (undo-log owned, never swept)
 

@@ -13,6 +13,8 @@ vi.mock('@/lib/api', () => ({
     getDidCkbItemDetail: vi.fn(),
     getBitCellItemActivities: vi.fn(),
     getBitCellItemDetail: vi.fn(),
+    getDotCellItemActivities: vi.fn(),
+    getDotCellItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getTransactionDetail: vi.fn(),
@@ -445,6 +447,79 @@ describe('renderRawPage', () => {
       cursor: undefined,
       limit: 20,
     });
+  });
+
+  it('renders .cell item raw with default profile', async () => {
+    vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 18_000_000,
+      createdAtTx: `0x${'7'.repeat(64)}`,
+      layoutVersion: 3,
+      namespaceArgs: `0x${'5'.repeat(64)}`,
+      expiredAt: 1_821_507_678,
+      state: 'active',
+      graceEndsAt: 1_824_099_678,
+      owner: {
+        hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+        lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+        address: 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        scriptName: 'SECP256K1_BLAKE160',
+      },
+      manager: {
+        hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+        lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+        address: 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        scriptName: 'SECP256K1_BLAKE160',
+      },
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+      parent: null,
+      children: [],
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    });
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xactdotcell',
+          blockNumber: 18_000_001,
+          txIndex: 0,
+          timestamp: '2026-02-23T00:00:00Z',
+          actions: ['mint'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const result = await renderRawPage({
+      page: parseRawSourcePath('/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.data?.dotcellItem?.name).toBe('support.cell');
+    expect(result.body.data?.dotcellItem?.owner.hashPrefix).toBe(
+      '0x57d926a44d83fc13b21ce037b1e31f4223e3c867'
+    );
+    expect(result.body.data?.dotcellActivities?.data[0]?.actions).toEqual(['mint']);
+    expect(api.getDotCellItemDetail).toHaveBeenCalledWith(
+      '0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+    );
+    expect(api.getDotCellItemActivities).toHaveBeenCalledWith(
+      '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      {
+        action: undefined,
+        cursor: undefined,
+        limit: 20,
+      }
+    );
   });
 
   it('renders mnft item raw with default profile', async () => {

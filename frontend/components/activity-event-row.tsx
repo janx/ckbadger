@@ -11,6 +11,7 @@ import {
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
+import { ParticipantRefView } from '@/components/participant-ref';
 import type {
   Activity,
   GlobalActivity,
@@ -536,13 +537,6 @@ export function ActivityEventGroup({
 // Global activity helpers — tx-centric layered view for multi-participant
 // ---------------------------------------------------------------------------
 
-function formatAddress(address: string): string {
-  if (address.startsWith('ckb1') || address.startsWith('ckt1')) {
-    return `${address.slice(0, 8)}...${address.slice(-6)}`;
-  }
-  return truncateHash(address);
-}
-
 /** Inline item delta: compact signed amount + label, for participant summary lines. */
 function InlineItemDelta({ item }: { item: ItemDelta }) {
   switch (item.kind) {
@@ -594,24 +588,13 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
   }
 }
 
-/** Single participant line: address + CKB delta + item deltas (L1 + L2). */
+/** Single participant line: party + CKB delta + item deltas (L1 + L2). */
 export function ParticipantLine({ participant }: { participant: ParticipantInfo }) {
   const showCkb = participant.ckbDelta !== '0';
-  const addr = participant.address;
-  const isCkbAddr = addr.startsWith('ckb1') || addr.startsWith('ckt1');
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <Link
-        href={`/address/${addr}`}
-        className={cn(
-          'shrink-0 font-mono text-xs transition-colors',
-          isCkbAddr ? 'text-jade/80 hover:text-jade' : 'text-text-dim hover:text-aqua'
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {formatAddress(addr)}
-      </Link>
+      <ParticipantRefView participant={participant} compact />
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
         {showCkb && <CkbDelta delta={participant.ckbDelta} />}
         {participant.itemDeltas.map((item, i) => (

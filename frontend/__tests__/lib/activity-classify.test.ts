@@ -15,6 +15,9 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     participants: overrides.participants ?? [
       {
         address: 'ckb1qtest',
+        lockHash: '0xaa',
+        lockHashPrefix: null,
+        roles: [],
         ckbDelta: '0',
         usedDelta: '0',
         itemDeltas: [],
@@ -72,6 +75,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [
@@ -97,6 +103,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [{ kind: 'object', objectId: '0xspore', delta: 1 }],
@@ -114,6 +123,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [{ kind: 'identity', identityId: '0xdotbit', delta: 1 }],
@@ -148,6 +160,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '-50000000000',
             usedDelta: '0',
             itemDeltas: [],
@@ -168,6 +183,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [
@@ -187,6 +205,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [
@@ -231,6 +252,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [
@@ -289,6 +313,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [
@@ -309,6 +336,9 @@ describe('classifyActivity', () => {
         participants: [
           {
             address: 'ckb1qtest',
+            lockHash: '0xaa',
+            lockHashPrefix: null,
+            roles: [],
             ckbDelta: '-50000000000',
             usedDelta: '0',
             itemDeltas: [],

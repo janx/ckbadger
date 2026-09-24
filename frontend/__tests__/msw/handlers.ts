@@ -568,6 +568,61 @@ export const handlers = [
     });
   }),
 
+  http.get(`${API_BASE}/assets/identities/dotcell/ring`, () => {
+    return HttpResponse.json({
+      namespaceArgs: `0x${'5'.repeat(64)}`,
+      rootOutPoint: { txHash: `0x${'4'.repeat(64)}`, index: 0 },
+      firstId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      liveCount: 1,
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/identities/dotcell/items/:idOrName`, () => {
+    return HttpResponse.json({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 100000,
+      createdAtTx: `0x${'7'.repeat(64)}`,
+      layoutVersion: 3,
+      namespaceArgs: `0x${'5'.repeat(64)}`,
+      expiredAt: 1821507678,
+      state: 'active',
+      graceEndsAt: 1824099678,
+      // The chain stores a 20-byte lock-hash prefix; this one resolves to no
+      // known lock, which is what the UI must render as a prefix.
+      owner: {
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      manager: {
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      parent: null,
+      children: [],
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    });
+  }),
+
+  http.get(`${API_BASE}/addresses/:addr/dotcell-names`, () => {
+    return HttpResponse.json({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+  }),
+
   // --- Network peer crawler mock handlers ---
 
   http.get(`${API_BASE}/network/summary`, () => {

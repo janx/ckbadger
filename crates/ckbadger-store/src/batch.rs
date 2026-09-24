@@ -765,6 +765,56 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_addr_txs(), &key, &encoded);
     }
 
+    /// Address-tx row for a party the protocol named by a 20-byte lock-hash prefix.
+    ///
+    /// Same append-only semantics as [`Self::put_addr_tx`]; rollback deletes the
+    /// row rather than restoring a pre-image.
+    pub fn put_addr_tx_by_prefix(
+        &mut self,
+        prefix: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        tx_hash: &[u8],
+        value: &AddrTxValue,
+    ) {
+        let key = keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx, tx_hash);
+        let encoded = bincode::serialize(value).expect("serialize AddrTxValue");
+        self.put_cf(self.store.cf_addr_txs_by_prefix(), &key, &encoded);
+    }
+
+    pub fn put_addr_prefix_stats(&mut self, prefix: &[u8], stats: &AddrPrefixStats) {
+        assert_eq!(
+            prefix.len(),
+            20,
+            "put_addr_prefix_stats expects a 20-byte prefix"
+        );
+        let encoded = bincode::serialize(stats).expect("serialize AddrPrefixStats");
+        self.put_cf(self.store.cf_addr_prefix_stats(), prefix, &encoded);
+    }
+
+    /// Index one `.cell` name under its 20-byte owner prefix. The value is
+    /// empty: the row IS the fact.
+    pub fn put_dotcell_name_by_owner(&mut self, owner20: &[u8], name_id: &[u8]) {
+        let key = keys::encode_dotcell_name_by_owner_key(owner20, name_id);
+        self.put_cf(self.store.cf_dotcell_name_by_owner(), key, []);
+    }
+
+    pub fn delete_dotcell_name_by_owner(&mut self, owner20: &[u8], name_id: &[u8]) {
+        let key = keys::encode_dotcell_name_by_owner_key(owner20, name_id);
+        self.delete_cf(self.store.cf_dotcell_name_by_owner(), key);
+    }
+
+    /// Record a `.cell` namespace's uniqueness-ring root cell.
+    pub fn put_dotcell_ring(&mut self, namespace_args: &[u8], root: &DotCellRingRoot) {
+        assert_eq!(
+            namespace_args.len(),
+            20,
+            "put_dotcell_ring expects 20-byte namespace args"
+        );
+        let encoded = bincode::serialize(root).expect("serialize DotCellRingRoot");
+        self.put_cf(self.store.cf_dotcell_ring(), namespace_args, &encoded);
+    }
+
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
         let key = keys::encode_reorg_undo_log_key(block_num, seq);
         let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
@@ -1137,6 +1187,20 @@ impl<'a> StoreBatch<'a> {
     pub fn put_identity_owner_count(&mut self, collection_id: &[u8], lock_hash: &[u8], count: i64) {
         let key = keys::encode_identity_owner_key(collection_id, lock_hash);
         self.put_cf(self.store.cf_stats_identity(), key, count.to_le_bytes());
+    }
+
+    /// Per-owner live count for a collection whose chain-level owner is a
+    /// 20-byte lock-hash prefix (`.cell`). Same CF and same 64-byte key width
+    /// as `put_identity_owner_count`, but the owner segment is explicitly
+    /// `owner20 ‖ 0^12` rather than a lock hash.
+    pub fn put_identity_owner20_count(&mut self, collection_id: &[u8], owner20: &[u8], count: i64) {
+        let key = keys::encode_identity_owner20_key(collection_id, owner20);
+        self.put_cf(self.store.cf_stats_identity(), key, count.to_le_bytes());
+    }
+
+    pub fn delete_identity_owner20(&mut self, collection_id: &[u8], owner20: &[u8]) {
+        let key = keys::encode_identity_owner20_key(collection_id, owner20);
+        self.delete_cf(self.store.cf_stats_identity(), key);
     }
 
     pub fn delete_identity_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {

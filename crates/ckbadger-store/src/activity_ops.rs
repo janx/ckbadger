@@ -287,11 +287,13 @@ impl CkbadgerStore {
         match filter {
             None | Some("all") => true,
             Some(f) => {
-                // Find the participant matching this lock_hash
-                let participant = actions
-                    .participants
-                    .iter()
-                    .find(|p| p.lock_hash == lock_hash);
+                // Find the participant matching this lock_hash. One matcher for
+                // both participant identities: a full lock hash compares whole,
+                // a protocol-named 20-byte prefix compares its first 20 bytes.
+                let Ok(lock) = <&[u8; 32]>::try_from(lock_hash) else {
+                    return false;
+                };
+                let participant = actions.participants.iter().find(|p| p.id.matches(lock));
                 let Some(p) = participant else {
                     // No matching participant — should not happen if data is consistent,
                     // but don't match any filter if participant is missing.
@@ -351,11 +353,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
+                id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 100,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         }
     }
@@ -526,11 +529,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: lock.clone(),
+                id: ParticipantId::lock(&lock).unwrap(),
                 ckb_delta: 50,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: TAG_TOKEN,
+                roles: 0,
             }],
         };
         batch.put_tx_actions(&matching_actions);
@@ -567,5 +571,47 @@ mod tests {
             .list_activities(&[0xAA; 16], 10, None, None)
             .unwrap_err();
         assert!(err.to_string().contains("32-byte lock_hash"));
+    }
+}
+
+#[cfg(test)]
+mod prefix_participant_filter_tests {
+    use crate::store::CkbadgerStore;
+    use crate::types::{ParticipantDelta, ParticipantId, TxActions, TAG_IDENTITY};
+
+    #[test]
+    fn matches_activity_filter_accepts_prefix_participant() {
+        let lock = [0xAAu8; 32];
+        let mut prefix = [0u8; 20];
+        prefix.copy_from_slice(&lock[..20]);
+        let actions = TxActions {
+            tx_hash: vec![0xA1; 32],
+            block_hash: vec![0xBB; 32],
+            block_number: 10,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::LockPrefix(prefix),
+                ckb_delta: 0,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: TAG_IDENTITY,
+                roles: 0,
+            }],
+        };
+        assert!(CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock,
+            Some("identity")
+        ));
+        assert!(!CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock,
+            Some("token")
+        ));
     }
 }

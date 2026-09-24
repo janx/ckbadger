@@ -2341,6 +2341,54 @@ format and write semantics are unchanged.
 
 ---
 
+### PROTO-010: An outpoint index the rollback could never reach
+
+**Date**: 2026-09-24
+
+**Symptom**: After a reorg, `CF_STATS_SPORE`'s outpoint reverse index kept rows
+for outpoints that no longer exist. Two shapes: a rolled-back mint or identity
+registration left both its `outpoint -> id` and `id -> outpoint` rows behind,
+and a rolled-back **transfer** of an item that survived the rollback left the
+transfer's rows pointing at a transaction that had been undone. Every per-item
+lifecycle feed reads that index (`/assets/objects/{id}/activities` and the
+three identity item feeds), as does the DOB decoder when it picks an outpoint
+to decode, so a rolled-back transaction stayed in an item's history and could
+be handed to the decoder as a live cell.
+
+**Root Cause**: Spore, did:ckb and `.bit Cell` wrote those rows with no undo
+pre-image, on the assumption that the rollback's identity/object repair stage
+would clean them. That stage scans `CF_IDENTITY_DATA` / `CF_SPORE_DATA` and
+cleans the reverse index only for entries it can still see with
+`created_at_block > rollback_to` — and neither failing case has that shape.
+Production replays the undo log FIRST (`db/writer/reorg.rs:153-160`), which has
+already deleted a rolled-back mint's entry, so the repair never sees it; and a
+rolled-back transfer leaves the item alive with an unchanged
+`created_at_block`, so it is not a delete candidate at all. The structural
+rollback's own `CF_STATS_SPORE` sweep only covers the cluster-owner prefix, not
+the outpoint prefixes. `.cell` had been given pre-images when it was added, so
+the two conventions sat side by side in one CF.
+
+**Fix**: One `BatchWriter::put_object_outpoint_rows` records a pre-image for
+each of the two rows and then writes them; all four protocols call it, and
+`.cell`'s private copy is deleted. A failed pre-image read propagates rather
+than being read as "the row did not exist". Bulk build is unchanged: it writes
+no undo journal because a from-genesis build is never rolled back.
+
+**Testing**: Four regressions drive the real live write path and then the real
+rollback sequence (`rollback_via_undo_log` then
+`rollback_to_block_with_tx_contexts`, in that order): a rolled-back did:ckb
+registration, a rolled-back `.bit Cell` registration and a rolled-back Spore
+mint each leave no row in either direction; a rolled-back Spore TRANSFER leaves
+exactly the mint's outpoint, with the spore still live under its original
+owner. The fourth is the case the repair stage can never reach.
+
+**Lesson**: "Another stage cleans this up" is a claim about ordering and about
+which rows that stage can see. Here it was wrong on both counts, and the
+surviving-item case was invisible to every existing test because those tests
+only ever rolled back the block that created something.
+
+---
+
 ### API-014: A size that could not reproduce its own fee rate
 
 **Date**: 2026-08-04

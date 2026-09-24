@@ -16,6 +16,13 @@ export function resolveSearchRoute(input: string): string | null {
     return '/identities/did:ckb';
   }
 
+  // The `.cell` COLLECTION only. A `.cell` NAME resolves through the API —
+  // its id is blake2b(label)[..20], which the browser cannot derive, so
+  // routing one here would be a guess.
+  if (bodyLower === '.cell' || bodyLower === 'dotcell') {
+    return '/identities/dotcell';
+  }
+
   if (intent.prefix === 'block') {
     if (/^[0-9]+$/.test(body)) return `/blocks/${body}`;
     const hash = normalizeHash32(body);

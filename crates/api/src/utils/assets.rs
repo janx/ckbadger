@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
     ObjectStandard, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -215,6 +215,9 @@ pub fn resolve_collection_standard(collection_id: &[u8], agg_standard: &str) -> 
     if collection_id == BIT_CELL_SENTINEL_COLLECTION {
         return "bit_cell".to_string();
     }
+    if collection_id == DOTCELL_SENTINEL_COLLECTION {
+        return "dotcell".to_string();
+    }
     agg_standard.to_string()
 }
 
@@ -249,6 +252,32 @@ mod tests {
     use super::*;
     use ckbadger_store::types::{ObjectEntry, ObjectExtra};
     use tempfile::TempDir;
+
+    /// Identity collections reach this helper with `ObjectStandard::Spore` as
+    /// a placeholder — `ObjectStandard` has no identity variants — so every
+    /// identity sentinel needs its own arm or the collection reports itself as
+    /// a Spore collection, and the inventory's standard filter matches nothing.
+    #[test]
+    fn every_identity_sentinel_resolves_to_its_own_standard() {
+        use ckbadger_store::types::{
+            BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+            DOTCELL_SENTINEL_COLLECTION,
+        };
+        for (sentinel, expected) in [
+            (DOTBIT_SENTINEL_COLLECTION, "dotbit"),
+            (BIT_CELL_SENTINEL_COLLECTION, "bit_cell"),
+            (DID_CKB_SENTINEL_COLLECTION, "did_ckb"),
+            (DOTCELL_SENTINEL_COLLECTION, "dotcell"),
+        ] {
+            assert_eq!(
+                resolve_collection_standard(&sentinel, "spore"),
+                expected,
+                "sentinel {expected}"
+            );
+        }
+        // A real object collection keeps the aggregate's own standard.
+        assert_eq!(resolve_collection_standard(&[0x11; 32], "m-nft"), "m-nft");
+    }
 
     fn test_store() -> (TempDir, CkbadgerStore) {
         let dir = TempDir::new().unwrap();

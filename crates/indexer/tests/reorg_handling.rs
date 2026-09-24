@@ -4,7 +4,7 @@ use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, HourlyStats, ParticipantDelta,
-    ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
+    ParticipantId, ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
 };
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
@@ -465,11 +465,12 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: lock_hash.clone(),
+                id: ParticipantId::lock(&lock_hash).unwrap(),
                 ckb_delta: block as i128 * 100_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
         domain_batch.put_tx_actions(&tx_actions);
@@ -1053,11 +1054,12 @@ fn test_rollback_deletes_multi_participant_activities() {
         type_calls: vec![],
         lock_calls: vec![],
         participants: vec![ParticipantDelta {
-            lock_hash: lock_a.clone(),
+            id: ParticipantId::lock(&lock_a).unwrap(),
             ckb_delta: -5_000_000_000,
             used_delta: 0,
             item_deltas: vec![],
             tags: 0,
+            roles: 0,
         }],
     };
     batch.put_tx_actions(&actions_2);
@@ -1084,18 +1086,20 @@ fn test_rollback_deletes_multi_participant_activities() {
         lock_calls: vec![],
         participants: vec![
             ParticipantDelta {
-                lock_hash: lock_a.clone(),
+                id: ParticipantId::lock(&lock_a).unwrap(),
                 ckb_delta: -10_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
             ParticipantDelta {
-                lock_hash: lock_b.clone(),
+                id: ParticipantId::lock(&lock_b).unwrap(),
                 ckb_delta: 10_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
         ],
     };
@@ -1130,18 +1134,20 @@ fn test_rollback_deletes_multi_participant_activities() {
         lock_calls: vec![],
         participants: vec![
             ParticipantDelta {
-                lock_hash: lock_a.clone(),
+                id: ParticipantId::lock(&lock_a).unwrap(),
                 ckb_delta: 5_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
             ParticipantDelta {
-                lock_hash: lock_b.clone(),
+                id: ParticipantId::lock(&lock_b).unwrap(),
                 ckb_delta: -5_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
         ],
     };
@@ -1586,11 +1592,12 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         participants: participants
             .iter()
             .map(|lh| ParticipantDelta {
-                lock_hash: lh.to_vec(),
+                id: ParticipantId::lock(lh).unwrap(),
                 ckb_delta: 100_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             })
             .collect(),
     };
@@ -1668,7 +1675,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         );
         for p in &row.participants {
             let mut lh = [0u8; 32];
-            lh.copy_from_slice(&p.lock_hash);
+            lh.copy_from_slice(p.id.as_bytes());
             day_addrs.insert(lh);
             hour_addrs
                 .entry(hour_key.to_string())
@@ -1883,5 +1890,218 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
         store.get_latest_dao_statistics().unwrap().is_some(),
         "rollback must not delete dao_latest_stats: the post-rollback refresh \
          overwrites it in place"
+    );
+}
+
+// ── Phase 1a: protocol-named participants ────────────────────────────────
+
+/// The 20-byte prefix a protocol named in the rolled-back block.
+const ROLLED_BACK_PREFIX: [u8; 20] = [0x77; 20];
+
+fn prefix_participant_actions(
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+    lock: &[u8],
+) -> TxActions {
+    TxActions {
+        tx_hash: tx_hash.to_vec(),
+        block_hash: make_header(block_num).hash,
+        block_number: block_num,
+        tx_index: tx_idx,
+        timestamp: 1_000_000 + block_num * 1000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::lock(lock).unwrap(),
+                ckb_delta: -1,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::LockPrefix(ROLLED_BACK_PREFIX),
+                ckb_delta: 0,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: ckbadger_store::types::TAG_IDENTITY,
+                roles: ckbadger_store::types::participant_roles::OWNER_TO,
+            },
+        ],
+    }
+}
+
+#[test]
+fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
+    let (domain, append) = setup_split_stores();
+    let lock_a = vec![0xA0u8; 32];
+    let tx_hash_2 = {
+        let mut h = vec![0u8; 32];
+        h[0] = 0x20;
+        h
+    };
+    let tx_hash_3 = {
+        let mut h = vec![0u8; 32];
+        h[0] = 0x30;
+        h
+    };
+
+    let mut batch = StoreBatch::new(&domain);
+    for b in 1..=3i64 {
+        batch.put_block_header(b, &make_header(b));
+    }
+    batch.commit().unwrap();
+    seed_epoch_rows(&domain, 1..=3i64);
+
+    let mut batch = StoreBatch::new(&domain);
+    // Block 2 survives: lock A only.
+    batch.put_tx_actions(&prefix_participant_actions(2, 0, &tx_hash_2, &lock_a));
+    batch.put_addr_tx(
+        &lock_a,
+        2,
+        0,
+        &tx_hash_2,
+        &AddrTxValue::new(0, true, false, 0),
+    );
+    batch.put_addr_tx_by_prefix(
+        &ROLLED_BACK_PREFIX,
+        2,
+        0,
+        &tx_hash_2,
+        &AddrTxValue::new(0, false, false, 0),
+    );
+    // Block 3 is rolled back.
+    batch.put_tx_actions(&prefix_participant_actions(3, 0, &tx_hash_3, &lock_a));
+    batch.put_addr_tx(
+        &lock_a,
+        3,
+        0,
+        &tx_hash_3,
+        &AddrTxValue::new(0, true, false, 0),
+    );
+    batch.put_addr_tx_by_prefix(
+        &ROLLED_BACK_PREFIX,
+        3,
+        0,
+        &tx_hash_3,
+        &AddrTxValue::new(0, false, false, 0),
+    );
+    batch.put_addr_balance(
+        &lock_a,
+        &AddressBalance {
+            txs_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.put_addr_prefix_stats(
+        &ROLLED_BACK_PREFIX,
+        &ckbadger_store::types::AddrPrefixStats { txs_count: 2 },
+    );
+    batch.commit().unwrap();
+
+    domain.rollback_via_undo_log(&append, 2).unwrap();
+    domain
+        .rollback_to_block_with_append_only_store(2, Some(&append))
+        .unwrap();
+
+    // Block 3's rows are gone from both indexes; block 2's survive.
+    let rows = domain.list_addr_txs_recent(&lock_a, 10, None).unwrap();
+    let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _, _)| (*b, *t)).collect();
+    assert_eq!(
+        positions,
+        vec![(2, 0)],
+        "only block 2 rows survive: {rows:?}"
+    );
+    let prefix_rows = domain
+        .list_addr_txs_by_prefix_recent(&ROLLED_BACK_PREFIX, 10, None)
+        .unwrap();
+    assert_eq!(
+        prefix_rows
+            .iter()
+            .map(|(b, t, _, _)| (*b, *t))
+            .collect::<Vec<_>>(),
+        vec![(2, 0)],
+        "the rolled-back prefix row must be deleted"
+    );
+
+    // The counter is reversed by the rows stage 8c' deleted — it owns no undo
+    // pre-images, so it must end equal to the rows that survive.
+    assert_eq!(
+        domain
+            .get_addr_prefix_stats(&ROLLED_BACK_PREFIX)
+            .unwrap()
+            .unwrap()
+            .txs_count,
+        1
+    );
+    assert_eq!(
+        domain.get_addr_balance(&lock_a).unwrap().unwrap().txs_count,
+        1
+    );
+}
+
+#[test]
+fn test_rollback_bails_when_prefix_participant_row_is_missing() {
+    let (domain, append) = setup_split_stores();
+    let lock_a = vec![0xA0u8; 32];
+    let tx_hash_3 = {
+        let mut h = vec![0u8; 32];
+        h[0] = 0x30;
+        h
+    };
+
+    let mut batch = StoreBatch::new(&domain);
+    for b in 1..=3i64 {
+        batch.put_block_header(b, &make_header(b));
+    }
+    batch.commit().unwrap();
+    seed_epoch_rows(&domain, 1..=3i64);
+
+    let mut batch = StoreBatch::new(&domain);
+    batch.put_tx_actions(&prefix_participant_actions(3, 0, &tx_hash_3, &lock_a));
+    batch.put_tx_index(
+        3,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_003_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_hash_map(&tx_hash_3, 3, 0);
+    batch.put_addr_tx(
+        &lock_a,
+        3,
+        0,
+        &tx_hash_3,
+        &AddrTxValue::new(0, true, false, 0),
+    );
+    // Deliberately NOT writing the addr_txs_by_prefix row.
+    batch.put_reorg_undo_log_by_block(
+        3,
+        0,
+        &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
+            tx_hash: tx_hash_3.clone(),
+            outputs_count: 0,
+            inputs: vec![],
+        }),
+    );
+    batch.commit().unwrap();
+
+    let err = domain
+        .rollback_to_block_with_append_only_store(2, Some(&append))
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("missing addr_txs_by_prefix row"),
+        "{err}"
     );
 }

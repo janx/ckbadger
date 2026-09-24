@@ -7,10 +7,10 @@ use crate::parser::{
 };
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::{CF_IDENTITY_DATA, CF_SPORE_DATA};
+use ckbadger_store::store::{CF_IDENTITY_DATA, CF_SPORE_DATA, CF_STATS_SPORE};
 use ckbadger_store::types::{
-    ClusterAggregate, CompositionTier, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
-    IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
+    ClusterAggregate, CompositionTier, DotCellRingRoot, IdentityCollectionAggregate, IdentityEntry,
+    IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
 };
 use ckbadger_store::types::{
     BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
@@ -26,6 +26,18 @@ use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
 
+/// How a collection's per-owner counter key encodes its owner.
+///
+/// Every identity standard but `.cell` stores a full 32-byte lock hash. `.cell`
+/// stores what the chain stores: the first 20 bytes of the owner's lock hash,
+/// written into the same fixed-width key as an explicit `owner20 ‖ 0^12`.
+/// One transition algorithm, two key encodings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentityOwnerKeyKind {
+    LockHash32,
+    Prefix20,
+}
+
 #[derive(Default)]
 pub(crate) struct SporeBatchState {
     spores: HashMap<Vec<u8>, Option<ObjectEntry>>,
@@ -36,7 +48,12 @@ pub(crate) struct SporeBatchState {
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     stats: SharedEntityStatsOverlay,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
-    undo_seq_by_block: SharedUndoSeq,
+    /// `.cell` namespaces seen in this batch, plus the ones already on disk.
+    /// A network runs exactly one.
+    dotcell_namespaces: HashSet<[u8; 20]>,
+    dotcell_namespaces_loaded: bool,
+    dotcell_rings: HashMap<[u8; 20], DotCellRingRoot>,
+    pub(super) undo_seq_by_block: SharedUndoSeq,
 }
 
 impl SporeBatchState {
@@ -53,7 +70,7 @@ impl SporeBatchState {
         self.spores.insert(spore_id.to_vec(), Some(entry));
     }
 
-    fn get_identity(
+    pub(super) fn get_identity(
         &mut self,
         store: &CkbadgerStore,
         identity_id: &[u8],
@@ -66,7 +83,7 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_identity(&mut self, identity_id: &[u8], entry: IdentityEntry) {
+    pub(super) fn put_identity(&mut self, identity_id: &[u8], entry: IdentityEntry) {
         self.identities.insert(identity_id.to_vec(), Some(entry));
     }
 
@@ -132,7 +149,7 @@ impl SporeBatchState {
             .insert((cluster_id.to_vec(), lock_hash.to_vec()), 0);
     }
 
-    fn get_identity_agg(
+    pub(super) fn get_identity_agg(
         &mut self,
         store: &CkbadgerStore,
         collection_id: &[u8],
@@ -148,7 +165,7 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_identity_agg(
+    pub(super) fn put_identity_agg(
         &mut self,
         collection_id: &[u8],
         agg: IdentityCollectionAggregate,
@@ -161,39 +178,66 @@ impl SporeBatchState {
     fn get_identity_owner_count(
         &mut self,
         store: &CkbadgerStore,
+        kind: IdentityOwnerKeyKind,
         collection_id: &[u8],
-        lock_hash: &[u8],
+        owner: &[u8],
     ) -> Result<i64> {
-        let key = (collection_id.to_vec(), lock_hash.to_vec());
+        let key = (collection_id.to_vec(), owner.to_vec());
         if let Some(cached) = self.identity_owner_counts.get(&key) {
             return Ok(*cached);
         }
-        let loaded = store.get_identity_owner_count(collection_id, lock_hash)?;
+        let loaded = match kind {
+            IdentityOwnerKeyKind::LockHash32 => {
+                store.get_identity_owner_count(collection_id, owner)?
+            }
+            IdentityOwnerKeyKind::Prefix20 => {
+                let owner20: [u8; 20] = owner.try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "identity owner prefix must be 20 bytes, got {}: collection_id=0x{}",
+                        owner.len(),
+                        hex::encode(collection_id)
+                    )
+                })?;
+                store.get_dotcell_owner20_count(collection_id, &owner20)?
+            }
+        };
         self.identity_owner_counts.insert(key, loaded);
         Ok(loaded)
     }
 
     fn put_identity_owner_count(
         &mut self,
+        kind: IdentityOwnerKeyKind,
         collection_id: &[u8],
-        lock_hash: &[u8],
+        owner: &[u8],
         count: i64,
         batch: &mut StoreBatch,
     ) {
-        batch.put_identity_owner_count(collection_id, lock_hash, count);
+        match kind {
+            IdentityOwnerKeyKind::LockHash32 => {
+                batch.put_identity_owner_count(collection_id, owner, count)
+            }
+            IdentityOwnerKeyKind::Prefix20 => {
+                batch.put_identity_owner20_count(collection_id, owner, count)
+            }
+        }
         self.identity_owner_counts
-            .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
+            .insert((collection_id.to_vec(), owner.to_vec()), count);
     }
 
     fn delete_identity_owner(
         &mut self,
+        kind: IdentityOwnerKeyKind,
         collection_id: &[u8],
-        lock_hash: &[u8],
+        owner: &[u8],
         batch: &mut StoreBatch,
     ) {
-        batch.delete_identity_owner(collection_id, lock_hash);
+        match kind {
+            IdentityOwnerKeyKind::LockHash32 => batch.delete_identity_owner(collection_id, owner),
+            IdentityOwnerKeyKind::Prefix20 => batch.delete_identity_owner20(collection_id, owner),
+        }
         self.identity_owner_counts
-            .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
+            .insert((collection_id.to_vec(), owner.to_vec()), 0);
     }
 
     pub(crate) fn pending_identity_aggs(&self) -> &HashMap<Vec<u8>, IdentityCollectionAggregate> {
@@ -212,6 +256,42 @@ impl SporeBatchState {
     ) {
         self.spore_outpoints
             .insert((tx_hash.to_vec(), output_index), spore_id.to_vec());
+    }
+
+    /// Every `.cell` namespace this store knows: the committed ring rows plus
+    /// anything this batch has already written.
+    pub(super) fn dotcell_known_namespaces(
+        &mut self,
+        store: &CkbadgerStore,
+    ) -> Result<Vec<[u8; 20]>> {
+        if !self.dotcell_namespaces_loaded {
+            for (namespace, root) in store.list_dotcell_rings()? {
+                self.dotcell_namespaces.insert(namespace);
+                self.dotcell_rings.insert(namespace, root);
+            }
+            self.dotcell_namespaces_loaded = true;
+        }
+        Ok(self.dotcell_namespaces.iter().copied().collect())
+    }
+
+    pub(super) fn remember_dotcell_namespace(&mut self, namespace: [u8; 20]) {
+        self.dotcell_namespaces.insert(namespace);
+    }
+
+    pub(super) fn get_dotcell_ring(
+        &mut self,
+        store: &CkbadgerStore,
+        namespace: &[u8; 20],
+    ) -> Result<Option<DotCellRingRoot>> {
+        if !self.dotcell_namespaces_loaded {
+            self.dotcell_known_namespaces(store)?;
+        }
+        Ok(self.dotcell_rings.get(namespace).cloned())
+    }
+
+    pub(super) fn put_dotcell_ring(&mut self, namespace: &[u8; 20], root: DotCellRingRoot) {
+        self.dotcell_namespaces.insert(*namespace);
+        self.dotcell_rings.insert(*namespace, root);
     }
 
     pub(crate) fn get_cached_spore_id_by_outpoint(
@@ -238,9 +318,66 @@ impl BatchWriter {
         }
     }
 
-    fn apply_identity_owner_transition(
+    /// Write an item's outpoint reverse-index rows, with undo pre-images.
+    ///
+    /// `CF_STATS_SPORE` carries two rows per (item, outpoint): the forward
+    /// `outpoint -> id` row every per-item lifecycle feed seeks, and the
+    /// `id -> outpoint` row that lists them. Spore, did:ckb, `.bit Cell` and
+    /// `.cell` all write them through here, so there is one definition of what
+    /// a rollback has to undo.
+    ///
+    /// The pre-images are what make the rollback exact. The repair stage
+    /// cleans these rows by scanning entries that SURVIVE, and neither case
+    /// that matters survives in the right shape: a rolled-back mint's entry is
+    /// already deleted by the undo replay that runs first
+    /// (`db/writer/reorg.rs:153-160`), and a rolled-back TRANSFER leaves the
+    /// item alive, so it is never a delete candidate at all while its second
+    /// outpoint row sits there pointing at a transaction that no longer exists.
+    pub(super) fn put_object_outpoint_rows(
+        &self,
+        id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) -> Result<()> {
+        for key in [
+            keys::encode_spore_outpoint_key(tx_hash, output_index).to_vec(),
+            keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index),
+        ] {
+            // A failed read is NOT "the row did not exist": recording `None`
+            // for it would make the rollback delete a row that had a value.
+            let previous = self
+                .store
+                .get_cf(self.store.cf_stats_spore(), &key)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to read the outpoint reverse-index pre-image: id=0x{}, key=0x{}, block={}, {}",
+                        hex::encode(id),
+                        hex::encode(&key),
+                        block_number,
+                        e
+                    )
+                })?;
+            self.record_object_undo(
+                batch,
+                block_number,
+                CF_STATS_SPORE,
+                &key,
+                previous,
+                &state.undo_seq_by_block,
+            );
+        }
+        batch.put_spore_outpoint(tx_hash, output_index, id);
+        state.put_spore_outpoint(tx_hash, output_index, id);
+        Ok(())
+    }
+
+    pub(super) fn apply_identity_owner_transition(
         &self,
         collection_id: &[u8],
+        kind: IdentityOwnerKeyKind,
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
         agg: &mut IdentityCollectionAggregate,
@@ -252,8 +389,12 @@ impl BatchWriter {
         }
 
         if let Some(old_lock) = old_owner {
-            let old_count =
-                state.get_identity_owner_count(self.store.as_ref(), collection_id, old_lock)?;
+            let old_count = state.get_identity_owner_count(
+                self.store.as_ref(),
+                kind,
+                collection_id,
+                old_lock,
+            )?;
             if old_count <= 0 {
                 bail!(
                     "identity owner count underflow: collection_id=0x{}, lock_hash=0x{}, owner_count={}",
@@ -269,16 +410,20 @@ impl BatchWriter {
                         agg.holders_count
                     );
                 }
-                state.delete_identity_owner(collection_id, old_lock, batch);
+                state.delete_identity_owner(kind, collection_id, old_lock, batch);
                 agg.holders_count -= 1;
             } else {
-                state.put_identity_owner_count(collection_id, old_lock, old_count - 1, batch);
+                state.put_identity_owner_count(kind, collection_id, old_lock, old_count - 1, batch);
             }
         }
 
         if let Some(new_lock) = new_owner {
-            let cur_count =
-                state.get_identity_owner_count(self.store.as_ref(), collection_id, new_lock)?;
+            let cur_count = state.get_identity_owner_count(
+                self.store.as_ref(),
+                kind,
+                collection_id,
+                new_lock,
+            )?;
             if cur_count == 0 {
                 agg.holders_count = agg
                     .holders_count
@@ -288,7 +433,7 @@ impl BatchWriter {
             let next = cur_count
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("identity owner count overflow"))?;
-            state.put_identity_owner_count(collection_id, new_lock, next, batch);
+            state.put_identity_owner_count(kind, collection_id, new_lock, next, batch);
         }
 
         Ok(())
@@ -497,8 +642,14 @@ impl BatchWriter {
         };
         batch.put_identity(&did.did_id, &identity);
         state.put_identity(&did.did_id, identity);
-        batch.put_spore_outpoint(tx_hash, output_index, &did.did_id);
-        state.put_spore_outpoint(tx_hash, output_index, &did.did_id);
+        self.put_object_outpoint_rows(
+            &did.did_id,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            state,
+        )?;
 
         // Update identity collection aggregate
         let cid = &DID_CKB_SENTINEL_COLLECTION;
@@ -534,6 +685,7 @@ impl BatchWriter {
         let owner_from = if was_live { old_owner.as_deref() } else { None };
         self.apply_identity_owner_transition(
             cid,
+            IdentityOwnerKeyKind::LockHash32,
             owner_from,
             Some(did.owner_lock_hash.as_slice()),
             &mut agg,
@@ -648,8 +800,14 @@ impl BatchWriter {
         };
         batch.put_spore(&spore.spore_id, &entry);
         state.put_spore(&spore.spore_id, entry);
-        batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
-        state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
+        self.put_object_outpoint_rows(
+            &spore.spore_id,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            state,
+        )?;
 
         if old_cluster != effective_cluster {
             if let Some(ref old_cluster_id) = old_cluster {
@@ -854,8 +1012,14 @@ impl BatchWriter {
         };
         batch.put_identity(identity_id, &identity);
         state.put_identity(identity_id, identity);
-        batch.put_spore_outpoint(tx_hash, output_index, identity_id);
-        state.put_spore_outpoint(tx_hash, output_index, identity_id);
+        self.put_object_outpoint_rows(
+            identity_id,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            state,
+        )?;
 
         let collection_id = &BIT_CELL_SENTINEL_COLLECTION;
         let mut aggregate = state.get_identity_agg(self.store.as_ref(), collection_id)?;
@@ -887,6 +1051,7 @@ impl BatchWriter {
         }
         self.apply_identity_owner_transition(
             collection_id,
+            IdentityOwnerKeyKind::LockHash32,
             if was_live { old_owner.as_deref() } else { None },
             Some(bit_cell.owner_lock_hash.as_slice()),
             &mut aggregate,
@@ -950,6 +1115,7 @@ impl BatchWriter {
             agg.live_count -= 1;
             self.apply_identity_owner_transition(
                 cid,
+                IdentityOwnerKeyKind::LockHash32,
                 old_owner.as_deref(),
                 None,
                 &mut agg,
@@ -1285,6 +1451,249 @@ mod tests {
         ParsedDidCkbCell {
             did_id: did_id.to_vec(),
             owner_lock_hash: owner_lock.to_vec(),
+        }
+    }
+
+    /// The outpoint reverse index must not outlive the rows it describes.
+    ///
+    /// `CF_STATS_SPORE`'s outpoint rows are written by four protocols and read
+    /// by every per-item lifecycle feed and by the DOB decoder. The rollback
+    /// cleans them in the identity/object repair stage, which only sees
+    /// entries that SURVIVE — but production replays the undo log first
+    /// (`db/writer/reorg.rs:153-160`), so a rolled-back mint's entry is gone
+    /// before the repair runs, and a rolled-back TRANSFER of a surviving item
+    /// is never a candidate at all. Only a pre-image per row makes either
+    /// case exact.
+    mod outpoint_rollback {
+        use super::*;
+
+        fn header(number: i64) -> ckbadger_store::types::CachedBlockHeader {
+            ckbadger_store::types::CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                parent_hash: vec![(number - 1) as u8; 32],
+                timestamp: 1_700_000_000_000 + number * 1000,
+                epoch_number: 40,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0u8; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            }
+        }
+
+        fn store_with_headers() -> (Arc<CkbadgerStore>, BatchWriter, tempfile::TempDir) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let writer = BatchWriter::new(store.clone(), store.clone());
+            let mut batch = StoreBatch::new(writer.store());
+            for number in 198..=202i64 {
+                batch.put_block_header(number, &header(number));
+            }
+            batch.commit().unwrap();
+            (store, writer, dir)
+        }
+
+        fn new_state(writer: &BatchWriter) -> SporeBatchState {
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default())
+        }
+
+        /// The production rollback sequence, in the production order.
+        fn rollback_to(store: &Arc<CkbadgerStore>, block: i64) {
+            let undo = store.rollback_via_undo_log(store.as_ref(), block).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(block, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+        }
+
+        fn assert_no_outpoint_rows(
+            store: &Arc<CkbadgerStore>,
+            writer: &BatchWriter,
+            id: &[u8],
+            tx_hash: &[u8],
+            what: &str,
+        ) {
+            assert_eq!(
+                store.list_spore_outpoints_by_spore_id(id).unwrap(),
+                Vec::new(),
+                "{what}: a rolled-back item must leave no by_id reverse-index row"
+            );
+            assert_eq!(
+                writer.get_spore_id_by_outpoint(tx_hash, 0).unwrap(),
+                None,
+                "{what}: nor a forward outpoint row"
+            );
+        }
+
+        #[test]
+        fn rolled_back_did_ckb_registration_leaves_no_outpoint_rows() {
+            let (store, writer, _dir) = store_with_headers();
+            let did_id = vec![0xB7u8; 32];
+            let tx_hash = vec![0x91u8; 32];
+
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = new_state(&writer);
+            writer
+                .insert_did_ckb_cell(
+                    &make_parsed_did(&did_id, &[0x31; 32]),
+                    &tx_hash,
+                    0,
+                    200,
+                    &mut batch,
+                    &mut state,
+                )
+                .unwrap();
+            batch.commit().unwrap();
+            assert_eq!(
+                store.list_spore_outpoints_by_spore_id(&did_id).unwrap(),
+                vec![(tx_hash.clone(), 0i16)]
+            );
+
+            rollback_to(&store, 199);
+            assert!(store.get_identity(&did_id).unwrap().is_none());
+            assert_no_outpoint_rows(&store, &writer, &did_id, &tx_hash, "did:ckb");
+        }
+
+        #[test]
+        fn rolled_back_bit_cell_registration_leaves_no_outpoint_rows() {
+            let (store, writer, _dir) = store_with_headers();
+            let identity_id = vec![0xC3u8; 32];
+            let tx_hash = vec![0x92u8; 32];
+            let bit_cell = crate::parser::ParsedBitCell {
+                identity_id: identity_id.clone(),
+                account_id: vec![0xD4; 20],
+                account: "example.bit".to_string(),
+                expired_at: 1_900_000_000,
+                type_script_hash: vec![0x99; 32],
+                owner_lock_hash: vec![0x32; 32],
+            };
+
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = new_state(&writer);
+            writer
+                .insert_bit_cell(&bit_cell, &tx_hash, 0, 200, &mut batch, &mut state)
+                .unwrap();
+            batch.commit().unwrap();
+            assert_eq!(
+                store
+                    .list_spore_outpoints_by_spore_id(&identity_id)
+                    .unwrap(),
+                vec![(tx_hash.clone(), 0i16)]
+            );
+
+            rollback_to(&store, 199);
+            assert!(store.get_identity(&identity_id).unwrap().is_none());
+            assert_no_outpoint_rows(&store, &writer, &identity_id, &tx_hash, ".bit Cell");
+        }
+
+        #[test]
+        fn rolled_back_spore_mint_leaves_no_outpoint_rows() {
+            let (store, writer, _dir) = store_with_headers();
+            let spore_id = vec![0xA1u8; 32];
+            let tx_hash = vec![0x93u8; 32];
+
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = new_state(&writer);
+            writer
+                .insert_spore_cell(
+                    &make_parsed_spore_no_cluster(&spore_id, &[0x41; 32]),
+                    &tx_hash,
+                    0,
+                    200,
+                    1_700_000_200_000,
+                    &mut batch,
+                    &mut state,
+                )
+                .unwrap();
+            batch.commit().unwrap();
+            assert_eq!(
+                store.list_spore_outpoints_by_spore_id(&spore_id).unwrap(),
+                vec![(tx_hash.clone(), 0i16)]
+            );
+
+            rollback_to(&store, 199);
+            assert!(store.get_spore(&spore_id).unwrap().is_none());
+            assert_no_outpoint_rows(&store, &writer, &spore_id, &tx_hash, "spore mint");
+        }
+
+        /// The case the repair stage can never reach: the item SURVIVES the
+        /// rollback, so it is not a delete candidate, yet the transfer wrote a
+        /// second outpoint row that must go.
+        #[test]
+        fn rolled_back_spore_transfer_leaves_only_the_mint_outpoint() {
+            let (store, writer, _dir) = store_with_headers();
+            let spore_id = vec![0xA2u8; 32];
+            let mint_tx = vec![0x94u8; 32];
+            let transfer_tx = vec![0x95u8; 32];
+            let owner_a = vec![0x41u8; 32];
+            let owner_b = vec![0x42u8; 32];
+
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = new_state(&writer);
+            writer
+                .insert_spore_cell(
+                    &make_parsed_spore_no_cluster(&spore_id, &owner_a),
+                    &mint_tx,
+                    0,
+                    200,
+                    1_700_000_200_000,
+                    &mut batch,
+                    &mut state,
+                )
+                .unwrap();
+            batch.commit().unwrap();
+
+            // Block 201: the same spore is consumed and re-created elsewhere.
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = new_state(&writer);
+            writer
+                .consume_spore(&spore_id, 201, &transfer_tx, &mut batch, &mut state)
+                .unwrap();
+            writer
+                .insert_spore_cell(
+                    &make_parsed_spore_no_cluster(&spore_id, &owner_b),
+                    &transfer_tx,
+                    0,
+                    201,
+                    1_700_000_201_000,
+                    &mut batch,
+                    &mut state,
+                )
+                .unwrap();
+            batch.commit().unwrap();
+
+            let mut before = store.list_spore_outpoints_by_spore_id(&spore_id).unwrap();
+            before.sort();
+            assert_eq!(
+                before,
+                vec![(mint_tx.clone(), 0i16), (transfer_tx.clone(), 0i16)]
+            );
+
+            rollback_to(&store, 200);
+
+            let entry = store
+                .get_spore(&spore_id)
+                .unwrap()
+                .expect("the spore itself survives a rollback to its mint block");
+            assert!(entry.is_live);
+            assert_eq!(entry.owner_lock_hash.as_deref(), Some(owner_a.as_slice()));
+            assert_eq!(
+                store.list_spore_outpoints_by_spore_id(&spore_id).unwrap(),
+                vec![(mint_tx.clone(), 0i16)],
+                "the rolled-back transfer's outpoint row must be gone, the mint's must stay"
+            );
+            assert_eq!(
+                writer.get_spore_id_by_outpoint(&transfer_tx, 0).unwrap(),
+                None,
+                "and so must its forward row"
+            );
+            assert_eq!(
+                writer.get_spore_id_by_outpoint(&mint_tx, 0).unwrap(),
+                Some(spore_id.clone())
+            );
         }
     }
 

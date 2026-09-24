@@ -742,11 +742,12 @@ mod tests {
 
     fn make_participant(lock_hash: &[u8]) -> ParticipantDelta {
         ParticipantDelta {
-            lock_hash: lock_hash.to_vec(),
+            id: ckbadger_store::types::ParticipantId::lock(lock_hash).unwrap(),
             ckb_delta: 0,
             used_delta: 0,
             item_deltas: vec![],
             tags: 0,
+            roles: 0,
         }
     }
 

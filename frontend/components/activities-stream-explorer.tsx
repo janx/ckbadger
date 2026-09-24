@@ -404,8 +404,11 @@ function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) 
 
         {/* Per-participant lines: L1 CKB + L2 item deltas */}
         <div className="space-y-1 pl-3">
-          {activity.participants.map((p) => (
-            <ParticipantLine key={p.address} participant={p} />
+          {activity.participants.map((p, i) => (
+            <ParticipantLine
+              key={p.lockHash ?? p.lockHashPrefix ?? p.address ?? i}
+              participant={p}
+            />
           ))}
         </div>
       </div>

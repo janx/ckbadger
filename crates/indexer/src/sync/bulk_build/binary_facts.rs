@@ -415,7 +415,8 @@ pub(crate) fn parse_block_to_facts(
                 | CellSemanticTag::Mnft
                 | CellSemanticTag::Dotbit
                 | CellSemanticTag::BitCell
-                | CellSemanticTag::DidCkb => {
+                | CellSemanticTag::DidCkb
+                | CellSemanticTag::DotCell => {
                     let parsed_cell = ParsedCell {
                         capacity,
                         lock_code_hash: lock_code_hash_bytes.to_vec(),
@@ -430,10 +431,14 @@ pub(crate) fn parse_block_to_facts(
                         data_size,
                         data: data.clone(),
                     };
+                    // The witness at THIS output's own index: a `.cell` name
+                    // cell keeps its records payload there (spec §1.3).
+                    let own_witness = witnesses.get(output_index).map(|w| w.raw_data());
                     parse_protocol_facts(
                         &parsed_cell,
                         semantic_tag,
                         &witness_bundle,
+                        own_witness.as_deref(),
                         &tx_hash,
                         output_index_i16,
                     )?
@@ -668,6 +673,7 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
         ) => CellSemanticTag::Mnft,
         Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid) => CellSemanticTag::Spore,
         Some(ProtocolScript::Cluster) => CellSemanticTag::Cluster,
+        Some(ProtocolScript::DotCellAccount) => CellSemanticTag::DotCell,
         // UDT deployments are resolved above by `UdtParser`, the single source
         // for standard and bundled xUDT-compatible code hashes. Reaching here
         // means that parser rejected this (code_hash, hash_type) pair.
@@ -683,7 +689,12 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
             | ProtocolScript::StablePpPool
             | ProtocolScript::StablePpIntent
             | ProtocolScript::StablePpVault
-            | ProtocolScript::UtxoSwapIntent,
+            | ProtocolScript::UtxoSwapIntent
+            | ProtocolScript::DotCellAccountLock
+            | ProtocolScript::DotCellSaleLock
+            // The `.cell` price cell is a protocol parameter, not an asset:
+            // Phase 2 decodes its history, Phase 1 leaves it unclassified.
+            | ProtocolScript::DotCellPrice,
         ) => CellSemanticTag::Plain,
         // Unregistered code_hash.
         None => CellSemanticTag::Plain,
@@ -1286,6 +1297,40 @@ mod tests {
         assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Mnft);
     }
 
+    /// The Cells Account type script is the only `.cell` script that tags a
+    /// cell. The Account Lock, Sale Lock and Price scripts must NOT produce a
+    /// DotCell tag: two of them are locks (detected from the lock side) and the
+    /// price cell is Phase 2.
+    #[test]
+    fn classify_from_code_hash_dotcell_account_is_dotcell_and_locks_are_plain() {
+        for hex in [
+            crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_MAINNET,
+            crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_TESTNET,
+        ] {
+            let hash = crate::rpc::parse_hex_to_bytes(hex);
+            assert_eq!(
+                code_hash_to_semantic_tag(&hash, 1),
+                CellSemanticTag::DotCell,
+                "Cells Account code_hash {hex} must classify as DotCell in bulk build"
+            );
+        }
+        for hex in [
+            crate::parser::test_helpers::real_dotcell::ACCOUNT_LOCK_CODE_HASH_MAINNET,
+            crate::parser::test_helpers::real_dotcell::ACCOUNT_LOCK_CODE_HASH_TESTNET,
+            crate::parser::test_helpers::real_dotcell::SALE_LOCK_CODE_HASH_MAINNET,
+            crate::parser::test_helpers::real_dotcell::SALE_LOCK_CODE_HASH_TESTNET,
+            crate::parser::test_helpers::real_dotcell::PRICE_TYPE_CODE_HASH_MAINNET,
+            crate::parser::test_helpers::real_dotcell::PRICE_TYPE_CODE_HASH_TESTNET,
+        ] {
+            let hash = crate::rpc::parse_hex_to_bytes(hex);
+            assert_eq!(
+                code_hash_to_semantic_tag(&hash, 1),
+                CellSemanticTag::Plain,
+                "{hex} carries no cell-level semantic tag"
+            );
+        }
+    }
+
     #[test]
     fn classify_from_code_hash_unknown_type_is_plain() {
         let hash = [0xFF; 32];
@@ -1309,6 +1354,94 @@ mod tests {
                 "did:ckb code_hash {hex} must classify as DidCkb in bulk build"
             );
         }
+    }
+
+    /// PROTO-009: a semantic tag whose protocol facts are discarded leaves the
+    /// cells classified but unindexed. The real testnet registration carries a
+    /// six-record witness on its ring predecessor and an empty one on the new
+    /// name, so this proves the witness is read at each output's OWN index.
+    #[test]
+    fn binary_facts_emit_dotcell_facts_with_records_for_real_testnet_registration() {
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        use crate::sync::bulk_build::facts::CellProtocolFacts;
+        use ckb_types::packed;
+        use ckb_types::prelude::*;
+
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(
+                packed::TransactionVec::new_builder()
+                    .push(fixture::T2_REGISTER_JOAOM.packed_transaction())
+                    .build(),
+            )
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let (_, _, cells) = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect("binary facts must parse the real testnet .cell registration");
+        assert_eq!(cells.len(), fixture::T2_REGISTER_JOAOM.outputs.len());
+        assert_eq!(cells[0].semantic_tag, CellSemanticTag::DotCell);
+        assert_eq!(cells[1].semantic_tag, CellSemanticTag::DotCell);
+
+        match cells[0].protocol_facts.as_ref().expect("out[0] facts") {
+            CellProtocolFacts::DotCell(facts) => {
+                assert_eq!(facts.name.label, "maria");
+                assert_eq!(facts.records.len(), 6);
+                assert_eq!(facts.records[0].key, "address.309");
+                assert_eq!(
+                    facts.namespace_args.to_vec(),
+                    crate::rpc::parse_hex_to_bytes(fixture::NAMESPACE_ARGS_TESTNET)
+                );
+            }
+            other => panic!("out[0] must carry DotCell facts, got {other:?}"),
+        }
+        match cells[1].protocol_facts.as_ref().expect("out[1] facts") {
+            CellProtocolFacts::DotCell(facts) => {
+                assert_eq!(facts.name.label, "joaom");
+                assert!(
+                    facts.records.is_empty(),
+                    "joaom was registered with no records"
+                );
+            }
+            other => panic!("out[1] must carry DotCell facts, got {other:?}"),
+        }
+    }
+
+    /// A name cell says how its records hash; if the witness that holds them is
+    /// gone, the bulk path must stop rather than index a name with no records.
+    #[test]
+    fn bulk_facts_bail_when_dotcell_witness_missing() {
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        use ckb_types::packed;
+        use ckb_types::prelude::*;
+
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(
+                packed::TransactionVec::new_builder()
+                    .push(fixture::T2_REGISTER_JOAOM.packed_transaction_with_witnesses(&[]))
+                    .build(),
+            )
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let err = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect_err("a name cell with no witness at its own index must fail fast");
+        assert!(err.to_string().contains("witness"), "{err}");
     }
 
     #[test]

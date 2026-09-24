@@ -16,9 +16,12 @@ use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
 pub(crate) use ckbadger_store::types::{
     BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    DOTCELL_SENTINEL_COLLECTION,
 };
 
-use crate::parser::{BitCellParser, DaoParser, DidCkbParser, DotbitParser, MnftParser};
+use crate::parser::{
+    BitCellParser, DaoParser, DidCkbParser, DotCellParser, DotbitParser, MnftParser,
+};
 
 use super::helpers::{checked_usize_to_i16, parsed_input_outpoint_index_i16};
 use super::types::TxData;
@@ -137,6 +140,9 @@ pub(crate) fn classify_object_collection_id(
     }
     if DidCkbParser::is_type_script(type_code_hash) {
         return Some(DID_CKB_SENTINEL_COLLECTION.to_vec());
+    }
+    if DotCellParser::is_account_type_script(type_code_hash) {
+        return Some(DOTCELL_SENTINEL_COLLECTION.to_vec());
     }
     None
 }

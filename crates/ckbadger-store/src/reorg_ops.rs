@@ -949,11 +949,13 @@ fn rebuild_cutoff_activity_addr_sets(
             continue;
         }
         for participant in &tx_actions.participants {
-            if participant.lock_hash.len() != 32 {
+            // Unique-address counts are per address, and one address can appear
+            // in the same day under both identities; counting the prefix form
+            // too would double-count it. Being named by a protocol is also not
+            // that address's own activity. So: `Lock` participants only.
+            let ParticipantId::Lock(lock_hash) = participant.id else {
                 continue;
-            }
-            let mut lock_hash = [0u8; 32];
-            lock_hash.copy_from_slice(&participant.lock_hash);
+            };
             if in_date {
                 sets.date.insert(lock_hash);
             }
@@ -3430,12 +3432,20 @@ impl CkbadgerStore {
 
         // 8b. Delete tx activity bundles for rolled-back blocks.
         // Activities are now in domain store, so we can delete directly.
+        //
+        // The same scan collects each rolled-back transaction's protocol-named
+        // participants: they hold no cell, so cells cannot enumerate them, and
+        // `TxActions` is the only record of who the protocol pointed at. Keys are
+        // block-descending, so this reads the rolled-back blocks and stops —
+        // there is no full-CF cost. Cellbase transactions have no CF_TX_ACTIONS
+        // row and never name parties, so cells remain their only source.
+        let mut prefix_participants: HashMap<Vec<u8>, Vec<[u8; 20]>> = HashMap::new();
         {
             let mut activities_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_activities");
             let iter = self.iterator_cf(self.cf_tx_actions(), IteratorMode::Start);
             for item in iter {
-                let (key, _) = item.map_err(|e| {
+                let (key, value) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate activities in rollback_to_block cleanup: {}",
                         e
@@ -3444,11 +3454,30 @@ impl CkbadgerStore {
                 if key.len() != keys::TX_ACTIONS_KEY_SIZE {
                     continue;
                 }
-                let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_actions_key(&key);
+                let (block_num, _tx_idx, tx_hash) = keys::decode_tx_actions_key(&key);
                 if block_num <= rollback_to {
                     // Keys are in descending block_num order; all remaining entries
                     // are also <= rollback_to, so stop scanning.
                     break;
+                }
+                let tx_actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize TxActions while collecting rolled-back named participants: block_num={}, tx_hash=0x{}, {}",
+                        block_num,
+                        bytes_to_hex(&tx_hash),
+                        e
+                    )
+                })?;
+                let prefixes: Vec<[u8; 20]> = tx_actions
+                    .participants
+                    .iter()
+                    .filter_map(|p| match p.id {
+                        ParticipantId::LockPrefix(prefix) => Some(prefix),
+                        ParticipantId::Lock(_) => None,
+                    })
+                    .collect();
+                if !prefixes.is_empty() {
+                    prefix_participants.insert(tx_hash, prefixes);
                 }
                 batch.delete_cf(self.cf_tx_actions(), &key);
                 activities_removed += 1;
@@ -3539,6 +3568,161 @@ impl CkbadgerStore {
             stage.finish(addr_txs_removed);
             if addr_txs_removed > 0 {
                 info!(addr_txs_removed, "rollback: deleted addr_txs entries");
+            }
+        }
+
+        // 8c'. Delete addr_txs_by_prefix entries for rolled-back blocks, and
+        // reverse `addr_prefix_stats` by exactly the rows deleted.
+        //
+        // These rows are NOT counted into `addr_txs_count_deltas`: that map
+        // reverses `addr_balance.txs_count`, which only ever counted cell
+        // participations. The prefix counter is reversed here instead, from the
+        // deleted row count — the same shape `addr_balance.txs_count` uses, and
+        // the only one that is exact when a fork point falls inside a write
+        // batch that spanned several blocks (an undo pre-image is recorded on
+        // one block of that batch and is simply not replayed for a higher fork
+        // point, while its later rows still get deleted).
+        let mut deleted_prefix_rows: HashMap<[u8; 20], i64> = HashMap::new();
+        let mut deleted_prefix_keys: HashSet<Vec<u8>> = HashSet::new();
+        {
+            let mut removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_addr_txs_by_prefix");
+            if use_tx_context {
+                for (tx_hash, prefixes) in &prefix_participants {
+                    let (block_num, tx_idx) =
+                        *rolled_back_tx_positions.get(tx_hash).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing chain position for rolled-back tx while deleting addr_txs_by_prefix: tx_hash=0x{}, rollback_to={}",
+                                bytes_to_hex(tx_hash),
+                                rollback_to
+                            )
+                        })?;
+                    for prefix in prefixes {
+                        let key =
+                            keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx, tx_hash);
+                        if self.get_cf(self.cf_addr_txs_by_prefix(), &key)?.is_none() {
+                            anyhow::bail!(
+                                "missing addr_txs_by_prefix row for rolled-back participant: prefix=0x{}, block={}, tx_idx={}, tx_hash=0x{} — \
+                                 participant collection disagrees with the forward write path",
+                                bytes_to_hex(prefix),
+                                block_num,
+                                tx_idx,
+                                bytes_to_hex(tx_hash)
+                            );
+                        }
+                        batch.delete_cf(self.cf_addr_txs_by_prefix(), &key);
+                        *deleted_prefix_rows.entry(*prefix).or_insert(0) += 1;
+                        deleted_prefix_keys.insert(key);
+                        removed += 1;
+                        stage.tick(removed);
+                    }
+                }
+            } else {
+                // No tx-contexts: same full-scan fallback the cell stages take.
+                let iter = self.iterator_cf(self.cf_addr_txs_by_prefix(), IteratorMode::Start);
+                for item in iter {
+                    let (key, _) = item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate addr_txs_by_prefix in rollback_to_block cleanup: {}",
+                            e
+                        )
+                    })?;
+                    if key.len() != keys::ADDR_TX_BY_PREFIX_KEY_SIZE {
+                        anyhow::bail!(
+                            "addr_txs_by_prefix key is not {} bytes during rollback: len={}",
+                            keys::ADDR_TX_BY_PREFIX_KEY_SIZE,
+                            key.len()
+                        );
+                    }
+                    let (prefix, block_num, _tx_idx, _tx_hash) =
+                        keys::decode_addr_tx_by_prefix_key(&key);
+                    if block_num <= rollback_to {
+                        continue;
+                    }
+                    batch.delete_cf(self.cf_addr_txs_by_prefix(), &key);
+                    *deleted_prefix_rows.entry(prefix).or_insert(0) += 1;
+                    deleted_prefix_keys.insert(key.to_vec());
+                    removed += 1;
+                    stage.tick(removed);
+                }
+            }
+            stage.finish(removed);
+            if removed > 0 {
+                info!(
+                    addr_txs_by_prefix_removed = removed,
+                    "rollback: deleted addr_txs_by_prefix entries"
+                );
+            }
+        }
+
+        // Reverse the per-prefix counters by the rows just deleted, and prove
+        // the result against the rows that survive. A prefix row exists only
+        // because the forward path counted that participation, so a missing
+        // counter is a broken invariant, not a value to invent.
+        for (prefix, deleted) in &deleted_prefix_rows {
+            let stats = self.get_addr_prefix_stats(prefix)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing addr_prefix_stats while rolling back prefix rows: prefix=0x{}, deleted_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    deleted,
+                    rollback_to
+                )
+            })?;
+            let next = stats.txs_count.checked_sub(*deleted).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "addr_prefix_stats txs_count underflow during rollback: prefix=0x{}, txs_count={}, deleted_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    stats.txs_count,
+                    deleted,
+                    rollback_to
+                )
+            })?;
+            if next < 0 {
+                anyhow::bail!(
+                    "addr_prefix_stats txs_count went negative during rollback: prefix=0x{}, txs_count={}, deleted_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    stats.txs_count,
+                    deleted,
+                    rollback_to
+                );
+            }
+            let mut surviving: i64 = 0;
+            for item in self.prefix_iterator_cf(self.cf_addr_txs_by_prefix(), prefix) {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate addr_txs_by_prefix while checking prefix counters: prefix=0x{}, {}",
+                        bytes_to_hex(prefix),
+                        e
+                    )
+                })?;
+                if !key.starts_with(prefix) {
+                    break;
+                }
+                if deleted_prefix_keys.contains(key.as_ref()) {
+                    continue;
+                }
+                surviving += 1;
+            }
+            if next != surviving {
+                anyhow::bail!(
+                    "addr_prefix_stats disagrees with the surviving row count after rollback: prefix=0x{}, txs_count={}, deleted_rows={}, next={}, surviving_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    stats.txs_count,
+                    deleted,
+                    next,
+                    surviving,
+                    rollback_to
+                );
+            }
+            if next == 0 {
+                batch.delete_cf(self.cf_addr_prefix_stats(), prefix);
+            } else {
+                batch.put_cf(
+                    self.cf_addr_prefix_stats(),
+                    prefix,
+                    bincode::serialize(&crate::types::AddrPrefixStats { txs_count: next })
+                        .expect("serialize AddrPrefixStats"),
+                );
             }
         }
 
@@ -4464,6 +4648,8 @@ impl CkbadgerStore {
         // identity_by_collection index, and identity owner counts.
         let mut identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> = HashMap::new();
         let mut identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
+        // Which of those owner keys are 20-byte prefixes rather than lock hashes.
+        let mut identity_owner20_keys: HashSet<(Vec<u8>, Vec<u8>)> = HashSet::new();
 
         let iter = self.iterator_cf(self.cf_identity_data(), IteratorMode::Start);
         for item in iter {
@@ -4508,13 +4694,27 @@ impl CkbadgerStore {
                         batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
                     }
                 }
-                // `.bit Cell` and did:ckb identities record their outpoints in
-                // the spore reverse index (DotBit has its own, handled above),
-                // so both must be cleaned up here or a rolled-back identity
-                // leaves orphaned lifecycle rows behind.
+                // A rolled-back `.cell` name must also lose its owner-index
+                // row, or an address keeps listing a name that no longer
+                // exists. The undo replay deletes it too; this is the path a
+                // rollback without undo entries takes.
+                if let IdentityExtra::DotCell { owner_hash20, .. } = &entry.extra {
+                    if identity_id.len() == owner_hash20.len() {
+                        batch.delete_cf(
+                            self.cf_dotcell_name_by_owner(),
+                            keys::encode_dotcell_name_by_owner_key(owner_hash20, &identity_id),
+                        );
+                    }
+                }
+                // `.bit Cell`, did:ckb and `.cell` identities record their
+                // outpoints in the spore reverse index (DotBit has its own,
+                // handled above), so all three must be cleaned up here or a
+                // rolled-back identity leaves orphaned lifecycle rows behind.
                 if matches!(
                     entry.standard,
-                    IdentityStandard::BitCell | IdentityStandard::DidCkb
+                    IdentityStandard::BitCell
+                        | IdentityStandard::DidCkb
+                        | IdentityStandard::DotCell
                 ) {
                     if identity_id.is_empty()
                         || identity_id.len() > keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
@@ -4568,6 +4768,7 @@ impl CkbadgerStore {
                 IdentityStandard::DotBit => DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 IdentityStandard::DidCkb => DID_CKB_SENTINEL_COLLECTION.to_vec(),
                 IdentityStandard::BitCell => BIT_CELL_SENTINEL_COLLECTION.to_vec(),
+                IdentityStandard::DotCell => DOTCELL_SENTINEL_COLLECTION.to_vec(),
             };
 
             // Rebuild identity_by_collection index
@@ -4583,6 +4784,7 @@ impl CkbadgerStore {
                         IdentityStandard::DotBit => Some(".bit".to_string()),
                         IdentityStandard::DidCkb => Some("did:ckb".to_string()),
                         IdentityStandard::BitCell => Some(".bit Cell".to_string()),
+                        IdentityStandard::DotCell => Some(".cell".to_string()),
                     },
                     ..Default::default()
                 });
@@ -4599,8 +4801,24 @@ impl CkbadgerStore {
                         bytes_to_hex(&collection_id)
                     )
                 })?;
-                if let Some(owner_lock_hash) = entry.owner_lock_hash.as_ref() {
-                    let owner_key = (collection_id, owner_lock_hash.clone());
+                // `.cell` stores its owner as the 20-byte prefix the chain
+                // gives, not as a lock hash, so it is counted under its own
+                // key encoder. Reading `owner_lock_hash` for it would count
+                // nothing and zero the collection's holders.
+                let owner: Option<(Vec<u8>, bool)> = match &entry.extra {
+                    IdentityExtra::DotCell { owner_hash20, .. } => {
+                        Some((owner_hash20.to_vec(), true))
+                    }
+                    _ => entry
+                        .owner_lock_hash
+                        .as_ref()
+                        .map(|lock_hash| (lock_hash.clone(), false)),
+                };
+                if let Some((owner_bytes, is_prefix)) = owner {
+                    let owner_key = (collection_id, owner_bytes);
+                    if is_prefix {
+                        identity_owner20_keys.insert(owner_key.clone());
+                    }
                     let owner_count = identity_owner_counts.entry(owner_key).or_insert(0);
                     *owner_count = owner_count.checked_add(1).ok_or_else(|| {
                         anyhow::anyhow!(
@@ -4724,8 +4942,12 @@ impl CkbadgerStore {
 
         // Write rebuilt identity owner counts to CF_STATS_IDENTITY.
         let mut identity_holder_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        for ((collection_id, lock_hash), count) in &identity_owner_counts {
-            let owner_key = keys::encode_identity_owner_key(collection_id, lock_hash);
+        for (key @ (collection_id, owner), count) in &identity_owner_counts {
+            let owner_key = if identity_owner20_keys.contains(key) {
+                keys::encode_identity_owner20_key(collection_id, owner)
+            } else {
+                keys::encode_identity_owner_key(collection_id, owner)
+            };
             batch.put_cf(
                 self.cf_stats_identity(),
                 owner_key,
@@ -5110,11 +5332,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
+                id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 0,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         }
     }

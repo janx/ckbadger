@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ckbadger_store::types::{AddrTxValue, TxActions};
+use ckbadger_store::types::{AddrTxValue, ParticipantId, TxActions};
 use serde::{Deserialize, Serialize};
 
 use super::resolve::ResolvedCell;
@@ -100,7 +100,7 @@ impl Interpretation {
 /// transaction will show once indexed.
 #[derive(Debug, Clone)]
 pub struct PoolParticipant {
-    pub lock_hash: [u8; 32],
+    pub id: ParticipantId,
     pub addr_tx: AddrTxValue,
 }
 
@@ -139,10 +139,10 @@ impl PoolTxRecord {
         self.actions.is_none()
     }
 
-    pub fn participant(&self, lock_hash: &[u8]) -> Option<&PoolParticipant> {
-        self.participants
-            .iter()
-            .find(|p| p.lock_hash.as_slice() == lock_hash)
+    /// This lock's participation, through the one participant matcher: a
+    /// `Lock` compares whole, a protocol-named prefix compares its 20 bytes.
+    pub fn participant(&self, lock_hash: &[u8; 32]) -> Option<&PoolParticipant> {
+        self.participants.iter().find(|p| p.id.matches(lock_hash))
     }
 }
 
@@ -182,6 +182,11 @@ pub struct PoolSnapshot {
     /// first. A pool transaction is by definition later than every committed
     /// one, so this order is the order the API serves pool rows in.
     pub by_lock: HashMap<[u8; 32], Vec<[u8; 32]>>,
+    /// Same index for parties a protocol named by a 20-byte lock-hash prefix.
+    /// A prefix party has no full hash, so it cannot live in `by_lock`; every
+    /// per-address lookup merges the two, exactly as the committed
+    /// `list_addr_txs_recent` merges its two column families.
+    pub by_lock_prefix: HashMap<[u8; 20], Vec<[u8; 32]>>,
     pub status: MirrorStatus,
 }
 
@@ -224,6 +229,7 @@ impl PoolSnapshot {
         // Each entry carries its own sort key, so ordering never depends on a
         // lookup that could miss and quietly sort by a default.
         let mut by_lock: HashMap<[u8; 32], Vec<(u64, [u8; 32])>> = HashMap::new();
+        let mut by_lock_prefix: HashMap<[u8; 20], Vec<(u64, [u8; 32])>> = HashMap::new();
         let mut by_hash: HashMap<[u8; 32], Arc<PoolTxRecord>> =
             HashMap::with_capacity(records.len());
 
@@ -237,57 +243,89 @@ impl PoolSnapshot {
                 status.partial += 1;
             }
             for participant in &record.participants {
-                by_lock
-                    .entry(participant.lock_hash)
-                    .or_default()
-                    .push((record.entry.time_added_to_pool_ms, record.tx_hash));
+                match participant.id {
+                    ParticipantId::Lock(lock_hash) => by_lock
+                        .entry(lock_hash)
+                        .or_default()
+                        .push((record.entry.time_added_to_pool_ms, record.tx_hash)),
+                    ParticipantId::LockPrefix(prefix) => by_lock_prefix
+                        .entry(prefix)
+                        .or_default()
+                        .push((record.entry.time_added_to_pool_ms, record.tx_hash)),
+                }
             }
             by_hash.insert(record.tx_hash, record);
         }
 
-        let by_lock = by_lock
-            .into_iter()
-            .map(|(lock_hash, mut entries)| {
-                entries.sort_by(|(a_time, a_hash), (b_time, b_hash)| {
-                    b_time.cmp(a_time).then_with(|| a_hash.cmp(b_hash))
-                });
-                (
-                    lock_hash,
-                    entries.into_iter().map(|(_, hash)| hash).collect(),
-                )
-            })
-            .collect();
+        fn sort_newest_first<K: std::hash::Hash + Eq>(
+            index: HashMap<K, Vec<(u64, [u8; 32])>>,
+        ) -> HashMap<K, Vec<[u8; 32]>> {
+            index
+                .into_iter()
+                .map(|(key, mut entries)| {
+                    entries.sort_by(|(a_time, a_hash), (b_time, b_hash)| {
+                        b_time.cmp(a_time).then_with(|| a_hash.cmp(b_hash))
+                    });
+                    (key, entries.into_iter().map(|(_, hash)| hash).collect())
+                })
+                .collect()
+        }
 
         Self {
             records: by_hash,
-            by_lock,
+            by_lock: sort_newest_first(by_lock),
+            by_lock_prefix: sort_newest_first(by_lock_prefix),
             status,
         }
+    }
+
+    /// Both identity forms of one address, newest `time_added_to_pool` first.
+    ///
+    /// A (party, tx) pair reaches exactly one of the two indexes — the builder's
+    /// merge pass already unified same-tx appearances — so this is a merge, not
+    /// a dedup.
+    fn tx_hashes_for_lock(&self, lock_hash: &[u8; 32]) -> Vec<[u8; 32]> {
+        let empty: &[[u8; 32]] = &[];
+        let by_lock = self.by_lock.get(lock_hash).map_or(empty, Vec::as_slice);
+        let prefix: [u8; 20] = lock_hash[..20]
+            .try_into()
+            .expect("a 32-byte lock hash always has a 20-byte prefix");
+        let by_prefix = self
+            .by_lock_prefix
+            .get(&prefix)
+            .map_or(empty, Vec::as_slice);
+        if by_prefix.is_empty() {
+            return by_lock.to_vec();
+        }
+        let mut merged: Vec<[u8; 32]> = Vec::with_capacity(by_lock.len() + by_prefix.len());
+        merged.extend_from_slice(by_lock);
+        merged.extend_from_slice(by_prefix);
+        merged.sort_by(|a, b| {
+            let time_of = |hash: &[u8; 32]| {
+                self.records
+                    .get(hash)
+                    .map(|record| record.entry.time_added_to_pool_ms)
+            };
+            time_of(b).cmp(&time_of(a)).then_with(|| a.cmp(b))
+        });
+        merged
     }
 
     pub fn records_for_lock(&self, lock_hash: &[u8]) -> Vec<Arc<PoolTxRecord>> {
         let Ok(lock_hash) = <[u8; 32]>::try_from(lock_hash) else {
             return Vec::new();
         };
-        self.by_lock
-            .get(&lock_hash)
-            .map(|hashes| {
-                hashes
-                    .iter()
-                    .filter_map(|hash| self.records.get(hash).cloned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.tx_hashes_for_lock(&lock_hash)
+            .iter()
+            .filter_map(|hash| self.records.get(hash).cloned())
+            .collect()
     }
 
     pub fn pending_count_for_lock(&self, lock_hash: &[u8]) -> usize {
         let Ok(lock_hash) = <[u8; 32]>::try_from(lock_hash) else {
             return 0;
         };
-        self.by_lock
-            .get(&lock_hash)
-            .map(|hashes| hashes.len())
-            .unwrap_or(0)
+        self.tx_hashes_for_lock(&lock_hash).len()
     }
 }
 

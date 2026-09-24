@@ -20,6 +20,7 @@ function makeActivity(overrides: Partial<Activity> = {}): Activity {
     lockCalls: [],
     protocolActions: [],
     participants: [],
+    roles: [],
     tags: 0,
     ...overrides,
   };

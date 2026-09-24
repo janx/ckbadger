@@ -193,6 +193,12 @@ const BitCellItemDetailRoute = lazyParamPage(
     identityId: params.identityId ?? '',
   })
 );
+const DotCellItemDetailRoute = lazyParamPage(
+  () => import('@/app/identities/dotcell/[identityId]/client-page'),
+  (params) => ({
+    identityId: params.identityId ?? '',
+  })
+);
 const MnftClassDetailRoute = lazyParamPage(
   () => import('@/app/classes/[classId]/client-page'),
   (params) => ({
@@ -451,6 +457,10 @@ export function createAppRouter(): RouteObject[] {
     {
       path: 'identities/bit-cell/:identityId',
       element: <BitCellItemDetailRoute />,
+    },
+    {
+      path: 'identities/dotcell/:identityId',
+      element: <DotCellItemDetailRoute />,
     },
     {
       path: '*',

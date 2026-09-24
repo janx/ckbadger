@@ -1120,7 +1120,10 @@ fn bulk_build_materializes_tx_actions_from_single_pass() {
         .expect("consume tx actions");
     assert!(!consume_actions.is_cellbase);
     assert_eq!(consume_actions.participants.len(), 1);
-    assert_eq!(consume_actions.participants[0].lock_hash, lock_hash);
+    assert_eq!(
+        consume_actions.participants[0].id.as_bytes(),
+        lock_hash.as_slice()
+    );
     assert_eq!(consume_actions.participants[0].ckb_delta, 0);
 }
 

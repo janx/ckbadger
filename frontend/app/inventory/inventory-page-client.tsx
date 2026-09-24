@@ -52,7 +52,10 @@ type AssetSortKey =
   | 'hMultiplier';
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
 const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
-const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
+// The wire values `IdentityStandard::as_str()` produces. These travel to the
+// API as the `standard` filter, so they are the protocol's spelling, not a
+// display one — `formatStandardLabel` handles how they read.
+const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'bit_cell', 'did_ckb', 'dotcell'];
 const COMPOSITION_TIER_OPTIONS: CompositionTierFilter[] = [
   'all',
   'pure_ckb',
@@ -121,6 +124,8 @@ function formatStandardLabel(standard: string): string {
     case 'did_ckb':
     case 'did:ckb':
       return 'did:ckb';
+    case 'bit_cell':
+      return '.bit Cell';
     case 'dotbit':
       return 'DOTBIT';
     default:

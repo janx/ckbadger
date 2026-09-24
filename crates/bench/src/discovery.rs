@@ -648,6 +648,20 @@ async fn discover_params(
                 .and_then(|v| v.as_str())
                 .map(String::from);
         }
+
+        // `.cell` item discovery. The collection is absent on a network that
+        // has no `.cell` deployment, so a missing id simply skips its entries.
+        let dotcell_items = fetch_json(
+            client,
+            &format!("{}/assets/identities/dotcell/items?limit=1", base),
+        )
+        .await?;
+        if let Some(first) = data_array(&dotcell_items).and_then(|arr| arr.first()) {
+            params.dotcell_item_id = first
+                .get("nftId")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
     }
 
     // object_collection_id from /assets (if has_assets)

@@ -62,32 +62,53 @@ pub struct TxActions {
     pub protocol_actions: Vec<ProtocolAction>,  // Layer 3: TX-level (stored once)
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
-    pub participants: Vec<ParticipantDelta>,    // All participants, sorted by lock_hash
+    pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
 }
 ```
 
 **Key design decisions:**
 
 - **TX-level fields stored once**: `protocol_actions`, `type_calls`, and `lock_calls` are properties of the transaction, not individual participants. Storing them once eliminates redundancy.
-- **`participants` sorted by lock_hash**: Deterministic ordering enables consistent serialization and efficient lookup.
+- **`participants` sorted by `ParticipantId`**: Deterministic ordering enables consistent serialization and efficient lookup. The enum's variant order IS the sort order, so every cell participant sorts before every protocol-named one, and within a variant the bytes decide.
 
 ### ParticipantDelta — Per-Participant Position Change
 
 ```rust
 // crates/ckbadger-store/src/types.rs
+
+/// Who a participant is.
+pub enum ParticipantId {
+    /// Exact lock script hash of a cell the tx consumed or created.
+    Lock([u8; 32]),
+    /// A party a protocol NAMED in cell data or script args by the first 20
+    /// bytes of its lock hash.
+    LockPrefix([u8; 20]),
+}
+
 pub struct ParticipantDelta {
-    pub lock_hash: Vec<u8>,          // 32-byte lock script hash (participant identity)
+    pub id: ParticipantId,           // Participant identity (see above)
     pub ckb_delta: i128,             // Net CKB change (shannons) — i128 for overflow safety
     pub used_delta: i64,             // Net occupied capacity change (shannons)
     pub item_deltas: Vec<ItemDelta>, // Layer 2: position changes for tokens/objects/identities
     pub tags: u16,                   // Bitmask classification for fast filtering
+    pub roles: u8,                   // participant_roles bitmask: owner_from / owner_to / manager_to
 }
 ```
 
 **Key design decisions:**
 
+- **A participant is a party, not a cell owner**: a protocol that writes a party's identity into
+  cell data or script args knows that party even when no cell of theirs appears in the
+  transaction. Such a party is a full participant whose CKB position is exactly zero — the zero is
+  what happened, not a missing value.
 - **`ckb_delta` is i128**: CKB amounts are u64 shannons, but deltas can overflow i64 when a single participant has massive input/output imbalance across many cells.
 - **`tags` bitmask**: Enables O(1) filter matching without inspecting item_deltas or protocol_actions. Set during the build phase.
+- **`roles` is a bitmask, not a `Vec`**: at ~2 participants per transaction and 10^8 participants
+  on mainnet alone, a `Vec<ParticipantRole>` would cost 8 more bytes per participant in
+  `CF_TX_ACTIONS` for information that fits in one.
+- **One matcher**: `ParticipantId::matches(&[u8; 32])` — a `Lock` compares the whole hash, a
+  `LockPrefix` its first 20 bytes. Every "is this participant this address" question in the store,
+  the API and the tx-pool mirror goes through it.
 - **No lock script components**: Unlike the old `OwnerActivityDelta`, `ParticipantDelta` does not carry lock_code_hash, lock_hash_type, lock_args, or peers. Lock script details are resolved from the address store at API response time; peers are all other participants in the same `TxActions` record.
 
 ### ItemDelta — Uniform Item Position Change
@@ -106,11 +127,11 @@ pub struct ItemDelta {
 
 **Item kind constants:**
 
-| Constant             | Value | Meaning                                         |
-| -------------------- | ----- | ----------------------------------------------- |
-| `ITEM_KIND_TOKEN`    | 0     | Fungible token (sUDT, xUDT)                     |
-| `ITEM_KIND_OBJECT`   | 1     | Non-fungible object (Spore, mNFT)               |
-| `ITEM_KIND_IDENTITY` | 2     | Identity (.bit AccountCell, .bit Cell, did:ckb) |
+| Constant             | Value | Meaning                                                       |
+| -------------------- | ----- | ------------------------------------------------------------- |
+| `ITEM_KIND_TOKEN`    | 0     | Fungible token (sUDT, xUDT)                                   |
+| `ITEM_KIND_OBJECT`   | 1     | Non-fungible object (Spore, mNFT)                             |
+| `ITEM_KIND_IDENTITY` | 2     | Identity (.bit AccountCell, .bit Cell, did:ckb, `.cell` name) |
 
 **Key design decisions:**
 
@@ -197,7 +218,7 @@ pub struct DailyActivityStats {
     pub script_call_count: u32,           // Unrecognized scripts
     pub unknown_count: u32,               // Fallback (should be 0)
     pub coinbase_count: u32,              // Mining rewards
-    pub unique_address_count: u32,        // Distinct lock_hashes
+    pub unique_address_count: u32,        // Distinct lock_hashes (Lock participants only)
     pub total_ckb_moved: u128,            // Sum of |ckb_delta| across all participants
     pub script_counts: HashMap<String, u32>,  // Per-code_hash counts
     pub protocol_action_counts: HashMap<String, u32>,  // "protocol:action" counts
@@ -236,6 +257,13 @@ pub fn build_tx_actions_for_block(
 pub fn build_tx_actions_for_block_no_detectors(
     txs: &[TxView<'_>],
 ) -> Result<Vec<TxActions>>
+
+/// Same, keeping each participant's input/output presence beside it. The
+/// addr_txs row emitters take this form.
+pub fn build_tx_actions_for_block_with_io(
+    txs: &[TxView<'_>],
+    detectors: &[Box<dyn ProtocolDetector>],
+) -> Result<Vec<BuiltTxActions>>  // { actions: TxActions, participant_io: Vec<ParticipantIo> }
 ```
 
 **Parameters:**
@@ -263,6 +291,7 @@ enum AssetKind {
     MnftToken,    // mNFT token
     Dotbit,       // .bit AccountCell (20-byte account ID)
     BitCell,      // .bit Cell (independent 32-byte identity ID)
+    DotCell,      // `.cell` name (20-byte name id, ownership in cell DATA)
 }
 ```
 
@@ -313,7 +342,17 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
    - Each ProtocolDetector analyzes the full transaction context
    - Emit ProtocolAction entries (TX-level, stored once)
 
-5. Build per-participant deltas (sorted by lock_hash):
+4b. Collect NAMED participants and merge them:
+   - `ProtocolDetector::name_participants(tx)` (default: none) returns the parties the protocol
+     points at, with their item deltas and roles
+   - Collapse repeats by id (one party may be named as both owner_to and manager_to)
+   - A named `LockPrefix` matching exactly ONE cell owner's first 20 bytes IS that owner: its item
+     deltas and roles are attached there, not emitted as a second participant for one person
+   - No match → a standalone participant with ckb_delta = used_delta = 0
+   - Two or more matches → error with tx context. A 2^-160 event; if it ever fires it is a bug or
+     an attack, and neither is something to guess about
+
+5. Build per-participant deltas (sorted by ParticipantId):
    - ckb_delta = Σ output_capacity - Σ input_capacity
    - used_delta = Σ output_occupied - Σ input_occupied
    - Derive item_deltas from accumulated data:
@@ -336,6 +375,10 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 - Spore: extract type args as the object ID
 - DotBit: resolve the canonical 20-byte AccountCell ID
 - BitCell: use the pre-parsed 32-byte identity ID retained with bulk/live-cell facts; legacy cells derive it from the full CKB-personalized account-name hash, while current cells use non-zero 32-byte type args
+- DotCell: **nothing is collected per lock owner.** A `.cell` name's owner is a 20-byte lock-hash
+  prefix in the cell's DATA, and every name cell carries the same Account Lock, so attributing the
+  name to the lock of the cell would credit the protocol's own lock for every name that exists.
+  `DotCellDetector` names the real parties instead (see "Named participants" below)
 - Unrecognized: call `record_type_call()` → stored in `type_calls`
 
 **`classify_output()`**: Processes output cell type script.
@@ -345,6 +388,7 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 - Spore: extract type args as the object ID
 - DotBit: parse the canonical 20-byte AccountCell ID
 - BitCell: parse the versioned DidCellData/SporeData payload once and emit its independent 32-byte identity ID
+- DotCell: nothing, for the same reason as the input side
 - Unrecognized: call `record_type_call()`
 
 **`emit_object_changes()`**: Set comparison for Object assets.
@@ -354,6 +398,44 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 - ID in inputs only → `magnitude=1, negative=true`
 
 **`emit_identity_changes()`**: Same logic for Identity assets.
+
+### `.cell` (DotCell) names
+
+`.cell` is the one protocol whose ownership is not the lock of the cell that
+holds it, so it is the one protocol whose Layer-2 deltas come from a detector
+rather than from the per-owner cell scan.
+
+`crates/indexer/src/db/writer/dotcell_detector.rs` diffs the name cells a
+transaction consumes against the ones it creates, once, and that single
+`Vec<DotCellTransition>` produces all four outputs — the Layer-3 action, the
+named participants, the collection `AssetAction` and the per-item feed entry —
+so the two sync paths cannot disagree about what a transaction meant.
+
+| `dotcell:*` action | Collection `AssetAction` | Named participants                                                                                                              | Metadata beyond `label`/`name`/`id`/`changes` |
+| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `register`         | Mint                     | owner `+1` (`owner_to`), and the manager it assigns                                                                             | `to`, `manager`, `expiry`                     |
+| `register_subname` | Mint                     | same                                                                                                                            | `+ parentId`                                  |
+| `transfer`         | Transfer                 | previous owner `-1`, new owner `+1`                                                                                             | `from`, `to`                                  |
+| `list`             | Update                   | seller `-1`, the Sale Lock instance `+1`                                                                                        | `from`, `to`, `seller`, `price`               |
+| `cancel_sale`      | Update                   | Sale Lock instance `-1`, seller `+1`                                                                                            | `from`, `to`, `seller`, `price`               |
+| `buy`              | Transfer                 | Sale Lock instance `-1`, buyer `+1` (the seller is paid in a cell of their own, so it is a LOCK participant with no item delta) | `from`, `to`, `buyer`, `seller`, `price`      |
+| `renew`            | Renew                    | none                                                                                                                            | `expiryFrom`, `expiryTo`                      |
+| `edit_records`     | Update                   | none                                                                                                                            | —                                             |
+| `edit_manager`     | Update                   | new manager, role `manager_to`, NO item delta                                                                                   | `managerFrom`, `managerTo`                    |
+| `touch`            | Update                   | none                                                                                                                            | —                                             |
+| `recycle`          | Recycle                  | owner `-1`                                                                                                                      | `from`                                        |
+| (ring root)        | — suppressed             | none                                                                                                                            | no action at all                              |
+| (ring relink)      | — suppressed             | none                                                                                                                            | no action at all                              |
+
+Layer-2 deltas follow `owner20` uniformly, with no special case for the Sale
+Lock: while a name is listed the chain says a Sale Lock script instance owns
+it, and that instance is a cell participant of the list/buy/cancel transaction,
+so the general merge rule attaches the ±1 to it.
+
+The collection feed entry is derived from the `dotcell:*` actions already
+written to `CF_TX_ACTIONS`, by `build_dotcell_tx_activity_entry`, in both sync
+paths — never from a create/consume pair, which would read a re-created name as
+a Transfer.
 
 ### UDT Amount Parsing
 
@@ -375,6 +457,8 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 | ----------------------------------- | --------- | ------------------------------- | ---------------------------------------------------------------- |
 | `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (bincode)           | Per-tx actions record                                            |
 | `CF_ADDR_TXS`                       | 76 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
+| `CF_ADDR_TXS_BY_PREFIX`             | 64 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
+| `CF_ADDR_PREFIX_STATS`              | 20 bytes  | `AddrPrefixStats` (bincode)     | Per-prefix count of named participations without a cell          |
 | `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds                                      |
 | `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
 | `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                                         |
@@ -418,6 +502,31 @@ pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>);
 pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8>;
 ```
 
+### Key Encoding — CF_ADDR_TXS_BY_PREFIX
+
+```
+lock_hash_prefix(20B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 64 bytes
+```
+
+A separate fixed-width CF rather than a tag byte on `CF_ADDR_TXS`: `ADDR_TX_KEY_SIZE` and every
+length assert on the full-hash index stay exact, and the descending position suffix is reused
+verbatim from `encode_addr_tx_key`, so the two indexes can never drift in ordering.
+
+### Row Derivation — one source
+
+`crates/indexer/src/db/writer/participant_rows.rs::addr_tx_rows(&TxActions, &[ParticipantIo])` is
+the ONLY derivation of `addr_txs` / `addr_txs_by_prefix` rows. Live sync, bulk build and the API's
+tx-pool mirror all call it; there is no second cell-walking derivation left to disagree with it.
+`ParticipantIo { has_inputs, has_outputs }` travels beside the participants and is never
+persisted — it is what the emitter needs to pick `AddrTxValue`'s tx_type.
+
+`AddrTxValue::new`'s `(has_inputs, has_outputs) == (false, false)` arm is `TX_TYPE_NAMED`
+(`tx_type_str() == "named"`), reachable only by a party holding no cell.
+
+`standalone_prefixes()` returns the prefixes of participants with no cell — exactly the
+participations `addr_balance.txs_count` cannot see, and therefore exactly what
+`CF_ADDR_PREFIX_STATS` counts.
+
 ### Key Encoding — Collection Activities
 
 ```
@@ -434,7 +543,19 @@ All values use `bincode::serialize()` — compact binary, fast to serialize/dese
 
 **`get_latest_activities()`**: Scans `CF_TX_ACTIONS`, skips cellbase transactions, returns up to 64 `TxActions` records for the global feed.
 
-**`list_activities(lock_hash, limit, cursor, filter)`**: Scans `CF_ADDR_TXS` by lock_hash prefix, multi-gets `TxActions` from `CF_TX_ACTIONS`, applies filter via `matches_activity_filter()`.
+**`list_activities(lock_hash, limit, cursor, filter)`**: Scans the address index, multi-gets `TxActions` from `CF_TX_ACTIONS`, applies filter via `matches_activity_filter()`.
+
+**`list_addr_txs_recent(lock_hash, limit, cursor)`**: A descending merge of two scans —
+`CF_ADDR_TXS[lock_hash]` and `CF_ADDR_TXS_BY_PREFIX[lock_hash[..20]]`. The same `(block, tx_idx)`
+cursor seeks both. A (party, tx) pair reaches exactly one of the two because the builder's merge
+pass already unified same-tx appearances, so the same position in both is reported as the upstream
+invariant violation it is, never deduped away.
+
+**`address_tx_count(lock_hash)`**: `addr_balance.txs_count + addr_prefix_stats[lock_hash[..20]].txs_count`.
+The ONE place the two are summed; every consumer calls it.
+
+**`resolve_lock_hash_prefix(prefix20)`**: Prefix-seeks `CF_LOCK_SCRIPTS` (written once per lock
+ever seen, never deleted). 0 hits → unresolved, 1 → the party, ≥2 → an error naming both hashes.
 
 **`get_tx_actions(block_num, tx_idx, tx_hash)`**: Point lookup of a single `TxActions` record.
 
@@ -451,7 +572,23 @@ StoreBatch::put_addr_tx(
     tx_hash: &[u8],
     value: &AddrTxValue,
 )
+StoreBatch::put_addr_tx_by_prefix(
+    &mut self,
+    prefix: &[u8],        // exactly 20 bytes
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+    value: &AddrTxValue,
+)
+StoreBatch::put_addr_prefix_stats(&mut self, prefix: &[u8], stats: &AddrPrefixStats)
 ```
+
+`CF_ADDR_PREFIX_STATS` carries **no** undo pre-image. Rollback subtracts the number of
+`CF_ADDR_TXS_BY_PREFIX` rows it deletes per prefix and then asserts the counter equals the rows
+that survive (deleting the row when it reaches zero) — the same contract `addr_balance.txs_count`
+has against `CF_ADDR_TXS`. A pre-image would be recorded on one block of a multi-block live batch
+and would not be replayed for a fork point on a later block of that batch, leaving the counter
+above the rows it is supposed to count.
 
 ### Activity Filter Matching
 
@@ -880,7 +1017,11 @@ transaction with three token changes is counted once in `token_count`.
 ### Additional Metrics
 
 - **`total_ckb_moved`**: Sum of `|ckb_delta|` across all non-cellbase participants (u128)
-- **`unique_address_count`**: Distinct lock_hashes per day/hour (computed from HashSet of `[u8; 32]`)
+- **`unique_address_count`**: Distinct lock_hashes per day/hour (computed from HashSet of `[u8; 32]`).
+  **`Lock` participants only.** One address can appear in the same bucket under both identities,
+  so counting the prefix form too would double-count it; and being named by a protocol is not that
+  address's own activity. The write paths match the variant explicitly rather than filtering on a
+  32-byte length.
 - **`script_counts`**: Per-code_hash activity counts (hex string keys → u32 counts)
 - **`protocol_action_counts`**: Per-action counts keyed as `protocol:action` (for example,
   `"rgbpp:leap_to_ckb" => 5`, `"dao:deposit" => 12`)

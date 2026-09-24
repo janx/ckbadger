@@ -8,6 +8,7 @@ import {
   type Cell,
   type ChartResponse,
   type DaoDeposit,
+  type DotCellOutPoint,
   type GlobalActivity,
   type GlobalActivityFilter,
   type GraphResponse,
@@ -134,6 +135,12 @@ function buildMeta(pathname: string, pageType: string, origin: string) {
 function hashShort(value: string, start: number = 10, end: number = 8): string {
   if (value.length <= start + end + 3) return value;
   return `${value.slice(0, start)}...${value.slice(-end)}`;
+}
+
+/** `txHash-index`, or `-` when the name has no such cell. */
+function formatDotCellOutPoint(outPoint: DotCellOutPoint | null): string {
+  if (!outPoint) return '-';
+  return `${outPoint.txHash}-${outPoint.index}`;
 }
 
 function parseOutpoint(outpoint: string): { txHash: string; outputIndex: number } {
@@ -281,7 +288,8 @@ function renderActivityDetail(activity: GlobalActivity): string {
 function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   return activities.map((activity) => {
     const classified = classifyActivity(activity);
-    const addr = activity.participants[0]?.address ?? '';
+    const addr =
+      activity.participants[0]?.address ?? activity.participants[0]?.lockHashPrefix ?? '';
     const ckbDelta = activity.participants[0]?.ckbDelta ?? '0';
     return [
       activity.timestamp,
@@ -1419,6 +1427,110 @@ export async function renderMarkdownPage(
             ['expiredAt', item.expiredAt ?? '-'],
             ['txHash', item.txHash ?? '-'],
             ['outputIndex', item.outputIndex ?? '-'],
+          ]
+        ),
+        '',
+        '## Activities',
+        '',
+        markdownTable(
+          ['txHash', 'blockNumber', 'txIndex', 'timestamp', 'actions'],
+          activities.data.map((activity) => [
+            hashShort(activity.txHash),
+            activity.blockNumber,
+            activity.txIndex,
+            activity.timestamp,
+            activity.actions.join(','),
+          ])
+        ),
+      ]);
+      return { status: 200, body };
+    }
+    case 'dotcell_item_detail': {
+      const limit = parseLimit(searchParams);
+      const cursor = searchParams.get('cursor') ?? undefined;
+      const action = parseMnftActivityAction(searchParams.get('action'));
+      const [item, activities] = await Promise.all([
+        api.getDotCellItemDetail(page.identityId),
+        api.getDotCellItemActivities(page.identityId, { limit, cursor, action }),
+      ]);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# .cell ${item.name}`,
+        '',
+        '## Name',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['identityId', item.identityId],
+            ['label', item.label],
+            ['name', item.name],
+            ['state', item.state],
+            ['isLive', item.isLive],
+            ['expiredAt', item.expiredAt],
+            ['graceEndsAt', item.graceEndsAt],
+            ['layoutVersion', item.layoutVersion],
+            ['namespaceArgs', item.namespaceArgs],
+            ['createdAtBlock', item.createdAtBlock],
+            ['createdAtTx', item.createdAtTx],
+            ['liveOutPoint', formatDotCellOutPoint(item.liveOutPoint)],
+            ['recordsHash', item.recordsHash],
+            ['nextId', item.nextId],
+          ]
+        ),
+        '',
+        '## Ownership',
+        '',
+        // A 20-byte prefix is what the chain stores; `lockHash`/`address` are
+        // reported only when exactly one known lock matches it.
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['ownerHashPrefix', item.owner.hashPrefix],
+            ['ownerLockHash', item.owner.lockHash ?? '-'],
+            ['ownerAddress', item.owner.address ?? '-'],
+            ['ownerScriptName', item.owner.scriptName ?? '-'],
+            ['managerHashPrefix', item.manager.hashPrefix],
+            ['managerLockHash', item.manager.lockHash ?? '-'],
+            ['managerAddress', item.manager.address ?? '-'],
+            ['managerScriptName', item.manager.scriptName ?? '-'],
+          ]
+        ),
+        '',
+        '## Sale',
+        '',
+        item.sale
+          ? markdownTable(
+              ['field', 'value'],
+              [
+                ['priceShannons', item.sale.priceShannons],
+                ['sellerHashPrefix', item.sale.seller.hashPrefix],
+                ['sellerLockHash', item.sale.seller.lockHash ?? '-'],
+                ['sellerAddress', item.sale.seller.address ?? '-'],
+                ['offerOutPoint', formatDotCellOutPoint(item.sale.offerOutPoint)],
+              ]
+            )
+          : '_Not listed for sale_',
+        '',
+        '## Records',
+        '',
+        markdownTable(
+          ['key', 'label', 'value', 'ttl', 'decodedAddress'],
+          item.records.map((record) => [
+            record.key,
+            record.label,
+            record.valueUtf8 ?? record.valueHex,
+            record.ttl,
+            record.decodedAddress?.address ?? '-',
+          ])
+        ),
+        '',
+        '## Sub-names',
+        '',
+        markdownTable(
+          ['relation', 'identityId', 'name'],
+          [
+            ...(item.parent ? [['parent', item.parent.identityId, item.parent.name]] : []),
+            ...item.children.map((child) => ['child', child.identityId, child.name]),
           ]
         ),
         '',

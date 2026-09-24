@@ -38,6 +38,13 @@ used_delta = change in occupied capacity
 
 CKB delta is a **dimension**, not a classification. A DAO deposit has `ckb_delta = -102 CKB`. A token transfer may have `ckb_delta = -188 CKB` (capacity transferred with tokens). A coinbase has `ckb_delta = +1065 CKB`. The CKB position is the bedrock measurement that is always meaningful.
 
+**Who is a participant.** A participant is any party the transaction affects: the holder of a lock
+on one of its cells, and the party a protocol _names_ in cell data or script args — by a full lock
+hash, or by the first 20 bytes of one. A named party is a participant whether or not it happened
+to hold a cell; when it did not, its CKB position is exactly zero. Nothing is invented — the zero
+is what happened. A named party that turns out to be one of the cell holders is not a second
+participant: it _is_ that one, with the protocol's item changes and roles attached.
+
 ### Layer 2: Item Delta (per-participant balance sheet)
 
 Layer 2 records the participant's **personal balance sheet** — what items were gained or lost. It follows double-entry bookkeeping principles: each participant independently records their own position changes.
@@ -50,7 +57,10 @@ Layer 2 records **only position changes** (delta != 0):
 
 - Token received or sent (with precise amount)
 - Object (Spore, mNFT, ...) arrived or departed
-- Identity (.bit, did:ckb, ...) arrived or departed
+- Identity (.bit, did:ckb, `.cell`, ...) arrived or departed — including for a receiver who holds
+  no cell in the transaction: a `.cell` name transfer records `-1` for the previous owner and `+1`
+  for the new one, whose only appearance in the transaction is the owner hash written into the
+  name's data
 
 #### What Layer 2 does NOT record
 

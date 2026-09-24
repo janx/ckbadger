@@ -89,8 +89,8 @@ function StreamItem({ activity }: { activity: GlobalActivity }) {
 
       {/* Per-participant lines: L1 CKB + L2 item deltas */}
       <div className={cn('space-y-0.5', txEvents.length > 0 ? 'mt-0.5 pl-2' : 'mt-1 pl-2')}>
-        {visibleParticipants.map((p) => (
-          <ParticipantLine key={p.address} participant={p} />
+        {visibleParticipants.map((p, i) => (
+          <ParticipantLine key={p.lockHash ?? p.lockHashPrefix ?? p.address ?? i} participant={p} />
         ))}
         {hiddenCount > 0 && (
           <span className="text-text-dim font-mono text-[10px]">

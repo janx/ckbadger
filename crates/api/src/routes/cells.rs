@@ -97,6 +97,9 @@ fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
     if semantic_tags & st::DID_CKB != 0 {
         labels.push("did:ckb".to_string());
     }
+    if semantic_tags & st::DOTCELL != 0 {
+        labels.push(".cell".to_string());
+    }
     labels
 }
 
@@ -1388,6 +1391,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/addresses/{addr}/transactions",
             get(get_address_transactions),
         )
+        .route(
+            "/addresses/prefix/{prefix}/transactions",
+            get(get_prefix_transactions),
+        )
+        .route(
+            "/addresses/{addr}/dotcell-names",
+            get(get_address_dotcell_names),
+        )
         .route("/addresses/{addr}/tokens", get(get_address_tokens))
 }
 
@@ -2493,19 +2504,31 @@ async fn get_address(
     // Get balance from the store
     let store = state.store.clone();
     let lock_hash_c = lock_hash.clone();
-    let addr_balance = tokio::task::spawn_blocking(move || store.get_addr_balance(&lock_hash_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let lock32: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "address lookup expects a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        ))
+    })?;
+    let (addr_balance, transactions_count) = tokio::task::spawn_blocking(move || {
+        // `address_tx_count` is the ONE place cell participations and
+        // protocol-named participations are added together.
+        Ok::<_, anyhow::Error>((
+            store.get_addr_balance(&lock_hash_c)?,
+            store.address_tx_count(&lock32)?,
+        ))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (balance, used_capacity, live_cells_count, transactions_count) = match &addr_balance {
+    let (balance, used_capacity, live_cells_count) = match &addr_balance {
         Some(ab) => (
             ab.balance.to_string(),
             ab.used_capacity.to_string(),
             ab.live_cells_count as i64,
-            ab.txs_count,
         ),
-        None => ("0".to_string(), "0".to_string(), 0, 0),
+        None => ("0".to_string(), "0".to_string(), 0),
     };
 
     // Resolve the lock script through the single canonical path: `CF_LOCK_SCRIPTS`
@@ -3106,6 +3129,167 @@ fn list_canonical_addr_txs_page(
     Ok(out)
 }
 
+/// One `addr_txs_by_prefix` row.
+///
+/// The prefix index is the half of an address's history that a protocol named
+/// rather than a cell recorded, so it has its own read path: verification and
+/// debugging need to see it as itself, not merged into an address that may not
+/// even be resolvable.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixTransactionResponse {
+    pub tx_hash: String,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub capacity_change: String,
+    pub tx_type: String,
+    pub tags: u16,
+}
+
+/// `GET /addresses/prefix/{prefix}/transactions` — the transactions a protocol
+/// named this 20-byte lock-hash prefix in.
+async fn get_prefix_transactions(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(prefix): axum::extract::Path<String>,
+    Query(params): Query<AddressTxParams>,
+) -> ApiResult<CursorPaginatedResponse<PrefixTransactionResponse>> {
+    let bytes = crate::utils::hash::parse_lock_hash_prefix20(&prefix, "lock hash prefix")?;
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
+
+    let store = state.store.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        store.list_addr_txs_by_prefix_recent(&bytes, limit + 1, cursor)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() > limit;
+    let page = &rows[..rows.len().min(limit)];
+    let next_cursor = if has_more {
+        page.last()
+            .map(|(block_num, tx_idx, _, _)| format!("{}:{}", block_num, tx_idx))
+    } else {
+        None
+    };
+
+    let txs = page
+        .iter()
+        .map(
+            |(block_number, tx_index, tx_hash, value)| PrefixTransactionResponse {
+                tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                block_number: *block_number,
+                tx_index: *tx_index,
+                capacity_change: value.capacity_change.to_string(),
+                tx_type: value.tx_type_str().to_string(),
+                tags: value.tags,
+            },
+        )
+        .collect();
+
+    ok(CursorPaginatedResponse::without_total(
+        txs,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+/// One `.cell` name an address holds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressDotCellNameResponse {
+    pub identity_id: String,
+    pub label: String,
+    pub name: String,
+    pub expired_at: u64,
+}
+
+/// `GET /addresses/{addr}/dotcell-names` — the `.cell` names this address owns.
+///
+/// A name's owner is the first 20 bytes of its owner's lock script hash, so
+/// the lookup is a prefix seek on the address's own lock hash — no scan, and
+/// no guess about which full hash a prefix belongs to.
+async fn get_address_dotcell_names(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(addr): axum::extract::Path<String>,
+    Query(params): Query<AddressTxParams>,
+) -> ApiResult<CursorPaginatedResponse<AddressDotCellNameResponse>> {
+    let lock_hash = if is_ckb_address(&addr) {
+        address_to_lock_script_hash(&addr)
+            .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
+    } else {
+        parse_hash32(&addr, "address/lock script hash")?
+    };
+    let owner20: [u8; 20] = lock_hash[..20].try_into().expect("20 bytes");
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor: Option<[u8; 20]> = match params.cursor.as_deref() {
+        Some(raw) => {
+            let bytes = crate::utils::hash::parse_lock_hash_prefix20(raw, ".cell name cursor")?;
+            Some(
+                bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| ApiError::bad_request(".cell name cursor must be 20 bytes"))?,
+            )
+        }
+        None => None,
+    };
+
+    let store = state.store.clone();
+    let ids = tokio::task::spawn_blocking(move || {
+        store.list_dotcell_names_by_owner20(&owner20, cursor, limit + 1)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = ids.len() > limit;
+    let page = &ids[..ids.len().min(limit)];
+    let next_cursor = if has_more {
+        page.last().map(|id| format!("0x{}", hex::encode(id)))
+    } else {
+        None
+    };
+
+    let mut rows = Vec::with_capacity(page.len());
+    for id in page {
+        let entry = state
+            .store
+            .get_identity(id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    ".cell owner index points at a missing identity: identity_id=0x{}",
+                    hex::encode(id)
+                ))
+            })?;
+        let (label, expired_at) = match &entry.extra {
+            ckbadger_store::types::IdentityExtra::DotCell {
+                label, expired_at, ..
+            } => (label.clone(), *expired_at),
+            _ => {
+                return Err(ApiError::internal(format!(
+                    ".cell identity has wrong extra variant: identity_id=0x{}",
+                    hex::encode(id)
+                )))
+            }
+        };
+        rows.push(AddressDotCellNameResponse {
+            identity_id: format!("0x{}", hex::encode(id)),
+            name: format!("{label}.cell"),
+            label,
+            expired_at,
+        });
+    }
+
+    ok(CursorPaginatedResponse::without_total(
+        rows,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
 async fn get_address_transactions(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
@@ -3264,15 +3448,19 @@ async fn get_address_transactions(
         )
         .collect::<Result<Vec<_>, _>>()?;
 
-    // `total` stays the COMMITTED transaction count. Pool rows are reported
-    // beside it in `pool`, never added to it.
+    // `total` stays the COMMITTED transaction count — cell participations plus
+    // protocol-named ones, through the one summing helper. Pool rows are
+    // reported beside it in `pool`, never added to it.
+    let total_lock: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "address transactions expect a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        ))
+    })?;
     let total = state
         .store
-        .get_addr_balance(&lock_hash)
-        .ok()
-        .flatten()
-        .map(|ab| ab.txs_count)
-        .unwrap_or(0);
+        .address_tx_count(&total_lock)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (mut txs, pool) = match pool_rows {
         Some((rows, summary)) => (rows, Some(summary)),
@@ -3303,6 +3491,12 @@ fn build_pool_transaction_rows(
     Vec<AddressTransactionResponse>,
     crate::pool::PoolSummaryResponse,
 )> {
+    let lock32: &[u8; 32] = lock_hash.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "pool address rows expect a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        )
+    })?;
     let (records, truncated) =
         crate::routes::activities::pool_records_for_page(snapshot, lock_hash);
 
@@ -3315,7 +3509,7 @@ fn build_pool_transaction_rows(
         }
         // `by_lock` is built from the record's participants, so one reached
         // through it must have an entry for this lock.
-        let participant = record.participant(lock_hash).ok_or_else(|| {
+        let participant = record.participant(lock32).ok_or_else(|| {
             anyhow::anyhow!(
                 "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
                 hex::encode(lock_hash),

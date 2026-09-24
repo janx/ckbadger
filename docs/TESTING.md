@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 58 checks, minutes
+ckbadger verify --depth sampling          # 63 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                               |
-| --------------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                  |
-| **Sampling** (S1-S25) | 25     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, entity capacity history vs chain |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                           |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                    |
+| **Sampling** (S1-S30) | 30     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                             |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -67,7 +67,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 58 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 63 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
@@ -140,6 +140,25 @@ Each network's report is also persisted to
 `<network workdir>/perf/verify/<run-id>/report.json` — written to a temp file
 and renamed, so an interrupted run leaves no partial file that could be read as
 complete evidence.
+
+### `.cell` (DotCell) Names (S27-S30)
+
+Four Sampling checks, store-vs-store except the last, which reads cells and
+witnesses back from the node. On a network with no `.cell` deployment each one
+passes with `no .cell collection on this network`.
+
+| Check                             | What it proves                                                                                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dotcell_ring_integrity`          | Walking `next` from the ring root visits every live name exactly once, in strictly ascending id order, ending at the zero id; the walk's length equals `liveCount` |
+| `dotcell_id_is_label_hash`        | Every name's id is `blake2b(label)[..20]` — the id is derived, never stored, so a mismatch means the label and the key disagree                                    |
+| `dotcell_owner_index_consistency` | Per-owner counts sum to `liveCount`, the holder rows equal `holdersCount`, and each resolvable owner's `/dotcell-names` list matches its counter                   |
+| `dotcell_records_hash_parity`     | For a sample of live names: the node's cell data `[1..33]` equals the stored `recordsHash`, and the witness at the cell's own output index decodes to it           |
+
+`identity_collection_holder_consistency` deliberately does **not** cover `.cell`.
+It asserts that an owner holds at least as many live cells as identity items,
+which is true when each identity sits in a cell under the owner's own lock.
+Every `.cell` name sits under the protocol's Account Lock instead, so that
+premise does not hold; `dotcell_owner_index_consistency` is its replacement.
 
 ### Chain-derived Entity Verification (S25)
 

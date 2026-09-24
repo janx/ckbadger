@@ -22,7 +22,7 @@ use crate::parser::transaction::TransactionParser;
 use crate::parser::udt::UdtStandard;
 use crate::parser::{
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
-    BitCellParser, DidCkbParser, DotbitParser, MnftParser, SporeParser, UdtParser,
+    BitCellParser, DidCkbParser, DotCellParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
@@ -181,6 +181,10 @@ pub fn classify_type_script_semantic_tag(
 
     if DidCkbParser::is_type_script(type_code_hash) {
         return CellSemanticTag::DidCkb;
+    }
+
+    if DotCellParser::is_account_type_script(type_code_hash) {
+        return CellSemanticTag::DotCell;
     }
 
     if SporeParser::is_spore_nft_type_script(type_code_hash) {
@@ -476,6 +480,12 @@ fn parse_single_block(
             let output_index_i16 =
                 checked_usize_to_i16(output_index, "bulk facts arena output index")?;
             let semantic_tag = classify_bulk_cell_semantic_tag(cell);
+            // The witness at THIS output's own index: a `.cell` name cell keeps
+            // its records payload there (spec §1.3).
+            let own_witness = tx
+                .witnesses
+                .get(output_index)
+                .map(|witness| crate::rpc::parse_hex_to_bytes(witness));
             local_cells.push(CellFacts {
                 outpoint: OutPointKey::new(
                     parsed_tx.hash,
@@ -531,6 +541,7 @@ fn parse_single_block(
                     cell,
                     semantic_tag,
                     &witness_bundle,
+                    own_witness.as_deref(),
                     &parsed_tx.hash,
                     output_index_i16,
                 )?,
@@ -3293,10 +3304,16 @@ mod tests {
                 "real did:ckb cell must classify as DidCkb"
             );
 
-            let facts =
-                parse_protocol_facts(&cell, tag, &DotbitWitnessBundle::default(), &[0u8; 32], 0)
-                    .expect("protocol facts")
-                    .expect("did:ckb cell must produce protocol facts");
+            let facts = parse_protocol_facts(
+                &cell,
+                tag,
+                &DotbitWitnessBundle::default(),
+                None,
+                &[0u8; 32],
+                0,
+            )
+            .expect("protocol facts")
+            .expect("did:ckb cell must produce protocol facts");
             match facts {
                 CellProtocolFacts::DidCkb(did) => {
                     assert_eq!(

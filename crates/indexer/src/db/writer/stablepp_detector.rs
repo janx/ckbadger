@@ -368,6 +368,7 @@ mod tests {
                 type_args: self.type_args.as_deref(),
                 udt_amount: self.udt_amount,
                 bit_cell_identity_id: None,
+                dotcell: None,
                 data: &self.data,
                 is_dao_withdraw_request: false,
                 dao_compensation: None,

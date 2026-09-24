@@ -21,6 +21,9 @@ vi.mock('@/lib/api', () => ({
 function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantInfo {
   return {
     address: overrides.address ?? 'ckb1qtest',
+    lockHash: overrides.lockHash ?? '0xaa',
+    lockHashPrefix: overrides.lockHashPrefix ?? null,
+    roles: overrides.roles ?? [],
     ckbDelta: overrides.ckbDelta ?? '0',
     usedDelta: overrides.usedDelta ?? '0',
     itemDeltas: overrides.itemDeltas ?? [],

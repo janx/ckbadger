@@ -577,7 +577,10 @@ describe('Identities Inventory Page', () => {
     window.history.replaceState(null, '', '/inventory/identities');
   });
 
-  it('shows did:ckb in Identity standards', async () => {
+  /// The four identity standards the indexer writes, filtered by the wire
+  /// value each one has in `IdentityStandard::as_str()`. A display label may
+  /// read however it likes; the value that travels to the API may not.
+  it('offers every identity standard and filters by its wire value', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockDidCkbIdentityAssets);
 
     render(<IdentitiesPage />);
@@ -587,18 +590,25 @@ describe('Identities Inventory Page', () => {
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'identity' }));
     });
 
+    const select = screen.getByLabelText('Filter by standard') as HTMLSelectElement;
+    const values = Array.from(select.options).map((option) => option.value);
+    expect(values).toEqual(['', 'dotbit', 'bit_cell', 'did_ckb', 'dotcell']);
+
+    expect(screen.getByRole('option', { name: 'DOTBIT' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '.bit Cell' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'did:ckb' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'DOTCELL' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'D-ID' })).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Filter by standard'), {
-      target: { value: 'did:ckb' },
-    });
-    await waitFor(() => {
-      expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ type: 'identity', standard: 'did:ckb' })
-      );
-      expect(window.location.search).toContain('standard=did%3Ackb');
-    });
+    for (const wire of ['dotbit', 'bit_cell', 'did_ckb', 'dotcell']) {
+      fireEvent.change(select, { target: { value: wire } });
+      await waitFor(() => {
+        expect(api.getAssets).toHaveBeenLastCalledWith(
+          expect.objectContaining({ type: 'identity', standard: wire })
+        );
+        expect(window.location.search).toContain(`standard=${wire}`);
+      });
+    }
   });
 
   it('shows empty state when no identities found', async () => {

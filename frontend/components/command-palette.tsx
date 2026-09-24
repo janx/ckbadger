@@ -48,8 +48,14 @@ const COMMANDS: CommandItem[] = [
   {
     id: 'go-inventory-identities',
     label: 'Go to Identities',
-    keywords: ['inventory', 'identity', 'identities', 'dotbit', 'did'],
+    keywords: ['inventory', 'identity', 'identities', 'dotbit', 'did', 'cell', 'dotcell'],
     href: '/inventory/identities',
+  },
+  {
+    id: 'go-dotcell-names',
+    label: 'Go to .cell Names',
+    keywords: ['cell', 'dotcell', 'name', 'names', 'identity', 'identities'],
+    href: '/identities/dotcell',
   },
   {
     id: 'go-fiber',

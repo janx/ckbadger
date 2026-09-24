@@ -3,6 +3,7 @@ import type {
   Cell,
   CellDep,
   CursorPaginatedResponse,
+  DotCellItem,
   MnftItemActivity,
   MnftItemDetail,
   CollectionItem,
@@ -252,6 +253,8 @@ type RawPayload = {
   didCkbActivities?: CursorPaginatedResponse<MnftItemActivity>;
   bitCellItem?: CollectionItem;
   bitCellActivities?: CursorPaginatedResponse<MnftItemActivity>;
+  dotcellItem?: DotCellItem;
+  dotcellActivities?: CursorPaginatedResponse<MnftItemActivity>;
   mnftItem?: MnftItemDetail;
   mnftActivities?: CursorPaginatedResponse<MnftItemActivity>;
   transaction?: TransactionDetail;
@@ -908,6 +911,23 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         return {
           status: 200,
           body: { meta, data: { bitCellItem, bitCellActivities } },
+        };
+      }
+      case 'dotcell_item_detail': {
+        const limit = parseLimit(searchParams);
+        const cursor = searchParams.get('cursor') ?? undefined;
+        const action = parseMnftActivityAction(searchParams.get('action'));
+        const [dotcellItem, dotcellActivities] = await Promise.all([
+          api.getDotCellItemDetail(page.identityId),
+          api.getDotCellItemActivities(page.identityId, {
+            limit,
+            cursor,
+            action,
+          }),
+        ]);
+        return {
+          status: 200,
+          body: { meta, data: { dotcellItem, dotcellActivities } },
         };
       }
       case 'mnft_item_detail': {

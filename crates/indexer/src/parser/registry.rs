@@ -35,6 +35,14 @@ pub enum ProtocolScript {
     StablePpIntent,
     StablePpVault,
     UtxoSwapIntent,
+    /// `.cell` (Cells) naming protocol: the name cell's type script.
+    DotCellAccount,
+    /// `.cell` Account Lock — every name cell's lock, empty args.
+    DotCellAccountLock,
+    /// `.cell` Sale Lock — args `seller_lock_hash(32) ‖ price_shannons(u64 LE)`.
+    DotCellSaleLock,
+    /// `.cell` Price cell type script (decoded in Phase 2).
+    DotCellPrice,
 }
 
 /// Map a registry file's `metadata_slug` (file stem) to a protocol identity.
@@ -61,6 +69,10 @@ fn slug_to_protocol(slug: &str) -> Option<ProtocolScript> {
         "stable-intent-lock" => ProtocolScript::StablePpIntent,
         "stable-vault-lock" => ProtocolScript::StablePpVault,
         "utxoswap-intent-lock" => ProtocolScript::UtxoSwapIntent,
+        "dotcell-account" => ProtocolScript::DotCellAccount,
+        "dotcell-account-lock" => ProtocolScript::DotCellAccountLock,
+        "dotcell-sale-lock" => ProtocolScript::DotCellSaleLock,
+        "dotcell-price" => ProtocolScript::DotCellPrice,
         _ => return None,
     })
 }

@@ -34,9 +34,11 @@ export function getMnftClassDetailHref(classId: string): string {
 }
 
 export function getIdentityCollectionHref(standard: string, collectionId: string): string {
-  if (standard === 'dotbit') return '/identities/dotbit';
-  if (standard === 'did_ckb' || standard === 'did:ckb') return '/identities/did:ckb';
-  if (standard === 'bit_cell' || standard === 'bit-cell') return '/identities/bit-cell';
+  const normalized = standard.toLowerCase();
+  if (normalized === 'dotbit') return '/identities/dotbit';
+  if (normalized === 'did_ckb' || normalized === 'did:ckb') return '/identities/did:ckb';
+  if (normalized === 'bit_cell' || normalized === 'bit-cell') return '/identities/bit-cell';
+  if (normalized === 'dotcell' || normalized === '.cell') return '/identities/dotcell';
   return `/identities/${encodeURIComponent(collectionId)}`;
 }
 
@@ -45,6 +47,9 @@ export const DOTBIT_COLLECTION_ID =
   '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 export const DID_CKB_COLLECTION_ID =
   '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+/** ASCII bytes of `dotcell_collection______________`, not a hash. */
+export const DOTCELL_COLLECTION_ID =
+  '0x646f7463656c6c5f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 export function isDotbitCollectionAlias(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -56,6 +61,11 @@ export function isDidCkbCollectionAlias(value: string): boolean {
   return (
     normalized === 'did:ckb' || normalized === 'did_ckb' || normalized === DID_CKB_COLLECTION_ID
   );
+}
+
+export function isDotCellCollectionAlias(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'dotcell' || normalized === '.cell' || normalized === DOTCELL_COLLECTION_ID;
 }
 
 /**
@@ -99,6 +109,9 @@ export function resolveObjectRouteTarget(rawAssetId: string): ObjectRouteTarget 
   if (isDidCkbCollectionAlias(assetId)) {
     return { kind: 'redirect', href: getIdentityCollectionHref('did:ckb', assetId) };
   }
+  if (isDotCellCollectionAlias(assetId)) {
+    return { kind: 'redirect', href: getIdentityCollectionHref('dotcell', assetId) };
+  }
   switch (hexByteLength(assetId)) {
     case MNFT_CLASS_ID_BYTES: {
       const canonical = `0x${assetId.replace(/^0x/i, '').toLowerCase()}`;
@@ -118,6 +131,8 @@ export function getIdentityItemDetailHref(standard: string, identityId: string):
     return `/identities/did/${encodeURIComponent(identityId)}`;
   if (normalized === 'bit_cell' || normalized === 'bit-cell')
     return `/identities/bit-cell/${encodeURIComponent(identityId)}`;
+  if (normalized === 'dotcell' || normalized === '.cell')
+    return `/identities/dotcell/${encodeURIComponent(identityId)}`;
   return `/objects/mnft/${encodeURIComponent(identityId)}`;
 }
 

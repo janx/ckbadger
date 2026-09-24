@@ -159,6 +159,28 @@ struct AddressActivityRecord {
     item_deltas: Vec<serde_json::Value>,
 }
 
+/// One party of a global activity row.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalParticipantApiRecord {
+    lock_hash: Option<String>,
+    lock_hash_prefix: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalActivityApiRecord {
+    tx_hash: String,
+    block_number: i64,
+    participants: Vec<GlobalParticipantApiRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressTxHashRecord {
+    tx_hash: String,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TokenTransferApiRecord {
@@ -4362,6 +4384,583 @@ impl Check for DaoStatusIndexMatchesDeposits {
     }
 }
 
+/// Every participant of a transaction must be able to find it again.
+///
+/// The whole point of the participant model is that `addr_txs` rows are derived
+/// from `TxActions.participants` rather than from cells: one derivation, no
+/// join to drift. This check reads it back from the other end — for each party
+/// a recent activity lists, the party's own transaction index must contain that
+/// transaction. A `Lock` party is looked up by address, a protocol-named party
+/// by its 20-byte prefix.
+pub struct ParticipantRowsConsistency;
+
+/// How many recent activities the check walks, and how deep it pages each
+/// party's transaction list looking for the transaction.
+const PARTICIPANT_ROWS_ACTIVITY_LIMIT: usize = 50;
+const PARTICIPANT_ROWS_TX_LOOKUP_LIMIT: usize = 100;
+
+impl Check for ParticipantRowsConsistency {
+    fn name(&self) -> &'static str {
+        "participant_rows_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Every participant of a recent activity finds that transaction in its own tx index"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(PARTICIPANT_ROWS_ACTIVITY_LIMIT) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let limit = ctx.sample_count.min(PARTICIPANT_ROWS_ACTIVITY_LIMIT);
+        if limit == 0 {
+            return Ok(CheckResult::pass(0));
+        }
+        let page: CursorPage<GlobalActivityApiRecord> =
+            api_get(ctx, &format!("activities?limit={}", limit))?;
+
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for activity in &page.data {
+            for participant in &activity.participants {
+                let (path, entity) = match (&participant.lock_hash, &participant.lock_hash_prefix) {
+                    // Resolved or plain cell participant: its full lock hash is
+                    // the address index key.
+                    (Some(lock_hash), _) => (
+                        format!(
+                            "addresses/{}/transactions?limit={}",
+                            lock_hash, PARTICIPANT_ROWS_TX_LOOKUP_LIMIT
+                        ),
+                        format!("lock_hash={}", lock_hash),
+                    ),
+                    // Named but unresolved: only the prefix index can answer.
+                    (None, Some(prefix)) => (
+                        format!(
+                            "addresses/prefix/{}/transactions?limit={}",
+                            prefix, PARTICIPANT_ROWS_TX_LOOKUP_LIMIT
+                        ),
+                        format!("lock_hash_prefix={}", prefix),
+                    ),
+                    (None, None) => {
+                        findings.push(Finding {
+                            entity: format!("tx={}", activity.tx_hash),
+                            details: vec![
+                                "participant carries neither lockHash nor lockHashPrefix"
+                                    .to_string(),
+                            ],
+                        });
+                        continue;
+                    }
+                };
+                let rows: CursorPage<AddressTxHashRecord> = api_get(ctx, &path)?;
+                if !rows.data.iter().any(|row| row.tx_hash == activity.tx_hash) {
+                    findings.push(Finding {
+                        entity,
+                        details: vec![format!(
+                            "participant of tx={} (block {}) has no row for it in its own transaction index",
+                            activity.tx_hash, activity.block_number
+                        )],
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+// ── `.cell` (DotCell) names ────────────────────────────────────────────────
+
+/// How many `.cell` names a records-parity sample may read back from the node.
+const DOTCELL_RECORDS_SAMPLE_CAP: usize = 20;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotCellItemListRecord {
+    nft_id: String,
+    name: Option<String>,
+    is_live: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotCellRingApiRecord {
+    first_id: String,
+    live_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotCellItemDetailApiRecord {
+    identity_id: String,
+    label: String,
+    is_live: bool,
+    next_id: String,
+    records_hash: String,
+    live_out_point: Option<DotCellOutPointApiRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotCellOutPointApiRecord {
+    tx_hash: String,
+    index: i16,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotCellHolderApiRecord {
+    owner_hash_prefix: Option<String>,
+    address: Option<String>,
+    item_count: i64,
+}
+
+/// Every live `.cell` name, paged out of the collection listing.
+fn dotcell_live_items(ctx: &CheckContext) -> anyhow::Result<Option<Vec<DotCellItemListRecord>>> {
+    // A network with no `.cell` deployment answers 404 here, and that is not
+    // a failure — it is a network where the protocol was never deployed.
+    if api_get::<NftCollectionDetailApiRecord>(ctx, "assets/identities/dotcell").is_err() {
+        return Ok(None);
+    }
+    let mut items = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let path = match &cursor {
+            Some(cursor) => format!(
+                "assets/identities/dotcell/items?limit=100&status=live&cursor={}",
+                cursor
+            ),
+            None => "assets/identities/dotcell/items?limit=100&status=live".to_string(),
+        };
+        let page: CursorPage<DotCellItemListRecord> = api_get(ctx, &path)?;
+        let page_len = page.data.len();
+        items.extend(page.data);
+        match page.next_cursor {
+            Some(next) if page_len > 0 => cursor = Some(next),
+            _ => break,
+        }
+    }
+    Ok(Some(items))
+}
+
+fn parse_hex20(label: &str, value: &str) -> anyhow::Result<[u8; 20]> {
+    let bytes = hex::decode(value.trim_start_matches("0x"))
+        .map_err(|e| anyhow::anyhow!("{label} is not hex: {value}: {e}"))?;
+    bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{label} is not 20 bytes: {value}"))
+}
+
+pub struct DotCellRingIntegrity;
+
+impl Check for DotCellRingIntegrity {
+    fn name(&self) -> &'static str {
+        "dotcell_ring_integrity"
+    }
+    fn description(&self) -> &'static str {
+        "Walking the .cell uniqueness ring from its root visits every live name exactly once, in ascending id order"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let Some(items) = dotcell_live_items(ctx)? else {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no .cell collection on this network",
+            ));
+        };
+        let ring: DotCellRingApiRecord = api_get(ctx, "assets/identities/dotcell/ring")?;
+
+        // The listing gives only ids; `next` comes from each item's detail.
+        let mut next_by_id: std::collections::HashMap<[u8; 20], [u8; 20]> =
+            std::collections::HashMap::new();
+        for item in &items {
+            let detail: DotCellItemDetailApiRecord = api_get(
+                ctx,
+                &format!("assets/identities/dotcell/items/{}", item.nft_id),
+            )?;
+            next_by_id.insert(
+                parse_hex20("item id", &detail.identity_id)?,
+                parse_hex20("next id", &detail.next_id)?,
+            );
+            progress.inc(1);
+        }
+
+        let mut findings = vec![];
+        let mut visited: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
+        let mut current = parse_hex20("ring first id", &ring.first_id)?;
+        let mut previous: Option<[u8; 20]> = None;
+        while current != [0u8; 20] {
+            if !visited.insert(current) {
+                findings.push(Finding {
+                    entity: format!("dotcell_id=0x{}", hex::encode(current)),
+                    details: vec!["the ring revisits this name: it is a cycle".to_string()],
+                });
+                break;
+            }
+            if let Some(previous) = previous {
+                if current <= previous {
+                    findings.push(Finding {
+                        entity: format!("dotcell_id=0x{}", hex::encode(current)),
+                        details: vec![format!(
+                            "ring is not ascending: previous=0x{}",
+                            hex::encode(previous)
+                        )],
+                    });
+                }
+            }
+            let Some(next) = next_by_id.get(&current).copied() else {
+                findings.push(Finding {
+                    entity: format!("dotcell_id=0x{}", hex::encode(current)),
+                    details: vec!["the ring points at a name that is not live".to_string()],
+                });
+                break;
+            };
+            previous = Some(current);
+            current = next;
+        }
+
+        let visited_count = visited.len() as i64;
+        if visited_count != ring.live_count {
+            findings.push(Finding {
+                entity: "dotcell_ring".to_string(),
+                details: vec![format!(
+                    "walk visited {} names, ring reports live_count={}",
+                    visited_count, ring.live_count
+                )],
+            });
+        }
+        if visited_count != items.len() as i64 {
+            findings.push(Finding {
+                entity: "dotcell_ring".to_string(),
+                details: vec![format!(
+                    "walk visited {} names, the collection lists {} live",
+                    visited_count,
+                    items.len()
+                )],
+            });
+        }
+
+        let checked = items.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+pub struct DotCellIdIsLabelHash;
+
+impl Check for DotCellIdIsLabelHash {
+    fn name(&self) -> &'static str {
+        "dotcell_id_is_label_hash"
+    }
+    fn description(&self) -> &'static str {
+        "Every .cell name's id is blake2b(label)[..20]"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let Some(items) = dotcell_live_items(ctx)? else {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no .cell collection on this network",
+            ));
+        };
+        let mut findings = vec![];
+        for item in &items {
+            // The listing's `name` is the label plus ".cell".
+            let name = item.name.as_deref().unwrap_or_default();
+            let label = name.strip_suffix(".cell").unwrap_or(name);
+            let expected = ckbadger_store::types::derive_dotcell_id(label);
+            let actual = parse_hex20("item id", &item.nft_id)?;
+            if expected != actual {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec![format!(
+                        "label {:?} hashes to 0x{}",
+                        label,
+                        hex::encode(expected)
+                    )],
+                });
+            }
+            progress.inc(1);
+        }
+        let checked = items.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+pub struct DotCellOwnerIndexConsistency;
+
+impl Check for DotCellOwnerIndexConsistency {
+    fn name(&self) -> &'static str {
+        "dotcell_owner_index_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Per-owner .cell counts sum to live_count, and each resolvable owner's name list matches its count"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let detail: NftCollectionDetailApiRecord = match api_get(ctx, "assets/identities/dotcell") {
+            Ok(detail) => detail,
+            Err(_) => {
+                return Ok(CheckResult::pass_with_detail(
+                    0,
+                    "no .cell collection on this network",
+                ))
+            }
+        };
+
+        let mut holders: Vec<DotCellHolderApiRecord> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let path = match &cursor {
+                Some(cursor) => format!(
+                    "assets/identities/dotcell/holders?limit=100&cursor={}",
+                    cursor
+                ),
+                None => "assets/identities/dotcell/holders?limit=100".to_string(),
+            };
+            let page: CursorPage<DotCellHolderApiRecord> = api_get(ctx, &path)?;
+            let page_len = page.data.len();
+            holders.extend(page.data);
+            match page.next_cursor {
+                Some(next) if page_len > 0 => cursor = Some(next),
+                _ => break,
+            }
+        }
+
+        let mut findings = vec![];
+        let sum: i64 = holders.iter().map(|holder| holder.item_count).sum();
+        if sum != detail.live_count {
+            findings.push(Finding {
+                entity: "dotcell_holders".to_string(),
+                details: vec![format!(
+                    "per-owner counts sum to {}, aggregate live_count={}",
+                    sum, detail.live_count
+                )],
+            });
+        }
+        if holders.len() as i64 != detail.holders_count {
+            findings.push(Finding {
+                entity: "dotcell_holders".to_string(),
+                details: vec![format!(
+                    "{} holder rows, aggregate holders_count={}",
+                    holders.len(),
+                    detail.holders_count
+                )],
+            });
+        }
+
+        // Spot-check the resolvable owners: their own name list must match the
+        // counter. An owner whose 20-byte prefix resolves to no known lock has
+        // no address page to ask, and that is not a defect.
+        let mut checked = 0u64;
+        for holder in holders.iter().take(IDENTITY_HOLDER_SPOT_CHECK_LIMIT) {
+            progress.inc(1);
+            let Some(address) = holder.address.as_deref() else {
+                continue;
+            };
+            let names: CursorPage<DotCellItemListRecord> = api_get(
+                ctx,
+                &format!("addresses/{}/dotcell-names?limit=100", address),
+            )?;
+            checked += 1;
+            if names.data.len() as i64 != holder.item_count {
+                findings.push(Finding {
+                    entity: format!(
+                        "dotcell_owner={}",
+                        holder.owner_hash_prefix.as_deref().unwrap_or(address)
+                    ),
+                    details: vec![format!(
+                        "address lists {} names, counter says {}",
+                        names.data.len(),
+                        holder.item_count
+                    )],
+                });
+            }
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked.max(holders.len() as u64)))
+        } else {
+            Ok(CheckResult::fail(
+                checked.max(holders.len() as u64),
+                findings,
+            ))
+        }
+    }
+}
+
+pub struct DotCellRecordsHashParity;
+
+impl Check for DotCellRecordsHashParity {
+    fn name(&self) -> &'static str {
+        "dotcell_records_hash_parity"
+    }
+    fn description(&self) -> &'static str {
+        "A sampled .cell name's live cell data and its creating witness agree with the stored records hash"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        true
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let Some(rpc_url) = ctx.rpc_url.clone() else {
+            anyhow::bail!("dotcell_records_hash_parity needs a CKB RPC URL");
+        };
+        let Some(items) = dotcell_live_items(ctx)? else {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no .cell collection on this network",
+            ));
+        };
+
+        let sample = ctx.sample_count.min(DOTCELL_RECORDS_SAMPLE_CAP);
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for item in items.iter().filter(|item| item.is_live).take(sample) {
+            progress.inc(1);
+            let detail: DotCellItemDetailApiRecord = api_get(
+                ctx,
+                &format!("assets/identities/dotcell/items/{}", item.nft_id),
+            )?;
+            checked += 1;
+            if !detail.is_live {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec![
+                        "the live listing returned a name the detail route calls recycled"
+                            .to_string(),
+                    ],
+                });
+                continue;
+            }
+            let Some(outpoint) = detail.live_out_point.as_ref() else {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec!["a live name has no live outpoint".to_string()],
+                });
+                continue;
+            };
+            let (tx_hash, output_index) = (outpoint.tx_hash.as_str(), outpoint.index);
+
+            let cell = rpc_call(
+                ctx,
+                &rpc_url,
+                "get_live_cell",
+                vec![
+                    serde_json::json!({
+                        "tx_hash": tx_hash,
+                        "index": format!("0x{:x}", output_index),
+                    }),
+                    serde_json::Value::Bool(true),
+                ],
+            )?;
+            let data_hex = cell
+                .as_ref()
+                .and_then(|cell| cell.get("cell"))
+                .and_then(|cell| cell.get("data"))
+                .and_then(|data| data.get("content"))
+                .and_then(|content| content.as_str());
+            let Some(data_hex) = data_hex else {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec![format!(
+                        "node has no live cell at {}:{}",
+                        tx_hash, output_index
+                    )],
+                });
+                continue;
+            };
+            let data = hex::decode(data_hex.trim_start_matches("0x"))?;
+            if data.len() < 33 {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec![format!("cell data is {} bytes", data.len())],
+                });
+                continue;
+            }
+            let on_chain_records_hash = format!("0x{}", hex::encode(&data[1..33]));
+            if on_chain_records_hash != detail.records_hash {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec![format!(
+                        "stored recordsHash={} but cell data[1..33]={}",
+                        detail.records_hash, on_chain_records_hash
+                    )],
+                });
+            }
+
+            // The records payload itself lives in the witness at this output's
+            // own index in the creating transaction.
+            let tx = rpc_call(
+                ctx,
+                &rpc_url,
+                "get_transaction",
+                vec![serde_json::Value::String(tx_hash.to_string())],
+            )?;
+            let witness = tx
+                .as_ref()
+                .and_then(|tx| tx.get("transaction"))
+                .and_then(|tx| tx.get("witnesses"))
+                .and_then(|witnesses| witnesses.as_array())
+                .and_then(|witnesses| witnesses.get(output_index as usize))
+                .and_then(|witness| witness.as_str());
+            let Some(witness) = witness else {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={}", item.nft_id),
+                    details: vec![format!(
+                        "creating tx {} has no witness at index {}",
+                        tx_hash, output_index
+                    )],
+                });
+                continue;
+            };
+            let expected: [u8; 32] = hex::decode(detail.records_hash.trim_start_matches("0x"))?
+                .try_into()
+                .map_err(|_| {
+                    anyhow::anyhow!("recordsHash is not 32 bytes: {}", detail.records_hash)
+                })?;
+            if let Err(e) = crate::parser::DotCellParser::parse_witness_records(witness, &expected)
+            {
+                findings.push(Finding {
+                    entity: format!("dotcell_id={} label={}", item.nft_id, detail.label),
+                    details: vec![format!("witness records do not verify: {e}")],
+                });
+            }
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -4397,6 +4996,11 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(AssetTopHoldersAddressConsistency),
         Box::new(IdentityCollectionHolderConsistency),
         Box::new(DaoStatusIndexMatchesDeposits),
+        Box::new(ParticipantRowsConsistency),
+        Box::new(DotCellRingIntegrity),
+        Box::new(DotCellIdIsLabelHash),
+        Box::new(DotCellOwnerIndexConsistency),
+        Box::new(DotCellRecordsHashParity),
     ]
 }
 
@@ -4583,7 +5187,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 31);
+        assert_eq!(checks.len(), 36);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -4606,6 +5210,54 @@ mod tests {
         assert!(names.contains(&"asset_top_holders_address_consistency"));
         assert!(names.contains(&"identity_collection_holder_consistency"));
         assert!(names.contains(&"dao_status_index_matches_deposits"));
+        assert!(names.contains(&"participant_rows_consistency"));
+        assert!(names.contains(&"dotcell_ring_integrity"));
+        assert!(names.contains(&"dotcell_id_is_label_hash"));
+        assert!(names.contains(&"dotcell_owner_index_consistency"));
+        assert!(names.contains(&"dotcell_records_hash_parity"));
+    }
+
+    /// The `.cell` checks are Sampling, and only the one that reads cells and
+    /// witnesses back from the node needs RPC.
+    #[test]
+    fn dotcell_checks_declare_their_tier_and_rpc_need() {
+        let checks = api_checks();
+        for name in [
+            "dotcell_ring_integrity",
+            "dotcell_id_is_label_hash",
+            "dotcell_owner_index_consistency",
+            "dotcell_records_hash_parity",
+        ] {
+            let check = checks
+                .iter()
+                .find(|c| c.name() == name)
+                .unwrap_or_else(|| panic!("missing check {name}"));
+            assert_eq!(check.tier(), CheckTier::Sampling, "{name}");
+            assert_eq!(
+                check.requires_rpc(),
+                name == "dotcell_records_hash_parity",
+                "{name}"
+            );
+        }
+    }
+
+    /// `.cell` names live under the protocol's own Account Lock, so the
+    /// "an owner holds at least as many live cells as items" premise of
+    /// `identity_collection_holder_consistency` does not hold for them.
+    /// `dotcell_owner_index_consistency` replaces it.
+    #[test]
+    fn identity_holder_consistency_does_not_cover_dotcell() {
+        let source = include_str!("api_checks.rs");
+        let start = source
+            .find("impl Check for IdentityCollectionHolderConsistency")
+            .expect("the check exists");
+        let body = &source[start..start + 2_000];
+        assert!(
+            !body.contains("dotcell"),
+            "identity_collection_holder_consistency must not claim .cell: its premise is that \
+             each identity sits in a cell under the owner's own lock, and every .cell name sits \
+             under the protocol's Account Lock"
+        );
     }
 
     #[test]
@@ -4620,7 +5272,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 24);
+        assert_eq!(sampling_count, 29);
     }
 
     #[test]

@@ -4,6 +4,7 @@ pub mod cell;
 pub mod dao;
 pub mod did_ckb;
 pub mod dotbit;
+pub mod dotcell;
 pub mod fiber;
 pub mod media_source;
 pub mod mnft;
@@ -22,6 +23,7 @@ pub use cell::CellParser;
 pub use dao::{DaoParser, DaoState, ParsedDaoDeposit, ParsedDaoWithdrawRequest};
 pub use did_ckb::{DidCkbParser, ParsedDidCkbCell};
 pub use dotbit::{DotbitParser, ParsedDotbitAccount, ParsedDotbitAccountOutput};
+pub use dotcell::{DotCellNameData, DotCellParser, DotCellRecord};
 pub use media_source::{analyze_spore_media_profile, build_dob1_svg, extract_dob1_pattern};
 pub use mnft::{MnftParser, ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 pub use rgbpp::{RgbppLockArgs, RgbppLockType, RgbppParser};
@@ -62,6 +64,9 @@ pub fn validate_outputs_data_len(
         outputs_data.len()
     );
 }
+
+#[cfg(test)]
+pub mod dotcell_fixtures;
 
 #[cfg(test)]
 pub(crate) mod test_helpers {
@@ -161,6 +166,10 @@ pub(crate) mod test_helpers {
             )
         }
     }
+
+    /// Real `.cell` transactions captured from both networks (see the module
+    /// for provenance). Kept in its own file: it is pure chain data.
+    pub use super::dotcell_fixtures as real_dotcell;
 }
 
 #[cfg(test)]

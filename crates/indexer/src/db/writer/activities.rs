@@ -4,16 +4,18 @@
 //! type/lock calls, and per-participant deltas (CKB, items, tags).
 
 use anyhow::{anyhow, bail, Result};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 use ckbadger_store::types::{
-    ItemDelta, LockCallEntry, ParticipantDelta, ProtocolAction, TxActions, TypeCallEntry,
-    ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE, TAG_DAO, TAG_IDENTITY,
-    TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
+    ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ProtocolAction, TxActions,
+    TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE, TAG_DAO,
+    TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
 };
 
-use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
+use crate::parser::{
+    bit_cell::BitCellParser, dotbit::DotbitParser, dotcell::DotCellNameData, udt::UdtParser,
+};
 
 static CODE_HASHES: OnceLock<CodeHashes> = OnceLock::new();
 
@@ -32,6 +34,7 @@ enum AssetKind {
     MnftToken,
     Dotbit,
     BitCell,
+    DotCell,
 }
 
 /// Pre-computed code hashes for asset detection via HashMap lookup.
@@ -71,6 +74,13 @@ impl CodeHashes {
                 ProtocolScript::MnftToken => AssetKind::MnftToken,
                 ProtocolScript::DotbitAccount => AssetKind::Dotbit,
                 ProtocolScript::BitCell => AssetKind::BitCell,
+                ProtocolScript::DotCellAccount => AssetKind::DotCell,
+                // The `.cell` Account Lock and Sale Lock are locks, and the
+                // Price cell is a protocol parameter: none of them is an asset
+                // a party owns, so none gets an AssetKind.
+                ProtocolScript::DotCellAccountLock
+                | ProtocolScript::DotCellSaleLock
+                | ProtocolScript::DotCellPrice => continue,
                 _ => continue,
             };
             type_lookup.insert(code_hash.clone(), kind);
@@ -154,6 +164,11 @@ pub struct InputCellView<'a> {
     /// Pre-parsed `.bit Cell` identity ID carried by the bulk live-cell arena.
     /// Live sync leaves this unset because it retains the input cell data.
     pub bit_cell_identity_id: Option<&'a [u8]>,
+    /// The `.cell` name this input consumed, as it stood before the spend.
+    /// Both sync paths must fill it — bulk from the cell's stored protocol
+    /// facts, live from the identity entry the consume path just read — because
+    /// an input cell reaches the activity builder without its data.
+    pub dotcell: Option<&'a DotCellNameData>,
     pub data: &'a [u8],
     pub is_dao_withdraw_request: bool,
     pub dao_compensation: Option<i64>,
@@ -236,6 +251,153 @@ pub trait ProtocolDetector: Send + Sync {
     fn emits_tx_level_actions(&self) -> bool {
         true
     }
+
+    /// Name the parties this transaction affects that may hold no cell in it.
+    ///
+    /// A protocol that writes a party's identity into cell data or script args
+    /// (a `.cell` owner/manager, a cheque lock's receiver and sender) knows that
+    /// party even when no cell of theirs appears. Default: names nobody.
+    fn name_participants(&self, _tx: &TxView<'_>) -> Result<Vec<NamedParticipant>> {
+        Ok(Vec::new())
+    }
+}
+
+/// A party a protocol names in transaction data, with what it did to their items.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedParticipant {
+    pub id: ParticipantId,
+    pub item_deltas: Vec<ItemDelta>,
+    pub roles: u8,
+}
+
+/// Whether a participant holds an input / output cell in this transaction.
+///
+/// Never persisted: it is what the row emitter needs to pick an `AddrTxValue`
+/// tx_type, and it travels beside `TxActions.participants` rather than inside
+/// each `ParticipantDelta`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParticipantIo {
+    pub has_inputs: bool,
+    pub has_outputs: bool,
+}
+
+/// `TxActions` plus the per-participant IO flags the row emitter needs.
+#[derive(Debug, Clone)]
+pub struct BuiltTxActions {
+    pub actions: TxActions,
+    pub participant_io: Vec<ParticipantIo>,
+}
+
+/// Lets a test install extra detectors for the live and bulk write paths.
+///
+/// Phase 1a ships no production detector that names participants, so the only
+/// way to exercise the named-party write paths end to end is to inject one.
+/// Compiled only under `cfg(test)`; production assembles its detector list from
+/// [`production_detectors`] alone.
+#[cfg(test)]
+pub(crate) mod test_detector_override {
+    use super::ProtocolDetector;
+    use std::sync::{Mutex, MutexGuard};
+
+    type Factory = fn() -> Vec<Box<dyn ProtocolDetector>>;
+
+    static FACTORY: Mutex<Option<Factory>> = Mutex::new(None);
+    /// Held for the lifetime of a [`Guard`] so two tests never install at once.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    pub(crate) struct Guard(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    #[must_use = "the override is uninstalled when the guard drops"]
+    pub(crate) fn install(factory: Factory) -> Guard {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some(factory);
+        Guard(serial)
+    }
+
+    /// Take the same lock without installing anything.
+    ///
+    /// The override is process-wide, so a test that asserts on the *absence* of
+    /// named participants must hold this for its duration — otherwise a
+    /// concurrently installed override is visible to it and the assertion is a
+    /// coin flip. Any in-crate test that drives a live write or a bulk build and
+    /// asserts on participants or addr_txs rows needs one of the two guards.
+    #[must_use = "the lock is released when the guard drops"]
+    pub(crate) fn without_extra_detectors() -> Guard {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        Guard(serial)
+    }
+
+    pub(crate) fn extra_detectors() -> Vec<Box<dyn ProtocolDetector>> {
+        match *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some(factory) => factory(),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Detectors that exist only to drive the participant-model tests.
+///
+/// Phase 1a ships no production detector that names participants, so the live
+/// and bulk write paths are exercised through an injected one. Kept beside the
+/// builder (rather than in one test module) because `sync/batch.rs` and
+/// `bulk_build/mod.rs` both need it.
+#[cfg(test)]
+pub(crate) mod test_detectors {
+    use super::LockCallEntry;
+    use super::{
+        ItemDelta, NamedParticipant, OwnerAccum, ParticipantId, ProtocolAction, ProtocolDetector,
+        Result, TxView, TypeCallEntry,
+    };
+    use ckbadger_store::types::ITEM_KIND_IDENTITY;
+
+    /// Names exactly one party, with one identity item delta.
+    pub(crate) struct NamingDetector {
+        pub(crate) id: ParticipantId,
+        pub(crate) delta_negative: bool,
+        pub(crate) roles: u8,
+    }
+
+    impl ProtocolDetector for NamingDetector {
+        fn might_apply(&self, tx: &TxView<'_>) -> bool {
+            !tx.is_cellbase
+        }
+
+        fn detect(
+            &self,
+            _tx: &TxView<'_>,
+            _owner_lock_hash: &[u8],
+            _accum: &OwnerAccum<'_>,
+            _item_deltas: &[ItemDelta],
+            _type_calls: &[TypeCallEntry],
+            _lock_calls: &[LockCallEntry],
+        ) -> Result<Vec<ProtocolAction>> {
+            Ok(vec![ProtocolAction::new(
+                "test",
+                "named",
+                serde_json::json!({}),
+            )])
+        }
+
+        fn name_participants(&self, _tx: &TxView<'_>) -> Result<Vec<NamedParticipant>> {
+            Ok(vec![NamedParticipant {
+                id: self.id,
+                item_deltas: vec![ItemDelta {
+                    item_id: vec![0xEE; 20],
+                    kind: ITEM_KIND_IDENTITY,
+                    magnitude: 1,
+                    negative: self.delta_negative,
+                }],
+                roles: self.roles,
+            }])
+        }
+    }
 }
 
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
@@ -249,6 +411,18 @@ pub fn build_tx_actions_for_block(
     txs: &[TxView<'_>],
     detectors: &[Box<dyn ProtocolDetector>],
 ) -> Result<Vec<TxActions>> {
+    Ok(build_tx_actions_for_block_with_io(txs, detectors)?
+        .into_iter()
+        .map(|b| b.actions)
+        .collect())
+}
+
+/// Build `TxActions` for all transactions in a block, keeping each participant's
+/// input/output presence beside it. The addr_txs row emitters take this form.
+pub fn build_tx_actions_for_block_with_io(
+    txs: &[TxView<'_>],
+    detectors: &[Box<dyn ProtocolDetector>],
+) -> Result<Vec<BuiltTxActions>> {
     let hashes = code_hashes();
     txs.iter()
         .map(|tx| build_tx_actions(tx, hashes, detectors))
@@ -269,6 +443,7 @@ pub fn production_detectors(is_mainnet: bool) -> Vec<Box<dyn ProtocolDetector>> 
         Box::new(super::fiber_detector::FiberDetector::new(is_mainnet)),
         Box::new(super::stablepp_detector::StableppDetector::new(is_mainnet)),
         Box::new(super::utxoswap_detector::UtxoSwapDetector::new(is_mainnet)),
+        Box::new(super::dotcell_detector::DotCellDetector::new()),
     ]
 }
 
@@ -282,6 +457,17 @@ pub fn build_tx_actions_with_production_detectors(
     is_mainnet: bool,
 ) -> Result<Vec<TxActions>> {
     build_tx_actions_for_block(txs, &production_detectors(is_mainnet))
+}
+
+/// Same as [`build_tx_actions_with_production_detectors`], keeping each
+/// participant's input/output presence so the caller can derive `addr_txs` rows
+/// through [`super::participant_rows::addr_tx_rows`] — the derivation the
+/// indexer's own write paths use.
+pub fn build_tx_actions_with_production_detectors_with_io(
+    txs: &[TxView<'_>],
+    is_mainnet: bool,
+) -> Result<Vec<BuiltTxActions>> {
+    build_tx_actions_for_block_with_io(txs, &production_detectors(is_mainnet))
 }
 
 /// Accumulator for per-owner position within one transaction.
@@ -388,7 +574,7 @@ fn build_tx_actions<'a>(
     tx: &TxView<'a>,
     hashes: &CodeHashes,
     detectors: &[Box<dyn ProtocolDetector>],
-) -> Result<TxActions> {
+) -> Result<BuiltTxActions> {
     let mut owners: HashMap<&'a [u8], OwnerAccum<'a>> = HashMap::new();
 
     // Process inputs — lock_script_hash must always be exactly 32 bytes
@@ -500,6 +686,61 @@ fn build_tx_actions<'a>(
         .map(|d| d.as_ref())
         .collect();
 
+    // --- Named participants: parties the protocol points at, cell or no cell ---
+    //
+    // One party may be named more than once in the same tx (owner_to and
+    // manager_to of the same name), so collapse by id first; then decide, per
+    // named party, whether it IS one of the cell owners.
+    let mut named_by_id: BTreeMap<ParticipantId, NamedParticipant> = BTreeMap::new();
+    for detector in &applicable_detectors {
+        for n in detector.name_participants(tx)? {
+            let e = named_by_id.entry(n.id).or_insert_with(|| NamedParticipant {
+                id: n.id,
+                item_deltas: Vec::new(),
+                roles: 0,
+            });
+            e.item_deltas.extend(n.item_deltas);
+            e.roles |= n.roles;
+        }
+    }
+    let mut attached: HashMap<&'a [u8], NamedParticipant> = HashMap::new();
+    let mut standalone: Vec<NamedParticipant> = Vec::new();
+    for (id, n) in named_by_id {
+        let matches: Vec<&'a [u8]> = match id {
+            ParticipantId::Lock(h) => owners.keys().filter(|k| ***k == h[..]).copied().collect(),
+            ParticipantId::LockPrefix(p) => owners
+                .keys()
+                .filter(|k| k[..20] == p[..])
+                .copied()
+                .collect(),
+        };
+        match matches.len() {
+            // Nobody in the tx holds this lock: a full participant whose CKB
+            // position happens to be exactly zero.
+            0 => standalone.push(n),
+            // Exactly one cell owner shares this identity — it IS that party.
+            1 => {
+                let e = attached
+                    .entry(matches[0])
+                    .or_insert_with(|| NamedParticipant {
+                        id,
+                        item_deltas: Vec::new(),
+                        roles: 0,
+                    });
+                e.item_deltas.extend(n.item_deltas);
+                e.roles |= n.roles;
+            }
+            _ => bail!(
+                "ambiguous participant prefix in tx 0x{}: 0x{} matches {} lock participants (0x{}, 0x{})",
+                hex::encode(tx.tx_hash),
+                hex::encode(id.as_bytes()),
+                matches.len(),
+                hex::encode(matches[0]),
+                hex::encode(matches[1])
+            ),
+        }
+    }
+
     // --- Phase 1: Per-owner item deltas and DAO protocol actions ---
     // `all_protocol_actions` holds per-CELL DAO actions (deposit/withdraw_request/
     // withdraw_complete below) and must keep every legitimate repeat — one tx can
@@ -513,6 +754,7 @@ fn build_tx_actions<'a>(
     let mut tx_type_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut tx_lock_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut participants = Vec::with_capacity(owner_hashes.len());
+    let mut participant_io: Vec<ParticipantIo> = Vec::with_capacity(owner_hashes.len());
 
     for lock_hash in &owner_hashes {
         let accum = owners
@@ -522,7 +764,7 @@ fn build_tx_actions<'a>(
         let used_delta = accum.output_used - accum.input_used;
 
         // Build item deltas
-        let mut item_deltas = Vec::new();
+        let mut item_deltas: Vec<ItemDelta> = Vec::new();
 
         // UDT changes → ItemDelta (token). Net-difference (u128, no intermediate overflow).
         for (type_script_hash, (input_amt, output_amt)) in &accum.udt_deltas {
@@ -684,13 +926,84 @@ fn build_tx_actions<'a>(
             tags |= TAG_LOCK_CALL;
         }
 
+        // A named party that IS this cell owner contributes its item deltas and
+        // roles here rather than becoming a second participant for one person.
+        let mut roles: u8 = 0;
+        if let Some(n) = attached.get(*lock_hash) {
+            item_deltas.extend(n.item_deltas.iter().cloned());
+            roles |= n.roles;
+            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
+                tags |= TAG_TOKEN;
+            }
+            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
+                tags |= TAG_OBJECT;
+            }
+            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
+                tags |= TAG_IDENTITY;
+            }
+        }
+
         participants.push(ParticipantDelta {
-            lock_hash: lock_hash.to_vec(),
+            id: ParticipantId::lock(lock_hash)?,
             ckb_delta,
             used_delta,
             item_deltas,
             tags,
+            roles,
         });
+        // Cell capacities are always >= 61 CKB, so a non-zero capacity sum is
+        // exactly "this participant had a cell on that side". Cellbase has no
+        // inputs, which reads as `has_inputs: false` on its own.
+        participant_io.push(ParticipantIo {
+            has_inputs: accum.input_capacity > 0,
+            has_outputs: accum.output_capacity > 0,
+        });
+    }
+
+    // Parties nobody in the tx shares a lock with: zero CKB position, their own
+    // row. Their tags come from their item deltas alone.
+    for n in standalone {
+        let mut tags = 0u16;
+        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
+            tags |= TAG_TOKEN;
+        }
+        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
+            tags |= TAG_OBJECT;
+        }
+        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
+            tags |= TAG_IDENTITY;
+        }
+        if tx.is_cellbase {
+            tags |= TAG_CELLBASE;
+        }
+        participants.push(ParticipantDelta {
+            id: n.id,
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: n.item_deltas,
+            tags,
+            roles: n.roles,
+        });
+        participant_io.push(ParticipantIo {
+            has_inputs: false,
+            has_outputs: false,
+        });
+    }
+
+    // `participants` and `participant_io` are two views of one list and must stay
+    // index-aligned: sort them together. For Lock-only txs this is the same order
+    // `owner_hashes.sort()` already produced, so existing output is unchanged.
+    {
+        let mut order: Vec<usize> = (0..participants.len()).collect();
+        order.sort_by_key(|i| participants[*i].id);
+        let mut sorted_participants = Vec::with_capacity(participants.len());
+        let mut sorted_io = Vec::with_capacity(participant_io.len());
+        for i in order {
+            sorted_participants.push(participants[i].clone());
+            sorted_io.push(participant_io[i]);
+        }
+        participants = sorted_participants;
+        participant_io = sorted_io;
     }
 
     // Deduplicate tx-level detector output only: those detectors re-derive one
@@ -731,17 +1044,20 @@ fn build_tx_actions<'a>(
         })
         .collect();
 
-    Ok(TxActions {
-        tx_hash: tx.tx_hash.to_vec(),
-        block_hash: tx.block_hash.to_vec(),
-        block_number: tx.block_number,
-        tx_index: tx.tx_index,
-        timestamp: tx.timestamp,
-        is_cellbase: tx.is_cellbase,
-        protocol_actions: all_protocol_actions,
-        type_calls,
-        lock_calls,
-        participants,
+    Ok(BuiltTxActions {
+        actions: TxActions {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash: tx.block_hash.to_vec(),
+            block_number: tx.block_number,
+            tx_index: tx.tx_index,
+            timestamp: tx.timestamp,
+            is_cellbase: tx.is_cellbase,
+            protocol_actions: all_protocol_actions,
+            type_calls,
+            lock_calls,
+            participants,
+        },
+        participant_io,
     })
 }
 
@@ -832,6 +1148,12 @@ fn classify_input<'a>(
                 accum.dotbit_inputs.push(account_id);
             }
         }
+        // `.cell` ownership lives in the cell's DATA, not in its lock: every
+        // name cell carries the same Account Lock, so attributing the name to
+        // the lock of the cell would credit the protocol's own lock for every
+        // name. `DotCellDetector` names the real parties instead, so nothing
+        // is collected per lock owner here.
+        Some(AssetKind::DotCell) => {}
         Some(AssetKind::BitCell) => {
             let identity_id = if let Some(identity_id) = bit_cell_identity_id {
                 if identity_id.len() != 32 || identity_id.iter().all(|byte| *byte == 0) {
@@ -956,6 +1278,9 @@ fn classify_output<'a>(
             })?;
             accum.bit_cell_outputs.push(identity_id);
         }
+        // See `classify_input`: `.cell` ownership is in the data, never in the
+        // lock, so the name never becomes an item of the cell's lock owner.
+        Some(AssetKind::DotCell) => {}
         None => {
             record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
         }
@@ -1057,27 +1382,29 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
     }
 }
 
-// Tests rewritten for TxActions/ItemDelta model.
+/// Owned fixtures for the builder tests, shared with `participant_rows`.
+///
+/// They live outside one test module because the single row derivation is
+/// proven equal to the old cell derivation over exactly these transactions.
 #[cfg(test)]
-#[allow(clippy::useless_vec)]
-mod tests {
-    use super::*;
+pub(crate) mod test_fixtures {
+    use super::{InputCellView, OutputCellView, TxView};
 
     /// Owned data for constructing test OutputCellView instances.
-    struct OwnedOutput {
-        lock_script_hash: Vec<u8>,
-        lock_code_hash: Vec<u8>,
-        lock_args: Vec<u8>,
-        type_code_hash: Option<Vec<u8>>,
-        type_hash_type: Option<i16>,
-        type_script_hash: Option<Vec<u8>>,
-        type_args: Option<Vec<u8>>,
-        data: Vec<u8>,
-        capacity: i64,
+    pub(crate) struct OwnedOutput {
+        pub(crate) lock_script_hash: Vec<u8>,
+        pub(crate) lock_code_hash: Vec<u8>,
+        pub(crate) lock_args: Vec<u8>,
+        pub(crate) type_code_hash: Option<Vec<u8>>,
+        pub(crate) type_hash_type: Option<i16>,
+        pub(crate) type_script_hash: Option<Vec<u8>>,
+        pub(crate) type_args: Option<Vec<u8>>,
+        pub(crate) data: Vec<u8>,
+        pub(crate) capacity: i64,
     }
 
     impl OwnedOutput {
-        fn view(&self) -> OutputCellView<'_> {
+        pub(crate) fn view(&self) -> OutputCellView<'_> {
             OutputCellView {
                 capacity: self.capacity,
                 lock_code_hash: &self.lock_code_hash,
@@ -1095,7 +1422,7 @@ mod tests {
         }
     }
 
-    fn make_output(
+    pub(crate) fn make_output(
         lock_hash_byte: u8,
         capacity: i64,
         type_code_hash: Option<Vec<u8>>,
@@ -1117,24 +1444,25 @@ mod tests {
     }
 
     /// Owned data for constructing test InputCellView instances.
-    struct OwnedInput {
-        lock_script_hash: Vec<u8>,
-        lock_code_hash: Vec<u8>,
-        lock_args: Vec<u8>,
-        type_code_hash: Option<Vec<u8>>,
-        type_script_hash: Option<Vec<u8>>,
-        type_args: Option<Vec<u8>>,
-        udt_amount: Option<u128>,
-        data: Vec<u8>,
-        capacity: i64,
-        occupied_capacity: i64,
-        type_hash_type: Option<i16>,
-        is_dao_withdraw_request: bool,
-        dao_compensation: Option<i64>,
+    pub(crate) struct OwnedInput {
+        pub(crate) dotcell: Option<super::DotCellNameData>,
+        pub(crate) lock_script_hash: Vec<u8>,
+        pub(crate) lock_code_hash: Vec<u8>,
+        pub(crate) lock_args: Vec<u8>,
+        pub(crate) type_code_hash: Option<Vec<u8>>,
+        pub(crate) type_script_hash: Option<Vec<u8>>,
+        pub(crate) type_args: Option<Vec<u8>>,
+        pub(crate) udt_amount: Option<u128>,
+        pub(crate) data: Vec<u8>,
+        pub(crate) capacity: i64,
+        pub(crate) occupied_capacity: i64,
+        pub(crate) type_hash_type: Option<i16>,
+        pub(crate) is_dao_withdraw_request: bool,
+        pub(crate) dao_compensation: Option<i64>,
     }
 
     impl OwnedInput {
-        fn view(&self) -> InputCellView<'_> {
+        pub(crate) fn view(&self) -> InputCellView<'_> {
             InputCellView {
                 previous_tx_hash: &[0u8; 32],
                 previous_output_index: 0,
@@ -1150,6 +1478,7 @@ mod tests {
                 type_args: self.type_args.as_deref(),
                 udt_amount: self.udt_amount,
                 bit_cell_identity_id: None,
+                dotcell: self.dotcell.as_ref(),
                 data: &self.data,
                 is_dao_withdraw_request: self.is_dao_withdraw_request,
                 dao_compensation: self.dao_compensation,
@@ -1157,8 +1486,9 @@ mod tests {
         }
     }
 
-    fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> OwnedInput {
+    pub(crate) fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> OwnedInput {
         OwnedInput {
+            dotcell: None,
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash: vec![0x11; 32],
             lock_args: vec![0x22; 20],
@@ -1175,12 +1505,104 @@ mod tests {
         }
     }
 
+    /// One owned transaction: the shapes the old cell-derived `addr_txs` writer
+    /// had to get right — plain transfer, self-transfer, fan-out to several
+    /// locks, and a cellbase (outputs only, no inputs).
+    pub(crate) struct OwnedTx {
+        pub(crate) name: &'static str,
+        pub(crate) tx_hash: [u8; 32],
+        pub(crate) is_cellbase: bool,
+        pub(crate) inputs: Vec<OwnedInput>,
+        pub(crate) outputs: Vec<OwnedOutput>,
+    }
+
+    impl OwnedTx {
+        pub(crate) fn view(&self) -> TxView<'_> {
+            TxView {
+                tx_hash: &self.tx_hash,
+                block_hash: &[0xBB; 32],
+                tx_index: 1,
+                block_number: 7,
+                timestamp: 0,
+                is_cellbase: self.is_cellbase,
+                inputs: self.inputs.iter().map(|i| i.view()).collect(),
+                outputs: self.outputs.iter().map(|o| o.view()).collect(),
+            }
+        }
+    }
+
+    pub(crate) fn legacy_fixture_txs() -> Vec<OwnedTx> {
+        vec![
+            OwnedTx {
+                name: "1-in-1-out transfer between two locks",
+                tx_hash: [0x01; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 100_000_000_000, 6_100_000_000)],
+                outputs: vec![make_output(0x22, 99_900_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "self transfer (same lock on both sides)",
+                tx_hash: [0x02; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 100_000_000_000, 6_100_000_000)],
+                outputs: vec![make_output(0x11, 99_900_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "one payer, three payees",
+                tx_hash: [0x03; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 300_000_000_000, 6_100_000_000)],
+                outputs: vec![
+                    make_output(0x22, 100_000_000_000, None, None, None, vec![]),
+                    make_output(0x33, 100_000_000_000, None, None, None, vec![]),
+                    make_output(0x44, 99_900_000_000, None, None, None, vec![]),
+                ],
+            },
+            OwnedTx {
+                name: "two payers merging into one payee",
+                tx_hash: [0x04; 32],
+                is_cellbase: false,
+                inputs: vec![
+                    make_input(0x11, 50_000_000_000, 6_100_000_000),
+                    make_input(0x22, 50_000_000_000, 6_100_000_000),
+                ],
+                outputs: vec![make_output(0x33, 99_900_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "cellbase: outputs only",
+                tx_hash: [0x05; 32],
+                is_cellbase: true,
+                inputs: vec![],
+                outputs: vec![make_output(0x55, 106_500_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "same lock appearing on two outputs",
+                tx_hash: [0x06; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 100_000_000_000, 6_100_000_000)],
+                outputs: vec![
+                    make_output(0x22, 40_000_000_000, None, None, None, vec![]),
+                    make_output(0x22, 59_900_000_000, None, None, None, vec![]),
+                ],
+            },
+        ]
+    }
+}
+
+// Tests rewritten for TxActions/ItemDelta model.
+#[cfg(test)]
+#[allow(clippy::useless_vec)]
+mod tests {
+    use super::test_fixtures::*;
+    use super::*;
+    use ckbadger_store::types::participant_roles;
+
     /// Helper: find participant by lock_hash byte pattern in a TxActions.
     fn find_participant(actions: &TxActions, lock_byte: u8) -> &ParticipantDelta {
         actions
             .participants
             .iter()
-            .find(|p| p.lock_hash == vec![lock_byte; 32])
+            .find(|p| p.id == ParticipantId::Lock([lock_byte; 32]))
             .unwrap_or_else(|| panic!("participant 0x{:02x} not found", lock_byte))
     }
 
@@ -1203,7 +1625,10 @@ mod tests {
         let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
         assert_eq!(actions_list.len(), 1);
         assert_eq!(actions_list[0].participants.len(), 1);
-        assert_eq!(actions_list[0].participants[0].lock_hash, vec![owner; 32]);
+        assert_eq!(
+            actions_list[0].participants[0].id,
+            ParticipantId::Lock([owner; 32])
+        );
     }
 
     #[test]
@@ -1232,7 +1657,7 @@ mod tests {
         let hashes: Vec<Vec<u8>> = actions_list[0]
             .participants
             .iter()
-            .map(|p| p.lock_hash.clone())
+            .map(|p| p.id.as_bytes().to_vec())
             .collect();
         assert_eq!(hashes, vec![vec![alice; 32], vec![bob; 32]]);
     }
@@ -2438,6 +2863,7 @@ mod tests {
         type_args: Option<Vec<u8>>,
     ) -> OwnedInput {
         OwnedInput {
+            dotcell: None,
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash,
             lock_args,
@@ -2695,6 +3121,7 @@ mod tests {
             type_args: None,
             udt_amount: None,
             bit_cell_identity_id: None,
+            dotcell: None,
             data: &input_data,
             is_dao_withdraw_request: false,
             dao_compensation: None,
@@ -2881,6 +3308,31 @@ mod tests {
                     "production detector list (is_mainnet={is_mainnet}) is missing the {label} detector"
                 );
             }
+
+            // `.cell` is detected from the name cell's TYPE script, not a lock.
+            let empty_locks: HashSet<[u8; 32]> = HashSet::new();
+            for (label, code_hash_hex) in [
+                (
+                    "dotcell mainnet",
+                    crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_MAINNET,
+                ),
+                (
+                    "dotcell testnet",
+                    crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_TESTNET,
+                ),
+            ] {
+                let mut type_code_hash = [0u8; 32];
+                type_code_hash.copy_from_slice(&parse_hex_to_bytes(code_hash_hex));
+                let mut types: HashSet<[u8; 32]> = HashSet::new();
+                types.insert(type_code_hash);
+
+                assert!(
+                    detectors
+                        .iter()
+                        .any(|d| d.might_apply_batch(&empty_locks, &types)),
+                    "production detector list (is_mainnet={is_mainnet}) is missing the {label} detector"
+                );
+            }
         }
     }
 
@@ -2926,6 +3378,7 @@ mod tests {
                 type_args: Some(&[]),
                 udt_amount: Some(1000),
                 bit_cell_identity_id: None,
+                dotcell: None,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -2954,6 +3407,151 @@ mod tests {
                 .any(|a| a.protocol == "rgbpp"),
             "production entry point must run the production detectors; got {:?}",
             actions_list[0].protocol_actions
+        );
+    }
+
+    // ---- Phase 1a: protocol-named participants ----
+
+    fn one_transfer_tx<'a>(input: &'a OwnedInput, output: &'a OwnedOutput) -> TxView<'a> {
+        TxView {
+            tx_hash: &[0xAA; 32],
+            block_hash: &[0xBB; 32],
+            tx_index: 1,
+            block_number: 7,
+            timestamp: 0,
+            is_cellbase: false,
+            inputs: vec![input.view()],
+            outputs: vec![output.view()],
+        }
+    }
+
+    #[test]
+    fn named_prefix_participant_without_cell_becomes_standalone_participant() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x11, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let detectors: Vec<Box<dyn ProtocolDetector>> =
+            vec![Box::new(test_detectors::NamingDetector {
+                id: ParticipantId::LockPrefix([0x77; 20]),
+                delta_negative: false,
+                roles: participant_roles::OWNER_TO,
+            })];
+        let built = build_tx_actions_for_block_with_io(&[tx], &detectors)
+            .unwrap()
+            .remove(0);
+        let a = &built.actions;
+        assert_eq!(a.participants.len(), 2);
+        assert_eq!(a.participants[0].id, ParticipantId::Lock([0x11; 32])); // Lock 先
+        let named = &a.participants[1];
+        assert_eq!(named.id, ParticipantId::LockPrefix([0x77; 20]));
+        assert_eq!((named.ckb_delta, named.used_delta), (0, 0));
+        assert_eq!(named.item_deltas.len(), 1);
+        assert_eq!(named.roles, participant_roles::OWNER_TO);
+        assert_ne!(named.tags & TAG_IDENTITY, 0);
+        assert_ne!(named.tags & TAG_PROTOCOL, 0);
+        assert_eq!(
+            built.participant_io[1],
+            ParticipantIo {
+                has_inputs: false,
+                has_outputs: false
+            }
+        );
+        assert_eq!(
+            built.participant_io[0],
+            ParticipantIo {
+                has_inputs: true,
+                has_outputs: true
+            }
+        );
+    }
+
+    #[test]
+    fn named_prefix_participant_merges_into_matching_lock_participant() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x11, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let mut p = [0u8; 20];
+        p.copy_from_slice(&[0x11; 20]);
+        let detectors: Vec<Box<dyn ProtocolDetector>> =
+            vec![Box::new(test_detectors::NamingDetector {
+                id: ParticipantId::LockPrefix(p),
+                delta_negative: true,
+                roles: participant_roles::OWNER_FROM,
+            })];
+        let built = build_tx_actions_for_block_with_io(&[tx], &detectors)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            built.actions.participants.len(),
+            1,
+            "前缀参与方并入同前缀的 Lock 参与方"
+        );
+        let only = &built.actions.participants[0];
+        assert_eq!(only.id, ParticipantId::Lock([0x11; 32]));
+        assert_eq!(only.ckb_delta, -10);
+        assert!(only
+            .item_deltas
+            .iter()
+            .any(|d| d.kind == ITEM_KIND_IDENTITY && d.negative));
+        assert_eq!(only.roles, participant_roles::OWNER_FROM);
+    }
+
+    #[test]
+    fn two_lock_participants_sharing_a_prefix_is_an_error() {
+        let input = make_input(0x11, 1000, 61);
+        let mut other = make_output(0x11, 990, None, None, None, vec![]);
+        other.lock_script_hash[31] = 0x00; // 同前 20 字节，不同完整哈希
+        let tx = one_transfer_tx(&input, &other);
+        let mut p = [0u8; 20];
+        p.copy_from_slice(&[0x11; 20]);
+        let detectors: Vec<Box<dyn ProtocolDetector>> =
+            vec![Box::new(test_detectors::NamingDetector {
+                id: ParticipantId::LockPrefix(p),
+                delta_negative: false,
+                roles: 0,
+            })];
+        let err = build_tx_actions_for_block_with_io(&[tx], &detectors).unwrap_err();
+        assert!(
+            err.to_string().contains("ambiguous participant prefix"),
+            "{err}"
+        );
+    }
+
+    /// A transaction no protocol is involved in gets no named participants
+    /// from any production detector — naming is a protocol fact, never a
+    /// default.
+    #[test]
+    fn production_detectors_name_nobody_in_a_plain_transfer() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x22, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        for is_mainnet in [true, false] {
+            for d in production_detectors(is_mainnet) {
+                assert!(
+                    d.name_participants(&tx).unwrap().is_empty(),
+                    "a plain transfer names nobody"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_tx_actions_for_block_still_returns_plain_actions() {
+        // 兼容包装：无 detector 时与旧函数逐字段一致（participants 用 id 表达）
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x22, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let plain = build_tx_actions_for_block(&[tx], &[]).unwrap();
+        assert_eq!(
+            plain[0]
+                .participants
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>(),
+            vec![
+                ParticipantId::Lock([0x11; 32]),
+                ParticipantId::Lock([0x22; 32])
+            ]
         );
     }
 }

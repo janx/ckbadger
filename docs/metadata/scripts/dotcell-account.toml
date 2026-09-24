@@ -1,0 +1,27 @@
+name = "Cells Account"
+description = "Type script of a .cell name: keeps every label unique through an ordered on-chain linked list and holds the name's owner, manager, records hash and expiry."
+website = "https://cellula.id/"
+category = "naming"
+
+[mainnet]
+[[mainnet.versions]]
+# Current, in-place type-id upgrade; code cell
+# 0xe9122f59d58625f8040926606cfb6e244ca557e5f83fed7cc1e6dea6b81804fc:0 (node-verified 2026-09-23).
+canonical_ref_hash = "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54"
+version_hash = "0xf86bdba9ff22b5018dcb90a22cdb3720cd5ea8868ab94959ac8146a6789aae30"
+canonical_hash_type = "type"
+[[mainnet.versions]]
+# Deploy version; code cell
+# 0x522c91d3242450fdc5ae4cc6891d566de34d6f99663679f15e96c03d01c59268:0 (node-verified 2026-09-23).
+canonical_ref_hash = "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54"
+version_hash = "0x8b800e1c5bd79129745939a1b5a8f382d55fe83ef41a9202f64d29287585b150"
+canonical_hash_type = "type"
+
+[testnet]
+[[testnet.versions]]
+# Current; code cell
+# 0x57ed78e4b2d7c07372719ef6177b6fd3b33ea63272e7d63f25ab277d3c764ae6:0 (node-verified 2026-09-23).
+# Nine earlier testnet binaries exist; only the current one is listed, as the .bit files do.
+canonical_ref_hash = "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9"
+version_hash = "0x76ed462c0278e2d3f1413ae6ac254210fb72a8cb2f2c87a1d9d5f37d4e06cc27"
+canonical_hash_type = "type"

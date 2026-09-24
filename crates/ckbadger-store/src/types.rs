@@ -99,6 +99,8 @@ impl AddrTxValue {
     pub const TX_TYPE_SENT: u8 = 1;
     pub const TX_TYPE_INTERNAL: u8 = 2;
     pub const TX_TYPE_TRANSFER: u8 = 3;
+    /// A party the protocol named that holds no cell in this transaction.
+    pub const TX_TYPE_NAMED: u8 = 4;
 
     pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool, tags: u16) -> Self {
         let tx_type = match (has_inputs, has_outputs) {
@@ -113,7 +115,7 @@ impl AddrTxValue {
             }
             (false, true) => Self::TX_TYPE_RECEIVED,
             (true, false) => Self::TX_TYPE_SENT,
-            (false, false) => Self::TX_TYPE_TRANSFER,
+            (false, false) => Self::TX_TYPE_NAMED,
         };
         Self {
             capacity_change,
@@ -127,6 +129,7 @@ impl AddrTxValue {
             Self::TX_TYPE_RECEIVED => "received",
             Self::TX_TYPE_SENT => "sent",
             Self::TX_TYPE_INTERNAL => "internal",
+            Self::TX_TYPE_NAMED => "named",
             _ => "transfer",
         }
     }
@@ -144,6 +147,7 @@ pub mod semantic_tags {
     pub const CLUSTER: u16 = 1 << 6;
     pub const BIT_CELL: u16 = 1 << 7;
     pub const DID_CKB: u16 = 1 << 8;
+    pub const DOTCELL: u16 = 1 << 9;
 }
 
 /// Aggregated cell statistics for a token.
@@ -791,6 +795,8 @@ pub enum IdentityStandard {
     BitCell,
     /// did:ckb decentralized identity.
     DidCkb,
+    /// `.cell` (Cells) name.
+    DotCell,
 }
 
 impl IdentityStandard {
@@ -800,6 +806,7 @@ impl IdentityStandard {
             IdentityStandard::DotBit => "dotbit",
             IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
+            IdentityStandard::DotCell => "dotcell",
         }
     }
 
@@ -809,6 +816,7 @@ impl IdentityStandard {
             IdentityStandard::DotBit => "dotbit",
             IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
+            IdentityStandard::DotCell => "dotcell",
         }
     }
 
@@ -818,6 +826,7 @@ impl IdentityStandard {
             IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
             IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
             IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
+            IdentityStandard::DotCell => &DOTCELL_SENTINEL_COLLECTION,
         }
     }
 }
@@ -828,8 +837,72 @@ pub const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection___________
 pub const BIT_CELL_SENTINEL_COLLECTION: [u8; 32] = *b"bit_cell_collection_____________";
 /// Sentinel collection key for the did:ckb identity collection (32 bytes).
 pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+/// Sentinel collection key for the `.cell` (DotCell) identity collection (32 bytes).
+pub const DOTCELL_SENTINEL_COLLECTION: [u8; 32] = *b"dotcell_collection______________";
 /// Sentinel collection key for clusterless Spore objects (32 bytes).
 pub const SOLE_SPORES_SENTINEL_COLLECTION: [u8; 32] = *b"sole_spores_collection__________";
+
+// ── `.cell` (DotCell) name cell types ───────────────────────────────────────
+//
+// The cell layout these describe is spec §1.2, verified byte-for-byte on both
+// networks on 2026-09-23. They live in the store crate because the identity
+// entry (`IdentityExtra::DotCell`) is built from exactly these fields and both
+// the indexer's parser and the API's read path must speak one vocabulary.
+
+/// One decoded record from a name cell's witness payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotCellRecord {
+    pub key: String,
+    pub label: String,
+    pub value: Vec<u8>,
+    pub ttl: u32,
+}
+
+/// The decoded header + label of a `.cell` name cell.
+///
+/// `id` is derived, not stored on chain: `blake2b(label)[..20]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotCellNameData {
+    pub layout_version: u8,
+    pub records_hash: [u8; 32],
+    pub next_id: [u8; 20],
+    pub expired_at: u64,
+    pub owner_hash20: [u8; 20],
+    pub manager_hash20: [u8; 20],
+    pub label: String,
+    pub id: [u8; 20],
+}
+
+/// The ONE definition of a `.cell` name id: `blake2b(label)[..20]` under CKB's
+/// default personalization. Everything that needs a name id — the parser, the
+/// sub-name parent link, API name lookups and the verify check — calls this.
+pub fn derive_dotcell_id(label: &str) -> [u8; 20] {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(label.as_bytes());
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    let mut id = [0u8; 20];
+    id.copy_from_slice(&out[..20]);
+    id
+}
+
+impl DotCellNameData {
+    /// The ring root carries an empty label. It is protocol infrastructure,
+    /// not an identity.
+    pub fn is_root(&self) -> bool {
+        self.label.is_empty()
+    }
+
+    /// `shop.alice` is a sub-name of `alice`; the grammar allows at most one
+    /// dot, so the parent is everything after the first one.
+    pub fn parent_label(&self) -> Option<&str> {
+        self.label.split_once('.').map(|(_, parent)| parent)
+    }
+
+    pub fn parent_id(&self) -> Option<[u8; 20]> {
+        self.parent_label().map(derive_dotcell_id)
+    }
+}
 
 /// Standard-specific data for Identity entries, stored inline via bincode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -853,6 +926,26 @@ pub enum IdentityExtra {
     },
     /// did:ckb identity: reserved for future fields.
     DidCkb,
+    /// `.cell` name. Ownership is stored exactly as the chain stores it — two
+    /// 20-byte lock-hash prefixes — and `IdentityEntry.owner_lock_hash` stays
+    /// `None`, because the chain never gives a full hash here.
+    DotCell {
+        /// "alice" or "shop.alice"; `IdentityEntry.name` is this + ".cell".
+        label: String,
+        /// The deployment's type-script args.
+        namespace_args: [u8; 20],
+        layout_version: u8,
+        /// Unix seconds (u40 on chain).
+        expired_at: u64,
+        owner_hash20: [u8; 20],
+        manager_hash20: [u8; 20],
+        next_id: [u8; 20],
+        records_hash: [u8; 32],
+        /// Decoded from the creating transaction's witness, hash-verified.
+        records: Vec<DotCellRecord>,
+        /// `blake2b(label after the first '.')[..20]` for sub-names.
+        parent_id: Option<[u8; 20]>,
+    },
 }
 
 /// An Identity entry stored in the `identity_data` column family.
@@ -869,6 +962,21 @@ pub struct IdentityEntry {
     pub created_at_tx: Vec<u8>,
     /// Standard-specific payload (bincode-serialized, no JSON).
     pub extra: IdentityExtra,
+}
+
+/// The uniqueness-ring root of one `.cell` namespace (spec §1.4).
+///
+/// The root is protocol infrastructure — empty label, zero owner — so it is
+/// never an identity; this row is what lets verify walk the ring from the root
+/// without scanning every name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotCellRingRoot {
+    pub root_tx_hash: Vec<u8>,
+    pub root_output_index: i16,
+    /// The root cell's `next` — the first name in id order, or zero when the
+    /// ring holds no names.
+    pub first_id: [u8; 20],
+    pub created_at_block: i64,
 }
 
 /// Pre-aggregated cluster (DOB collection) data, maintained inline by the indexer.
@@ -1703,7 +1811,7 @@ pub const ITEM_KIND_TOKEN: u8 = 0;
 pub const ITEM_KIND_OBJECT: u8 = 1;
 pub const ITEM_KIND_IDENTITY: u8 = 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDelta {
     pub item_id: Vec<u8>,
     pub kind: u8,
@@ -1715,13 +1823,93 @@ pub struct ItemDelta {
     pub negative: bool,
 }
 
+/// 交易影响到的一方。`Lock` 是交易里某个 cell 的 lock hash；`LockPrefix` 是协议在
+/// 数据或 args 里以 lock hash 前 20 字节指名的一方。变体顺序即排序顺序。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ParticipantId {
+    Lock([u8; 32]),
+    LockPrefix([u8; 20]),
+}
+
+impl ParticipantId {
+    pub fn lock(hash: &[u8]) -> anyhow::Result<Self> {
+        let arr: [u8; 32] = hash.try_into().map_err(|_| {
+            anyhow::anyhow!("ParticipantId::lock expects 32 bytes, got {}", hash.len())
+        })?;
+        Ok(Self::Lock(arr))
+    }
+
+    pub fn prefix(prefix: &[u8]) -> anyhow::Result<Self> {
+        let arr: [u8; 20] = prefix.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "ParticipantId::prefix expects 20 bytes, got {}",
+                prefix.len()
+            )
+        })?;
+        Ok(Self::LockPrefix(arr))
+    }
+
+    /// 一个地址（完整 lock hash）是否就是这个参与方。
+    pub fn matches(&self, lock_hash: &[u8; 32]) -> bool {
+        match self {
+            Self::Lock(h) => h == lock_hash,
+            Self::LockPrefix(p) => p[..] == lock_hash[..20],
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Lock(h) => &h[..],
+            Self::LockPrefix(p) => &p[..],
+        }
+    }
+
+    pub fn prefix20(&self) -> [u8; 20] {
+        let mut out = [0u8; 20];
+        out.copy_from_slice(&self.as_bytes()[..20]);
+        out
+    }
+}
+
+/// 协议赋予参与方的角色，bitmask，落盘 1 字节。
+pub mod participant_roles {
+    pub const OWNER_FROM: u8 = 1 << 0;
+    pub const OWNER_TO: u8 = 1 << 1;
+    pub const MANAGER_TO: u8 = 1 << 2;
+
+    pub fn names(mask: u8) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if mask & OWNER_FROM != 0 {
+            out.push("owner_from");
+        }
+        if mask & OWNER_TO != 0 {
+            out.push("owner_to");
+        }
+        if mask & MANAGER_TO != 0 {
+            out.push("manager_to");
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParticipantDelta {
-    pub lock_hash: Vec<u8>,
+    pub id: ParticipantId,
     pub ckb_delta: i128,
     pub used_delta: i64,
     pub item_deltas: Vec<ItemDelta>,
     pub tags: u16,
+    pub roles: u8,
+}
+
+/// 按 20 字节前缀记录的参与统计（domain，`CF_ADDR_PREFIX_STATS`）。
+///
+/// 只统计"被协议指名、且在这笔交易里没有任何 cell"的参与（独立前缀参与方）；
+/// 有 cell 的参与仍然由 `addr_balance.txs_count` 计数。两者相加的唯一求和点是
+/// [`crate::store::CkbadgerStore::address_tx_count`]。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddrPrefixStats {
+    pub txs_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1813,7 +2001,7 @@ impl ProtocolAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssetAction {
     Mint,
     Transfer,
@@ -2048,6 +2236,78 @@ pub struct TokenActivityTransfer {
 mod tests {
     use super::*;
 
+    /// Every semantic tag owns one bit of `TxIndexEntry.semantic_tags`. A
+    /// duplicated bit would make one protocol's cells report as another's on
+    /// every transaction row.
+    #[test]
+    fn semantic_tag_bits_are_distinct_and_dotcell_is_bit_nine() {
+        use semantic_tags as st;
+        assert_eq!(st::DOTCELL, 1 << 9);
+        let bits = [
+            ("DAO", st::DAO),
+            ("SUDT", st::SUDT),
+            ("XUDT", st::XUDT),
+            ("DOTBIT", st::DOTBIT),
+            ("MNFT", st::MNFT),
+            ("SPORE", st::SPORE),
+            ("CLUSTER", st::CLUSTER),
+            ("BIT_CELL", st::BIT_CELL),
+            ("DID_CKB", st::DID_CKB),
+            ("DOTCELL", st::DOTCELL),
+        ];
+        let mut seen: u16 = st::PLAIN;
+        for (name, bit) in bits {
+            assert_eq!(bit.count_ones(), 1, "{name} must be a single bit");
+            assert_eq!(seen & bit, 0, "{name} reuses an already-assigned bit");
+            seen |= bit;
+        }
+    }
+
+    /// The `.cell` name id is `blake2b(label)[..20]` — vectors read off chain
+    /// (the ring root's empty label, a mainnet name, a testnet sub-name).
+    #[test]
+    fn dotcell_id_derivation_matches_chain_vectors() {
+        for (label, expected) in [
+            ("", "44f4c69744d5f8c55d642062949dcae49bc4e7ef"),
+            ("support", "62d71147ac82b83c8531126cacb0d2f072bfd94a"),
+            (
+                "shop.v3-first-name",
+                "bb008a3e9045554d5b1b609c072b59b404320f9f",
+            ),
+        ] {
+            assert_eq!(hex::encode(derive_dotcell_id(label)), expected, "{label:?}");
+        }
+    }
+
+    #[test]
+    fn dotcell_name_data_reports_root_and_sub_name_parent() {
+        let mut name = DotCellNameData {
+            layout_version: 3,
+            records_hash: [0u8; 32],
+            next_id: [0u8; 20],
+            expired_at: 0,
+            owner_hash20: [0u8; 20],
+            manager_hash20: [0u8; 20],
+            label: String::new(),
+            id: derive_dotcell_id(""),
+        };
+        assert!(name.is_root());
+        assert_eq!(name.parent_id(), None);
+
+        name.label = "shop.v3-first-name".to_string();
+        name.id = derive_dotcell_id(&name.label);
+        assert!(!name.is_root());
+        assert_eq!(name.parent_label(), Some("v3-first-name"));
+        assert_eq!(
+            hex::encode(name.parent_id().unwrap()),
+            "4144e782dfaadeeb07625e11e4b6de717893aacb"
+        );
+
+        name.label = "v3-first-name".to_string();
+        name.id = derive_dotcell_id(&name.label);
+        assert_eq!(name.parent_id(), None, "a top-level name has no parent");
+    }
+
     fn sample_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 1_000_000_000,
@@ -2240,7 +2500,7 @@ mod tests {
                 lock_args: vec![0x11; 20],
             }],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
+                id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: -500_00000000,
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
@@ -2250,6 +2510,7 @@ mod tests {
                     negative: false,
                 }],
                 tags: TAG_TOKEN | TAG_PROTOCOL,
+                roles: 0,
             }],
         };
         let bytes = bincode::serialize(&actions).unwrap();
@@ -2288,11 +2549,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAB; 32],
+                id: ParticipantId::Lock([0xAB; 32]),
                 ckb_delta: 7,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: TAG_PROTOCOL,
+                roles: 0,
             }],
         };
 
@@ -2715,5 +2977,79 @@ mod tests {
 
         assert_eq!(status.sync_started_block, 128);
         assert!(status.sync_started_at.is_some());
+    }
+}
+
+#[cfg(test)]
+mod participant_model_tests {
+    use super::*;
+
+    #[test]
+    fn participant_id_matches_full_hash_and_prefix() {
+        let h = [0xABu8; 32];
+        let mut other = h;
+        other[31] = 0x00;
+        assert!(ParticipantId::Lock(h).matches(&h));
+        assert!(!ParticipantId::Lock(h).matches(&other));
+        let mut p = [0u8; 20];
+        p.copy_from_slice(&h[..20]);
+        assert!(ParticipantId::LockPrefix(p).matches(&h));
+        assert!(ParticipantId::LockPrefix(p).matches(&other)); // 只比前 20 字节
+        let mut q = p;
+        q[0] ^= 1;
+        assert!(!ParticipantId::LockPrefix(q).matches(&h));
+    }
+
+    #[test]
+    fn participant_id_sorts_lock_before_prefix_then_bytes() {
+        let a = ParticipantId::Lock([0xFF; 32]);
+        let b = ParticipantId::LockPrefix([0x00; 20]);
+        let c = ParticipantId::Lock([0x01; 32]);
+        let mut v = vec![b, a, c];
+        v.sort();
+        assert_eq!(v, vec![c, a, b]);
+    }
+
+    #[test]
+    fn participant_delta_bincode_roundtrip_and_size() {
+        let lock = ParticipantDelta {
+            id: ParticipantId::Lock([0x11; 32]),
+            ckb_delta: -5,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: TAG_IDENTITY,
+            roles: participant_roles::OWNER_FROM,
+        };
+        let bytes = bincode::serialize(&lock).unwrap();
+        // 4 (variant u32) + 32 + 16 (i128) + 8 (i64) + 8 (空 Vec 长度) + 2 (u16) + 1 (u8) = 71
+        assert_eq!(
+            bytes.len(),
+            71,
+            "Lock 参与方序列化大小必须比旧 40 字节 Vec 版小"
+        );
+        let back: ParticipantDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(back.id, lock.id);
+        assert_eq!(back.roles, lock.roles);
+        let prefix = ParticipantDelta {
+            id: ParticipantId::LockPrefix([0x22; 20]),
+            ..lock.clone()
+        };
+        let back: ParticipantDelta =
+            bincode::deserialize(&bincode::serialize(&prefix).unwrap()).unwrap();
+        assert_eq!(back.id, ParticipantId::LockPrefix([0x22; 20]));
+    }
+
+    #[test]
+    fn addr_tx_value_named_party_has_its_own_tx_type() {
+        let v = AddrTxValue::new(0, false, false, TAG_IDENTITY);
+        assert_eq!(v.flags, AddrTxValue::TX_TYPE_NAMED);
+        assert_eq!(v.tx_type_str(), "named");
+        // 既有三种不受影响
+        assert_eq!(
+            AddrTxValue::new(1, false, true, 0).tx_type_str(),
+            "received"
+        );
+        assert_eq!(AddrTxValue::new(-1, true, false, 0).tx_type_str(), "sent");
+        assert_eq!(AddrTxValue::new(0, true, true, 0).tx_type_str(), "internal");
     }
 }

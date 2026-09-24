@@ -38,6 +38,12 @@ describe('parseRawSourcePath', () => {
       identityId: '0xbitcell',
     });
 
+    expect(parseRawSourcePath('/identities/dotcell/0xdotcell')).toEqual({
+      kind: 'dotcell_item_detail',
+      pathname: '/identities/dotcell/0xdotcell',
+      identityId: '0xdotcell',
+    });
+
     expect(parseRawSourcePath('/objects/mnft/0xmnft')).toEqual({
       kind: 'mnft_item_detail',
       pathname: '/objects/mnft/0xmnft',

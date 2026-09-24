@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -15,8 +15,8 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
-    MnftTypeIndex, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    MnftTypeIndex, ParticipantId, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
+    DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -25,8 +25,8 @@ use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::writer::DaoSnapshotBoundary;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
-    BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotbitParser, MnftParser,
-    ScriptParser, SporeParser, TransactionParser, UdtParser,
+    BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotCellParser, DotbitParser,
+    MnftParser, ScriptParser, SporeParser, TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -442,6 +442,9 @@ struct ActivityInputIndexes<'a> {
     dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
     dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
     bit_cell_identity_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
+    /// The `.cell` name each consumed name cell carried, captured by the
+    /// consume path. An input reaches the activity builder without its data.
+    dotcell_inputs: &'a HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData>,
 }
 
 fn build_activity_input_views<'a>(
@@ -531,6 +534,7 @@ fn build_activity_input_views<'a>(
                     .bit_cell_identity_ids
                     .get(&key)
                     .map(Vec::as_slice),
+                dotcell: indexes.dotcell_inputs.get(&key),
                 data,
                 is_dao_withdraw_request,
                 dao_compensation,
@@ -1897,85 +1901,6 @@ impl Indexer {
             }
         }
 
-        // Compute per-tx address entries for addr_txs index.
-        // Defer AddrTxValue construction until participant tags are known: the
-        // actual write is performed after TxActions is built below, where
-        // `tags_by_addr_tx` provides the tag bitmask for `AddrTxValue.tags`.
-        // per_addr: lock_hash -> (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
-        struct PendingAddrTx {
-            lock_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            tx_hash: Vec<u8>,
-            capacity_change: i64,
-            has_in: bool,
-            has_out: bool,
-        }
-        let mut addr_tx_entries: Vec<PendingAddrTx> = Vec::new();
-        for tx_data in &all_tx_data {
-            let mut per_addr: HashMap<Vec<u8>, (i64, i64, bool, bool)> = HashMap::new();
-            for cell in &tx_data.cells {
-                let e = per_addr.entry(cell.lock_script_hash.clone()).or_default();
-                e.0 = e.0.checked_add(cell.capacity).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "output capacity sum overflow for addr in tx block={}",
-                        tx_data.block_number
-                    )
-                })?;
-                e.2 = true;
-            }
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        )?,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    let info = info.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "missing input cell info for addr_txs: tx=0x{}, input_prev_tx=0x{}, output_index={}, block={}",
-                            hex::encode(tx_data.hash),
-                            hex::encode(input.previous_tx_hash),
-                            input.previous_output_index,
-                            tx_data.block_number
-                        )
-                    })?;
-                    let e = per_addr.entry(info.lock_script_hash.clone()).or_default();
-                    e.1 = e.1.checked_add(info.capacity).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "input capacity sum overflow for addr in tx block={}",
-                            tx_data.block_number
-                        )
-                    })?;
-                    e.3 = true;
-                }
-            }
-            for (lock_hash, (out_cap, in_cap, has_out, has_in)) in per_addr {
-                let capacity_change = out_cap.checked_sub(in_cap).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "capacity_change overflow: out={} in={} block={}",
-                        out_cap,
-                        in_cap,
-                        tx_data.block_number
-                    )
-                })?;
-                addr_tx_entries.push(PendingAddrTx {
-                    lock_hash,
-                    block_number: tx_data.block_number,
-                    tx_index: tx_data.tx_index,
-                    tx_hash: tx_data.hash.to_vec(),
-                    capacity_change,
-                    has_in,
-                    has_out,
-                });
-            }
-        }
-
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
@@ -2221,9 +2146,6 @@ impl Indexer {
                 )
             })
         })?;
-
-        // addr_tx writes are deferred until participant tags are known (see
-        // tags_by_addr_tx construction during TxActions processing below).
 
         // Group A: DAO processing
         {
@@ -2681,6 +2603,9 @@ impl Indexer {
         // testnet cells have empty type args, so the activity builder must use
         // the parser result retained by the identity write path.
         let mut resolved_bit_cell_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+        // The `.cell` name each consumed name cell carried before it was spent.
+        let mut resolved_dotcell_inputs: HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData> =
+            HashMap::new();
 
         // Group C: Object/Spore processing
         //
@@ -2861,12 +2786,53 @@ impl Indexer {
                             }
 
                             if !bulk_sync_active {
+                                let consumed_type_code_hash = input_cell_info
+                                    .get(&key)
+                                    .or_else(|| batch_cell_infos.get(&key))
+                                    .and_then(|info| info.type_code_hash.clone());
+                                let consumed_is_dotcell = consumed_type_code_hash
+                                    .as_deref()
+                                    .is_some_and(DotCellParser::is_account_type_script);
+
+                                // `.cell` consumption. It shares the outpoint
+                                // reverse index with spores but NOT the spore
+                                // consume path: a `.cell` name's ownership is in
+                                // its data, and its collection feed comes from
+                                // the state diff, not from a create/consume pair.
+                                if consumed_is_dotcell {
+                                    let name_id = spore_map.get(&key).ok_or_else(|| {
+                                        anyhow!(
+                                            "dotcell outpoint-id mapping missing for consumed name cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                            parsed.number,
+                                            hex::encode(tx_data.hash),
+                                            hex::encode(&key.0),
+                                            key.1
+                                        )
+                                    })?;
+                                    let name_id: [u8; 20] =
+                                        name_id.as_slice().try_into().map_err(|_| {
+                                            anyhow!(
+                                                "dotcell name id must be 20 bytes, got {}: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                                name_id.len(),
+                                                parsed.number,
+                                                hex::encode(tx_data.hash),
+                                                hex::encode(&key.0),
+                                                key.1
+                                            )
+                                        })?;
+                                    if let Some(previous) = self.writer.consume_dotcell_name(
+                                        &name_id,
+                                        parsed.number,
+                                        &mut data_batch,
+                                        &mut spore_state,
+                                    )? {
+                                        resolved_dotcell_inputs.insert(key.clone(), previous);
+                                    }
+                                }
                                 // Spore consumption
-                                if let Some(spore_id) = spore_map.get(&key) {
-                                    let identity_collection_id = input_cell_info
-                                        .get(&key)
-                                        .or_else(|| batch_cell_infos.get(&key))
-                                        .and_then(|info| info.type_code_hash.as_deref())
+                                else if let Some(spore_id) = spore_map.get(&key) {
+                                    let identity_collection_id = consumed_type_code_hash
+                                        .as_deref()
                                         .and_then(|type_code_hash| {
                                             if BitCellParser::is_type_script(type_code_hash) {
                                                 Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
@@ -2910,23 +2876,18 @@ impl Indexer {
                                             false,
                                         );
                                     }
-                                } else if let Some(info) = input_cell_info
-                                    .get(&key)
-                                    .or_else(|| batch_cell_infos.get(&key))
-                                {
-                                    if let Some(tch) = info.type_code_hash.as_ref() {
-                                        if SporeParser::is_spore_nft_type_script(tch)
-                                            || DidCkbParser::is_type_script(tch)
-                                            || BitCellParser::is_type_script(tch)
-                                        {
-                                            bail!(
-                                                "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
-                                                parsed.number,
-                                                hex::encode(tx_data.hash),
-                                                hex::encode(&key.0),
-                                                key.1
-                                            );
-                                        }
+                                } else if let Some(tch) = consumed_type_code_hash.as_deref() {
+                                    if SporeParser::is_spore_nft_type_script(tch)
+                                        || DidCkbParser::is_type_script(tch)
+                                        || BitCellParser::is_type_script(tch)
+                                    {
+                                        bail!(
+                                            "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                            parsed.number,
+                                            hex::encode(tx_data.hash),
+                                            hex::encode(&key.0),
+                                            key.1
+                                        );
                                     }
                                 }
 
@@ -3129,6 +3090,62 @@ impl Indexer {
                             true,
                         );
                     }
+                    // `.cell` names. The collection feed is NOT accumulated
+                    // here: `identity_activity_acc` reads a create/consume pair
+                    // as a Transfer, while a `.cell` transaction's meaning comes
+                    // from the state diff (`DotCellDetector`). The feed entry is
+                    // derived from the written protocol actions below.
+                    for (output_index, name, records) in
+                        DotCellParser::parse_name_cells_with_output_indices(tx)?
+                    {
+                        let output_index_i16 = checked_usize_to_i16(
+                            output_index,
+                            "dotcell output index while processing grouped blocks",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: block={}, tx_hash=0x{}",
+                                e,
+                                parsed.number,
+                                hex::encode(tx_data.hash)
+                            )
+                        })?;
+                        let type_script = tx.outputs[output_index]
+                            .type_
+                            .as_ref()
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "dotcell output has no type script: block={}, tx_hash=0x{}, output_index={}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    output_index
+                                )
+                            })?;
+                        let namespace_args: [u8; 20] =
+                            crate::rpc::parse_hex_to_bytes(&type_script.args)
+                                .try_into()
+                                .map_err(
+                                |args: Vec<u8>| {
+                                    anyhow!(
+                                        "dotcell namespace args must be 20 bytes, got {}: block={}, tx_hash=0x{}, output_index={}",
+                                        args.len(),
+                                        parsed.number,
+                                        hex::encode(tx_data.hash),
+                                        output_index
+                                    )
+                                },
+                            )?;
+                        self.writer.insert_dotcell_name(
+                            &name,
+                            &records,
+                            &namespace_args,
+                            &tx_data.hash,
+                            output_index_i16,
+                            parsed.number,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                    }
                     for (output_index, issuer) in MnftParser::parse_issuers_with_output_indices(tx)
                     {
                         let output_index_i16 = i16::try_from(output_index).map_err(|_| {
@@ -3327,24 +3344,23 @@ impl Indexer {
             &pending_object_collection_aggs,
             &pending_cluster_ids,
         )?;
-        apply_identity_collection_activity_count_deltas(
-            self.writer.store(),
-            &mut data_batch,
-            identity_activity_count_deltas,
-            &pending_identity_aggs,
-        )?;
 
         // Activity writes (live sync)
-        let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
-            crate::db::writer::activities::production_detectors(self.config.is_mainnet())
-                .into_iter()
-                .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
-                .collect();
+        #[allow(unused_mut)]
+        let mut protocol_detectors: Vec<
+            Box<dyn crate::db::writer::activities::ProtocolDetector>,
+        > = crate::db::writer::activities::production_detectors(self.config.is_mainnet())
+            .into_iter()
+            .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
+            .collect();
+        #[cfg(test)]
+        protocol_detectors
+            .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
         let mut activity_batch = StoreBatch::new(self.writer.store());
-        // Per-(block, tx_idx, lock_hash) participant tag bitmap. Populated as
-        // TxActions are built below, then consumed by the deferred addr_tx
-        // write loop so each `AddrTxValue.tags` matches its TxActions sibling.
-        let mut tags_by_addr_tx: HashMap<(i64, i32, Vec<u8>), u16> = HashMap::new();
+        // Standalone protocol-named participations counted per 20-byte prefix
+        // over this whole batch. Rollback reverses the counter from the prefix
+        // rows it deletes, so no per-block bookkeeping is needed here.
+        let mut prefix_tx_counts: BTreeMap<[u8; 20], i64> = BTreeMap::new();
         {
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
@@ -3365,6 +3381,7 @@ impl Indexer {
                                 dao_compensations: &dao_compensations,
                                 dotbit_ids: &resolved_dotbit_ids,
                                 bit_cell_identity_ids: &resolved_bit_cell_ids,
+                                dotcell_inputs: &resolved_dotcell_inputs,
                             },
                         )?;
                         let outputs: Vec<crate::db::writer::activities::OutputCellView<'_>> = td
@@ -3398,23 +3415,77 @@ impl Indexer {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let tx_actions_list = crate::db::writer::activities::build_tx_actions_for_block(
+                let built_list = crate::db::writer::activities::build_tx_actions_for_block_with_io(
                     &tx_views,
                     &protocol_detectors,
                 )?;
 
-                for tx_actions in &tx_actions_list {
-                    // Capture participant tags so the deferred addr_tx writes
-                    // populate AddrTxValue.tags consistently with TxActions.
-                    for participant in &tx_actions.participants {
-                        tags_by_addr_tx.insert(
-                            (
-                                tx_actions.block_number,
-                                tx_actions.tx_index,
-                                participant.lock_hash.clone(),
-                            ),
-                            participant.tags,
+                for built in &built_list {
+                    let tx_actions = &built.actions;
+                    // addr_txs rows follow the participants — the ONE derivation,
+                    // shared with bulk build and the tx-pool mirror. Cellbase is
+                    // included: it has participants (its output locks) even though
+                    // it gets no CF_TX_ACTIONS row.
+                    for (id, value) in crate::db::writer::participant_rows::addr_tx_rows(
+                        tx_actions,
+                        &built.participant_io,
+                    )? {
+                        match id {
+                            ParticipantId::Lock(hash) => batch_undo_seq.with(|undo_seq| {
+                                put_addr_tx(
+                                    &mut append_history_batch,
+                                    undo_seq,
+                                    &hash,
+                                    tx_actions.block_number,
+                                    tx_actions.tx_index,
+                                    &tx_actions.tx_hash,
+                                    &value,
+                                )
+                            }),
+                            ParticipantId::LockPrefix(prefix) => batch_undo_seq.with(|undo_seq| {
+                                put_addr_tx_by_prefix(
+                                    &mut append_history_batch,
+                                    undo_seq,
+                                    &prefix,
+                                    tx_actions.block_number,
+                                    tx_actions.tx_index,
+                                    &tx_actions.tx_hash,
+                                    &value,
+                                )
+                            }),
+                        }
+                    }
+                    for prefix in crate::db::writer::participant_rows::standalone_prefixes(
+                        tx_actions,
+                        &built.participant_io,
+                    ) {
+                        *prefix_tx_counts.entry(prefix).or_insert(0) += 1;
+                    }
+
+                    // The `.cell` collection feed is derived from the
+                    // `dotcell:*` actions already in this tx's `TxActions`, by
+                    // the same function bulk build uses — one meaning of a
+                    // `.cell` transaction, not two.
+                    if let Some(entry) =
+                        crate::db::writer::dotcell_detector::build_dotcell_tx_activity_entry(
+                            &tx_actions.protocol_actions,
+                            &tx_actions.tx_hash,
+                            &tx_actions.block_hash,
+                            tx_actions.timestamp,
+                        )?
+                    {
+                        identity_activity_batch.put_identity_collection_activity(
+                            &DOTCELL_SENTINEL_COLLECTION,
+                            tx_actions.block_number,
+                            tx_actions.tx_index,
+                            &entry,
                         );
+                        let delta = identity_activity_count_deltas
+                            .entry(DOTCELL_SENTINEL_COLLECTION.to_vec())
+                            .or_insert(0);
+                        *delta = delta
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("dotcell identity activity delta overflow"))?;
                     }
 
                     // Accumulate daily activity stats
@@ -3436,9 +3507,10 @@ impl Indexer {
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
                         for participant in &tx_actions.participants {
-                            if participant.lock_hash.len() == 32 {
-                                let mut hash = [0u8; 32];
-                                hash.copy_from_slice(&participant.lock_hash);
+                            // Unique-address counts are `Lock` participants only:
+                            // see `rebuild_cutoff_addr_sets` for why a named
+                            // prefix must not be counted as its own address.
+                            if let ParticipantId::Lock(hash) = participant.id {
                                 daily_activity_addrs
                                     .entry(date.clone())
                                     .or_default()
@@ -3477,36 +3549,39 @@ impl Indexer {
             }
         }
 
-        // Deferred addr_tx writes. Each entry pairs with a TxActions participant
-        // populated above; the participant's tag bitmap drives `AddrTxValue.tags`.
-        for entry in &addr_tx_entries {
-            let tags = *tags_by_addr_tx
-                .get(&(entry.block_number, entry.tx_index, entry.lock_hash.clone()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing participant tags for addr_tx: block={}, tx_idx={}, lock_hash=0x{}",
-                        entry.block_number,
-                        entry.tx_index,
-                        hex::encode(&entry.lock_hash)
-                    )
-                })?;
-            let addr_tx_value = ckbadger_store::types::AddrTxValue::new(
-                entry.capacity_change,
-                entry.has_in,
-                entry.has_out,
-                tags,
-            );
-            batch_undo_seq.with(|undo_seq| {
-                put_addr_tx(
-                    &mut append_history_batch,
-                    undo_seq,
-                    &entry.lock_hash,
-                    entry.block_number,
-                    entry.tx_index,
-                    &entry.tx_hash,
-                    &addr_tx_value,
-                )
-            });
+        // The `.cell` collection feed is derived from the protocol actions the
+        // activity loop just wrote, so its counter is applied here rather than
+        // beside the create/consume accumulators above.
+        apply_identity_collection_activity_count_deltas(
+            self.writer.store(),
+            &mut data_batch,
+            identity_activity_count_deltas,
+            &pending_identity_aggs,
+        )?;
+
+        // Per-prefix participation counters. Read-modify-write against the
+        // committed value. No undo pre-image: rollback reverses this counter by
+        // the number of `CF_ADDR_TXS_BY_PREFIX` rows it deletes, exactly the way
+        // `addr_balance.txs_count` is reversed from the `CF_ADDR_TXS` rows it
+        // deletes. A pre-image would be recorded on one block of this batch and
+        // would simply not be replayed when the fork point lands on a later
+        // block of the same batch, leaving the counter above the surviving rows.
+        for (prefix, delta) in &prefix_tx_counts {
+            let previous = self.writer.store().get_addr_prefix_stats(prefix)?;
+            let next = ckbadger_store::types::AddrPrefixStats {
+                txs_count: previous
+                    .map(|s| s.txs_count)
+                    .unwrap_or(0)
+                    .checked_add(*delta)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "addr_prefix_stats txs_count overflow: prefix=0x{}, delta={}",
+                            hex::encode(prefix),
+                            delta
+                        )
+                    })?,
+            };
+            domain_analytics_batch.put_addr_prefix_stats(prefix, &next);
         }
 
         // Every entity daily/hourly key this batch touched is written exactly
@@ -4995,6 +5070,7 @@ mod tests {
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
+        let empty_dotcell = HashMap::new();
         let err = match build_activity_input_views(
             &tx,
             99,
@@ -5005,6 +5081,7 @@ mod tests {
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
                 bit_cell_identity_ids: &empty_dotbit,
+                dotcell_inputs: &empty_dotcell,
             },
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
@@ -5048,6 +5125,7 @@ mod tests {
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
+        let empty_dotcell = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             100,
@@ -5058,6 +5136,7 @@ mod tests {
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
                 bit_cell_identity_ids: &empty_dotbit,
+                dotcell_inputs: &empty_dotcell,
             },
         )
         .expect("input lookup should fall back to same-batch cell cache");
@@ -5103,6 +5182,7 @@ mod tests {
 
         let empty_batch_info = HashMap::new();
         let empty_dotbit = HashMap::new();
+        let empty_dotcell = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             200,
@@ -5113,6 +5193,7 @@ mod tests {
                 dao_compensations: &dao_compensations,
                 dotbit_ids: &empty_dotbit,
                 bit_cell_identity_ids: &empty_dotbit,
+                dotcell_inputs: &empty_dotcell,
             },
         )
         .unwrap();
@@ -5150,6 +5231,7 @@ mod tests {
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_compensations = HashMap::new();
         let empty_dotbit_ids = HashMap::new();
+        let empty_dotcell = HashMap::new();
 
         let inputs = build_activity_input_views(
             &tx,
@@ -5161,6 +5243,7 @@ mod tests {
                 dao_compensations: &empty_dao_compensations,
                 dotbit_ids: &empty_dotbit_ids,
                 bit_cell_identity_ids: &bit_cell_ids,
+                dotcell_inputs: &empty_dotcell,
             },
         )
         .unwrap();
@@ -5765,11 +5848,11 @@ mod tests {
         /// (102). With a 1000 CKB deposit whose occupied capacity is the
         /// standard 102 CKB, free capacity is 898 CKB and the compensation is
         /// exactly 898_00000000 * 101/100 - 898_00000000 = 8_98000000.
-        const AR_DEPOSIT: u64 = 10_000_000_000_000_000;
+        pub(super) const AR_DEPOSIT: u64 = 10_000_000_000_000_000;
         const AR_REQUEST: u64 = 10_100_000_000_000_000;
         const DAO_COMPENSATION: i64 = 8_98000000;
         const DEPOSIT_CAPACITY: u64 = 1000_00000000;
-        const FUNDING_CAPACITY: u64 = 3000_00000000;
+        pub(super) const FUNDING_CAPACITY: u64 = 3000_00000000;
         const CHANGE_CAPACITY: u64 = 1800_00000000;
 
         pub(super) fn lock_script() -> Script {
@@ -5870,6 +5953,64 @@ mod tests {
                 },
                 cycles: None,
             }
+        }
+
+        /// The post-rollback DAO snapshot recompute reads block N-1 of the first
+        /// block of the affected day (RFC-0023). The fixture's own parent is
+        /// block 99, so its parent needs a header too — dated a day earlier so
+        /// block 99 stays that day's first block.
+        pub(super) fn seed_pre_parent_header(store: &CkbadgerStore) {
+            let mut dao = vec![0u8; 32];
+            dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+            dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
+            dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+            let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+            batch.put_block_header(
+                98,
+                &ckbadger_store::types::CachedBlockHeader {
+                    hash: block_hash(98).to_vec(),
+                    parent_hash: block_hash(97).to_vec(),
+                    timestamp: 1_699_900_000_000,
+                    epoch_number: 39,
+                    epoch_index: 1798,
+                    epoch_length: 1800,
+                    dao,
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+            batch.commit().unwrap();
+        }
+
+        /// Stage 9b of the rollback adjusts the lock's `script_info` from the
+        /// cells it deletes; the fixture write path is handed empty script
+        /// deltas, so seed the row it will subtract from.
+        pub(super) fn seed_secp_script_info(store: &CkbadgerStore) {
+            seed_script_info(store, SECP_CODE_HASH);
+        }
+
+        pub(super) fn seed_script_info(store: &CkbadgerStore, code_hash_hex: &str) {
+            let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
+            let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+            batch.put_script_info(
+                &code_hash,
+                &ckbadger_store::types::ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    hash_type: 1,
+                    lock_live_cells_count: 1_000,
+                    lock_owned_capacity_sum: 1_000_000_000_000_000,
+                    lock_owned_knowledge_sum: 1_000_000_000_000_000,
+                    type_live_cells_count: 1_000,
+                    type_owned_capacity_sum: 1_000_000_000_000_000,
+                    type_owned_knowledge_sum: 1_000_000_000_000_000,
+                    ..Default::default()
+                },
+            );
+            batch.commit().unwrap();
         }
 
         pub(super) fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
@@ -6746,6 +6887,1042 @@ mod tests {
                 "phase-2 tx with extra plain inputs must have its fee recomputed with compensation"
             );
         }
+
+        // ---- Phase 1a: participant-derived addr_txs rows ----
+
+        pub(super) fn lock_script_b() -> Script {
+            Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "02".repeat(20)),
+            }
+        }
+
+        pub(super) fn lock_script_c() -> Script {
+            Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "03".repeat(20)),
+            }
+        }
+
+        /// Spend `prev_tx`'s output 0 into `to`, keeping a 1 CKB fee.
+        pub(super) fn transfer_tx(
+            hash_byte: u8,
+            prev_tx_hash_byte: u8,
+            capacity: u64,
+            to: Script,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([prev_tx_hash_byte; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{:x}", capacity),
+                    lock: to,
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![],
+            }
+        }
+
+        /// The prefix the injected detector names. Deliberately unrelated to any
+        /// lock in the fixtures, so it stays a standalone participant.
+        pub(super) const NAMED_PREFIX: [u8; 20] = [0x77; 20];
+
+        pub(super) fn naming_detectors(
+        ) -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::LockPrefix(NAMED_PREFIX),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        fn addr_tx_keys(store: &CkbadgerStore) -> Vec<(Vec<u8>, i64, i32)> {
+            let mut out = Vec::new();
+            for item in store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start) {
+                let (key, _) = item.unwrap();
+                let (lock_hash, block_num, tx_idx, _) =
+                    ckbadger_store::keys::decode_addr_tx_key(&key);
+                out.push((lock_hash, block_num, tx_idx));
+            }
+            out.sort();
+            out
+        }
+
+        pub(super) fn prefix_rows(
+            store: &CkbadgerStore,
+        ) -> Vec<([u8; 20], i64, i32, ckbadger_store::types::AddrTxValue)> {
+            let mut out = Vec::new();
+            for item in
+                store.iterator_cf(store.cf_addr_txs_by_prefix(), rocksdb::IteratorMode::Start)
+            {
+                let (key, value) = item.unwrap();
+                let (prefix, block_num, tx_idx, _) =
+                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key);
+                out.push((
+                    prefix,
+                    block_num,
+                    tx_idx,
+                    bincode::deserialize(&value).unwrap(),
+                ));
+            }
+            out.sort_by_key(|(p, b, t, _)| (*p, *b, *t));
+            out
+        }
+
+        /// Every `CF_ADDR_PREFIX_STATS` undo entry, as (block, previous_value).
+        fn prefix_stats_undo_entries(store: &CkbadgerStore) -> Vec<(i64, Option<Vec<u8>>)> {
+            let mut out = Vec::new();
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, value) = item.unwrap();
+                let (block_num, _seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                let entry: ckbadger_store::types::UndoLogEntry =
+                    bincode::deserialize(&value).unwrap();
+                if let ckbadger_store::types::UndoLogEntry::KeyMutation {
+                    cf_name,
+                    key: mutated_key,
+                    previous_value,
+                    ..
+                } = entry
+                {
+                    if cf_name == ckbadger_store::CF_ADDR_PREFIX_STATS {
+                        assert_eq!(mutated_key, NAMED_PREFIX.to_vec());
+                        out.push((block_num, previous_value));
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+
+        #[tokio::test]
+        async fn live_writes_rows_for_every_participant_and_counts_prefix_participations() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            let lock_b = crate::parser::ScriptParser::compute_script_hash(&lock_script_b());
+
+            // Block 100 funds lock A through its cellbase.
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+
+            // Block 101: cellbase + a transfer A -> B. The injected detector
+            // names a party that holds no cell anywhere in the transaction.
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                addr_tx_keys(&store),
+                vec![
+                    (lock_a.clone(), 100, 0),
+                    (lock_a.clone(), 101, 0),
+                    (lock_a.clone(), 101, 1),
+                    (lock_b.clone(), 101, 1),
+                ],
+                "one addr_txs row per cell participant, cellbase included"
+            );
+
+            let prefix = prefix_rows(&store);
+            assert_eq!(prefix.len(), 1, "exactly the named party's row: {prefix:?}");
+            assert_eq!(
+                (prefix[0].0, prefix[0].1, prefix[0].2),
+                (NAMED_PREFIX, 101, 1)
+            );
+            assert_eq!(
+                prefix[0].3.flags,
+                ckbadger_store::types::AddrTxValue::TX_TYPE_NAMED
+            );
+            assert_eq!(prefix[0].3.capacity_change, 0);
+            assert_ne!(prefix[0].3.tags & ckbadger_store::types::TAG_IDENTITY, 0);
+            assert_ne!(prefix[0].3.tags & ckbadger_store::types::TAG_PROTOCOL, 0);
+
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                1
+            );
+            assert_eq!(
+                store.get_addr_balance(&lock_a).unwrap().unwrap().txs_count,
+                3,
+                "addr_balance keeps counting only cell participations"
+            );
+            assert_eq!(
+                store
+                    .address_tx_count(&lock_a.clone().try_into().unwrap())
+                    .unwrap(),
+                3
+            );
+
+            // Unique-address sets never carry a named prefix.
+            let date =
+                ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000i64 + 101 * 1000)
+                    .to_string();
+            let raw = store
+                .get_cf(
+                    store.cf_stats_chain(),
+                    &ckbadger_store::keys::encode_stats_key(
+                        ckbadger_store::keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+                        date.as_bytes(),
+                    ),
+                )
+                .unwrap()
+                .expect("daily addr set row");
+            assert!(
+                raw.len().is_multiple_of(32),
+                "addr set row must be whole hashes"
+            );
+            let set: std::collections::HashSet<[u8; 32]> = raw
+                .chunks_exact(32)
+                .map(|c| <[u8; 32]>::try_from(c).unwrap())
+                .collect();
+            let mut expected = std::collections::HashSet::new();
+            expected.insert(<[u8; 32]>::try_from(lock_a.as_slice()).unwrap());
+            expected.insert(<[u8; 32]>::try_from(lock_b.as_slice()).unwrap());
+            assert_eq!(set, expected);
+
+            assert_eq!(
+                prefix_stats_undo_entries(&store),
+                Vec::new(),
+                "the prefix counter owns no undo pre-images: rollback reverses it \
+                 from the prefix rows it deletes"
+            );
+        }
+
+        #[tokio::test]
+        async fn live_second_block_increments_prefix_stats() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        transfer_tx(0xd2, 0xd1, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                2
+            );
+            assert_eq!(
+                prefix_stats_undo_entries(&store),
+                Vec::new(),
+                "the prefix counter is reversed from the deleted rows, never from undo pre-images"
+            );
+        }
+
+        /// One batch, three blocks: the prefix is named in block 1 and block 3.
+        /// Rolling back into the middle of that batch must leave the counter
+        /// equal to the prefix rows that survive — a batch-granular undo
+        /// pre-image (recorded on the batch's FIRST touching block) is never
+        /// replayed for a fork point above that block, so it cannot do this.
+        #[tokio::test]
+        async fn rollback_into_a_multi_block_batch_leaves_prefix_stats_equal_to_surviving_rows() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+
+            // Funding batch: cellbase only, so no participant is named yet.
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+
+            // ONE batch covering blocks 101..103. Block 102 carries a cellbase
+            // only, so the injected detector names the prefix exactly twice:
+            // once in the batch's first block, once in its last.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![
+                    block(
+                        101,
+                        AR_DEPOSIT,
+                        vec![
+                            cellbase_tx(0xc1, 100_000_000),
+                            transfer_tx(
+                                0xd1,
+                                0xc0,
+                                FUNDING_CAPACITY - 100_000_000,
+                                lock_script_b(),
+                            ),
+                        ],
+                    ),
+                    block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, 100_000_000)]),
+                    block(
+                        103,
+                        AR_DEPOSIT,
+                        vec![
+                            cellbase_tx(0xc3, 100_000_000),
+                            transfer_tx(
+                                0xd3,
+                                0xd1,
+                                FUNDING_CAPACITY - 300_000_000,
+                                lock_script_c(),
+                            ),
+                        ],
+                    ),
+                ],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                2,
+                "both named participations are counted"
+            );
+            assert_eq!(
+                prefix_rows(&store)
+                    .iter()
+                    .map(|(p, b, t, _)| (*p, *b, *t))
+                    .collect::<Vec<_>>(),
+                vec![(NAMED_PREFIX, 101, 1), (NAMED_PREFIX, 103, 1)]
+            );
+
+            // Fork at 102: block 103's row goes, block 101's stays.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 102).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(102, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+
+            assert_eq!(
+                prefix_rows(&store)
+                    .iter()
+                    .map(|(p, b, t, _)| (*p, *b, *t))
+                    .collect::<Vec<_>>(),
+                vec![(NAMED_PREFIX, 101, 1)],
+                "only the rolled-back block's prefix row is deleted"
+            );
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                1,
+                "the counter must equal the surviving prefix rows"
+            );
+
+            // Fork at 100: the last row goes, and a zero counter is no row.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+            assert!(
+                prefix_rows(&store).is_empty(),
+                "every prefix row is rolled back"
+            );
+            assert_eq!(
+                store.get_addr_prefix_stats(&NAMED_PREFIX).unwrap(),
+                None,
+                "a counter that reaches zero is deleted, not stored as 0"
+            );
+        }
+    }
+
+    /// `.cell` names through the real live write path.
+    ///
+    /// The registration is the testnet transaction 0x89191ea4… replayed as a
+    /// two-block chain: block 101 creates the ring predecessor `maria`, block
+    /// 102 is the registration that relinks it and creates `joaom`. Every name
+    /// cell's data and its own-index witness are the bytes the node served.
+    pub(crate) mod dotcell_live {
+        use super::live_dao_fee::{
+            block, cellbase_tx, lock_script, prefix_rows, AR_DEPOSIT, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        use crate::parser::DotCellParser;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        pub(crate) fn account_type_script() -> Script {
+            Script {
+                code_hash: fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET.to_string(),
+                hash_type: "type".to_string(),
+                args: fixture::NAMESPACE_ARGS_TESTNET.to_string(),
+            }
+        }
+
+        fn account_lock_script() -> Script {
+            Script {
+                code_hash: fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }
+        }
+
+        fn name_output(capacity: u64) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock: account_lock_script(),
+                type_: Some(account_type_script()),
+            }
+        }
+
+        fn plain_output(capacity: u64) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock: lock_script(),
+                type_: None,
+            }
+        }
+
+        fn input(prev_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([prev_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        const NAME_CAPACITY: u64 = 240_00000000;
+
+        /// The pre-state of `maria`, exactly as the node served the input cell
+        /// the registration consumed.
+        fn maria_pre_data() -> &'static str {
+            fixture::T2_REGISTER_JOAOM.inputs[0].data
+        }
+
+        pub(crate) fn dotcell_registration_blocks() -> Vec<BlockResponseWithCycles> {
+            // 100: cellbase funds the secp lock that pays for everything.
+            let funding = block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
+
+            // 101: create `maria` with its own records witness.
+            let create_maria = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![maria_pre_data().to_string(), "0x".to_string()],
+                witnesses: vec![fixture::T2_WITNESS_0.to_string(), String::new()],
+            };
+
+            // 102: the registration itself — `maria` relinks, `joaom` is born.
+            let register_joaom = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xd1, 0), input(0xd1, 1)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - 3 * NAME_CAPACITY - 300_000_000),
+                ],
+                outputs_data: vec![
+                    fixture::T2_OUT0_DATA.to_string(),
+                    fixture::T2_OUT1_DATA.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![
+                    fixture::T2_WITNESS_0.to_string(),
+                    fixture::T2_WITNESS_1.to_string(),
+                    String::new(),
+                ],
+            };
+
+            vec![
+                funding,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), create_maria],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc2, 100_000_000), register_joaom],
+                ),
+            ]
+        }
+
+        pub(crate) fn maria_id() -> [u8; 20] {
+            DotCellParser::derive_id("maria")
+        }
+
+        pub(crate) fn joaom_id() -> [u8; 20] {
+            DotCellParser::derive_id("joaom")
+        }
+
+        /// Same chain plus the namespace's ring root, so a rollback has a
+        /// `dotcell_ring` row to restore as well.
+        pub(crate) fn dotcell_rollback_blocks() -> Vec<BlockResponseWithCycles> {
+            let funding = block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
+
+            // 101: the ring root and `maria`, each with its own-index witness.
+            let create_root_and_maria = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(192_00000000),
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - 192_00000000 - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![
+                    fixture::T1_RING_ROOT.outputs[0].data.to_string(),
+                    fixture::T2_REGISTER_JOAOM.inputs[0].data.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![
+                    fixture::T1_RING_ROOT.witnesses[0].to_string(),
+                    fixture::T2_WITNESS_0.to_string(),
+                    String::new(),
+                ],
+            };
+
+            // 102: the registration.
+            let register_joaom = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 1), input(0xe1, 2)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - 192_00000000 - 3 * NAME_CAPACITY - 300_000_000),
+                ],
+                outputs_data: vec![
+                    fixture::T2_OUT0_DATA.to_string(),
+                    fixture::T2_OUT1_DATA.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![
+                    fixture::T2_WITNESS_0.to_string(),
+                    fixture::T2_WITNESS_1.to_string(),
+                    String::new(),
+                ],
+            };
+
+            vec![
+                funding,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), create_root_and_maria],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc2, 100_000_000), register_joaom],
+                ),
+            ]
+        }
+
+        #[tokio::test]
+        async fn rollback_restores_dotcell_identity_owner_index_and_ring_after_fork() {
+            use ckbadger_store::types::{IdentityExtra, DOTCELL_SENTINEL_COLLECTION};
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            // The post-rollback DAO snapshot recompute reads block N-1 of the
+            // affected day's first block; date it a day earlier so block 99
+            // stays that first block.
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            super::live_dao_fee::seed_secp_script_info(store.as_ref());
+            for code_hash in [
+                fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET,
+                fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET,
+            ] {
+                super::live_dao_fee::seed_script_info(store.as_ref(), code_hash);
+            }
+            for block in dotcell_rollback_blocks() {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let namespace: [u8; 20] =
+                crate::rpc::parse_hex_to_bytes(fixture::NAMESPACE_ARGS_TESTNET)
+                    .try_into()
+                    .unwrap();
+            let maria_owner: [u8; 20] =
+                crate::rpc::parse_hex_to_bytes("0x58e6c6f873af57732daae458be3c56c2c847b141")
+                    .try_into()
+                    .unwrap();
+            let joaom_owner: [u8; 20] =
+                crate::rpc::parse_hex_to_bytes("0x69e8165efb4cb3b2cd62300e7d16f41a1c65ceab")
+                    .try_into()
+                    .unwrap();
+            assert!(store.get_identity(&joaom_id()).unwrap().is_some());
+            assert!(store.get_dotcell_ring(&namespace).unwrap().is_some());
+
+            // Fork at 101: the registration is undone, the predecessor goes
+            // back to the `next` it had before it was relinked.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 101).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(101, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+
+            assert!(
+                store.get_identity(&joaom_id()).unwrap().is_none(),
+                "the registered name is gone"
+            );
+            let maria = store.get_identity(&maria_id()).unwrap().expect("maria");
+            assert!(maria.is_live);
+            match &maria.extra {
+                IdentityExtra::DotCell {
+                    next_id,
+                    owner_hash20,
+                    ..
+                } => {
+                    assert_eq!(
+                        next_id.to_vec(),
+                        crate::rpc::parse_hex_to_bytes(
+                            "0x2cf2cdac7ab0e7b97f4b50475fb5ce1b32dfe711"
+                        ),
+                        "the ring relink is undone"
+                    );
+                    assert_eq!(*owner_hash20, maria_owner);
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(
+                store
+                    .list_dotcell_names_by_owner20(&maria_owner, None, 10)
+                    .unwrap(),
+                vec![maria_id()]
+            );
+            assert!(
+                store
+                    .list_dotcell_names_by_owner20(&joaom_owner, None, 10)
+                    .unwrap()
+                    .is_empty(),
+                "the rolled-back owner holds nothing"
+            );
+            assert_eq!(
+                store
+                    .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &maria_owner)
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                store
+                    .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &joaom_owner)
+                    .unwrap(),
+                0
+            );
+            let agg = store
+                .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
+                .unwrap()
+                .expect("aggregate survives");
+            assert_eq!(agg.total_count, 1);
+            assert_eq!(agg.live_count, 1);
+            assert_eq!(agg.holders_count, 1);
+            assert_eq!(agg.activities_count, 1);
+            assert_eq!(
+                store
+                    .list_identity_collection_activities(
+                        &DOTCELL_SENTINEL_COLLECTION,
+                        10,
+                        None,
+                        None
+                    )
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(
+                store
+                    .get_spore_id_by_outpoint(&[0xe2u8; 32], 1)
+                    .unwrap()
+                    .is_none(),
+                "the rolled-back name's outpoint row is gone"
+            );
+            let ring = store
+                .get_dotcell_ring(&namespace)
+                .unwrap()
+                .expect("the ring root was created at 101 and survives");
+            assert_eq!(ring.created_at_block, 101);
+
+            // Fork at 100: nothing `.cell` is left.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+            assert!(store.get_identity(&maria_id()).unwrap().is_none());
+            assert!(store
+                .list_dotcell_names_by_owner20(&maria_owner, None, 10)
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                store.get_dotcell_ring(&namespace).unwrap(),
+                None,
+                "the ring row is deleted with the root cell that created it"
+            );
+            let agg = store
+                .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
+                .unwrap();
+            assert!(
+                agg.as_ref().is_none_or(|a| a.total_count == 0
+                    && a.live_count == 0
+                    && a.holders_count == 0
+                    && a.activities_count == 0),
+                "{agg:?}"
+            );
+        }
+
+        /// PROTO-007/009: a from-genesis rebuild and an incremental sync must
+        /// leave the same rows. Same blocks, both paths, byte-for-byte.
+        #[tokio::test]
+        async fn bulk_and_live_write_identical_dotcell_rows_for_real_registration() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotcell_registration_blocks();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
+                .expect("bulk build must index the registration");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref())
+                .expect("live rows");
+
+            assert!(
+                !live.identity_data.is_empty(),
+                "the fixture must actually index names"
+            );
+            assert_eq!(
+                live.identity_data, bulk.dotcell.identity_data,
+                "identity_data rows differ between the two sync paths"
+            );
+            assert_eq!(
+                live.identity_by_collection, bulk.dotcell.identity_by_collection,
+                "identity_by_collection rows differ"
+            );
+            assert_eq!(
+                live.identity_agg, bulk.dotcell.identity_agg,
+                "aggregate differs"
+            );
+            assert_eq!(
+                live.stats_identity, bulk.dotcell.stats_identity,
+                "per-owner counters differ"
+            );
+            assert_eq!(
+                live.name_by_owner, bulk.dotcell.name_by_owner,
+                "dotcell_name_by_owner rows differ"
+            );
+            assert_eq!(live.ring, bulk.dotcell.ring, "dotcell_ring rows differ");
+            assert_eq!(
+                live.outpoint_reverse_index, bulk.dotcell.outpoint_reverse_index,
+                "outpoint reverse index rows differ"
+            );
+            assert_eq!(
+                live.collection_activities, bulk.dotcell.collection_activities,
+                "the .cell collection feed differs"
+            );
+        }
+
+        /// In bulk, an input cell reaches the activity builder with `data: &[]`.
+        /// The consumed name's state has to come from the protocol facts the
+        /// creating cell stored, or every relink reads as a fresh registration.
+        #[test]
+        fn bulk_input_view_carries_dotcell_prev_state_from_resolved_inputs() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let bulk =
+                crate::sync::materialize_bulk_artifacts_for_test(&dotcell_registration_blocks())
+                    .expect("bulk build");
+
+            let tx_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xd2u8; 32])
+                .expect("the registration tx has actions");
+            let dotcell_actions: Vec<_> = tx_actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dotcell")
+                .collect();
+            assert_eq!(
+                dotcell_actions.len(),
+                1,
+                "the ring relink must be suppressed in bulk too: {dotcell_actions:?}"
+            );
+            assert_eq!(dotcell_actions[0].action, "register");
+            assert_eq!(
+                dotcell_actions[0].metadata.to_value().unwrap()["label"],
+                serde_json::json!("joaom")
+            );
+        }
+
+        #[tokio::test]
+        async fn live_sync_indexes_a_real_dotcell_registration() {
+            use ckbadger_store::types::{
+                AssetAction, IdentityExtra, IdentityStandard, DOTCELL_SENTINEL_COLLECTION,
+            };
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            for block in dotcell_registration_blocks() {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            // Both names are identities of the `.cell` collection.
+            let maria = store
+                .get_identity(&maria_id())
+                .unwrap()
+                .expect("maria.cell indexed");
+            assert_eq!(maria.standard, IdentityStandard::DotCell);
+            assert_eq!(maria.name.as_deref(), Some("maria.cell"));
+            assert!(maria.is_live);
+            let (maria_owner, maria_records, maria_next) = match &maria.extra {
+                IdentityExtra::DotCell {
+                    owner_hash20,
+                    records,
+                    next_id,
+                    ..
+                } => (*owner_hash20, records.len(), *next_id),
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                maria_owner.to_vec(),
+                crate::rpc::parse_hex_to_bytes("0x58e6c6f873af57732daae458be3c56c2c847b141")
+            );
+            assert_eq!(maria_records, 6, "records come from the own-index witness");
+            assert_eq!(
+                maria_next,
+                joaom_id(),
+                "the registration relinked the ring predecessor"
+            );
+
+            let joaom = store
+                .get_identity(&joaom_id())
+                .unwrap()
+                .expect("joaom.cell indexed");
+            let joaom_owner = match &joaom.extra {
+                IdentityExtra::DotCell { owner_hash20, .. } => *owner_hash20,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                joaom_owner.to_vec(),
+                crate::rpc::parse_hex_to_bytes("0x69e8165efb4cb3b2cd62300e7d16f41a1c65ceab")
+            );
+
+            // Aggregate, owner index and per-owner counters.
+            let agg = store
+                .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
+                .unwrap()
+                .expect("dotcell aggregate");
+            assert_eq!(agg.total_count, 2);
+            assert_eq!(agg.live_count, 2);
+            assert_eq!(agg.holders_count, 2);
+            assert_eq!(
+                store
+                    .list_dotcell_names_by_owner20(&maria_owner, None, 10)
+                    .unwrap(),
+                vec![maria_id()]
+            );
+            assert_eq!(
+                store
+                    .list_dotcell_names_by_owner20(&joaom_owner, None, 10)
+                    .unwrap(),
+                vec![joaom_id()]
+            );
+            assert_eq!(
+                store
+                    .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &joaom_owner)
+                    .unwrap(),
+                1
+            );
+
+            // The collection feed is derived from the protocol actions, one
+            // Mint per registering transaction — the ring relink adds nothing.
+            let feed = store
+                .list_identity_collection_activities(&DOTCELL_SENTINEL_COLLECTION, 10, None, None)
+                .unwrap();
+            assert_eq!(feed.len(), 2, "{feed:?}");
+            for (_, _, entry) in &feed {
+                assert_eq!(entry.actions, vec![AssetAction::Mint]);
+            }
+            assert_eq!(agg.activities_count, 2);
+
+            // The registrant holds no cell in this transaction, so it is a
+            // standalone prefix participant with a prefix row of its own.
+            let prefix_positions: Vec<([u8; 20], i64, i32)> = prefix_rows(&store)
+                .iter()
+                .map(|(p, b, t, _)| (*p, *b, *t))
+                .collect();
+            assert!(
+                prefix_positions.contains(&(joaom_owner, 102, 1)),
+                "the registrant must have an addr_txs_by_prefix row: {prefix_positions:?}"
+            );
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&joaom_owner)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                1
+            );
+
+            // The Account Lock holds every name cell and owns none of them.
+            let account_lock =
+                crate::parser::ScriptParser::compute_script_hash(&account_lock_script());
+            let tx_actions = store
+                .get_tx_actions(102, 1, &[0xd2u8; 32])
+                .unwrap()
+                .expect("tx actions for the registration");
+            // Exactly ONE action: `maria` only relinked the ring. Getting two
+            // here means the consumed name's prior state never reached the
+            // classifier, so every touch would read as a fresh registration.
+            let dotcell_actions: Vec<_> = tx_actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dotcell")
+                .collect();
+            assert_eq!(
+                dotcell_actions.len(),
+                1,
+                "the ring relink must be suppressed: {dotcell_actions:?}"
+            );
+            let register = dotcell_actions[0];
+            assert_eq!(register.action, "register");
+            assert_eq!(
+                register.metadata.to_value().unwrap()["label"],
+                serde_json::json!("joaom")
+            );
+            // And the relinked predecessor names nobody: its owner gets no
+            // second participation out of this transaction.
+            assert!(
+                !prefix_positions.contains(&(maria_owner, 102, 1)),
+                "a ring relink is infrastructure, not a party's activity: {prefix_positions:?}"
+            );
+            let account_lock_party = tx_actions
+                .participants
+                .iter()
+                .find(|p| p.id.as_bytes() == account_lock.as_slice())
+                .expect("the Account Lock participates");
+            assert!(
+                account_lock_party.item_deltas.is_empty(),
+                "the protocol's own lock never owns the names it holds"
+            );
+        }
     }
 
     // ── Unique Cell binding: live write path vs bulk build ────────────────
@@ -6757,6 +7934,288 @@ mod tests {
     // The bulk reducer vetoes on all resolved inputs, so the live write path
     // must veto on exactly the same set; otherwise the two sync paths persist
     // different metadata for the same chain.
+
+    /// Bulk build and live sync must produce byte-identical participant rows.
+    mod participant_rows_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            naming_detectors, transfer_tx, write_live_block, NAMED_PREFIX,
+        };
+        use super::*;
+        use crate::sync::materialize_bulk_artifacts_for_test;
+        use ckbadger_store::types::AddrTxValue;
+        use std::collections::BTreeMap;
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const FUNDING_CAPACITY: u64 = 3000_00000000;
+
+        /// Block 100 funds lock A; block 101 spends it to lock B, and the
+        /// injected detector names a party holding no cell at all.
+        fn parity_blocks() -> Vec<BlockResponseWithCycles> {
+            vec![
+                block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            ]
+        }
+
+        #[allow(clippy::type_complexity)]
+        fn live_rows(
+            store: &CkbadgerStore,
+        ) -> (
+            BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), AddrTxValue>,
+            BTreeMap<([u8; 20], i64, i32, Vec<u8>), AddrTxValue>,
+        ) {
+            let mut by_lock = BTreeMap::new();
+            for item in store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start) {
+                let (key, value) = item.unwrap();
+                let (lock_hash, block_num, tx_idx, tx_hash) =
+                    ckbadger_store::keys::decode_addr_tx_key(&key);
+                by_lock.insert(
+                    (lock_hash, block_num, tx_idx, tx_hash),
+                    bincode::deserialize(&value).unwrap(),
+                );
+            }
+            let mut by_prefix = BTreeMap::new();
+            for item in
+                store.iterator_cf(store.cf_addr_txs_by_prefix(), rocksdb::IteratorMode::Start)
+            {
+                let (key, value) = item.unwrap();
+                let (prefix, block_num, tx_idx, tx_hash) =
+                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key);
+                by_prefix.insert(
+                    (prefix, block_num, tx_idx, tx_hash),
+                    bincode::deserialize(&value).unwrap(),
+                );
+            }
+            (by_lock, by_prefix)
+        }
+
+        #[test]
+        fn bulk_writes_prefix_rows_and_counters_for_named_participants() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let snapshot = materialize_bulk_artifacts_for_test(&parity_blocks())
+                .expect("bulk build must succeed");
+
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            let lock_b = crate::parser::ScriptParser::compute_script_hash(&lock_script_b());
+            let mut positions: Vec<(Vec<u8>, i64, i32)> = snapshot
+                .addr_txs
+                .keys()
+                .map(|(lock_hash, block_num, tx_idx, _)| (lock_hash.clone(), *block_num, *tx_idx))
+                .collect();
+            positions.sort();
+            assert_eq!(
+                positions,
+                vec![
+                    (lock_a.clone(), 100, 0),
+                    (lock_a.clone(), 101, 0),
+                    (lock_a.clone(), 101, 1),
+                    (lock_b.clone(), 101, 1),
+                ]
+            );
+
+            assert_eq!(snapshot.addr_txs_by_prefix.len(), 1);
+            let ((prefix, block_num, tx_idx, _), value) =
+                snapshot.addr_txs_by_prefix.iter().next().unwrap();
+            assert_eq!((*prefix, *block_num, *tx_idx), (NAMED_PREFIX, 101, 1));
+            assert_eq!(value.flags, AddrTxValue::TX_TYPE_NAMED);
+            assert_eq!(value.capacity_change, 0);
+
+            assert_eq!(
+                snapshot
+                    .addr_prefix_stats
+                    .get(&NAMED_PREFIX)
+                    .expect("prefix counter")
+                    .txs_count,
+                1
+            );
+            assert_eq!(
+                snapshot
+                    .core
+                    .address_balances
+                    .get(lock_a.as_slice())
+                    .expect("lock A balance")
+                    .txs_count,
+                3,
+                "addr_balance still counts only cell participations"
+            );
+        }
+
+        /// End-to-end equivalence: with no detector naming anybody, the rows the
+        /// live path writes are exactly the rows the old cell-derived writer
+        /// produced, and the prefix index stays empty.
+        ///
+        /// `addr_tx_rows` is proven equal to the legacy derivation at the
+        /// builder level in `participant_rows`; this closes the loop through the
+        /// real write path. Tags are cross-checked against CF_TX_ACTIONS — an
+        /// independent record — rather than against the row being verified.
+        #[tokio::test]
+        async fn live_rows_equal_legacy_for_real_block_fixture() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = parity_blocks();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+
+            // The legacy derivation, from cells: every lock touched by a tx's
+            // outputs, plus (for non-cellbase) by its inputs.
+            let mut outputs_by_outpoint: HashMap<(Vec<u8>, usize), (Vec<u8>, i64)> = HashMap::new();
+            for block in &blocks {
+                for tx in &block.block.transactions {
+                    let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+                    for (index, output) in tx.outputs.iter().enumerate() {
+                        outputs_by_outpoint.insert(
+                            (tx_hash.clone(), index),
+                            (
+                                crate::parser::ScriptParser::compute_script_hash(&output.lock),
+                                i64::from_str_radix(output.capacity.trim_start_matches("0x"), 16)
+                                    .unwrap(),
+                            ),
+                        );
+                    }
+                }
+            }
+
+            let mut expected: BTreeMap<
+                (Vec<u8>, i64, i32, Vec<u8>),
+                ckbadger_store::types::AddrTxValue,
+            > = BTreeMap::new();
+            for block in &blocks {
+                let block_number =
+                    i64::from_str_radix(block.block.header.number.trim_start_matches("0x"), 16)
+                        .unwrap();
+                for (tx_index, tx) in block.block.transactions.iter().enumerate() {
+                    let is_cellbase = tx_index == 0;
+                    let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+                    let tx_index = tx_index as i32;
+                    // (out_cap, in_cap, has_out, has_in)
+                    let mut per_addr: BTreeMap<Vec<u8>, (i64, i64, bool, bool)> = BTreeMap::new();
+                    for output in &tx.outputs {
+                        let lock = crate::parser::ScriptParser::compute_script_hash(&output.lock);
+                        let e = per_addr.entry(lock).or_default();
+                        e.0 += i64::from_str_radix(output.capacity.trim_start_matches("0x"), 16)
+                            .unwrap();
+                        e.2 = true;
+                    }
+                    if !is_cellbase {
+                        for input in &tx.inputs {
+                            let prev_hash =
+                                crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                            let prev_index = usize::from_str_radix(
+                                input.previous_output.index.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap();
+                            let (lock, capacity) = outputs_by_outpoint
+                                .get(&(prev_hash, prev_index))
+                                .expect("fixture input must be a fixture output")
+                                .clone();
+                            let e = per_addr.entry(lock).or_default();
+                            e.1 += capacity;
+                            e.3 = true;
+                        }
+                    }
+                    // Tags from CF_TX_ACTIONS, which the write path records
+                    // independently of the addr_txs row. Cellbase has no such row
+                    // by design and carries exactly TAG_CELLBASE here.
+                    let actions = store
+                        .get_tx_actions(block_number, tx_index, &tx_hash)
+                        .unwrap();
+                    for (lock, (out_cap, in_cap, has_out, has_in)) in per_addr {
+                        let tags = match &actions {
+                            Some(actions) => {
+                                actions
+                                    .participants
+                                    .iter()
+                                    .find(|p| p.id.as_bytes() == lock.as_slice())
+                                    .expect("every touched lock is a participant")
+                                    .tags
+                            }
+                            None => ckbadger_store::types::TAG_CELLBASE,
+                        };
+                        expected.insert(
+                            (lock, block_number, tx_index, tx_hash.clone()),
+                            ckbadger_store::types::AddrTxValue::new(
+                                out_cap - in_cap,
+                                has_in,
+                                has_out,
+                                tags,
+                            ),
+                        );
+                    }
+                }
+            }
+
+            let (actual, by_prefix) = live_rows(&store);
+            assert_eq!(
+                actual, expected,
+                "participant-derived rows must equal the legacy cell derivation"
+            );
+            assert!(
+                by_prefix.is_empty(),
+                "no production detector names participants in Phase 1a: {by_prefix:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn bulk_and_live_produce_identical_participant_rows_for_the_same_block() {
+            let blocks = parity_blocks();
+
+            let live_store = {
+                let _guard = crate::db::writer::activities::test_detector_override::install(
+                    naming_detectors,
+                );
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(store.clone());
+                for b in &blocks {
+                    write_live_block(&indexer, b.clone()).await.unwrap();
+                }
+                store
+            };
+            let (live_by_lock, live_by_prefix) = live_rows(&live_store);
+
+            let snapshot = {
+                let _guard = crate::db::writer::activities::test_detector_override::install(
+                    naming_detectors,
+                );
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed")
+            };
+
+            assert_eq!(live_by_lock, snapshot.addr_txs, "CF_ADDR_TXS must match");
+            assert_eq!(
+                live_by_prefix, snapshot.addr_txs_by_prefix,
+                "CF_ADDR_TXS_BY_PREFIX must match"
+            );
+            assert_eq!(
+                live_store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap(),
+                *snapshot.addr_prefix_stats.get(&NAMED_PREFIX).unwrap(),
+                "prefix counters must match"
+            );
+        }
+    }
 
     mod live_token_binding {
         use super::live_dao_fee::{
