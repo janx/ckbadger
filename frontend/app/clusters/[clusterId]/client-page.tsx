@@ -28,6 +28,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { ClusterDescription, Tooltip } from '@/components/spore/cluster-description';
 import { parseSporeClusterDescription, type DobInfo } from '@/lib/spore-cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { HolderLabel } from '@/components/holder-label';
 import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp, formatCompositionTier } from '@/lib/asset-utils';
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
@@ -838,30 +839,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                         className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"
                       >
                         <div className="min-w-0">
-                          {/* A holder the API can name but not address has no lock
-                              hash; linking one anyway would invent an address. */}
-                          {holder.address ? (
-                            <Link
-                              href={`/address/${holder.address}`}
-                              className="text-text font-mono text-xs hover:underline"
-                            >
-                              {holder.address}
-                            </Link>
-                          ) : holder.lockScriptHash ? (
-                            <Link
-                              href={`/address/${holder.lockScriptHash}`}
-                              className="text-text font-mono text-xs hover:underline"
-                            >
-                              <HexDisplay
-                                value={holder.lockScriptHash}
-                                size="sm"
-                                startChars={12}
-                                endChars={10}
-                              />
-                            </Link>
-                          ) : (
-                            <span className="text-text-dim font-mono text-xs">Unknown holder</span>
-                          )}
+                          <HolderLabel holder={holder} />
                         </div>
                         <div className="text-text-bright shrink-0 font-mono text-sm">
                           {formatNumber(holder.itemCount)}

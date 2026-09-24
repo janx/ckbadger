@@ -26,12 +26,13 @@ import {
 } from '@/lib/api';
 import { ActivityEventGroup } from '@/components/activity-event-row';
 import {
+  formatPoolDuration,
   PoolInterpretationNotice,
   PoolStatusBadge,
+  PoolTruncatedNotice,
   PoolUnavailableNotice,
 } from '@/components/ui/pool-status';
-import { poolRefetchInterval } from '@/lib/pool-polling';
-import { formatPoolDuration } from '@/components/ui/pool-status';
+import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { useParams } from '@/src/navigation';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
@@ -65,6 +66,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const txPagination = useCursorPagination();
   const daoPagination = useCursorPagination();
   const fiberPagination = useCursorPagination();
+  const namesPagination = useCursorPagination();
   const {
     data: address,
     isLoading,
@@ -72,6 +74,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   } = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
+    // The unconfirmed header is read from this summary and shows on every tab
+    // and page, so the summary is what keeps it current.
+    refetchInterval: POOL_POLL_INTERVAL_MS,
   });
   const { data: tokens } = useQuery({
     queryKey: ['address-tokens', address?.lockScriptHash],
@@ -186,10 +191,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   // `.cell` names an address owns. The lookup is a prefix seek on this
   // address's own lock hash, so it needs the resolved hash, not the route text.
   const { data: dotcellNames } = useQuery({
-    queryKey: ['address-dotcell-names', address?.lockScriptHash],
+    queryKey: ['address-dotcell-names', address?.lockScriptHash, namesPagination.cursor],
     queryFn: () =>
       api.getAddressDotCellNames(address!.lockScriptHash, {
         limit: DEFAULT_PAGE_SIZE,
+        cursor: namesPagination.cursor,
       }),
     enabled: !!address,
     placeholderData: keepPreviousData,
@@ -204,8 +210,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address,
     placeholderData: keepPreviousData,
   });
-  // The pool segment belongs to whichever list the user is looking at; both
-  // page-one responses carry the same summary for this address.
+  // The pool segment belongs to whichever list the user is looking at. It
+  // decides only that list's notices; the header reads `address.pendingSummary`.
   const pool =
     activeTab === 'transactions' && !txPagination.cursor
       ? transactions?.pool
@@ -341,19 +347,21 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <StatBlock label="Live Cells" value={address.liveCellsCount} color="gold" />
               <StatBlock label="Transactions" value={address.transactionsCount} color="default" />
             </div>
-            {pool?.enabled && pool.healthy && pool.count > 0 && (
+            {address.pendingSummary !== null && address.pendingSummary.txCount > 0 && (
               <div className="border-base-border mt-4 flex items-baseline gap-3 border-t pt-4">
                 {/* Deliberately apart from Balance and never added to it: a
                     transaction in the node's pool is a proposed transition that
                     proof-of-work has not confirmed. */}
-                <StatBlock label="Unconfirmed" value={`${pool.count} tx`} color="gold" size="sm" />
-                <span className="text-warning font-mono text-sm">
-                  {formatCkbAmount(pool.pendingCkbDelta).isNegative ? '' : '+'}
-                  {formatCkbAmount(pool.pendingCkbDelta).full} CKB pending
-                </span>
-                {pool.truncated && (
-                  <span className="text-text-dim font-mono text-xs">
-                    (more unconfirmed transactions than shown)
+                <StatBlock
+                  label="Unconfirmed"
+                  value={`${address.pendingSummary.txCount} tx`}
+                  color="gold"
+                  size="sm"
+                />
+                {BigInt(address.pendingSummary.capacityDelta) !== BigInt(0) && (
+                  <span className="text-warning font-mono text-sm">
+                    {formatCkbAmount(address.pendingSummary.capacityDelta).isNegative ? '' : '+'}
+                    {formatCkbAmount(address.pendingSummary.capacityDelta).full} CKB pending
                   </span>
                 )}
               </div>
@@ -674,8 +682,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           </TerminalPanel>
         )}
         {dotcellNames?.data && dotcellNames.data.length > 0 && (
-          <TerminalPanel className="mb-8" variant="elevated">
-            <TerminalPanelHeader>{`Names (${dotcellNames.data.length})`}</TerminalPanelHeader>
+          <TerminalPanel className="mb-8" variant="elevated" data-testid="address-dotcell-names">
+            <TerminalPanelHeader>
+              {/* The endpoint declares no total, so a count is shown only when
+                  the whole list is on this one page. */}
+              {!dotcellNames.hasMore && !namesPagination.hasPrevious
+                ? `Names (${dotcellNames.data.length})`
+                : 'Names'}
+            </TerminalPanelHeader>
             <TerminalPanelContent padding="none">
               <div className="min-w-full">
                 <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
@@ -701,6 +715,19 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 ))}
               </div>
             </TerminalPanelContent>
+            {(dotcellNames.hasMore || namesPagination.hasPrevious) && (
+              <TerminalPanelFooter className="flex justify-center">
+                <CursorPagination
+                  totalLabel="names"
+                  pageSize={DEFAULT_PAGE_SIZE}
+                  hasMore={dotcellNames.hasMore}
+                  hasPrevious={namesPagination.hasPrevious}
+                  page={namesPagination.page}
+                  onNext={() => namesPagination.goToNext(dotcellNames.nextCursor)}
+                  onPrevious={namesPagination.goToPrevious}
+                />
+              </TerminalPanelFooter>
+            )}
           </TerminalPanel>
         )}
         {fiberChannels?.data && fiberChannels.data.length > 0 && (
@@ -937,6 +964,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   </select>
                 </div>
                 {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
+                {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
                 {activitiesLoading ? (
                   <div className="text-text-dim py-12 text-center">Loading activities...</div>
                 ) : activitiesError ? (
@@ -1178,6 +1206,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {activeTab === 'transactions' && (
               <>
                 {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
+                {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
                 {txLoading ? (
                   <div className="text-text-dim py-12 text-center">Loading transactions...</div>
                 ) : transactions?.data && transactions.data.length > 0 ? (
@@ -1293,7 +1322,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             </div>
                             <div className="text-text-dim w-20 text-right text-sm">{when}</div>
                           </div>
-                          <div className="space-y-1.5 lg:hidden">
+                          <div
+                            className="space-y-1.5 lg:hidden"
+                            data-testid="address-tx-row-mobile"
+                          >
                             <div className="flex items-center justify-between gap-2">
                               <Link href={`/tx/${tx.txHash}`}>
                                 <HexDisplay
@@ -1305,6 +1337,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               </Link>
                               <span className="text-text-dim shrink-0 text-xs">{when}</span>
                             </div>
+                            {/* The same position and interpretation facts the
+                                desktop row carries. */}
+                            {position}
+                            <PoolInterpretationNotice interpretation={tx.interpretation} />
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-text-dim flex items-center gap-3 font-mono text-xs">
                                 <span>

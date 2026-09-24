@@ -339,7 +339,7 @@ impl BatchWriter {
         append_store: &CkbadgerStore,
         start_block: i64,
         end_block: i64,
-    ) -> Result<()> {
+    ) -> Result<ckbadger_store::RollbackResult> {
         info!(
             "Cleaning up partial batch data for blocks {} to {}",
             start_block, end_block
@@ -356,13 +356,20 @@ impl BatchWriter {
         // used by execute_reorg and init_sync_start. Entity mutations (Spore,
         // mNFT, dotbit) are reverted first so the subsequent domain rollback
         // can rebuild aggregates from correct entity state.
-        self.store
+        let undo_result = self
+            .store
             .rollback_via_undo_log(append_store, cleanup_tip)?;
 
         // For range cleanup, we rollback to the block before the range
-        // then the caller will re-sync from start_block
-        self.store
-            .rollback_to_block_with_append_only_store(cleanup_tip, Some(append_store))?;
+        // then the caller will re-sync from start_block. The replay above
+        // consumed the undo log's tx-context entries; hand the ones it
+        // returned to the canonical rollback, exactly as `execute_reorg` and
+        // `init_sync_start` do, or it can only fall back to whole-CF scans.
+        let result = self.store.rollback_to_block_with_tx_contexts(
+            cleanup_tip,
+            Some(append_store),
+            undo_result.tx_contexts,
+        )?;
         // Re-derive script version/family rollups from corrected reference info.
         self.refresh_script_reference_rollups()?;
 
@@ -370,7 +377,7 @@ impl BatchWriter {
             "Batch cleanup complete for blocks {} to {}",
             start_block, end_block
         );
-        Ok(())
+        Ok(result)
     }
 
     fn has_partial_data_after_block(&self, start_block: i64) -> Result<bool> {

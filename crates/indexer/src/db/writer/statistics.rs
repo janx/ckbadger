@@ -812,30 +812,44 @@ impl BatchWriter {
         already_executed: i64,
     ) -> Result<i64> {
         let by_clock = now_ms / 3_600_000 - Self::HOURLY_RETENTION_WINDOW_HOURS;
-        let undo_window_block = committed_tip - crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS;
-        let by_undo_window = if undo_window_block < 0 {
-            // The whole chain is still inside the undo window: there is no
-            // block old enough to bound anything, so only the clock applies.
-            i64::MIN
-        } else {
-            match self.store.get_block_header(undo_window_block)? {
-                Some(header) => header.timestamp / 3_600_000,
-                None => {
-                    // A canonical block at or below the tip with no header is
-                    // store corruption. Turning that into "delete nothing"
-                    // would hide it behind a retention sweep that quietly stops
-                    // working.
-                    bail!(
-                        "missing header for the entity-stats undo window block while computing \
-                         the hourly retention cutoff: block={}, committed_tip={}, retain_blocks={}",
-                        undo_window_block,
-                        committed_tip,
-                        crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS
-                    );
-                }
+        // While the whole chain is inside the undo window there is no block
+        // old enough to bound anything, and so no cutoff at all; the caller
+        // skips the step (`hourly_retention_undo_window_block`). Answering
+        // "the clock alone" here is what persisted `i64::MIN` as a cutoff.
+        let undo_window_block = Self::hourly_retention_undo_window_block(committed_tip)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "hourly retention cutoff requested while the chain is inside the undo \
+                     window: committed_tip={}, retain_blocks={}",
+                    committed_tip,
+                    crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS
+                )
+            })?;
+        let by_undo_window = match self.store.get_block_header(undo_window_block)? {
+            Some(header) => header.timestamp / 3_600_000,
+            None => {
+                // A canonical block at or below the tip with no header is
+                // store corruption. Turning that into "delete nothing"
+                // would hide it behind a retention sweep that quietly stops
+                // working.
+                bail!(
+                    "missing header for the entity-stats undo window block while computing \
+                     the hourly retention cutoff: block={}, committed_tip={}, retain_blocks={}",
+                    undo_window_block,
+                    committed_tip,
+                    crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS
+                );
             }
         };
         Ok(by_clock.min(by_undo_window).max(already_executed))
+    }
+
+    /// The block whose header bounds hourly retention —
+    /// `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` — or `None` while the
+    /// whole chain is still inside the undo window, when there is none.
+    pub fn hourly_retention_undo_window_block(committed_tip: i64) -> Option<i64> {
+        let block = committed_tip - crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS;
+        (block >= 0).then_some(block)
     }
 
     /// Delete up to `HOURLY_RETENTION_STEP_BUDGET` expired keys of one hourly
@@ -3049,9 +3063,9 @@ mod activity_stats_tests {
     use std::sync::Arc;
 
     use ckbadger_store::types::{
-        DailyActivityStats, ItemDelta, ParticipantDelta, ProtocolAction, TxActions, TypeCallEntry,
-        ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_DAO, TAG_IDENTITY, TAG_OBJECT,
-        TAG_TOKEN, TAG_TYPE_CALL,
+        DailyActivityStats, IdentityStandard, ItemDelta, ItemKind, ParticipantDelta,
+        ProtocolAction, TxActions, TypeCallEntry, TAG_DAO, TAG_IDENTITY, TAG_OBJECT, TAG_TOKEN,
+        TAG_TYPE_CALL,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -3181,7 +3195,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(0, TAG_TOKEN);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
-                    kind: ITEM_KIND_TOKEN,
+                    kind: ItemKind::Token,
                     magnitude: 1000,
                     negative: false,
                 }];
@@ -3204,7 +3218,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(0, TAG_OBJECT);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xBB; 32],
-                    kind: ITEM_KIND_OBJECT,
+                    kind: ItemKind::Object,
                     magnitude: 1,
                     negative: false,
                 }];
@@ -3227,7 +3241,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(0, TAG_IDENTITY);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xCC; 32],
-                    kind: ITEM_KIND_IDENTITY,
+                    kind: ItemKind::Identity(IdentityStandard::DotBit),
                     magnitude: 1,
                     negative: false,
                 }];
@@ -3250,7 +3264,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(-500_00000000, TAG_TOKEN | TAG_DAO);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
-                    kind: ITEM_KIND_TOKEN,
+                    kind: ItemKind::Token,
                     magnitude: 1000,
                     negative: false,
                 }];

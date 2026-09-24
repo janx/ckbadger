@@ -79,6 +79,19 @@ describe('resolveObjectRouteTarget', () => {
 });
 
 describe('identity item routes', () => {
+  it('routes every identity standard wire value to its own detail page', () => {
+    expect(getIdentityItemDetailHref('dotbit', '0xaa')).toBe('/identities/dotbit/0xaa');
+    expect(getIdentityItemDetailHref('did_ckb', '0xbb')).toBe('/identities/did/0xbb');
+    expect(getIdentityItemDetailHref('bit_cell', '0xcc')).toBe('/identities/bit-cell/0xcc');
+    expect(getIdentityItemDetailHref('dotcell', '0xdd')).toBe('/identities/dotcell/0xdd');
+  });
+
+  it('refuses a standard that has no identity page instead of routing it to an object page', () => {
+    expect(() => getIdentityItemDetailHref('identity', '0xee')).toThrow(
+      /No identity detail route for standard "identity"/
+    );
+  });
+
   it('routes .bit Cell IDs to the dedicated identity detail page', () => {
     expect(getIdentityItemDetailHref('bit_cell', '0xbit/cell')).toBe(
       '/identities/bit-cell/0xbit%2Fcell'

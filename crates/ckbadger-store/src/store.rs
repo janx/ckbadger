@@ -1340,8 +1340,8 @@ impl CkbadgerStore {
     ///
     /// `atomic_flush = 1` means ANY CF hitting its buffer switches memtables
     /// for the whole DB, so the smallest tier here sets the flush frequency of
-    /// all 59 CFs — which is why the tier comes from the memory profile and is
-    /// never hardcoded below it.
+    /// every CF the store opens — which is why the tier comes from the memory
+    /// profile and is never hardcoded below it.
     fn live_cf_write_buffer(name: &str, profile: &MemoryProfile) -> (i32, usize) {
         if Self::is_mega_write_cf(name) {
             (4, profile.write_buffer_mega_bytes)
@@ -1411,8 +1411,8 @@ impl CkbadgerStore {
         //
         // Stays ON for the entire process lifetime (the rocksdb crate does not
         // expose SetDBOptions, so atomic_flush cannot be toggled at runtime).
-        // This means background flushes during bulk sync coordinate all 61 CFs,
-        // which is slower than independent per-CF flushes but ensures cross-CF
+        // This means background flushes during bulk sync coordinate every CF
+        // the store opens, which is slower than independent per-CF flushes but ensures cross-CF
         // consistency on crash during live sync (WAL + atomic flush).
         opts.set_atomic_flush(true);
 
@@ -2749,7 +2749,7 @@ impl CkbadgerStore {
     ///
     /// `num_running_flushes` is DB-wide; the per-CF counters are summed
     /// over all CFs in this store. With atomic_flush enabled, flushes
-    /// fan out across all 59 CFs simultaneously, so summing is
+    /// fan out across every CF of the store simultaneously, so summing is
     /// representative of total flush pressure.
     pub fn flush_stats(&self) -> FlushStats {
         let num_running_flushes = self

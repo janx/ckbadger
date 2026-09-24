@@ -558,7 +558,12 @@ impl BatchWriter {
             block_number,
             CF_SPORE_DATA,
             &cluster.cluster_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| {
+                    super::undo_pre_image(e, "Spore cluster", &cluster.cluster_id, block_number)
+                })
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let entry = ObjectEntry {
@@ -616,7 +621,10 @@ impl BatchWriter {
             block_number,
             CF_IDENTITY_DATA,
             &did.did_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "did:ckb identity", &did.did_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
@@ -730,7 +738,10 @@ impl BatchWriter {
             block_number,
             CF_SPORE_DATA,
             &spore.spore_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "Spore", &spore.spore_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
@@ -981,7 +992,10 @@ impl BatchWriter {
             identity_id,
             existing
                 .as_ref()
-                .and_then(|entry| bincode::serialize(entry).ok()),
+                .map(|entry| {
+                    super::undo_pre_image(entry, ".bit Cell identity", identity_id, block_number)
+                })
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
@@ -1091,7 +1105,12 @@ impl BatchWriter {
                 block_number,
                 CF_IDENTITY_DATA,
                 spore_id,
-                bincode::serialize(&identity).ok(),
+                Some(super::undo_pre_image(
+                    &identity,
+                    "identity",
+                    spore_id,
+                    block_number,
+                )?),
                 &state.undo_seq_by_block,
             );
             let old_owner = identity.owner_lock_hash.clone();
@@ -1139,7 +1158,12 @@ impl BatchWriter {
                 block_number,
                 CF_SPORE_DATA,
                 spore_id,
-                bincode::serialize(&entry).ok(),
+                Some(super::undo_pre_image(
+                    &entry,
+                    "Spore",
+                    spore_id,
+                    block_number,
+                )?),
                 &state.undo_seq_by_block,
             );
 
@@ -2850,5 +2874,76 @@ mod tests {
         let agg_b = store.get_cluster_aggregate(&cluster_b).unwrap().unwrap();
         assert_eq!(agg_b.owned_capacity, 300);
         assert_eq!(agg_b.owned_knowledge, 100);
+    }
+
+    /// Flip the first bytes of every SST file under `dir`. A block-based table
+    /// starts with its data blocks, so the next read of a row in one fails
+    /// RocksDB's block checksum: a real read error, not a fake store.
+    fn corrupt_sst_data_blocks(dir: &std::path::Path) -> usize {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let mut corrupted = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("sst") {
+                continue;
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            let mut head = [0u8; 16];
+            file.read_exact(&mut head).unwrap();
+            for byte in &mut head {
+                *byte ^= 0xFF;
+            }
+            file.seek(SeekFrom::Start(0)).unwrap();
+            file.write_all(&head).unwrap();
+            file.sync_all().unwrap();
+            corrupted += 1;
+        }
+        corrupted
+    }
+
+    /// a5241239: an outpoint reverse-index pre-image is read with `get_cf`,
+    /// and a failed read stops the write. Recording it as `None` ("the row did
+    /// not exist") would make a rollback delete a row that had a value — here,
+    /// the forward row already sitting at the outpoint being written. Spore,
+    /// did:ckb, `.bit Cell` and `.cell` all write these rows through
+    /// `put_object_outpoint_rows`, which is where that commit's fix now lives.
+    #[test]
+    fn a_failed_outpoint_pre_image_read_stops_the_write_instead_of_recording_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let item_id = [0x5C; 20];
+        let tx_hash = [0xBB; 32];
+
+        let mut seed = StoreBatch::new(writer.store());
+        seed.put_spore_outpoint(&tx_hash, 0, &item_id);
+        seed.commit().unwrap();
+        store.flush_all_memtables().unwrap();
+        assert!(
+            corrupt_sst_data_blocks(dir.path()) > 0,
+            "the seeded outpoint row must live in an SST for the read to fail"
+        );
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state =
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let err = writer
+            .put_object_outpoint_rows(&item_id, &tx_hash, 0, 100, &mut batch, &mut state)
+            .expect_err("a failed pre-image read must not be recorded as an absent row");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("failed to read the outpoint reverse-index pre-image"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("id=0x{}", hex::encode(item_id))),
+            "{message}"
+        );
+        assert!(message.contains("block=100"), "{message}");
     }
 }

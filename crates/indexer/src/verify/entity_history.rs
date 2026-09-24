@@ -209,11 +209,30 @@ impl FacetDifference {
 // The typed export, as this crate consumes it.
 // ---------------------------------------------------------------------------
 
+/// Mirrors the API's `verify::Anchor`, field for field and type for type.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportAnchor {
-    pub block_number: u64,
+    pub block_number: i64,
     pub block_hash: String,
+}
+
+impl ExportAnchor {
+    /// The chain-side anchor: node heights are unsigned, so a negative
+    /// export anchor is refused here rather than reinterpreted.
+    pub fn source_anchor(&self) -> anyhow::Result<SourceAnchor> {
+        let block_number = u64::try_from(self.block_number).map_err(|_| {
+            anyhow!(
+                "the typed export pinned anchor block {} ({}), which is not a chain height",
+                self.block_number,
+                self.block_hash
+            )
+        })?;
+        Ok(SourceAnchor {
+            block_number,
+            block_hash: self.block_hash.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -883,10 +902,12 @@ struct TokenListEntry {
 /// the run claims, and swallowing that error hid it.
 fn default_candidates(ctx: &CheckContext) -> (Vec<EntitySelector>, Option<String>) {
     let mut candidates = incident_selectors(ctx.network);
-    let listed: Result<Vec<TokenListEntry>, _> = super::checks::api_get(ctx, "tokens?limit=8");
+    // `GET /tokens` is cursor-paged: the entries sit in the envelope's `data`.
+    let listed: Result<super::api_checks::CursorPage<TokenListEntry>, _> =
+        super::checks::api_get(ctx, "tokens?limit=8");
     let uncovered = match listed {
-        Ok(entries) => {
-            for entry in entries {
+        Ok(page) => {
+            for entry in page.data {
                 if candidates.len() >= MAX_ENTITIES_PER_RUN {
                     break;
                 }
@@ -928,8 +949,9 @@ async fn qualify_and_collect(
     scripts: &[(EntitySelector, Script)],
     budget: &mut RunBudget,
 ) -> anyhow::Result<ChainWork> {
-    budget.charge_request();
-    let qualification = qualify_source(client, declaration, declaration_path, anchor).await?;
+    // Qualification charges each node call it makes.
+    let qualification =
+        qualify_source(client, budget, declaration, declaration_path, anchor).await?;
     if matches!(qualification, SourceQualification::Inconclusive(_)) {
         return Ok(ChainWork {
             qualification,
@@ -953,7 +975,7 @@ async fn qualify_and_collect(
     // and a reorg underneath it would have the node enumerating a different
     // chain than the export describes. Re-verifying it here is what keeps a
     // moved chain from being reported as a proven inconsistency.
-    if let Some(reason) = reverify_anchor(client, anchor).await? {
+    if let Some(reason) = reverify_anchor(client, budget, anchor).await? {
         return Ok(ChainWork {
             qualification: SourceQualification::Inconclusive(reason),
             outcomes: Vec::new(),
@@ -1055,6 +1077,15 @@ impl Check for EntityCapacityHistoryMatchesChain {
                     .join(", ")
             )));
         }
+        // A requested selector this delivery cannot verify is an uncovered
+        // entity like any other: it is named in the verdict and the manifest,
+        // and the run can never end Pass while it stands.
+        inconclusive.extend(unsupported.into_iter().map(|selector| {
+            (
+                selector,
+                "family not covered by this delivery (token only)".to_string(),
+            )
+        }));
 
         // The export is one request per case, so its anchor and rows are one
         // pinned view.
@@ -1069,10 +1100,7 @@ impl Check for EntityCapacityHistoryMatchesChain {
             }),
         )?;
 
-        let anchor = SourceAnchor {
-            block_number: export.anchor.block_number,
-            block_hash: export.anchor.block_hash.clone(),
-        };
+        let anchor = export.anchor.source_anchor()?;
 
         if !export.complete {
             return Ok(CheckResult::inconclusive(format!(
@@ -1821,6 +1849,31 @@ mod tests {
         let budget = raised.to_run_budget();
         assert_eq!(budget.max_rpc_requests(), 400_000);
         assert_eq!(budget.max_records(), 1_000_000);
+    }
+
+    /// `ExportAnchor` mirrors the API's `Anchor`, whose `blockNumber` is `i64`.
+    /// The chain side needs a `u64` height, so the one conversion refuses a
+    /// negative anchor explicitly instead of letting a wire-type mismatch
+    /// decide.
+    #[test]
+    fn export_anchor_mirrors_the_api_i64_and_converts_explicitly() {
+        let anchor: ExportAnchor =
+            serde_json::from_value(serde_json::json!({"blockNumber": 100, "blockHash": "0xb1"}))
+                .unwrap();
+        let _: i64 = anchor.block_number;
+        assert_eq!(
+            anchor.source_anchor().unwrap(),
+            SourceAnchor {
+                block_number: 100,
+                block_hash: "0xb1".to_string(),
+            }
+        );
+
+        let negative: ExportAnchor =
+            serde_json::from_value(serde_json::json!({"blockNumber": -1, "blockHash": "0xb1"}))
+                .expect("the mirror decodes every value the API type can carry");
+        let err = negative.source_anchor().unwrap_err();
+        assert!(format!("{err:#}").contains("-1"), "{err:#}");
     }
 
     #[test]

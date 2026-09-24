@@ -82,6 +82,57 @@ pub struct ConsumedCellMeta {
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
+/// How an address took part in one transaction, as stored in
+/// `AddrTxValue.flags`. The domain is closed: a byte outside it is corruption
+/// and fails where the row is decoded, never renders as some default label.
+/// On the wire it is the single `u8` it always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum AddrTxType {
+    Received = 0,
+    Sent = 1,
+    Internal = 2,
+    Transfer = 3,
+    /// A party the protocol named that holds no cell in this transaction.
+    Named = 4,
+}
+
+impl AddrTxType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Received => "received",
+            Self::Sent => "sent",
+            Self::Internal => "internal",
+            Self::Transfer => "transfer",
+            Self::Named => "named",
+        }
+    }
+}
+
+impl From<AddrTxType> for u8 {
+    fn from(tx_type: AddrTxType) -> Self {
+        tx_type as u8
+    }
+}
+
+impl TryFrom<u8> for AddrTxType {
+    type Error = String;
+
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
+        match byte {
+            0 => Ok(Self::Received),
+            1 => Ok(Self::Sent),
+            2 => Ok(Self::Internal),
+            3 => Ok(Self::Transfer),
+            4 => Ok(Self::Named),
+            other => Err(format!(
+                "unknown addr_tx type byte {other} (known: 0..=4) — the row is corrupt"
+            )),
+        }
+    }
+}
+
 /// Pre-computed value stored in CF_ADDR_TXS.
 /// Encodes capacity change, transaction type, and the participant tag bitmask
 /// (mirrors `ParticipantDelta::tags` for the same `(lock_hash, block, tx_idx, tx_hash)`),
@@ -90,17 +141,17 @@ pub struct ConsumedCellMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AddrTxValue {
     pub capacity_change: i64,
-    pub flags: u8,
+    pub flags: AddrTxType,
     pub tags: u16,
 }
 
 impl AddrTxValue {
-    pub const TX_TYPE_RECEIVED: u8 = 0;
-    pub const TX_TYPE_SENT: u8 = 1;
-    pub const TX_TYPE_INTERNAL: u8 = 2;
-    pub const TX_TYPE_TRANSFER: u8 = 3;
+    pub const TX_TYPE_RECEIVED: AddrTxType = AddrTxType::Received;
+    pub const TX_TYPE_SENT: AddrTxType = AddrTxType::Sent;
+    pub const TX_TYPE_INTERNAL: AddrTxType = AddrTxType::Internal;
+    pub const TX_TYPE_TRANSFER: AddrTxType = AddrTxType::Transfer;
     /// A party the protocol named that holds no cell in this transaction.
-    pub const TX_TYPE_NAMED: u8 = 4;
+    pub const TX_TYPE_NAMED: AddrTxType = AddrTxType::Named;
 
     pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool, tags: u16) -> Self {
         let tx_type = match (has_inputs, has_outputs) {
@@ -125,13 +176,7 @@ impl AddrTxValue {
     }
 
     pub fn tx_type_str(&self) -> &'static str {
-        match self.flags {
-            Self::TX_TYPE_RECEIVED => "received",
-            Self::TX_TYPE_SENT => "sent",
-            Self::TX_TYPE_INTERNAL => "internal",
-            Self::TX_TYPE_NAMED => "named",
-            _ => "transfer",
-        }
+        self.flags.as_str()
     }
 }
 
@@ -820,14 +865,9 @@ impl IdentityStandard {
         }
     }
 
-    /// Sentinel collection key for this identity standard.
+    /// Sentinel collection key for this identity standard ([`identity_sentinel_for`]).
     pub fn sentinel_collection_id(&self) -> &'static [u8; 32] {
-        match self {
-            IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
-            IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
-            IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
-            IdentityStandard::DotCell => &DOTCELL_SENTINEL_COLLECTION,
-        }
+        identity_sentinel_for(*self)
     }
 }
 
@@ -841,6 +881,103 @@ pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection_________
 pub const DOTCELL_SENTINEL_COLLECTION: [u8; 32] = *b"dotcell_collection______________";
 /// Sentinel collection key for clusterless Spore objects (32 bytes).
 pub const SOLE_SPORES_SENTINEL_COLLECTION: [u8; 32] = *b"sole_spores_collection__________";
+
+// ── The identity-standard table ─────────────────────────────────────────────
+//
+// Every place that turns a sentinel, a URL alias or a route back into an
+// identity standard reads it from here. The table used to be retyped by hand at
+// each read site, and `.cell` was left out of three copies (its activity feed
+// read the object CF, its chart 400'd), so each per-standard property below is
+// an exhaustive `match` — a new variant cannot compile until every column has
+// its value — and the reverse lookups search [`IDENTITY_STANDARDS`].
+
+/// Every identity standard, once. The reverse lookups below search this list.
+pub const IDENTITY_STANDARDS: [IdentityStandard; 4] = [
+    IdentityStandard::DotBit,
+    IdentityStandard::BitCell,
+    IdentityStandard::DidCkb,
+    IdentityStandard::DotCell,
+];
+
+/// Position of a standard in [`IDENTITY_STANDARDS`]. The exhaustive match means
+/// a new variant stops the build here until it is placed in the list, and the
+/// const check below proves the list and the positions agree.
+const fn identity_standard_position(standard: IdentityStandard) -> usize {
+    match standard {
+        IdentityStandard::DotBit => 0,
+        IdentityStandard::BitCell => 1,
+        IdentityStandard::DidCkb => 2,
+        IdentityStandard::DotCell => 3,
+    }
+}
+
+const _: () = {
+    let mut index = 0;
+    while index < IDENTITY_STANDARDS.len() {
+        assert!(identity_standard_position(IDENTITY_STANDARDS[index]) == index);
+        index += 1;
+    }
+};
+
+/// The sentinel collection id an identity standard's collection rows are keyed by.
+pub fn identity_sentinel_for(standard: IdentityStandard) -> &'static [u8; 32] {
+    match standard {
+        IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
+        IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
+        IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
+        IdentityStandard::DotCell => &DOTCELL_SENTINEL_COLLECTION,
+    }
+}
+
+/// The identity standard a collection id is the sentinel of, or `None` for a
+/// collection that is not an identity sentinel (an mNFT class, a cluster, …).
+pub fn identity_sentinel_standard(collection_id: &[u8]) -> Option<IdentityStandard> {
+    IDENTITY_STANDARDS
+        .into_iter()
+        .find(|standard| identity_sentinel_for(*standard).as_slice() == collection_id)
+}
+
+/// The URL aliases that name a standard's collection, lowercase. The route slug
+/// and the wire value ([`IdentityStandard::asset_standard`]) are always among them.
+pub fn identity_aliases(standard: IdentityStandard) -> &'static [&'static str] {
+    match standard {
+        IdentityStandard::DotBit => &["dotbit", ".bit"],
+        IdentityStandard::BitCell => &["bit_cell", "bit-cell", ".bit-cell"],
+        IdentityStandard::DidCkb => &["did:ckb", "did_ckb"],
+        IdentityStandard::DotCell => &["dotcell", ".cell"],
+    }
+}
+
+/// Resolve a URL alias (case-insensitive) to its identity standard.
+pub fn identity_alias(raw: &str) -> Option<IdentityStandard> {
+    let normalized = raw.to_ascii_lowercase();
+    IDENTITY_STANDARDS
+        .into_iter()
+        .find(|standard| identity_aliases(*standard).contains(&normalized.as_str()))
+}
+
+/// The frontend route segment of a standard's collection page:
+/// `/identities/{slug}`. A route segment, not the wire value — `bit_cell` on the
+/// wire is `bit-cell` in a URL.
+pub fn identity_route_slug(standard: IdentityStandard) -> &'static str {
+    match standard {
+        IdentityStandard::DotBit => "dotbit",
+        IdentityStandard::BitCell => "bit-cell",
+        IdentityStandard::DidCkb => "did:ckb",
+        IdentityStandard::DotCell => "dotcell",
+    }
+}
+
+/// The name a standard's collection is shown under when its aggregate carries
+/// none.
+pub fn identity_display_name(standard: IdentityStandard) -> &'static str {
+    match standard {
+        IdentityStandard::DotBit => ".bit",
+        IdentityStandard::BitCell => ".bit Cell",
+        IdentityStandard::DidCkb => "did:ckb",
+        IdentityStandard::DotCell => ".cell",
+    }
+}
 
 // ── `.cell` (DotCell) name cell types ───────────────────────────────────────
 //
@@ -1724,7 +1861,6 @@ pub struct HourlyRetentionState {
     /// Cutoff the in-flight round is sweeping towards, `None` when no round is
     /// in flight. Deletions below it have happened only up to `cursor`, so this
     /// is diagnostic: never use it as the retention boundary.
-    #[serde(default)]
     pub round_in_progress_cutoff_hour: Option<i64>,
     /// Where the current round stopped; `None` once the round is complete.
     pub cursor: Option<Vec<u8>>,
@@ -1806,15 +1942,34 @@ pub const TAG_CELLBASE: u16 = 1 << 5;
 pub const TAG_TYPE_CALL: u16 = 1 << 6;
 pub const TAG_LOCK_CALL: u16 = 1 << 7;
 
-// ItemDelta kind discriminators.
-pub const ITEM_KIND_TOKEN: u8 = 0;
-pub const ITEM_KIND_OBJECT: u8 = 1;
-pub const ITEM_KIND_IDENTITY: u8 = 2;
+/// What kind of item an `ItemDelta` moves.
+///
+/// An identity delta carries the standard that names it: `.cell`, `.bit` and
+/// did:ckb ids can all be 20 bytes, so an identity id alone cannot say which
+/// item page it belongs to. The builder knows the standard at the moment it
+/// emits the delta, and this is where it keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    Token,
+    Object,
+    Identity(IdentityStandard),
+}
+
+impl ItemKind {
+    /// The participant tag bit this kind of item sets.
+    pub fn tag(self) -> u16 {
+        match self {
+            Self::Token => TAG_TOKEN,
+            Self::Object => TAG_OBJECT,
+            Self::Identity(_) => TAG_IDENTITY,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDelta {
     pub item_id: Vec<u8>,
-    pub kind: u8,
+    pub kind: ItemKind,
     /// Absolute value of the delta. For a token item this is a UDT amount (u128); for
     /// object/identity items it is a small count. Stored only for non-zero deltas, so
     /// `magnitude` is always >= 1 when persisted.
@@ -2465,7 +2620,7 @@ mod tests {
     fn item_delta_preserves_full_u128_signed_magnitude() {
         let item = ItemDelta {
             item_id: vec![],
-            kind: ITEM_KIND_TOKEN,
+            kind: ItemKind::Token,
             magnitude: u128::MAX,
             negative: true,
         };
@@ -2505,7 +2660,7 @@ mod tests {
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xBB; 32],
-                    kind: ITEM_KIND_TOKEN,
+                    kind: ItemKind::Token,
                     magnitude: 42,
                     negative: false,
                 }],
@@ -2587,15 +2742,41 @@ mod tests {
         assert_eq!(combined, ored, "tags have overlapping bits");
     }
 
+    /// Replaces the old `u8` discriminator test: every kind (and every
+    /// identity standard) must round-trip, encode distinctly and map to its tag.
     #[test]
-    fn test_item_kind_constants() {
-        assert_eq!(ITEM_KIND_TOKEN, 0);
-        assert_eq!(ITEM_KIND_OBJECT, 1);
-        assert_eq!(ITEM_KIND_IDENTITY, 2);
-        // All distinct
-        assert_ne!(ITEM_KIND_TOKEN, ITEM_KIND_OBJECT);
-        assert_ne!(ITEM_KIND_OBJECT, ITEM_KIND_IDENTITY);
-        assert_ne!(ITEM_KIND_TOKEN, ITEM_KIND_IDENTITY);
+    fn test_item_kinds_are_distinct_and_identity_keeps_its_standard() {
+        let kinds = [
+            ItemKind::Token,
+            ItemKind::Object,
+            ItemKind::Identity(IdentityStandard::DotBit),
+            ItemKind::Identity(IdentityStandard::BitCell),
+            ItemKind::Identity(IdentityStandard::DidCkb),
+            ItemKind::Identity(IdentityStandard::DotCell),
+        ];
+        let encoded: Vec<Vec<u8>> = kinds
+            .iter()
+            .map(|kind| bincode::serialize(kind).unwrap())
+            .collect();
+        for (i, kind) in kinds.iter().enumerate() {
+            let decoded: ItemKind = bincode::deserialize(&encoded[i]).unwrap();
+            assert_eq!(decoded, *kind);
+            for (j, other) in encoded.iter().enumerate() {
+                if i != j {
+                    assert_ne!(&encoded[i], other, "{kind:?} encodes like {:?}", kinds[j]);
+                }
+            }
+        }
+        assert_eq!(ItemKind::Token.tag(), TAG_TOKEN);
+        assert_eq!(ItemKind::Object.tag(), TAG_OBJECT);
+        for standard in [
+            IdentityStandard::DotBit,
+            IdentityStandard::BitCell,
+            IdentityStandard::DidCkb,
+            IdentityStandard::DotCell,
+        ] {
+            assert_eq!(ItemKind::Identity(standard).tag(), TAG_IDENTITY);
+        }
     }
 
     // ---- ObjectStandard ----
@@ -2634,6 +2815,55 @@ mod tests {
         assert_eq!(IdentityStandard::DotBit.as_str(), "dotbit");
         assert_eq!(IdentityStandard::BitCell.as_str(), "bit_cell");
         assert_eq!(IdentityStandard::DidCkb.as_str(), "did_ckb");
+    }
+
+    /// Every standard has a sentinel, an alias set and a route slug, and every
+    /// reverse lookup lands back on the standard it started from. `.cell` was
+    /// once missing from three hand-typed copies of this table.
+    #[test]
+    fn every_identity_standard_has_sentinel_alias_and_slug() {
+        let mut sentinels = std::collections::HashSet::new();
+        for standard in IDENTITY_STANDARDS {
+            let sentinel = identity_sentinel_for(standard);
+            assert!(sentinels.insert(*sentinel), "{standard:?}: sentinel reused");
+            assert_eq!(
+                identity_sentinel_standard(sentinel),
+                Some(standard),
+                "{standard:?}: sentinel does not map back"
+            );
+            assert_eq!(standard.sentinel_collection_id(), sentinel);
+
+            assert!(!identity_aliases(standard).is_empty(), "{standard:?}");
+            for alias in identity_aliases(standard) {
+                assert_eq!(identity_alias(alias), Some(standard), "alias {alias}");
+                assert_eq!(
+                    identity_alias(&alias.to_ascii_uppercase()),
+                    Some(standard),
+                    "alias {alias} is case-insensitive"
+                );
+            }
+            assert_eq!(
+                identity_alias(identity_route_slug(standard)),
+                Some(standard),
+                "{standard:?}: the route slug is an alias"
+            );
+            assert_eq!(
+                identity_alias(standard.asset_standard()),
+                Some(standard),
+                "{standard:?}: the wire value is an alias"
+            );
+            assert!(!identity_display_name(standard).is_empty());
+        }
+        assert_eq!(identity_sentinel_standard(&[0x11; 32]), None);
+        assert_eq!(
+            identity_sentinel_standard(&SOLE_SPORES_SENTINEL_COLLECTION),
+            None,
+            "the Sole Spores sentinel is an object collection"
+        );
+        assert_eq!(identity_alias("m-nft"), None);
+        assert_eq!(identity_route_slug(IdentityStandard::BitCell), "bit-cell");
+        assert_eq!(identity_route_slug(IdentityStandard::DidCkb), "did:ckb");
+        assert_eq!(identity_alias(".cell"), Some(IdentityStandard::DotCell));
     }
 
     #[test]
@@ -2978,6 +3208,54 @@ mod tests {
         assert_eq!(status.sync_started_block, 128);
         assert!(status.sync_started_at.is_some());
     }
+
+    /// `HourlyRetentionState` is persisted with bincode, which is positional:
+    /// every field is always on the wire, so a serde field default can never
+    /// apply to it. The layout is pinned field by field, and a row written
+    /// without `round_in_progress_cutoff_hour` fails to decode instead of
+    /// reading the field as absent.
+    #[test]
+    fn hourly_retention_state_bincode_layout_is_positional() {
+        for in_progress in [None, Some(7i64)] {
+            let state = HourlyRetentionState {
+                policy_version: HOURLY_RETENTION_POLICY_VERSION,
+                family: HourlyRetentionFamily::Mnft,
+                executed_cutoff_hour: 42,
+                round_in_progress_cutoff_hour: in_progress,
+                cursor: Some(vec![9, 9]),
+                round_started_at: 100,
+                round_completed_at: None,
+            };
+            let mut expected = Vec::new();
+            expected.extend(bincode::serialize(&state.policy_version).unwrap());
+            expected.extend(bincode::serialize(&state.family).unwrap());
+            expected.extend(bincode::serialize(&state.executed_cutoff_hour).unwrap());
+            expected.extend(bincode::serialize(&state.round_in_progress_cutoff_hour).unwrap());
+            expected.extend(bincode::serialize(&state.cursor).unwrap());
+            expected.extend(bincode::serialize(&state.round_started_at).unwrap());
+            expected.extend(bincode::serialize(&state.round_completed_at).unwrap());
+
+            let bytes = bincode::serialize(&state).unwrap();
+            assert_eq!(bytes, expected);
+            assert_eq!(
+                bincode::deserialize::<HourlyRetentionState>(&bytes).unwrap(),
+                state
+            );
+        }
+
+        let without_field = (
+            HOURLY_RETENTION_POLICY_VERSION,
+            HourlyRetentionFamily::Mnft,
+            42i64,
+            Some(vec![9u8, 9]),
+            100i64,
+            None::<i64>,
+        );
+        assert!(bincode::deserialize::<HourlyRetentionState>(
+            &bincode::serialize(&without_field).unwrap()
+        )
+        .is_err());
+    }
 }
 
 #[cfg(test)]
@@ -3037,6 +3315,37 @@ mod participant_model_tests {
         let back: ParticipantDelta =
             bincode::deserialize(&bincode::serialize(&prefix).unwrap()).unwrap();
         assert_eq!(back.id, ParticipantId::LockPrefix([0x22; 20]));
+    }
+
+    /// The tx-type byte of an `AddrTxValue` has a closed domain. A byte outside
+    /// it is corruption and must fail where the row is read — it used to decode
+    /// fine and render as "transfer". The wire layout stays the plain
+    /// `(capacity_change: i64, flags: u8, tags: u16)` tuple, so this changes no
+    /// stored byte.
+    #[test]
+    fn addr_tx_value_tx_type_domain_is_closed() {
+        let labels = [
+            (0u8, "received"),
+            (1, "sent"),
+            (2, "internal"),
+            (3, "transfer"),
+            (4, "named"),
+        ];
+        for (byte, label) in labels {
+            let raw = bincode::serialize(&(-5i64, byte, 0x0102u16)).unwrap();
+            let value: AddrTxValue = bincode::deserialize(&raw)
+                .unwrap_or_else(|e| panic!("tx type {byte} must decode: {e}"));
+            assert_eq!(value.tx_type_str(), label);
+            assert_eq!(value.capacity_change, -5);
+            assert_eq!(value.tags, 0x0102);
+            assert_eq!(bincode::serialize(&value).unwrap(), raw, "{label}");
+        }
+        for byte in [5u8, 9, 0xFF] {
+            let raw = bincode::serialize(&(0i64, byte, 0u16)).unwrap();
+            let err = bincode::deserialize::<AddrTxValue>(&raw)
+                .expect_err("an out-of-domain tx type must not decode");
+            assert!(err.to_string().contains(&byte.to_string()), "{err}");
+        }
     }
 
     #[test]

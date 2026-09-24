@@ -100,7 +100,7 @@ pub struct AppState {
     /// empty pool.
     pub pool_mirror: Arc<PoolMirror>,
     /// Upper bound on mirrored pool transactions (`[api] pool_max_tracked_txs`).
-    pub pool_max_tracked_txs: usize,
+    pub pool_max_tracked_txs: std::num::NonZeroUsize,
 }
 
 impl AppState {
@@ -222,10 +222,11 @@ pub struct AppConfig {
     pub cycles_request_dir: Option<PathBuf>,
     /// Mirror the node's tx pool in process memory (`[api] pool_mirror_enabled`).
     pub pool_mirror_enabled: bool,
-    /// Poll interval for that mirror (`[api] pool_poll_interval_ms`).
-    pub pool_poll_interval_ms: u64,
+    /// Poll interval for that mirror (`[api] pool_poll_interval_ms`). Non-zero
+    /// by type: the config parser rejects 0, so there is nothing to clamp.
+    pub pool_poll_interval_ms: std::num::NonZeroU64,
     /// Tracking cap for that mirror (`[api] pool_max_tracked_txs`).
-    pub pool_max_tracked_txs: usize,
+    pub pool_max_tracked_txs: std::num::NonZeroUsize,
 }
 
 /// Seed the asset/address/script caches at startup *only when no background
@@ -294,7 +295,7 @@ pub async fn create_router(config: AppConfig) -> Router {
     let mem_cache = InMemoryCache::new();
 
     let pool_mirror = Arc::new(PoolMirror::new(config.pool_mirror_enabled));
-    let pool_poll_interval = std::time::Duration::from_millis(config.pool_poll_interval_ms.max(1));
+    let pool_poll_interval = std::time::Duration::from_millis(config.pool_poll_interval_ms.get());
 
     let state = Arc::new(AppState {
         store: config.store,

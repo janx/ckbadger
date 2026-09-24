@@ -149,14 +149,28 @@ CFs with delta-based state (e.g. `addr_balance`, `script_info`, `token_holders`,
 - Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
 - Rollback replays entries for `block > rollback_to` in reverse order
 
-The **outpoint reverse index** in `CF_STATS_SPORE` (`outpoint -> id` and
-`id -> outpoint`, written by Spore, did:ckb, `.bit Cell` and `.cell` through
-`BatchWriter::put_object_outpoint_rows`) belongs to this column, not to the
-repair stage. The repair cleans those rows only for entries it can still see
-with `created_at_block > rollback_to`: a rolled-back mint's entry is already
-gone by then (undo replay runs first), and a rolled-back TRANSFER leaves the
-item alive, so it is never a delete candidate while its stale outpoint row
-remains. See POSTMORTEM PROTO-010.
+The **outpoint reverse indexes** belong to this column too: `outpoint -> id` and
+`id -> outpoint` in `CF_STATS_SPORE` (written by Spore, did:ckb, `.bit Cell` and `.cell`
+through `BatchWriter::put_object_outpoint_rows`) and the mNFT class/token outpoint rows in
+`CF_STATS_MNFT` (written through `put_mnft_outpoint_row`). Each write reads its pre-image first,
+and a failed read is an error, never "the row did not exist". No other stage can clean these
+rows: a rolled-back mint's entry is already gone when anything after undo replay runs, and a
+rolled-back TRANSFER leaves the item alive with its stale outpoint row. See POSTMORTEM PROTO-010
+and PROTO-012.
+
+**Undo replay is the only owner of entity rows.** Identity (`identity_data`), Spore
+(`spore_data`) and mNFT (`mnft_data`) rows, together with their owner-index and outpoint
+reverse-index rows, are restored only by undo replay, which runs before `rollback_to_block` at
+every entry point (`execute_reorg`, `init_sync_start`, partial-batch cleanup). Stage 10
+(`repair_spore_object_domain`) only rebuilds derived indexes and aggregates from the entities that
+survive — the `identity_by_collection` sentinel rows and `.cell` parent→child rows, and the owner
+counts, keyed by `ParticipantId` (a `Lock` or a `LockPrefix` picks the key encoder) — and never
+deletes an entity. An entry with `created_at_block > rollback_to` that is still present at that
+point means the writer that created it recorded no undo pre-image, so the rollback fails with
+`… missing undo pre-image from writer` (naming the CF, id, standard, `created_at_block` and
+`rollback_to`) and commits nothing. The fix is always to add the pre-image in the writer, never
+to delete in the repair scan. A crashed bulk build cannot reach this path, because startup fails
+fast on an incomplete bulk-session marker.
 
 ### Direct Deletion (for activity/event CFs)
 
@@ -232,7 +246,10 @@ can still roll these families: `sync_meta` → `entity_stats_undo_contract`
 
 - Every live commit advances `coverage_floor_block` to
   `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000) and stages the matching deletions into
-  the same batch, so the floor and its deletions are never separately durable.
+  the same batch, so the floor and its deletions are never separately durable. `committed_tip` is
+  the durable tip the batch builds on (the block before its first block), because the prune sees
+  only committed rows; a batch longer than 1000 blocks leaves its own below-floor entries to the
+  next batch (POSTMORTEM IDX-012).
 - A rollback target **below** the floor fails with a rebuild-required error at **all three** entry
   points — `execute_reorg` (fork point), `init_sync_start` (startup cleanup target), and
   partial-batch cleanup — rather than rolling back blocks, cells and indexes while leaving these

@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -69,6 +69,33 @@ impl PreCommitInvariantError {
     pub(crate) fn new(component: &'static str, source: anyhow::Error) -> Self {
         Self { component, source }
     }
+}
+
+/// A `.cell` name cell the live writer indexes: output index, decoded name,
+/// records from the witness at that output's own index.
+type LiveDotCellNameCell = (
+    usize,
+    crate::parser::DotCellNameData,
+    Vec<crate::parser::dotcell::DotCellRecord>,
+);
+
+/// The `.cell` name cells a transaction creates, for the live writer.
+///
+/// A failure here is a deterministic property of committed chain data that
+/// the strict decoder rejects (spec §Fail Fast: layout version, records hash,
+/// own-index witness, UTF-8 label). Bulk build stops on the same block, so
+/// live must stop the same way — a pre-commit invariant, never the
+/// cleanup-and-retry path that would re-fetch and re-reject the block forever.
+fn live_dotcell_name_cells(
+    tx: &crate::rpc::TransactionView,
+    block_number: i64,
+) -> Result<Vec<LiveDotCellNameCell>> {
+    DotCellParser::parse_name_cells_with_output_indices(tx).map_err(|source| {
+        anyhow::Error::new(PreCommitInvariantError::new(
+            "dotcell name cell",
+            anyhow!("block={block_number}, {source:#}"),
+        ))
+    })
 }
 
 pub(super) fn collect_missing_input_outpoints<T>(
@@ -1276,15 +1303,38 @@ pub fn stage_hourly_retention(
     if writer.store().is_bulk_sync_mode() {
         return Ok(());
     }
+    if BatchWriter::hourly_retention_undo_window_block(committed_tip).is_none() {
+        debug!(
+            committed_tip,
+            "Hourly retention skipped: the chain is still inside the entity-stats undo window, \
+             so no block bounds the cutoff"
+        );
+        return Ok(());
+    }
 
     for family in [HourlyRetentionFamily::Token, HourlyRetentionFamily::Mnft] {
-        let already_executed = writer
-            .store()
-            .get_hourly_retention_state(family)?
-            .map(|state| state.executed_cutoff_hour)
-            .unwrap_or(i64::MIN);
-        let cutoff_hour =
-            writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?;
+        let existing = writer.store().get_hourly_retention_state(family)?;
+        // A round that needs several steps sweeps with the cutoff it started
+        // with: each step covers its own key range, so a later step using a
+        // later cutoff would make the completed round claim deletions the
+        // earlier steps never made.
+        let cutoff_hour = match existing.as_ref() {
+            Some(state) if state.cursor.is_some() => {
+                state.round_in_progress_cutoff_hour.ok_or_else(|| {
+                    anyhow!(
+                        "{} hourly retention round has a cursor but no pinned cutoff",
+                        family.as_str()
+                    )
+                })?
+            }
+            _ => {
+                let already_executed = existing
+                    .as_ref()
+                    .map(|state| state.executed_cutoff_hour)
+                    .unwrap_or(i64::MIN);
+                writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?
+            }
+        };
         let result = writer.stage_hourly_retention_step(batch, family, cutoff_hour, now_ms)?;
         if result.deleted > 0 || result.completed {
             debug!(
@@ -1298,6 +1348,66 @@ pub fn stage_hourly_retention(
         }
     }
     Ok(())
+}
+
+/// The tip a live batch builds on: the last block already durable in the
+/// store, i.e. the block before the batch's first block.
+///
+/// Retention maintenance must bound itself by this tip, never by the batch's
+/// own last block: the batch's headers and undo entries are not committed
+/// while it is being staged, so a batch longer than the undo window would read
+/// a header that is not there yet (and call it store corruption), and would
+/// promise a coverage floor the batch's own undo entries sit below. The
+/// store's sync tip must agree; if it does not, the batch boundary is wrong.
+pub(super) fn committed_tip_before_batch(store: &CkbadgerStore, first_block: i64) -> Result<i64> {
+    let committed_tip = first_block
+        .checked_sub(1)
+        .ok_or_else(|| anyhow!("live batch first block underflow: first_block={first_block}"))?;
+    let (store_tip, store_tip_hash) = store.get_sync_tip()?;
+    let consistent = match store_tip_hash {
+        // An empty store: only a batch that starts at genesis builds on it.
+        None => first_block == 0,
+        Some(_) => store_tip == committed_tip,
+    };
+    if !consistent {
+        bail!(
+            "live batch does not build on the committed tip: first_block={}, expected committed tip {}, store sync tip {} (hash {})",
+            first_block,
+            committed_tip,
+            store_tip,
+            if store_tip_hash.is_some() { "present" } else { "absent" }
+        );
+    }
+    Ok(committed_tip)
+}
+
+/// The periodic task's request for one hourly-retention step, held by one
+/// batch. Reading it does not consume it: the request is cleared only by
+/// `served`, after the batch that staged the step has committed. A batch that
+/// fails leaves it armed for the retry.
+pub(super) struct HourlyRetentionRequest<'a> {
+    flag: &'a AtomicBool,
+    armed: bool,
+}
+
+impl<'a> HourlyRetentionRequest<'a> {
+    pub(super) fn read(flag: &'a AtomicBool, maintenance_allowed: bool) -> Self {
+        Self {
+            flag,
+            armed: maintenance_allowed && flag.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(super) fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    /// The batch that staged the step is durable: the request is served.
+    pub(super) fn served(self) {
+        if self.armed {
+            self.flag.store(false, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Stage the coverage-floor advance and the matching undo deletions.
@@ -3095,8 +3205,7 @@ impl Indexer {
                     // as a Transfer, while a `.cell` transaction's meaning comes
                     // from the state diff (`DotCellDetector`). The feed entry is
                     // derived from the written protocol actions below.
-                    for (output_index, name, records) in
-                        DotCellParser::parse_name_cells_with_output_indices(tx)?
+                    for (output_index, name, records) in live_dotcell_name_cells(tx, parsed.number)?
                     {
                         let output_index_i16 = checked_usize_to_i16(
                             output_index,
@@ -3142,6 +3251,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index_i16,
                             parsed.number,
+                            ts_ms,
                             &mut data_batch,
                             &mut spore_state,
                         )?;
@@ -4080,31 +4190,36 @@ impl Indexer {
             //
             // Bulk build records no undo entries at all and has no reorg
             // workflow, so it neither prunes nor needs a window.
+            //
+            // Both retention stages are bounded by the tip this batch builds on
+            // (`first_block - 1`), never by `last_block`: this batch's headers
+            // and undo entries are not committed yet. A batch longer than the
+            // undo window leaves some of its own entries below the floor its
+            // tip implies; the next batch, built on this tip, prunes them.
+            let retention_request =
+                HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
             if !bulk_sync_mode {
+                let committed_tip = committed_tip_before_batch(self.writer.store(), first_block)?;
                 stage_entity_stats_undo_retention(
                     self.writer.store(),
                     &mut data_batch,
-                    last_block,
+                    committed_tip,
                 )?;
-            }
 
-            // One bounded hourly-retention step, if the periodic task asked for
-            // one. Deletions and the advanced retention state go into the same
-            // batch as the blocks, so the persisted boundary always matches
-            // what was actually deleted, and no background task can delete a
-            // bucket while a rollback is restoring it. Bulk build never runs
-            // this maintenance path.
-            if !bulk_sync_mode
-                && self
-                    .hourly_retention_requested
-                    .swap(false, Ordering::Relaxed)
-            {
-                stage_hourly_retention(
-                    &self.writer,
-                    &mut data_batch,
-                    last_block,
-                    Utc::now().timestamp_millis(),
-                )?;
+                // One bounded hourly-retention step, if the periodic task asked
+                // for one. Deletions and the advanced retention state go into the
+                // same batch as the blocks, so the persisted boundary always
+                // matches what was actually deleted, and no background task can
+                // delete a bucket while a rollback is restoring it. Bulk build
+                // never runs this maintenance path.
+                if retention_request.is_armed() {
+                    stage_hourly_retention(
+                        &self.writer,
+                        &mut data_batch,
+                        committed_tip,
+                        Utc::now().timestamp_millis(),
+                    )?;
+                }
             }
 
             // The commit window, split into five non-overlapping parts. Each
@@ -4214,7 +4329,24 @@ impl Indexer {
                     first_block, last_block
                 )
             })?;
+            retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+            // Debug-build invariant (plan Task 5.3): rollback replays a block's
+            // undo entries scope-major, which is exact only while each key the
+            // block mutates is recorded by one scope.
+            #[cfg(debug_assertions)]
+            {
+                let overlaps = crate::sync::undo::undo_scope_overlaps(
+                    self.writer.store(),
+                    first_block,
+                    last_block,
+                )?;
+                assert!(
+                    overlaps.is_empty(),
+                    "undo scopes overlap in blocks {first_block}-{last_block}; rollback would \
+                     replay these keys out of write order: {overlaps:?}"
+                );
+            }
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             commit_phase_total_ms = commit_ms;
@@ -5806,6 +5938,83 @@ mod tests {
         assert!(msg.contains("run through bulk build engine first"));
     }
 
+    #[test]
+    fn retention_flag_survives_a_failed_batch() {
+        let flag = AtomicBool::new(true);
+
+        // A batch reads the request, stages the step, then fails before its
+        // commit: the request must still be there for the retry.
+        {
+            let failed = HourlyRetentionRequest::read(&flag, true);
+            assert!(failed.is_armed());
+        }
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "a failed batch does not consume it"
+        );
+
+        let committed = HourlyRetentionRequest::read(&flag, true);
+        assert!(committed.is_armed());
+        committed.served();
+        assert!(!flag.load(Ordering::Relaxed), "a committed batch serves it");
+
+        // No request, or maintenance not allowed (bulk): nothing is armed and
+        // nothing is cleared.
+        assert!(!HourlyRetentionRequest::read(&flag, true).is_armed());
+        flag.store(true, Ordering::Relaxed);
+        let bulk = HourlyRetentionRequest::read(&flag, false);
+        assert!(!bulk.is_armed());
+        bulk.served();
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn committed_tip_before_batch_is_the_store_tip_or_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        // Empty store: only a batch from genesis builds on it.
+        assert_eq!(committed_tip_before_batch(&store, 0).unwrap(), -1);
+        let err = committed_tip_before_batch(&store, 5).unwrap_err();
+        assert!(err.to_string().contains("first_block=5"), "{err}");
+
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: 1_100,
+                tip_block_hash: vec![0x11; 32],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(committed_tip_before_batch(&store, 1_101).unwrap(), 1_100);
+        for wrong_first in [1_100, 1_102, 0] {
+            let err = committed_tip_before_batch(&store, wrong_first).unwrap_err();
+            assert!(
+                err.to_string().contains("store sync tip 1100"),
+                "first_block={wrong_first}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn dotcell_parse_error_on_live_path_is_a_precommit_invariant() {
+        let mut tx = crate::parser::test_helpers::real_dotcell::T2_REGISTER_JOAOM.transaction();
+        tx.witnesses.truncate(1);
+        let err = live_dotcell_name_cells(&tx, 22_365_400).unwrap_err();
+        let invariant = err
+            .downcast_ref::<PreCommitInvariantError>()
+            .expect("a DotCell parse failure is a pre-commit invariant");
+        assert_eq!(invariant.component, "dotcell name cell");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("block=22365400"), "{msg}");
+        assert!(
+            msg.contains(&format!("tx={}, output_index=1", tx.hash)),
+            "{msg}"
+        );
+
+        let clean = crate::parser::test_helpers::real_dotcell::T2_REGISTER_JOAOM.transaction();
+        assert_eq!(live_dotcell_name_cells(&clean, 1).unwrap().len(), 2);
+    }
+
     // ── Live write-path DAO phase-2 fee regression tests ─────────────────
     //
     // Drives the real live-sync write path (parse → parser fee pass →
@@ -5871,13 +6080,23 @@ mod tests {
             }
         }
 
-        fn block_hash(number: u64) -> [u8; 32] {
+        pub(super) fn block_hash(number: u64) -> [u8; 32] {
             let mut hash = [0x55u8; 32];
             hash[0..8].copy_from_slice(&number.to_le_bytes());
             hash
         }
 
         fn header(number: u64, ar: u64) -> HeaderView {
+            header_with_epoch_length(number, ar, 1800)
+        }
+
+        /// `header`, in an epoch of `epoch_length` blocks starting at block 100,
+        /// so a fixture can run past block 1899 inside one epoch.
+        pub(super) fn header_with_epoch_length(
+            number: u64,
+            ar: u64,
+            epoch_length: u64,
+        ) -> HeaderView {
             // DAO field: C (total issuance) and U (occupied) must satisfy
             // C > U for the secondary-miner split; AR drives compensation.
             // S (the unissued secondary pool) must cover the compensation this
@@ -5892,7 +6111,7 @@ mod tests {
             // Epoch 40 (length 1800) starts at block 100, so the first
             // fixture batch opens the epoch stats row exactly like a real
             // epoch boundary block would.
-            let epoch = (1800u64 << 40) | ((number - 100) << 24) | 40;
+            let epoch = (epoch_length << 40) | ((number - 100) << 24) | 40;
             HeaderView {
                 version: "0x0".to_string(),
                 compact_target: "0x1a08a97e".to_string(),
@@ -6260,6 +6479,103 @@ mod tests {
             blocks: Vec<BlockResponseWithCycles>,
             token_daily_changes: EntityDailyChanges<EntityDateKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_inner(
+                indexer,
+                blocks,
+                FixtureTokenDaily::Given(token_daily_changes),
+            )
+            .await
+        }
+
+        /// Same live write path, with `TOKEN_DAILY` changes derived from the
+        /// batch's cells by the parser's own membership rule
+        /// (`pipeline::token_daily_member`), as the real parser stage does.
+        pub(super) async fn write_live_blocks_with_parser_token_daily(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells).await
+        }
+
+        enum FixtureTokenDaily {
+            Given(EntityDailyChanges<EntityDateKey>),
+            FromCells,
+        }
+
+        /// The parser stage's `TOKEN_DAILY` accumulation: every member cell a
+        /// transaction creates adds, every member cell it consumes subtracts.
+        fn token_daily_from_cells(
+            all_tx_data: &[TxData],
+            input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        ) -> Result<EntityDailyChanges<EntityDateKey>> {
+            let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+            for tx_data in all_tx_data {
+                let date = ckbadger_store::keys::timestamp_ms_to_date(
+                    tx_data.timestamp.timestamp_millis(),
+                );
+                for cell in &tx_data.cells {
+                    if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
+                        cell.type_script_hash.as_deref(),
+                        cell.type_code_hash.as_deref(),
+                        cell.type_hash_type,
+                    ) {
+                        let occupied = occupied_capacity_shannons_i64(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        );
+                        changes.add(
+                            tx_data.block_number,
+                            (type_hash.to_vec(), date),
+                            i128::from(cell.capacity),
+                            i128::from(occupied),
+                        )?;
+                    }
+                }
+                if tx_data.is_cellbase {
+                    continue;
+                }
+                for input in &tx_data.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "fixture token daily",
+                        )?,
+                    );
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "fixture input cell missing: outpoint=0x{}:{}",
+                                hex::encode(&key.0),
+                                key.1
+                            )
+                        })?;
+                    if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
+                        info.type_script_hash.as_deref(),
+                        info.type_code_hash.as_deref(),
+                        info.type_hash_type,
+                    ) {
+                        changes.add(
+                            tx_data.block_number,
+                            (type_hash.to_vec(), date),
+                            -i128::from(info.capacity),
+                            -i128::from(info.occupied_capacity),
+                        )?;
+                    }
+                }
+            }
+            Ok(changes)
+        }
+
+        async fn write_live_blocks_inner(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+            token_daily: FixtureTokenDaily,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
 
@@ -6320,6 +6636,12 @@ mod tests {
                 &input_cell_info,
                 &batch_cell_infos,
             )?;
+            let token_daily_changes = match token_daily {
+                FixtureTokenDaily::Given(changes) => changes,
+                FixtureTokenDaily::FromCells => {
+                    token_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?
+                }
+            };
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
             let metrics = indexer
@@ -6663,7 +6985,7 @@ mod tests {
             ) {
                 let (key, _) = item.unwrap();
                 let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if block_num == 101 && seq >> 48 == 0x0004 {
+                if block_num == 101 && crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
                     entity_undo += 1;
                 }
             }
@@ -7009,6 +7331,270 @@ mod tests {
             }
             out.sort();
             out
+        }
+
+        /// A detector that names lock A's 20-byte prefix in every non-cellbase
+        /// transaction, whether or not A holds a cell there.
+        fn naming_lock_a_detectors() -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>>
+        {
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::prefix(&lock_a[..20])
+                        .expect("20-byte prefix"),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        /// R2 forward pin (plan Task 1.4): `addr_balance.last_activity` moves only
+        /// on cell participation. Being NAMED by a protocol in a transaction in
+        /// which the address holds no cell leaves it where it was — the rule the
+        /// stage 9a rollback repair must reproduce. (The address deltas come
+        /// from the harness's mirror of the parser's cell-derived pass; what
+        /// this pins is that the write path adds nothing from named rows.)
+        #[tokio::test]
+        async fn named_only_participation_does_not_move_last_activity() {
+            let _guard = crate::db::writer::activities::test_detector_override::install(
+                naming_lock_a_detectors,
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            let prefix_a: [u8; 20] = lock_a[..20].try_into().unwrap();
+
+            // Block 100: the cellbase funds A, and A's cell moves on to B.
+            write_live_block(
+                &indexer,
+                block(
+                    100,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc0, FUNDING_CAPACITY),
+                        transfer_tx(0xd0, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+            // Block 101: the cellbase pays A (a cell participation, tx 0); then
+            // B -> C, where A holds no cell but is named by the detector (tx 1).
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xd0, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                prefix_rows(&store)
+                    .iter()
+                    .any(|(p, b, t, _)| (*p, *b, *t) == (prefix_a, 101, 1)),
+                "A is a named participant of 0xd1: {:?}",
+                prefix_rows(&store)
+            );
+            let balance = store.get_addr_balance(&lock_a).unwrap().expect("A");
+            assert_eq!(
+                (
+                    balance.last_activity_block,
+                    balance.last_activity_tx.clone()
+                ),
+                (101, vec![0xc1u8; 32]),
+                "last_activity is A's last CELL participation, not the naming tx 0xd1"
+            );
+            assert_ne!(balance.last_activity_tx, vec![0xd1u8; 32]);
+            assert_eq!(
+                balance.txs_count, 3,
+                "txs_count counts cell participations only"
+            );
+        }
+
+        /// Plan Task 5.7: `cleanup_batch_range` replayed the undo log (which
+        /// consumes the tx-context entries) and then asked for the canonical
+        /// rollback WITHOUT the contexts that replay returned, so every
+        /// CleanupAndRetry fell back to whole-CF scans. It must hand them over,
+        /// exactly like `execute_reorg`.
+        #[tokio::test]
+        async fn cleanup_batch_range_reuses_the_undo_tx_contexts_instead_of_scanning() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+
+            // Address history the cleanup has no business reading: 300 rows of
+            // unrelated locks, all below the cleanup range.
+            const NOISE: u64 = 300;
+            {
+                let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+                for i in 0..NOISE {
+                    let mut lock = [0x90u8; 32];
+                    lock[..8].copy_from_slice(&i.to_le_bytes());
+                    batch.put_addr_tx(
+                        &lock,
+                        50,
+                        0,
+                        &[0x51; 32],
+                        &ckbadger_store::types::AddrTxValue::new(1, false, true, 0),
+                    );
+                }
+                batch.commit().unwrap();
+            }
+
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        transfer_tx(0xd2, 0xd1, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+
+            let result = indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 102, 102)
+                .expect("cleanup of the last batch");
+            assert_eq!(result.blocks_removed, 1);
+            assert!(
+                result.addr_txs_scanned < NOISE,
+                "the cleanup read {} CF_ADDR_TXS rows; with the replayed tx contexts it reads \
+                 only the rolled-back participants' rows, not the {NOISE} unrelated ones",
+                result.addr_txs_scanned
+            );
+            assert!(
+                !addr_tx_keys(&store)
+                    .iter()
+                    .any(|(_, block, _)| *block > 101),
+                "block 102's rows are gone"
+            );
+        }
+
+        /// A lock the injected detector names by its FULL hash. Deliberately a
+        /// lock no fixture cell uses.
+        fn lock_named_hash() -> [u8; 32] {
+            [0x7b; 32]
+        }
+
+        fn naming_full_lock_detectors(
+        ) -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::Lock(lock_named_hash()),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        /// Plan Task 5.4 — ANALYSIS ONLY, pins today's behaviour (no protocol
+        /// names a party by its full lock hash yet; `.cell` uses prefixes).
+        ///
+        /// A party named as `ParticipantId::Lock(X)` that holds no cell in the
+        /// transaction becomes a standalone `Lock` participant with a zero CKB
+        /// position, and gets a `CF_ADDR_TXS` row — while nothing counts that
+        /// participation: `addr_balance(X)` does not exist (address deltas are
+        /// cell-derived) and `addr_prefix_stats` counts `LockPrefix` rows only.
+        /// Rolling the block back then reverses X's `txs_count` by the deleted
+        /// `CF_ADDR_TXS` row, which the forward path never added: see the
+        /// report for the proposed rule.
+        #[tokio::test]
+        async fn a_lock_named_party_with_no_cell_gets_an_uncounted_addr_tx_row() {
+            let _guard = crate::db::writer::activities::test_detector_override::install(
+                naming_full_lock_detectors,
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            let named = lock_named_hash().to_vec();
+            let actions = store
+                .get_tx_actions(101, 1, &[0xd1u8; 32])
+                .unwrap()
+                .expect("tx actions");
+            let party = actions
+                .participants
+                .iter()
+                .find(|p| p.id == ckbadger_store::types::ParticipantId::Lock(lock_named_hash()))
+                .expect("the named lock is a standalone participant");
+            assert_eq!(party.ckb_delta, 0);
+            assert!(
+                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "it gets a CF_ADDR_TXS row"
+            );
+            assert!(
+                store.get_addr_balance(&named).unwrap().is_none(),
+                "no addr_balance counts that row"
+            );
+            assert!(prefix_rows(&store).is_empty(), "and it is not a prefix row");
+
+            // PINNED DEFECT (latent: no production detector names a full lock
+            // today). Rollback derives the CF_ADDR_TXS keys to delete from the
+            // rolled-back cells' locks; X holds none, so its row survives,
+            // pointing at an orphaned block. Changing this is plan 5.4's
+            // follow-up, not this test's job: update the assertion with it.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .expect("today the rollback itself succeeds");
+            assert!(
+                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "today: the Lock-named row outlives the rollback of its block"
+            );
+            assert!(store.get_addr_balance(&named).unwrap().is_none());
         }
 
         #[tokio::test]
@@ -7729,6 +8315,398 @@ mod tests {
             );
         }
 
+        /// The registration chain, with two Sale-Lock-coded outputs whose args
+        /// are not a sale's 40 bytes appended to the registration. The chain
+        /// accepts them: a lock script does not run when a cell is created.
+        fn registration_blocks_with_junk_sale_lock_outputs() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_registration_blocks();
+            let register = &mut blocks[2].block.transactions[1];
+            assert_eq!(register.hash, format!("0x{}", hex::encode([0xd2u8; 32])));
+            for args in [String::from("0x"), format!("0x{}", "5a".repeat(39))] {
+                register.outputs.push(CellOutput {
+                    capacity: format!("0x{:x}", 61_00000000u64),
+                    lock: Script {
+                        code_hash: fixture::SALE_LOCK_CODE_HASH_TESTNET.to_string(),
+                        hash_type: "type".to_string(),
+                        args,
+                    },
+                    type_: None,
+                });
+                register.outputs_data.push("0x".to_string());
+            }
+            blocks
+        }
+
+        /// PROTO-011: a junk Sale Lock output halted both sync paths at its
+        /// block, forever, on every node. Both must index the block, and agree.
+        #[tokio::test]
+        async fn junk_sale_lock_outputs_index_identically_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = registration_blocks_with_junk_sale_lock_outputs();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
+                .expect("bulk build must index a block with junk Sale Lock outputs");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .expect("live sync must index a block with junk Sale Lock outputs");
+            }
+
+            let live_actions = store
+                .get_tx_actions(102, 1, &[0xd2u8; 32])
+                .unwrap()
+                .expect("live tx actions for the registration");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xd2u8; 32])
+                .expect("bulk tx actions for the registration");
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap(),
+                "the two sync paths must write the same tx_actions row"
+            );
+            let register: Vec<_> = live_actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dotcell")
+                .map(|a| a.action.clone())
+                .collect();
+            assert_eq!(register, vec!["register".to_string()]);
+
+            let (live_by_lock, live_by_prefix) =
+                super::participant_rows_parity::live_rows(store.as_ref());
+            assert_eq!(live_by_lock, bulk.addr_txs, "addr_txs rows differ");
+            assert_eq!(
+                live_by_prefix, bulk.addr_txs_by_prefix,
+                "addr_txs_by_prefix rows differ"
+            );
+        }
+
+        /// The registration chain with the new name's own-index witness
+        /// dropped: a name cell whose records the strict decoder cannot find.
+        fn registration_blocks_missing_the_new_names_witness() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_registration_blocks();
+            let register = &mut blocks[2].block.transactions[1];
+            assert_eq!(register.hash, format!("0x{}", hex::encode([0xd2u8; 32])));
+            register.witnesses.truncate(1);
+            blocks
+        }
+
+        /// #10: a DotCell parse failure is deterministic. Live must stop the way
+        /// bulk does — a pre-commit invariant, no cleanup, no retry — and both
+        /// must say where: the same tx/output locator.
+        #[tokio::test]
+        async fn a_dotcell_parse_error_stops_live_like_bulk_with_the_same_locator() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = registration_blocks_missing_the_new_names_witness();
+            let locator = format!("tx=0x{}, output_index=1", hex::encode([0xd2u8; 32]));
+
+            let bulk_err = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
+                .expect_err("bulk build must stop on the malformed name cell");
+            let bulk_msg = format!("{bulk_err:#}");
+            assert!(bulk_msg.contains(&locator), "bulk: {bulk_msg}");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let mut blocks = blocks.into_iter();
+            for block in blocks.by_ref().take(2) {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+            let live_err = super::live_dao_fee::write_live_block(&indexer, blocks.next().unwrap())
+                .await
+                .expect_err("live sync must stop on the malformed name cell");
+            assert!(
+                live_err.downcast_ref::<PreCommitInvariantError>().is_some(),
+                "a deterministic parse failure must be a pre-commit invariant: {live_err:#}"
+            );
+            assert_eq!(
+                crate::sync::pipeline::classify_batch_write_failure(&live_err),
+                crate::sync::pipeline::BatchWriteFailurePolicy::FailFastPreCommitInvariant,
+                "live must not clean up and retry a block bulk rejects"
+            );
+            let live_msg = format!("{live_err:#}");
+            assert!(live_msg.contains(&locator), "live: {live_msg}");
+            assert!(live_msg.contains("block=102"), "live: {live_msg}");
+            assert_eq!(
+                store.get_sync_status().unwrap().tip_block_number,
+                101,
+                "nothing of the rejected block was committed"
+            );
+        }
+
+        /// `dotcell_rollback_blocks` plus block 103, which consumes the ring
+        /// root and re-creates it byte-identical.
+        fn ring_root_recreation_blocks() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_rollback_blocks();
+            let recreate_root = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 0)],
+                outputs: vec![name_output(192_00000000 - 100_000)],
+                outputs_data: vec![fixture::T1_RING_ROOT.outputs[0].data.to_string()],
+                witnesses: vec![fixture::T1_RING_ROOT.witnesses[0].to_string()],
+            };
+            blocks.push(block(
+                103,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc3, 100_000_000), recreate_root],
+            ));
+            blocks
+        }
+
+        /// 5.2: bulk sees the consumed root's state, live does not; the tx must
+        /// still mean the same thing on both paths (ring infrastructure: no
+        /// action, no feed entry, no participant row).
+        #[tokio::test]
+        async fn ring_root_recreation_indexes_identically_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = ring_root_recreation_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let live_actions = store
+                .get_tx_actions(103, 1, &[0xe7u8; 32])
+                .unwrap()
+                .expect("live tx actions");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xe7u8; 32])
+                .expect("bulk tx actions");
+            assert!(
+                bulk_actions
+                    .protocol_actions
+                    .iter()
+                    .all(|a| a.protocol != "dotcell"),
+                "the ring root emits no .cell action: {:?}",
+                bulk_actions.protocol_actions
+            );
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap()
+            );
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref()).unwrap();
+            assert_eq!(
+                live.collection_activities,
+                bulk.dotcell.collection_activities
+            );
+            assert_eq!(live.identity_agg, bulk.dotcell.identity_agg);
+            assert_eq!(live.ring, bulk.dotcell.ring);
+        }
+
+        /// A name cell's data from parts, with an empty records payload.
+        fn synthetic_name_data(label: &str, owner: [u8; 20], expiry: u64) -> String {
+            let mut data = vec![3u8];
+            data.extend_from_slice(&DotCellParser::records_hash(&[0, 0]));
+            data.extend_from_slice(&[0u8; 20]);
+            data.extend_from_slice(&expiry.to_le_bytes()[..5]);
+            data.extend_from_slice(&owner);
+            data.extend_from_slice(&owner);
+            data.extend_from_slice(label.as_bytes());
+            format!("0x{}", hex::encode(data))
+        }
+
+        /// `WitnessArgs { lock: None, input_type: None, output_type: payload }`.
+        fn witness_with_records(payload: &[u8]) -> String {
+            let total = 16 + 4 + payload.len();
+            let mut witness = Vec::with_capacity(total);
+            witness.extend_from_slice(&(total as u32).to_le_bytes());
+            for _ in 0..3 {
+                witness.extend_from_slice(&16u32.to_le_bytes());
+            }
+            witness.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            witness.extend_from_slice(payload);
+            format!("0x{}", hex::encode(witness))
+        }
+
+        /// 101 registers `lapsed` with an expiry long past (plus grace) by
+        /// block 102's time; 102 hands it to a new owner: a takeover.
+        fn takeover_blocks() -> Vec<BlockResponseWithCycles> {
+            let lapsed_owner = [0x44u8; 20];
+            let taker = [0x55u8; 20];
+            let register = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe5u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![
+                    synthetic_name_data("lapsed", lapsed_owner, 1_000_000),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![witness_with_records(&[0, 0]), String::new()],
+            };
+            let take = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe6u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe5, 0), input(0xe5, 1)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 200_000_000),
+                ],
+                outputs_data: vec![
+                    synthetic_name_data("lapsed", taker, 1_900_000_000),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![witness_with_records(&[0, 0]), String::new()],
+            };
+            vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), register],
+                ),
+                block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, 100_000_000), take]),
+            ]
+        }
+
+        /// R7: a takeover is a new holding. Both paths record `takeover`, feed a
+        /// Mint, and restart the name's `created_at` at the takeover.
+        #[tokio::test]
+        async fn takeover_restarts_created_at_on_both_paths() {
+            use ckbadger_store::types::AssetAction;
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = takeover_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let id = DotCellParser::derive_id("lapsed");
+            let entry = store.get_identity(&id).unwrap().expect("lapsed.cell");
+            assert_eq!(
+                entry.created_at_block, 102,
+                "a takeover starts a new holding"
+            );
+            assert_eq!(entry.created_at_tx, vec![0xe6u8; 32]);
+            let actions = store
+                .get_tx_actions(102, 1, &[0xe6u8; 32])
+                .unwrap()
+                .expect("takeover tx actions");
+            assert_eq!(
+                actions
+                    .protocol_actions
+                    .iter()
+                    .filter(|a| a.protocol == "dotcell")
+                    .map(|a| a.action.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["takeover"]
+            );
+            let feed = store
+                .list_identity_collection_activities(&DOTCELL_SENTINEL_COLLECTION, 10, None, None)
+                .unwrap();
+            assert!(
+                feed.iter()
+                    .all(|(_, _, entry)| entry.actions == vec![AssetAction::Mint]),
+                "{feed:?}"
+            );
+
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref()).unwrap();
+            assert_eq!(live.identity_data, bulk.dotcell.identity_data);
+            assert_eq!(
+                live.collection_activities,
+                bulk.dotcell.collection_activities
+            );
+            assert_eq!(live.identity_agg, bulk.dotcell.identity_agg);
+        }
+
+        /// The persisted identity delta says which standard it belongs to, on
+        /// both sync paths: an API reading the row can link the item without a
+        /// store lookup that a pending registration would not satisfy.
+        #[tokio::test]
+        async fn persisted_dotcell_item_deltas_carry_their_standard_on_both_paths() {
+            use ckbadger_store::types::{IdentityStandard, ItemKind, TxActions};
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotcell_registration_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let identity_kinds = |actions: &TxActions| -> Vec<(Vec<u8>, ItemKind)> {
+                actions
+                    .participants
+                    .iter()
+                    .flat_map(|p| p.item_deltas.iter())
+                    .map(|d| (d.item_id.clone(), d.kind))
+                    .collect()
+            };
+            let expected = vec![(
+                joaom_id().to_vec(),
+                ItemKind::Identity(IdentityStandard::DotCell),
+            )];
+            let live = store
+                .get_tx_actions(102, 1, &[0xd2u8; 32])
+                .unwrap()
+                .expect("live tx actions");
+            assert_eq!(identity_kinds(&live), expected, "live row");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xd2u8; 32])
+                .expect("bulk tx actions");
+            assert_eq!(identity_kinds(bulk_actions), expected, "bulk row");
+        }
+
         /// In bulk, an input cell reaches the activity builder with `data: &[]`.
         /// The consumed name's state has to come from the protocol facts the
         /// creating cell stored, or every relink reads as a fresh registration.
@@ -7925,6 +8903,611 @@ mod tests {
         }
     }
 
+    /// `TOKEN_DAILY` membership (#11, R3): every cell of the token's type
+    /// script counts toward its capacity history, amount or not, on both paths.
+    mod token_daily_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            write_live_block, write_live_blocks_with_parser_token_daily, AR_DEPOSIT,
+            FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::udt::XUDT_CODE_HASH_TYPE;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+        use ckbadger_store::TokenDailyDelta;
+
+        fn xudt_type() -> Script {
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "5c".repeat(32)),
+            }
+        }
+
+        fn input(prev_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([prev_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn xudt_output(capacity: u64, lock: Script) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_: Some(xudt_type()),
+            }
+        }
+
+        fn amount_data(amount: u128) -> String {
+            format!("0x{}", hex::encode(amount.to_le_bytes()))
+        }
+
+        /// An owner-mode xUDT cell: 8 bytes of data, too short for an amount.
+        const OWNER_MODE_DATA: &str = "0x0102030405060708";
+
+        /// 100 funds lock A; 101 mints 1000 units to A beside an owner-mode
+        /// cell of the same token; 102 moves both to B.
+        fn blocks() -> Vec<BlockResponseWithCycles> {
+            let mint = TransactionView {
+                hash: format!("0x{}", hex::encode([0xf1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    xudt_output(200_00000000, lock_script()),
+                    xudt_output(150_00000000, lock_script()),
+                    CellOutput {
+                        capacity: format!("0x{:x}", FUNDING_CAPACITY - 351_00000000),
+                        lock: lock_script(),
+                        type_: None,
+                    },
+                ],
+                outputs_data: vec![
+                    amount_data(1000),
+                    OWNER_MODE_DATA.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![],
+            };
+            let transfer = TransactionView {
+                hash: format!("0x{}", hex::encode([0xf2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xf1, 0), input(0xf1, 1)],
+                outputs: vec![
+                    xudt_output(199_00000000, lock_script_b()),
+                    xudt_output(150_00000000, lock_script_b()),
+                ],
+                outputs_data: vec![amount_data(1000), OWNER_MODE_DATA.to_string()],
+                witnesses: vec![],
+            };
+            vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, 100_000_000), mint]),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc2, 100_000_000), transfer],
+                ),
+            ]
+        }
+
+        fn token_daily_rows(rows: &crate::sync::bulk_build::TokenRawRows) -> Vec<TokenDailyDelta> {
+            rows.stats_token
+                .iter()
+                .filter(|(key, _)| {
+                    key.first() == Some(&ckbadger_store::keys::STATS_PREFIX_TOKEN_DAILY)
+                })
+                .map(|(_, value)| bincode::deserialize(value).unwrap())
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            for b in &blocks[1..] {
+                write_live_blocks_with_parser_token_daily(&indexer, vec![b.clone()])
+                    .await
+                    .unwrap();
+            }
+            let live = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap();
+
+            assert!(
+                !bulk.token_rows.tokens.is_empty(),
+                "the fixture must create a token row"
+            );
+            assert_eq!(live.tokens, bulk.token_rows.tokens, "CF_TOKENS rows differ");
+            assert_eq!(
+                live.stats_token, bulk.token_rows.stats_token,
+                "CF_STATS_TOKEN rows (transfers, TOKEN_HOURLY, TOKEN_DAILY) differ"
+            );
+
+            // Daily cumulative == Current: the daily rows add up to the live
+            // cells of the token's type script, read from the cell set itself.
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            let (mut current_capacity, mut current_occupied) = (0i128, 0i128);
+            for outpoint in bulk.live_cells.keys() {
+                let cell = &bulk.cell_payloads[outpoint];
+                if cell.type_script_hash.as_deref() == Some(type_hash.as_slice()) {
+                    current_capacity += i128::from(cell.capacity);
+                    current_occupied += i128::from(cell.occupied_capacity);
+                }
+            }
+            assert_eq!(current_capacity, 349_00000000, "both B cells are live");
+            let daily = token_daily_rows(&bulk.token_rows);
+            let cumulative_capacity: i128 = daily.iter().map(|d| d.owned_capacity_delta).sum();
+            let cumulative_occupied: i128 = daily.iter().map(|d| d.owned_knowledge_delta).sum();
+            assert_eq!(cumulative_capacity, current_capacity);
+            assert_eq!(cumulative_occupied, current_occupied);
+        }
+    }
+
+    /// Retention maintenance inside a live batch longer than the undo window
+    /// (#9): a node that was down for more than 1000 blocks catches up in
+    /// batches of up to 5000.
+    mod retention_live {
+        use super::live_dao_fee::{
+            cellbase_tx, header_with_epoch_length, indexer_for_live_write_test,
+            write_live_blocks_with_entity_changes, AR_DEPOSIT,
+        };
+        use super::*;
+        use crate::rpc::BlockView;
+        use ckbadger_store::types::HourlyRetentionFamily;
+
+        const EPOCH_LENGTH: u64 = 4000;
+        const TOKEN: [u8; 32] = [0x7a; 32];
+
+        fn cellbase_block(number: u64) -> BlockResponseWithCycles {
+            let hash_byte = (number % 251) as u8;
+            let mut cellbase = cellbase_tx(hash_byte, 100_000_000);
+            let mut hash = [hash_byte; 32];
+            hash[..8].copy_from_slice(&number.to_le_bytes());
+            cellbase.hash = format!("0x{}", hex::encode(hash));
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: header_with_epoch_length(number, AR_DEPOSIT, EPOCH_LENGTH),
+                    uncles: vec![],
+                    transactions: vec![cellbase],
+                    proposals: vec![],
+                },
+                cycles: None,
+            }
+        }
+
+        fn blocks(range: std::ops::RangeInclusive<u64>) -> Vec<BlockResponseWithCycles> {
+            range.map(cellbase_block).collect()
+        }
+
+        fn date_of(number: u64) -> u32 {
+            ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000 + number as i64 * 1000)
+        }
+
+        fn token_changes_at(blocks: &[u64]) -> EntityDailyChanges<EntityDateKey> {
+            let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+            for &block in blocks {
+                changes
+                    .add(
+                        block as i64,
+                        (TOKEN.to_vec(), date_of(block)),
+                        61_00000000,
+                        61_00000000,
+                    )
+                    .unwrap();
+            }
+            changes
+        }
+
+        /// Blocks that still hold an `EntityStats`-scope undo entry.
+        fn entity_stats_undo_blocks(store: &CkbadgerStore) -> Vec<i64> {
+            let mut out = Vec::new();
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, _) = item.unwrap();
+                let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                if crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
+                    out.push(block);
+                }
+            }
+            out.dedup();
+            out
+        }
+
+        #[tokio::test]
+        async fn a_live_batch_longer_than_the_undo_window_commits_and_the_next_batch_prunes_it() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            // Reach a committed tip T = 1100, well past the 1000-block window.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(100..=1100),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            // One catch-up batch T+1..T+1500 with the periodic retention request
+            // armed, touching the token's daily bucket in block 1150 (below the
+            // floor this batch's own tip implies) and in block 2550 (above it).
+            indexer
+                .hourly_retention_requested
+                .store(true, Ordering::Relaxed);
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(1101..=2600),
+                token_changes_at(&[1150, 2550]),
+            )
+            .await
+            .expect("a >1000-block live batch must commit, not report store corruption");
+
+            assert!(
+                !indexer.hourly_retention_requested.load(Ordering::Relaxed),
+                "the committed batch served the retention request"
+            );
+            let state = store
+                .get_hourly_retention_state(HourlyRetentionFamily::Token)
+                .unwrap()
+                .expect("the retention step ran and its state is durable");
+            let header_100 = store.get_block_header(100).unwrap().unwrap();
+            assert_eq!(
+                state.executed_cutoff_hour,
+                header_100.timestamp / 3_600_000,
+                "the undo-window bound is the header at committed_tip(1100) - 1000"
+            );
+            assert_eq!(entity_stats_undo_blocks(&store), vec![1150, 2550]);
+            assert_eq!(
+                store
+                    .get_entity_stats_undo_contract()
+                    .unwrap()
+                    .unwrap()
+                    .coverage_floor_block,
+                100,
+                "the floor follows the tip the batch was built on"
+            );
+
+            // The next batch builds on T+1500: its floor is T+500 = 1600, which
+            // prunes the entry the long batch left below it.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(2601..=2601),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                entity_stats_undo_blocks(&store),
+                vec![2550],
+                "block 1150's EntityStats undo entry is pruned by the next batch"
+            );
+            assert_eq!(
+                store
+                    .get_entity_stats_undo_contract()
+                    .unwrap()
+                    .unwrap()
+                    .coverage_floor_block,
+                1600
+            );
+        }
+    }
+
+    /// mNFT outpoint reverse-index rows through the real live write path and
+    /// the production two-phase rollback (#15, the mNFT half of PROTO-010).
+    mod mnft_live {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            seed_pre_parent_header, seed_script_info, seed_secp_script_info, write_live_block,
+            AR_DEPOSIT, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::mnft::{
+            MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH,
+        };
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        const ISSUER_ID: [u8; 20] = [0x44; 20];
+
+        fn class_id() -> Vec<u8> {
+            let mut id = ISSUER_ID.to_vec();
+            id.extend_from_slice(&7u32.to_le_bytes());
+            id
+        }
+
+        fn token_id() -> Vec<u8> {
+            let mut id = class_id();
+            id.extend_from_slice(&9u32.to_le_bytes());
+            id
+        }
+
+        fn type_script(code_hash: &str, args: &[u8]) -> Script {
+            Script {
+                code_hash: code_hash.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode(args)),
+            }
+        }
+
+        fn issuer_data() -> Vec<u8> {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&1u32.to_be_bytes());
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data
+        }
+
+        fn class_data(issued: u32) -> Vec<u8> {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&100u32.to_be_bytes());
+            data.extend_from_slice(&issued.to_be_bytes());
+            data.push(3);
+            for text in ["Genesis Class", "class description"] {
+                data.extend_from_slice(&(text.len() as u16).to_be_bytes());
+                data.extend_from_slice(text.as_bytes());
+            }
+            data.extend_from_slice(&0u16.to_be_bytes());
+            data
+        }
+
+        fn token_data() -> Vec<u8> {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+            data.push(1);
+            data.push(0);
+            data
+        }
+
+        fn input(prev_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([prev_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn output(capacity: u64, lock: Script, type_: Option<Script>) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_,
+            }
+        }
+
+        const ISSUER_CAPACITY: u64 = 250_00000000;
+        const CLASS_CAPACITY: u64 = 260_00000000;
+        const TOKEN_CAPACITY: u64 = 270_00000000;
+
+        /// Block 101 creates issuer, class (outpoint 0xe1:1) and token
+        /// (outpoint 0xe1:2) from the block-100 funding cell.
+        fn mint_block() -> BlockResponseWithCycles {
+            let mint = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    output(
+                        ISSUER_CAPACITY,
+                        lock_script(),
+                        Some(type_script(MNFT_ISSUER_CODE_HASH, &[0xab; 32])),
+                    ),
+                    output(
+                        CLASS_CAPACITY,
+                        lock_script(),
+                        Some(type_script(MNFT_CLASS_CODE_HASH, &class_id())),
+                    ),
+                    output(
+                        TOKEN_CAPACITY,
+                        lock_script(),
+                        Some(type_script(MNFT_TOKEN_CODE_HASH, &token_id())),
+                    ),
+                    output(
+                        FUNDING_CAPACITY
+                            - ISSUER_CAPACITY
+                            - CLASS_CAPACITY
+                            - TOKEN_CAPACITY
+                            - 100_000_000,
+                        lock_script(),
+                        None,
+                    ),
+                ],
+                outputs_data: vec![
+                    format!("0x{}", hex::encode(issuer_data())),
+                    format!("0x{}", hex::encode(class_data(1))),
+                    format!("0x{}", hex::encode(token_data())),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![],
+            };
+            block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, 100_000_000), mint])
+        }
+
+        /// Block 102 moves the token to lock B at outpoint 0xe2:0.
+        fn transfer_block() -> BlockResponseWithCycles {
+            let transfer = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 2)],
+                outputs: vec![output(
+                    TOKEN_CAPACITY - 100_000,
+                    lock_script_b(),
+                    Some(type_script(MNFT_TOKEN_CODE_HASH, &token_id())),
+                )],
+                outputs_data: vec![format!("0x{}", hex::encode(token_data()))],
+                witnesses: vec![],
+            };
+            block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc2, 100_000_000), transfer],
+            )
+        }
+
+        /// Block 102 re-creates the class cell at outpoint 0xe3:0 (an update).
+        fn class_recreate_block() -> BlockResponseWithCycles {
+            let recreate = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe3u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 1)],
+                outputs: vec![output(
+                    CLASS_CAPACITY - 100_000,
+                    lock_script(),
+                    Some(type_script(MNFT_CLASS_CODE_HASH, &class_id())),
+                )],
+                outputs_data: vec![format!("0x{}", hex::encode(class_data(1)))],
+                witnesses: vec![],
+            };
+            block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc2, 100_000_000), recreate],
+            )
+        }
+
+        fn cells_dump(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
+            store
+                .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
+                .map(|item| {
+                    let (key, value) = item.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        }
+
+        async fn indexed_through(last: BlockResponseWithCycles) -> Arc<CkbadgerStore> {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            for code_hash in [
+                MNFT_ISSUER_CODE_HASH,
+                MNFT_CLASS_CODE_HASH,
+                MNFT_TOKEN_CODE_HASH,
+            ] {
+                seed_script_info(store.as_ref(), code_hash);
+            }
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                mint_block(),
+                last,
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+            store
+        }
+
+        fn rollback_to(store: &CkbadgerStore, fork_point: i64) {
+            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(fork_point, Some(store), undo.tx_contexts)
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn mnft_transfer_rollback_removes_the_new_outpoint_row() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let store = indexed_through(transfer_block()).await;
+            assert_eq!(
+                store
+                    .list_mnft_token_outpoints_by_token_id(&token_id())
+                    .unwrap(),
+                vec![([0xe1u8; 32].to_vec(), 2), ([0xe2u8; 32].to_vec(), 0)],
+                "the fixture must move the token"
+            );
+            let cells_before = cells_dump(&store);
+
+            rollback_to(&store, 101);
+
+            assert_eq!(
+                store
+                    .list_mnft_token_outpoints_by_token_id(&token_id())
+                    .unwrap(),
+                vec![([0xe1u8; 32].to_vec(), 2)],
+                "only the surviving mint outpoint remains"
+            );
+            assert_eq!(
+                store
+                    .get_mnft_token_id_by_outpoint(&[0xe2u8; 32], 0)
+                    .unwrap(),
+                None,
+                "the rolled-back transfer's outpoint row is gone"
+            );
+            assert_eq!(
+                cells_dump(&store),
+                cells_before,
+                "append-only CF_CELLS bytes are untouched by rollback"
+            );
+        }
+
+        #[tokio::test]
+        async fn mnft_class_recreate_rollback_removes_the_new_outpoint_row() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let store = indexed_through(class_recreate_block()).await;
+            assert_eq!(
+                store
+                    .get_mnft_class_id_by_outpoint(&[0xe3u8; 32], 0)
+                    .unwrap(),
+                Some(class_id()),
+                "the fixture must re-create the class"
+            );
+            let cells_before = cells_dump(&store);
+
+            rollback_to(&store, 101);
+
+            assert_eq!(
+                store
+                    .get_mnft_class_id_by_outpoint(&[0xe3u8; 32], 0)
+                    .unwrap(),
+                None,
+                "the rolled-back class outpoint row is gone"
+            );
+            assert_eq!(
+                store
+                    .get_mnft_class_id_by_outpoint(&[0xe1u8; 32], 1)
+                    .unwrap(),
+                Some(class_id()),
+                "the surviving class outpoint row stays"
+            );
+            assert_eq!(cells_dump(&store), cells_before);
+        }
+    }
+
     // ── Unique Cell binding: live write path vs bulk build ────────────────
     //
     // The issuance co-occurrence rule binds a Unique Cell's token metadata to
@@ -7966,7 +9549,7 @@ mod tests {
         }
 
         #[allow(clippy::type_complexity)]
-        fn live_rows(
+        pub(super) fn live_rows(
             store: &CkbadgerStore,
         ) -> (
             BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), AddrTxValue>,

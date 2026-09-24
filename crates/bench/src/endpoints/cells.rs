@@ -94,6 +94,37 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "cells",
             method: Method::Get,
+            path_template: "/addresses/prefix/{prefix}/transactions",
+            description: "List the transactions a protocol named a lock-hash prefix in",
+            resolve: Box::new(|base, p| {
+                // The prefix is the first 20 bytes of a lock hash: `0x` + 40 hex.
+                let prefix = p.top_lock_hashes.first()?.get(..42)?;
+                Some(get(&format!(
+                    "{base}/addresses/prefix/{prefix}/transactions?limit=20"
+                )))
+            }),
+            expect_status: 200,
+            risk_tier: RiskTier::Medium,
+            read_pattern: ReadPattern::PrefixScan,
+        },
+        EndpointEntry {
+            module: "cells",
+            method: Method::Get,
+            path_template: "/addresses/{addr}/dotcell-names",
+            description: "List the .cell names an address owns",
+            resolve: Box::new(|base, p| {
+                let lh = p.top_lock_hashes.first()?;
+                Some(get(&format!(
+                    "{base}/addresses/{lh}/dotcell-names?limit=20"
+                )))
+            }),
+            expect_status: 200,
+            risk_tier: RiskTier::Medium,
+            read_pattern: ReadPattern::PrefixScan,
+        },
+        EndpointEntry {
+            module: "cells",
+            method: Method::Get,
             path_template: "/addresses/{addr}/tokens",
             description: "List tokens held by an address",
             resolve: Box::new(|base, p| {

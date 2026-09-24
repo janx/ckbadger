@@ -66,6 +66,7 @@ impl BatchWriter {
     }
 
     /// Index one `.cell` name cell (or record the ring root it is).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn insert_dotcell_name(
         &self,
         name: &DotCellNameData,
@@ -74,6 +75,7 @@ impl BatchWriter {
         tx_hash: &[u8],
         output_index: i16,
         block_number: i64,
+        block_timestamp_ms: i64,
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
@@ -140,7 +142,10 @@ impl BatchWriter {
             block_number,
             CF_IDENTITY_DATA,
             &name.id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, ".cell identity", &name.id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
@@ -149,6 +154,8 @@ impl BatchWriter {
             .filter(|_| was_live)
             .map(|e| dotcell_owner20(&e.extra, &name.id))
             .transpose()?;
+        let holding_starts_here =
+            dotcell_holding_starts_here(existing.as_ref(), name, block_timestamp_ms)?;
 
         let entry = IdentityEntry {
             standard: IdentityStandard::DotCell,
@@ -157,14 +164,14 @@ impl BatchWriter {
             owner_lock_hash: None,
             name: Some(format!("{}.cell", name.label)),
             is_live: true,
-            created_at_block: existing
-                .as_ref()
-                .map(|e| e.created_at_block)
-                .unwrap_or(block_number),
-            created_at_tx: existing
-                .as_ref()
-                .map(|e| e.created_at_tx.clone())
-                .unwrap_or_else(|| tx_hash.to_vec()),
+            created_at_block: match existing.as_ref() {
+                Some(e) if !holding_starts_here => e.created_at_block,
+                _ => block_number,
+            },
+            created_at_tx: match existing.as_ref() {
+                Some(e) if !holding_starts_here => e.created_at_tx.clone(),
+                _ => tx_hash.to_vec(),
+            },
             extra: IdentityExtra::DotCell {
                 label: name.label.clone(),
                 namespace_args: *namespace_args,
@@ -328,6 +335,37 @@ impl BatchWriter {
     }
 }
 
+/// Whether writing `name` starts a new holding of an already-known name: a
+/// takeover of a lapsed name (`is_expired_takeover`, the classifier's own
+/// rule), whose `created_at` restarts at the takeover. Both sync paths decide
+/// `created_at` through here.
+pub(crate) fn dotcell_holding_starts_here(
+    existing: Option<&IdentityEntry>,
+    name: &DotCellNameData,
+    block_timestamp_ms: i64,
+) -> Result<bool> {
+    let Some(entry) = existing else {
+        return Ok(false);
+    };
+    match &entry.extra {
+        IdentityExtra::DotCell {
+            expired_at,
+            owner_hash20,
+            ..
+        } => super::dotcell_detector::is_expired_takeover(
+            *expired_at,
+            owner_hash20,
+            &name.owner_hash20,
+            block_timestamp_ms,
+        ),
+        other => Err(anyhow!(
+            "dotcell identity 0x{} carries {:?} instead of DotCell extra",
+            hex::encode(name.id),
+            std::mem::discriminant(other)
+        )),
+    }
+}
+
 fn dotcell_owner20(extra: &IdentityExtra, id: &[u8; 20]) -> Result<[u8; 20]> {
     match extra {
         IdentityExtra::DotCell { owner_hash20, .. } => Ok(*owner_hash20),
@@ -399,6 +437,10 @@ mod tests {
     use crate::db::writer::BatchWriter;
     use crate::sync::undo::SharedUndoSeq;
 
+    /// 2023-11-14: every fixture name's expiry lies after this, so no test
+    /// write here is a takeover unless it says so.
+    const TEST_BLOCK_TIME_MS: i64 = 1_700_000_000_000;
+
     fn writer_for_test() -> (Arc<CkbadgerStore>, BatchWriter, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
@@ -463,6 +505,7 @@ mod tests {
                 &tx_hash,
                 1,
                 20_518_306,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -563,6 +606,7 @@ mod tests {
                 &tx_hash,
                 0,
                 20_515_882,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -607,6 +651,7 @@ mod tests {
                 &parse_hex_to_bytes(fixture::M1_RING_ROOT.tx_hash),
                 0,
                 20_515_882,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -623,6 +668,7 @@ mod tests {
                 &parse_hex_to_bytes(fixture::M2_REGISTER_SUPPORT.tx_hash),
                 1,
                 20_518_306,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -647,6 +693,7 @@ mod tests {
                 &tx_hash,
                 1,
                 100,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -672,6 +719,7 @@ mod tests {
                 &[0xEE; 32],
                 0,
                 101,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -725,6 +773,7 @@ mod tests {
                 &[0xAA; 32],
                 0,
                 100,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -800,6 +849,7 @@ mod tests {
                 &[0xAA; 32],
                 0,
                 100,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -812,6 +862,7 @@ mod tests {
                 &[0xBB; 32],
                 0,
                 100,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )
@@ -859,6 +910,7 @@ mod tests {
                 &[0xAA; 32],
                 0,
                 100,
+                TEST_BLOCK_TIME_MS,
                 &mut StoreBatch::new(writer.store()),
                 &mut new_state(&writer),
             )
@@ -886,6 +938,7 @@ mod tests {
                 &[0xAA; 32],
                 1,
                 22_367_979,
+                TEST_BLOCK_TIME_MS,
                 &mut batch,
                 &mut state,
             )

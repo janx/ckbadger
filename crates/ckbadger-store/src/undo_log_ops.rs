@@ -10,12 +10,6 @@ const UNDO_ROLLBACK_FLUSH_EVERY: usize = 50_000;
 
 use crate::bytes_to_hex;
 
-/// Top bits of an undo sequence number carry its scope
-/// (`indexer::sync::types::UndoSeqScope`). The store only needs to recognise
-/// the `EntityStats` scope, whose entries are the only ones it prunes.
-const ENTITY_STATS_UNDO_SEQ_SHIFT: u32 = 48;
-const ENTITY_STATS_UNDO_SEQ_SCOPE: u64 = 0x0004;
-
 #[derive(Debug, Default)]
 pub struct UndoRollbackResult {
     pub undo_entries_applied: u64,
@@ -125,7 +119,8 @@ impl CkbadgerStore {
             if block_num > to_block {
                 break;
             }
-            if seq >> ENTITY_STATS_UNDO_SEQ_SHIFT == ENTITY_STATS_UNDO_SEQ_SCOPE {
+            // Only `EntityStats` entries are retention's to prune.
+            if keys::UndoSeqScope::EntityStats.owns(seq) {
                 batch.delete_reorg_undo_log_key(&key);
                 pruned += 1;
             }
@@ -470,9 +465,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
-        const ENTITY: u64 = 0x0004 << 48;
-        const TX_CONTEXT: u64 = 0x0001 << 48;
-        const OBJECT: u64 = 0x0003 << 48;
+        const ENTITY: u64 = keys::UndoSeqScope::EntityStats.seq_base();
+        const TX_CONTEXT: u64 = keys::UndoSeqScope::TxContext.seq_base();
+        const OBJECT: u64 = keys::UndoSeqScope::Object.seq_base();
 
         {
             let mut batch = StoreBatch::new(&store);
@@ -529,7 +524,7 @@ mod tests {
         for item in iter {
             let (key, _) = item.unwrap();
             let (block, seq) = keys::decode_reorg_undo_log_key(&key);
-            if seq >> 48 == 0x0004 {
+            if keys::UndoSeqScope::EntityStats.owns(seq) {
                 entity += 1;
                 lowest_entity_block = lowest_entity_block.min(block);
             } else {

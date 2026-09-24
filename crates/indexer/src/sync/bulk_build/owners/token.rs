@@ -24,6 +24,12 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 #[derive(Debug, Default)]
 pub(crate) struct TokenOwner {
     tokens: FxHashMap<Vec<u8>, TokenAccum>,
+    /// `TOKEN_DAILY` capacity/knowledge history by token type hash, then by
+    /// UTC+8 date. Kept apart from `tokens` because its membership differs:
+    /// every sUDT/xUDT-typed cell counts here (the live rule,
+    /// `pipeline::token_daily_member`), while holders, supply, transfers and
+    /// the token row need a u128 amount.
+    daily_deltas: FxHashMap<Vec<u8>, FxHashMap<u32, TokenDailyDelta>>,
     /// On-chain max_supply observations collected from omnilock supply info cells.
     max_supply_observations: FxHashMap<Vec<u8>, u128>,
     /// On-chain token info collected from xUDT Unique Cells (keyed by unique type_args, 20 bytes).
@@ -38,6 +44,12 @@ impl TokenOwner {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(type_hash)
                 + token.estimated_bytes()
         }) + crate::sync::bulk_build::accounting::hash_map_bytes(
+            &self.daily_deltas,
+            |type_hash, daily| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(type_hash)
+                    + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(daily)
+            },
+        ) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.max_supply_observations,
             |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(&self.unique_cell_info, |k, v| {
@@ -232,6 +244,43 @@ impl TokenOwner {
 
 impl BulkReducer for TokenOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
+        // Capacity history first: every sUDT/xUDT-typed cell, amount or not.
+        let date = keys::timestamp_ms_to_date(tx.timestamp_ms);
+        for input in &tx.resolved_inputs {
+            if let Some(type_hash) = token_daily_type_hash(
+                input.semantic_tag,
+                input.type_script_hash_id,
+                ctx,
+                tx,
+                "input",
+            )? {
+                self.record_daily_delta(
+                    type_hash,
+                    date,
+                    -i128::from(input.capacity),
+                    -i128::from(input.occupied_capacity),
+                    tx,
+                )?;
+            }
+        }
+        for cell in tx.cells.iter() {
+            if let Some(type_hash) = token_daily_type_hash(
+                cell.semantic_tag,
+                cell.type_script_hash_id,
+                ctx,
+                tx,
+                "output",
+            )? {
+                self.record_daily_delta(
+                    type_hash,
+                    date,
+                    i128::from(cell.capacity),
+                    i128::from(cell.occupied_capacity),
+                    tx,
+                )?;
+            }
+        }
+
         let input_views = tx
             .resolved_inputs
             .iter()
@@ -346,8 +395,12 @@ impl TokenOwner {
                     count.to_le_bytes().to_vec(),
                 ))?;
             }
+        }
 
-            let mut daily_dates = token.daily_deltas.iter().collect::<Vec<_>>();
+        let mut daily_type_hashes: Vec<&Vec<u8>> = self.daily_deltas.keys().collect();
+        daily_type_hashes.sort();
+        for type_hash in daily_type_hashes {
+            let mut daily_dates = self.daily_deltas[type_hash].iter().collect::<Vec<_>>();
             daily_dates.sort_by_key(|(date, _)| *date);
             for (date, delta) in daily_dates {
                 if delta.owned_capacity_delta == 0 && delta.owned_knowledge_delta == 0 {
@@ -361,6 +414,40 @@ impl TokenOwner {
             }
         }
 
+        Ok(())
+    }
+
+    fn record_daily_delta(
+        &mut self,
+        type_hash: Vec<u8>,
+        date_yyyymmdd: u32,
+        owned_capacity_delta: i128,
+        owned_knowledge_delta: i128,
+        tx: &ResolvedTxFacts<'_>,
+    ) -> Result<()> {
+        if owned_capacity_delta == 0 && owned_knowledge_delta == 0 {
+            return Ok(());
+        }
+        let entry = self
+            .daily_deltas
+            .entry(type_hash.clone())
+            .or_default()
+            .entry(date_yyyymmdd)
+            .or_default();
+        entry.owned_capacity_delta = checked_signed_i128(
+            entry.owned_capacity_delta,
+            owned_capacity_delta,
+            "token daily owned_capacity_delta",
+            &type_hash,
+            tx,
+        )?;
+        entry.owned_knowledge_delta = checked_signed_i128(
+            entry.owned_knowledge_delta,
+            owned_knowledge_delta,
+            "token daily owned_knowledge_delta",
+            &type_hash,
+            tx,
+        )?;
         Ok(())
     }
 
@@ -506,7 +593,6 @@ struct TokenAccum {
     holders: FxHashMap<Vec<u8>, TokenBalance>,
     transfers_count: i64,
     hourly_transfers: FxHashMap<i64, i64>,
-    daily_deltas: FxHashMap<u32, TokenDailyDelta>,
 }
 
 impl TokenAccum {
@@ -523,7 +609,6 @@ impl TokenAccum {
                 },
             )
             + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.hourly_transfers)
-            + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
     }
 
     fn from_view(view: &TokenCellView, first_seen_block: i64) -> Self {
@@ -536,7 +621,6 @@ impl TokenAccum {
             holders: FxHashMap::default(),
             transfers_count: 0,
             hourly_transfers: FxHashMap::default(),
-            daily_deltas: FxHashMap::default(),
         }
     }
 
@@ -559,15 +643,6 @@ impl TokenAccum {
         } else {
             self.holders.insert(view.lock_hash.clone(), next);
         }
-
-        self.record_daily_delta(
-            keys::timestamp_ms_to_date(tx.timestamp_ms),
-            -i128::from(view.capacity),
-            -i128::from(view.occupied_capacity),
-            &view.type_hash,
-            tx,
-        )?;
-
         Ok(())
     }
 
@@ -589,14 +664,6 @@ impl TokenAccum {
             tx,
         )?;
         self.holders.insert(view.lock_hash.clone(), next);
-
-        self.record_daily_delta(
-            keys::timestamp_ms_to_date(tx.timestamp_ms),
-            i128::from(view.capacity),
-            i128::from(view.occupied_capacity),
-            &view.type_hash,
-            tx,
-        )?;
         Ok(())
     }
 
@@ -618,36 +685,6 @@ impl TokenAccum {
         let next_hourly =
             checked_next_i64(current_hourly, 1, "token hourly transfers", type_hash, tx)?;
         self.hourly_transfers.insert(hour_bucket, next_hourly);
-        Ok(())
-    }
-
-    fn record_daily_delta(
-        &mut self,
-        date_yyyymmdd: u32,
-        owned_capacity_delta: i128,
-        owned_knowledge_delta: i128,
-        type_hash: &[u8],
-        tx: &ResolvedTxFacts<'_>,
-    ) -> Result<()> {
-        if owned_capacity_delta == 0 && owned_knowledge_delta == 0 {
-            return Ok(());
-        }
-
-        let entry = self.daily_deltas.entry(date_yyyymmdd).or_default();
-        entry.owned_capacity_delta = checked_signed_i128(
-            entry.owned_capacity_delta,
-            owned_capacity_delta,
-            "token daily owned_capacity_delta",
-            type_hash,
-            tx,
-        )?;
-        entry.owned_knowledge_delta = checked_signed_i128(
-            entry.owned_knowledge_delta,
-            owned_knowledge_delta,
-            "token daily owned_knowledge_delta",
-            type_hash,
-            tx,
-        )?;
         Ok(())
     }
 
@@ -693,8 +730,6 @@ struct TokenCellView {
     type_hash_type: u8,
     type_args: Vec<u8>,
     lock_hash: Vec<u8>,
-    capacity: i64,
-    occupied_capacity: i64,
     amount: u128,
     standard: &'static str,
 }
@@ -712,8 +747,6 @@ impl TokenCellView {
             cell.type_hash_type,
             cell.type_args_id,
             cell.lock_script_hash_id,
-            cell.capacity,
-            cell.occupied_capacity,
             cell.udt_amount,
             ctx,
             tx,
@@ -737,8 +770,6 @@ impl TokenCellView {
             input.type_hash_type,
             input.type_args_id,
             input.lock_script_hash_id,
-            input.capacity,
-            input.occupied_capacity,
             input.udt_amount,
             ctx,
             tx,
@@ -758,8 +789,6 @@ impl TokenCellView {
         type_hash_type: Option<i16>,
         type_args_id: Option<crate::sync::types::InternId>,
         lock_script_hash_id: crate::sync::types::InternId,
-        capacity: i64,
-        occupied_capacity: i64,
         udt_amount: Option<u128>,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
@@ -775,10 +804,9 @@ impl TokenCellView {
             // Owner-mode / non-standard fungible cells (both sUDT and xUDT) can carry
             // payloads too short for a u128 amount. The type script skips amount
             // validation in owner mode, so these are legitimate on-chain cells with no
-            // trackable fungible amount — skip them as token owners rather than
-            // fail-fast the whole sync. The parse layer (binary_facts / token_helpers)
-            // already warned when it recorded the missing amount; consistent with the
-            // bulk_build/mod.rs token-transfer path and the parse layers.
+            // trackable fungible amount: they are not holders and move no supply.
+            // Their CAPACITY still belongs to the token's history, which `apply_tx`
+            // records for every sUDT/xUDT-typed cell before building these views.
             return Ok(None);
         };
 
@@ -843,8 +871,6 @@ impl TokenCellView {
             type_hash_type,
             type_args,
             lock_hash,
-            capacity,
-            occupied_capacity,
             amount,
             standard,
         }))
@@ -865,6 +891,33 @@ impl TokenCellView {
             .expect("token cell view must carry a recognized UDT standard"),
         }
     }
+}
+
+/// The token a cell's capacity history belongs to: its type script hash when
+/// the cell is sUDT/xUDT-typed (`CellSemanticTag::{Sudt, Xudt}`, derived from
+/// the same `UdtParser::is_udt_code_hash_bytes` test as the live rule
+/// `pipeline::token_daily_member`), whether or not its data holds an amount.
+fn token_daily_type_hash(
+    semantic_tag: CellSemanticTag,
+    type_script_hash_id: Option<crate::sync::types::InternId>,
+    ctx: &ReducerContext<'_>,
+    tx: &ResolvedTxFacts<'_>,
+    side: &str,
+) -> Result<Option<Vec<u8>>> {
+    if !matches!(semantic_tag, CellSemanticTag::Sudt | CellSemanticTag::Xudt) {
+        return Ok(None);
+    }
+    let id = type_script_hash_id.ok_or_else(|| {
+        anyhow!(
+            "{:?}-tagged {} cell has no type script hash: block={}, tx=0x{}, tx_index={}",
+            semantic_tag,
+            side,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })?;
+    Ok(Some(ctx.resolve_identity(id).to_vec()))
 }
 
 fn checked_add_balance(
@@ -1513,6 +1566,118 @@ mod tests {
         assert!(!owner.tokens.contains_key(&vec![0xbb; 32]));
     }
 
+    /// #11 / R3: a cell under the token's type script belongs to the token's
+    /// capacity history whether or not its data carries a u128 amount (the
+    /// live rule, `pipeline::token_daily_member`). Only the amount facets —
+    /// holders, supply, transfers, the token row itself — need an amount.
+    #[test]
+    fn token_owner_counts_capacity_of_udt_cells_without_amount() {
+        let interner = IdentityInterner::default();
+        let lock_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let type_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x11; 32]);
+        let lock_code_hash_id = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args_id = interner.intern_bytes(vec![0x33; 20]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let owner_mode_cell = |tx_byte: u8, capacity: i64| CellFacts {
+            outpoint: OutPointKey::new([tx_byte; 32], 0),
+            created_at_block: 10,
+            created_by_block_dao_ar: 1,
+            capacity,
+            lock_script_hash_id: lock_hash_id,
+            lock_code_hash_id,
+            lock_hash_type: 1,
+            lock_args_id,
+            type_script_hash_id: Some(type_hash_id),
+            type_code_hash_id: Some(type_code_hash_id),
+            type_hash_type: Some(1),
+            type_args_id: Some(type_args_id),
+            occupied_capacity: 142_00000000,
+            data_size: 8,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Sudt,
+            dao_state: None,
+            protocol_facts: None,
+        };
+        // 2023-11-15 (UTC+8) for both transactions.
+        let ts = 1_700_000_000_000;
+        let create = ResolvedTxFacts {
+            tx_hash: [0x01; 32],
+            block_number: 10,
+            block_hash: [0x66; 32],
+            timestamp_ms: ts,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![owner_mode_cell(0x01, 200_00000000)].into(),
+        };
+        let mut owner = TokenOwner::default();
+        owner.apply_tx(&create, &ctx).unwrap();
+
+        let consumed = owner_mode_cell(0x01, 200_00000000);
+        let consumed = ResolvedInputFacts {
+            outpoint: consumed.outpoint,
+            created_at_block: consumed.created_at_block,
+            created_by_block_dao_ar: consumed.created_by_block_dao_ar,
+            capacity: consumed.capacity,
+            occupied_capacity: consumed.occupied_capacity,
+            udt_amount: None,
+            lock_script_hash_id: consumed.lock_script_hash_id,
+            lock_code_hash_id: consumed.lock_code_hash_id,
+            lock_hash_type: consumed.lock_hash_type,
+            lock_args_id: consumed.lock_args_id,
+            type_script_hash_id: consumed.type_script_hash_id,
+            type_code_hash_id: consumed.type_code_hash_id,
+            type_hash_type: consumed.type_hash_type,
+            type_args_id: consumed.type_args_id,
+            data_size: consumed.data_size,
+            data_hash: None,
+            semantic_tag: CellSemanticTag::Sudt,
+            dao_state: None,
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+        let consume = ResolvedTxFacts {
+            tx_hash: [0x02; 32],
+            block_number: 11,
+            block_hash: [0x67; 32],
+            timestamp_ms: ts + 1_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: vec![consumed],
+            cells: vec![owner_mode_cell(0x02, 150_00000000)].into(),
+        };
+        owner.apply_tx(&consume, &ctx).unwrap();
+
+        assert!(
+            !owner.tokens.contains_key(&vec![0xbb; 32]),
+            "no amount, so no token row, holders or transfers"
+        );
+        let daily_key = keys::encode_token_daily_key(&[0xbb; 32], keys::timestamp_ms_to_date(ts));
+        let rows = owner.build_sealed_rows().unwrap();
+        let daily: Vec<_> = rows
+            .iter()
+            .filter(|row| row.key.as_slice() == daily_key.as_slice())
+            .collect();
+        assert_eq!(daily.len(), 1, "one TOKEN_DAILY row: {rows:?}");
+        let delta: TokenDailyDelta = bincode::deserialize(&daily[0].value).unwrap();
+        assert_eq!(delta.owned_capacity_delta, 150_00000000);
+        assert_eq!(delta.owned_knowledge_delta, 142_00000000);
+        assert!(
+            rows.iter()
+                .all(|row| row.key.as_slice() == daily_key.as_slice()),
+            "the daily row is the only row an amount-less token produces: {rows:?}"
+        );
+    }
+
     // -- issuance co-occurrence binding tests -----------------------------------
 
     /// Real mainnet vector: RGB++ Protocol issuance
@@ -2026,7 +2191,6 @@ mod tests {
                     holders: FxHashMap::default(),
                     transfers_count: 0,
                     hourly_transfers: FxHashMap::default(),
-                    daily_deltas: FxHashMap::default(),
                 },
             );
             owner
@@ -2085,7 +2249,6 @@ mod tests {
                 holders: FxHashMap::default(),
                 transfers_count: 0,
                 hourly_transfers: FxHashMap::default(),
-                daily_deltas: FxHashMap::default(),
             },
         );
         owner.token_onchain_info.insert(

@@ -9,6 +9,9 @@ license.workspace = true
 ckb-types = { workspace = true }
 ckb-hash = { workspace = true }
 
+# The one hash_type label table of the workspace
+ckbadger-common = { path = "../common" }
+
 # RocksDB (same version as workspace)
 rocksdb = { workspace = true }
 

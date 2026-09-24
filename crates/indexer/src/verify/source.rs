@@ -133,9 +133,11 @@ impl SourceQualification {
 /// Check the declaration against the live node and the case's anchor.
 ///
 /// Returns `Err` only for transport/protocol failures; every substantive
-/// shortfall is `Inconclusive` with the reason spelled out.
+/// shortfall is `Inconclusive` with the reason spelled out. Every node call is
+/// charged to `budget` as it is made.
 pub async fn qualify_source(
     client: &CkbRpcClient,
+    budget: &mut RunBudget,
     declaration: Option<&SourceDeclaration>,
     declaration_path: &Path,
     anchor: &SourceAnchor,
@@ -189,6 +191,7 @@ pub async fn qualify_source(
         )));
     }
 
+    budget.charge_request();
     let node_version = client.local_node_info().await?.version;
     if node_version != declaration.node_version {
         return Ok(SourceQualification::Inconclusive(format!(
@@ -198,6 +201,7 @@ pub async fn qualify_source(
         )));
     }
 
+    budget.charge_request();
     let genesis_hash = client
         .get_block_hash(0)
         .await?
@@ -209,6 +213,7 @@ pub async fn qualify_source(
         )));
     }
 
+    budget.charge_request();
     let indexer_tip = client.get_indexer_tip().await?;
     if indexer_tip.block_number < anchor.block_number {
         return Ok(SourceQualification::Inconclusive(format!(
@@ -217,6 +222,7 @@ pub async fn qualify_source(
         )));
     }
 
+    budget.charge_request();
     let anchor_hash = client
         .get_block_hash(anchor.block_number)
         .await?
@@ -261,8 +267,10 @@ pub async fn qualify_source(
 /// `Ok(None)` means the anchor still holds. `Ok(Some(reason))` means it moved.
 pub async fn reverify_anchor(
     client: &CkbRpcClient,
+    budget: &mut RunBudget,
     anchor: &SourceAnchor,
 ) -> anyhow::Result<Option<String>> {
+    budget.charge_request();
     let anchor_hash = client
         .get_block_hash(anchor.block_number)
         .await?
@@ -279,6 +287,7 @@ pub async fn reverify_anchor(
         )));
     }
 
+    budget.charge_request();
     let indexer_tip = client.get_indexer_tip().await?;
     if indexer_tip.block_number < anchor.block_number {
         return Ok(Some(format!(
@@ -464,6 +473,10 @@ mod tests {
     const GENESIS: &str = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5";
     const NODE_VERSION: &str = "0.119.0 (abcdef1 2026-01-01)";
 
+    fn test_budget() -> RunBudget {
+        RunBudget::new(100, 10_000, Duration::from_secs(600))
+    }
+
     fn declaration_toml(genesis: &str, node_version: &str, build_start_block: u64) -> String {
         format!(
             r#"genesisHash = "{genesis}"
@@ -542,6 +555,7 @@ provenance = "operator declared, 2026-09-22"
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(900, "0xanchor"),
@@ -584,6 +598,7 @@ provenance = "operator declared, 2026-09-22"
         );
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             None,
             &path,
             &anchor(900, "0xanchor"),
@@ -607,6 +622,7 @@ provenance = "operator declared, 2026-09-22"
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(900, "0xanchor"),
@@ -631,6 +647,7 @@ provenance = "operator declared, 2026-09-22"
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(900, "0xanchor"),
@@ -655,6 +672,7 @@ provenance = "operator declared, 2026-09-22"
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(900, "0xanchor"),
@@ -677,6 +695,7 @@ provenance = "operator declared, 2026-09-22"
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(900_000, "0xanchor"),
@@ -700,6 +719,7 @@ provenance = "operator declared, 2026-09-22"
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(900, "0xanchor"),
@@ -713,13 +733,53 @@ provenance = "operator declared, 2026-09-22"
         assert!(reason.contains("0xreorged"), "{reason}");
     }
 
+    /// Qualification and re-verification charge the run budget one request
+    /// per node call, exactly what the node receives.
+    #[tokio::test]
+    async fn qualification_and_reverification_charge_every_node_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_declaration(dir.path(), &declaration_toml(GENESIS, NODE_VERSION, 0));
+        let server = MockServer::start().await;
+        mount_node(&server, GENESIS, NODE_VERSION, 1_000, "0xanchor").await;
+        let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
+        let client = CkbRpcClient::new(server.uri());
+        let mut budget = test_budget();
+
+        let qualification = qualify_source(
+            &client,
+            &mut budget,
+            Some(&declaration),
+            &path,
+            &anchor(900, "0xanchor"),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(qualification, SourceQualification::Qualified(_)));
+        let after_qualify = server.received_requests().await.unwrap().len();
+        assert_eq!(budget.rpc_requests, after_qualify);
+
+        let moved = reverify_anchor(&client, &mut budget, &anchor(900, "0xanchor"))
+            .await
+            .unwrap();
+        assert_eq!(moved, None);
+        assert_eq!(
+            budget.rpc_requests,
+            server.received_requests().await.unwrap().len()
+        );
+        assert!(budget.rpc_requests > after_qualify);
+    }
+
     #[tokio::test]
     async fn an_unchanged_anchor_passes_reverification() {
         let server = MockServer::start().await;
         mount_node(&server, GENESIS, NODE_VERSION, 1_000, "0xanchor").await;
-        let moved = reverify_anchor(&CkbRpcClient::new(server.uri()), &anchor(900, "0xanchor"))
-            .await
-            .unwrap();
+        let moved = reverify_anchor(
+            &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
+            &anchor(900, "0xanchor"),
+        )
+        .await
+        .unwrap();
         assert_eq!(moved, None, "a growing tip is not a moved anchor");
     }
 
@@ -727,10 +787,14 @@ provenance = "operator declared, 2026-09-22"
     async fn an_anchor_hash_that_changed_during_the_walk_is_detected() {
         let server = MockServer::start().await;
         mount_node(&server, GENESIS, NODE_VERSION, 1_000, "0xreorged").await;
-        let moved = reverify_anchor(&CkbRpcClient::new(server.uri()), &anchor(900, "0xanchor"))
-            .await
-            .unwrap()
-            .expect("a different hash at H is a moved anchor");
+        let moved = reverify_anchor(
+            &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
+            &anchor(900, "0xanchor"),
+        )
+        .await
+        .unwrap()
+        .expect("a different hash at H is a moved anchor");
         assert!(moved.contains("0xreorged"), "{moved}");
         assert!(moved.contains("during the walk"), "{moved}");
     }
@@ -739,10 +803,14 @@ provenance = "operator declared, 2026-09-22"
     async fn an_index_that_fell_below_the_anchor_during_the_walk_is_detected() {
         let server = MockServer::start().await;
         mount_node(&server, GENESIS, NODE_VERSION, 899, "0xanchor").await;
-        let moved = reverify_anchor(&CkbRpcClient::new(server.uri()), &anchor(900, "0xanchor"))
-            .await
-            .unwrap()
-            .expect("an index that no longer reaches H did not enumerate [0, H]");
+        let moved = reverify_anchor(
+            &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
+            &anchor(900, "0xanchor"),
+        )
+        .await
+        .unwrap()
+        .expect("an index that no longer reaches H did not enumerate [0, H]");
         assert!(moved.contains("899"), "{moved}");
     }
 
@@ -798,6 +866,7 @@ provenance = "Operator confirmed both currently running, self-operated CKB index
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(20_530_435, "0xanchor"),
@@ -838,6 +907,7 @@ provenance = "Operator confirmed both currently running, self-operated CKB index
         let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
         let qualification = qualify_source(
             &CkbRpcClient::new(server.uri()),
+            &mut test_budget(),
             Some(&declaration),
             &path,
             &anchor(20_530_435, "0xanchor"),

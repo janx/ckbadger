@@ -532,9 +532,10 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 pipeline_reset_reason: pipeline_reset.as_ref().map(|(_, reason)| reason.clone()),
                 bulk_build: bulk_build.clone(),
             };
-            // `get_memory_stats` sweeps ~8 properties across all 60 CFs of
-            // BOTH chain stores. That is far heavier than the tick it rides
-            // on, and nothing in live sync needs it at 3 s resolution — sync
+            // `get_memory_stats` sweeps ~8 properties across every column
+            // family of BOTH chain stores (`ckbadger_store::ALL_CFS`: every
+            // domain CF plus the append-only `cells`). That is far heavier
+            // than the tick it rides on, and nothing in live sync needs it at 3 s resolution — sync
             // progress, which the TUI and API read, keeps the 3 s cadence.
             // Bulk sync keeps sampling every tick: its perf heartbeat and the
             // memory-pressure log are the whole point during a build.
@@ -1022,8 +1023,9 @@ fn queue_fill_pct(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
 }
 
 /// How often live sync resamples RocksDB memory stats. The sweep touches ~8
-/// properties on each of the 60 CFs of BOTH chain stores, which is far heavier
-/// than the 3 s tick it used to ride on; sync progress keeps its 3 s cadence.
+/// properties on every column family of BOTH chain stores
+/// (`ckbadger_store::ALL_CFS`), which is far heavier than the 3 s tick it used
+/// to ride on; sync progress keeps its 3 s cadence.
 const MEMORY_STATS_LIVE_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Whether this tick should resample RocksDB memory stats.
@@ -1449,6 +1451,35 @@ mod tests {
             now + Duration::from_secs(60),
             Duration::from_secs(60)
         ));
+    }
+
+    /// The live sampling interval is justified by what one memory sweep
+    /// touches: `ckbadger_store::ALL_CFS` on each chain store. That set must be
+    /// exactly the chain stores' CFs — a domain CF missing from it would be
+    /// silently absent from memory stats, and the comments that name it would
+    /// be wrong without any number in them changing.
+    #[test]
+    fn memory_stats_sweep_covers_exactly_the_chain_store_column_families() {
+        use std::collections::BTreeSet;
+
+        let swept: BTreeSet<&str> = ckbadger_store::ALL_CFS.iter().copied().collect();
+        assert_eq!(
+            swept.len(),
+            ckbadger_store::ALL_CFS.len(),
+            "ALL_CFS lists a column family twice"
+        );
+        let chain: BTreeSet<&str> = ckbadger_store::DOMAIN_CFS
+            .iter()
+            .chain(ckbadger_store::APPEND_CFS)
+            .copied()
+            .collect();
+        assert_eq!(swept, chain);
+        for network_cf in ckbadger_store::NETWORK_CFS {
+            assert!(
+                !swept.contains(network_cf),
+                "{network_cf} belongs to the crawler's network store, not a chain store"
+            );
+        }
     }
 
     /// P3.4: the 3 s tick must not drag the two-store, all-CF memory sweep

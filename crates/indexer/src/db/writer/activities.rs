@@ -8,9 +8,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 use ckbadger_store::types::{
-    ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ProtocolAction, TxActions,
-    TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE, TAG_DAO,
-    TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
+    IdentityStandard, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
+    ProtocolAction, TxActions, TypeCallEntry, TAG_CELLBASE, TAG_DAO, TAG_LOCK_CALL, TAG_PROTOCOL,
+    TAG_TYPE_CALL,
 };
 
 use crate::parser::{
@@ -355,7 +355,7 @@ pub(crate) mod test_detectors {
         ItemDelta, NamedParticipant, OwnerAccum, ParticipantId, ProtocolAction, ProtocolDetector,
         Result, TxView, TypeCallEntry,
     };
-    use ckbadger_store::types::ITEM_KIND_IDENTITY;
+    use ckbadger_store::types::{IdentityStandard, ItemKind};
 
     /// Names exactly one party, with one identity item delta.
     pub(crate) struct NamingDetector {
@@ -390,7 +390,7 @@ pub(crate) mod test_detectors {
                 id: self.id,
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xEE; 20],
-                    kind: ITEM_KIND_IDENTITY,
+                    kind: ItemKind::Identity(IdentityStandard::DotCell),
                     magnitude: 1,
                     negative: self.delta_negative,
                 }],
@@ -778,7 +778,7 @@ fn build_tx_actions<'a>(
             };
             item_deltas.push(ItemDelta {
                 item_id: type_script_hash.to_vec(),
-                kind: ITEM_KIND_TOKEN,
+                kind: ItemKind::Token,
                 magnitude,
                 negative,
             });
@@ -792,6 +792,7 @@ fn build_tx_actions<'a>(
 
         // DotBit changes → ItemDelta (identity, +1/-1)
         emit_identity_item_deltas(
+            IdentityStandard::DotBit,
             &accum.dotbit_inputs,
             &accum.dotbit_outputs,
             &mut item_deltas,
@@ -799,6 +800,7 @@ fn build_tx_actions<'a>(
 
         // `.bit Cell` changes → independent identity ItemDelta.
         emit_identity_item_deltas(
+            IdentityStandard::BitCell,
             &accum.bit_cell_inputs,
             &accum.bit_cell_outputs,
             &mut item_deltas,
@@ -806,6 +808,7 @@ fn build_tx_actions<'a>(
 
         // did:ckb changes → ItemDelta (identity, +1/-1)
         emit_identity_item_deltas(
+            IdentityStandard::DidCkb,
             &accum.did_ckb_inputs,
             &accum.did_ckb_outputs,
             &mut item_deltas,
@@ -903,16 +906,7 @@ fn build_tx_actions<'a>(
         }
 
         // Compute tags bitmask
-        let mut tags: u16 = 0;
-        if item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
-            tags |= TAG_TOKEN;
-        }
-        if item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
-            tags |= TAG_OBJECT;
-        }
-        if item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
-            tags |= TAG_IDENTITY;
-        }
+        let mut tags: u16 = item_kind_tags(&item_deltas);
         if has_dao {
             tags |= TAG_DAO;
         }
@@ -932,15 +926,7 @@ fn build_tx_actions<'a>(
         if let Some(n) = attached.get(*lock_hash) {
             item_deltas.extend(n.item_deltas.iter().cloned());
             roles |= n.roles;
-            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
-                tags |= TAG_TOKEN;
-            }
-            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
-                tags |= TAG_OBJECT;
-            }
-            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
-                tags |= TAG_IDENTITY;
-            }
+            tags |= item_kind_tags(&n.item_deltas);
         }
 
         participants.push(ParticipantDelta {
@@ -963,16 +949,7 @@ fn build_tx_actions<'a>(
     // Parties nobody in the tx shares a lock with: zero CKB position, their own
     // row. Their tags come from their item deltas alone.
     for n in standalone {
-        let mut tags = 0u16;
-        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
-            tags |= TAG_TOKEN;
-        }
-        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
-            tags |= TAG_OBJECT;
-        }
-        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
-            tags |= TAG_IDENTITY;
-        }
+        let mut tags = item_kind_tags(&n.item_deltas);
         if tx.is_cellbase {
             tags |= TAG_CELLBASE;
         }
@@ -1328,7 +1305,7 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
         if !inputs.iter().any(|i| i.as_ref() == id) {
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
-                kind: ITEM_KIND_OBJECT,
+                kind: ItemKind::Object,
                 magnitude: 1,
                 negative: false,
             });
@@ -1340,7 +1317,7 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
         if !outputs.iter().any(|o| o.as_ref() == id) {
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
-                kind: ITEM_KIND_OBJECT,
+                kind: ItemKind::Object,
                 magnitude: 1,
                 negative: true,
             });
@@ -1348,10 +1325,19 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
     }
 }
 
+/// The tag bits a set of item deltas sets on its participant.
+fn item_kind_tags(item_deltas: &[ItemDelta]) -> u16 {
+    item_deltas.iter().fold(0, |tags, d| tags | d.kind.tag())
+}
+
 /// Emit identity ItemDeltas by comparing input vs output ID sets.
 ///
-/// Same +1/-1 logic as objects.
+/// Same +1/-1 logic as objects. `standard` is the identity standard whose
+/// cells produced these ids; it travels with every delta so a reader can link
+/// the item without guessing from an id that several standards share a width
+/// with.
 fn emit_identity_item_deltas<T: AsRef<[u8]>>(
+    standard: IdentityStandard,
     inputs: &[T],
     outputs: &[T],
     item_deltas: &mut Vec<ItemDelta>,
@@ -1362,7 +1348,7 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
         if !inputs.iter().any(|i| i.as_ref() == id) {
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
-                kind: ITEM_KIND_IDENTITY,
+                kind: ItemKind::Identity(standard),
                 magnitude: 1,
                 negative: false,
             });
@@ -1374,7 +1360,7 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
         if !outputs.iter().any(|o| o.as_ref() == id) {
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
-                kind: ITEM_KIND_IDENTITY,
+                kind: ItemKind::Identity(standard),
                 magnitude: 1,
                 negative: true,
             });
@@ -1595,7 +1581,7 @@ pub(crate) mod test_fixtures {
 mod tests {
     use super::test_fixtures::*;
     use super::*;
-    use ckbadger_store::types::participant_roles;
+    use ckbadger_store::types::{participant_roles, TAG_IDENTITY, TAG_OBJECT, TAG_TOKEN};
 
     /// Helper: find participant by lock_hash byte pattern in a TxActions.
     fn find_participant(actions: &TxActions, lock_byte: u8) -> &ParticipantDelta {
@@ -1877,7 +1863,7 @@ mod tests {
         let alice_token = alice_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .find(|d| d.kind == ItemKind::Token)
             .expect("alice should have token item delta");
         assert_eq!(alice_token.magnitude, 1000);
         assert!(alice_token.negative);
@@ -1887,7 +1873,7 @@ mod tests {
         let bob_token = bob_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .find(|d| d.kind == ItemKind::Token)
             .expect("bob should have token item delta");
         assert_eq!(bob_token.magnitude, 1000);
         assert!(!bob_token.negative);
@@ -1932,7 +1918,7 @@ mod tests {
         let bob_token = bob_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .find(|d| d.kind == ItemKind::Token)
             .expect("bob should have token item delta");
         assert_eq!(bob_token.magnitude, big);
         assert!(!bob_token.negative);
@@ -1987,7 +1973,7 @@ mod tests {
         let alice_token = alice_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .find(|d| d.kind == ItemKind::Token)
             .expect("alice should have token item delta");
         assert_eq!(alice_token.magnitude, 1000);
         assert!(alice_token.negative);
@@ -2036,8 +2022,8 @@ mod tests {
         let identity_delta = owner_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_IDENTITY)
-            .expect("dotbit identity item delta should be present");
+            .find(|d| d.kind == ItemKind::Identity(IdentityStandard::DotBit))
+            .expect("dotbit identity item delta must carry the DotBit standard");
         assert_eq!(identity_delta.item_id, account_id);
         assert_eq!(identity_delta.magnitude, 1); // output-only = +1
         assert!(!identity_delta.negative);
@@ -2082,8 +2068,8 @@ mod tests {
         let identity_delta = owner_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_IDENTITY)
-            .expect(".bit identity item delta should be present");
+            .find(|d| d.kind == ItemKind::Identity(IdentityStandard::BitCell))
+            .expect(".bit Cell identity item delta must carry the BitCell standard");
         assert_eq!(identity_delta.item_id, identity_id);
         assert_eq!(identity_delta.magnitude, 1); // output-only = +1
         assert!(!identity_delta.negative);
@@ -2129,8 +2115,8 @@ mod tests {
         let identity_delta = owner_p
             .item_deltas
             .iter()
-            .find(|d| d.kind == ITEM_KIND_IDENTITY)
-            .expect("did:ckb identity item delta should be present");
+            .find(|d| d.kind == ItemKind::Identity(IdentityStandard::DidCkb))
+            .expect("did:ckb identity item delta must carry the DidCkb standard");
         assert_eq!(identity_delta.item_id, item_id);
         assert_eq!(identity_delta.magnitude, 1); // output-only = +1
         assert!(!identity_delta.negative);
@@ -2565,7 +2551,7 @@ mod tests {
         assert!(alice_p
             .item_deltas
             .iter()
-            .any(|d| d.kind == ITEM_KIND_TOKEN));
+            .any(|d| d.kind == ItemKind::Token));
         // Type calls at TX level
         assert_eq!(actions.type_calls.len(), 1);
         assert_eq!(actions.type_calls[0].type_code_hash, unknown_code_hash);
@@ -2762,7 +2748,7 @@ mod tests {
             alice_p
                 .item_deltas
                 .iter()
-                .any(|d| d.kind == ITEM_KIND_TOKEN),
+                .any(|d| d.kind == ItemKind::Token),
             "xudt_compatible should produce Token item delta"
         );
     }
@@ -3492,7 +3478,7 @@ mod tests {
         assert!(only
             .item_deltas
             .iter()
-            .any(|d| d.kind == ITEM_KIND_IDENTITY && d.negative));
+            .any(|d| matches!(d.kind, ItemKind::Identity(_)) && d.negative));
         assert_eq!(only.roles, participant_roles::OWNER_FROM);
     }
 

@@ -267,6 +267,41 @@ pub fn encode_reorg_undo_log_key(block_num: i64, seq: u64) -> [u8; REORG_UNDO_LO
     key
 }
 
+/// Bit position of an undo sequence number's scope. The top 16 bits of the
+/// `seq` in `encode_reorg_undo_log_key` name the writer family that recorded
+/// the entry; the low 48 bits count entries within the block. This is the ONE
+/// definition: the indexer composes sequence numbers from it and the store's
+/// retention prune reads it back.
+pub const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
+/// Largest per-block counter value a sequence number can carry.
+pub const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
+
+/// The writer family an undo-log entry belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u16)]
+pub enum UndoSeqScope {
+    TxContext = 0x0001,
+    DotBit = 0x0002,
+    Object = 0x0003,
+    /// Entity daily/hourly stats buckets (`SCRIPT_DAILY`, `TOKEN_DAILY`,
+    /// `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`,
+    /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
+    /// can prune exactly these entries without touching the other three.
+    EntityStats = 0x0004,
+}
+
+impl UndoSeqScope {
+    /// The first sequence number of this scope: its scope bits, counter 0.
+    pub const fn seq_base(self) -> u64 {
+        (self as u64) << UNDO_SEQ_SCOPE_SHIFT
+    }
+
+    /// Whether `seq` was recorded under this scope.
+    pub const fn owns(self, seq: u64) -> bool {
+        seq >> UNDO_SEQ_SCOPE_SHIFT == self as u64
+    }
+}
+
 pub fn decode_reorg_undo_log_key(key: &[u8]) -> (i64, u64) {
     assert!(
         key.len() == REORG_UNDO_LOG_KEY_SIZE,
@@ -496,6 +531,24 @@ pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
     key.extend_from_slice(&[0xFF; 32]);
+    key
+}
+
+/// Seek key for the newest `addr_txs` row of `lock_hash` at or below
+/// `block_num`. Rows are descending by block within a lock-hash prefix, so a
+/// forward seek from `lock_hash ‖ desc(block_num)` passes exactly the rows of
+/// higher blocks and lands on the first row of `block_num` or below, whatever
+/// its tx index.
+pub fn encode_addr_tx_block_seek_key(lock_hash: &[u8], block_num: i64) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_addr_tx_block_seek_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
+    );
+    let mut key = Vec::with_capacity(HASH32_LEN + 8);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&encode_desc_block_num(block_num));
     key
 }
 
@@ -1325,19 +1378,34 @@ pub fn encode_identity_owner20_key(
 
 /// Read the 20-byte owner prefix back out of a 32-byte owner segment written
 /// by `encode_identity_owner20_key`.
+///
+/// Fallible, for read paths serving stored rows: a malformed segment is a store
+/// invariant violation to report with the segment, and a read handler must not
+/// turn it into a panic (the release profile aborts on panic).
+pub fn try_decode_identity_owner20(owner_segment: &[u8]) -> anyhow::Result<[u8; 20]> {
+    if owner_segment.len() != HASH32_LEN {
+        anyhow::bail!(
+            "identity owner segment must be exactly {HASH32_LEN} bytes, got {}: 0x{}",
+            owner_segment.len(),
+            hex::encode(owner_segment)
+        );
+    }
+    if !owner_segment[20..].iter().all(|byte| *byte == 0) {
+        anyhow::bail!(
+            "owner segment 0x{} is not a 20-byte prefix padded with zeros",
+            hex::encode(owner_segment)
+        );
+    }
+    Ok(owner_segment[..20]
+        .try_into()
+        .expect("length checked above"))
+}
+
+/// [`try_decode_identity_owner20`] for callers holding a segment they encoded
+/// themselves, where a malformed one is a bug in the caller.
 pub fn decode_identity_owner20(owner_segment: &[u8]) -> [u8; 20] {
-    assert_key_component_len(
-        "decode_identity_owner20",
-        "owner_segment",
-        owner_segment.len(),
-        HASH32_LEN,
-    );
-    assert!(
-        owner_segment[20..].iter().all(|byte| *byte == 0),
-        "decode_identity_owner20: owner segment 0x{} is not a 20-byte prefix padded with zeros",
-        hex::encode(owner_segment)
-    );
-    owner_segment[..20].try_into().expect("20 bytes")
+    try_decode_identity_owner20(owner_segment)
+        .unwrap_or_else(|e| panic!("decode_identity_owner20: {e:#}"))
 }
 
 // ---- `.cell` (DotCell) name-by-owner index ----
@@ -3451,6 +3519,14 @@ mod tests {
                 },
             },
             FixedWidthCase {
+                encoder: "encode_addr_tx_block_seek_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_tx_block_seek_key(h, 1);
+                },
+            },
+            FixedWidthCase {
                 encoder: "encode_token_holder_key",
                 component: "type_hash",
                 expected: 32,
@@ -3984,6 +4060,47 @@ mod tests {
         let _ = encode_outpoint(&[0x9B; 31], 0);
     }
 
+    /// The scope table is part of the persisted undo-log key: its values are
+    /// pinned so a renumbering cannot silently re-scope stored entries.
+    #[test]
+    fn test_undo_seq_scope_table_is_pinned() {
+        assert_eq!(UNDO_SEQ_SCOPE_SHIFT, 48);
+        assert_eq!(UNDO_SEQ_LOCAL_MAX, 0x0000_FFFF_FFFF_FFFF);
+        let table = [
+            (UndoSeqScope::TxContext, 0x0001u64),
+            (UndoSeqScope::DotBit, 0x0002),
+            (UndoSeqScope::Object, 0x0003),
+            (UndoSeqScope::EntityStats, 0x0004),
+        ];
+        for (scope, bits) in table {
+            assert_eq!(scope.seq_base(), bits << 48, "{scope:?}");
+            assert!(scope.owns(scope.seq_base()), "{scope:?}");
+            assert!(
+                scope.owns(scope.seq_base() | UNDO_SEQ_LOCAL_MAX),
+                "{scope:?}"
+            );
+            for (other, _) in table.iter().filter(|(other, _)| *other != scope) {
+                assert!(!scope.owns(other.seq_base()), "{scope:?} vs {other:?}");
+            }
+        }
+        // A counter that overflowed into the scope bits is no scope's entry.
+        assert!(!UndoSeqScope::EntityStats.owns(5 << 48));
+        assert!(!UndoSeqScope::TxContext.owns(0));
+    }
+
+    #[test]
+    fn test_addr_tx_block_seek_key_orders_between_blocks() {
+        let lock = [0xAA; 32];
+        let seek = encode_addr_tx_block_seek_key(&lock, 5);
+        // Every row of block 5, whatever its tx index or hash, sorts at or after the seek key.
+        assert!(encode_addr_tx_key(&lock, 5, 0, &[0x00; 32]) >= seek);
+        assert!(encode_addr_tx_key(&lock, 5, i32::MAX, &[0x00; 32]) >= seek);
+        assert!(encode_addr_tx_key(&lock, 5, 0, &[0xFF; 32]) >= seek);
+        // Lower blocks follow it; higher blocks precede it.
+        assert!(encode_addr_tx_key(&lock, 4, i32::MAX, &[0x00; 32]) > seek);
+        assert!(encode_addr_tx_key(&lock, 6, 0, &[0xFF; 32]) < seek);
+    }
+
     #[test]
     #[should_panic(expected = "encode_addr_tx_key: lock_hash must be exactly 32 bytes, got 33")]
     fn test_addr_tx_key_rejects_oversized_lock_hash() {
@@ -4095,5 +4212,26 @@ mod dotcell_key_tests {
     #[should_panic(expected = "not a 20-byte prefix padded with zeros")]
     fn decode_identity_owner20_rejects_a_real_lock_hash() {
         decode_identity_owner20(&[0x77; 32]);
+    }
+
+    #[test]
+    fn try_decode_identity_owner20_reports_a_malformed_segment() {
+        let mut segment = [0u8; 32];
+        segment[..20].copy_from_slice(&[0x33; 20]);
+        assert_eq!(try_decode_identity_owner20(&segment).unwrap(), [0x33; 20]);
+
+        let err = try_decode_identity_owner20(&[0x77; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not a 20-byte prefix padded with zeros"),
+            "{err}"
+        );
+        assert!(err.contains(&"77".repeat(32)), "{err}");
+
+        let err = try_decode_identity_owner20(&[0x33; 20])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly 32 bytes, got 20"), "{err}");
     }
 }

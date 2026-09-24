@@ -25,25 +25,58 @@ pub fn has_embedded_assets() -> bool {
     FrontendAssets::iter().next().is_some()
 }
 
+/// The directory Vite writes the build's content-hashed files into:
+/// `build.assetsDir`, which `frontend/vite.config.ts` leaves at Vite's default.
+/// The only namespace the build owns, so the only place a missing path is a
+/// missing file rather than an SPA route (a unit test pins the config).
+pub(crate) const VITE_ASSETS_DIR: &str = "assets/";
+
+/// Where a request that matches no file goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MissingPath {
+    /// A content-hashed build file that is not there (a stale chunk after a
+    /// redeploy): 404, never the SPA shell served as JavaScript.
+    BuildAsset,
+    /// Anything else is a client-side route — including a deep link whose last
+    /// segment has a dot, such as `/identities/dotcell/alice.cell`.
+    SpaRoute,
+}
+
+/// Classify a path (without its leading `/`) that matched no file. Whether a
+/// path IS a file is never guessed from its shape: the caller has already
+/// looked it up.
+pub(crate) fn classify_missing_path(path: &str) -> MissingPath {
+    if path.starts_with(VITE_ASSETS_DIR) {
+        MissingPath::BuildAsset
+    } else {
+        MissingPath::SpaRoute
+    }
+}
+
+/// Cache policy for a served file: content-hashed build files are immutable,
+/// everything else (HTML pages, root-level files) must revalidate.
+pub(crate) fn cache_control_for(path: &str) -> &'static str {
+    if path.starts_with(VITE_ASSETS_DIR) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
 /// Axum handler that serves embedded frontend assets.
 ///
 /// Serving strategy:
-/// 1. Exact path match (e.g. `/favicon.ico` → `favicon.ico`)
-/// 2. SPA fallback: non-file paths fall back to `index.html`
-///
-/// Cache headers:
-/// - `assets/` files → immutable, 1 year (content-hashed)
-/// - Everything else → no-cache (HTML pages, etc.)
+/// 1. A path in the embedded asset set is served as itself.
+/// 2. A missing path under the build's asset directory is a 404.
+/// 3. Everything else falls back to `index.html` (SPA routing).
 pub async fn embedded_frontend_handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
 
-    // 1. Exact match
     if let Some(resp) = serve_embedded(path) {
         return resp;
     }
 
-    // 2. SPA fallback for non-file paths
-    if !path_looks_like_file(path) {
+    if classify_missing_path(path) == MissingPath::SpaRoute {
         if let Some(resp) = serve_embedded("index.html") {
             return resp;
         }
@@ -58,18 +91,12 @@ fn serve_embedded(path: &str) -> Option<Response> {
 
     let mime = mime_guess::from_path(path).first_or_octet_stream();
 
-    let cache_control = if path.starts_with("assets/") {
-        "public, max-age=31536000, immutable"
-    } else {
-        "no-cache"
-    };
-
     Some(
         (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, mime.as_ref()),
-                (header::CACHE_CONTROL, cache_control),
+                (header::CACHE_CONTROL, cache_control_for(path)),
             ],
             asset.data,
         )
@@ -77,31 +104,74 @@ fn serve_embedded(path: &str) -> Option<Response> {
     )
 }
 
-/// Returns `true` if the path looks like a file request (has an extension).
-/// Dot-prefixed segments like `.bit` are SPA route params, not files.
-fn path_looks_like_file(path: &str) -> bool {
-    let segment = match path.rsplit_once('/') {
-        Some((_, s)) => s,
-        None => path,
-    };
-    segment.contains('.') && !segment.starts_with('.')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The contract the removed `path_looks_like_file` heuristic was meant to
+    /// serve, on its own inputs plus the dotted deep link it got wrong: only a
+    /// path in the build's asset namespace may 404; every other missing path
+    /// is a route.
     #[test]
-    fn test_path_looks_like_file() {
-        assert!(path_looks_like_file("favicon.ico"));
-        assert!(path_looks_like_file("assets/app.js"));
-        assert!(path_looks_like_file("images/logo.png"));
+    fn missing_paths_are_routes_except_in_the_build_asset_namespace() {
+        assert_eq!(
+            classify_missing_path("assets/app.js"),
+            MissingPath::BuildAsset
+        );
+        assert_eq!(
+            classify_missing_path("assets/app-stale.js"),
+            MissingPath::BuildAsset
+        );
 
-        assert!(!path_looks_like_file(""));
-        assert!(!path_looks_like_file("blocks"));
-        assert!(!path_looks_like_file("address/ckb1qz"));
-        // Dot-prefixed segments are SPA route params, not files
-        assert!(!path_looks_like_file("identities/.bit"));
-        assert!(!path_looks_like_file(".hidden"));
+        for route in [
+            "",
+            "blocks",
+            "address/ckb1qz",
+            "script/0x1234",
+            "identities/.bit",
+            "identities/did:ckb",
+            "identities/dotbit",
+            ".hidden",
+            "identities/dotcell/alice.cell",
+            "identities/dotcell/shop.alice.cell",
+            "mainnet/identities/dotcell/alice.cell",
+            "assets",
+            "mainnet/assets/whatever.js",
+            // A root-level file is served when it exists (the caller looked it
+            // up first); when it does not, it is not a build asset.
+            "favicon.ico",
+            "images/logo.png",
+        ] {
+            assert_eq!(
+                classify_missing_path(route),
+                MissingPath::SpaRoute,
+                "{route}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_build_assets_are_cached_immutably() {
+        assert_eq!(
+            cache_control_for("assets/app-abc.js"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(cache_control_for("index.html"), "no-cache");
+        assert_eq!(cache_control_for("favicon.ico"), "no-cache");
+    }
+
+    /// `VITE_ASSETS_DIR` is Vite's default `build.assetsDir`. The config sets
+    /// none; if it ever does, this constant must follow it.
+    #[test]
+    fn vite_assets_dir_matches_the_build_config() {
+        let config = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontend/vite.config.ts"),
+        )
+        .expect("frontend/vite.config.ts is readable");
+        assert!(
+            !config.contains("assetsDir"),
+            "vite.config.ts overrides build.assetsDir; update VITE_ASSETS_DIR to match"
+        );
+        assert_eq!(VITE_ASSETS_DIR, "assets/");
     }
 }

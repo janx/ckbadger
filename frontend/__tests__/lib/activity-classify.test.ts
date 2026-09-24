@@ -128,7 +128,9 @@ describe('classifyActivity', () => {
             roles: [],
             ckbDelta: '0',
             usedDelta: '0',
-            itemDeltas: [{ kind: 'identity', identityId: '0xdotbit', delta: 1 }],
+            itemDeltas: [
+              { kind: 'identity', standard: 'dotbit', identityId: '0xdotbit', delta: 1 },
+            ],
             tags: 4,
           },
         ],

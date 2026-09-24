@@ -1525,6 +1525,27 @@ fn clear_dao_withdraw_completion_fields(entry: &mut DaoDepositCacheEntry) {
 
 use crate::bytes_to_hex;
 
+/// Undo replay is the ONE owner of identity / spore / mNFT entity rows: every
+/// rollback entry point replays the undo log before `rollback_to_block`, and
+/// the replay restores every row a rolled-back block created or changed. An
+/// entry created above the fork point that is still here therefore means the
+/// writer that created it recorded no pre-image. The repair scan used to
+/// delete such an entry, a second owner that hid exactly that bug; it now
+/// refuses, naming what is needed to find the writer.
+fn entity_survived_undo_replay(
+    cf_name: &str,
+    id_label: &str,
+    id: &[u8],
+    standard: &str,
+    created_at_block: i64,
+    rollback_to: i64,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{cf_name} entry created above the fork point survived undo replay: {id_label}=0x{}, standard={standard}, created_at_block={created_at_block}, rollback_to={rollback_to} — missing undo pre-image from writer",
+        bytes_to_hex(id)
+    )
+}
+
 fn truncate_hodl_tracker_state_for_rollback(
     state: &mut HodlTrackerState,
     rollback_to: i64,
@@ -4031,23 +4052,24 @@ impl CkbadgerStore {
                     ab.live_cells_count
                 );
             }
-            // Repair last_activity from the latest surviving addr_tx entry.
-            // addr_txs keys are descending by block within a lock_hash prefix,
-            // so seeking just past the fork point lands directly on that entry —
-            // one seek per affected address, no scan of the address's history.
-            // The deletions above are still only staged in `batch`, but they all
-            // sit before this cursor, so the store view cannot return one.
+            // Repair last_activity from the latest surviving CELL participation.
+            // Both forward paths set last_activity from cell participation
+            // only, so the repair reads `addr_txs` alone — never the
+            // protocol-named `addr_txs_by_prefix` rows. addr_txs keys are
+            // descending by block within a lock_hash prefix, so seeking to the
+            // fork point lands directly on that entry — one seek per affected
+            // address, no scan of the address's history. The deletions above
+            // are still only staged in `batch`, but they all sit before this
+            // cursor, so the store view cannot return one.
             if ab.last_activity_block > rollback_to {
                 let latest_surviving = if rollback_to < 0 {
                     None
                 } else {
                     addr_txs_scanned += 1;
-                    self.list_addr_txs_recent(lock_hash, 1, Some((rollback_to, i32::MAX)))?
-                        .into_iter()
-                        .next()
+                    self.latest_cell_addr_tx_at_or_below(lock_hash, rollback_to)?
                 };
                 match latest_surviving {
-                    Some((surv_block, _, surv_tx, _)) => {
+                    Some((surv_block, _, surv_tx)) => {
                         ab.last_activity_block = surv_block;
                         ab.last_activity_tx = surv_tx;
                     }
@@ -4330,9 +4352,6 @@ impl CkbadgerStore {
 
         // 10. Repair Spore/Object domain state for orphaned blocks and rebuild secondary indexes.
         let mut stage = RollbackStageProgress::new("repair_spore_object_domain");
-        let mut spore_deleted = 0u64;
-        let mut object_deleted = 0u64;
-        let mut secondary_keys_deleted = 0u64;
         let mut secondary_keys_written = 0u64;
         let mut aggregate_rows_written = 0u64;
         let mut cluster_owner_rows_written = 0u64;
@@ -4392,44 +4411,14 @@ impl CkbadgerStore {
             })?;
 
             if entry.created_at_block > rollback_to {
-                batch.delete_cf(self.cf_spore_data(), &key);
-                // Clean up outpoint entries for this deleted spore using the
-                // reverse index (SPORE_OUTPOINT_BY_ID → outpoints).
-                let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&spore_id);
-                let by_id_key_len = keys::spore_outpoint_by_id_key_len(spore_id.len());
-                let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
-                for by_id_item in by_id_iter {
-                    let (by_id_key, _) = by_id_item.map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to iterate spore_outpoint_by_id during rollback cleanup: spore_id=0x{}, error={}",
-                            bytes_to_hex(&spore_id),
-                            e
-                        )
-                    })?;
-                    if !by_id_key.starts_with(&by_id_prefix) {
-                        break;
-                    }
-                    if by_id_key.len() != by_id_key_len {
-                        // Rows of a longer id that starts with these bytes —
-                        // not ours to delete.
-                        continue;
-                    }
-                    let (tx_hash, output_index) = keys::decode_spore_outpoint_by_id_key(&by_id_key);
-                    let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
-                    batch.delete_cf(self.cf_stats_spore(), fwd_key);
-                    batch.delete_cf(self.cf_stats_spore(), &by_id_key);
-                    secondary_keys_deleted += 1;
-                }
-                spore_deleted += 1;
-                stage.tick(
-                    spore_deleted
-                        + object_deleted
-                        + secondary_keys_deleted
-                        + secondary_keys_written
-                        + aggregate_rows_written
-                        + cluster_owner_rows_written,
-                );
-                continue;
+                return Err(entity_survived_undo_replay(
+                    "spore_data",
+                    "spore_id",
+                    &spore_id,
+                    entry.standard.as_str(),
+                    entry.created_at_block,
+                    rollback_to,
+                ));
             }
 
             match entry.standard {
@@ -4500,14 +4489,8 @@ impl CkbadgerStore {
                     // MnftIssuer, MnftClass, MnftToken are not stored in spore_data
                 }
             }
-            stage.tick(
-                spore_deleted
-                    + object_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
+            stage
+                .tick(secondary_keys_written + aggregate_rows_written + cluster_owner_rows_written);
         }
 
         let iter = self.iterator_cf(self.cf_mnft_data(), IteratorMode::Start);
@@ -4528,17 +4511,14 @@ impl CkbadgerStore {
             })?;
 
             if entry.created_at_block > rollback_to {
-                batch.delete_cf(self.cf_mnft_data(), &key);
-                object_deleted += 1;
-                stage.tick(
-                    spore_deleted
-                        + object_deleted
-                        + secondary_keys_deleted
-                        + secondary_keys_written
-                        + aggregate_rows_written
-                        + cluster_owner_rows_written,
-                );
-                continue;
+                return Err(entity_survived_undo_replay(
+                    "mnft_data",
+                    "object_id",
+                    &object_id,
+                    entry.standard.as_str(),
+                    entry.created_at_block,
+                    rollback_to,
+                ));
             }
 
             match entry.standard {
@@ -4634,22 +4614,17 @@ impl CkbadgerStore {
                     // MnftIssuer has no collection-level aggregation.
                 }
             }
-            stage.tick(
-                spore_deleted
-                    + object_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
+            stage
+                .tick(secondary_keys_written + aggregate_rows_written + cluster_owner_rows_written);
         }
 
         // Repair identity data: scan CF_IDENTITY_DATA to rebuild identity aggregates,
         // identity_by_collection index, and identity owner counts.
         let mut identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> = HashMap::new();
-        let mut identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
-        // Which of those owner keys are 20-byte prefixes rather than lock hashes.
-        let mut identity_owner20_keys: HashSet<(Vec<u8>, Vec<u8>)> = HashSet::new();
+        // Keyed by collection and owner. `.cell` names are owned by a 20-byte
+        // lock-hash prefix, every other standard by a full lock hash; the
+        // participant kind picks the key encoder.
+        let mut identity_owner_counts: HashMap<(Vec<u8>, ParticipantId), i64> = HashMap::new();
 
         let iter = self.iterator_cf(self.cf_identity_data(), IteratorMode::Start);
         for item in iter {
@@ -4668,100 +4643,18 @@ impl CkbadgerStore {
                 )
             })?;
 
+            // Its owner-index row, outpoint reverse-index rows and `.bit`
+            // outpoint rows are restored by the same undo replay, which is
+            // why nothing here deletes them.
             if entry.created_at_block > rollback_to {
-                batch.delete_cf(self.cf_identity_data(), &key);
-                // Clean up dotbit outpoint entries for deleted identities.
-                if entry.standard == IdentityStandard::DotBit && identity_id.len() >= 20 {
-                    let by_id_prefix =
-                        keys::encode_dotbit_outpoint_by_account_id_prefix(&identity_id);
-                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &by_id_prefix);
-                    for by_id_item in by_id_iter {
-                        let (by_id_key, _) = by_id_item.map_err(|e| {
-                            anyhow::anyhow!(
-                                "failed to iterate dotbit_outpoint_by_account_id during rollback cleanup: identity_id=0x{}, error={}",
-                                bytes_to_hex(&identity_id),
-                                e
-                            )
-                        })?;
-                        if !by_id_key.starts_with(&by_id_prefix) {
-                            break;
-                        }
-                        let (tx_hash, output_index) =
-                            keys::decode_dotbit_outpoint_by_account_id_key(&by_id_key);
-                        let fwd_key =
-                            keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
-                        batch.delete_cf(self.cf_stats_mnft(), fwd_key);
-                        batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
-                    }
-                }
-                // A rolled-back `.cell` name must also lose its owner-index
-                // row, or an address keeps listing a name that no longer
-                // exists. The undo replay deletes it too; this is the path a
-                // rollback without undo entries takes.
-                if let IdentityExtra::DotCell { owner_hash20, .. } = &entry.extra {
-                    if identity_id.len() == owner_hash20.len() {
-                        batch.delete_cf(
-                            self.cf_dotcell_name_by_owner(),
-                            keys::encode_dotcell_name_by_owner_key(owner_hash20, &identity_id),
-                        );
-                    }
-                }
-                // `.bit Cell`, did:ckb and `.cell` identities record their
-                // outpoints in the spore reverse index (DotBit has its own,
-                // handled above), so all three must be cleaned up here or a
-                // rolled-back identity leaves orphaned lifecycle rows behind.
-                if matches!(
-                    entry.standard,
-                    IdentityStandard::BitCell
-                        | IdentityStandard::DidCkb
-                        | IdentityStandard::DotCell
-                ) {
-                    if identity_id.is_empty()
-                        || identity_id.len() > keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
-                    {
-                        return Err(anyhow::anyhow!(
-                            "identity id width violates the outpoint reverse index contract during rollback cleanup: standard={}, identity_id=0x{}, len={}, max={}",
-                            entry.standard.as_str(),
-                            bytes_to_hex(&identity_id),
-                            identity_id.len(),
-                            keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
-                        ));
-                    }
-                    let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&identity_id);
-                    let by_id_key_len = keys::spore_outpoint_by_id_key_len(identity_id.len());
-                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
-                    for by_id_item in by_id_iter {
-                        let (by_id_key, _) = by_id_item.map_err(|e| {
-                            anyhow::anyhow!(
-                                "failed to iterate identity outpoint reverse index during rollback cleanup: identity_id=0x{}, error={}",
-                                bytes_to_hex(&identity_id),
-                                e
-                            )
-                        })?;
-                        if !by_id_key.starts_with(&by_id_prefix) {
-                            break;
-                        }
-                        if by_id_key.len() != by_id_key_len {
-                            // Rows of a longer id that starts with these bytes.
-                            continue;
-                        }
-                        let (tx_hash, output_index) =
-                            keys::decode_spore_outpoint_by_id_key(&by_id_key);
-                        let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
-                        batch.delete_cf(self.cf_stats_spore(), fwd_key);
-                        batch.delete_cf(self.cf_stats_spore(), &by_id_key);
-                    }
-                }
-                secondary_keys_deleted += 1;
-                stage.tick(
-                    spore_deleted
-                        + object_deleted
-                        + secondary_keys_deleted
-                        + secondary_keys_written
-                        + aggregate_rows_written
-                        + cluster_owner_rows_written,
-                );
-                continue;
+                return Err(entity_survived_undo_replay(
+                    "identity_data",
+                    "identity_id",
+                    &identity_id,
+                    entry.standard.as_str(),
+                    entry.created_at_block,
+                    rollback_to,
+                ));
             }
 
             let collection_id = match entry.standard {
@@ -4775,6 +4668,21 @@ impl CkbadgerStore {
             let idx_key = keys::encode_identity_by_collection_key(&collection_id, &identity_id);
             batch.put_cf(self.cf_identity_by_collection(), idx_key, []);
             secondary_keys_written += 1;
+            // A `.cell` sub-name is also listed under its parent, keyed by the
+            // parent's padded id — exactly what the forward writers file
+            // (live `db/writer/dotcell.rs`, bulk `owners/object.rs`). The range
+            // delete above removed those rows too, so every surviving sub-name
+            // (live or not; readers filter liveness) gets its row back here.
+            if let IdentityExtra::DotCell {
+                parent_id: Some(parent),
+                ..
+            } = &entry.extra
+            {
+                let parent_key =
+                    keys::encode_identity_by_collection_key(&keys::pad_id_32(parent), &identity_id);
+                batch.put_cf(self.cf_identity_by_collection(), parent_key, []);
+                secondary_keys_written += 1;
+            }
 
             let agg = identity_aggs
                 .entry(collection_id.clone())
@@ -4805,21 +4713,28 @@ impl CkbadgerStore {
                 // gives, not as a lock hash, so it is counted under its own
                 // key encoder. Reading `owner_lock_hash` for it would count
                 // nothing and zero the collection's holders.
-                let owner: Option<(Vec<u8>, bool)> = match &entry.extra {
+                let owner: Option<ParticipantId> = match &entry.extra {
                     IdentityExtra::DotCell { owner_hash20, .. } => {
-                        Some((owner_hash20.to_vec(), true))
+                        Some(ParticipantId::LockPrefix(*owner_hash20))
                     }
                     _ => entry
                         .owner_lock_hash
-                        .as_ref()
-                        .map(|lock_hash| (lock_hash.clone(), false)),
+                        .as_deref()
+                        .map(ParticipantId::lock)
+                        .transpose()
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "identity owner is not a lock hash while repairing rollback state: identity_id=0x{}, standard={}, error={}",
+                                bytes_to_hex(&identity_id),
+                                entry.standard.as_str(),
+                                e
+                            )
+                        })?,
                 };
-                if let Some((owner_bytes, is_prefix)) = owner {
-                    let owner_key = (collection_id, owner_bytes);
-                    if is_prefix {
-                        identity_owner20_keys.insert(owner_key.clone());
-                    }
-                    let owner_count = identity_owner_counts.entry(owner_key).or_insert(0);
+                if let Some(owner) = owner {
+                    let owner_count = identity_owner_counts
+                        .entry((collection_id, owner))
+                        .or_insert(0);
                     *owner_count = owner_count.checked_add(1).ok_or_else(|| {
                         anyhow::anyhow!(
                             "identity owner count overflow while repairing rollback state"
@@ -4827,14 +4742,8 @@ impl CkbadgerStore {
                     })?;
                 }
             }
-            stage.tick(
-                spore_deleted
-                    + object_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
+            stage
+                .tick(secondary_keys_written + aggregate_rows_written + cluster_owner_rows_written);
         }
 
         let mut cluster_owner_totals: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -4942,11 +4851,14 @@ impl CkbadgerStore {
 
         // Write rebuilt identity owner counts to CF_STATS_IDENTITY.
         let mut identity_holder_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        for (key @ (collection_id, owner), count) in &identity_owner_counts {
-            let owner_key = if identity_owner20_keys.contains(key) {
-                keys::encode_identity_owner20_key(collection_id, owner)
-            } else {
-                keys::encode_identity_owner_key(collection_id, owner)
+        for ((collection_id, owner), count) in &identity_owner_counts {
+            let owner_key = match owner {
+                ParticipantId::Lock(lock_hash) => {
+                    keys::encode_identity_owner_key(collection_id, lock_hash)
+                }
+                ParticipantId::LockPrefix(owner20) => {
+                    keys::encode_identity_owner20_key(collection_id, owner20)
+                }
             };
             batch.put_cf(
                 self.cf_stats_identity(),
@@ -5006,14 +4918,7 @@ impl CkbadgerStore {
             aggregate_rows_written += 1;
         }
 
-        stage.finish(
-            spore_deleted
-                + object_deleted
-                + secondary_keys_deleted
-                + secondary_keys_written
-                + aggregate_rows_written
-                + cluster_owner_rows_written,
-        );
+        stage.finish(secondary_keys_written + aggregate_rows_written + cluster_owner_rows_written);
 
         // 11. Keep HODL tracker state aligned with rollback tip in the same write batch.
         let mut stage = RollbackStageProgress::new("repair_hodl_tracker_state");
@@ -7853,6 +7758,156 @@ mod tests {
         );
     }
 
+    /// Review #4 (R2): `addr_balance.last_activity` counts only transactions in
+    /// which the address held a cell — bulk (`owners/address.rs`) and live
+    /// (`addresses.rs`) set it from cell participation alone. Stage 9a's repair
+    /// used to read `list_addr_txs_recent`, which also merges the protocol-NAMED
+    /// rows of `CF_ADDR_TXS_BY_PREFIX`, so a reorg could land `last_activity` on
+    /// a named-only tx — a state no forward path produces.
+    #[test]
+    fn rollback_last_activity_ignores_prefix_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let addr_a = vec![0xAAu8; 32];
+        let lock_code_hash = vec![0x11u8; 32];
+        let tx1 = vec![0x31u8; 32]; // block 1: creates A's first cell
+        let tx3 = vec![0x33u8; 32]; // block 3: names A by prefix, A holds no cell
+        let tx5 = vec![0x35u8; 32]; // block 5: creates A's second cell (rolled back)
+
+        let header = |n: u8| CachedBlockHeader {
+            hash: vec![n; 32],
+            parent_hash: vec![n.wrapping_sub(1); 32],
+            timestamp: 1_700_000_000_000 + i64::from(n) * 10_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let cellbase_index = |timestamp: i64| TxIndexEntry {
+            is_cellbase: true,
+            timestamp,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let make_cell = |capacity: i64| LiveCellInfo {
+            capacity,
+            lock_script_hash: addr_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: capacity,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        for n in 1..=5u8 {
+            batch.put_block_header(i64::from(n), &header(n));
+        }
+        batch.put_tx_index(1, 0, &cellbase_index(header(1).timestamp));
+        batch.put_tx_hash_map(&tx1, 1, 0);
+        put_canonical_tx(&mut batch, 3, 0, &tx3);
+        batch.put_tx_index(5, 0, &cellbase_index(header(5).timestamp));
+        batch.put_tx_hash_map(&tx5, 5, 0);
+
+        batch.put_cell(&tx1, 0, &make_cell(400), 1);
+        batch.put_cell(&tx5, 0, &make_cell(200), 5);
+        batch.put_reorg_undo_log_by_block(
+            5,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: tx5.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: vec![0u8; 32],
+                    output_index: -1,
+                }],
+            }),
+        );
+
+        let val = AddrTxValue::new(0, true, true, 0);
+        batch.put_addr_tx(&addr_a, 1, 0, &tx1, &val);
+        batch.put_addr_tx_by_prefix(&addr_a[..20], 3, 0, &tx3, &val);
+        batch.put_addr_tx(&addr_a, 5, 0, &tx5, &val);
+        batch.put_addr_prefix_stats(&addr_a[..20], &AddrPrefixStats { txs_count: 1 });
+        batch.put_addr_balance(
+            &addr_a,
+            &AddressBalance {
+                balance: 600,
+                used_capacity: 600,
+                live_cells_count: 2,
+                total_cells_count: 2,
+                txs_count: 2,
+                first_seen_block: 1,
+                first_seen_tx: tx1.clone(),
+                last_activity_block: 5,
+                last_activity_tx: tx5.clone(),
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                hash_type: 1,
+                lock_live_cells_count: 2,
+                lock_owned_capacity_sum: 600,
+                lock_owned_knowledge_sum: 600,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 5, &header(5).hash, 3, 2, 0);
+
+        let cell_key = keys::encode_outpoint(&tx1, 0);
+        let cell_before = store.get_cf(store.cf_cells(), &cell_key).unwrap();
+        assert!(
+            cell_before.is_some(),
+            "fixture must seed a CF_CELLS payload"
+        );
+
+        store.rollback_to_block(4).unwrap();
+
+        let ab = store.get_addr_balance(&addr_a).unwrap().unwrap();
+        assert_eq!(ab.txs_count, 1);
+        assert_eq!(
+            (ab.last_activity_block, ab.last_activity_tx.clone()),
+            (1, tx1.clone()),
+            "last_activity must be repaired from cell participation only, never from the \
+             block-3 prefix (named-only) row"
+        );
+        // The named-only row itself is below the fork point and survives.
+        assert_eq!(
+            store
+                .list_addr_txs_by_prefix_recent(&addr_a[..20], 10, None)
+                .unwrap()
+                .into_iter()
+                .map(|(block, idx, hash, _)| (block, idx, hash))
+                .collect::<Vec<_>>(),
+            vec![(3, 0, tx3.clone())]
+        );
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &cell_key).unwrap(),
+            cell_before,
+            "append-only CF_CELLS payload bytes must be unchanged by rollback"
+        );
+    }
+
     /// Same defect class as `test_rollback_deletes_addr_txs_without_scanning_whole_cf`,
     /// in the CF that became the next bottleneck once addr_txs was fixed:
     /// deleting rolled-back token transfers iterated all of CF_TOKEN_TRANSFERS
@@ -10055,8 +10110,18 @@ mod tests {
                 ..Default::default()
             },
         );
+        // Block 2 created the two "drop" entities; their writers recorded it.
+        record_creations_for_undo(
+            &mut batch,
+            2,
+            &[
+                (crate::store::CF_SPORE_DATA, spore_drop_id.clone()),
+                (crate::store::CF_MNFT_DATA, object_drop_id.clone()),
+            ],
+        );
         batch.commit().unwrap();
 
+        store.rollback_via_undo_log(&store, 1).unwrap();
         store.rollback_to_block(1).unwrap();
 
         assert!(store.get_spore(&spore_keep_id).unwrap().is_some());
@@ -11834,10 +11899,12 @@ mod tests {
         seed_sync_status(store, 5, &[5u8; 32], 0, 0, 0);
     }
 
-    /// Rollback cleanup of an identity's outpoint rows scans the reverse index
-    /// by id prefix. With variable-width ids, a short id's prefix also matches
+    /// With variable-width ids, a short id's reverse-index prefix also matches
     /// a longer id that starts with the same bytes — so rolling one back must
-    /// never delete the other's rows, in either direction.
+    /// never delete the other's rows, in either direction. The rows of a
+    /// rolled-back identity are removed by undo replay, key by key, exactly as
+    /// its writer recorded them; the rollback's repair scan no longer deletes
+    /// anything by prefix.
     #[test]
     fn identity_rollback_outpoint_cleanup_does_not_alias_between_short_and_long_ids() {
         use crate::types::{IdentityEntry, IdentityExtra, IdentityStandard};
@@ -11905,6 +11972,29 @@ mod tests {
         batch.commit().unwrap();
         seed_sync_status(&store, 160, &[160u8; 32], 0, 0, 0);
 
+        // Block 150 created `short_a` and `long_b` and their outpoint rows.
+        let created = |id: &[u8], tx: &[u8; 32]| {
+            vec![
+                (crate::store::CF_IDENTITY_DATA, id.to_vec()),
+                (
+                    crate::store::CF_STATS_SPORE,
+                    keys::encode_spore_outpoint_key(tx, 0).to_vec(),
+                ),
+                (
+                    crate::store::CF_STATS_SPORE,
+                    keys::encode_spore_outpoint_by_id_key(id, tx, 0).to_vec(),
+                ),
+            ]
+        };
+        {
+            let mut batch = StoreBatch::new(&store);
+            let mut rows = created(&short_a, &short_a_tx);
+            rows.extend(created(&long_b, &long_b_tx));
+            record_creations_for_undo(&mut batch, 150, &rows);
+            batch.commit().unwrap();
+        }
+
+        store.rollback_via_undo_log(&store, 120).unwrap();
         store.rollback_to_block(120).unwrap();
 
         // Rolled-back identities are gone, together with their outpoint rows.
@@ -12008,5 +12098,384 @@ mod tests {
             bincode::serialize(&expected).unwrap(),
             "a date no rolled-back block touched must be left exactly as written"
         );
+    }
+
+    /// A `.cell` identity as the forward writers persist it, for rollback
+    /// fixtures that must seed a name and (optionally) its parent.
+    fn dotcell_identity(
+        label: &str,
+        created_at_block: i64,
+        parent_id: Option<[u8; 20]>,
+    ) -> IdentityEntry {
+        IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some(format!("{label}.cell")),
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![created_at_block as u8; 32],
+            extra: IdentityExtra::DotCell {
+                label: label.to_string(),
+                namespace_args: [0x5A; 20],
+                layout_version: 3,
+                expired_at: 1_900_000_000,
+                owner_hash20: [0x0E; 20],
+                manager_hash20: [0x0E; 20],
+                next_id: [0; 20],
+                records_hash: [0; 32],
+                records: Vec::new(),
+                parent_id,
+            },
+        }
+    }
+
+    fn identity_by_collection_rows(store: &CkbadgerStore) -> std::collections::BTreeSet<Vec<u8>> {
+        store
+            .iterator_cf(store.cf_identity_by_collection(), IteratorMode::Start)
+            .map(|item| item.unwrap().0.to_vec())
+            .collect()
+    }
+
+    /// Review #2: stage 10 range-deletes `CF_IDENTITY_BY_COLLECTION` and must
+    /// rebuild exactly what the forward writers (`db/writer/dotcell.rs`, bulk
+    /// `owners/object.rs`) write — the sentinel row for every surviving
+    /// identity AND the `.cell` parent->child row for every surviving sub-name
+    /// (live or not; read paths filter liveness). A rolled-back sub-name emits
+    /// neither.
+    #[test]
+    fn rollback_rebuilds_dotcell_parent_child_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let alice_id = [0xA1u8; 20];
+        let child_id = [0xB2u8; 20];
+        let alice = dotcell_identity("alice", 10, None);
+        let child = dotcell_identity("shop.alice", 12, Some(alice_id));
+        // A recycled sub-name registered before either fork point: the index
+        // lists every child ever registered, so its parent row stays.
+        let recycled_id = [0xC3u8; 20];
+        let recycled = IdentityEntry {
+            is_live: false,
+            ..dotcell_identity("old.alice", 5, Some(alice_id))
+        };
+
+        let sentinel_row =
+            |id: &[u8]| keys::encode_identity_by_collection_key(&DOTCELL_SENTINEL_COLLECTION, id);
+        let parent_row =
+            |id: &[u8]| keys::encode_identity_by_collection_key(&keys::pad_id_32(&alice_id), id);
+
+        let cell_key = keys::encode_outpoint(&[0xAB; 32], 0);
+        {
+            let mut batch = StoreBatch::new(&store);
+            // Blocks 1..=16 inside one day, so both rollback targets have a header.
+            for n in 1..=16i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: 1_790_038_800_000 + n * 10_000,
+                        epoch_number: 11,
+                        epoch_index: (n - 1) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 0,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.put_identity(&alice_id, &alice);
+            batch.put_identity(&child_id, &child);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &alice_id);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &child_id);
+            batch.put_identity_by_collection(&keys::pad_id_32(&alice_id), &child_id);
+            batch.put_identity(&recycled_id, &recycled);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &recycled_id);
+            batch.put_identity_by_collection(&keys::pad_id_32(&alice_id), &recycled_id);
+            batch.put_cell_raw_key(
+                &cell_key,
+                &LiveCellInfo {
+                    capacity: 10_000_000_000,
+                    lock_script_hash: vec![0xC1; 32],
+                    lock_code_hash: vec![0xC2; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0xC3; 20],
+                    type_script_hash: None,
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 6_100_000_000,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+                2,
+            );
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 11,
+                start_block: 1,
+                end_block: Some(16),
+                blocks_count: 16,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(1_790_038_810_000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+        let cell_before = store.get_cf(store.cf_cells(), &cell_key).unwrap();
+        assert!(
+            cell_before.is_some(),
+            "fixture must seed a CF_CELLS payload"
+        );
+
+        // Both names survive: every forward row must come back.
+        store.rollback_to_block(15).unwrap();
+        let expected: std::collections::BTreeSet<Vec<u8>> = [
+            sentinel_row(&alice_id),
+            sentinel_row(&child_id),
+            sentinel_row(&recycled_id),
+            parent_row(&child_id),
+            parent_row(&recycled_id),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            identity_by_collection_rows(&store),
+            expected,
+            "a rollback that orphans no .cell tx must rebuild the sentinel rows and the \
+             parent->child row the forward writers wrote"
+        );
+        assert_eq!(
+            store
+                .list_identity_ids_by_collection(&keys::pad_id_32(&alice_id), None, 200)
+                .unwrap(),
+            vec![child_id.to_vec(), recycled_id.to_vec()],
+            "the parent's child list (live or not) must survive the rollback"
+        );
+
+        // The sub-name's registration block is orphaned: it and its parent row
+        // go. Its writer recorded the creation; undo replay removes the entity
+        // and stage 10 then rebuilds the index without it.
+        {
+            let mut batch = StoreBatch::new(&store);
+            record_creations_for_undo(
+                &mut batch,
+                12,
+                &[(crate::store::CF_IDENTITY_DATA, child_id.to_vec())],
+            );
+            batch.commit().unwrap();
+        }
+        store.rollback_via_undo_log(&store, 11).unwrap();
+        store.rollback_to_block(11).unwrap();
+        assert!(store.get_identity(&child_id).unwrap().is_none());
+        assert!(store.get_identity(&alice_id).unwrap().is_some());
+        let expected: std::collections::BTreeSet<Vec<u8>> = [
+            sentinel_row(&alice_id),
+            sentinel_row(&recycled_id),
+            parent_row(&recycled_id),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            identity_by_collection_rows(&store),
+            expected,
+            "a rolled-back sub-name must emit neither its sentinel row nor its parent row"
+        );
+
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &cell_key).unwrap(),
+            cell_before,
+            "append-only CF_CELLS payload bytes must be unchanged by rollback"
+        );
+    }
+
+    /// The undo entries a live writer records when block `block` CREATES each
+    /// `(cf, key)` row: pre-image `None`, one `Object`-scope sequence number
+    /// each. Rollback fixtures that remove rows above the fork point must go
+    /// through these, because undo replay is the only owner of entity rows.
+    fn record_creations_for_undo(batch: &mut StoreBatch<'_>, block: i64, rows: &[(&str, Vec<u8>)]) {
+        for (local, (cf_name, key)) in rows.iter().enumerate() {
+            batch.put_reorg_undo_log_by_block(
+                block,
+                keys::UndoSeqScope::Object.seq_base() + local as u64,
+                &UndoLogEntry::KeyMutation {
+                    target_store: UndoLogStoreTarget::Domain,
+                    cf_name: (*cf_name).to_string(),
+                    key: key.clone(),
+                    previous_value: None,
+                },
+            );
+        }
+    }
+
+    /// Headers for blocks `1..=last` inside one day and one epoch, plus that
+    /// epoch's row, so any rollback target in range has what the header and
+    /// epoch stages need.
+    fn seed_single_epoch_chain(store: &CkbadgerStore, last: i64) {
+        let mut batch = StoreBatch::new(store);
+        for n in 1..=last {
+            batch.put_block_header(
+                n,
+                &CachedBlockHeader {
+                    hash: {
+                        let mut h = vec![0u8; 32];
+                        h[0] = n as u8;
+                        h
+                    },
+                    parent_hash: vec![0u8; 32],
+                    timestamp: 1_790_038_800_000 + n * 10_000,
+                    epoch_number: 11,
+                    epoch_index: (n - 1) as i32,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 0,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0x1a08a97e,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        seed_epoch_row(
+            store,
+            &EpochStats {
+                epoch_number: 11,
+                start_block: 1,
+                end_block: Some(last),
+                blocks_count: i32::try_from(last).unwrap(),
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(1_790_038_810_000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+    }
+
+    /// Task 5.6 (R6): undo replay is the ONE owner of identity / spore / mNFT
+    /// entity rows. Every entry point replays the undo log before
+    /// `rollback_to_block`, so an entity created above the fork point that is
+    /// still there means a writer recorded no pre-image for it. The repair
+    /// scan used to delete it silently — a second owner that hid exactly that
+    /// bug. It must refuse, naming the entity, and change nothing; once the
+    /// pre-image the writer owes is in the log, the same rollback succeeds.
+    #[test]
+    fn rollback_refuses_an_entity_that_survived_undo_replay() {
+        let spore = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0x66; 32]),
+            name: Some("late cluster".to_string()),
+            description: None,
+            is_live: true,
+            created_at_block: 5,
+            created_at_tx: vec![0x55; 32],
+            extra: ObjectExtra::SporeCluster,
+        };
+        let mnft = ObjectEntry {
+            standard: ObjectStandard::MnftToken,
+            collection_id: Some(vec![0x44; 24]),
+            token_id: Some(vec![0x57; 28]),
+            owner_lock_hash: Some(vec![0x66; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 5,
+            created_at_tx: vec![0x55; 32],
+            extra: ObjectExtra::MnftToken {
+                token_index: 1,
+                characteristic: vec![],
+                configure: 0,
+                state: 0,
+            },
+        };
+        let identity = dotcell_identity("late", 5, None);
+
+        let cases: [(&str, Vec<u8>, &str, &str); 3] = [
+            (
+                crate::store::CF_IDENTITY_DATA,
+                vec![0xD5; 20],
+                "dotcell",
+                "identity_id",
+            ),
+            (
+                crate::store::CF_SPORE_DATA,
+                vec![0xC5; 32],
+                "spore_cluster",
+                "spore_id",
+            ),
+            (
+                crate::store::CF_MNFT_DATA,
+                vec![0x57; 28],
+                "mnft",
+                "object_id",
+            ),
+        ];
+        for (cf_name, id, standard, id_label) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+            seed_single_epoch_chain(&store, 5);
+            {
+                let mut batch = StoreBatch::new(&store);
+                match cf_name {
+                    crate::store::CF_IDENTITY_DATA => batch.put_identity(&id, &identity),
+                    crate::store::CF_SPORE_DATA => batch.put_spore(&id, &spore),
+                    _ => batch.put_mnft(&id, &mnft),
+                }
+                batch.commit().unwrap();
+            }
+            let cf = store.cf_handle_by_name(cf_name).unwrap();
+            let before = store.get_cf(cf, &id).unwrap();
+            assert!(before.is_some(), "{cf_name}: fixture must seed the entity");
+
+            // No undo entry: the writer "forgot" its pre-image.
+            let err = store
+                .rollback_to_block(4)
+                .expect_err("an entity above the fork point must not survive undo replay");
+            let message = format!("{err:#}");
+            for needle in [
+                "missing undo pre-image from writer",
+                &format!("{id_label}=0x{}", bytes_to_hex(&id)),
+                &format!("standard={standard}"),
+                "created_at_block=5",
+                "rollback_to=4",
+            ] {
+                assert!(
+                    message.contains(needle),
+                    "{cf_name}: `{needle}` in {message}"
+                );
+            }
+            assert_eq!(
+                store.get_cf(cf, &id).unwrap(),
+                before,
+                "{cf_name}: a refused rollback deletes nothing"
+            );
+
+            // The pre-image the writer owes: the key did not exist before block 5.
+            {
+                let mut batch = StoreBatch::new(&store);
+                record_creations_for_undo(&mut batch, 5, &[(cf_name, id.clone())]);
+                batch.commit().unwrap();
+            }
+            store.rollback_via_undo_log(&store, 4).unwrap();
+            store.rollback_to_block(4).unwrap();
+            assert_eq!(store.get_cf(cf, &id).unwrap(), None, "{cf_name}");
+        }
     }
 }

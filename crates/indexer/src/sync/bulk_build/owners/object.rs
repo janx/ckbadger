@@ -975,6 +975,11 @@ impl ObjectOwner {
                 )),
             })
             .transpose()?;
+        let holding_starts_here = crate::db::writer::dotcell::dotcell_holding_starts_here(
+            existing.as_ref(),
+            name,
+            tx.timestamp_ms,
+        )?;
 
         self.identities.insert(
             id.clone(),
@@ -983,14 +988,14 @@ impl ObjectOwner {
                 owner_lock_hash: None,
                 name: Some(format!("{}.cell", name.label)),
                 is_live: true,
-                created_at_block: existing
-                    .as_ref()
-                    .map(|entry| entry.created_at_block)
-                    .unwrap_or(tx.block_number),
-                created_at_tx: existing
-                    .as_ref()
-                    .map(|entry| entry.created_at_tx.clone())
-                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                created_at_block: match existing.as_ref() {
+                    Some(entry) if !holding_starts_here => entry.created_at_block,
+                    _ => tx.block_number,
+                },
+                created_at_tx: match existing.as_ref() {
+                    Some(entry) if !holding_starts_here => entry.created_at_tx.clone(),
+                    _ => tx.tx_hash.to_vec(),
+                },
                 extra: IdentityExtra::DotCell {
                     label: name.label.clone(),
                     namespace_args: facts.namespace_args,

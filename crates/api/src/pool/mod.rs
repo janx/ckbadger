@@ -19,6 +19,8 @@ pub mod snapshot;
 pub mod source;
 
 #[cfg(test)]
+mod fake;
+#[cfg(test)]
 mod tests;
 
 pub use mirror::{
@@ -27,14 +29,14 @@ pub use mirror::{
 pub use refresh::{refresh_pool_mirror_loop, POOL_MIRROR_TASK};
 pub use resolve::{
     resolve_pool_tx, resolve_previous_outputs, NoPoolParents, OutPointKey, PoolParentCells,
-    ResolvedCell, ResolvedInput, ResolvedPoolTx,
+    ResolvedCell, ResolvedInput, ResolvedPoolTx, TX_FETCH_CONCURRENCY,
 };
 pub use snapshot::{
     pool_timestamp_rfc3339, Interpretation, InterpretationReasonResponse, InterpretationResponse,
-    MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot, PoolStatus,
-    PoolSummaryResponse, PoolTxRecord,
+    MirrorStatus, PartialReason, PoolEntryError, PoolLockScript, PoolParticipant, PoolSnapshot,
+    PoolStatus, PoolSummaryResponse, PoolTxRecord,
 };
 pub use source::{
-    FakePoolSource, HttpPoolSource, NodeLiveCell, NodeScript, NodeTxStatus, PoolEntryMeta,
-    PoolSource, PoolTxLookup, RawTxPool, TxPoolInfo,
+    HttpPoolSource, NodeHeader, NodeTxStatus, PoolEntryMeta, PoolSource, PoolTxLookup, RawTxPool,
+    TxPoolInfo,
 };

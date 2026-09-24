@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { render, screen } from '@/__tests__/utils/test-utils';
 import {
   PoolStatusBadge,
   PoolInterpretationNotice,
+  PoolTruncatedNotice,
   PoolUnavailableNotice,
   TimeInPool,
   poolStatusLabel,
@@ -46,11 +47,25 @@ describe('PoolInterpretationNotice', () => {
       <PoolInterpretationNotice
         interpretation={{
           status: 'partial',
-          reasons: [{ code: 'dao_compensation_unavailable' }],
+          reasons: [{ code: 'unresolved_input' }],
         }}
       />
     );
-    expect(screen.getByText(/DAO compensation not yet known/)).toBeInTheDocument();
+    expect(screen.getByText('partial: an input is not yet resolvable')).toBeInTheDocument();
+  });
+
+  it('shows a code it has no wording for verbatim rather than dropping it', () => {
+    // DAO phase-2 compensation is computed exactly now, so the API no longer
+    // sends `dao_compensation_unavailable`; were it to, it is not special.
+    render(
+      <PoolInterpretationNotice
+        interpretation={{
+          status: 'partial',
+          reasons: [{ code: 'dao_compensation_unavailable' }, { code: 'x', detail: 'y' }],
+        }}
+      />
+    );
+    expect(screen.getByText('partial: dao_compensation_unavailable; x (y)')).toBeInTheDocument();
   });
 
   it('names the outpoint it could not resolve', () => {
@@ -70,5 +85,12 @@ describe('PoolUnavailableNotice', () => {
   it('says the view is unavailable rather than implying an empty pool', () => {
     render(<PoolUnavailableNotice />);
     expect(screen.getByText(/pool view unavailable/i)).toBeInTheDocument();
+  });
+});
+
+describe('PoolTruncatedNotice', () => {
+  it('says the unconfirmed segment is incomplete', () => {
+    render(<PoolTruncatedNotice />);
+    expect(screen.getByText('More unconfirmed transactions than shown.')).toBeInTheDocument();
   });
 });
