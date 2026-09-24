@@ -4223,3 +4223,131 @@ async fn test_assets_dotcell_items_listing() {
     );
     assert_eq!(rows[0]["outputIndex"], 1);
 }
+
+/// `.cell` collection activities are written to the identity CF by both
+/// indexer paths; the collection feed must read them from there. The sentinel
+/// was once missing from the identity set, so this feed read the object CF and
+/// was always empty while the detail reported `activitiesCount > 0`.
+#[tokio::test]
+async fn dotcell_collection_activities_are_served_from_the_identity_cf() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    let register_tx = vec![0xC7; 32];
+    let block_hash = vec![0xB7; 32];
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_tx_hash_map(&register_tx, 700, 0);
+        batch.put_tx_index(
+            700,
+            0,
+            &TxIndexEntry {
+                is_cellbase: false,
+                timestamp: 1_700_000_700,
+                inputs_count: 1,
+                outputs_count: 2,
+                fee: 0,
+                tx_size: 400,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_block_header(
+            700,
+            &CachedBlockHeader {
+                hash: block_hash.clone(),
+                parent_hash: vec![0u8; 32],
+                timestamp: 1_700_000_700,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+        batch.put_identity_collection_activity(
+            &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+            700,
+            0,
+            &ObjectCollectionActivityEntry {
+                tx_hash: register_tx.clone(),
+                block_hash,
+                timestamp_ms: 1_700_000_700,
+                actions: vec![AssetAction::Mint],
+            },
+        );
+        batch.commit().unwrap();
+    }
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for uri in [
+        "/api/v1/assets/identities/dotcell/activities",
+        "/api/v1/assets/objects/dotcell/activities",
+    ] {
+        let (status, body) = dotcell_get(app.clone(), uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        let rows = body["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{uri}: {body}");
+        assert_eq!(
+            rows[0]["txHash"],
+            format!("0x{}", hex::encode(&register_tx))
+        );
+        assert_eq!(rows[0]["blockNumber"], 700);
+        assert_eq!(rows[0]["actions"][0], "mint");
+    }
+}
+
+/// The `.cell` collection page's capacity chart asks for
+/// `/assets/objects/dotcell/charts/capacity-history`; the alias must resolve to
+/// the `.cell` sentinel and the chart read its daily rows.
+#[tokio::test]
+async fn dotcell_capacity_history_chart_resolves_the_alias() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    store
+        .put_mnft_daily_delta(
+            &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 240_00000000,
+                owned_knowledge_delta: 200_00000000,
+            },
+        )
+        .unwrap();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for alias in ["dotcell", "%2Ecell", "DOTCELL"] {
+        let (status, body) = dotcell_get(
+            app.clone(),
+            &format!("/api/v1/assets/objects/{alias}/charts/capacity-history"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{alias}: {body}");
+        assert_eq!(body["title"], ".cell Capacity History", "{alias}");
+        assert_eq!(body["data"][0]["date"], "2024-01-15", "{alias}");
+        assert_eq!(body["data"][0]["values"]["used"], "20000000000", "{alias}");
+        assert_eq!(body["data"][0]["values"]["unused"], "4000000000", "{alias}");
+    }
+}

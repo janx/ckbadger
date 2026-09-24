@@ -111,10 +111,13 @@ fn cached_object_collection_match(
 /// Mirrors `getIdentityCollectionHref` / `getMnftClassDetailHref` in
 /// `frontend/lib/detail-routes.ts`.
 fn object_collection_href(standard: &str, collection_hex: &str) -> String {
+    if let Some(identity) = ckbadger_store::types::identity_alias(standard) {
+        return format!(
+            "/identities/{}",
+            ckbadger_store::types::identity_route_slug(identity)
+        );
+    }
     match standard {
-        "dotbit" => "/identities/dotbit".to_string(),
-        "did_ckb" => "/identities/did:ckb".to_string(),
-        "bit_cell" => format!("/identities/{}", collection_hex),
         "m-nft" => format!("/classes/{}", collection_hex),
         _ => format!("/objects/{}", collection_hex),
     }
@@ -1072,7 +1075,11 @@ mod tests {
         );
         assert_eq!(
             object_collection_href("bit_cell", "0xfeed"),
-            "/identities/0xfeed"
+            "/identities/bit-cell"
+        );
+        assert_eq!(
+            object_collection_href("dotcell", "0xfeed"),
+            "/identities/dotcell"
         );
         // Anything else keeps the object route (32-byte collections).
         let spore_collection = format!("0x{}", "cd".repeat(32));

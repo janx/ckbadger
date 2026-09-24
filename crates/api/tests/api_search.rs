@@ -676,3 +676,55 @@ async fn test_search_dotcell_name_hashes_to_direct_hit() {
         "a name nobody registered is not a hit: {json}"
     );
 }
+
+/// A `.cell` collection name hit links to the collection's own page — the same
+/// `/identities/{slug}` route every identity standard's hit uses — not to the
+/// `/objects/{id}` namespace that cannot address a sentinel.
+#[tokio::test]
+async fn dotcell_collection_hit_links_to_the_identities_route() {
+    let store = test_store();
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity_collection_aggregate(
+            &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+            &IdentityCollectionAggregate {
+                standard: IdentityStandard::DotCell,
+                name: Some(".cell".to_string()),
+                total_count: 3,
+                live_count: 3,
+                holders_count: 2,
+                activities_count: 3,
+            },
+        );
+        batch.commit().unwrap();
+    }
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/search?q=.cell")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let hit = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resultType"] == "object")
+        .unwrap_or_else(|| panic!("no collection hit: {json}"));
+    assert_eq!(
+        hit["id"],
+        format!(
+            "0x{}",
+            hex::encode(ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION)
+        )
+    );
+    assert_eq!(hit["url"], "/identities/dotcell");
+}

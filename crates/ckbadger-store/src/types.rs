@@ -820,14 +820,9 @@ impl IdentityStandard {
         }
     }
 
-    /// Sentinel collection key for this identity standard.
+    /// Sentinel collection key for this identity standard ([`identity_sentinel_for`]).
     pub fn sentinel_collection_id(&self) -> &'static [u8; 32] {
-        match self {
-            IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
-            IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
-            IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
-            IdentityStandard::DotCell => &DOTCELL_SENTINEL_COLLECTION,
-        }
+        identity_sentinel_for(*self)
     }
 }
 
@@ -841,6 +836,103 @@ pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection_________
 pub const DOTCELL_SENTINEL_COLLECTION: [u8; 32] = *b"dotcell_collection______________";
 /// Sentinel collection key for clusterless Spore objects (32 bytes).
 pub const SOLE_SPORES_SENTINEL_COLLECTION: [u8; 32] = *b"sole_spores_collection__________";
+
+// ── The identity-standard table ─────────────────────────────────────────────
+//
+// Every place that turns a sentinel, a URL alias or a route back into an
+// identity standard reads it from here. The table used to be retyped by hand at
+// each read site, and `.cell` was left out of three copies (its activity feed
+// read the object CF, its chart 400'd), so each per-standard property below is
+// an exhaustive `match` — a new variant cannot compile until every column has
+// its value — and the reverse lookups search [`IDENTITY_STANDARDS`].
+
+/// Every identity standard, once. The reverse lookups below search this list.
+pub const IDENTITY_STANDARDS: [IdentityStandard; 4] = [
+    IdentityStandard::DotBit,
+    IdentityStandard::BitCell,
+    IdentityStandard::DidCkb,
+    IdentityStandard::DotCell,
+];
+
+/// Position of a standard in [`IDENTITY_STANDARDS`]. The exhaustive match means
+/// a new variant stops the build here until it is placed in the list, and the
+/// const check below proves the list and the positions agree.
+const fn identity_standard_position(standard: IdentityStandard) -> usize {
+    match standard {
+        IdentityStandard::DotBit => 0,
+        IdentityStandard::BitCell => 1,
+        IdentityStandard::DidCkb => 2,
+        IdentityStandard::DotCell => 3,
+    }
+}
+
+const _: () = {
+    let mut index = 0;
+    while index < IDENTITY_STANDARDS.len() {
+        assert!(identity_standard_position(IDENTITY_STANDARDS[index]) == index);
+        index += 1;
+    }
+};
+
+/// The sentinel collection id an identity standard's collection rows are keyed by.
+pub fn identity_sentinel_for(standard: IdentityStandard) -> &'static [u8; 32] {
+    match standard {
+        IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
+        IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
+        IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
+        IdentityStandard::DotCell => &DOTCELL_SENTINEL_COLLECTION,
+    }
+}
+
+/// The identity standard a collection id is the sentinel of, or `None` for a
+/// collection that is not an identity sentinel (an mNFT class, a cluster, …).
+pub fn identity_sentinel_standard(collection_id: &[u8]) -> Option<IdentityStandard> {
+    IDENTITY_STANDARDS
+        .into_iter()
+        .find(|standard| identity_sentinel_for(*standard).as_slice() == collection_id)
+}
+
+/// The URL aliases that name a standard's collection, lowercase. The route slug
+/// and the wire value ([`IdentityStandard::asset_standard`]) are always among them.
+pub fn identity_aliases(standard: IdentityStandard) -> &'static [&'static str] {
+    match standard {
+        IdentityStandard::DotBit => &["dotbit", ".bit"],
+        IdentityStandard::BitCell => &["bit_cell", "bit-cell", ".bit-cell"],
+        IdentityStandard::DidCkb => &["did:ckb", "did_ckb"],
+        IdentityStandard::DotCell => &["dotcell", ".cell"],
+    }
+}
+
+/// Resolve a URL alias (case-insensitive) to its identity standard.
+pub fn identity_alias(raw: &str) -> Option<IdentityStandard> {
+    let normalized = raw.to_ascii_lowercase();
+    IDENTITY_STANDARDS
+        .into_iter()
+        .find(|standard| identity_aliases(*standard).contains(&normalized.as_str()))
+}
+
+/// The frontend route segment of a standard's collection page:
+/// `/identities/{slug}`. A route segment, not the wire value — `bit_cell` on the
+/// wire is `bit-cell` in a URL.
+pub fn identity_route_slug(standard: IdentityStandard) -> &'static str {
+    match standard {
+        IdentityStandard::DotBit => "dotbit",
+        IdentityStandard::BitCell => "bit-cell",
+        IdentityStandard::DidCkb => "did:ckb",
+        IdentityStandard::DotCell => "dotcell",
+    }
+}
+
+/// The name a standard's collection is shown under when its aggregate carries
+/// none.
+pub fn identity_display_name(standard: IdentityStandard) -> &'static str {
+    match standard {
+        IdentityStandard::DotBit => ".bit",
+        IdentityStandard::BitCell => ".bit Cell",
+        IdentityStandard::DidCkb => "did:ckb",
+        IdentityStandard::DotCell => ".cell",
+    }
+}
 
 // ── `.cell` (DotCell) name cell types ───────────────────────────────────────
 //
@@ -2634,6 +2726,55 @@ mod tests {
         assert_eq!(IdentityStandard::DotBit.as_str(), "dotbit");
         assert_eq!(IdentityStandard::BitCell.as_str(), "bit_cell");
         assert_eq!(IdentityStandard::DidCkb.as_str(), "did_ckb");
+    }
+
+    /// Every standard has a sentinel, an alias set and a route slug, and every
+    /// reverse lookup lands back on the standard it started from. `.cell` was
+    /// once missing from three hand-typed copies of this table.
+    #[test]
+    fn every_identity_standard_has_sentinel_alias_and_slug() {
+        let mut sentinels = std::collections::HashSet::new();
+        for standard in IDENTITY_STANDARDS {
+            let sentinel = identity_sentinel_for(standard);
+            assert!(sentinels.insert(*sentinel), "{standard:?}: sentinel reused");
+            assert_eq!(
+                identity_sentinel_standard(sentinel),
+                Some(standard),
+                "{standard:?}: sentinel does not map back"
+            );
+            assert_eq!(standard.sentinel_collection_id(), sentinel);
+
+            assert!(!identity_aliases(standard).is_empty(), "{standard:?}");
+            for alias in identity_aliases(standard) {
+                assert_eq!(identity_alias(alias), Some(standard), "alias {alias}");
+                assert_eq!(
+                    identity_alias(&alias.to_ascii_uppercase()),
+                    Some(standard),
+                    "alias {alias} is case-insensitive"
+                );
+            }
+            assert_eq!(
+                identity_alias(identity_route_slug(standard)),
+                Some(standard),
+                "{standard:?}: the route slug is an alias"
+            );
+            assert_eq!(
+                identity_alias(standard.asset_standard()),
+                Some(standard),
+                "{standard:?}: the wire value is an alias"
+            );
+            assert!(!identity_display_name(standard).is_empty());
+        }
+        assert_eq!(identity_sentinel_standard(&[0x11; 32]), None);
+        assert_eq!(
+            identity_sentinel_standard(&SOLE_SPORES_SENTINEL_COLLECTION),
+            None,
+            "the Sole Spores sentinel is an object collection"
+        );
+        assert_eq!(identity_alias("m-nft"), None);
+        assert_eq!(identity_route_slug(IdentityStandard::BitCell), "bit-cell");
+        assert_eq!(identity_route_slug(IdentityStandard::DidCkb), "did:ckb");
+        assert_eq!(identity_alias(".cell"), Some(IdentityStandard::DotCell));
     }
 
     #[test]

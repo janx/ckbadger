@@ -4,8 +4,8 @@ use axum::{
     Json, Router,
 };
 use ckbadger_store::types::{
-    LockScriptEntry, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION,
+    identity_alias, identity_sentinel_for, identity_sentinel_standard, LockScriptEntry,
+    DOTCELL_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 use serde::{Deserialize, Serialize};
@@ -30,31 +30,17 @@ use crate::AppState;
 
 /// Decode an identity collection ID from a URL path segment.
 ///
-/// Accepts human-readable aliases for DotBit, `.bit Cell`, and did:ckb
-/// and hex-encoded sentinel IDs. Rejects any collection ID that does not
-/// resolve to an identity sentinel.
+/// Accepts every standard's aliases from the store's identity table and the
+/// hex-encoded sentinel IDs. Rejects any collection ID that does not resolve to
+/// an identity sentinel.
 fn decode_identity_collection_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
-    let normalized = raw.to_ascii_lowercase();
-    if normalized == "dotbit" || normalized == ".bit" {
-        return Ok(DOTBIT_SENTINEL_COLLECTION.to_vec());
-    }
-    if normalized == "did:ckb" || normalized == "did_ckb" {
-        return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
-    }
-    if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
-        return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
-    }
-    if matches!(normalized.as_str(), "dotcell" | ".cell" | "cell") {
-        return Ok(DOTCELL_SENTINEL_COLLECTION.to_vec());
+    if let Some(standard) = identity_alias(raw) {
+        return Ok(identity_sentinel_for(standard).to_vec());
     }
     let bytes = parse_asset_id_max32(raw, "identity collection ID")?;
-    if bytes != DOTBIT_SENTINEL_COLLECTION
-        && bytes != BIT_CELL_SENTINEL_COLLECTION
-        && bytes != DID_CKB_SENTINEL_COLLECTION
-        && bytes != DOTCELL_SENTINEL_COLLECTION
-    {
+    if identity_sentinel_standard(&bytes).is_none() {
         return Err(ApiError::bad_request(
             "Collection ID is not an identity collection",
         ));
@@ -1350,6 +1336,9 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::types::{
+        BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    };
 
     #[test]
     fn test_decode_identity_collection_id_aliases() {
