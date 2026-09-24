@@ -8235,6 +8235,80 @@ mod tests {
             );
         }
 
+        /// `dotcell_rollback_blocks` plus block 103, which consumes the ring
+        /// root and re-creates it byte-identical.
+        fn ring_root_recreation_blocks() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_rollback_blocks();
+            let recreate_root = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 0)],
+                outputs: vec![name_output(192_00000000 - 100_000)],
+                outputs_data: vec![fixture::T1_RING_ROOT.outputs[0].data.to_string()],
+                witnesses: vec![fixture::T1_RING_ROOT.witnesses[0].to_string()],
+            };
+            blocks.push(block(
+                103,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc3, 100_000_000), recreate_root],
+            ));
+            blocks
+        }
+
+        /// 5.2: bulk sees the consumed root's state, live does not; the tx must
+        /// still mean the same thing on both paths (ring infrastructure: no
+        /// action, no feed entry, no participant row).
+        #[tokio::test]
+        async fn ring_root_recreation_indexes_identically_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = ring_root_recreation_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let live_actions = store
+                .get_tx_actions(103, 1, &[0xe7u8; 32])
+                .unwrap()
+                .expect("live tx actions");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xe7u8; 32])
+                .expect("bulk tx actions");
+            assert!(
+                bulk_actions
+                    .protocol_actions
+                    .iter()
+                    .all(|a| a.protocol != "dotcell"),
+                "the ring root emits no .cell action: {:?}",
+                bulk_actions.protocol_actions
+            );
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap()
+            );
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref()).unwrap();
+            assert_eq!(
+                live.collection_activities,
+                bulk.dotcell.collection_activities
+            );
+            assert_eq!(live.identity_agg, bulk.dotcell.identity_agg);
+            assert_eq!(live.ring, bulk.dotcell.ring);
+        }
+
         /// A name cell's data from parts, with an empty records payload.
         fn synthetic_name_data(label: &str, owner: [u8; 20], expiry: u64) -> String {
             let mut data = vec![3u8];

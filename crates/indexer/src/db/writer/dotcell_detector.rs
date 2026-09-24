@@ -229,13 +229,21 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
         let transition = match (prev.get(&id), next.get(&id)) {
-            (None, Some(name)) if name.is_root() => DotCellTransition {
-                id,
-                label: String::new(),
-                kind: DotCellTransitionKind::RingRoot,
-                changes: Vec::new(),
-                manager_changed_to: None,
-            },
+            // The ring root is protocol infrastructure on either side. The two
+            // sync paths do not see the same input side for it (bulk carries
+            // the consumed root's facts, live has no identity to rebuild them
+            // from), so its meaning must not depend on that side at all.
+            (previous, name)
+                if previous.is_some_and(|p| p.is_root()) || name.is_some_and(|n| n.is_root()) =>
+            {
+                DotCellTransition {
+                    id,
+                    label: String::new(),
+                    kind: DotCellTransitionKind::RingRoot,
+                    changes: Vec::new(),
+                    manager_changed_to: None,
+                }
+            }
             (None, Some(name)) => DotCellTransition {
                 id,
                 label: name.label.clone(),
@@ -1327,6 +1335,41 @@ mod tests {
             assert!(actions_for(f).is_empty());
             assert!(named_for(f).is_empty());
         }
+    }
+
+    /// The ring root is infrastructure on EITHER side of a transaction. Bulk
+    /// hands the classifier the consumed root's state; live cannot (the root
+    /// is no identity, so there is no stored name to rebuild it from). Both
+    /// must still read the same thing: `RingRoot`, which emits nothing.
+    #[test]
+    fn a_consumed_ring_root_is_ring_root_whatever_the_input_view_holds() {
+        let root_cell = |as_input: bool| {
+            let mut cell = OwnedCell::from_fixture(&fixture::M1_RING_ROOT.outputs[0]);
+            if !as_input {
+                cell.dotcell = None;
+            }
+            cell
+        };
+        // Re-created byte-identical, with the input view carrying the root
+        // (bulk) and without it (live).
+        for input_view_has_root in [true, false] {
+            let owned = synthetic_tx(vec![root_cell(input_view_has_root)], vec![root_cell(false)]);
+            let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+            assert_eq!(ts.len(), 1);
+            assert_eq!(
+                ts[0].kind,
+                DotCellTransitionKind::RingRoot,
+                "input view has root: {input_view_has_root}"
+            );
+            assert!(protocol_actions_for(&ts).is_empty());
+            assert!(named_participants_for(&ts).is_empty());
+        }
+        // Consumed and not re-created: still infrastructure, not a recycle.
+        let owned = synthetic_tx(vec![root_cell(true)], vec![]);
+        let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+        assert_eq!(ts[0].kind, DotCellTransitionKind::RingRoot);
+        assert!(protocol_actions_for(&ts).is_empty());
+        assert!(named_participants_for(&ts).is_empty());
     }
 
     // ── Synthetic shapes the chain has not produced yet ────────────────────
