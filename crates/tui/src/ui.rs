@@ -963,9 +963,10 @@ fn header_right_line(version: &str, stale_secs: Option<i64>, clock_text: &str) -
 ///
 /// The heartbeat is written on every 3 s progress tick (in the same batch as
 /// sync progress), so it is the single source of "is the writer alive". Memory
-/// stats are NOT: the sweep behind them reads ~8 properties across all 60 CFs
-/// of both chain stores, so live sync resamples them on a much slower cadence
-/// and their `updated_at` says nothing about liveness.
+/// stats are NOT: the sweep behind them reads ~8 properties across every
+/// column family of both chain stores (`DOMAIN_CFS` + `APPEND_CFS`), so live
+/// sync resamples them on a much slower cadence and their `updated_at` says
+/// nothing about liveness.
 ///
 /// `None` means unknown — no diagnostics yet, or no heartbeat ever recorded.
 fn stale_age_secs(runtime_diag: Option<&RuntimeDiagData>) -> Option<i64> {
@@ -6757,7 +6758,7 @@ mod tests {
 
     /// Liveness comes from the runtime heartbeat, which the indexer writes on
     /// every 3 s tick. Memory stats are resampled far less often in live sync
-    /// (the sweep reads ~8 properties across all 60 CFs of both stores), so
+    /// (the sweep reads ~8 properties across every CF of both chain stores), so
     /// reading THEIR age as liveness painted a healthy indexer amber and logged
     /// a warning every ~30 s.
     #[test]
@@ -7363,6 +7364,32 @@ mod tests {
         assert!(text.contains("/data/append-only"));
         assert!(text.contains("CKB RocksDB"));
         assert!(text.contains("/ckb/data/db"));
+    }
+
+    /// The store panel's column-family line is derived from the store's own CF
+    /// lists, so a CF added to or removed from a chain store shows up here
+    /// without anyone editing a number.
+    #[test]
+    fn system_store_path_lines_derive_the_column_family_counts_from_the_store() {
+        let lines = system_store_path_lines(
+            std::path::Path::new("/data/domain"),
+            std::path::Path::new("/data/append-only"),
+            std::path::Path::new("/ckb/data/db"),
+        );
+        let text = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<String>>()
+            .join(" ");
+        let (domain, append_only) = (ckbadger_store::DOMAIN_CFS, ckbadger_store::APPEND_CFS);
+        let expected = format!(
+            "{} domain + {} append-only = {}",
+            domain.len(),
+            append_only.len(),
+            domain.len() + append_only.len()
+        );
+        assert!(text.contains("Column families"), "{text}");
+        assert!(text.contains(&expected), "expected `{expected}` in: {text}");
     }
 
     #[test]
