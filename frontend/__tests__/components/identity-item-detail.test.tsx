@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
   IdentityItemDetail,
@@ -22,10 +22,11 @@ vi.mock('@/components/layout/header', () => ({
 
 const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
+let mockPathname = '';
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ identityId: '0xabc' }),
-  usePathname: () => '/identities/dotbit/0xabc',
+  usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -72,6 +73,7 @@ describe('IdentityItemDetail', () => {
     vi.clearAllMocks();
     mockReplace.mockReset();
     mockSearchParams = new URLSearchParams();
+    mockPathname = '/identities/dotbit/0xabc';
     vi.mocked(api.getAddress).mockResolvedValue({
       lockScriptHash: '0xlock',
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
@@ -158,6 +160,64 @@ describe('IdentityItemDetail', () => {
     await waitFor(() => {
       expect(screen.getByText('did:ckb item not found')).toBeInTheDocument();
     });
+  });
+
+  it('starts a newly navigated-to identity on its first activity page', async () => {
+    // Moving from one account to another on the same route (search, history)
+    // changes only the route parameter, so the element stays mounted. The
+    // activity page of the account left behind must not follow the user.
+    const detailFor = (nftId: string, name: string) => ({
+      nftId,
+      name,
+      standard: 'dotbit',
+      ownerLockHash: '0xlock',
+      isLive: true,
+      createdAtBlock: 123,
+      expiredAt: 1800000000,
+      txHash: null,
+      outputIndex: null,
+    });
+    mockFetchDetail.mockImplementation(async (id: string) =>
+      id === '0xaaa' ? detailFor('0xaaa', 'alice.bit') : detailFor('0xbbb', 'bob.bit')
+    );
+    mockFetchActivities.mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: true,
+      nextCursor: 'alice-page-2',
+    });
+
+    mockPathname = '/identities/dotbit/0xaaa';
+    const { rerender } = render(<IdentityItemDetail config={dotbitConfig} identityId="0xaaa" />);
+    await waitFor(() => {
+      expect(mockFetchActivities).toHaveBeenCalledWith('0xaaa', { limit: 50 });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect(mockFetchActivities).toHaveBeenCalledWith('0xaaa', {
+        limit: 50,
+        cursor: 'alice-page-2',
+      });
+    });
+    expect(screen.getByText('Page 2')).toBeInTheDocument();
+
+    mockPathname = '/identities/dotbit/0xbbb';
+    mockSearchParams = new URLSearchParams();
+    mockReplace.mockClear();
+    mockFetchActivities.mockClear();
+    rerender(<IdentityItemDetail config={dotbitConfig} identityId="0xbbb" />);
+
+    await waitFor(() => {
+      expect(mockFetchActivities).toHaveBeenCalledWith('0xbbb', { limit: 50 });
+    });
+    expect(await screen.findByText('Page 1')).toBeInTheDocument();
+    expect(mockFetchActivities).not.toHaveBeenCalledWith(
+      '0xbbb',
+      expect.objectContaining({ cursor: expect.anything() })
+    );
+    expect(mockReplace.mock.calls.some(([url]) => String(url).includes('activity_cursor'))).toBe(
+      false
+    );
   });
 
   it('renders recycled status message', async () => {

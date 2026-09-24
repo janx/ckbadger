@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
 import { api } from '@/lib/api';
@@ -21,10 +21,11 @@ vi.mock('@/components/layout/header', () => ({
 
 const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
+let mockPathname = '';
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ objectId: '0xmnft' }),
-  usePathname: () => '/objects/mnft/0xmnft',
+  usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -34,6 +35,7 @@ describe('MnftItemDetailPage', () => {
     vi.clearAllMocks();
     mockReplace.mockReset();
     mockSearchParams = new URLSearchParams();
+    mockPathname = '/objects/mnft/0xmnft';
     vi.mocked(api.getAddress).mockResolvedValue({
       lockScriptHash: '0xlock',
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
@@ -139,6 +141,84 @@ describe('MnftItemDetailPage', () => {
     // Payload Data hex viewer
     expect(screen.getByText(/Payload Data/)).toBeInTheDocument();
     expect(screen.getByText('8 bytes', { exact: false })).toBeInTheDocument();
+  });
+
+  it('starts a newly navigated-to token on its first activity page', async () => {
+    // Moving from one token to another on the same route (search, history)
+    // changes only the route parameter, so the element stays mounted. The
+    // activity page of the token left behind must not follow the user.
+    const detailFor = (nftId: string, tokenIndex: number) => ({
+      nftId,
+      standard: 'm-nft',
+      isLive: true,
+      ownerLockHash: '0xlock',
+      createdAtBlock: 123,
+      tokenIndex,
+      characteristicHex: '0x',
+      configure: 0,
+      state: 0,
+      txHash: '0xtx',
+      outputIndex: 0,
+      class: {
+        classId: '0xclass',
+        issuerId: '0xissuer',
+        name: 'Class A',
+        description: null,
+        renderer: null,
+        total: 1000,
+        issued: 200,
+        configure: 0,
+      },
+      issuer: {
+        issuerId: '0xissuer',
+        name: 'Issuer A',
+        classCount: 2,
+        setCount: 3,
+        infoHex: '0x7b7d',
+      },
+      lifecycle: [],
+    });
+    vi.mocked(api.getMnftItemDetail).mockImplementation(
+      async (id: string) => (id === '0xaaa' ? detailFor('0xaaa', 1) : detailFor('0xbbb', 2)) as any
+    );
+    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: true,
+      nextCursor: 'token-1-page-2',
+    } as any);
+
+    mockPathname = '/objects/mnft/0xaaa';
+    const { rerender } = render(<MnftItemDetailPage objectId="0xaaa" />);
+    await waitFor(() => {
+      expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xaaa', { limit: 50 });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xaaa', {
+        limit: 50,
+        cursor: 'token-1-page-2',
+      });
+    });
+    expect(screen.getByText('Page 2')).toBeInTheDocument();
+
+    mockPathname = '/objects/mnft/0xbbb';
+    mockSearchParams = new URLSearchParams();
+    mockReplace.mockClear();
+    vi.mocked(api.getMnftItemActivities).mockClear();
+    rerender(<MnftItemDetailPage objectId="0xbbb" />);
+
+    await waitFor(() => {
+      expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xbbb', { limit: 50 });
+    });
+    expect(await screen.findByText('Page 1')).toBeInTheDocument();
+    expect(api.getMnftItemActivities).not.toHaveBeenCalledWith(
+      '0xbbb',
+      expect.objectContaining({ cursor: expect.anything() })
+    );
+    expect(mockReplace.mock.calls.some(([url]) => String(url).includes('activity_cursor'))).toBe(
+      false
+    );
   });
 
   it('renders not found panel when item is missing', async () => {

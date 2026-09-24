@@ -117,10 +117,17 @@ export interface MnftItemDetailPageProps {
   objectId: string;
 }
 export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItemDetailPageProps) {
+  const nftId = normalizeAssetId(routeObjectId);
+  // Moving to another token on the same route changes only the route parameter,
+  // so the router keeps this element mounted. Keying on the token gives each one
+  // its own activity paging instead of inheriting the previous token's cursor.
+  return <MnftItemDetailView key={nftId} nftId={nftId} />;
+}
+
+function MnftItemDetailView({ nftId }: { nftId: string }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nftId = normalizeAssetId(routeObjectId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );
