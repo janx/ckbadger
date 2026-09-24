@@ -16,23 +16,11 @@ pub fn is_known_script_name(name: Option<&str>) -> bool {
 }
 
 pub fn hash_type_to_u8(hash_type: &str) -> Option<u8> {
-    match hash_type {
-        "data" => Some(0),
-        "type" => Some(1),
-        "data1" => Some(2),
-        "data2" => Some(4),
-        _ => None,
-    }
+    ckbadger_common::hash_type_from_label(hash_type)
 }
 
 pub fn hash_type_to_string(hash_type: u8) -> Option<&'static str> {
-    match hash_type {
-        0 => Some("data"),
-        1 => Some("type"),
-        2 => Some("data1"),
-        4 => Some("data2"),
-        _ => None,
-    }
+    ckbadger_common::hash_type_label(hash_type)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,13 +7,16 @@
 //! Everything here is READ-ONLY node RPC. The mirror writes to no store.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use ckb_store_reader::RpcTransactionView;
 use serde::{Deserialize, Serialize};
 
-use crate::routes::tx_lookup::{fetch_transaction_lookup, TransactionLookup};
+use crate::routes::tx_lookup::{
+    describe_http_error, fetch_transaction_lookup_with, TransactionLookup,
+};
 
 /// A transaction's status as the node reports it.
 ///
@@ -65,20 +68,13 @@ pub struct PoolTxLookup {
     pub block_hash: Option<[u8; 32]>,
 }
 
-/// One live cell as the node reports it, data included.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeLiveCell {
-    pub capacity: u64,
-    pub lock: NodeScript,
-    pub type_script: Option<NodeScript>,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeScript {
-    pub code_hash: [u8; 32],
-    pub hash_type: i16,
-    pub args: Vec<u8>,
+/// A block header reduced to what input resolution needs: the DAO field, whose
+/// accumulated rate prices a Nervos DAO withdrawal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeHeader {
+    pub number: u64,
+    pub hash: [u8; 32],
+    pub dao: [u8; 32],
 }
 
 /// Read-only node RPC the mirror depends on.
@@ -86,15 +82,17 @@ pub struct NodeScript {
 pub trait PoolSource: Send + Sync {
     async fn tx_pool_info(&self) -> Result<TxPoolInfo, String>;
     async fn raw_tx_pool_verbose(&self) -> Result<RawTxPool, String>;
+    /// `get_transaction(tx_hash)`. The node answers for committed AND pool
+    /// transactions, which is what makes it the one source for the cells a
+    /// transaction spends: a previous output is `outputs[index]` of the
+    /// transaction that created it, spent or not.
     async fn get_transaction(&self, tx_hash: &[u8; 32]) -> Result<Option<PoolTxLookup>, String>;
-    /// `get_live_cell(out_point, with_data = true)`. Data is required: DAO,
-    /// `.bit` and UDT interpretation all read it, and the store's
-    /// `LiveCellInfo` does not carry it.
-    async fn get_live_cell(
-        &self,
-        tx_hash: &[u8; 32],
-        index: u32,
-    ) -> Result<Option<NodeLiveCell>, String>;
+    /// `get_header(block_hash)`: the block that committed a DAO withdraw
+    /// request, whose accumulated rate is the withdrawal's `AR_withdraw`.
+    async fn get_header(&self, block_hash: &[u8; 32]) -> Result<Option<NodeHeader>, String>;
+    /// `get_header_by_number(number)`: the deposit block a withdraw-request
+    /// cell names in its data, whose accumulated rate is `AR_deposit`.
+    async fn get_header_by_number(&self, number: u64) -> Result<Option<NodeHeader>, String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,35 +142,22 @@ struct RawPoolEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RawCellWithStatus {
-    cell: Option<RawCellInfo>,
-    status: String,
+struct RawHeader {
+    hash: String,
+    number: String,
+    dao: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RawCellInfo {
-    output: RawCellOutput,
-    data: Option<RawCellData>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawCellOutput {
-    capacity: String,
-    lock: RawScript,
-    #[serde(rename = "type")]
-    type_: Option<RawScript>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawCellData {
-    content: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawScript {
-    code_hash: String,
-    hash_type: String,
-    args: String,
+impl RawHeader {
+    fn into_node_header(self, method: &str) -> Result<NodeHeader, String> {
+        let dao = parse_hex_bytes(&self.dao, &format!("{method}.dao"))?;
+        Ok(NodeHeader {
+            number: parse_hex_u64(&self.number, &format!("{method}.number"))?,
+            hash: parse_hex_hash32(&self.hash, &format!("{method}.hash"))?,
+            dao: <[u8; 32]>::try_from(dao.as_slice())
+                .map_err(|_| format!("{method}.dao '{}' from node is not 32 bytes", self.dao))?,
+        })
+    }
 }
 
 /// Parse a `0x`-prefixed hex quantity. A malformed node value is an error with
@@ -197,25 +182,30 @@ pub fn parse_hex_hash32(value: &str, field: &str) -> Result<[u8; 32], String> {
 }
 
 /// CKB `hash_type` label to the numeric form the store and the activity builder
-/// use. Unknown labels are an error, not a default.
+/// use, through the workspace's one table (`ckbadger_common::hash_type`).
+/// Unknown labels are an error, not a default.
 pub fn parse_hash_type(label: &str) -> Result<i16, String> {
-    match label {
-        "data" => Ok(0),
-        "type" => Ok(1),
-        "data1" => Ok(2),
-        "data2" => Ok(3),
-        other => Err(format!("unknown script hash_type '{other}' from node")),
-    }
+    ckbadger_common::hash_type_from_label(label)
+        .map(i16::from)
+        .ok_or_else(|| format!("unknown script hash_type '{label}' from node"))
 }
 
-impl RawScript {
-    fn into_node_script(self, field: &str) -> Result<NodeScript, String> {
-        Ok(NodeScript {
-            code_hash: parse_hex_hash32(&self.code_hash, &format!("{field}.code_hash"))?,
-            hash_type: parse_hash_type(&self.hash_type)?,
-            args: parse_hex_bytes(&self.args, &format!("{field}.args"))?,
-        })
-    }
+/// How long [`HttpPoolSource`] waits for the node to accept a connection.
+const POOL_RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The pool source's own HTTP client. The mirror bounds every call it makes
+/// (`POOL_RPC_TIMEOUT`); this client is the second line of defence, so the
+/// `/tx` pending branch — which talks to the node through the same source —
+/// cannot hang on a black-holed node either.
+fn pool_rpc_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(POOL_RPC_CONNECT_TIMEOUT)
+            .timeout(super::mirror::POOL_RPC_TIMEOUT)
+            .build()
+            .expect("static reqwest client configuration is valid")
+    })
 }
 
 /// Talks to the local CKB node over JSON-RPC.
@@ -233,7 +223,7 @@ impl HttpPoolSource {
         method: &'static str,
         params: P,
     ) -> Result<Option<T>, String> {
-        let client = crate::utils::shared_http_client();
+        let client = pool_rpc_client();
         let request = RpcRequest {
             jsonrpc: "2.0",
             method,
@@ -245,10 +235,15 @@ impl HttpPoolSource {
             .json(&request)
             .send()
             .await
-            .map_err(|e| format!("{method} request failed: {e}"))?
+            .map_err(|e| format!("{method} request failed: {}", describe_http_error(e)))?
             .json::<RpcResponse<T>>()
             .await
-            .map_err(|e| format!("{method} response decode failed: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "{method} response decode failed: {}",
+                    describe_http_error(e)
+                )
+            })?;
 
         if let Some(error) = response.error {
             return Err(format!(
@@ -325,7 +320,9 @@ impl PoolSource for HttpPoolSource {
 
     async fn get_transaction(&self, tx_hash: &[u8; 32]) -> Result<Option<PoolTxLookup>, String> {
         let hash_hex = format!("0x{}", hex::encode(tx_hash));
-        let Some(lookup) = fetch_transaction_lookup(&self.url, &hash_hex).await? else {
+        let Some(lookup) =
+            fetch_transaction_lookup_with(pool_rpc_client(), &self.url, &hash_hex).await?
+        else {
             return Ok(None);
         };
         let status = node_status(&lookup);
@@ -337,157 +334,40 @@ impl PoolSource for HttpPoolSource {
         }))
     }
 
-    async fn get_live_cell(
-        &self,
-        tx_hash: &[u8; 32],
-        index: u32,
-    ) -> Result<Option<NodeLiveCell>, String> {
-        let out_point = serde_json::json!({
-            "tx_hash": format!("0x{}", hex::encode(tx_hash)),
-            "index": format!("0x{index:x}"),
-        });
-        let raw: RawCellWithStatus = self
-            .call("get_live_cell", (out_point, true))
+    async fn get_header(&self, block_hash: &[u8; 32]) -> Result<Option<NodeHeader>, String> {
+        let hash_hex = format!("0x{}", hex::encode(block_hash));
+        let Some(raw) = self
+            .call::<_, RawHeader>("get_header", (&hash_hex,))
             .await?
-            .ok_or_else(|| "get_live_cell returned no result".to_string())?;
-
-        if raw.status != "live" {
-            return Ok(None);
-        }
-        let Some(info) = raw.cell else {
+        else {
             return Ok(None);
         };
-        Ok(Some(NodeLiveCell {
-            capacity: parse_hex_u64(&info.output.capacity, "live cell capacity")?,
-            lock: info.output.lock.into_node_script("live cell lock")?,
-            type_script: info
-                .output
-                .type_
-                .map(|script| script.into_node_script("live cell type"))
-                .transpose()?,
-            data: match info.data {
-                Some(data) => parse_hex_bytes(&data.content, "live cell data")?,
-                None => {
-                    return Err(format!(
-                        "get_live_cell(with_data=true) returned no data for 0x{}:{index}",
-                        hex::encode(tx_hash)
-                    ))
-                }
-            },
-        }))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test double
-// ---------------------------------------------------------------------------
-
-/// Scripted [`PoolSource`] for mirror tests, and for API tests that want a
-/// deterministic pool without a node. Records every call so tests can assert
-/// what the mirror did *not* ask for.
-#[derive(Default)]
-pub struct FakePoolSource {
-    state: Mutex<FakeState>,
-}
-
-#[derive(Default)]
-struct FakeState {
-    info: Option<Result<TxPoolInfo, String>>,
-    raw_pool: RawTxPool,
-    transactions: HashMap<[u8; 32], Result<Option<PoolTxLookup>, String>>,
-    live_cells: HashMap<([u8; 32], u32), NodeLiveCell>,
-    calls: Vec<String>,
-}
-
-impl FakePoolSource {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set_info(&self, info: TxPoolInfo) {
-        self.lock().info = Some(Ok(info));
-    }
-
-    pub fn set_info_error(&self, error: impl Into<String>) {
-        self.lock().info = Some(Err(error.into()));
-    }
-
-    pub fn set_raw_pool(&self, pool: RawTxPool) {
-        self.lock().raw_pool = pool;
-    }
-
-    pub fn set_transaction(&self, tx_hash: [u8; 32], lookup: PoolTxLookup) {
-        self.lock().transactions.insert(tx_hash, Ok(Some(lookup)));
-    }
-
-    pub fn set_transaction_error(&self, tx_hash: [u8; 32], error: impl Into<String>) {
-        self.lock().transactions.insert(tx_hash, Err(error.into()));
-    }
-
-    pub fn set_transaction_missing(&self, tx_hash: [u8; 32]) {
-        self.lock().transactions.insert(tx_hash, Ok(None));
-    }
-
-    pub fn set_live_cell(&self, tx_hash: [u8; 32], index: u32, cell: NodeLiveCell) {
-        self.lock().live_cells.insert((tx_hash, index), cell);
-    }
-
-    pub fn remove_live_cell(&self, tx_hash: [u8; 32], index: u32) {
-        self.lock().live_cells.remove(&(tx_hash, index));
-    }
-
-    /// Every RPC method name this source was asked for, in order.
-    pub fn calls(&self) -> Vec<String> {
-        self.lock().calls.clone()
-    }
-
-    pub fn clear_calls(&self) {
-        self.lock().calls.clear();
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, FakeState> {
-        self.state.lock().expect("fake pool source lock poisoned")
-    }
-}
-
-#[async_trait]
-impl PoolSource for FakePoolSource {
-    async fn tx_pool_info(&self) -> Result<TxPoolInfo, String> {
-        let mut state = self.lock();
-        state.calls.push("tx_pool_info".to_string());
-        match state.info.clone() {
-            Some(result) => result,
-            None => Err("fake pool source has no tx_pool_info scripted".to_string()),
+        let header = raw.into_node_header("get_header")?;
+        if header.hash != *block_hash {
+            return Err(format!(
+                "get_header({hash_hex}) returned header 0x{}",
+                hex::encode(header.hash)
+            ));
         }
+        Ok(Some(header))
     }
 
-    async fn raw_tx_pool_verbose(&self) -> Result<RawTxPool, String> {
-        let mut state = self.lock();
-        state.calls.push("get_raw_tx_pool".to_string());
-        Ok(state.raw_pool.clone())
-    }
-
-    async fn get_transaction(&self, tx_hash: &[u8; 32]) -> Result<Option<PoolTxLookup>, String> {
-        let mut state = self.lock();
-        state
-            .calls
-            .push(format!("get_transaction:0x{}", hex::encode(tx_hash)));
-        match state.transactions.get(tx_hash) {
-            Some(result) => result.clone(),
-            None => Ok(None),
+    async fn get_header_by_number(&self, number: u64) -> Result<Option<NodeHeader>, String> {
+        let number_hex = format!("0x{number:x}");
+        let Some(raw) = self
+            .call::<_, RawHeader>("get_header_by_number", (&number_hex,))
+            .await?
+        else {
+            return Ok(None);
+        };
+        let header = raw.into_node_header("get_header_by_number")?;
+        if header.number != number {
+            return Err(format!(
+                "get_header_by_number({number}) returned header #{}",
+                header.number
+            ));
         }
-    }
-
-    async fn get_live_cell(
-        &self,
-        tx_hash: &[u8; 32],
-        index: u32,
-    ) -> Result<Option<NodeLiveCell>, String> {
-        let mut state = self.lock();
-        state
-            .calls
-            .push(format!("get_live_cell:0x{}:{index}", hex::encode(tx_hash)));
-        Ok(state.live_cells.get(&(*tx_hash, index)).cloned())
+        Ok(Some(header))
     }
 }
 
@@ -500,7 +380,7 @@ mod tests {
         assert_eq!(parse_hash_type("data").unwrap(), 0);
         assert_eq!(parse_hash_type("type").unwrap(), 1);
         assert_eq!(parse_hash_type("data1").unwrap(), 2);
-        assert_eq!(parse_hash_type("data2").unwrap(), 3);
+        assert_eq!(parse_hash_type("data2").unwrap(), 4);
         let error = parse_hash_type("bogus").unwrap_err();
         assert!(
             error.contains("bogus"),

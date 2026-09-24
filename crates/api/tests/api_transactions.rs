@@ -10,9 +10,13 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     let server = MockServer::start().await;
     let hash = pending_tx_hash_hex();
     mount_pending_transaction_rpc(&server, &hash, "pending").await;
-    // The store is empty: the input can only come from the node's live-cell
-    // set, which is where pending inputs are resolved from.
-    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
+    // The store is empty: the input can only come from the node, as output 0
+    // of the transaction that created it.
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e974", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
@@ -86,12 +90,12 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     );
 }
 
-/// A pending genesis (block 0) output whose lock args equal the Satoshi
-/// dead-address pubkey hash is tagged `genesis_special_burn` and reports the
-/// network's seeded `baseline.virtual_occupied` as `virtualUsedCapacity`,
-/// proving the burn policy + baseline flow through the tx-output builder.
+/// A POOL transaction paying the Satoshi dead-address pubkey hash is not the
+/// genesis burn cell: `genesis_special_burn` (and its `virtualUsedCapacity`)
+/// describe block 0's cells only. This test used to assert the opposite — the
+/// pool branch passed block number 0 for every uncommitted transaction.
 #[tokio::test]
-async fn test_pending_transaction_genesis_satoshi_output_tagged() {
+async fn pending_tx_paying_the_satoshi_address_is_not_a_genesis_burn() {
     let store = test_store();
     // Seed the synced-chain baseline; `seed_genesis_baseline` uses mainnet's
     // 8.4B burnt * 6/10 == 504e15 shannons, the value asserted below.
@@ -147,14 +151,12 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
             }
         }
     });
-    Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_transaction" }),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(rpc_response))
-        .mount(&server)
-        .await;
-    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
+    mount_transaction_rpc(&server, rpc_response).await;
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e974", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
@@ -169,6 +171,53 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["outputs"][0]["cellType"], serde_json::Value::Null);
+    assert_eq!(
+        json["outputs"][0]["virtualCommonKnowledgeSize"],
+        serde_json::Value::Null
+    );
+}
+
+/// The genesis block's cellbase, committed but not yet indexed (the store is
+/// empty): its Satoshi output IS the genesis burn cell and carries the
+/// network's `baseline.virtual_occupied`; its pseudo-input spends no cell, so
+/// it is served (fee 0) rather than reported as unresolved.
+#[tokio::test]
+async fn committed_unindexed_genesis_cellbase_tags_the_satoshi_output() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let cellbase_input = format!("0x{}", "00".repeat(32));
+    let mut response = transaction_rpc_response(
+        &hash,
+        &[(&cellbase_input, u32::MAX)],
+        vec![serde_json::json!({
+            "capacity": "0x174876e800",
+            "lock": {
+                "code_hash": format!("0x{}", "11".repeat(32)),
+                "hash_type": "type",
+                "args": format!("0x{}", hex::encode(ckbadger_common::dao::SATOSHI_PUBKEY_HASH))
+            },
+            "type": null
+        })],
+        vec!["0x".to_string()],
+        "committed",
+        Some((0, &format!("0x{}", "92".repeat(32)))),
+    );
+    response["result"]["cycles"] = serde_json::json!("0x0");
+    mount_transaction_rpc(&server, response).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    assert_eq!(json["isCellbase"], true);
+    assert_eq!(json["blockNumber"], 0);
+    assert_eq!(json["fee"], "0");
+    assert_eq!(json["interpretation"]["status"], "complete");
     assert_eq!(json["outputs"][0]["cellType"], "genesis_special_burn");
     assert_eq!(
         json["outputs"][0]["virtualCommonKnowledgeSize"],
@@ -176,45 +225,54 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
     );
 }
 
-/// An input the node does not report as live is left unresolved and SAID to be
-/// unresolved. No zero capacity, no store fallback, no invented fee.
+/// A pool transaction paying a `data2` lock (any VM2 script) is attributed to
+/// that lock's address, and `/tx` renders the lock with the label the node
+/// used. The mirror once mapped `data2` to byte 3 — CKB's wire value is 4 — so
+/// it hashed the lock into a script hash no address has: the payee's page
+/// showed nothing pending and `/tx` 500'd on the unknown byte.
 #[tokio::test]
-async fn test_pending_transaction_with_a_spent_input_reports_partial_interpretation() {
+async fn pending_tx_with_data2_lock_is_attributed_to_its_address() {
     let store = test_store();
     seed_genesis_baseline(&store);
     let server = MockServer::start().await;
     let hash = pending_tx_hash_hex();
-    mount_pending_transaction_rpc(&server, &hash, "pending").await;
-    mount_dead_cell_rpc(&server).await;
+
+    let mut response_json = pending_transaction_rpc_response(&hash, "pending");
+    response_json["result"]["transaction"]["outputs"][0]["lock"]["hash_type"] =
+        serde_json::json!("data2");
+    mount_transaction_rpc(&server, response_json).await;
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e974", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    mount_tx_pool_rpc(&server, &[(&hash, pending_tx_pool_timestamp_hex())]).await;
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
-    let app = create_router(config).await;
+    let state = test_app_state(config);
+    let outcome = refresh_pool_mirror_once(&state, &server.uri()).await;
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.entry_errors, 0, "{outcome:?}");
+    let app = create_router_with_state(state).await;
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v1/transactions/{hash}/detail"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let payee = ckbadger_common::script_to_address(&[0x11; 32], 4, &[0x22; 20], "mainnet")
+        .expect("data2 is a valid full-address hash_type");
+    let (status, json) = get_json(&app, &format!("/addresses/{payee}/activities")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the data2 payee must see its pending tx: {json:?}"
+    );
+    assert_eq!(rows[0]["txHash"], hash);
+    assert_eq!(rows[0]["poolStatus"], "pending");
 
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["inputsCapacity"], serde_json::Value::Null);
-    assert_eq!(json["inputs"][0]["capacity"], serde_json::Value::Null);
-    assert_eq!(json["interpretation"]["status"], "partial");
-    assert_eq!(
-        json["interpretation"]["reasons"][0]["code"],
-        "unresolved_input"
-    );
-    assert_eq!(
-        json["interpretation"]["reasons"][0]["detail"],
-        format!("{}:0", pending_previous_output_hash_hex())
-    );
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    assert_eq!(json["outputs"][0]["lock"]["hashType"], "data2");
+    assert_eq!(json["outputs"][0]["address"], payee);
 }
 
 /// A node that cannot answer is an error with context, not an input silently
@@ -227,9 +285,10 @@ async fn test_pending_transaction_fails_loudly_when_the_node_cannot_resolve_inpu
     let hash = pending_tx_hash_hex();
     mount_pending_transaction_rpc(&server, &hash, "pending").await;
     Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_live_cell" }),
-        ))
+        .and(body_partial_json(serde_json::json!({
+            "method": "get_transaction",
+            "params": [pending_previous_output_hash_hex()]
+        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -264,7 +323,11 @@ async fn test_pending_transaction_fails_loudly_when_the_node_cannot_resolve_inpu
 /// The window between node commit and local index: the node has the
 /// transaction in a block, this process's store does not have it yet. It is
 /// served provisionally rather than 404, so the pool row that links here is not
-/// a dead link for those seconds.
+/// a dead link for those seconds (hours during bulk sync).
+///
+/// Fixture = what a real node returns: a committed transaction carries no pool
+/// `fee`, and its input is SPENT by it — no live-cell answer exists. The input
+/// resolves from the parent transaction's body; the fee is Σinputs − Σoutputs.
 #[tokio::test]
 async fn test_committed_but_unindexed_transaction_is_served_provisionally() {
     let store = test_store();
@@ -275,35 +338,194 @@ async fn test_committed_but_unindexed_transaction_is_served_provisionally() {
     response_json["result"]["tx_status"]["block_number"] = serde_json::json!("0x1092");
     response_json["result"]["tx_status"]["block_hash"] =
         serde_json::json!(format!("0x{}", "33".repeat(32)));
-    Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_transaction" }),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response_json))
-        .mount(&server)
-        .await;
-    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
+    response_json["result"]["fee"] = serde_json::Value::Null;
+    response_json["result"]["time_added_to_pool"] = serde_json::Value::Null;
+    response_json["result"]["min_replace_fee"] = serde_json::Value::Null;
+    mount_transaction_rpc(&server, response_json).await;
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e974", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
     let app = create_router(config).await;
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v1/transactions/{hash}/detail"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
     assert_eq!(json["status"], "committed");
     assert_eq!(json["poolStatus"], "committed_awaiting_index");
+    // The tx page links the committing block while indexing (lane F contract):
+    // a committed response never has a null block number.
     assert_eq!(json["blockNumber"], 4242);
     assert_eq!(json["blockHash"], format!("0x{}", "33".repeat(32)));
+    assert_eq!(json["timestamp"], serde_json::Value::Null);
+    assert_eq!(json["confirmations"], serde_json::Value::Null);
+    assert_eq!(json["interpretation"]["status"], "complete");
+
+    let inputs_capacity: u128 = json["inputsCapacity"].as_str().unwrap().parse().unwrap();
+    let outputs_capacity: u128 = json["outputsCapacity"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        json["fee"],
+        (inputs_capacity - outputs_capacity).to_string()
+    );
+    assert_eq!(json["fee"], "372");
+    let input = &json["inputs"][0];
+    assert_eq!(input["capacity"], "100000000372");
+    assert_eq!(input["lock"]["codeHash"], TEST_SECP_LOCK_CODE_HASH);
+    assert!(
+        input["address"].as_str().unwrap().starts_with("ckb1"),
+        "a spent input still carries its owner's address: {input:?}"
+    );
+}
+
+/// With the mirror off there is no snapshot to hold a pool parent, yet a
+/// chained pool spend still resolves: the node answers `get_transaction` for
+/// pool transactions too.
+#[tokio::test]
+async fn pending_tx_whose_parent_is_also_pending_resolves_without_the_mirror() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+    let mut parent =
+        funding_transaction_rpc_response("0x174876e974", &format!("0x{}", "33".repeat(20)));
+    parent["result"]["tx_status"] = serde_json::json!({
+        "status": "pending",
+        "block_hash": null,
+        "block_number": null,
+        "reason": null
+    });
+    mount_transaction_rpc(&server, parent).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    config.pool_mirror_enabled = false;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    assert_eq!(json["poolStatus"], "pending");
+    assert_eq!(json["interpretation"]["status"], "complete");
+    assert_eq!(json["inputs"][0]["capacity"], "100000000372");
+    assert_eq!(json["fee"], "372");
+}
+
+/// An input whose parent the node does not know cannot be resolved YET (the
+/// parent was evicted, or has not propagated). The response is a retryable
+/// 503, never a 200 carrying unresolved inputs and no fee.
+#[tokio::test]
+async fn pending_tx_with_unknown_parent_returns_503() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+    mount_transaction_unknown_to_node(&server, &pending_previous_output_hash_hex()).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json:?}");
+    assert_eq!(json["error"], "service_unavailable");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&pending_previous_output_hash_hex()) && message.contains("retry"),
+        "the 503 must name the unknown parent and say to retry: {message}"
+    );
+}
+
+/// A pending Nervos DAO withdrawal completion is served with its EXACT fee:
+/// Σinputs + compensation − Σoutputs, the compensation priced from the deposit
+/// and request headers' accumulated rates and the request cell's own occupied
+/// capacity (RFC-0023).
+///
+/// Numbers are the common DAO test vector
+/// `compensation_uses_the_cells_actual_occupied_capacity`: a 300 CKB cell
+/// occupying 142 CKB (lock args 60 bytes + DAO type + 8-byte data), AR 10_000 →
+/// 11_000, compensation 15.8 CKB.
+#[tokio::test]
+async fn pending_dao_withdrawal_is_served_with_its_exact_fee() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let request_tx = format!("0x{}", "d1".repeat(32));
+    let request_block = format!("0x{}", "b1".repeat(32));
+    let deposit_block_number: u64 = 1_000;
+    let fee: u64 = 1_000;
+    let request_capacity: u64 = 300_00000000;
+    let compensation: u64 = 15_80000000;
+
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &request_tx,
+            &[(&format!("0x{}", "d0".repeat(32)), 0)],
+            vec![serde_json::json!({
+                "capacity": format!("0x{request_capacity:x}"),
+                "lock": {
+                    "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                    "hash_type": "type",
+                    "args": format!("0x{}", "44".repeat(60))
+                },
+                "type": {
+                    "code_hash": ckbadger_indexer::parser::dao::DAO_CODE_HASH,
+                    "hash_type": "type",
+                    "args": "0x"
+                }
+            })],
+            vec![format!(
+                "0x{}",
+                hex::encode(deposit_block_number.to_le_bytes())
+            )],
+            "committed",
+            Some((2_000, &request_block)),
+        ),
+    )
+    .await;
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &hash,
+            &[(&request_tx, 0)],
+            vec![serde_json::json!({
+                "capacity": format!("0x{:x}", request_capacity + compensation - fee),
+                "lock": {
+                    "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                    "hash_type": "type",
+                    "args": format!("0x{}", "44".repeat(20))
+                },
+                "type": null
+            })],
+            vec!["0x".to_string()],
+            "pending",
+            None,
+        ),
+    )
+    .await;
+    mount_header_rpc(
+        &server,
+        deposit_block_number,
+        &format!("0x{}", "b0".repeat(32)),
+        10_000,
+    )
+    .await;
+    mount_header_rpc(&server, 2_000, &request_block, 11_000).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    assert_eq!(json["interpretation"]["status"], "complete", "{json:?}");
+    assert_eq!(json["inputs"][0]["capacity"], request_capacity.to_string());
+    assert_eq!(json["fee"], fee.to_string());
 }
 
 #[tokio::test]

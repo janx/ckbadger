@@ -7,7 +7,8 @@
 
 use anyhow::{bail, Context, Result};
 use ckbadger_common::hardfork::normalize_network;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 mod orchestrator;
@@ -68,11 +69,39 @@ pub struct ApiConfig {
     /// switching it off changes no persisted state and needs no re-sync.
     pub pool_mirror_enabled: bool,
     /// How often the mirror polls the node. Idle polls cost one
-    /// `tx_pool_info` call.
-    pub pool_poll_interval_ms: u64,
+    /// `tx_pool_info` call. Zero is rejected at parse time: it would make the
+    /// refresh loop spin on the node without pause.
+    #[serde(deserialize_with = "deserialize_pool_poll_interval_ms")]
+    pub pool_poll_interval_ms: NonZeroU64,
     /// Upper bound on mirrored transactions. Past it the newest by
-    /// `time_added_to_pool` are kept and responses report `truncated`.
-    pub pool_max_tracked_txs: usize,
+    /// `time_added_to_pool` are kept and responses report `truncated`. Zero is
+    /// rejected at parse time: it would evict every record every round.
+    #[serde(deserialize_with = "deserialize_pool_max_tracked_txs")]
+    pub pool_max_tracked_txs: NonZeroUsize,
+}
+
+fn deserialize_pool_poll_interval_ms<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<NonZeroU64, D::Error> {
+    let value = u64::deserialize(deserializer)?;
+    NonZeroU64::new(value).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "api.pool_poll_interval_ms must be in 1..={} milliseconds, got {value}",
+            u64::MAX
+        ))
+    })
+}
+
+fn deserialize_pool_max_tracked_txs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<NonZeroUsize, D::Error> {
+    let value = usize::deserialize(deserializer)?;
+    NonZeroUsize::new(value).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "api.pool_max_tracked_txs must be in 1..={} transactions, got {value}",
+            usize::MAX
+        ))
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -177,8 +206,8 @@ impl Default for ApiConfig {
             rate_limit_burst: 200,
             slow_request_threshold_ms: 100,
             pool_mirror_enabled: true,
-            pool_poll_interval_ms: 1000,
-            pool_max_tracked_txs: 50_000,
+            pool_poll_interval_ms: NonZeroU64::new(1000).expect("non-zero literal"),
+            pool_max_tracked_txs: NonZeroUsize::new(50_000).expect("non-zero literal"),
         }
     }
 }
@@ -665,8 +694,8 @@ mod tests {
         assert_eq!(cfg.api.rate_limit_burst, 200);
         assert_eq!(cfg.api.slow_request_threshold_ms, 100);
         assert!(cfg.api.pool_mirror_enabled);
-        assert_eq!(cfg.api.pool_poll_interval_ms, 1000);
-        assert_eq!(cfg.api.pool_max_tracked_txs, 50_000);
+        assert_eq!(cfg.api.pool_poll_interval_ms.get(), 1000);
+        assert_eq!(cfg.api.pool_max_tracked_txs.get(), 50_000);
 
         assert_eq!(cfg.frontend.host, "127.0.0.1");
         assert_eq!(cfg.frontend.port, 8100);
@@ -726,6 +755,26 @@ mod tests {
             assert!(invalid.validate().is_err());
         }
         assert!(CrawlerConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn a_zero_pool_poll_interval_is_rejected_naming_the_key_and_range() {
+        let error = parse_config("[api]\npool_poll_interval_ms = 0\n").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("api.pool_poll_interval_ms") && message.contains("1.."),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_zero_pool_tracking_cap_is_rejected_naming_the_key_and_range() {
+        let error = parse_config("[api]\npool_max_tracked_txs = 0\n").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("api.pool_max_tracked_txs") && message.contains("1.."),
+            "{message}"
+        );
     }
 
     // -- TOML parsing --
@@ -800,8 +849,8 @@ level = "debug"
         assert_eq!(cfg.api.rate_limit_burst, 100);
         assert_eq!(cfg.api.slow_request_threshold_ms, 50);
         assert!(!cfg.api.pool_mirror_enabled);
-        assert_eq!(cfg.api.pool_poll_interval_ms, 2500);
-        assert_eq!(cfg.api.pool_max_tracked_txs, 1234);
+        assert_eq!(cfg.api.pool_poll_interval_ms.get(), 2500);
+        assert_eq!(cfg.api.pool_max_tracked_txs.get(), 1234);
         assert_eq!(cfg.frontend.host, "0.0.0.0");
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
