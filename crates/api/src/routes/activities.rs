@@ -5,8 +5,8 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        participant_roles, ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ScriptInfo,
-        TxActions, TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN,
+        participant_roles, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
+        ScriptInfo, TxActions, TypeCallEntry,
     },
     CkbadgerStore,
 };
@@ -189,7 +189,15 @@ pub enum ItemDeltaResponse {
     #[serde(rename = "object", rename_all = "camelCase")]
     Object { object_id: String, delta: i8 },
     #[serde(rename = "identity", rename_all = "camelCase")]
-    Identity { identity_id: String, delta: i8 },
+    Identity {
+        identity_id: String,
+        delta: i8,
+        /// The identity's standard, as the builder recorded it on the delta,
+        /// in its one wire value (`IdentityStandard::asset_standard`:
+        /// `dotbit | bit_cell | did_ckb | dotcell`). The frontend links the
+        /// item to its standard's page with it.
+        standard: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,7 +278,7 @@ fn convert_item_delta(
     store: &CkbadgerStore,
 ) -> anyhow::Result<ItemDeltaResponse> {
     match item.kind {
-        ITEM_KIND_TOKEN => {
+        ItemKind::Token => {
             let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
             Ok(ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
@@ -279,25 +287,22 @@ fn convert_item_delta(
                 decimals,
             })
         }
-        ITEM_KIND_OBJECT => Ok(ItemDeltaResponse::Object {
+        ItemKind::Object => Ok(ItemDeltaResponse::Object {
             object_id: format!("0x{}", hex::encode(&item.item_id)),
             delta: discrete_item_delta(item)?,
         }),
-        ITEM_KIND_IDENTITY => Ok(ItemDeltaResponse::Identity {
+        ItemKind::Identity(standard) => Ok(ItemDeltaResponse::Identity {
             identity_id: format!("0x{}", hex::encode(&item.item_id)),
             delta: discrete_item_delta(item)?,
+            standard: standard.asset_standard(),
         }),
-        kind => anyhow::bail!(
-            "unknown activity item kind {kind} for item 0x{}",
-            hex::encode(&item.item_id)
-        ),
     }
 }
 
 fn discrete_item_delta(item: &ItemDelta) -> anyhow::Result<i8> {
     if item.magnitude != 1 {
         anyhow::bail!(
-            "activity discrete-item invariant violated: kind={} item=0x{} magnitude={} (expected 1)",
+            "activity discrete-item invariant violated: kind={:?} item=0x{} magnitude={} (expected 1)",
             item.kind,
             hex::encode(&item.item_id),
             item.magnitude
@@ -1228,7 +1233,7 @@ mod tests {
     fn discrete_item_delta_requires_exact_unit_magnitude() {
         let item = ItemDelta {
             item_id: vec![0xAA; 32],
-            kind: ITEM_KIND_OBJECT,
+            kind: ItemKind::Object,
             magnitude: 2,
             negative: false,
         };
@@ -1241,7 +1246,7 @@ mod tests {
     fn discrete_item_delta_preserves_sign() {
         let mut item = ItemDelta {
             item_id: vec![0xBB; 32],
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(ckbadger_store::types::IdentityStandard::DotCell),
             magnitude: 1,
             negative: false,
         };
@@ -1587,11 +1592,17 @@ mod tests {
         let identity = ItemDeltaResponse::Identity {
             identity_id: "0xabcdef".to_string(),
             delta: -1,
+            standard: ckbadger_store::types::IdentityStandard::DotCell.asset_standard(),
         };
         let json = serde_json::to_string(&identity).unwrap();
         assert!(
             json.contains("\"identityId\""),
             "missing identityId: {}",
+            json
+        );
+        assert!(
+            json.contains("\"standard\":\"dotcell\""),
+            "missing standard: {}",
             json
         );
         assert!(

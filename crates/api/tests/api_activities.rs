@@ -1164,8 +1164,8 @@ fn seed_named_tx(
 #[tokio::test]
 async fn test_address_activities_include_named_participation_with_zero_ckb_delta() {
     use ckbadger_store::types::{
-        participant_roles, AddrTxValue, ItemDelta, ParticipantDelta, ParticipantId,
-        ITEM_KIND_IDENTITY, TAG_IDENTITY,
+        participant_roles, AddrTxValue, ItemDelta, ItemKind, ParticipantDelta, ParticipantId,
+        TAG_IDENTITY,
     };
 
     let core_store = test_store();
@@ -1202,7 +1202,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xEE; 20],
-                    kind: ITEM_KIND_IDENTITY,
+                    kind: ItemKind::Identity(IdentityStandard::DotCell),
                     magnitude: 1,
                     negative: false,
                 }],
@@ -1258,6 +1258,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
     assert_eq!(rows[0]["usedDelta"], "0");
     assert_eq!(rows[0]["itemDeltas"][0]["kind"], "identity");
     assert_eq!(rows[0]["itemDeltas"][0]["delta"], 1);
+    assert_eq!(rows[0]["itemDeltas"][0]["standard"], "dotcell");
     assert_eq!(rows[0]["roles"][0], "owner_to");
     let participants = rows[0]["participants"].as_array().unwrap();
     assert_eq!(participants.len(), 1, "only the other party: {json:?}");
@@ -1898,4 +1899,133 @@ async fn pending_tx_paying_a_never_seen_lock_shows_its_real_address() {
     let party = &row["participants"][0];
     assert_eq!(party["lockHash"], format!("0x{}", hex::encode(recipient)));
     assert_eq!(party["address"], expected, "{json}");
+}
+
+// ── 2.6b: identity item deltas name their standard ──────────────────────
+
+/// Every identity item delta carries its standard, as the builder recorded
+/// it, in the standard's one wire value (`IdentityStandard::asset_standard`):
+/// the frontend links the item to its page with it. No store lookup — the
+/// four identities below exist nowhere in the store.
+#[tokio::test]
+async fn identity_item_deltas_name_their_standard() {
+    use ckbadger_store::types::{
+        ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TAG_IDENTITY,
+    };
+
+    let store = test_store();
+    let lock_hash = [0x42u8; 32];
+    let tx_hash = vec![0xab; 32];
+    let identity = |standard, byte| ItemDelta {
+        item_id: vec![byte; 20],
+        kind: ItemKind::Identity(standard),
+        magnitude: 1,
+        negative: false,
+    };
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbb; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            id: ParticipantId::Lock(lock_hash),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![
+                identity(IdentityStandard::DotBit, 0x01),
+                identity(IdentityStandard::BitCell, 0x02),
+                identity(IdentityStandard::DidCkb, 0x03),
+                identity(IdentityStandard::DotCell, 0x04),
+            ],
+            tags: TAG_IDENTITY,
+            roles: 0,
+        }],
+    };
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, true, true, TAG_IDENTITY),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let deltas = json["data"][0]["itemDeltas"].as_array().unwrap();
+    let standards: Vec<&str> = deltas
+        .iter()
+        .map(|d| d["standard"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        standards,
+        ["dotbit", "bit_cell", "did_ckb", "dotcell"],
+        "{json}"
+    );
+
+    let (_, global) = get_json(&app, "/activities").await;
+    assert_eq!(
+        global["data"][0]["participants"][0]["itemDeltas"][3]["standard"], "dotcell",
+        "{global}"
+    );
+}
+
+/// A pending `.cell` registration: the name is not in the store yet, and the
+/// pool row still names its standard — carried by the item delta the mirror's
+/// builder produced, not looked up.
+#[tokio::test]
+async fn pending_dotcell_registration_item_delta_carries_its_standard() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, TAG_IDENTITY};
+
+    let mut record = make_test_pool_record_with(
+        &[0xf9; 32],
+        &POOL_LOCK_HASH,
+        -24_000_000_000,
+        1_700_000_500_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+        TAG_IDENTITY,
+        ckbadger_api::pool::Interpretation::Complete,
+    );
+    let new_name = ckbadger_store::types::derive_dotcell_id("brandnew");
+    record.actions.as_mut().unwrap().participants[0]
+        .item_deltas
+        .push(ItemDelta {
+            item_id: new_name.to_vec(),
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
+            magnitude: 1,
+            negative: false,
+        });
+
+    let state = test_app_state(test_config(test_store()));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(POOL_LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    assert_eq!(row["poolStatus"], "pending", "{json}");
+    assert_eq!(row["itemDeltas"][0]["kind"], "identity");
+    assert_eq!(
+        row["itemDeltas"][0]["identityId"],
+        format!("0x{}", hex::encode(new_name))
+    );
+    assert_eq!(row["itemDeltas"][0]["standard"], "dotcell", "{json}");
 }
