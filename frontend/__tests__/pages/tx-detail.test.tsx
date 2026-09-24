@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, screen, waitFor, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
-import { api } from '@/lib/api';
+import { api, ApiRequestError } from '@/lib/api';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -93,17 +93,54 @@ function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTran
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
 
-vi.mock('@/lib/api', () => ({
-  api: {
-    getTransactionDetail: vi.fn(),
-    getTransactionGraph: vi.fn(),
-    getTransactionCellDeps: vi.fn(),
-    getTransactionLifecycle: vi.fn(),
-    lookupScripts: vi.fn(),
-  },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
-}));
+/**
+ * What `/tx/{hash}` serves for a transaction the node has committed but this
+ * explorer's store has not indexed yet: the committing block is known, the
+ * block time, confirmations and tx index are not.
+ */
+function createCommittedAwaitingIndexTransactionDetail(): Awaited<
+  ReturnType<typeof api.getTransactionDetail>
+> {
+  return {
+    ...createCommittedTransactionDetail(),
+    status: 'committed',
+    poolStatus: 'committed_awaiting_index',
+    pendingSince: null,
+    blockNumber: 123,
+    blockHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    index: null,
+    timestamp: null,
+    confirmations: null,
+  } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+}
+
+vi.mock('@/lib/api', async () => {
+  // The error class and its classifier are the real ones: the page must key on
+  // exactly what the API client produces for a 503.
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return {
+    api: {
+      getTransactionDetail: vi.fn(),
+      getTransactionGraph: vi.fn(),
+      getTransactionCellDeps: vi.fn(),
+      getTransactionLifecycle: vi.fn(),
+      lookupScripts: vi.fn(),
+    },
+    ApiRequestError: actual.ApiRequestError,
+    isServiceUnavailableError: actual.isServiceUnavailableError,
+    isWarmupPendingError: vi.fn(() => false),
+    isNetworkInitializingError: vi.fn(() => false),
+  };
+});
+
+/** What `/tx/{hash}` answers while a pending transaction's parent is unknown to the node. */
+function inputsNotYetResolvable() {
+  return new ApiRequestError(
+    503,
+    'service_unavailable',
+    `inputs of uncommitted transaction ${TX_HASH} are not resolvable yet: the node does not know the transaction that created 0x${'d'.repeat(64)}:0; retry`
+  );
+}
 
 vi.mock('@/hooks/useCyclesCalculation', () => ({
   useCyclesCalculation: () => ({
@@ -204,6 +241,91 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionGraph).not.toHaveBeenCalled();
     expect(api.getTransactionCellDeps).not.toHaveBeenCalled();
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('serves a committed-but-unindexed transaction provisionally and polls until it is indexed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.getTransactionDetail)
+      .mockResolvedValueOnce(createCommittedAwaitingIndexTransactionDetail())
+      .mockResolvedValueOnce(createCommittedAwaitingIndexTransactionDetail())
+      .mockResolvedValue(createCommittedTransactionDetail());
+
+    render(<TransactionDetailPage />);
+
+    // The committing block is known and shown; the block time and the
+    // confirmation count are not known yet and are shown as pending.
+    expect(await screen.findByRole('link', { name: '#123' })).toBeInTheDocument();
+    expect(screen.getByText('Confirming')).toBeInTheDocument();
+    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Confirmations$/)).not.toBeInTheDocument();
+    expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
+
+    // Still provisional: the page keeps asking until the store has it.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('link', { name: '#123' })).toBeInTheDocument();
+
+    // Indexed: `poolStatus` is gone, the committed view renders, polling stops.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText(/4\s+Confirmations/)).toBeInTheDocument();
+    expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(9000));
+    expect(api.getTransactionDetail).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps polling through a transient 503 for unresolvable inputs, then renders the transaction', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.getTransactionDetail)
+      .mockRejectedValueOnce(inputsNotYetResolvable())
+      .mockResolvedValue(createPendingTransactionDetail());
+
+    render(<TransactionDetailPage />);
+
+    // Provisional, not failed: a placeholder that says what it waits for.
+    expect(await screen.findByTestId('tx-inputs-not-yet-resolvable')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+    expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
+
+    expect(await screen.findByText('Pending Since')).toBeInTheDocument();
+    expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
+    expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+  });
+
+  it('keeps showing a pending transaction when a later poll answers 503 for its inputs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.getTransactionDetail)
+      .mockResolvedValueOnce(createPendingTransactionDetail())
+      .mockRejectedValueOnce(inputsNotYetResolvable())
+      .mockResolvedValue(createPendingTransactionDetail());
+
+    render(<TransactionDetailPage />);
+    expect(await screen.findByText('Pending Since')).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Pending Since')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+
+    // Still polling after the 503.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
+  });
+
+  it('treats any other 503 as a failure, not as a pending transaction', async () => {
+    vi.mocked(api.getTransactionDetail).mockRejectedValueOnce(
+      new ApiRequestError(503, 'unknown_error', 'upstream down')
+    );
+
+    render(<TransactionDetailPage />);
+
+    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
+    expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
   });
 
   it('links unknown type script to code-hash detail page', async () => {

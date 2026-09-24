@@ -198,6 +198,68 @@ describe('renderMarkdownPage', () => {
     });
   });
 
+  it('names a lock party without an address by its lock hash in the activities table', async () => {
+    // A Lock participant whose lock script the store does not know encodes to
+    // no address; the API sends its lock hash instead.
+    const lockHash = `0x${'5'.repeat(64)}`;
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 1,
+      daoDepositCount: 0,
+      daoWithdrawRequestCount: 0,
+      daoWithdrawCompleteCount: 0,
+      tokenCount: 0,
+      objectCount: 0,
+      identityCount: 0,
+      scriptCallCount: 0,
+      unknownCount: 0,
+      coinbaseCount: 0,
+      uniqueAddressCount: 1,
+      totalCkbMoved: '0',
+      scriptCounts: [],
+      hoursCovered: 24,
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: `0x${'b'.repeat(64)}`,
+          blockNumber: 124,
+          txIndex: 0,
+          timestamp: '1700000000',
+          isCellbase: false,
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [
+            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10000000000' } },
+          ],
+          participants: [
+            {
+              address: null,
+              lockHash,
+              lockHashPrefix: null,
+              roles: [],
+              ckbDelta: '-10000000000',
+              usedDelta: '0',
+              itemDeltas: [],
+              tags: 8,
+            },
+          ],
+        },
+      ],
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain(`${lockHash.slice(0, 10)}...${lockHash.slice(-8)}`);
+  });
+
   it('fails fast on invalid limit query param', async () => {
     await expect(
       renderMarkdownPage({
@@ -645,6 +707,8 @@ describe('renderMarkdownPage', () => {
       nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
       parent: null,
       children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
     } as any);
     vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
@@ -684,6 +748,63 @@ describe('renderMarkdownPage', () => {
         action: undefined,
       }
     );
+  });
+
+  it('says when the .cell sub-names listed are only the first page', async () => {
+    const childId = '0x2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e';
+    vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 18_000_000,
+      createdAtTx: `0x${'7'.repeat(64)}`,
+      layoutVersion: 3,
+      namespaceArgs: `0x${'5'.repeat(64)}`,
+      expiredAt: 1_821_507_678,
+      state: 'active',
+      graceEndsAt: 1_824_099_678,
+      owner: {
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      manager: {
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+      parent: null,
+      children: [{ identityId: childId, label: 'blog.support', name: 'blog.support.cell' }],
+      childrenHasMore: true,
+      childrenNextCursor: childId,
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
+      data: [],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(
+        '/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+      ),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('blog.support.cell');
+    expect(result.body).toContain('| childrenHasMore | true |');
+    expect(result.body).toContain(`| childrenNextCursor | ${childId} |`);
   });
 
   it('renders peers markdown with the reachability caveat when the crawler is off', async () => {

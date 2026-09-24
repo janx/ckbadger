@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '../utils/test-utils';
-import { ActivityEventGroup } from '@/components/activity-event-row';
+import { ActivityEventGroup, ParticipantLine } from '@/components/activity-event-row';
 import type { Activity } from '@/lib/api';
 
 // Spread the overrides rather than `??`-ing each field: a pool row's
@@ -234,12 +234,67 @@ describe('ActivityEventGroup', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
-          itemDeltas: [{ kind: 'identity', identityId: '0xid123', delta: 1 }],
+          itemDeltas: [{ kind: 'identity', standard: 'dotbit', identityId: '0xid123', delta: 1 }],
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
     expect(screen.getAllByText(/Identity/).length).toBeGreaterThan(0);
+  });
+
+  // Every identity standard has its own detail route; an identity delta used to
+  // be routed as 'identity', which fell through to /objects/mnft/{id} (a 404).
+  const DOTCELL_NAME_ID = `0x${'ab'.repeat(20)}`;
+  const DOTBIT_ACCOUNT_ID = `0x${'cd'.repeat(20)}`;
+  const identityDeltas: Activity['itemDeltas'] = [
+    { kind: 'identity', standard: 'dotcell', identityId: DOTCELL_NAME_ID, delta: 1 },
+    { kind: 'identity', standard: 'dotbit', identityId: DOTBIT_ACCOUNT_ID, delta: -1 },
+  ];
+
+  function renderedHrefs(): string[] {
+    return screen.getAllByRole('link').map((link) => link.getAttribute('href') ?? '');
+  }
+
+  it('links identity item deltas to the detail page of their own standard', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({ itemDeltas: identityDeltas })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    const hrefs = renderedHrefs();
+    expect(hrefs.some((href) => href.endsWith(`/identities/dotcell/${DOTCELL_NAME_ID}`))).toBe(
+      true
+    );
+    expect(hrefs.some((href) => href.endsWith(`/identities/dotbit/${DOTBIT_ACCOUNT_ID}`))).toBe(
+      true
+    );
+    expect(hrefs.some((href) => href.includes('/objects/mnft/'))).toBe(false);
+  });
+
+  it('links identity item deltas on a participant line to their own standard', () => {
+    render(
+      <ParticipantLine
+        participant={{
+          address: null,
+          lockHash: null,
+          lockHashPrefix: `0x${'11'.repeat(20)}`,
+          roles: [],
+          ckbDelta: '0',
+          usedDelta: '0',
+          itemDeltas: identityDeltas,
+          tags: 0,
+        }}
+      />
+    );
+    const hrefs = renderedHrefs();
+    expect(hrefs.some((href) => href.endsWith(`/identities/dotcell/${DOTCELL_NAME_ID}`))).toBe(
+      true
+    );
+    expect(hrefs.some((href) => href.endsWith(`/identities/dotbit/${DOTBIT_ACCOUNT_ID}`))).toBe(
+      true
+    );
+    expect(hrefs.some((href) => href.includes('/objects/mnft/'))).toBe(false);
   });
 
   it('renders time ago text', () => {
@@ -349,13 +404,13 @@ describe('ActivityEventGroup — tx-pool rows', () => {
         activity={makePoolActivity({
           interpretation: {
             status: 'partial',
-            reasons: [{ code: 'dao_compensation_unavailable' }],
+            reasons: [{ code: 'unresolved_input', detail: '0xabc:1' }],
           },
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    expect(screen.getAllByText(/DAO compensation not yet known/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/input not yet resolvable \(0xabc:1\)/).length).toBeGreaterThan(0);
   });
 
   it('keeps rendering a committed row with its block link', () => {

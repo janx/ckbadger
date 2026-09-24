@@ -597,7 +597,9 @@ describe('Identities Inventory Page', () => {
     expect(screen.getByRole('option', { name: 'DOTBIT' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '.bit Cell' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'did:ckb' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'DOTCELL' })).toBeInTheDocument();
+    // The protocol's own name for itself, not its wire value shouted.
+    expect(screen.getByRole('option', { name: '.cell' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'DOTCELL' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'D-ID' })).not.toBeInTheDocument();
 
     for (const wire of ['dotbit', 'bit_cell', 'did_ckb', 'dotcell']) {

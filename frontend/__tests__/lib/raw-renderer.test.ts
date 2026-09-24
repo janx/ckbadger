@@ -480,6 +480,8 @@ describe('renderRawPage', () => {
       nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
       parent: null,
       children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
     });
     vi.mocked(api.getDotCellItemActivities).mockResolvedValue({

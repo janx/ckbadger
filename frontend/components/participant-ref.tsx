@@ -3,27 +3,26 @@
 import { Address } from '@/components/ui/address';
 import Link from '@/components/ui/link';
 import type { ParticipantRef } from '@/lib/api';
-import { cn } from '@/lib/utils';
-
-function truncateHex(value: string, startChars = 10, endChars = 6): string {
-  return value.length > startChars + endChars
-    ? `${value.slice(0, startChars)}…${value.slice(-endChars)}`
-    : value;
-}
+import { cn, truncateHash } from '@/lib/utils';
 
 function compactLabel(value: string): string {
   if (value.startsWith('ckb1') || value.startsWith('ckt1')) {
     return `${value.slice(0, 8)}...${value.slice(-6)}`;
   }
-  return truncateHex(value, 8, 6);
+  return truncateHash(value, 8, 6);
 }
 
 /**
  * One transaction party — the ONE place a party is rendered.
  *
- * Resolved: the address, linked like any other. Unresolved: the 20-byte
- * lock-hash prefix the protocol named, marked as such and NOT linked — no page
- * exists for a party we cannot name, and inventing one would be a lie.
+ * It shows the most specific identity the API gave:
+ * - an address, linked like any other;
+ * - else a full lock hash (a lock whose script this store does not know, so it
+ *   encodes to no address), linked to the address page by hash;
+ * - else the 20-byte lock-hash prefix a protocol named, marked unresolved and
+ *   NOT linked — no page exists for a party we cannot name, and inventing one
+ *   would be a lie.
+ * A party with none of the three is an API contract violation and throws.
  *
  * `compact` is the per-participant line inside an activity row; the default is
  * the standalone form.
@@ -64,14 +63,39 @@ export function ParticipantRefView({
     );
   }
 
-  const prefix = participant.lockHashPrefix ?? '';
+  const lockHash = participant.lockHash;
+  if (lockHash !== null) {
+    return (
+      <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
+        <Link
+          href={`/address/${lockHash}`}
+          className={cn(
+            'text-text-dim hover:text-aqua font-mono transition-colors',
+            compact ? 'shrink-0 text-xs' : 'text-sm'
+          )}
+          title={lockHash}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {compact ? compactLabel(lockHash) : truncateHash(lockHash, 10, 6)}
+        </Link>
+        {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+      </span>
+    );
+  }
+
+  const prefix = participant.lockHashPrefix;
+  if (prefix === null) {
+    throw new Error(
+      `Transaction party has no address, lock hash or lock-hash prefix (roles: ${roles ?? 'none'})`
+    );
+  }
   return (
     <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
       <span
         className={cn('text-text-dim font-mono', compact ? 'text-xs' : 'text-sm')}
         title={prefix}
       >
-        {compact ? compactLabel(prefix) : truncateHex(prefix)}
+        {compact ? compactLabel(prefix) : truncateHash(prefix, 10, 6)}
       </span>
       <span
         className={cn(

@@ -288,8 +288,10 @@ function renderActivityDetail(activity: GlobalActivity): string {
 function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   return activities.map((activity) => {
     const classified = classifyActivity(activity);
-    const addr =
-      activity.participants[0]?.address ?? activity.participants[0]?.lockHashPrefix ?? '';
+    // The most specific identity the API gave: an address, else the lock hash
+    // of a lock that encodes to no address, else a protocol-named prefix.
+    const party = activity.participants[0];
+    const addr = party?.address ?? party?.lockHash ?? party?.lockHashPrefix ?? '';
     const ckbDelta = activity.participants[0]?.ckbDelta ?? '0';
     return [
       activity.timestamp,
@@ -1531,6 +1533,16 @@ export async function renderMarkdownPage(
           [
             ...(item.parent ? [['parent', item.parent.identityId, item.parent.name]] : []),
             ...item.children.map((child) => ['child', child.identityId, child.name]),
+          ]
+        ),
+        '',
+        // The detail carries one page of sub-names; the rest page through
+        // `…/items/{id}/children` from this cursor.
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['childrenHasMore', item.childrenHasMore],
+            ['childrenNextCursor', item.childrenNextCursor ?? '-'],
           ]
         ),
         '',
