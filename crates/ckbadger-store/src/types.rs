@@ -82,6 +82,57 @@ pub struct ConsumedCellMeta {
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
+/// How an address took part in one transaction, as stored in
+/// `AddrTxValue.flags`. The domain is closed: a byte outside it is corruption
+/// and fails where the row is decoded, never renders as some default label.
+/// On the wire it is the single `u8` it always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+#[repr(u8)]
+pub enum AddrTxType {
+    Received = 0,
+    Sent = 1,
+    Internal = 2,
+    Transfer = 3,
+    /// A party the protocol named that holds no cell in this transaction.
+    Named = 4,
+}
+
+impl AddrTxType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Received => "received",
+            Self::Sent => "sent",
+            Self::Internal => "internal",
+            Self::Transfer => "transfer",
+            Self::Named => "named",
+        }
+    }
+}
+
+impl From<AddrTxType> for u8 {
+    fn from(tx_type: AddrTxType) -> Self {
+        tx_type as u8
+    }
+}
+
+impl TryFrom<u8> for AddrTxType {
+    type Error = String;
+
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
+        match byte {
+            0 => Ok(Self::Received),
+            1 => Ok(Self::Sent),
+            2 => Ok(Self::Internal),
+            3 => Ok(Self::Transfer),
+            4 => Ok(Self::Named),
+            other => Err(format!(
+                "unknown addr_tx type byte {other} (known: 0..=4) — the row is corrupt"
+            )),
+        }
+    }
+}
+
 /// Pre-computed value stored in CF_ADDR_TXS.
 /// Encodes capacity change, transaction type, and the participant tag bitmask
 /// (mirrors `ParticipantDelta::tags` for the same `(lock_hash, block, tx_idx, tx_hash)`),
@@ -90,17 +141,17 @@ pub struct ConsumedCellMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AddrTxValue {
     pub capacity_change: i64,
-    pub flags: u8,
+    pub flags: AddrTxType,
     pub tags: u16,
 }
 
 impl AddrTxValue {
-    pub const TX_TYPE_RECEIVED: u8 = 0;
-    pub const TX_TYPE_SENT: u8 = 1;
-    pub const TX_TYPE_INTERNAL: u8 = 2;
-    pub const TX_TYPE_TRANSFER: u8 = 3;
+    pub const TX_TYPE_RECEIVED: AddrTxType = AddrTxType::Received;
+    pub const TX_TYPE_SENT: AddrTxType = AddrTxType::Sent;
+    pub const TX_TYPE_INTERNAL: AddrTxType = AddrTxType::Internal;
+    pub const TX_TYPE_TRANSFER: AddrTxType = AddrTxType::Transfer;
     /// A party the protocol named that holds no cell in this transaction.
-    pub const TX_TYPE_NAMED: u8 = 4;
+    pub const TX_TYPE_NAMED: AddrTxType = AddrTxType::Named;
 
     pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool, tags: u16) -> Self {
         let tx_type = match (has_inputs, has_outputs) {
@@ -125,13 +176,7 @@ impl AddrTxValue {
     }
 
     pub fn tx_type_str(&self) -> &'static str {
-        match self.flags {
-            Self::TX_TYPE_RECEIVED => "received",
-            Self::TX_TYPE_SENT => "sent",
-            Self::TX_TYPE_INTERNAL => "internal",
-            Self::TX_TYPE_NAMED => "named",
-            _ => "transfer",
-        }
+        self.flags.as_str()
     }
 }
 
@@ -3084,6 +3129,37 @@ mod participant_model_tests {
         let back: ParticipantDelta =
             bincode::deserialize(&bincode::serialize(&prefix).unwrap()).unwrap();
         assert_eq!(back.id, ParticipantId::LockPrefix([0x22; 20]));
+    }
+
+    /// The tx-type byte of an `AddrTxValue` has a closed domain. A byte outside
+    /// it is corruption and must fail where the row is read — it used to decode
+    /// fine and render as "transfer". The wire layout stays the plain
+    /// `(capacity_change: i64, flags: u8, tags: u16)` tuple, so this changes no
+    /// stored byte.
+    #[test]
+    fn addr_tx_value_tx_type_domain_is_closed() {
+        let labels = [
+            (0u8, "received"),
+            (1, "sent"),
+            (2, "internal"),
+            (3, "transfer"),
+            (4, "named"),
+        ];
+        for (byte, label) in labels {
+            let raw = bincode::serialize(&(-5i64, byte, 0x0102u16)).unwrap();
+            let value: AddrTxValue = bincode::deserialize(&raw)
+                .unwrap_or_else(|e| panic!("tx type {byte} must decode: {e}"));
+            assert_eq!(value.tx_type_str(), label);
+            assert_eq!(value.capacity_change, -5);
+            assert_eq!(value.tags, 0x0102);
+            assert_eq!(bincode::serialize(&value).unwrap(), raw, "{label}");
+        }
+        for byte in [5u8, 9, 0xFF] {
+            let raw = bincode::serialize(&(0i64, byte, 0u16)).unwrap();
+            let err = bincode::deserialize::<AddrTxValue>(&raw)
+                .expect_err("an out-of-domain tx type must not decode");
+            assert!(err.to_string().contains(&byte.to_string()), "{err}");
+        }
     }
 
     #[test]
