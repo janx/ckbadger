@@ -138,6 +138,70 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// The newest transaction at or below `block_num` in which `lock_hash`
+    /// held a cell, as `(block_num, tx_idx, tx_hash)`.
+    ///
+    /// Reads `CF_ADDR_TXS` only: a protocol NAMING the address by its 20-byte
+    /// prefix (`CF_ADDR_TXS_BY_PREFIX`) is not cell activity, and
+    /// `addr_balance.last_activity` — which both forward paths set from cell
+    /// participation alone — must never be repaired onto one. One seek.
+    pub fn latest_cell_addr_tx_at_or_below(
+        &self,
+        lock_hash: &[u8],
+        block_num: i64,
+    ) -> anyhow::Result<Option<(i64, i32, Vec<u8>)>> {
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "latest_cell_addr_tx_at_or_below expects 32-byte lock_hash, got {} bytes",
+                lock_hash.len()
+            );
+        }
+        if block_num < 0 {
+            anyhow::bail!(
+                "latest_cell_addr_tx_at_or_below expects a non-negative block, got {}: lock_hash=0x{}",
+                block_num,
+                bytes_to_hex(lock_hash)
+            );
+        }
+        let seek_key = crate::keys::encode_addr_tx_block_seek_key(lock_hash, block_num);
+        let mut iter = self.iterator_cf(
+            self.cf_addr_txs(),
+            rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Forward),
+        );
+        let Some(item) = iter.next() else {
+            return Ok(None);
+        };
+        let (key, _) = item.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to iterate addr_txs in latest_cell_addr_tx_at_or_below: lock_hash=0x{}, block={}, error={}",
+                bytes_to_hex(lock_hash),
+                block_num,
+                e
+            )
+        })?;
+        if !key.starts_with(lock_hash) {
+            return Ok(None);
+        }
+        if key.len() != crate::keys::ADDR_TX_KEY_SIZE {
+            anyhow::bail!(
+                "addr_txs key is not {} bytes: len={}, lock_hash=0x{}",
+                crate::keys::ADDR_TX_KEY_SIZE,
+                key.len(),
+                bytes_to_hex(lock_hash)
+            );
+        }
+        let (_, row_block, tx_idx, tx_hash) = crate::keys::decode_addr_tx_key(&key);
+        if row_block > block_num {
+            anyhow::bail!(
+                "addr_txs seek for block <= {} landed on block {}: lock_hash=0x{} — descending key order violated",
+                block_num,
+                row_block,
+                bytes_to_hex(lock_hash)
+            );
+        }
+        Ok(Some((row_block, tx_idx, tx_hash)))
+    }
+
     /// The protocol-named half of [`Self::list_addr_txs_recent`].
     #[allow(clippy::type_complexity)]
     pub fn list_addr_txs_by_prefix_recent(
@@ -331,6 +395,46 @@ mod tests {
         assert!(err
             .to_string()
             .contains("list_addr_txs_recent expects 32-byte lock_hash"));
+    }
+
+    #[test]
+    fn test_latest_cell_addr_tx_at_or_below_reads_cell_rows_only() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock = [0xAA; 32];
+        let next_lock = [0xAB; 32];
+        let val = AddrTxValue::new(0, false, true, 0);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 1, 2, &[0x01; 32], &val);
+        batch.put_addr_tx(&lock, 5, 0, &[0x05; 32], &val);
+        // Named-only participation: never cell activity.
+        batch.put_addr_tx_by_prefix(&lock[..20], 3, 0, &[0x03; 32], &val);
+        // The next lock's rows sit right after this lock's in key order.
+        batch.put_addr_tx(&next_lock, 9, 0, &[0x09; 32], &val);
+        batch.commit().unwrap();
+
+        let at = |block| store.latest_cell_addr_tx_at_or_below(&lock, block).unwrap();
+        assert_eq!(at(4), Some((1, 2, vec![0x01; 32])));
+        assert_eq!(at(3), Some((1, 2, vec![0x01; 32])));
+        assert_eq!(at(5), Some((5, 0, vec![0x05; 32])));
+        assert_eq!(at(100), Some((5, 0, vec![0x05; 32])));
+        assert_eq!(at(0), None, "must not cross into the next lock's rows");
+        assert_eq!(
+            store
+                .latest_cell_addr_tx_at_or_below(&[0xCC; 32], 100)
+                .unwrap(),
+            None
+        );
+
+        let err = store
+            .latest_cell_addr_tx_at_or_below(&lock, -1)
+            .unwrap_err();
+        assert!(err.to_string().contains("non-negative block"));
+        let err = store
+            .latest_cell_addr_tx_at_or_below(&[0xAA; 31], 1)
+            .unwrap_err();
+        assert!(err.to_string().contains("expects 32-byte lock_hash"));
     }
 
     #[test]

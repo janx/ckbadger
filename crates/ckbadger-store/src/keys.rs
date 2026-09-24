@@ -499,6 +499,24 @@ pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i
     key
 }
 
+/// Seek key for the newest `addr_txs` row of `lock_hash` at or below
+/// `block_num`. Rows are descending by block within a lock-hash prefix, so a
+/// forward seek from `lock_hash ‖ desc(block_num)` passes exactly the rows of
+/// higher blocks and lands on the first row of `block_num` or below, whatever
+/// its tx index.
+pub fn encode_addr_tx_block_seek_key(lock_hash: &[u8], block_num: i64) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_addr_tx_block_seek_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
+    );
+    let mut key = Vec::with_capacity(HASH32_LEN + 8);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&encode_desc_block_num(block_num));
+    key
+}
+
 pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
     assert!(
         key.len() == ADDR_TX_KEY_SIZE,
@@ -3451,6 +3469,14 @@ mod tests {
                 },
             },
             FixedWidthCase {
+                encoder: "encode_addr_tx_block_seek_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_tx_block_seek_key(h, 1);
+                },
+            },
+            FixedWidthCase {
                 encoder: "encode_token_holder_key",
                 component: "type_hash",
                 expected: 32,
@@ -3982,6 +4008,19 @@ mod tests {
     #[should_panic(expected = "encode_outpoint: tx_hash must be exactly 32 bytes, got 31")]
     fn test_outpoint_rejects_undersized_tx_hash() {
         let _ = encode_outpoint(&[0x9B; 31], 0);
+    }
+
+    #[test]
+    fn test_addr_tx_block_seek_key_orders_between_blocks() {
+        let lock = [0xAA; 32];
+        let seek = encode_addr_tx_block_seek_key(&lock, 5);
+        // Every row of block 5, whatever its tx index or hash, sorts at or after the seek key.
+        assert!(encode_addr_tx_key(&lock, 5, 0, &[0x00; 32]) >= seek);
+        assert!(encode_addr_tx_key(&lock, 5, i32::MAX, &[0x00; 32]) >= seek);
+        assert!(encode_addr_tx_key(&lock, 5, 0, &[0xFF; 32]) >= seek);
+        // Lower blocks follow it; higher blocks precede it.
+        assert!(encode_addr_tx_key(&lock, 4, i32::MAX, &[0x00; 32]) > seek);
+        assert!(encode_addr_tx_key(&lock, 6, 0, &[0xFF; 32]) < seek);
     }
 
     #[test]
