@@ -209,11 +209,30 @@ impl FacetDifference {
 // The typed export, as this crate consumes it.
 // ---------------------------------------------------------------------------
 
+/// Mirrors the API's `verify::Anchor`, field for field and type for type.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportAnchor {
-    pub block_number: u64,
+    pub block_number: i64,
     pub block_hash: String,
+}
+
+impl ExportAnchor {
+    /// The chain-side anchor: node heights are unsigned, so a negative
+    /// export anchor is refused here rather than reinterpreted.
+    pub fn source_anchor(&self) -> anyhow::Result<SourceAnchor> {
+        let block_number = u64::try_from(self.block_number).map_err(|_| {
+            anyhow!(
+                "the typed export pinned anchor block {} ({}), which is not a chain height",
+                self.block_number,
+                self.block_hash
+            )
+        })?;
+        Ok(SourceAnchor {
+            block_number,
+            block_hash: self.block_hash.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1081,10 +1100,7 @@ impl Check for EntityCapacityHistoryMatchesChain {
             }),
         )?;
 
-        let anchor = SourceAnchor {
-            block_number: export.anchor.block_number,
-            block_hash: export.anchor.block_hash.clone(),
-        };
+        let anchor = export.anchor.source_anchor()?;
 
         if !export.complete {
             return Ok(CheckResult::inconclusive(format!(
@@ -1833,6 +1849,31 @@ mod tests {
         let budget = raised.to_run_budget();
         assert_eq!(budget.max_rpc_requests(), 400_000);
         assert_eq!(budget.max_records(), 1_000_000);
+    }
+
+    /// `ExportAnchor` mirrors the API's `Anchor`, whose `blockNumber` is `i64`.
+    /// The chain side needs a `u64` height, so the one conversion refuses a
+    /// negative anchor explicitly instead of letting a wire-type mismatch
+    /// decide.
+    #[test]
+    fn export_anchor_mirrors_the_api_i64_and_converts_explicitly() {
+        let anchor: ExportAnchor =
+            serde_json::from_value(serde_json::json!({"blockNumber": 100, "blockHash": "0xb1"}))
+                .unwrap();
+        let _: i64 = anchor.block_number;
+        assert_eq!(
+            anchor.source_anchor().unwrap(),
+            SourceAnchor {
+                block_number: 100,
+                block_hash: "0xb1".to_string(),
+            }
+        );
+
+        let negative: ExportAnchor =
+            serde_json::from_value(serde_json::json!({"blockNumber": -1, "blockHash": "0xb1"}))
+                .expect("the mirror decodes every value the API type can carry");
+        let err = negative.source_anchor().unwrap_err();
+        assert!(format!("{err:#}").contains("-1"), "{err:#}");
     }
 
     #[test]
