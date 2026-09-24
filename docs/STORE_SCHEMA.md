@@ -200,6 +200,15 @@ which would make rollback delete a row that had a value. None of these prefixes 
 rolled-back mint has already lost its entry to the undo replay that runs first, and a
 rolled-back transfer leaves its item alive (POSTMORTEM PROTO-010 and PROTO-012).
 
+**Entity rows are owned by undo replay alone.** `identity_data`, `spore_data` and `mnft_data`,
+with their owner-index and outpoint rows, are restored only by undo replay, which runs before
+`rollback_to_block` at every entry point. Stage 10 (`repair_spore_object_domain`) rebuilds derived
+indexes and aggregates from the surviving entities — including the identity owner counts in
+`stats_identity`, keyed by `ParticipantId` (`Lock` or `LockPrefix` picks the key encoder) — and
+never deletes an entity: one with `created_at_block > rollback_to` still present there means its
+writer recorded no pre-image, and the rollback fails `… missing undo pre-image from writer`,
+committing nothing (`docs/prompts/REORG_HANDLING.md`).
+
 **`addr_prefix_stats` owns no undo scope.** Rollback reverses it by the number of
 `addr_txs_by_prefix` rows it deletes — the same shape `addr_balance.txs_count` is reversed from the
 `addr_txs` rows it deletes — and then asserts the counter **equals** the surviving rows. An undo
@@ -317,7 +326,8 @@ inline as Class C sealed aggregates:
   rows keyed by token `type_script_hash`. A token's daily capacity/knowledge history counts every
   cell whose type script is that sUDT/xUDT instance, whatever its data holds (an owner-mode cell
   too short for a u128 amount included); the amount facets — holders, supply, transfer counts,
-  `TOKEN_HOURLY` — need an amount. Bulk and live apply the same rule (POSTMORTEM STATS-011).
+  `TOKEN_HOURLY` and the token row — need an amount. Bulk (via `CellSemanticTag::{Sudt, Xudt}`)
+  and live (`pipeline::token_daily_member`) apply the same rule (POSTMORTEM STATS-011).
 
 ### stats_hodl Key Prefixes
 

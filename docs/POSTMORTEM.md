@@ -2900,10 +2900,20 @@ reverse-index rows with no replay owner". Regressions:
 `mnft_class_recreate_rollback_removes_the_new_outpoint_row` (both assert `CF_CELLS` bytes are
 unchanged).
 
-**Lesson**: Enumerate a bug class by what the rows are, not by who calls the function you just
-fixed: here, every reverse-index row written in live mode that no replay stage owns.
+**Follow-up (plan R6)**: the rollback's identity/Spore/mNFT repair scan used to delete any entity
+still present with `created_at_block > rollback_to` — a second owner that silently papered over a
+writer's missing pre-image. `fix/review-be2` 12b9a443 turns that deletion into an error naming the
+CF, id, standard, `created_at_block` and `rollback_to` ("missing undo pre-image from writer"); the
+refused rollback commits nothing. A future gap of this kind now stops the first reorg that meets
+it instead of hiding (`rollback_refuses_an_entity_that_survived_undo_replay`).
 
-**Files**: `crates/indexer/src/db/writer/mnft.rs`, `crates/indexer/src/sync/batch.rs` (tests)
+**Lesson**: Enumerate a bug class by what the rows are, not by who calls the function you just
+fixed: here, every reverse-index row written in live mode that no replay stage owns. And a
+"cleanup" stage that deletes what another owner should have restored does not fix that owner's
+gaps, it hides them.
+
+**Files**: `crates/indexer/src/db/writer/mnft.rs`, `crates/indexer/src/sync/batch.rs` (tests),
+`crates/ckbadger-store/src/reorg_ops.rs`
 
 ---
 
