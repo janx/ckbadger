@@ -4775,6 +4775,21 @@ impl CkbadgerStore {
             let idx_key = keys::encode_identity_by_collection_key(&collection_id, &identity_id);
             batch.put_cf(self.cf_identity_by_collection(), idx_key, []);
             secondary_keys_written += 1;
+            // A `.cell` sub-name is also listed under its parent, keyed by the
+            // parent's padded id — exactly what the forward writers file
+            // (live `db/writer/dotcell.rs`, bulk `owners/object.rs`). The range
+            // delete above removed those rows too, so every surviving sub-name
+            // (live or not; readers filter liveness) gets its row back here.
+            if let IdentityExtra::DotCell {
+                parent_id: Some(parent),
+                ..
+            } = &entry.extra
+            {
+                let parent_key =
+                    keys::encode_identity_by_collection_key(&keys::pad_id_32(parent), &identity_id);
+                batch.put_cf(self.cf_identity_by_collection(), parent_key, []);
+                secondary_keys_written += 1;
+            }
 
             let agg = identity_aggs
                 .entry(collection_id.clone())
@@ -12007,6 +12022,196 @@ mod tests {
             bincode::serialize(&untouched).unwrap(),
             bincode::serialize(&expected).unwrap(),
             "a date no rolled-back block touched must be left exactly as written"
+        );
+    }
+
+    /// A `.cell` identity as the forward writers persist it, for rollback
+    /// fixtures that must seed a name and (optionally) its parent.
+    fn dotcell_identity(
+        label: &str,
+        created_at_block: i64,
+        parent_id: Option<[u8; 20]>,
+    ) -> IdentityEntry {
+        IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some(format!("{label}.cell")),
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![created_at_block as u8; 32],
+            extra: IdentityExtra::DotCell {
+                label: label.to_string(),
+                namespace_args: [0x5A; 20],
+                layout_version: 3,
+                expired_at: 1_900_000_000,
+                owner_hash20: [0x0E; 20],
+                manager_hash20: [0x0E; 20],
+                next_id: [0; 20],
+                records_hash: [0; 32],
+                records: Vec::new(),
+                parent_id,
+            },
+        }
+    }
+
+    fn identity_by_collection_rows(store: &CkbadgerStore) -> std::collections::BTreeSet<Vec<u8>> {
+        store
+            .iterator_cf(store.cf_identity_by_collection(), IteratorMode::Start)
+            .map(|item| item.unwrap().0.to_vec())
+            .collect()
+    }
+
+    /// Review #2: stage 10 range-deletes `CF_IDENTITY_BY_COLLECTION` and must
+    /// rebuild exactly what the forward writers (`db/writer/dotcell.rs`, bulk
+    /// `owners/object.rs`) write — the sentinel row for every surviving
+    /// identity AND the `.cell` parent->child row for every surviving sub-name
+    /// (live or not; read paths filter liveness). A rolled-back sub-name emits
+    /// neither.
+    #[test]
+    fn rollback_rebuilds_dotcell_parent_child_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let alice_id = [0xA1u8; 20];
+        let child_id = [0xB2u8; 20];
+        let alice = dotcell_identity("alice", 10, None);
+        let child = dotcell_identity("shop.alice", 12, Some(alice_id));
+        // A recycled sub-name registered before either fork point: the index
+        // lists every child ever registered, so its parent row stays.
+        let recycled_id = [0xC3u8; 20];
+        let recycled = IdentityEntry {
+            is_live: false,
+            ..dotcell_identity("old.alice", 5, Some(alice_id))
+        };
+
+        let sentinel_row =
+            |id: &[u8]| keys::encode_identity_by_collection_key(&DOTCELL_SENTINEL_COLLECTION, id);
+        let parent_row =
+            |id: &[u8]| keys::encode_identity_by_collection_key(&keys::pad_id_32(&alice_id), id);
+
+        let cell_key = keys::encode_outpoint(&[0xAB; 32], 0);
+        {
+            let mut batch = StoreBatch::new(&store);
+            // Blocks 1..=16 inside one day, so both rollback targets have a header.
+            for n in 1..=16i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: 1_790_038_800_000 + n * 10_000,
+                        epoch_number: 11,
+                        epoch_index: (n - 1) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 0,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.put_identity(&alice_id, &alice);
+            batch.put_identity(&child_id, &child);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &alice_id);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &child_id);
+            batch.put_identity_by_collection(&keys::pad_id_32(&alice_id), &child_id);
+            batch.put_identity(&recycled_id, &recycled);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &recycled_id);
+            batch.put_identity_by_collection(&keys::pad_id_32(&alice_id), &recycled_id);
+            batch.put_cell_raw_key(
+                &cell_key,
+                &LiveCellInfo {
+                    capacity: 10_000_000_000,
+                    lock_script_hash: vec![0xC1; 32],
+                    lock_code_hash: vec![0xC2; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0xC3; 20],
+                    type_script_hash: None,
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 6_100_000_000,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+                2,
+            );
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 11,
+                start_block: 1,
+                end_block: Some(16),
+                blocks_count: 16,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(1_790_038_810_000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+        let cell_before = store.get_cf(store.cf_cells(), &cell_key).unwrap();
+        assert!(
+            cell_before.is_some(),
+            "fixture must seed a CF_CELLS payload"
+        );
+
+        // Both names survive: every forward row must come back.
+        store.rollback_to_block(15).unwrap();
+        let expected: std::collections::BTreeSet<Vec<u8>> = [
+            sentinel_row(&alice_id),
+            sentinel_row(&child_id),
+            sentinel_row(&recycled_id),
+            parent_row(&child_id),
+            parent_row(&recycled_id),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            identity_by_collection_rows(&store),
+            expected,
+            "a rollback that orphans no .cell tx must rebuild the sentinel rows and the \
+             parent->child row the forward writers wrote"
+        );
+        assert_eq!(
+            store
+                .list_identity_ids_by_collection(&keys::pad_id_32(&alice_id), None, 200)
+                .unwrap(),
+            vec![child_id.to_vec(), recycled_id.to_vec()],
+            "the parent's child list (live or not) must survive the rollback"
+        );
+
+        // The sub-name's registration block is orphaned: it and its parent row go.
+        store.rollback_to_block(11).unwrap();
+        assert!(store.get_identity(&child_id).unwrap().is_none());
+        assert!(store.get_identity(&alice_id).unwrap().is_some());
+        let expected: std::collections::BTreeSet<Vec<u8>> = [
+            sentinel_row(&alice_id),
+            sentinel_row(&recycled_id),
+            parent_row(&recycled_id),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            identity_by_collection_rows(&store),
+            expected,
+            "a rolled-back sub-name must emit neither its sentinel row nor its parent row"
+        );
+
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &cell_key).unwrap(),
+            cell_before,
+            "append-only CF_CELLS payload bytes must be unchanged by rollback"
         );
     }
 }
