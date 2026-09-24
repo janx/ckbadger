@@ -123,8 +123,8 @@ pub fn test_config_with_ckb_db_path(
         // Tests drive the mirror explicitly (install a snapshot, or run one
         // refresh against wiremock); no background loop polls a node.
         pool_mirror_enabled: true,
-        pool_poll_interval_ms: 1000,
-        pool_max_tracked_txs: 50_000,
+        pool_poll_interval_ms: std::num::NonZeroU64::new(1000).unwrap(),
+        pool_max_tracked_txs: std::num::NonZeroUsize::new(50_000).unwrap(),
     }
 }
 
@@ -372,68 +372,237 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
 pub const TEST_SECP_LOCK_CODE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 
-/// The node reports the pending transaction's previous output as live.
-///
-/// Pending inputs resolve through `get_live_cell(out_point, with_data = true)`
-/// — live cells are primitive truth in the node's own database, and unlike the
-/// store's `LiveCellInfo` the node returns the data bytes that DAO / `.bit` /
-/// UDT interpretation needs.
-pub async fn mount_live_cell_rpc(server: &MockServer, capacity_hex: &str, lock_args_hex: &str) {
-    let response = serde_json::json!({
+pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
+    mount_transaction_rpc(server, pending_transaction_rpc_response(hash, status)).await;
+}
+
+/// Serve `response` (a whole `get_transaction` JSON-RPC response) for exactly
+/// the transaction it carries, so a test can script a transaction AND the
+/// parents its inputs resolve through, each answered for its own hash.
+pub async fn mount_transaction_rpc(server: &MockServer, response: serde_json::Value) {
+    let hash = response["result"]["transaction"]["hash"]
+        .as_str()
+        .expect("get_transaction fixture carries its transaction hash")
+        .to_string();
+    Mock::given(method("POST"))
+        .and(body_partial_json(serde_json::json!({
+            "method": "get_transaction",
+            "params": [hash]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
+/// The node does not know this transaction: `{transaction: null, status: unknown}`.
+pub async fn mount_transaction_unknown_to_node(server: &MockServer, hash: &str) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(serde_json::json!({
+            "method": "get_transaction",
+            "params": [hash]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "transaction": null,
+                "cycles": null,
+                "fee": null,
+                "time_added_to_pool": null,
+                "min_replace_fee": null,
+                "tx_status": {
+                    "status": "unknown",
+                    "block_hash": null,
+                    "block_number": null,
+                    "reason": null
+                }
+            }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// A whole `get_transaction` response for a transaction with these inputs
+/// (`(previous tx hash, index)`), outputs and data, in `status`. A committed
+/// one carries its block `(number, hash)` and, like a real node, no pool fee.
+pub fn transaction_rpc_response(
+    hash: &str,
+    inputs: &[(&str, u32)],
+    outputs: Vec<serde_json::Value>,
+    outputs_data: Vec<String>,
+    status: &str,
+    block: Option<(u64, &str)>,
+) -> serde_json::Value {
+    serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "result": {
-            "cell": {
-                "data": { "content": "0x", "hash": format!("0x{}", "00".repeat(32)) },
-                "output": {
-                    "capacity": capacity_hex,
-                    "lock": {
-                        "code_hash": TEST_SECP_LOCK_CODE_HASH,
-                        "hash_type": "type",
-                        "args": lock_args_hex
-                    },
-                    "type": null
-                }
+            "transaction": {
+                "hash": hash,
+                "version": "0x0",
+                "cell_deps": [],
+                "header_deps": [],
+                "inputs": inputs
+                    .iter()
+                    .map(|(tx_hash, index)| serde_json::json!({
+                        "previous_output": { "tx_hash": tx_hash, "index": format!("0x{index:x}") },
+                        "since": "0x0"
+                    }))
+                    .collect::<Vec<_>>(),
+                "outputs": outputs,
+                "outputs_data": outputs_data,
+                "witnesses": ["0x"]
             },
-            "status": "live"
+            "cycles": null,
+            "fee": null,
+            "time_added_to_pool": null,
+            "min_replace_fee": null,
+            "tx_status": {
+                "status": status,
+                "block_hash": block.map(|(_, hash)| hash),
+                "block_number": block.map(|(number, _)| format!("0x{number:x}")),
+                "reason": null
+            }
         }
-    });
-    Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_live_cell" }),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response))
-        .mount(server)
-        .await;
+    })
 }
 
-/// The node reports the previous output as already spent.
-pub async fn mount_dead_cell_rpc(server: &MockServer) {
-    let response = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": { "cell": null, "status": "dead" }
-    });
-    Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_live_cell" }),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response))
-        .mount(server)
-        .await;
+/// The committed transaction that created the pending fixture's input
+/// (`pending_previous_output_hash_hex():0`): one secp output owned by
+/// `lock_args_hex`. The pending transaction spends it, so it is no longer live —
+/// it resolves from this body, as it does against a real node.
+pub fn funding_transaction_rpc_response(
+    capacity_hex: &str,
+    lock_args_hex: &str,
+) -> serde_json::Value {
+    let grandparent = format!("0x{}", "ee".repeat(32));
+    transaction_rpc_response(
+        &pending_previous_output_hash_hex(),
+        &[(&grandparent, 0)],
+        vec![serde_json::json!({
+            "capacity": capacity_hex,
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": lock_args_hex
+            },
+            "type": null
+        })],
+        vec!["0x".to_string()],
+        "committed",
+        Some((0x1000, &format!("0x{}", "cc".repeat(32)))),
+    )
 }
 
-pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
+/// A header answering `get_header` (by hash) and `get_header_by_number`, whose
+/// DAO field carries accumulated rate `ar` (bytes 8..16, little-endian).
+pub async fn mount_header_rpc(server: &MockServer, number: u64, hash: &str, ar: u64) {
+    let mut dao = [0u8; 32];
+    dao[8..16].copy_from_slice(&ar.to_le_bytes());
+    let header = serde_json::json!({
+        "compact_target": "0x1e083126",
+        "dao": format!("0x{}", hex::encode(dao)),
+        "epoch": "0x0",
+        "extra_hash": format!("0x{}", "00".repeat(32)),
+        "hash": hash,
+        "nonce": "0x0",
+        "number": format!("0x{number:x}"),
+        "parent_hash": format!("0x{}", "00".repeat(32)),
+        "proposals_hash": format!("0x{}", "00".repeat(32)),
+        "timestamp": "0x18bcfe5687b",
+        "transactions_root": format!("0x{}", "00".repeat(32)),
+        "version": "0x0"
+    });
+    for (rpc_method, param) in [
+        ("get_header", serde_json::json!(hash)),
+        (
+            "get_header_by_number",
+            serde_json::json!(format!("0x{number:x}")),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "method": rpc_method,
+                "params": [param]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": header
+            })))
+            .mount(server)
+            .await;
+    }
+}
+
+/// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
+/// these pending transactions (`(tx_hash, time_added_to_pool_hex)`).
+pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
     Mock::given(method("POST"))
-        .and(body_partial_json(serde_json::json!({
-            "method": "get_transaction"
+        .and(body_partial_json(
+            serde_json::json!({ "method": "tx_pool_info" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tip_hash": format!("0x{}", "77".repeat(32)),
+                "tip_number": "0x3e8",
+                "last_txs_updated_at": "0x1",
+                "pending": format!("0x{:x}", pending.len()),
+                "proposed": "0x0",
+                "orphan": "0x0"
+            }
         })))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(pending_transaction_rpc_response(hash, status)),
-        )
         .mount(server)
         .await;
+
+    let entries: serde_json::Map<String, serde_json::Value> = pending
+        .iter()
+        .map(|(hash, timestamp)| {
+            (
+                hash.to_string(),
+                serde_json::json!({
+                    "cycles": "0x5208",
+                    "size": "0x1f4",
+                    "fee": "0x174",
+                    "ancestors_count": "0x0",
+                    "ancestors_size": "0x1f4",
+                    "ancestors_cycles": "0x5208",
+                    "timestamp": timestamp
+                }),
+            )
+        })
+        .collect();
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_raw_tx_pool" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "pending": entries, "proposed": {} }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Run ONE tx-pool mirror round against the node at `rpc_url`, publishing into
+/// `state`'s mirror exactly as the background loop would.
+pub async fn refresh_pool_mirror_once(
+    state: &Arc<AppState>,
+    rpc_url: &str,
+) -> ckbadger_api::pool::RefreshOutcome {
+    let mut refresher = ckbadger_api::pool::PoolRefresher::new(
+        Arc::new(ckbadger_api::pool::HttpPoolSource::new(rpc_url)),
+        state.store.clone(),
+        state.pool_mirror.clone(),
+        ckbadger_api::pool::PoolRefresherConfig {
+            max_tracked_txs: std::num::NonZeroUsize::new(100).unwrap(),
+            is_mainnet: state.ckb_network == "mainnet",
+        },
+    );
+    refresher.refresh_once().await
 }
 
 pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
@@ -627,6 +796,7 @@ pub fn make_test_pool_record_with(
             time_added_to_pool_ms,
         },
         outputs: vec![],
+        input_locks: vec![],
         actions: Some(actions),
         participants: vec![ckbadger_api::pool::PoolParticipant {
             id: ckbadger_store::types::ParticipantId::lock(lock_hash)
@@ -644,7 +814,6 @@ pub fn make_test_pool_record_with(
         is_cellbase: false,
         interpretation,
         first_seen_ms: time_added_to_pool_ms as i64,
-        last_seen_ms: time_added_to_pool_ms as i64,
     }
 }
 

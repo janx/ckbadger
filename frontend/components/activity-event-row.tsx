@@ -218,7 +218,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
         ),
         value: (
           <Link
-            href={getIdentityItemDetailHref('identity', item.identityId)}
+            href={getIdentityItemDetailHref(item.standard, item.identityId)}
             className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
@@ -576,7 +576,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       const prefix = item.delta > 0 ? '+' : '';
       return (
         <Link
-          href={getIdentityItemDetailHref('identity', item.identityId)}
+          href={getIdentityItemDetailHref(item.standard, item.identityId)}
           className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
           onClick={(e) => e.stopPropagation()}
         >

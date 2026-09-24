@@ -194,16 +194,9 @@ fn convert_transaction(tx: &core::TransactionView) -> RpcTransactionView {
         cell_deps: raw
             .cell_deps()
             .into_iter()
-            .map(|dep| {
-                let dep_type = match dep.dep_type().as_slice()[0] {
-                    0 => "code",
-                    1 => "dep_group",
-                    _ => "code",
-                };
-                RpcCellDep {
-                    out_point: convert_out_point(&dep.out_point()),
-                    dep_type: dep_type.to_string(),
-                }
+            .map(|dep| RpcCellDep {
+                out_point: convert_out_point(&dep.out_point()),
+                dep_type: convert_dep_type(dep.dep_type().as_slice()[0]).to_string(),
             })
             .collect(),
         header_deps: raw
@@ -264,15 +257,35 @@ fn convert_out_point(out_point: &packed::OutPoint) -> RpcOutPoint {
     }
 }
 
+/// The RPC label of a cell dep's `dep_type` byte.
+///
+/// CKB's own store holds only the two consensus values; anything else means
+/// the store is corrupt or from an incompatible version, and defaulting it to
+/// `code` would hand the indexer a transaction that is not the one on chain.
+fn convert_dep_type(byte: u8) -> &'static str {
+    match byte {
+        0 => "code",
+        1 => "dep_group",
+        other => panic!(
+            "CKB store cell dep dep_type byte {other:#04x} is not a consensus value (code=0, dep_group=1)"
+        ),
+    }
+}
+
 fn convert_script(script: &packed::Script) -> RpcScript {
     let hash_type_byte = script.hash_type().as_slice()[0];
-    let hash_type = match hash_type_byte {
-        0 => "data",
-        1 => "type",
-        2 => "data1",
-        4 => "data2",
-        _ => "data",
-    };
+    // The label comes from the workspace's one hash_type table. A byte that
+    // table does not know is not a consensus value: mapping it to any label
+    // would give the indexer a script that hashes to something other than the
+    // one in the CKB store, so it stops here with the script named.
+    let hash_type = ckbadger_common::hash_type_label(hash_type_byte).unwrap_or_else(|| {
+        panic!(
+            "CKB store script hash_type byte {hash_type_byte:#04x} is not a consensus value \
+             (data=0, type=1, data1=2, data2=4): code_hash=0x{}, args=0x{}",
+            hex::encode(script.code_hash().as_slice()),
+            hex::encode(script.args().raw_data())
+        )
+    });
     RpcScript {
         code_hash: format!("0x{}", hex::encode(script.code_hash().as_slice())),
         hash_type: hash_type.to_string(),
@@ -282,28 +295,43 @@ fn convert_script(script: &packed::Script) -> RpcScript {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn script_with_hash_type(byte: u8) -> packed::Script {
+        packed::Script::new_builder()
+            .hash_type(packed::Byte::new(byte))
+            .build()
+    }
+
+    /// The conversion names every consensus hash_type through the workspace's
+    /// one table — `data2` is 4 — and refuses a byte that table does not know
+    /// instead of defaulting it to `data`.
     #[test]
-    fn test_hash_type_conversion() {
-        assert_eq!(
-            match 0u8 {
-                0 => "data",
-                1 => "type",
-                2 => "data1",
-                4 => "data2",
-                _ => "data",
-            },
-            "data"
-        );
-        assert_eq!(
-            match 1u8 {
-                0 => "data",
-                1 => "type",
-                2 => "data1",
-                4 => "data2",
-                _ => "data",
-            },
-            "type"
-        );
+    fn convert_script_names_every_consensus_hash_type() {
+        for (byte, label) in [(0u8, "data"), (1, "type"), (2, "data1"), (4, "data2")] {
+            assert_eq!(
+                convert_script(&script_with_hash_type(byte)).hash_type,
+                label
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "hash_type byte 0x03 is not a consensus value")]
+    fn convert_script_refuses_an_unknown_hash_type_byte() {
+        convert_script(&script_with_hash_type(3));
+    }
+
+    #[test]
+    fn convert_dep_type_names_both_consensus_kinds() {
+        assert_eq!(convert_dep_type(0), "code");
+        assert_eq!(convert_dep_type(1), "dep_group");
+    }
+
+    #[test]
+    #[should_panic(expected = "dep_type byte 0x02 is not a consensus value")]
+    fn convert_dep_type_refuses_an_unknown_byte() {
+        convert_dep_type(2);
     }
 
     #[test]

@@ -309,13 +309,8 @@ fn hex0x(bytes: &[u8]) -> String {
 /// An unknown value is an error: guessing one would publish a script that
 /// hashes to something other than the entity it names.
 fn hash_type_name(hash_type: u8) -> anyhow::Result<&'static str> {
-    match hash_type {
-        0 => Ok("data"),
-        1 => Ok("type"),
-        2 => Ok("data1"),
-        4 => Ok("data2"),
-        other => Err(anyhow::anyhow!("unknown stored hash_type {other}")),
-    }
+    ckbadger_common::hash_type_label(hash_type)
+        .ok_or_else(|| anyhow::anyhow!("unknown stored hash_type {hash_type}"))
 }
 
 /// Validate the request against the server's hard caps before any store read.
@@ -568,6 +563,19 @@ async fn export_entity_statistics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The export names a stored hash_type through the workspace's one table:
+    /// `data2` is 4, and a byte the table does not know is an error, not a
+    /// guess.
+    #[test]
+    fn hash_type_name_comes_from_the_one_table() {
+        assert_eq!(hash_type_name(0).unwrap(), "data");
+        assert_eq!(hash_type_name(1).unwrap(), "type");
+        assert_eq!(hash_type_name(2).unwrap(), "data1");
+        assert_eq!(hash_type_name(4).unwrap(), "data2");
+        let err = hash_type_name(3).unwrap_err().to_string();
+        assert!(err.contains("unknown stored hash_type 3"), "{err}");
+    }
 
     fn request(
         entities: Vec<(&str, &str)>,

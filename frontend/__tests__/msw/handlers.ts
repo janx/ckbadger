@@ -303,6 +303,7 @@ export const handlers = [
       lockCalls: [],
       protocolActions: [],
       participants: [],
+      roles: [],
       tags: 0,
     };
     if (cursor) {
@@ -324,7 +325,12 @@ export const handlers = [
           timeAddedToPool: '2026-09-23T12:00:00+00:00',
           interpretation: {
             status: 'partial',
-            reasons: [{ code: 'dao_compensation_unavailable' }],
+            reasons: [
+              {
+                code: 'unresolved_input',
+                detail: '0xabababababababababababababababababababababababababababababababab:0',
+              },
+            ],
           },
           ckbDelta: '-50000000000',
           usedDelta: '0',
@@ -334,6 +340,7 @@ export const handlers = [
           lockCalls: [],
           protocolActions: [],
           participants: [],
+          roles: [],
           tags: 0,
         },
         committed,
@@ -610,7 +617,18 @@ export const handlers = [
       nextId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
       parent: null,
       children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/identities/dotcell/items/:idOrName/children`, () => {
+    return HttpResponse.json({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
     });
   }),
 

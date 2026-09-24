@@ -62,11 +62,24 @@ interface Props {
 }
 
 export function IdentityItemDetail({ config, identityId: routeIdentityId }: Props) {
+  const identityId = normalizeAssetId(routeIdentityId);
+  // Moving to another item on the same route changes only the route parameter,
+  // so the router keeps this element mounted. Keying on the item gives each one
+  // its own activity paging instead of inheriting the previous item's cursor.
+  return <IdentityItemDetailView key={identityId} config={config} identityId={identityId} />;
+}
+
+function IdentityItemDetailView({
+  config,
+  identityId,
+}: {
+  config: IdentityItemDetailConfig;
+  identityId: string;
+}) {
   const { labels, fetchDetail, fetchActivities } = config;
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const identityId = normalizeAssetId(routeIdentityId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );

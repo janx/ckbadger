@@ -133,7 +133,9 @@ export function getIdentityItemDetailHref(standard: string, identityId: string):
     return `/identities/bit-cell/${encodeURIComponent(identityId)}`;
   if (normalized === 'dotcell' || normalized === '.cell')
     return `/identities/dotcell/${encodeURIComponent(identityId)}`;
-  return `/objects/mnft/${encodeURIComponent(identityId)}`;
+  // Every identity standard has its own page. An unknown standard is a caller
+  // bug; routing it somewhere else would only turn it into a 404.
+  throw new Error(`No identity detail route for standard "${standard}" (id ${identityId})`);
 }
 
 export function getScriptDetailHref(input: {

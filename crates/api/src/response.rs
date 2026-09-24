@@ -55,6 +55,17 @@ impl ApiError {
         )
     }
 
+    /// The resource exists but cannot be served YET: something it is derived
+    /// from has not reached the node (e.g. an uncommitted transaction's
+    /// parent). Transient by definition, so the caller retries — the response
+    /// never carries partial data in its place.
+    pub fn service_unavailable(message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self::new("service_unavailable", message)),
+        )
+    }
+
     pub fn unauthorized(message: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::UNAUTHORIZED,
@@ -173,13 +184,9 @@ pub fn default_limit() -> i64 {
 /// Map CKB script hash_type integer to its string representation.
 /// Returns `None` for unknown hash_type values so callers must handle them explicitly.
 pub fn hash_type_to_str(hash_type: i16) -> Option<&'static str> {
-    match hash_type {
-        0 => Some("data"),
-        1 => Some("type"),
-        2 => Some("data1"),
-        4 => Some("data2"),
-        _ => None,
-    }
+    u8::try_from(hash_type)
+        .ok()
+        .and_then(ckbadger_common::hash_type_label)
 }
 
 /// Shared script response type used by transaction, cell, and other route modules.

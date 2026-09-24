@@ -51,8 +51,6 @@ function reasonText(reason: { code: string; detail?: string }): string {
       return reason.detail
         ? `input not yet resolvable (${reason.detail})`
         : 'an input is not yet resolvable';
-    case 'dao_compensation_unavailable':
-      return 'DAO compensation not yet known';
     default:
       // An unrecognised reason is shown verbatim rather than dropped: the
       // point of the field is that nothing goes unexplained.
@@ -79,6 +77,18 @@ export function PoolInterpretationNotice({
     <span className={className ?? 'text-warning font-mono text-[10px]'}>
       partial: {reasons.map(reasonText).join('; ')}
     </span>
+  );
+}
+
+/**
+ * Shown when the list's unconfirmed segment is capped: some of this address's
+ * pool transactions are not among the rows shown.
+ */
+export function PoolTruncatedNotice() {
+  return (
+    <div className="border-base-border bg-base-surface/50 text-text-dim border-b px-4 py-2 font-mono text-xs">
+      More unconfirmed transactions than shown.
+    </div>
   );
 }
 

@@ -46,21 +46,15 @@ impl PoolStatus {
 /// silently absorbed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartialReason {
-    /// The node does not report this outpoint as live and no pool parent
-    /// creates it, so the spender's CKB position is not derivable.
+    /// Neither the mirror nor the node knows the transaction that created this
+    /// outpoint, so the spender's CKB position is not derivable.
     UnresolvedInput { tx_hash: [u8; 32], index: u32 },
-    /// A Nervos DAO withdrawal completion: its compensation needs the deposit
-    /// and withdrawing header accumulated rates, which the mirror does not read
-    /// yet. Layers 1 and 2 are exact; the `dao:withdraw_complete` action is
-    /// absent rather than carrying an invented figure.
-    DaoCompensationUnavailable,
 }
 
 impl PartialReason {
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnresolvedInput { .. } => "unresolved_input",
-            Self::DaoCompensationUnavailable => "dao_compensation_unavailable",
         }
     }
 
@@ -69,7 +63,6 @@ impl PartialReason {
             Self::UnresolvedInput { tx_hash, index } => {
                 Some(format!("0x{}:{index}", hex::encode(tx_hash)))
             }
-            Self::DaoCompensationUnavailable => None,
         }
     }
 }
@@ -104,6 +97,16 @@ pub struct PoolParticipant {
     pub addr_tx: AddrTxValue,
 }
 
+/// A lock script exactly as the node reported it: enough to encode its
+/// owner's address without a store lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolLockScript {
+    pub lock_hash: [u8; 32],
+    pub code_hash: Vec<u8>,
+    pub hash_type: i16,
+    pub args: Vec<u8>,
+}
+
 /// One mirrored transaction.
 #[derive(Debug, Clone)]
 pub struct PoolTxRecord {
@@ -115,6 +118,12 @@ pub struct PoolTxRecord {
     /// resolve its inputs without asking the node for a cell that does not
     /// exist on chain yet.
     pub outputs: Vec<ResolvedCell>,
+    /// The lock scripts of the cells this transaction spends — one per
+    /// distinct lock, in input order, for every input that resolved. With
+    /// `outputs` this covers every party that holds a cell in the
+    /// transaction, including a sender whose lock exists so far only as the
+    /// output of another pending transaction (no store row has it yet).
+    pub input_locks: Vec<PoolLockScript>,
     /// The interpretation, built by the indexer's activity builder. `None` when
     /// an input could not be resolved: a position derived from a partial input
     /// set would be wrong, and a wrong number is worse than a missing one.
@@ -126,7 +135,6 @@ pub struct PoolTxRecord {
     pub is_cellbase: bool,
     pub interpretation: Interpretation,
     pub first_seen_ms: i64,
-    pub last_seen_ms: i64,
 }
 
 impl PoolTxRecord {
@@ -137,6 +145,26 @@ impl PoolTxRecord {
     /// would spend RPC on an answer that cannot change.
     pub fn needs_input_retry(&self) -> bool {
         self.actions.is_none()
+    }
+
+    /// The full lock script behind `lock_hash`, from this transaction's own
+    /// cells (outputs first, then spent inputs).
+    pub fn lock_script(&self, lock_hash: &[u8; 32]) -> Option<PoolLockScript> {
+        self.outputs
+            .iter()
+            .find(|cell| cell.lock_script_hash.as_slice() == lock_hash.as_slice())
+            .map(|cell| PoolLockScript {
+                lock_hash: *lock_hash,
+                code_hash: cell.lock_code_hash.clone(),
+                hash_type: cell.lock_hash_type,
+                args: cell.lock_args.clone(),
+            })
+            .or_else(|| {
+                self.input_locks
+                    .iter()
+                    .find(|lock| lock.lock_hash == *lock_hash)
+                    .cloned()
+            })
     }
 
     /// This lock's participation, through the one participant matcher: a
@@ -428,23 +456,19 @@ mod tests {
     #[test]
     fn test_interpretation_response_carries_reason_detail() {
         let interpretation = Interpretation::Partial {
-            reasons: vec![
-                PartialReason::UnresolvedInput {
-                    tx_hash: [0xAB; 32],
-                    index: 3,
-                },
-                PartialReason::DaoCompensationUnavailable,
-            ],
+            reasons: vec![PartialReason::UnresolvedInput {
+                tx_hash: [0xAB; 32],
+                index: 3,
+            }],
         };
         let response = InterpretationResponse::from(&interpretation);
         assert_eq!(response.status, "partial");
+        assert_eq!(response.reasons.len(), 1);
         assert_eq!(response.reasons[0].code, "unresolved_input");
         assert_eq!(
             response.reasons[0].detail.as_deref(),
             Some(format!("0x{}:3", "ab".repeat(32)).as_str())
         );
-        assert_eq!(response.reasons[1].code, "dao_compensation_unavailable");
-        assert_eq!(response.reasons[1].detail, None);
     }
 
     #[test]

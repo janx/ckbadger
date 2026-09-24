@@ -128,6 +128,8 @@ function formatStandardLabel(standard: string): string {
       return '.bit Cell';
     case 'dotbit':
       return 'DOTBIT';
+    case 'dotcell':
+      return '.cell';
     default:
       return standard.toUpperCase();
   }

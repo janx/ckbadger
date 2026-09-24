@@ -13,7 +13,7 @@ use ckbadger_indexer::verify::checks::{
 };
 use ckbadger_indexer::verify::entity_history::EntityCapacityHistoryMatchesChain;
 use serde_json::{json, Value};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const NODE_VERSION: &str = "0.119.0 (test)";
@@ -406,7 +406,11 @@ struct Wiring {
     api_url: String,
     rpc_url: String,
     declaration_path: std::path::PathBuf,
-    type_hash: String,
+    network: &'static str,
+    /// `--entity` selectors; empty is the default (no `--entity`) mode.
+    entities: Vec<EntitySelector>,
+    /// Where the run writes `manifest.json`; `None` writes nothing.
+    evidence_dir: Option<std::path::PathBuf>,
 }
 
 fn wiring(
@@ -419,13 +423,18 @@ fn wiring(
         api_url: format!("{}/api/v1", api.uri()),
         rpc_url: node.uri(),
         declaration_path: declaration_path.to_path_buf(),
-        type_hash: type_hash.to_string(),
+        network: "mainnet",
+        entities: vec![EntitySelector {
+            kind: "token".to_string(),
+            id: type_hash.to_string(),
+        }],
+        evidence_dir: None,
     }
 }
 
 fn context(wiring: &Wiring) -> CheckContext {
     CheckContext {
-        network: "mainnet",
+        network: wiring.network,
         api_url: wiring.api_url.clone(),
         rpc_url: Some(wiring.rpc_url.clone()),
         explorer_url: None,
@@ -434,12 +443,9 @@ fn context(wiring: &Wiring) -> CheckContext {
         seed: 42,
         tolerance: 0.001,
         cache_dir: None,
-        entities: vec![EntitySelector {
-            kind: "token".to_string(),
-            id: wiring.type_hash.clone(),
-        }],
+        entities: wiring.entities.clone(),
         verify_source_path: Some(wiring.declaration_path.clone()),
-        evidence_dir: None,
+        evidence_dir: wiring.evidence_dir.clone(),
         entity_budget: Default::default(),
         source_profile: std::sync::Mutex::new(None),
     }
@@ -741,6 +747,183 @@ async fn expected_values_do_not_depend_on_the_protocol_registry() {
         result.status,
         CheckStatus::Pass,
         "the oracle must not consult PROTOCOL_REGISTRY: {:?}",
+        result.findings
+    );
+}
+
+/// Review #7: the default (no `--entity`) mode reads the head of the API's
+/// token directory, which `GET /tokens` serves as a `CursorPaginatedResponse`
+/// envelope. Deserializing it as a bare array failed on every run, so the
+/// default mode could never end anything but Inconclusive.
+#[tokio::test(flavor = "multi_thread")]
+async fn default_run_reads_the_token_directory_envelope() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/tokens"))
+        .and(query_param("limit", "8"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [{"typeScriptHash": type_hash, "name": "Fixture Token"}],
+            "limit": 8,
+            "hasMore": false,
+            "nextCursor": null,
+        })))
+        .mount(&api)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+
+    // A network with no incident selectors: the directory is the only source
+    // of candidates, so a directory that cannot be read leaves nothing.
+    let wiring = Wiring {
+        network: "devnet",
+        entities: vec![],
+        ..wiring(&api, &node, &declaration_path, &type_hash)
+    };
+    let result = run_check(wiring).await;
+
+    assert_eq!(
+        result.status,
+        CheckStatus::Pass,
+        "detail: {:?}, findings: {:?}",
+        result.detail,
+        result.findings
+    );
+    assert_eq!(result.items_checked, 1);
+    let detail = result.detail.clone().unwrap_or_default();
+    assert!(
+        !detail.contains("token directory could not be listed"),
+        "no candidate gap may be reported: {detail}"
+    );
+}
+
+/// Review #12: a requested selector of a family this delivery does not cover
+/// used to be dropped silently whenever a token selector was also present, so
+/// the run could end Pass (exit 0) with a manifest that never mentioned it.
+#[tokio::test(flavor = "multi_thread")]
+async fn token_plus_spore_selectors_end_inconclusive_and_name_the_spore_one() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let evidence = dir.path().join("evidence");
+    let spore = EntitySelector {
+        kind: "spore".to_string(),
+        id: hash_of(0xbb),
+    };
+
+    let mut wiring = wiring(&api, &node, &declaration_path, &type_hash);
+    wiring.entities.push(spore.clone());
+    wiring.evidence_dir = Some(evidence.clone());
+    let result = run_check(wiring).await;
+
+    assert_eq!(
+        result.status,
+        CheckStatus::Inconclusive,
+        "a dropped selector can never leave the run green: {:?}",
+        result.detail
+    );
+    let detail = result.detail.clone().unwrap_or_default();
+    assert!(detail.contains(&spore.to_string()), "{detail}");
+    assert!(detail.contains("family not covered"), "{detail}");
+
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(evidence.join("manifest.json")).unwrap())
+            .unwrap();
+    let entities = manifest["entities"].as_array().unwrap();
+    let spore_entry = entities
+        .iter()
+        .find(|entry| entry["selector"]["kind"] == "spore")
+        .unwrap_or_else(|| panic!("the manifest must list the uncovered selector: {manifest}"));
+    assert_eq!(spore_entry["selector"]["id"], spore.id);
+    assert_eq!(spore_entry["complete"], false);
+    assert!(spore_entry["uncoveredReason"]
+        .as_str()
+        .unwrap()
+        .contains("family not covered"));
+    let token_entry = entities
+        .iter()
+        .find(|entry| entry["selector"]["kind"] == "token")
+        .expect("the token entity is still verified");
+    assert_eq!(token_entry["complete"], true);
+}
+
+/// The manifest's `rpcRequests` is what the run spent against its RPC budget.
+/// Every node call — source qualification and the post-walk anchor
+/// re-verification included — must be charged, or the budget under-reports
+/// the spend it exists to bound.
+#[tokio::test(flavor = "multi_thread")]
+async fn rpc_budget_spend_equals_the_requests_the_node_received() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let evidence = dir.path().join("evidence");
+
+    let mut wiring = wiring(&api, &node, &declaration_path, &type_hash);
+    wiring.evidence_dir = Some(evidence.clone());
+    let result = run_check(wiring).await;
+    assert_eq!(result.status, CheckStatus::Pass, "{:?}", result.detail);
+
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(evidence.join("manifest.json")).unwrap())
+            .unwrap();
+    let received = node.received_requests().await.unwrap().len();
+    assert!(received > 0);
+    assert_eq!(
+        manifest["rpcRequests"].as_u64().unwrap() as usize,
+        received,
+        "the budget must charge exactly one request per RPC the node received"
+    );
+}
+
+/// `--entity` ids are hex; a bare or upper-case id names the same entity as its
+/// canonical `0x` + lowercase form, and the export is keyed by the latter.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bare_uppercase_entity_id_selects_the_same_entity() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+
+    let bare = format!(
+        "token:{}",
+        type_hash.trim_start_matches("0x").to_uppercase()
+    );
+    let selector = EntitySelector::parse(&bare).unwrap();
+    assert_eq!(
+        selector,
+        EntitySelector::parse(&format!("token:{type_hash}")).unwrap()
+    );
+
+    let mut wiring = wiring(&api, &node, &declaration_path, &type_hash);
+    wiring.entities = vec![selector];
+    let result = run_check(wiring).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Pass,
+        "{:?} {:?}",
+        result.detail,
         result.findings
     );
 }

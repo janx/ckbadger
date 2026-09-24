@@ -137,11 +137,13 @@ struct CellListResponse {
     next_cursor: Option<String>,
 }
 
+/// The `CursorPaginatedResponse` envelope every cursor-paged list endpoint
+/// serves (`{data, limit, hasMore, nextCursor}`).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CursorPage<T> {
-    data: Vec<T>,
-    next_cursor: Option<String>,
+pub(super) struct CursorPage<T> {
+    pub(super) data: Vec<T>,
+    pub(super) next_cursor: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -4412,13 +4414,20 @@ impl Check for ParticipantRowsConsistency {
     fn requires_rpc(&self) -> bool {
         false
     }
+    /// The recent-activity sample is sized by `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
         Some(ctx.sample_count.min(PARTICIPANT_ROWS_ACTIVITY_LIMIT) as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let limit = ctx.sample_count.min(PARTICIPANT_ROWS_ACTIVITY_LIMIT);
         if limit == 0 {
-            return Ok(CheckResult::pass(0));
+            anyhow::bail!(
+                "participant_rows_consistency was run with --sample-count 0: an empty sample \
+                 verifies nothing"
+            );
         }
         let page: CursorPage<GlobalActivityApiRecord> =
             api_get(ctx, &format!("activities?limit={}", limit))?;
@@ -4525,32 +4534,49 @@ struct DotCellHolderApiRecord {
     item_count: i64,
 }
 
-/// Every live `.cell` name, paged out of the collection listing.
-fn dotcell_live_items(ctx: &CheckContext) -> anyhow::Result<Option<Vec<DotCellItemListRecord>>> {
-    // A network with no `.cell` deployment answers 404 here, and that is not
-    // a failure — it is a network where the protocol was never deployed.
-    if api_get::<NftCollectionDetailApiRecord>(ctx, "assets/identities/dotcell").is_err() {
-        return Ok(None);
-    }
-    let mut items = Vec::new();
+/// Why a `.cell` check has nothing to verify on this network.
+const DOTCELL_NOT_DEPLOYED: &str =
+    "GET assets/identities/dotcell returned 404: no .cell deployment on this network";
+
+/// The `.cell` collection, or `None` when this network has no deployment.
+///
+/// Only a 404 means "not deployed". A 5xx, a transport failure or a body that
+/// does not decode is an error: reading those as "no collection" turned every
+/// broken API into four green checks over zero items.
+fn dotcell_collection(ctx: &CheckContext) -> anyhow::Result<Option<NftCollectionDetailApiRecord>> {
+    api_get_or_not_found(ctx, "assets/identities/dotcell")
+}
+
+/// Every row of a cursor-paged listing: `first_path` (which already carries
+/// its query string), then `&cursor=<next>` until the API stops handing one out.
+fn all_cursor_pages<T: serde::de::DeserializeOwned>(
+    ctx: &CheckContext,
+    first_path: &str,
+) -> anyhow::Result<Vec<T>> {
+    let mut rows = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
         let path = match &cursor {
-            Some(cursor) => format!(
-                "assets/identities/dotcell/items?limit=100&status=live&cursor={}",
-                cursor
-            ),
-            None => "assets/identities/dotcell/items?limit=100&status=live".to_string(),
+            Some(cursor) => format!("{first_path}&cursor={cursor}"),
+            None => first_path.to_string(),
         };
-        let page: CursorPage<DotCellItemListRecord> = api_get(ctx, &path)?;
+        let page: CursorPage<T> = api_get(ctx, &path)?;
         let page_len = page.data.len();
-        items.extend(page.data);
+        rows.extend(page.data);
         match page.next_cursor {
             Some(next) if page_len > 0 => cursor = Some(next),
             _ => break,
         }
     }
-    Ok(Some(items))
+    Ok(rows)
+}
+
+/// Every live `.cell` name, paged out of the collection listing.
+fn dotcell_live_items(ctx: &CheckContext) -> anyhow::Result<Option<Vec<DotCellItemListRecord>>> {
+    if dotcell_collection(ctx)?.is_none() {
+        return Ok(None);
+    }
+    all_cursor_pages(ctx, "assets/identities/dotcell/items?limit=100&status=live").map(Some)
 }
 
 fn parse_hex20(label: &str, value: &str) -> anyhow::Result<[u8; 20]> {
@@ -4575,10 +4601,7 @@ impl Check for DotCellRingIntegrity {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let Some(items) = dotcell_live_items(ctx)? else {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no .cell collection on this network",
-            ));
+            return Ok(CheckResult::not_applicable(DOTCELL_NOT_DEPLOYED));
         };
         let ring: DotCellRingApiRecord = api_get(ctx, "assets/identities/dotcell/ring")?;
 
@@ -4675,10 +4698,7 @@ impl Check for DotCellIdIsLabelHash {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let Some(items) = dotcell_live_items(ctx)? else {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no .cell collection on this network",
-            ));
+            return Ok(CheckResult::not_applicable(DOTCELL_NOT_DEPLOYED));
         };
         let mut findings = vec![];
         for item in &items {
@@ -4721,34 +4741,12 @@ impl Check for DotCellOwnerIndexConsistency {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let detail: NftCollectionDetailApiRecord = match api_get(ctx, "assets/identities/dotcell") {
-            Ok(detail) => detail,
-            Err(_) => {
-                return Ok(CheckResult::pass_with_detail(
-                    0,
-                    "no .cell collection on this network",
-                ))
-            }
+        let Some(detail) = dotcell_collection(ctx)? else {
+            return Ok(CheckResult::not_applicable(DOTCELL_NOT_DEPLOYED));
         };
 
-        let mut holders: Vec<DotCellHolderApiRecord> = Vec::new();
-        let mut cursor: Option<String> = None;
-        loop {
-            let path = match &cursor {
-                Some(cursor) => format!(
-                    "assets/identities/dotcell/holders?limit=100&cursor={}",
-                    cursor
-                ),
-                None => "assets/identities/dotcell/holders?limit=100".to_string(),
-            };
-            let page: CursorPage<DotCellHolderApiRecord> = api_get(ctx, &path)?;
-            let page_len = page.data.len();
-            holders.extend(page.data);
-            match page.next_cursor {
-                Some(next) if page_len > 0 => cursor = Some(next),
-                _ => break,
-            }
-        }
+        let holders: Vec<DotCellHolderApiRecord> =
+            all_cursor_pages(ctx, "assets/identities/dotcell/holders?limit=100")?;
 
         let mut findings = vec![];
         let sum: i64 = holders.iter().map(|holder| holder.item_count).sum();
@@ -4781,12 +4779,14 @@ impl Check for DotCellOwnerIndexConsistency {
             let Some(address) = holder.address.as_deref() else {
                 continue;
             };
-            let names: CursorPage<DotCellItemListRecord> = api_get(
+            // The owner's whole list, not its first page: an owner with more
+            // names than one page holds would otherwise always disagree.
+            let names: Vec<DotCellItemListRecord> = all_cursor_pages(
                 ctx,
                 &format!("addresses/{}/dotcell-names?limit=100", address),
             )?;
             checked += 1;
-            if names.data.len() as i64 != holder.item_count {
+            if names.len() as i64 != holder.item_count {
                 findings.push(Finding {
                     entity: format!(
                         "dotcell_owner={}",
@@ -4794,7 +4794,7 @@ impl Check for DotCellOwnerIndexConsistency {
                     ),
                     details: vec![format!(
                         "address lists {} names, counter says {}",
-                        names.data.len(),
+                        names.len(),
                         holder.item_count
                     )],
                 });
@@ -4827,15 +4827,16 @@ impl Check for DotCellRecordsHashParity {
     fn requires_rpc(&self) -> bool {
         true
     }
+    /// The names read back from the node are sized by `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let Some(rpc_url) = ctx.rpc_url.clone() else {
             anyhow::bail!("dotcell_records_hash_parity needs a CKB RPC URL");
         };
         let Some(items) = dotcell_live_items(ctx)? else {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no .cell collection on this network",
-            ));
+            return Ok(CheckResult::not_applicable(DOTCELL_NOT_DEPLOYED));
         };
 
         let sample = ctx.sample_count.min(DOTCELL_RECORDS_SAMPLE_CAP);
@@ -6713,5 +6714,324 @@ mod tests {
         assert!(!result.passed(), "a moved anchor proves nothing");
         let detail = result.detail.clone().unwrap_or_default();
         assert!(detail.contains("changed hash during the walk"), "{detail}");
+    }
+
+    // ---- `.cell` checks: only a 404 means "no deployment" (review #8) ----
+
+    const DOTCELL_CHECK_NAMES: [&str; 4] = [
+        "dotcell_ring_integrity",
+        "dotcell_id_is_label_hash",
+        "dotcell_owner_index_consistency",
+        "dotcell_records_hash_parity",
+    ];
+
+    fn registered_check(name: &str) -> Box<dyn Check> {
+        api_checks()
+            .into_iter()
+            .find(|check| check.name() == name)
+            .unwrap_or_else(|| panic!("missing check {name}"))
+    }
+
+    /// The node and the API are one mock server: RPC posts to `/`.
+    fn dotcell_ctx(server: &MockServer) -> CheckContext {
+        CheckContext {
+            rpc_url: Some(server.uri()),
+            ..mock_ctx(server)
+        }
+    }
+
+    fn mount_dotcell_collection_status(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        status: u16,
+    ) {
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets/identities/dotcell"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                    "error": "status",
+                    "message": format!("fixture status {status}"),
+                })))
+                .mount(server)
+                .await;
+        });
+    }
+
+    /// Answers the two node calls the records-parity check makes with the
+    /// real creating transaction of mainnet name `support` (M2, output 1).
+    struct DotCellNodeResponder;
+
+    impl Respond for DotCellNodeResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            use crate::parser::test_helpers::real_dotcell as fixture;
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let tx = &fixture::M2_REGISTER_SUPPORT;
+            let result = match body["method"].as_str().unwrap_or_default() {
+                "get_live_cell" => json!({
+                    "cell": {"data": {"content": tx.outputs[1].data}},
+                    "status": "live",
+                }),
+                "get_transaction" => json!({
+                    "transaction": {"hash": tx.tx_hash, "witnesses": tx.witnesses},
+                    "tx_status": {"status": "committed"},
+                }),
+                other => panic!("unexpected RPC method {other}"),
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": result}))
+        }
+    }
+
+    /// One real, internally consistent `.cell` deployment with a single live
+    /// name, served by every route the four checks read.
+    fn mount_dotcell_single_name(runtime: &tokio::runtime::Runtime, server: &MockServer) {
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        let tx = &fixture::M2_REGISTER_SUPPORT;
+        let data = hex::decode(tx.outputs[1].data.trim_start_matches("0x")).unwrap();
+        let name = crate::parser::DotCellParser::parse_name_data(&data).unwrap();
+        let id = format!("0x{}", hex::encode(name.id));
+        let item = json!({
+            "nftId": id,
+            "name": format!("{}.cell", name.label),
+            "isLive": true,
+        });
+        let address = "ckb1qfixtureowner";
+        runtime.block_on(async {
+            let get = |route: &str, body: serde_json::Value| {
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/{route}")))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            };
+            get(
+                "assets/identities/dotcell",
+                json!({
+                    "collectionId": "dotcell",
+                    "totalCount": 1,
+                    "liveCount": 1,
+                    "holdersCount": 1,
+                }),
+            )
+            .mount(server)
+            .await;
+            get(
+                "assets/identities/dotcell/items",
+                json!({"data": [item.clone()], "nextCursor": null}),
+            )
+            .mount(server)
+            .await;
+            get(
+                "assets/identities/dotcell/ring",
+                json!({"firstId": id, "liveCount": 1}),
+            )
+            .mount(server)
+            .await;
+            get(
+                &format!("assets/identities/dotcell/items/{id}"),
+                json!({
+                    "identityId": id,
+                    "label": name.label,
+                    "isLive": true,
+                    "nextId": format!("0x{}", "00".repeat(20)),
+                    "recordsHash": format!("0x{}", hex::encode(name.records_hash)),
+                    "liveOutPoint": {"txHash": tx.tx_hash, "index": 1},
+                }),
+            )
+            .mount(server)
+            .await;
+            get(
+                "assets/identities/dotcell/holders",
+                json!({
+                    "data": [{
+                        "ownerHashPrefix": format!("0x{}", hex::encode(name.owner_hash20)),
+                        "address": address,
+                        "itemCount": 1,
+                    }],
+                    "nextCursor": null,
+                }),
+            )
+            .mount(server)
+            .await;
+            get(
+                &format!("addresses/{address}/dotcell-names"),
+                json!({"data": [item.clone()], "nextCursor": null}),
+            )
+            .mount(server)
+            .await;
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .respond_with(DotCellNodeResponder)
+                .mount(server)
+                .await;
+        });
+    }
+
+    /// A network with no `.cell` deployment answers 404 on the collection:
+    /// that, and only that, is "not applicable".
+    #[test]
+    fn dotcell_checks_are_not_applicable_on_a_404_collection() {
+        for name in DOTCELL_CHECK_NAMES {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            mount_dotcell_collection_status(&runtime, &server, 404);
+
+            let check = registered_check(name);
+            let completed = execute_check(
+                check.as_ref(),
+                &dotcell_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            assert_eq!(completed.status, CheckStatus::NotApplicable, "{name}");
+            let reason = completed.status_reason.unwrap_or_default();
+            assert!(reason.contains("404"), "{name}: {reason}");
+        }
+    }
+
+    /// A 500 on the collection is a broken API, never an absent protocol: the
+    /// check must end Error, not a vacuous pass over zero items.
+    #[test]
+    fn dotcell_checks_error_on_a_500_collection() {
+        for name in DOTCELL_CHECK_NAMES {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            mount_dotcell_collection_status(&runtime, &server, 500);
+
+            let check = registered_check(name);
+            let completed = execute_check(
+                check.as_ref(),
+                &dotcell_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            assert_eq!(completed.status, CheckStatus::Error, "{name}");
+            let reason = completed.status_reason.unwrap_or_default();
+            assert!(reason.contains("500"), "{name}: {reason}");
+        }
+    }
+
+    /// A deployment that answers 200 is verified item by item.
+    #[test]
+    fn dotcell_checks_run_on_a_200_collection() {
+        for name in DOTCELL_CHECK_NAMES {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            mount_dotcell_single_name(&runtime, &server);
+
+            let check = registered_check(name);
+            let completed = execute_check(
+                check.as_ref(),
+                &dotcell_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            let result = completed.result.expect("a completed run has a result");
+            assert_eq!(
+                completed.status,
+                CheckStatus::Pass,
+                "{name}: {:?} {:?}",
+                completed.status_reason,
+                result.findings
+            );
+            assert_eq!(result.items_checked, 1, "{name}");
+        }
+    }
+
+    /// Both checks size their sample from `--sample-count`; at 0 they used to
+    /// pass over an empty selection. Declaring it hands 0 to the framework,
+    /// which refuses the run instead of reporting a vacuous Pass.
+    #[test]
+    fn sample_count_readers_refuse_a_zero_sample() {
+        for name in [
+            "participant_rows_consistency",
+            "dotcell_records_hash_parity",
+        ] {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            mount_dotcell_single_name(&runtime, &server);
+            let ctx = CheckContext {
+                sample_count: 0,
+                ..dotcell_ctx(&server)
+            };
+            let check = registered_check(name);
+            assert!(check.requires_sampling(), "{name}");
+            let completed = execute_check(check.as_ref(), &ctx, &ProgressReporter::new(None));
+            assert_eq!(completed.status, CheckStatus::Error, "{name}");
+            assert!(
+                completed
+                    .status_reason
+                    .unwrap_or_default()
+                    .contains("--sample-count 0"),
+                "{name}"
+            );
+        }
+    }
+
+    /// An owner holding more names than one `dotcell-names` page must be read
+    /// to the end before its list is compared with its counter.
+    #[test]
+    fn dotcell_owner_index_pages_through_an_owners_names() {
+        const NAMES: usize = 101;
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let address = "ckb1qfixturebigowner";
+        let item = |i: usize| {
+            json!({
+                "nftId": format!("0x{i:040x}"),
+                "name": format!("name{i}.cell"),
+                "isLive": true,
+            })
+        };
+        let first_page: Vec<_> = (0..100).map(item).collect();
+        let second_page: Vec<_> = (100..NAMES).map(item).collect();
+        let cursor = format!("0x{:040x}", 99);
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets/identities/dotcell"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "collectionId": "dotcell",
+                    "totalCount": NAMES,
+                    "liveCount": NAMES,
+                    "holdersCount": 1,
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets/identities/dotcell/holders"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{
+                        "ownerHashPrefix": format!("0x{}", "ab".repeat(20)),
+                        "address": address,
+                        "itemCount": NAMES,
+                    }],
+                    "nextCursor": null,
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{address}/dotcell-names")))
+                .and(query_param("cursor", cursor.as_str()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": second_page,
+                    "nextCursor": null,
+                })))
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{address}/dotcell-names")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": first_page,
+                    "nextCursor": cursor,
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = registered_check("dotcell_owner_index_consistency")
+            .run(&dotcell_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert_eq!(
+            result.status,
+            CheckStatus::Pass,
+            "an owner's second page of names must be read: {:?}",
+            result.findings
+        );
     }
 }

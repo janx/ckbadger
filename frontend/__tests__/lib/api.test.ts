@@ -1,4 +1,4 @@
-import { api, resolveApiBase } from '@/lib/api';
+import { api, isServiceUnavailableError, resolveApiBase } from '@/lib/api';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 import { DEFAULT_API_BASE } from '@/lib/runtime-config';
@@ -1037,6 +1037,8 @@ describe('api', () => {
             nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
             parent: null,
             children: [],
+            childrenHasMore: false,
+            childrenNextCursor: null,
             liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
           });
         })
@@ -1051,6 +1053,34 @@ describe('api', () => {
       expect(byName.manager.lockHash).toBeNull();
       expect(byName.manager.address).toBeNull();
       expect(byName.manager.hashPrefix).toBe('0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019');
+    });
+
+    it('fetches a page of .cell sub-names from the children endpoint', async () => {
+      const childId = '0x2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e';
+      server.use(
+        http.get(
+          '/api/:network/v1/assets/identities/dotcell/items/:idOrName/children',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.idOrName).toBe('support.cell');
+            expect(url.searchParams.get('limit')).toBe('50');
+            expect(url.searchParams.get('cursor')).toBe(childId);
+            return HttpResponse.json({
+              data: [{ identityId: childId, label: 'blog.support', name: 'blog.support.cell' }],
+              limit: 50,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
+      );
+
+      const page = await api.getDotCellItemChildren('support.cell', {
+        limit: 50,
+        cursor: childId,
+      });
+      expect(page.data.map((child) => child.name)).toEqual(['blog.support.cell']);
+      expect(page.hasMore).toBe(false);
     });
 
     it('fetches .cell item activities with query params', async () => {
@@ -1289,6 +1319,37 @@ describe('api', () => {
         status: 503,
         apiMessage: 'script cache unavailable; warmup in progress',
       });
+    });
+
+    it('recognises a 503 service_unavailable for a transaction whose inputs are not resolvable yet', async () => {
+      server.use(
+        http.get('/api/:network/v1/transactions/:hash/detail', () => {
+          return HttpResponse.json(
+            {
+              error: 'service_unavailable',
+              message: 'inputs of uncommitted transaction 0xabc are not resolvable yet; retry',
+            },
+            { status: 503 }
+          );
+        })
+      );
+
+      const error = await api.getTransactionDetail('0xabc').catch((e: unknown) => e);
+      expect(isServiceUnavailableError(error)).toBe(true);
+    });
+
+    it('does not mistake other 503s for service_unavailable', async () => {
+      server.use(
+        http.get('/api/:network/v1/statistics/network', () => {
+          return HttpResponse.json(
+            { error: 'warmup_pending', message: 'warmup in progress' },
+            { status: 503 }
+          );
+        })
+      );
+
+      const error = await api.getNetworkStats().catch((e: unknown) => e);
+      expect(isServiceUnavailableError(error)).toBe(false);
     });
   });
 
@@ -1538,7 +1599,7 @@ describe('api', () => {
       expect(poolRow.poolStatus).toBe('pending');
       expect(poolRow.timeAddedToPool).toBe('2026-09-23T12:00:00+00:00');
       expect(poolRow.interpretation?.status).toBe('partial');
-      expect(poolRow.interpretation?.reasons?.[0].code).toBe('dao_compensation_unavailable');
+      expect(poolRow.interpretation?.reasons?.[0].code).toBe('unresolved_input');
 
       // The committed row keeps its chain position and carries no pool fields.
       const committedRow = page.data[1];

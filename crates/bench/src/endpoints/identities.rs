@@ -89,6 +89,36 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "identities",
             method: Method::Get,
+            path_template: "/assets/identities/dotcell/items/{id_or_name}/children",
+            description: "List the live sub-names of a .cell name",
+            resolve: Box::new(|base, p| {
+                let id = p.dotcell_item_id.as_ref()?;
+                Some(get(&format!(
+                    "{base}/assets/identities/dotcell/items/{id}/children?limit=20"
+                )))
+            }),
+            expect_status: 200,
+            risk_tier: RiskTier::Medium,
+            read_pattern: ReadPattern::PrefixScan,
+        },
+        EndpointEntry {
+            module: "identities",
+            method: Method::Get,
+            path_template: "/assets/identities/dotcell/ring",
+            description: "Get the .cell uniqueness ring root",
+            // The ring root exists exactly where .cell names do: a network
+            // with no `.cell` deployment has neither, and skips this entry.
+            resolve: Box::new(|base, p| {
+                p.dotcell_item_id.as_ref()?;
+                Some(get(&format!("{base}/assets/identities/dotcell/ring")))
+            }),
+            expect_status: 200,
+            risk_tier: RiskTier::Low,
+            read_pattern: ReadPattern::KeyLookup,
+        },
+        EndpointEntry {
+            module: "identities",
+            method: Method::Get,
             path_template: "/assets/identities/{collection_id}",
             description: "Get identity collection",
             resolve: Box::new(|base, p| {

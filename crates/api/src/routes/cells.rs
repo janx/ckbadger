@@ -1664,6 +1664,10 @@ pub struct AddressResponse {
     pub lock_script: Option<ScriptResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock_script_info: Option<LockScriptInfo>,
+    /// What the address has pending in the node's tx pool, whatever a list
+    /// filters; `null` when the mirror is disabled or unhealthy. Always
+    /// computed per request — never served from the response cache.
+    pub pending_summary: Option<crate::routes::address_pool::PendingSummaryResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2118,13 +2122,7 @@ async fn list_live_cells(
 }
 
 fn parse_hash_type(hash_type: &str) -> Option<u8> {
-    match hash_type {
-        "data" => Some(0),
-        "type" => Some(1),
-        "data1" => Some(2),
-        "data2" => Some(4),
-        _ => None,
-    }
+    ckbadger_common::hash_type_from_label(hash_type)
 }
 
 fn load_script_infos_cached(
@@ -2473,9 +2471,12 @@ async fn get_address(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
 ) -> ApiResult<AddressResponse> {
-    // Check cache first
+    // Check cache first. The cache holds the chain view only; the pending
+    // summary is the pool's, and is attached fresh on every request.
     let cache_key = CacheKeys::address_balance(&addr);
-    if let Some(cached) = state.cache.get::<AddressResponse>(&cache_key).await {
+    if let Some(mut cached) = state.cache.get::<AddressResponse>(&cache_key).await {
+        let lock_hash = parse_hash32(&cached.lock_script_hash, "cached address lock hash")?;
+        cached.pending_summary = address_pending_summary(&state, &lock_hash).await?;
         return ok(cached);
     }
 
@@ -2616,15 +2617,43 @@ async fn get_address(
         recent_activities_count,
         lock_script,
         lock_script_info,
+        pending_summary: None,
     };
 
-    // Cache the response for 30 seconds
+    // Cache the chain view for 30 seconds
     state
         .cache
         .set(&cache_key, &response, CacheTtl::ADDRESS_BALANCE)
         .await;
 
+    let mut response = response;
+    response.pending_summary = address_pending_summary(&state, &lock_hash).await?;
     ok(response)
+}
+
+/// The address's pending summary from the current pool snapshot, through the
+/// shared page-one segment.
+async fn address_pending_summary(
+    state: &Arc<AppState>,
+    lock_hash: &[u8],
+) -> Result<
+    Option<crate::routes::address_pool::PendingSummaryResponse>,
+    (axum::http::StatusCode, axum::Json<ApiError>),
+> {
+    let lock32: [u8; 32] = lock_hash.try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "address pending summary expects a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        ))
+    })?;
+    let snapshot = state.pool_mirror.load();
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::routes::address_pool::pending_summary(store.as_ref(), snapshot.as_ref(), &lock32)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))
 }
 
 fn lookup_code_cell_scripts(
@@ -3312,9 +3341,14 @@ async fn get_address_transactions(
     let pool_rows = if cursor.is_none() {
         let snapshot = state.pool_mirror.load();
         let store = state.store.clone();
-        let lock_hash_c = lock_hash.clone();
+        let lock32: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
+            ApiError::internal(format!(
+                "address transactions expect a 32-byte lock hash, got {} bytes",
+                lock_hash.len()
+            ))
+        })?;
         let (rows, summary) = tokio::task::spawn_blocking(move || {
-            build_pool_transaction_rows(store.as_ref(), snapshot.as_ref(), &lock_hash_c)
+            build_pool_transaction_rows(store.as_ref(), snapshot.as_ref(), &lock32)
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -3359,19 +3393,32 @@ async fn get_address_transactions(
         blocks.dedup();
         blocks
     };
+    // Every row here is canonical, so its block header exists; a read failure,
+    // a missing header or an unrenderable timestamp is store corruption,
+    // reported with the block rather than served as an empty timestamp.
     let mut block_timestamps: HashMap<i64, String> = HashMap::with_capacity(unique_blocks.len());
     for block_num in unique_blocks {
-        let ts = state
+        let header = state
             .store
             .get_block_header(block_num)
-            .ok()
-            .flatten()
-            .map(|h| {
-                chrono::DateTime::from_timestamp_millis(h.timestamp)
-                    .unwrap_or_default()
-                    .to_rfc3339()
-            })
-            .unwrap_or_default();
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to read block header for block {block_num} (address transactions): {e}"
+                ))
+            })?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing block header for block {block_num}, which holds a canonical address transaction"
+                ))
+            })?;
+        let ts = chrono::DateTime::from_timestamp_millis(header.timestamp)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "block {block_num} header timestamp {} ms is out of range",
+                    header.timestamp
+                ))
+            })?
+            .to_rfc3339();
         block_timestamps.insert(block_num, ts);
     }
 
@@ -3382,10 +3429,11 @@ async fn get_address_transactions(
                 AddressTransactionResponse,
                 (axum::http::StatusCode, axum::Json<ApiError>),
             > {
-                let timestamp = block_timestamps
-                    .get(&block_number)
-                    .cloned()
-                    .unwrap_or_default();
+                let timestamp = block_timestamps.get(&block_number).cloned().ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "address transaction at block {block_number} has no resolved block timestamp"
+                    ))
+                })?;
 
                 let tx_entry = state
                     .store
@@ -3475,7 +3523,8 @@ async fn get_address_transactions(
     })
 }
 
-/// This lock's tx-pool rows for page one, and the summary describing them.
+/// This lock's tx-pool rows for page one, and the summary describing them:
+/// the shared page-one segment, every row of it (this list takes no filter).
 ///
 /// Every value is either the node's own exact pool-entry figure (fee, size,
 /// cycles) or comes from the same derivation the indexer uses for committed
@@ -3486,43 +3535,22 @@ async fn get_address_transactions(
 fn build_pool_transaction_rows(
     store: &CkbadgerStore,
     snapshot: &crate::pool::PoolSnapshot,
-    lock_hash: &[u8],
+    lock_hash: &[u8; 32],
 ) -> anyhow::Result<(
     Vec<AddressTransactionResponse>,
     crate::pool::PoolSummaryResponse,
 )> {
-    let lock32: &[u8; 32] = lock_hash.try_into().map_err(|_| {
-        anyhow::anyhow!(
-            "pool address rows expect a 32-byte lock hash, got {} bytes",
-            lock_hash.len()
-        )
-    })?;
-    let (records, truncated) =
-        crate::routes::activities::pool_records_for_page(snapshot, lock_hash);
+    let segment = crate::routes::address_pool::page_one_segment(store, snapshot, lock_hash)?;
 
-    let mut rows = Vec::with_capacity(records.len());
-    let mut pending_ckb_delta: i128 = 0;
-    for record in records {
-        // One dedup rule, committed wins.
-        if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
-            continue;
-        }
-        // `by_lock` is built from the record's participants, so one reached
-        // through it must have an entry for this lock.
-        let participant = record.participant(lock32).ok_or_else(|| {
-            anyhow::anyhow!(
-                "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
-                hex::encode(lock_hash),
-                hex::encode(record.tx_hash)
-            )
-        })?;
-
-        pending_ckb_delta += participant.addr_tx.capacity_change as i128;
+    let mut rows = Vec::with_capacity(segment.rows.len());
+    for row in &segment.rows {
+        let record = &row.record;
+        let addr_tx = &row.participant.addr_tx;
         rows.push(AddressTransactionResponse {
             tx_hash: format!("0x{}", hex::encode(record.tx_hash)),
             block_number: None,
-            tx_type: participant.addr_tx.tx_type_str().to_string(),
-            capacity_change: (participant.addr_tx.capacity_change as i128).to_string(),
+            tx_type: addr_tx.tx_type_str().to_string(),
+            capacity_change: (addr_tx.capacity_change as i128).to_string(),
             timestamp: None,
             pool_status: Some(record.pool_status.as_str().to_string()),
             time_added_to_pool: Some(
@@ -3545,7 +3573,7 @@ fn build_pool_transaction_rows(
     }
 
     let summary =
-        crate::routes::activities::pool_summary(snapshot, rows.len(), pending_ckb_delta, truncated);
+        crate::routes::address_pool::pool_summary(snapshot, &segment.rows, segment.truncated)?;
     Ok((rows, summary))
 }
 

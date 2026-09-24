@@ -76,6 +76,20 @@ export function isNetworkInitializingError(error: unknown): error is ApiRequestE
 }
 
 /**
+ * The resource exists but cannot be served YET (503 `service_unavailable`):
+ * something it derives from has not reached the node — e.g. a pending
+ * transaction whose parent the node does not know. Transient; the caller
+ * retries. Never partial data.
+ */
+export function isServiceUnavailableError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'service_unavailable' && candidate.status === 503;
+}
+
+/**
  * "The resource does not exist", read from the HTTP status the API answered
  * with — never from the rendered message text, which is prose and changes.
  */
@@ -327,6 +341,13 @@ interface TransactionDetail extends Omit<
   'blockNumber' | 'blockHash' | 'index' | 'timestamp'
 > {
   status: TransactionStatus;
+  /**
+   * Present only while this explorer has not indexed the transaction: `pending`
+   * or `proposed` in the node's pool, or `committed_awaiting_index` when the node
+   * has it in a block (`blockNumber`/`blockHash` set; `timestamp`, `confirmations`
+   * and `index` not yet known). Absent once the store has it.
+   */
+  poolStatus?: PoolStatus;
   pendingSince: string | null;
   blockNumber: number | null;
   blockHash: string | null;
@@ -504,6 +525,16 @@ interface LockScriptInfo {
   deprecated: boolean;
 }
 
+/**
+ * An address's unconfirmed state as a whole: every pool transaction touching
+ * it, independent of which list, tab, page or filter is being viewed.
+ */
+interface AddressPendingSummary {
+  txCount: number;
+  /** Signed net change in shannons, as a decimal string, if every one commits. Never added to Balance. */
+  capacityDelta: string;
+}
+
 interface Address {
   lockScriptHash: string;
   address?: string;
@@ -513,6 +544,8 @@ interface Address {
   transactionsCount: number;
   lockScript?: Script;
   lockScriptInfo?: LockScriptInfo;
+  /** Null when the tx-pool mirror is disabled or cannot reach the node: nothing may be claimed then. */
+  pendingSummary: AddressPendingSummary | null;
 }
 
 interface TopAddress {
@@ -534,7 +567,8 @@ interface AddressTransaction {
   txHash: string;
   /** Null while the transaction is still in the node's pool: it has no block yet. */
   blockNumber: number | null;
-  txType: 'received' | 'sent' | 'internal';
+  /** `named`: a protocol named this address as a party (by lock-hash prefix) without it holding a cell. */
+  txType: 'received' | 'sent' | 'internal' | 'named';
   capacityChange: string;
   /** Block time. Null for a pool row, which carries `timeAddedToPool` instead. */
   timestamp: string | null;
@@ -585,6 +619,9 @@ interface AssetTransferParams {
   category?: 'token' | 'object' | 'identity' | 'dao';
 }
 
+/** The identity standards, spelled as the indexer's `IdentityStandard::as_str()` puts them on the wire. */
+type IdentityStandard = 'dotbit' | 'bit_cell' | 'did_ckb' | 'dotcell';
+
 type ItemDelta =
   | {
       kind: 'token';
@@ -594,7 +631,7 @@ type ItemDelta =
       decimals?: number | null;
     }
   | { kind: 'object'; objectId: string; delta: number }
-  | { kind: 'identity'; identityId: string; delta: number };
+  | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
 interface ActivityTypeCall {
   typeCodeHash: string;
@@ -1266,7 +1303,11 @@ interface DotCellItem {
   recordsHash: string;
   nextId: string;
   parent: DotCellNameRef | null;
+  /** The first page of live sub-names; the rest page through `getDotCellItemChildren`. */
   children: DotCellNameRef[];
+  childrenHasMore: boolean;
+  /** Cursor for the next page of sub-names; null when `children` is the whole list. */
+  childrenNextCursor: string | null;
   liveOutPoint: DotCellOutPoint | null;
 }
 
@@ -1938,6 +1979,7 @@ export type {
   PaginatedResponse,
   PoolSummary,
   PoolStatus,
+  AddressPendingSummary,
   PoolInterpretation,
   MempoolInfo,
   MempoolTransaction,
@@ -1973,6 +2015,7 @@ export type {
   HardforkTimelineResponse,
   HardforkActivation,
   Activity,
+  IdentityStandard,
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
@@ -2854,6 +2897,20 @@ export const api = {
   /** `idOrName` accepts a 20-byte `0x…` name id, `alice`, or `alice.cell`. */
   getDotCellItemDetail: (idOrName: string): Promise<DotCellItem> => {
     return fetchApi(`/assets/identities/dotcell/items/${encodeURIComponent(idOrName)}`);
+  },
+
+  /** A page of a `.cell` name's live sub-names, after `cursor`. */
+  getDotCellItemChildren: (
+    idOrName: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<DotCellNameRef>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/dotcell/items/${encodeURIComponent(idOrName)}/children${suffix ? `?${suffix}` : ''}`
+    );
   },
 
   getDotCellItemActivities: (

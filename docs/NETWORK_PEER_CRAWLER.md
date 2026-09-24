@@ -156,8 +156,8 @@ When the frontier is drained, one RocksDB write batch atomically:
 Consequently readers see either the preceding completed snapshot or the next completed snapshot,
 never partially downgraded reachability or a status that does not match its nodes.
 
-This implementation changes serialized network values but adds no column family: ckbadger-store
-remains 63 CFs total (59 domain + 1 append-only + 3 network). Recreate the
+This implementation changes serialized network values but adds no column family: the network
+store keeps its 3 CFs (`docs/STORE_SCHEMA.md` has the current totals). Recreate the
 development network primary and API secondary once, then crawl again. For the default mainnet work
 directory these are `work/mainnet/data/network` and
 `work/mainnet/data/network-api-secondary`. Domain and append-only stores are untouched; no chain

@@ -90,14 +90,12 @@ impl ScriptParser {
         hash
     }
 
+    /// The node validated this label before handing it over, so an unknown one
+    /// is an invariant violation, not input to recover from. The table itself
+    /// is the workspace's one: `ckbadger_common::hash_type`.
     pub fn parse_hash_type(hash_type: &str) -> u8 {
-        match hash_type {
-            "data" => 0,
-            "type" => 1,
-            "data1" => 2,
-            "data2" => 4,
-            _ => unreachable!("node-validated hash_type: '{}'", hash_type),
-        }
+        ckbadger_common::hash_type_from_label(hash_type)
+            .unwrap_or_else(|| unreachable!("node-validated hash_type: '{}'", hash_type))
     }
 
     pub fn hash_type_to_i16(hash_type: &str) -> i16 {

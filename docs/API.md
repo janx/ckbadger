@@ -20,9 +20,10 @@ details that aren't reproduced here.
 - **Path syntax.** Axum 0.8: path params use `{id}` form.
 - **Casing.** Response structs use `#[serde(rename_all = "camelCase")]`. Query
   params decode from snake_case (`lock_script_hash`, `type_script_hash`, etc.).
-- **Error envelope.** Handlers return `ApiResult<T>` —
-  `ApiError::{not_found, bad_request, internal, warmup_pending}` map to
-  appropriate HTTP statuses.
+- **Error envelope.** Handlers return `ApiResult<T>` — the `ApiError` constructors (`not_found`,
+  `bad_request`, `internal`, `initializing`, `warmup_pending`, `service_unavailable`, …) map to
+  appropriate HTTP statuses. `service_unavailable` (`503`) means the answer depends on a state
+  that passes and the request can be retried (see `/transactions/{hash}/detail`).
 - **Pagination.** Listing endpoints return
   `CursorPaginatedResponse<T> = { data: Vec<T>, total?, limit, hasMore, nextCursor }`.
   The cursor is opaque; pass the previous response's `nextCursor` back as
@@ -42,10 +43,13 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 ## Modules
 
-`api_routes()` (`crates/api/src/routes/mod.rs:26`) merges 19 modules.
-Two files in `routes/` are helpers rather than mounted modules: `tx_lookup.rs`
-(imported by `transactions.rs`) and `proposal_window.rs` (the shared
-proposal-window scan used by `blocks.rs` and `graph.rs`).
+`api_routes()` (`crates/api/src/routes/mod.rs`) merges 19 modules.
+Four files in `routes/` are helpers rather than mounted modules: `tx_lookup.rs`
+(imported by `transactions.rs`), `proposal_window.rs` (the shared
+proposal-window scan used by `blocks.rs` and `graph.rs`), `address_presence.rs` (the one
+"does this address exist" rule, chain view plus tx pool, used by `search.rs`) and
+`address_pool.rs` (an address's tx-pool segment: the page-one pool rows and `pool` summary of the
+activity and transaction lists, and the address detail's `pendingSummary`).
 
 ---
 
@@ -84,6 +88,9 @@ response shapes describe a party the same way:
 ```
 
 - A party that held a cell carries `address` + `lockHash`, and `lockHashPrefix` is `null`.
+  `address` is `null` only when no lock script is known for `lockHash` (a tx-pool row resolves
+  the lock from the pool transaction's own cells first) — never a hex string posing as an
+  address. A stored lock script that cannot be encoded is a `500` naming the lock hash.
 - A party a protocol NAMED by the first 20 bytes of its lock hash always carries
   `lockHashPrefix`. `address` and `lockHash` are filled in when exactly one known lock script
   starts with that prefix, and are `null` when none does — an unresolved party is reported as its
@@ -94,6 +101,24 @@ response shapes describe a party the same way:
   what happened, not a missing value — and its `addr_txs` row reports `txType: "named"`.
 - `ActivityResponse.participants` are the OTHER parties; `ActivityResponse.roles` are this
   participant's own roles.
+
+**Item deltas**
+
+Each item a transaction moves is one `ItemDeltaResponse`, tagged by `kind`:
+
+```json
+[
+  { "kind": "token", "typeScriptHash": "0x...", "delta": "-1000", "symbol": "...", "decimals": 8 },
+  { "kind": "object", "objectId": "0x...", "delta": 1 },
+  { "kind": "identity", "identityId": "0x...", "delta": 1, "standard": "dotcell" }
+]
+```
+
+- `standard` is required on every identity delta and is the standard's wire value:
+  `dotbit | bit_cell | did_ckb | dotcell`. It is what the indexer recorded when it emitted the
+  delta (`ItemKind::Identity(standard)`), not a store lookup, so a pending registration of a name
+  the store does not hold yet carries it too. `.cell`, `.bit` and short did:ckb ids are all 20
+  bytes, so the id alone cannot say which item page it belongs to.
 
 ---
 
@@ -118,7 +143,9 @@ response shapes describe a party the same way:
 - `CollectionHoldersParams` — `limit`, `cursor`
 - `CollectionActivitiesParams` — `limit`, `cursor`, `action`
 - `ChartRangeParams` — `from`, `to`
-- `Path<String>` for `object_id`, `collection_id`
+- `Path<String>` for `object_id`, `collection_id`. `collection_id` is a hex id or, for an
+  identity collection, one of the identity aliases listed under identities below — so the
+  `.cell` collection page's chart is `/assets/objects/dotcell/charts/capacity-history`
 
 **Responses**
 
@@ -135,25 +162,33 @@ response shapes describe a party the same way:
 
 ### identities (crates/api/src/routes/identities.rs)
 
-| Method | Path                                                                | Handler                               | Purpose                                                                                                                                 |
-| ------ | ------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`              | `get_dotbit_item_detail`              | Get .bit AccountCell item detail                                                                                                        |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities`   | `list_dotbit_item_activities`         | List .bit AccountCell activities                                                                                                        |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}`                 | `get_did_ckb_item_detail`             | Get did:ckb item detail                                                                                                                 |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`      | `list_did_ckb_item_activities`        | List did:ckb item activities                                                                                                            |
-| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}`            | `get_bit_cell_item_detail`            | Get independent .bit Cell identity detail                                                                                               |
-| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}/activities` | `list_bit_cell_item_activities`       | List .bit Cell identity activities                                                                                                      |
-| GET    | `/api/v1/assets/identities/dotcell/ring`                            | `get_dotcell_ring`                    | Get the `.cell` uniqueness ring root (namespace, root outpoint, first id, live count)                                                   |
-| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}`              | `get_dotcell_item_detail`             | Get a `.cell` name by 20-byte id, `alice` or `alice.cell`                                                                               |
-| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}/activities`   | `list_dotcell_item_activities`        | List a `.cell` name's activities                                                                                                        |
-| GET    | `/api/v1/assets/identities/{collection_id}`                         | `get_identity_collection`             | Get .bit AccountCell, .bit Cell, did:ckb or `.cell` collection aggregate (aliases `dotbit`, `bit-cell`, `did_ckb`, `dotcell` / `.cell`) |
-| GET    | `/api/v1/assets/identities/{collection_id}/holders`                 | `list_identity_collection_holders`    | List ranked holders of an identity collection                                                                                           |
-| GET    | `/api/v1/assets/identities/{collection_id}/activities`              | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)                                                                         |
-| GET    | `/api/v1/assets/identities/{collection_id}/items`                   | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)                                                                              |
+| Method | Path                                                                | Handler                               | Purpose                                                                                  |
+| ------ | ------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`              | `get_dotbit_item_detail`              | Get .bit AccountCell item detail                                                         |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities`   | `list_dotbit_item_activities`         | List .bit AccountCell activities                                                         |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}`                 | `get_did_ckb_item_detail`             | Get did:ckb item detail                                                                  |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`      | `list_did_ckb_item_activities`        | List did:ckb item activities                                                             |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}`            | `get_bit_cell_item_detail`            | Get independent .bit Cell identity detail                                                |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}/activities` | `list_bit_cell_item_activities`       | List .bit Cell identity activities                                                       |
+| GET    | `/api/v1/assets/identities/dotcell/ring`                            | `get_dotcell_ring`                    | Get the `.cell` uniqueness ring root (namespace, root outpoint, first id, live count)    |
+| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}`              | `get_dotcell_item_detail`             | Get a `.cell` name by 20-byte id, `alice` or `alice.cell`                                |
+| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}/activities`   | `list_dotcell_item_activities`        | List a `.cell` name's activities                                                         |
+| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}/children`     | `list_dotcell_item_children`          | List a `.cell` name's live sub-names after the detail's first page (cursor-paginated)    |
+| GET    | `/api/v1/assets/identities/{collection_id}`                         | `get_identity_collection`             | Get .bit AccountCell, .bit Cell, did:ckb or `.cell` collection aggregate (aliases below) |
+| GET    | `/api/v1/assets/identities/{collection_id}/holders`                 | `list_identity_collection_holders`    | List ranked holders of an identity collection                                            |
+| GET    | `/api/v1/assets/identities/{collection_id}/activities`              | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)                          |
+| GET    | `/api/v1/assets/identities/{collection_id}/items`                   | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)                               |
 
 **Params**
 
-- `Path<String>` for `identity_id` / `collection_id`
+- `Path<String>` for `identity_id` / `collection_id`. A `collection_id` is a hex sentinel id or
+  one of the aliases in the store's one identity table (`ckbadger_store::types::identity_aliases`,
+  case-insensitive): `dotbit` / `.bit`, `bit_cell` / `bit-cell` / `.bit-cell`, `did:ckb` /
+  `did_ckb`, `dotcell` / `.cell`. There is no bare `cell` alias.
+- `id_or_name` for a `.cell` name: the 20-byte id (`0x` + 40 hex) or the label, case-insensitive,
+  with or without `.cell` (`alice`, `ALICE.cell`)
+- `DotCellChildrenParams` — `limit` (default 50, max 200), `cursor` (the last child's 20-byte
+  name id, as returned in `nextCursor` / `childrenNextCursor`)
 - `IdentityCollectionHoldersParams` — `limit`, `cursor`
 - `MnftItemActivitiesParams` (re-used from assets.rs) — `limit`, `cursor`, `action`
 - `CollectionActivitiesParams` (from assets.rs) — `limit`, `cursor`, `action`
@@ -166,6 +201,19 @@ response shapes describe a party the same way:
 - `CollectionActivityResponse` (from assets.rs)
 - `CollectionItemResponse` (from assets.rs) — used for item detail and item list
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activities
+- `DotCellRingResponse` — `namespaceArgs`, `rootOutPoint`, `firstId`, `liveCount`; `404` on a
+  network with no `.cell` ring root indexed
+- `DotCellItemResponse` — the name, its owner/manager/sale/records, `parent`, and the **first
+  page** of its live sub-names: `children` (at most 50), `childrenHasMore`, `childrenNextCursor`
+- `CursorPaginatedResponse<DotCellNameRef>` — `…/children`: `identityId`, `label`, `name`
+
+**`.cell` sub-names**
+
+The parent→child index lists every sub-name ever registered under a parent, recycled ones
+included; liveness is decided on read, so `children` and `…/children` serve live sub-names only,
+in id order. The detail carries the first 50; `…/children?cursor=<childrenNextCursor>` pages
+through the rest with the same `nextCursor` contract as every list. A child row that is missing
+or not a `.cell` identity is a `500` naming the parent and the child.
 
 ---
 
@@ -223,28 +271,48 @@ response shapes describe a party the same way:
 - `CyclesStatusResponse` (from `crate::cycles`) — status, cycles, error
 - `TransactionLifecycleResponse` — phase, proposal_id, `proposed_in`/`committed_in`, commitment_distance, `commitment_window: CommitmentWindow`
 
+**`/transactions/{hash}/detail` for a transaction the store has not indexed**
+
+- A transaction the node holds in its pool (`status` `pending` / `proposed`) or has committed
+  before this process's store indexed it (`status` `committed`, `poolStatus`
+  `committed_awaiting_index`) is served provisionally from the node: `poolStatus` and
+  `interpretation` are set, `timestamp` / `confirmations` / `index` are absent, and a committed one
+  always carries `blockNumber` and `blockHash`.
+- Each input resolves through one order: an output of a transaction the tx-pool mirror's snapshot
+  holds, otherwise `outputs[index]` of the parent from the node's `get_transaction`. A spent input
+  of a committed transaction resolves the same way as a chained pool spend.
+- `fee` has one source: Σ inputs + Σ exact Nervos DAO compensation of any withdraw-request inputs
+  − Σ outputs, over fully resolved inputs. The node's pool fee is not read.
+- An input whose parent transaction the node does not know yet is a `503`
+  `service_unavailable` naming the outpoints ("retry") — never a response with a partial fee or
+  unresolved inputs.
+
 ---
 
 ### cells (crates/api/src/routes/cells.rs)
 
-| Method | Path                                     | Handler                     | Purpose                                                                                                                                                                   |
-| ------ | ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/cells/live-summary`             | `get_live_cell_summary`     | Exact O(1) live-cell class/data counts at a verifiable canonical tip                                                                                                      |
-| GET    | `/api/v1/cells/live`                     | `list_live_cells`           | List live cells with optional lock/type/type_code_hash filters (cursor)                                                                                                   |
-| GET    | `/api/v1/cells/by-script`                | `list_cells_by_script`      | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`)                                                                         |
-| GET    | `/api/v1/cells/{tx_hash}/{output_index}` | `get_cell`                  | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                                                                                         |
-| GET    | `/api/v1/addresses/top`                  | `get_top_addresses`         | Top addresses by balance (warmup cache)                                                                                                                                   |
-| GET    | `/api/v1/addresses/active`               | `get_active_addresses`      | Most-active addresses in last N `days` (warmup cache)                                                                                                                     |
-| GET    | `/api/v1/addresses/{addr}`               | `get_address`               | Address summary (balance, used_capacity, live_cells_count, lock_script info)                                                                                              |
-| GET    | `/api/v1/addresses/{addr}/transactions`  | `get_address_transactions`  | List recent transactions for an address (cursor)                                                                                                                          |
-| GET    | `/api/v1/addresses/{addr}/tokens`        | `get_address_tokens`        | List token balances for an address (cursor)                                                                                                                               |
-| GET    | `/api/v1/addresses/{addr}/dotcell-names` | `get_address_dotcell_names` | List the `.cell` names this address owns (cursor). A name's owner is the first 20 bytes of its owner's lock hash, so this is a prefix seek on the address's own lock hash |
+| Method | Path                                             | Handler                     | Purpose                                                                                                                                                                         |
+| ------ | ------------------------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/cells/live-summary`                     | `get_live_cell_summary`     | Exact O(1) live-cell class/data counts at a verifiable canonical tip                                                                                                            |
+| GET    | `/api/v1/cells/live`                             | `list_live_cells`           | List live cells with optional lock/type/type_code_hash filters (cursor)                                                                                                         |
+| GET    | `/api/v1/cells/by-script`                        | `list_cells_by_script`      | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`)                                                                               |
+| GET    | `/api/v1/cells/{tx_hash}/{output_index}`         | `get_cell`                  | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                                                                                               |
+| GET    | `/api/v1/addresses/top`                          | `get_top_addresses`         | Top addresses by balance (warmup cache)                                                                                                                                         |
+| GET    | `/api/v1/addresses/active`                       | `get_active_addresses`      | Most-active addresses in last N `days` (warmup cache)                                                                                                                           |
+| GET    | `/api/v1/addresses/{addr}`                       | `get_address`               | Address summary (balance, used_capacity, live_cells_count, lock_script info)                                                                                                    |
+| GET    | `/api/v1/addresses/{addr}/transactions`          | `get_address_transactions`  | List recent transactions for an address (cursor)                                                                                                                                |
+| GET    | `/api/v1/addresses/prefix/{prefix}/transactions` | `get_prefix_transactions`   | List the transactions a protocol NAMED a 20-byte lock-hash prefix in without it holding a cell (cursor) — the `addr_txs_by_prefix` half of an address's history, read as itself |
+| GET    | `/api/v1/addresses/{addr}/tokens`                | `get_address_tokens`        | List token balances for an address (cursor)                                                                                                                                     |
+| GET    | `/api/v1/addresses/{addr}/dotcell-names`         | `get_address_dotcell_names` | List the `.cell` names this address owns (cursor). A name's owner is the first 20 bytes of its owner's lock hash, so this is a prefix seek on the address's own lock hash       |
 
 **Params**
 
 - `ListCellsParams` — `limit`, `lock_script_hash`, `type_script_hash`, `type_code_hash`, `cursor`
 - `ListCellsByScriptParams` — `limit`, `code_hash`, `hash_type`, `script_kind` (default `both`), `cursor`
 - `TopAddressesParams` — `limit` (default 100)
+- `Path(prefix)` for `/addresses/prefix/{prefix}/transactions` — 40 hex characters, optional `0x`
+  (the first 20 bytes of a lock hash); `AddressTxParams` — `limit` (default 50, max 100), `cursor`
+  (`block_num:tx_idx`, from `nextCursor`)
 
 **`transactionsCount` / `total`**
 
@@ -308,7 +376,24 @@ merged transaction list beneath it. Pool rows stay out of both and are reported 
 - `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`
 - `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo` (`deprecated` reflects the stored script record, e.g. an address on a superseded ACP deployment reports `true`).
   `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
-  network — never the raw input echoed back
+  network — never the raw input echoed back. `pendingSummary` is described below
+- `CursorPaginatedResponse<PrefixTransactionResponse>` — `txHash`, `blockNumber`, `txIndex`,
+  `capacityChange`, `txType` (`named`), `tags` (participant tag bitmask)
+
+**`pendingSummary` on `/addresses/{addr}`**
+
+```json
+{ "pendingSummary": { "txCount": 2, "capacityDelta": "-10000000000" } }
+```
+
+- Always present. `capacityDelta` is the address's signed net capacity change in shannons, as a
+  decimal string, over its page-one tx-pool segment: the pool transactions involving it that are
+  not indexed yet, at most 200.
+- Independent of any list filter, and computed per request — never served from the 30 s detail
+  cache.
+- `null` when the tx-pool mirror is disabled or unhealthy: there is no pool view to summarise,
+  and "0 pending" would be a guess. A healthy mirror with nothing pending gives
+  `{ "txCount": 0, "capacityDelta": "0" }`.
 
 **Address inputs (`{addr}`, all address endpoints)**
 
@@ -835,6 +920,6 @@ truncated list.
 
 ---
 
-**Total endpoints: 129** across 19 modules. Confirm against
+**Total endpoints: 135** across 19 modules. Confirm against
 `crates/api/src/routes/*.rs` for any field-level question; this skeleton is
 intentionally name-and-purpose only.
