@@ -372,68 +372,167 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
 pub const TEST_SECP_LOCK_CODE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 
-/// The node reports the pending transaction's previous output as live.
-///
-/// Pending inputs resolve through `get_live_cell(out_point, with_data = true)`
-/// — live cells are primitive truth in the node's own database, and unlike the
-/// store's `LiveCellInfo` the node returns the data bytes that DAO / `.bit` /
-/// UDT interpretation needs.
-pub async fn mount_live_cell_rpc(server: &MockServer, capacity_hex: &str, lock_args_hex: &str) {
-    let response = serde_json::json!({
+pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
+    mount_transaction_rpc(server, pending_transaction_rpc_response(hash, status)).await;
+}
+
+/// Serve `response` (a whole `get_transaction` JSON-RPC response) for exactly
+/// the transaction it carries, so a test can script a transaction AND the
+/// parents its inputs resolve through, each answered for its own hash.
+pub async fn mount_transaction_rpc(server: &MockServer, response: serde_json::Value) {
+    let hash = response["result"]["transaction"]["hash"]
+        .as_str()
+        .expect("get_transaction fixture carries its transaction hash")
+        .to_string();
+    Mock::given(method("POST"))
+        .and(body_partial_json(serde_json::json!({
+            "method": "get_transaction",
+            "params": [hash]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
+/// The node does not know this transaction: `{transaction: null, status: unknown}`.
+pub async fn mount_transaction_unknown_to_node(server: &MockServer, hash: &str) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(serde_json::json!({
+            "method": "get_transaction",
+            "params": [hash]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "transaction": null,
+                "cycles": null,
+                "fee": null,
+                "time_added_to_pool": null,
+                "min_replace_fee": null,
+                "tx_status": {
+                    "status": "unknown",
+                    "block_hash": null,
+                    "block_number": null,
+                    "reason": null
+                }
+            }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// A whole `get_transaction` response for a transaction with these inputs
+/// (`(previous tx hash, index)`), outputs and data, in `status`. A committed
+/// one carries its block `(number, hash)` and, like a real node, no pool fee.
+pub fn transaction_rpc_response(
+    hash: &str,
+    inputs: &[(&str, u32)],
+    outputs: Vec<serde_json::Value>,
+    outputs_data: Vec<String>,
+    status: &str,
+    block: Option<(u64, &str)>,
+) -> serde_json::Value {
+    serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "result": {
-            "cell": {
-                "data": { "content": "0x", "hash": format!("0x{}", "00".repeat(32)) },
-                "output": {
-                    "capacity": capacity_hex,
-                    "lock": {
-                        "code_hash": TEST_SECP_LOCK_CODE_HASH,
-                        "hash_type": "type",
-                        "args": lock_args_hex
-                    },
-                    "type": null
-                }
+            "transaction": {
+                "hash": hash,
+                "version": "0x0",
+                "cell_deps": [],
+                "header_deps": [],
+                "inputs": inputs
+                    .iter()
+                    .map(|(tx_hash, index)| serde_json::json!({
+                        "previous_output": { "tx_hash": tx_hash, "index": format!("0x{index:x}") },
+                        "since": "0x0"
+                    }))
+                    .collect::<Vec<_>>(),
+                "outputs": outputs,
+                "outputs_data": outputs_data,
+                "witnesses": ["0x"]
             },
-            "status": "live"
+            "cycles": null,
+            "fee": null,
+            "time_added_to_pool": null,
+            "min_replace_fee": null,
+            "tx_status": {
+                "status": status,
+                "block_hash": block.map(|(_, hash)| hash),
+                "block_number": block.map(|(number, _)| format!("0x{number:x}")),
+                "reason": null
+            }
         }
-    });
-    Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_live_cell" }),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response))
-        .mount(server)
-        .await;
+    })
 }
 
-/// The node reports the previous output as already spent.
-pub async fn mount_dead_cell_rpc(server: &MockServer) {
-    let response = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": { "cell": null, "status": "dead" }
-    });
-    Mock::given(method("POST"))
-        .and(body_partial_json(
-            serde_json::json!({ "method": "get_live_cell" }),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response))
-        .mount(server)
-        .await;
+/// The committed transaction that created the pending fixture's input
+/// (`pending_previous_output_hash_hex():0`): one secp output owned by
+/// `lock_args_hex`. The pending transaction spends it, so it is no longer live —
+/// it resolves from this body, as it does against a real node.
+pub fn funding_transaction_rpc_response(
+    capacity_hex: &str,
+    lock_args_hex: &str,
+) -> serde_json::Value {
+    let grandparent = format!("0x{}", "ee".repeat(32));
+    transaction_rpc_response(
+        &pending_previous_output_hash_hex(),
+        &[(&grandparent, 0)],
+        vec![serde_json::json!({
+            "capacity": capacity_hex,
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": lock_args_hex
+            },
+            "type": null
+        })],
+        vec!["0x".to_string()],
+        "committed",
+        Some((0x1000, &format!("0x{}", "cc".repeat(32)))),
+    )
 }
 
-pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
-    Mock::given(method("POST"))
-        .and(body_partial_json(serde_json::json!({
-            "method": "get_transaction"
-        })))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(pending_transaction_rpc_response(hash, status)),
-        )
-        .mount(server)
-        .await;
+/// A header answering `get_header` (by hash) and `get_header_by_number`, whose
+/// DAO field carries accumulated rate `ar` (bytes 8..16, little-endian).
+pub async fn mount_header_rpc(server: &MockServer, number: u64, hash: &str, ar: u64) {
+    let mut dao = [0u8; 32];
+    dao[8..16].copy_from_slice(&ar.to_le_bytes());
+    let header = serde_json::json!({
+        "compact_target": "0x1e083126",
+        "dao": format!("0x{}", hex::encode(dao)),
+        "epoch": "0x0",
+        "extra_hash": format!("0x{}", "00".repeat(32)),
+        "hash": hash,
+        "nonce": "0x0",
+        "number": format!("0x{number:x}"),
+        "parent_hash": format!("0x{}", "00".repeat(32)),
+        "proposals_hash": format!("0x{}", "00".repeat(32)),
+        "timestamp": "0x18bcfe5687b",
+        "transactions_root": format!("0x{}", "00".repeat(32)),
+        "version": "0x0"
+    });
+    for (rpc_method, param) in [
+        ("get_header", serde_json::json!(hash)),
+        (
+            "get_header_by_number",
+            serde_json::json!(format!("0x{number:x}")),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "method": rpc_method,
+                "params": [param]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": header
+            })))
+            .mount(server)
+            .await;
+    }
 }
 
 /// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly

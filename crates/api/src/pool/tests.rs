@@ -16,8 +16,7 @@ use super::mirror::{PoolMirror, PoolRefresher, PoolRefresherConfig};
 use super::resolve::{resolve_pool_tx, ResolvedCell};
 use super::snapshot::{Interpretation, PartialReason, PoolStatus};
 use super::source::{
-    FakePoolSource, NodeLiveCell, NodeScript, NodeTxStatus, PoolEntryMeta, PoolTxLookup, RawTxPool,
-    TxPoolInfo,
+    FakePoolSource, NodeHeader, NodeTxStatus, PoolEntryMeta, PoolTxLookup, RawTxPool, TxPoolInfo,
 };
 
 /// secp256k1-blake160, a standard lock: the activity builder records no
@@ -57,16 +56,6 @@ fn script(code_hash: &str, args_byte: u8) -> RpcScript {
         code_hash: code_hash.to_string(),
         hash_type: "type".to_string(),
         args: format!("0x{}", hex::encode([args_byte; 20])),
-    }
-}
-
-fn node_script(code_hash: &str, args_byte: u8) -> NodeScript {
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&hex::decode(code_hash.trim_start_matches("0x")).unwrap());
-    NodeScript {
-        code_hash: bytes,
-        hash_type: 1,
-        args: vec![args_byte; 20],
     }
 }
 
@@ -225,16 +214,6 @@ fn refresher(
     )
 }
 
-/// A funding cell the node reports as live, owned by `lock_args`.
-fn live_cell(capacity: u64, lock_args: u8) -> NodeLiveCell {
-    NodeLiveCell {
-        capacity,
-        lock: node_script(SECP_LOCK_CODE_HASH, lock_args),
-        type_script: None,
-        data: vec![],
-    }
-}
-
 fn setup(max_tracked_txs: usize) -> (Arc<FakePoolSource>, Arc<PoolMirror>, PoolRefresher) {
     let source = Arc::new(FakePoolSource::new());
     let mirror = Arc::new(PoolMirror::new(true));
@@ -263,7 +242,7 @@ async fn test_new_pool_tx_is_indexed_by_participant_lock() {
         pending: vec![([0x01; 32], entry(1_700_000_000_000))],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, sender));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, sender));
     source.set_transaction([0x01; 32], lookup(tx, NodeTxStatus::Pending));
 
     let outcome = refresher.refresh_once().await;
@@ -321,7 +300,7 @@ async fn test_chained_child_resolves_its_parent_from_the_pool() {
         .input(&hex32(0xF0), 0)
         .output(9_900_000_000, 0xBB)
         .build();
-    // The child spends the parent's output, which the node has no live cell for.
+    // The child spends the parent's output: an unconfirmed chained spend.
     let child = TxBuilder::new(0x02)
         .input(&hex32(0x01), 0)
         .output(9_800_000_000, 0xCC)
@@ -335,7 +314,7 @@ async fn test_chained_child_resolves_its_parent_from_the_pool() {
         ],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     source.set_transaction([0x01; 32], lookup(parent, NodeTxStatus::Pending));
     source.set_transaction([0x02; 32], lookup(child, NodeTxStatus::Pending));
 
@@ -378,7 +357,7 @@ async fn test_unresolvable_input_is_partial_and_retried_to_completion() {
         proposed: vec![],
     });
     source.set_transaction([0x01; 32], lookup(tx, NodeTxStatus::Pending));
-    // No live cell scripted: the input cannot be resolved yet.
+    // The node does not know the parent yet: the input cannot be resolved.
 
     refresher.refresh_once().await;
     let snapshot = mirror.load();
@@ -404,8 +383,8 @@ async fn test_unresolvable_input_is_partial_and_retried_to_completion() {
     );
     assert_eq!(snapshot.status.partial, 1);
 
-    // The node now reports the cell as live: same pool, retried, completed.
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    // The node now knows the parent: same pool, retried, completed.
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     refresher.refresh_once().await;
 
     let snapshot = mirror.load();
@@ -418,6 +397,92 @@ async fn test_unresolvable_input_is_partial_and_retried_to_completion() {
         1
     );
     assert_eq!(snapshot.status.partial, 0);
+}
+
+/// The committed transaction that created `hash_byte`'s output 0, owned by
+/// `lock_args`. Resolver v2 reads a previous output from its creating
+/// transaction, so this is how a test says "the node knows this cell".
+fn committed_parent(hash_byte: u8, capacity: u64, lock_args: u8) -> PoolTxLookup {
+    PoolTxLookup {
+        status: NodeTxStatus::Committed,
+        transaction: Some(
+            TxBuilder::new(hash_byte)
+                .input(&hex32(0xEE), 0)
+                .output(capacity, lock_args)
+                .build(),
+        ),
+        block_number: Some(4_000),
+        block_hash: Some([0x44; 32]),
+    }
+}
+
+/// One round, three shapes of input: a chained pool spend (C spends B:0, both
+/// pending), a spend of a committed parent (B spends F:0), and a transaction
+/// that committed between `get_raw_tx_pool` and `get_transaction` — its input
+/// (E:0) is already SPENT on chain. All three resolve in the same round;
+/// nothing is left for a retry.
+#[tokio::test]
+async fn chained_pool_spend_and_just_committed_parent_resolve_in_one_round() {
+    let (source, mirror, mut refresher) = setup(100);
+
+    let b = TxBuilder::new(0x0B)
+        .input(&hex32(0xF1), 0)
+        .output(9_900_000_000, 0xBB)
+        .build();
+    let c = TxBuilder::new(0x0C)
+        .input(&hex32(0x0B), 0)
+        .output(9_800_000_000, 0xCC)
+        .build();
+    let d = TxBuilder::new(0x0D)
+        .input(&hex32(0xE1), 0)
+        .output(4_900_000_000, 0xDD)
+        .build();
+
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![
+            ([0x0B; 32], entry(1_700_000_001_000)),
+            ([0x0C; 32], entry(1_700_000_002_000)),
+            ([0x0D; 32], entry(1_700_000_003_000)),
+        ],
+        proposed: vec![],
+    });
+    source.set_transaction([0xF1; 32], committed_parent(0xF1, 10_000_000_000, 0xAA));
+    source.set_transaction([0xE1; 32], committed_parent(0xE1, 5_000_000_000, 0xAB));
+    source.set_transaction([0x0B; 32], lookup(b, NodeTxStatus::Pending));
+    source.set_transaction([0x0C; 32], lookup(c, NodeTxStatus::Pending));
+    source.set_transaction(
+        [0x0D; 32],
+        PoolTxLookup {
+            status: NodeTxStatus::Committed,
+            transaction: Some(d),
+            block_number: Some(4_001),
+            block_hash: Some([0x45; 32]),
+        },
+    );
+
+    let outcome = refresher.refresh_once().await;
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.entry_errors, 0, "{outcome:?}");
+
+    let snapshot = mirror.load();
+    for hash in [[0x0B; 32], [0x0C; 32], [0x0D; 32]] {
+        let record = snapshot.records.get(&hash).expect("tracked");
+        assert_eq!(
+            record.interpretation,
+            Interpretation::Complete,
+            "0x{} must resolve in this round",
+            hex::encode(hash)
+        );
+        assert!(!record.needs_input_retry());
+    }
+    let d_actions = snapshot.records[&[0x0D; 32]].actions.as_ref().unwrap();
+    let spender = d_actions
+        .participants
+        .iter()
+        .find(|p| p.id.as_bytes() == lock_hash(SECP_LOCK_CODE_HASH, 0xAB))
+        .expect("the spent parent output's owner is the spender");
+    assert_eq!(spender.ckb_delta, -5_000_000_000);
 }
 
 #[tokio::test]
@@ -436,7 +501,7 @@ async fn test_committed_record_is_kept_until_the_store_has_indexed_it() {
         pending: vec![([0x01; 32], entry(1_700_000_000_000))],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     source.set_transaction([0x01; 32], lookup(tx.clone(), NodeTxStatus::Pending));
     refresher.refresh_once().await;
     assert_eq!(mirror.load().records.len(), 1);
@@ -513,7 +578,7 @@ async fn test_rejected_and_unknown_transactions_are_dropped() {
             pending: vec![([0x01; 32], entry(1_700_000_000_000))],
             proposed: vec![],
         });
-        source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+        source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
         source.set_transaction([0x01; 32], lookup(tx.clone(), NodeTxStatus::Pending));
         refresher.refresh_once().await;
         assert_eq!(mirror.load().records.len(), 1);
@@ -542,7 +607,7 @@ async fn test_reorg_returns_a_committed_record_to_pending() {
         pending: vec![([0x01; 32], entry(1_700_000_000_000))],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     source.set_transaction([0x01; 32], lookup(tx.clone(), NodeTxStatus::Pending));
     refresher.refresh_once().await;
 
@@ -590,7 +655,7 @@ async fn test_pending_becomes_proposed_without_rebuilding_the_record() {
         pending: vec![([0x01; 32], entry(1_700_000_000_000))],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     source.set_transaction([0x01; 32], lookup(tx, NodeTxStatus::Pending));
     refresher.refresh_once().await;
     let first_seen = mirror.load().records[&[0x01; 32]].first_seen_ms;
@@ -630,10 +695,9 @@ async fn test_tracking_cap_keeps_the_newest_and_reports_truncation() {
             .input(&hex32(0xF0 + index), 0)
             .output(9_900_000_000, 0xB0 + index)
             .build();
-        source.set_live_cell(
+        source.set_transaction(
             [0xF0 + index; 32],
-            0,
-            live_cell(10_000_000_000, 0xA0 + index),
+            committed_parent(0xF0 + index, 10_000_000_000, 0xA0 + index),
         );
         source.set_transaction([index; 32], lookup(tx, NodeTxStatus::Pending));
         pending.push(([index; 32], entry(1_700_000_000_000 + index as u64 * 1_000)));
@@ -666,7 +730,7 @@ async fn test_unchanged_pool_costs_exactly_one_rpc() {
         pending: vec![([0x01; 32], entry(1_700_000_000_000))],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     source.set_transaction([0x01; 32], lookup(tx, NodeTxStatus::Pending));
     refresher.refresh_once().await;
 
@@ -705,8 +769,8 @@ async fn test_malformed_entry_is_reported_without_losing_other_records() {
         ],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
-    source.set_live_cell([0xF1; 32], 0, live_cell(10_000_000_000, 0xAB));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
+    source.set_transaction([0xF1; 32], committed_parent(0xF1, 10_000_000_000, 0xAB));
     source.set_transaction([0x01; 32], lookup(good, NodeTxStatus::Pending));
     source.set_transaction([0x02; 32], lookup(broken, NodeTxStatus::Pending));
 
@@ -737,7 +801,7 @@ async fn test_rpc_failure_publishes_an_unhealthy_snapshot_not_an_empty_pool() {
         pending: vec![([0x01; 32], entry(1_700_000_000_000))],
         proposed: vec![],
     });
-    source.set_live_cell([0xF0; 32], 0, live_cell(10_000_000_000, 0xAA));
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
     source.set_transaction([0x01; 32], lookup(tx, NodeTxStatus::Pending));
     refresher.refresh_once().await;
 
@@ -1044,42 +1108,141 @@ async fn test_dotcell_transfer_reads_the_same_in_the_pool_as_committed() {
     assert!(!to.item_deltas[0].negative);
 }
 
-/// A pool transaction that completes a DAO withdrawal declares the one layer it
-/// cannot compute, rather than reporting a compensation of zero.
+/// A pool transaction that completes a Nervos DAO withdrawal is interpreted
+/// with the EXACT compensation, priced the way live sync prices it: the request
+/// cell's capacity and own occupied capacity, `AR_deposit` from the block its
+/// data names, `AR_withdraw` from the block that committed the request.
+///
+/// The numbers are the common DAO test vector
+/// `compensation_uses_the_cells_actual_occupied_capacity`: a 300 CKB cell
+/// occupying 142 CKB (60-byte lock args + DAO type + 8-byte data), AR
+/// 10_000 → 11_000, compensation 15.8 CKB.
 #[tokio::test]
-async fn test_dao_withdrawal_completion_declares_missing_compensation() {
+async fn test_dao_withdrawal_completion_is_priced_exactly() {
     use ckbadger_indexer::parser::dao::DAO_CODE_HASH;
 
-    let dao_withdraw_request_cell = ResolvedCell::new(
-        20_400_000_000,
-        hex::decode(SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
-        1,
-        vec![0xAA; 20],
-        Some((
-            hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap(),
-            1,
-            vec![],
-        )),
-        // Non-zero deposit block number: this is a phase-1 request cell.
-        4_242u64.to_le_bytes().to_vec(),
-    )
-    .unwrap();
-    assert!(dao_withdraw_request_cell.is_dao_withdraw_request());
+    let (source, mirror, mut refresher) = setup(100);
+    let deposit_block: u64 = 1_000;
+    let request_block_hash = [0xB1; 32];
+    let dao_field = |ar: u64| {
+        let mut dao = [0u8; 32];
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        dao
+    };
 
-    let tx = TxBuilder::new(0x01)
-        .input(&hex32(0xF0), 0)
-        .output(20_500_000_000, 0xAA)
-        .build();
-    let mut previous_outputs = std::collections::HashMap::new();
-    previous_outputs.insert(([0xF0; 32], 0u32), dao_withdraw_request_cell);
-    let resolved = resolve_pool_tx(&tx, &previous_outputs).unwrap();
-
-    assert!(resolved.completes_dao_withdrawal());
-    let zero = [0u8; 32];
-    assert!(
-        resolved.tx_view(&zero, 0).is_some(),
-        "layers 1 and 2 are exact and must still be interpreted"
+    // The phase-1 request transaction, committed in block 2_000.
+    let mut request_tx = TxBuilder::new(0xD1).input(&hex32(0xD0), 0).build();
+    request_tx.outputs.push(RpcCellOutput {
+        capacity: format!("0x{:x}", 300_00000000u64),
+        lock: RpcScript {
+            code_hash: SECP_LOCK_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", hex::encode([0xAA; 60])),
+        },
+        type_: Some(RpcScript {
+            code_hash: DAO_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        }),
+    });
+    request_tx
+        .outputs_data
+        .push(format!("0x{}", hex::encode(deposit_block.to_le_bytes())));
+    source.set_transaction(
+        [0xD1; 32],
+        PoolTxLookup {
+            status: NodeTxStatus::Committed,
+            transaction: Some(request_tx),
+            block_number: Some(2_000),
+            block_hash: Some(request_block_hash),
+        },
     );
+    source.set_header(NodeHeader {
+        number: deposit_block,
+        hash: [0xB0; 32],
+        dao: dao_field(10_000),
+    });
+    source.set_header(NodeHeader {
+        number: 2_000,
+        hash: request_block_hash,
+        dao: dao_field(11_000),
+    });
+
+    // Phase 2: 300 CKB + 15.8 CKB compensation − 1_000 shannons fee.
+    let withdrawal = TxBuilder::new(0x01)
+        .input(&hex32(0xD1), 0)
+        .output(315_80000000 - 1_000, 0xAA)
+        .build();
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x01; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    source.set_transaction([0x01; 32], lookup(withdrawal, NodeTxStatus::Pending));
+
+    let outcome = refresher.refresh_once().await;
+    assert_eq!(outcome.entry_errors, 0, "{outcome:?}");
+
+    let snapshot = mirror.load();
+    let record = snapshot.records.get(&[0x01; 32]).expect("tracked");
+    assert_eq!(record.interpretation, Interpretation::Complete);
+    let actions = record.actions.as_ref().expect("interpreted");
+    let completes: Vec<_> = actions
+        .protocol_actions
+        .iter()
+        .filter(|action| action.protocol == "dao" && action.action == "withdraw_complete")
+        .collect();
+    assert_eq!(completes.len(), 1, "{:?}", actions.protocol_actions);
+    let metadata = completes[0].metadata_value().unwrap();
+    assert_eq!(metadata["capacity"], 300_00000000i64);
+    assert_eq!(metadata["compensation"], 15_80000000i64);
+}
+
+/// A withdraw-request cell created by a transaction still in the pool cannot
+/// be withdrawn from yet; a transaction claiming to is an entry error with
+/// context, never interpreted with a missing or zero compensation.
+#[tokio::test]
+async fn test_withdrawal_from_an_uncommitted_request_is_an_entry_error() {
+    use ckbadger_indexer::parser::dao::DAO_CODE_HASH;
+
+    let (source, mirror, mut refresher) = setup(100);
+    let mut request_tx = TxBuilder::new(0xD1).input(&hex32(0xD0), 0).build();
+    request_tx.outputs.push(RpcCellOutput {
+        capacity: format!("0x{:x}", 300_00000000u64),
+        lock: script(SECP_LOCK_CODE_HASH, 0xAA),
+        type_: Some(RpcScript {
+            code_hash: DAO_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        }),
+    });
+    request_tx
+        .outputs_data
+        .push(format!("0x{}", hex::encode(1_000u64.to_le_bytes())));
+    source.set_transaction([0xD1; 32], lookup(request_tx, NodeTxStatus::Pending));
+
+    let withdrawal = TxBuilder::new(0x01)
+        .input(&hex32(0xD1), 0)
+        .output(300_00000000, 0xAA)
+        .build();
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x01; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    source.set_transaction([0x01; 32], lookup(withdrawal, NodeTxStatus::Pending));
+
+    let outcome = refresher.refresh_once().await;
+    assert_eq!(outcome.entry_errors, 1, "{outcome:?}");
+    let snapshot = mirror.load();
+    assert!(
+        snapshot.status.entry_errors[0]
+            .message
+            .contains("DAO withdraw-request"),
+        "{:?}",
+        snapshot.status.entry_errors
+    );
+    assert!(!snapshot.records.contains_key(&[0x01; 32]));
 }
 
 /// Pool participants come from the same row derivation committed rows use.

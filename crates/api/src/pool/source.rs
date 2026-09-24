@@ -65,20 +65,13 @@ pub struct PoolTxLookup {
     pub block_hash: Option<[u8; 32]>,
 }
 
-/// One live cell as the node reports it, data included.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeLiveCell {
-    pub capacity: u64,
-    pub lock: NodeScript,
-    pub type_script: Option<NodeScript>,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NodeScript {
-    pub code_hash: [u8; 32],
-    pub hash_type: i16,
-    pub args: Vec<u8>,
+/// A block header reduced to what input resolution needs: the DAO field, whose
+/// accumulated rate prices a Nervos DAO withdrawal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeHeader {
+    pub number: u64,
+    pub hash: [u8; 32],
+    pub dao: [u8; 32],
 }
 
 /// Read-only node RPC the mirror depends on.
@@ -86,15 +79,17 @@ pub struct NodeScript {
 pub trait PoolSource: Send + Sync {
     async fn tx_pool_info(&self) -> Result<TxPoolInfo, String>;
     async fn raw_tx_pool_verbose(&self) -> Result<RawTxPool, String>;
+    /// `get_transaction(tx_hash)`. The node answers for committed AND pool
+    /// transactions, which is what makes it the one source for the cells a
+    /// transaction spends: a previous output is `outputs[index]` of the
+    /// transaction that created it, spent or not.
     async fn get_transaction(&self, tx_hash: &[u8; 32]) -> Result<Option<PoolTxLookup>, String>;
-    /// `get_live_cell(out_point, with_data = true)`. Data is required: DAO,
-    /// `.bit` and UDT interpretation all read it, and the store's
-    /// `LiveCellInfo` does not carry it.
-    async fn get_live_cell(
-        &self,
-        tx_hash: &[u8; 32],
-        index: u32,
-    ) -> Result<Option<NodeLiveCell>, String>;
+    /// `get_header(block_hash)`: the block that committed a DAO withdraw
+    /// request, whose accumulated rate is the withdrawal's `AR_withdraw`.
+    async fn get_header(&self, block_hash: &[u8; 32]) -> Result<Option<NodeHeader>, String>;
+    /// `get_header_by_number(number)`: the deposit block a withdraw-request
+    /// cell names in its data, whose accumulated rate is `AR_deposit`.
+    async fn get_header_by_number(&self, number: u64) -> Result<Option<NodeHeader>, String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,35 +139,22 @@ struct RawPoolEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RawCellWithStatus {
-    cell: Option<RawCellInfo>,
-    status: String,
+struct RawHeader {
+    hash: String,
+    number: String,
+    dao: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RawCellInfo {
-    output: RawCellOutput,
-    data: Option<RawCellData>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawCellOutput {
-    capacity: String,
-    lock: RawScript,
-    #[serde(rename = "type")]
-    type_: Option<RawScript>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawCellData {
-    content: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawScript {
-    code_hash: String,
-    hash_type: String,
-    args: String,
+impl RawHeader {
+    fn into_node_header(self, method: &str) -> Result<NodeHeader, String> {
+        let dao = parse_hex_bytes(&self.dao, &format!("{method}.dao"))?;
+        Ok(NodeHeader {
+            number: parse_hex_u64(&self.number, &format!("{method}.number"))?,
+            hash: parse_hex_hash32(&self.hash, &format!("{method}.hash"))?,
+            dao: <[u8; 32]>::try_from(dao.as_slice())
+                .map_err(|_| format!("{method}.dao '{}' from node is not 32 bytes", self.dao))?,
+        })
+    }
 }
 
 /// Parse a `0x`-prefixed hex quantity. A malformed node value is an error with
@@ -203,16 +185,6 @@ pub fn parse_hash_type(label: &str) -> Result<i16, String> {
     ckbadger_common::hash_type_from_label(label)
         .map(i16::from)
         .ok_or_else(|| format!("unknown script hash_type '{label}' from node"))
-}
-
-impl RawScript {
-    fn into_node_script(self, field: &str) -> Result<NodeScript, String> {
-        Ok(NodeScript {
-            code_hash: parse_hex_hash32(&self.code_hash, &format!("{field}.code_hash"))?,
-            hash_type: parse_hash_type(&self.hash_type)?,
-            args: parse_hex_bytes(&self.args, &format!("{field}.args"))?,
-        })
-    }
 }
 
 /// Talks to the local CKB node over JSON-RPC.
@@ -334,44 +306,40 @@ impl PoolSource for HttpPoolSource {
         }))
     }
 
-    async fn get_live_cell(
-        &self,
-        tx_hash: &[u8; 32],
-        index: u32,
-    ) -> Result<Option<NodeLiveCell>, String> {
-        let out_point = serde_json::json!({
-            "tx_hash": format!("0x{}", hex::encode(tx_hash)),
-            "index": format!("0x{index:x}"),
-        });
-        let raw: RawCellWithStatus = self
-            .call("get_live_cell", (out_point, true))
+    async fn get_header(&self, block_hash: &[u8; 32]) -> Result<Option<NodeHeader>, String> {
+        let hash_hex = format!("0x{}", hex::encode(block_hash));
+        let Some(raw) = self
+            .call::<_, RawHeader>("get_header", (&hash_hex,))
             .await?
-            .ok_or_else(|| "get_live_cell returned no result".to_string())?;
-
-        if raw.status != "live" {
-            return Ok(None);
-        }
-        let Some(info) = raw.cell else {
+        else {
             return Ok(None);
         };
-        Ok(Some(NodeLiveCell {
-            capacity: parse_hex_u64(&info.output.capacity, "live cell capacity")?,
-            lock: info.output.lock.into_node_script("live cell lock")?,
-            type_script: info
-                .output
-                .type_
-                .map(|script| script.into_node_script("live cell type"))
-                .transpose()?,
-            data: match info.data {
-                Some(data) => parse_hex_bytes(&data.content, "live cell data")?,
-                None => {
-                    return Err(format!(
-                        "get_live_cell(with_data=true) returned no data for 0x{}:{index}",
-                        hex::encode(tx_hash)
-                    ))
-                }
-            },
-        }))
+        let header = raw.into_node_header("get_header")?;
+        if header.hash != *block_hash {
+            return Err(format!(
+                "get_header({hash_hex}) returned header 0x{}",
+                hex::encode(header.hash)
+            ));
+        }
+        Ok(Some(header))
+    }
+
+    async fn get_header_by_number(&self, number: u64) -> Result<Option<NodeHeader>, String> {
+        let number_hex = format!("0x{number:x}");
+        let Some(raw) = self
+            .call::<_, RawHeader>("get_header_by_number", (&number_hex,))
+            .await?
+        else {
+            return Ok(None);
+        };
+        let header = raw.into_node_header("get_header_by_number")?;
+        if header.number != number {
+            return Err(format!(
+                "get_header_by_number({number}) returned header #{}",
+                header.number
+            ));
+        }
+        Ok(Some(header))
     }
 }
 
@@ -392,7 +360,7 @@ struct FakeState {
     info: Option<Result<TxPoolInfo, String>>,
     raw_pool: RawTxPool,
     transactions: HashMap<[u8; 32], Result<Option<PoolTxLookup>, String>>,
-    live_cells: HashMap<([u8; 32], u32), NodeLiveCell>,
+    headers: Vec<NodeHeader>,
     calls: Vec<String>,
 }
 
@@ -425,12 +393,9 @@ impl FakePoolSource {
         self.lock().transactions.insert(tx_hash, Ok(None));
     }
 
-    pub fn set_live_cell(&self, tx_hash: [u8; 32], index: u32, cell: NodeLiveCell) {
-        self.lock().live_cells.insert((tx_hash, index), cell);
-    }
-
-    pub fn remove_live_cell(&self, tx_hash: [u8; 32], index: u32) {
-        self.lock().live_cells.remove(&(tx_hash, index));
+    /// A main-chain header, answerable by hash and by number.
+    pub fn set_header(&self, header: NodeHeader) {
+        self.lock().headers.push(header);
     }
 
     /// Every RPC method name this source was asked for, in order.
@@ -475,16 +440,26 @@ impl PoolSource for FakePoolSource {
         }
     }
 
-    async fn get_live_cell(
-        &self,
-        tx_hash: &[u8; 32],
-        index: u32,
-    ) -> Result<Option<NodeLiveCell>, String> {
+    async fn get_header(&self, block_hash: &[u8; 32]) -> Result<Option<NodeHeader>, String> {
         let mut state = self.lock();
         state
             .calls
-            .push(format!("get_live_cell:0x{}:{index}", hex::encode(tx_hash)));
-        Ok(state.live_cells.get(&(*tx_hash, index)).cloned())
+            .push(format!("get_header:0x{}", hex::encode(block_hash)));
+        Ok(state
+            .headers
+            .iter()
+            .find(|header| header.hash == *block_hash)
+            .copied())
+    }
+
+    async fn get_header_by_number(&self, number: u64) -> Result<Option<NodeHeader>, String> {
+        let mut state = self.lock();
+        state.calls.push(format!("get_header_by_number:{number}"));
+        Ok(state
+            .headers
+            .iter()
+            .find(|header| header.number == number)
+            .copied())
     }
 }
 

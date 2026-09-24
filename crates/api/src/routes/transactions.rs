@@ -40,16 +40,14 @@ type TxIoBundle = (
 struct PendingTxIoBundle {
     inputs: Vec<TransactionInputResponse>,
     outputs: Vec<TransactionOutputResponse>,
-    inputs_capacity: Option<u128>,
+    inputs_capacity: u128,
     outputs_capacity: u128,
-    inputs_used_capacity: Option<u128>,
+    inputs_used_capacity: u128,
     outputs_used_capacity: u128,
-    computed_fee: Option<u128>,
+    fee: u128,
     witnesses: Vec<String>,
     witnesses_available: bool,
 }
-const DAO_TYPE_CODE_HASH_HEX: &str =
-    "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 
 /// A transaction's size as CKB counts it: the molecule size plus the 4-byte
@@ -618,53 +616,39 @@ fn parse_u64_hex_field_with_context(
     })
 }
 
-fn is_dao_type_code_hash_hex(code_hash: &str) -> bool {
-    code_hash
-        .strip_prefix("0x")
-        .unwrap_or(code_hash)
-        .eq_ignore_ascii_case(DAO_TYPE_CODE_HASH_HEX)
-}
-
-/// Compute transaction fee from input/output capacities.
+/// Compute an UNCOMMITTED transaction's fee from its fully resolved cells.
 ///
-/// PENDING (mempool) transactions only: they have no indexed `TxIndexEntry`,
-/// so when the node RPC omits the pool fee this is the only source.
-/// Committed transactions always serve the stored fee — the indexer write
-/// path is the single calculation path and already accounts for DAO phase-2
-/// compensation.
-///
-/// Returns `None` for DAO phase-2 withdrawals where outputs > inputs due to
-/// compensation (the compensation amount is not available here, so the fee
-/// cannot be computed from I/O alone).
+/// Committed transactions serve the stored fee — the indexer write path is the
+/// single calculation path there. For an uncommitted one this is the only
+/// source: `(Σ inputs + Σ DAO compensation) − Σ outputs`, where the
+/// compensation is what the spent withdraw-request cells pay out (exactly the
+/// live-sync correction `correct_dao_withdrawal_fees` applies). A negative
+/// result is a broken invariant, never a zero.
 fn compute_tx_fee_from_io(
     inputs_capacity: u128,
+    dao_compensation: u128,
     outputs_capacity: u128,
     is_cellbase: bool,
-    has_dao_type_input: bool,
     block_number: i64,
     tx_hash: &[u8],
-) -> Result<Option<u128>, ApiRouteError> {
+) -> Result<u128, ApiRouteError> {
     if is_cellbase {
-        return Ok(Some(0));
+        return Ok(0);
     }
 
-    if let Some(fee) = inputs_capacity.checked_sub(outputs_capacity) {
-        return Ok(Some(fee));
-    }
-
-    if has_dao_type_input {
-        // DAO phase-2 withdrawal: outputs > inputs due to compensation.
-        // Cannot compute fee without the compensation amount.
-        return Ok(None);
-    }
-
-    Err(ApiError::internal(format!(
-        "transaction inputs/outputs invariant broken at block {}: tx_hash=0x{}, inputs_capacity={}, outputs_capacity={}",
-        block_number,
-        hex::encode(tx_hash),
-        inputs_capacity,
-        outputs_capacity
-    )))
+    inputs_capacity
+        .checked_add(dao_compensation)
+        .and_then(|effective_inputs| effective_inputs.checked_sub(outputs_capacity))
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "transaction inputs/outputs invariant broken at block {}: tx_hash=0x{}, inputs_capacity={}, dao_compensation={}, outputs_capacity={}",
+                block_number,
+                hex::encode(tx_hash),
+                inputs_capacity,
+                dao_compensation,
+                outputs_capacity
+            ))
+        })
 }
 
 fn occupied_capacity_bytes(
@@ -725,10 +709,13 @@ fn resolve_stored_input_type_hash_type(
     }
 }
 
-#[instrument(skip(state), level = "debug")]
+#[instrument(skip(state, read_view), level = "debug")]
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+    // Optional so the handler still works in routers built without the
+    // read-view middleware (unit tests mounting `routes()` directly).
+    read_view: Option<Extension<RequestReadView>>,
 ) -> ApiResult<TransactionDetailResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
@@ -765,10 +752,29 @@ async fn get_transaction_detail(
                 hash
             )));
         };
+        // A committed response always names its committing block: the tx page
+        // links it while the store catches up.
+        if tx_lookup.is_committed()
+            && (tx_lookup.block_number.is_none() || tx_lookup.block_hash.is_none())
+        {
+            return Err(ApiError::internal(format!(
+                "node reported transaction {hash} committed without its block number/hash"
+            )));
+        }
 
-        // One resolver, one order: a parent still in the pool, then the node's
-        // live cell. The mirror's snapshot supplies the pool parents so a
-        // chained unconfirmed spend resolves here exactly as it does there.
+        // The one store value this branch reads (immutable once derived), read
+        // before letting go of the request's view: everything below talks to
+        // the node, and holding the view across node round trips would stall
+        // the secondary's catch-up for as long as the node takes to answer.
+        let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
+        if let Some(Extension(view)) = read_view {
+            view.release();
+        }
+
+        // One resolver, one order: a parent the mirror's snapshot holds, then
+        // the parent transaction as the node returns it — so a chained
+        // unconfirmed spend and a just-committed transaction's (spent) inputs
+        // resolve here exactly as they do in the mirror.
         let pool_source = crate::pool::HttpPoolSource::new(state.ckb_rpc_url.clone());
         let pool_snapshot = state.pool_mirror.load();
         let previous_outputs =
@@ -784,6 +790,23 @@ async fn get_transaction_detail(
                 "failed to read uncommitted transaction {hash}: {e}"
             ))
         })?;
+
+        // A parent the node does not know is a state that passes (it was
+        // evicted, or has not propagated yet): say so and let the caller retry,
+        // rather than serving inputs, a fee and an interpretation that are
+        // missing a piece.
+        let unresolved = resolved.unresolved_inputs();
+        if !unresolved.is_empty() {
+            let outpoints = unresolved
+                .iter()
+                .map(|(tx_hash, index)| format!("0x{}:{index}", hex::encode(tx_hash)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ApiError::service_unavailable(format!(
+                "inputs of uncommitted transaction {hash} are not resolvable yet: the node does \
+                 not know the transaction that created {outpoints}; retry"
+            )));
+        }
 
         let interpretation = crate::pool::interpretation_of(&resolved);
         // The mirror is authoritative for the pool status when it tracks this
@@ -801,36 +824,24 @@ async fn get_transaction_detail(
                 }
             });
 
-        let io = build_inputs_outputs_from_pool_tx(
-            &resolved,
-            &state.ckb_network,
-            0,
-            state.genesis_baseline()?.virtual_occupied,
-        )?;
+        let io =
+            build_inputs_outputs_from_pool_tx(&resolved, &state.ckb_network, 0, virtual_occupied)?;
 
         let pending_since = tx_lookup.time_added_to_pool.and_then(|timestamp| {
             chrono::DateTime::from_timestamp_millis(timestamp as i64).map(|dt| dt.to_rfc3339())
         });
 
-        let fee = tx_lookup
-            .fee
-            .map(|value| value.to_string())
-            .or_else(|| io.computed_fee.map(|value| value.to_string()))
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "pending transaction {} missing fee from RPC and local computation",
-                    hash
-                ))
-            })?;
+        // The fee has ONE source: the fully resolved inputs (plus the exact DAO
+        // compensation they pay out) minus the outputs. The node's pool-entry
+        // fee is absent for committed transactions and is not a second path.
+        let fee_value = io.fee;
+        let fee = fee_value.to_string();
 
         let pending_tx_size = tx_lookup
             .tx_size
             .filter(|size| *size > 0)
             .map(tx_serialized_size_in_block);
-        let fee_rate = pending_tx_size.and_then(|size| {
-            let fee_value: u128 = fee.parse().ok()?;
-            Some(tx_fee_rate(fee_value, size))
-        });
+        let fee_rate = pending_tx_size.map(|size| tx_fee_rate(fee_value, size));
 
         let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
         let pool_is_cellbase = resolved.is_cellbase;
@@ -857,9 +868,9 @@ async fn get_transaction_detail(
             confirmations: None,
             is_cellbase: pool_is_cellbase,
             timestamp: None,
-            inputs_capacity: io.inputs_capacity.map(|value| value.to_string()),
+            inputs_capacity: Some(io.inputs_capacity.to_string()),
             outputs_capacity: Some(io.outputs_capacity.to_string()),
-            inputs_used_capacity: io.inputs_used_capacity.map(|value| value.to_string()),
+            inputs_used_capacity: Some(io.inputs_used_capacity.to_string()),
             outputs_used_capacity: Some(io.outputs_used_capacity.to_string()),
             inputs: io.inputs,
             outputs: io.outputs,
@@ -1002,13 +1013,14 @@ fn empty_inputs_outputs() -> TxIoBundle {
 }
 
 /// Build the `/tx/{hash}` response's inputs and outputs from a transaction the
-/// shared pool resolver has already resolved.
+/// shared pool resolver has already resolved — every input of it: the caller
+/// answers 503 while any is not.
 ///
 /// The previous store-based lookup (live cell, else consumed cell) is gone: an
 /// uncommitted transaction's inputs are resolved in exactly ONE place — the
-/// pool resolver's fixed order of pool parent, then the node's live cell — so
-/// the pending view and the address-page pool rows can never disagree about
-/// what a transaction spends.
+/// pool resolver's fixed order of snapshot parent, then the parent transaction
+/// from the node — so the pending view and the address-page pool rows can
+/// never disagree about what a transaction spends.
 fn build_inputs_outputs_from_pool_tx(
     resolved: &crate::pool::ResolvedPoolTx,
     network: &str,
@@ -1017,8 +1029,7 @@ fn build_inputs_outputs_from_pool_tx(
 ) -> Result<PendingTxIoBundle, ApiRouteError> {
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
-    let mut inputs_complete = true;
-    let mut has_dao_type_input = false;
+    let mut dao_compensation: u128 = 0;
 
     let inputs = resolved
         .inputs
@@ -1036,10 +1047,15 @@ fn build_inputs_outputs_from_pool_tx(
             });
 
             let Some(cell) = input.cell.as_ref() else {
-                // Either the cellbase pseudo-input, or an outpoint the node
-                // does not report as live. Both are reported as unresolved
-                // rather than filled in with a zero.
-                inputs_complete = false;
+                if !resolved.is_cellbase {
+                    return Err(ApiError::internal(format!(
+                        "unresolved input 0x{}:{} reached the response builder for tx 0x{}",
+                        hex::encode(input.previous_tx_hash),
+                        input.previous_output_index,
+                        hex::encode(resolved.tx_hash)
+                    )));
+                }
+                // The cellbase pseudo-input spends no cell.
                 return Ok(TransactionInputResponse {
                     previous_output,
                     since: input.since.clone(),
@@ -1051,6 +1067,16 @@ fn build_inputs_outputs_from_pool_tx(
             };
 
             inputs_capacity += cell.capacity as u128;
+            if let Some(compensation) = cell.dao_compensation {
+                dao_compensation += u128::try_from(compensation).map_err(|_| {
+                    ApiError::internal(format!(
+                        "negative DAO compensation {compensation} for input 0x{}:{} of tx 0x{}",
+                        hex::encode(input.previous_tx_hash),
+                        input.previous_output_index,
+                        hex::encode(resolved.tx_hash)
+                    ))
+                })?;
+            }
             inputs_occupied_capacity += occupied_capacity_bytes(
                 cell.lock_args.len(),
                 cell.type_code_hash
@@ -1098,13 +1124,6 @@ fn build_inputs_outputs_from_pool_tx(
                     })
                 })
                 .transpose()?;
-
-            if type_script
-                .as_ref()
-                .is_some_and(|script| is_dao_type_code_hash_hex(&script.code_hash))
-            {
-                has_dao_type_input = true;
-            }
 
             Ok(TransactionInputResponse {
                 previous_output,
@@ -1204,29 +1223,23 @@ fn build_inputs_outputs_from_pool_tx(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let computed_fee = if resolved.is_cellbase {
-        Some(0)
-    } else if inputs_complete {
-        compute_tx_fee_from_io(
-            inputs_capacity,
-            outputs_capacity,
-            false,
-            has_dao_type_input,
-            block_number,
-            &resolved.tx_hash,
-        )?
-    } else {
-        None
-    };
+    let fee = compute_tx_fee_from_io(
+        inputs_capacity,
+        dao_compensation,
+        outputs_capacity,
+        resolved.is_cellbase,
+        block_number,
+        &resolved.tx_hash,
+    )?;
 
     Ok(PendingTxIoBundle {
         inputs,
         outputs,
-        inputs_capacity: inputs_complete.then_some(inputs_capacity),
+        inputs_capacity,
         outputs_capacity,
-        inputs_used_capacity: inputs_complete.then_some(inputs_occupied_capacity),
+        inputs_used_capacity: inputs_occupied_capacity,
         outputs_used_capacity: outputs_occupied_capacity,
-        computed_fee,
+        fee,
         witnesses: resolved.witnesses.clone(),
         witnesses_available: true,
     })
@@ -2483,19 +2496,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_dao_type_code_hash_hex() {
-        assert!(is_dao_type_code_hash_hex(
-            "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
-        ));
-        assert!(is_dao_type_code_hash_hex(
-            "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
-        ));
-        assert!(!is_dao_type_code_hash_hex(
-            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-        ));
-    }
-
-    #[test]
     fn test_occupied_capacity_bytes_without_type_script() {
         let occ = occupied_capacity_bytes(20, None, 64);
         assert_eq!(occ, 8 + 32 + 1 + 20 + 64);
@@ -2509,19 +2509,24 @@ mod tests {
 
     #[test]
     fn test_compute_tx_fee_from_io_for_regular_tx() {
-        let fee = compute_tx_fee_from_io(1_000, 950, false, false, 10, &[0x11; 32]).unwrap();
-        assert_eq!(fee, Some(50));
+        let fee = compute_tx_fee_from_io(1_000, 0, 950, false, 10, &[0x11; 32]).unwrap();
+        assert_eq!(fee, 50);
     }
 
     #[test]
-    fn test_compute_tx_fee_from_io_returns_none_for_dao_compensation() {
-        let fee = compute_tx_fee_from_io(1_000, 1_100, false, true, 10, &[0x22; 32]).unwrap();
-        assert_eq!(fee, None);
+    fn test_compute_tx_fee_from_io_adds_dao_compensation_to_inputs() {
+        // Outputs exceed raw inputs because the withdrawal pays compensation.
+        let fee = compute_tx_fee_from_io(1_000, 150, 1_100, false, 10, &[0x22; 32]).unwrap();
+        assert_eq!(fee, 50);
+        // Compensation smaller than the fee: raw inputs still exceed outputs,
+        // and the compensation must STILL be counted, not dropped.
+        let fee = compute_tx_fee_from_io(1_000, 10, 950, false, 10, &[0x22; 32]).unwrap();
+        assert_eq!(fee, 60);
     }
 
     #[test]
     fn test_compute_tx_fee_from_io_errors_when_non_dao_outputs_exceed_inputs() {
-        let err = compute_tx_fee_from_io(1_000, 1_100, false, false, 10, &[0x33; 32]).unwrap_err();
+        let err = compute_tx_fee_from_io(1_000, 0, 1_100, false, 10, &[0x33; 32]).unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(err.1 .0.message.contains("inputs/outputs invariant broken"));
     }

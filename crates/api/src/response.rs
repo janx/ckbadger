@@ -55,6 +55,17 @@ impl ApiError {
         )
     }
 
+    /// The resource exists but cannot be served YET: something it is derived
+    /// from has not reached the node (e.g. an uncommitted transaction's
+    /// parent). Transient by definition, so the caller retries — the response
+    /// never carries partial data in its place.
+    pub fn service_unavailable(message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self::new("service_unavailable", message)),
+        )
+    }
+
     pub fn unauthorized(message: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::UNAUTHORIZED,

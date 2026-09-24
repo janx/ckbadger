@@ -21,16 +21,13 @@ use ckbadger_store::{read_view, CkbadgerStore};
 
 use super::resolve::{
     resolve_pool_tx, resolve_previous_outputs, PoolParentCells, ResolvedCell, ResolvedPoolTx,
+    TX_FETCH_CONCURRENCY,
 };
 use super::snapshot::{
     Interpretation, MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot,
     PoolStatus, PoolTxRecord,
 };
 use super::source::{NodeTxStatus, PoolEntryMeta, PoolSource, TxPoolInfo};
-
-/// How many `get_transaction` calls are in flight at once while picking up new
-/// pool transactions.
-const TX_FETCH_CONCURRENCY: usize = 16;
 
 /// The published mirror. Cloneable handle; readers take a snapshot with
 /// [`PoolMirror::load`] and never block the refresh loop.
@@ -436,8 +433,8 @@ impl PoolRefresher {
         }
 
         // Build parents before children so a chained unconfirmed spend resolves
-        // from its parent's outputs instead of asking the node for a cell that
-        // does not exist on chain.
+        // from its parent's already-built outputs (step 1 of the resolution
+        // order) instead of costing another `get_transaction`.
         let order = topological_order(&bodies);
 
         let mut fresh_outputs: HashMap<[u8; 32], Vec<ResolvedCell>> = HashMap::new();
@@ -748,14 +745,11 @@ pub(super) fn participants_from(
 /// The ONE place that judgement is made: the mirror records it on every pool
 /// record, and `/tx/{hash}` reports the same verdict for the same transaction.
 pub fn interpretation_of(resolved: &ResolvedPoolTx) -> Interpretation {
-    let mut reasons: Vec<PartialReason> = resolved
+    let reasons: Vec<PartialReason> = resolved
         .unresolved_inputs()
         .into_iter()
         .map(|(tx_hash, index)| PartialReason::UnresolvedInput { tx_hash, index })
         .collect();
-    if resolved.completes_dao_withdrawal() {
-        reasons.push(PartialReason::DaoCompensationUnavailable);
-    }
     if reasons.is_empty() {
         Interpretation::Complete
     } else {

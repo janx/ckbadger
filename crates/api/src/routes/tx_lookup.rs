@@ -33,7 +33,6 @@ pub(crate) struct TransactionLookup {
     pub status: Status,
     pub transaction: Option<RpcTransactionView>,
     pub cycles: Option<u64>,
-    pub fee: Option<u64>,
     pub time_added_to_pool: Option<u64>,
     pub tx_size: Option<i32>,
     /// Set by the node only for `committed`. The tx-pool mirror needs them to
@@ -244,7 +243,6 @@ pub(crate) async fn fetch_transaction_lookup(
         status: result.tx_status.status,
         transaction,
         cycles: result.cycles.map(Into::into),
-        fee: result.fee.map(Into::into),
         time_added_to_pool: result.time_added_to_pool.map(Into::into),
         tx_size,
         block_number,

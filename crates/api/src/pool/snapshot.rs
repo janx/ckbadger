@@ -46,21 +46,15 @@ impl PoolStatus {
 /// silently absorbed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartialReason {
-    /// The node does not report this outpoint as live and no pool parent
-    /// creates it, so the spender's CKB position is not derivable.
+    /// Neither the mirror nor the node knows the transaction that created this
+    /// outpoint, so the spender's CKB position is not derivable.
     UnresolvedInput { tx_hash: [u8; 32], index: u32 },
-    /// A Nervos DAO withdrawal completion: its compensation needs the deposit
-    /// and withdrawing header accumulated rates, which the mirror does not read
-    /// yet. Layers 1 and 2 are exact; the `dao:withdraw_complete` action is
-    /// absent rather than carrying an invented figure.
-    DaoCompensationUnavailable,
 }
 
 impl PartialReason {
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnresolvedInput { .. } => "unresolved_input",
-            Self::DaoCompensationUnavailable => "dao_compensation_unavailable",
         }
     }
 
@@ -69,7 +63,6 @@ impl PartialReason {
             Self::UnresolvedInput { tx_hash, index } => {
                 Some(format!("0x{}:{index}", hex::encode(tx_hash)))
             }
-            Self::DaoCompensationUnavailable => None,
         }
     }
 }
@@ -428,23 +421,19 @@ mod tests {
     #[test]
     fn test_interpretation_response_carries_reason_detail() {
         let interpretation = Interpretation::Partial {
-            reasons: vec![
-                PartialReason::UnresolvedInput {
-                    tx_hash: [0xAB; 32],
-                    index: 3,
-                },
-                PartialReason::DaoCompensationUnavailable,
-            ],
+            reasons: vec![PartialReason::UnresolvedInput {
+                tx_hash: [0xAB; 32],
+                index: 3,
+            }],
         };
         let response = InterpretationResponse::from(&interpretation);
         assert_eq!(response.status, "partial");
+        assert_eq!(response.reasons.len(), 1);
         assert_eq!(response.reasons[0].code, "unresolved_input");
         assert_eq!(
             response.reasons[0].detail.as_deref(),
             Some(format!("0x{}:3", "ab".repeat(32)).as_str())
         );
-        assert_eq!(response.reasons[1].code, "dao_compensation_unavailable");
-        assert_eq!(response.reasons[1].detail, None);
     }
 
     #[test]
