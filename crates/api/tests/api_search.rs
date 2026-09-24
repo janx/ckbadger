@@ -728,3 +728,48 @@ async fn dotcell_collection_hit_links_to_the_identities_route() {
     );
     assert_eq!(hit["url"], "/identities/dotcell");
 }
+
+/// A bare 32-byte lock hash known only to the tx pool is an address hit
+/// labelled by its pending count — the same presence rule the typed-address
+/// branch uses (`address_presence`), not a second copy of it.
+#[tokio::test]
+async fn pool_only_lock_hash_is_an_address_hit_through_the_shared_presence_rule() {
+    let store = test_store();
+    let config = test_config(store);
+    let state = test_app_state(config);
+    let lock_hash = [0x6d; 32];
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0x02; 32],
+            &lock_hash,
+            10_000_000_000,
+            1_700_000_000_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/search?q=address:0x{}",
+                    hex::encode(lock_hash)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let hit = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["resultType"] == "address")
+        .unwrap_or_else(|| panic!("no address hit: {json}"));
+    assert_eq!(hit["label"], "Address (0 cells, 1 pending)");
+    assert_eq!(hit["url"], format!("/address/0x{}", hex::encode(lock_hash)));
+}

@@ -382,18 +382,19 @@ async fn search(
                 scope,
                 &[SearchScope::Spore, SearchScope::Cluster, SearchScope::Asset],
             );
+            let mirror = state.pool_mirror.clone();
             #[allow(clippy::type_complexity)]
             let hash_results: (
                 Option<(i64, i32)>,
                 Option<i64>,
-                Option<ckbadger_store::AddressBalance>,
+                Option<AddressPresence>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
                 Option<String>,
             ) = tokio::task::spawn_blocking(move || -> anyhow::Result<(
                 Option<(i64, i32)>,
                 Option<i64>,
-                Option<ckbadger_store::AddressBalance>,
+                Option<AddressPresence>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
                 Option<String>,
@@ -408,8 +409,9 @@ async fn search(
                 } else {
                     None
                 };
-                let addr_bal = if check_addr {
-                    store.get_addr_balance(&hash_c)?
+                // The one presence rule, shared with the typed-address branch.
+                let presence = if check_addr {
+                    Some(address_presence(store.as_ref(), mirror.as_ref(), &hash_c)?)
                 } else {
                     None
                 };
@@ -436,13 +438,13 @@ async fn search(
                     }
                     _ => None,
                 };
-                Ok((tx_loc, block_num, addr_bal, token, spore, spore_cluster_name))
+                Ok((tx_loc, block_num, presence, token, spore, spore_cluster_name))
             })
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            let (tx_loc, block_num_result, addr_bal, token_info, spore_entry, spore_cluster_name) =
+            let (tx_loc, block_num_result, presence, token_info, spore_entry, spore_cluster_name) =
                 hash_results;
 
             if scope_allows(scope, &[SearchScope::Transaction]) {
@@ -484,28 +486,13 @@ async fn search(
             if scope_allows(scope, &[SearchScope::Address]) {
                 // A bare 32-byte hash is ambiguous (block, tx, script, lock
                 // hash), so unlike a typed address it only becomes a result
-                // when some source actually knows it — but "knows it" is the
-                // same predicate the address branch uses.
-                let presence = match addr_bal {
-                    Some(ab) if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 => {
-                        AddressPresence::OnChain {
-                            cells: ab.total_cells_count,
-                            txs: ab.txs_count,
-                        }
-                    }
-                    _ => {
-                        let pending = if state.pool_mirror.enabled() {
-                            state.pool_mirror.load().pending_count_for_lock(&hash_bytes)
-                        } else {
-                            0
-                        };
-                        if pending > 0 {
-                            AddressPresence::PoolOnly { pending }
-                        } else {
-                            AddressPresence::None
-                        }
-                    }
-                };
+                // when some source actually knows it — and "knows it" is
+                // `address_presence`, the predicate the address branch uses.
+                let presence = presence.ok_or_else(|| {
+                    ApiError::internal(
+                        "address presence was not resolved for an address-scoped hash search",
+                    )
+                })?;
                 if presence.is_known() {
                     results.push(SearchResult {
                         result_type: "address".to_string(),

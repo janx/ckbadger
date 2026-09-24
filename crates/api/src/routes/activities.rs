@@ -18,6 +18,7 @@ use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
 };
+use crate::routes::address_pool;
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
 use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
@@ -890,13 +891,8 @@ fn list_canonical_global_activities_page(
     Ok(out)
 }
 
-/// How many tx-pool rows one address's page one may carry.
-///
-/// A bound, not a sample: beyond it the response reports `truncated` so a
-/// caller is never shown a silently partial pool segment.
-pub(crate) const POOL_ROWS_PER_ADDRESS: usize = 200;
-
-/// Build this lock's tx-pool segment: the rows, and the summary describing them.
+/// Build this lock's tx-pool rows for page one, and the summary describing
+/// them: the shared page-one segment, narrowed by this feed's filter.
 ///
 /// Blocking (reads the store for dedup and for script/address resolution).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -905,31 +901,21 @@ pub(crate) fn build_pool_activity_rows(
     ao_store: &CkbadgerStore,
     network: &str,
     snapshot: &crate::pool::PoolSnapshot,
-    lock_hash: &[u8],
+    lock_hash: &[u8; 32],
     filter: Option<&str>,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
     address_cache: &mut HashMap<Vec<u8>, String>,
 ) -> anyhow::Result<(Vec<ActivityResponse>, crate::pool::PoolSummaryResponse)> {
-    let lock32: &[u8; 32] = lock_hash.try_into().map_err(|_| {
-        anyhow::anyhow!(
-            "build_pool_activity_rows expects a 32-byte lock hash, got {} bytes",
-            lock_hash.len()
-        )
-    })?;
-    let (records, truncated) = pool_records_for_page(snapshot, lock_hash);
+    let segment = address_pool::page_one_segment(store, snapshot, lock_hash)?;
 
-    let mut rows = Vec::with_capacity(records.len());
-    let mut pending_ckb_delta: i128 = 0;
-    for record in records {
-        // One dedup rule, committed wins: a transaction this request's pinned
-        // store view already has is served from the committed segment.
-        if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
-            continue;
-        }
+    let mut rows = Vec::with_capacity(segment.rows.len());
+    let mut served = Vec::with_capacity(segment.rows.len());
+    for row in &segment.rows {
+        let record = &row.record;
         // `by_lock` is built from a record's interpreted participants, so a
-        // record reached through it must have both. Either missing is a mirror
-        // invariant violation, not a row to skip quietly.
+        // record reached through it must have an interpretation. A missing one
+        // is a mirror invariant violation, not a row to skip quietly.
         let actions = record.actions.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "pool record indexed by lock 0x{} carries no interpretation: tx=0x{}",
@@ -944,7 +930,7 @@ pub(crate) fn build_pool_activity_rows(
         let participant = actions
             .participants
             .iter()
-            .find(|p| p.id.matches(lock32))
+            .find(|p| p.id.matches(lock_hash))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
@@ -953,7 +939,6 @@ pub(crate) fn build_pool_activity_rows(
                 )
             })?;
 
-        pending_ckb_delta += participant.ckb_delta;
         rows.push(build_activity_response(
             store,
             ao_store,
@@ -972,42 +957,11 @@ pub(crate) fn build_pool_activity_rows(
                 interpretation: crate::pool::InterpretationResponse::from(&record.interpretation),
             }),
         )?);
+        served.push(row);
     }
 
-    let summary = pool_summary(snapshot, rows.len(), pending_ckb_delta, truncated);
+    let summary = address_pool::pool_summary(snapshot, served, segment.truncated)?;
     Ok((rows, summary))
-}
-
-/// This lock's pool records for page one, newest first, capped — and whether
-/// anything was left out.
-pub(crate) fn pool_records_for_page(
-    snapshot: &crate::pool::PoolSnapshot,
-    lock_hash: &[u8],
-) -> (Vec<std::sync::Arc<crate::pool::PoolTxRecord>>, bool) {
-    let mut records = snapshot.records_for_lock(lock_hash);
-    let over_cap = records.len() > POOL_ROWS_PER_ADDRESS;
-    records.truncate(POOL_ROWS_PER_ADDRESS);
-    (records, over_cap || snapshot.status.truncated)
-}
-
-/// The `pool` object for a page-one response.
-pub(crate) fn pool_summary(
-    snapshot: &crate::pool::PoolSnapshot,
-    count: usize,
-    pending_ckb_delta: i128,
-    truncated: bool,
-) -> crate::pool::PoolSummaryResponse {
-    crate::pool::PoolSummaryResponse {
-        enabled: snapshot.status.enabled,
-        healthy: snapshot.status.healthy,
-        last_polled_at: snapshot
-            .status
-            .last_polled_at_ms
-            .and_then(|ms| crate::pool::pool_timestamp_rfc3339(ms).ok()),
-        count,
-        pending_ckb_delta: pending_ckb_delta.to_string(),
-        truncated,
-    }
 }
 
 async fn get_address_activities(

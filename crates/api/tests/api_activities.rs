@@ -524,6 +524,25 @@ async fn test_address_transactions_reads_from_derived_store() {
             semantic_tags: 0,
         },
     );
+    // A canonical transaction's block has a header; the list reads its time.
+    core_batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xba; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
     core_batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -1457,4 +1476,242 @@ async fn test_global_activities_expose_participant_ids_and_roles() {
     );
     assert_eq!(participants[1]["roles"][0], "owner_to");
     assert_eq!(participants[1]["roles"][1], "manager_to");
+}
+
+// ── Task 2.8: timestamps propagate, one pool segment, pendingSummary ─────
+
+async fn fetch_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+/// The pool summary's `lastPolledAt` is the mirror's own clock. A value that
+/// cannot be rendered is a mirror invariant violation, reported with the value
+/// — not a `null` that reads as "never polled".
+#[tokio::test]
+async fn pool_summary_unrenderable_last_polled_at_is_a_500() {
+    let store = test_store();
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(ckbadger_api::pool::PoolSnapshot::from_records(
+            vec![Arc::new(make_test_pool_record(
+                &[0xf1; 32],
+                &POOL_LOCK_HASH,
+                -500,
+                1_700_000_500_000,
+                ckbadger_api::pool::PoolStatus::Pending,
+            ))],
+            ckbadger_api::pool::MirrorStatus {
+                enabled: true,
+                healthy: true,
+                last_polled_at_ms: Some(i64::MAX),
+                ..Default::default()
+            },
+        ));
+    let app = create_router_with_state(state).await;
+
+    for uri in [
+        format!(
+            "/api/v1/addresses/0x{}/activities",
+            hex::encode(POOL_LOCK_HASH)
+        ),
+        format!(
+            "/api/v1/addresses/0x{}/transactions",
+            hex::encode(POOL_LOCK_HASH)
+        ),
+    ] {
+        let (status, json) = fetch_json(app.clone(), &uri).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(message.contains("last_polled_at"), "{uri}: {message}");
+        assert!(message.contains(&i64::MAX.to_string()), "{uri}: {message}");
+    }
+}
+
+/// A canonical committed row whose block header is missing is store
+/// corruption: the transaction list reports it with the block, instead of
+/// serving the row with an empty timestamp.
+#[tokio::test]
+async fn address_transactions_missing_block_header_is_a_500_naming_the_block() {
+    let store = test_store();
+    let lock_hash = [0x4au8; 32];
+    let tx_hash = [0x5bu8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(&tx_hash, 4242, 0);
+    batch.put_tx_index(
+        4242,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 100,
+            tx_size: 300,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_addr_tx(
+        &lock_hash,
+        4242,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(-100, true, false, 0),
+    );
+    batch.commit().unwrap();
+    let mut config = test_config(store);
+    config.pool_mirror_enabled = false;
+    let app = create_router(config).await;
+
+    let (status, json) = fetch_json(
+        app,
+        &format!(
+            "/api/v1/addresses/0x{}/transactions",
+            hex::encode(lock_hash)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("4242"), "{message}");
+    assert!(message.contains("header"), "{message}");
+}
+
+/// The address detail's `pendingSummary` counts every pool row of the address
+/// — the same segment the lists serve on page one, committed-wins included —
+/// and no activity filter reaches it, so the header cannot disagree with
+/// itself between tabs.
+#[tokio::test]
+async fn address_pending_summary_is_independent_of_the_activity_filter() {
+    use ckbadger_store::types::TAG_TOKEN;
+
+    let store = test_store();
+    let committed_tx = [0xc1; 32];
+    seed_committed_activity(&store, &POOL_LOCK_HASH, &committed_tx, 10, 0, 100, 0);
+    let state = test_app_state(test_config(store));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![
+        make_test_pool_record_with(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            -500,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+            TAG_TOKEN,
+            ckbadger_api::pool::Interpretation::Complete,
+        ),
+        make_test_pool_record(
+            &[0xf2; 32],
+            &POOL_LOCK_HASH,
+            300,
+            1_700_000_600_000,
+            ckbadger_api::pool::PoolStatus::Proposed,
+        ),
+        // Already indexed: served by the committed segment, counted nowhere here.
+        make_test_pool_record(
+            &committed_tx,
+            &POOL_LOCK_HASH,
+            100,
+            1_700_000_400_000,
+            ckbadger_api::pool::PoolStatus::CommittedAwaitingIndex {
+                block_number: 10,
+                block_hash: [0xba; 32],
+            },
+        ),
+    ]));
+    let app = create_router_with_state(state).await;
+    let addr = format!("/api/v1/addresses/0x{}", hex::encode(POOL_LOCK_HASH));
+
+    let (status, detail) = fetch_json(app.clone(), &addr).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["pendingSummary"],
+        serde_json::json!({ "txCount": 2, "capacityDelta": "-200" })
+    );
+
+    // A filter on a list narrows the list's own `pool` summary …
+    let (_, filtered) = fetch_json(app.clone(), &format!("{addr}/activities?filter=token")).await;
+    assert_eq!(filtered["pool"]["count"], 1);
+    assert_eq!(filtered["pool"]["pendingCkbDelta"], "-500");
+    // … the transaction list agrees with the unfiltered segment …
+    let (_, txs) = fetch_json(app.clone(), &format!("{addr}/transactions")).await;
+    assert_eq!(txs["pool"]["count"], 2);
+    assert_eq!(txs["pool"]["pendingCkbDelta"], "-200");
+    // … and the detail's summary is the same whatever the page asks for.
+    let (_, again) = fetch_json(app, &format!("{addr}?filter=token")).await;
+    assert_eq!(again["pendingSummary"], detail["pendingSummary"]);
+}
+
+/// No pool view, no pending summary: the key is present and `null`, never a
+/// `0` that reads as "nothing pending".
+#[tokio::test]
+async fn address_pending_summary_is_null_without_a_healthy_mirror() {
+    let addr = format!("/api/v1/addresses/0x{}", hex::encode(POOL_LOCK_HASH));
+
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(unhealthy_pool_snapshot());
+    let app = create_router_with_state(state).await;
+    let (status, json) = fetch_json(app, &addr).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(
+        json.as_object().unwrap().contains_key("pendingSummary"),
+        "{json}"
+    );
+    assert!(json["pendingSummary"].is_null(), "{json}");
+
+    let mut config = test_config(test_store());
+    config.pool_mirror_enabled = false;
+    let app = create_router(config).await;
+    let (status, json) = fetch_json(app, &addr).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(
+        json.as_object().unwrap().contains_key("pendingSummary"),
+        "{json}"
+    );
+    assert!(json["pendingSummary"].is_null(), "{json}");
+
+    // A healthy mirror with nothing for this address is a real zero.
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![]));
+    let app = create_router_with_state(state).await;
+    let (_, json) = fetch_json(app, &addr).await;
+    assert_eq!(
+        json["pendingSummary"],
+        serde_json::json!({ "txCount": 0, "capacityDelta": "0" })
+    );
+}
+
+/// The detail response is cached; the pending summary is not — a pool
+/// transaction that arrives after the first request shows on the next one.
+#[tokio::test]
+async fn address_pending_summary_is_not_served_from_the_detail_cache() {
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![]));
+    let app = create_router_with_state(state.clone()).await;
+    let addr = format!("/api/v1/addresses/0x{}", hex::encode(POOL_LOCK_HASH));
+
+    let (_, first) = fetch_json(app.clone(), &addr).await;
+    assert_eq!(first["pendingSummary"]["txCount"], 0);
+
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            700,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let (_, second) = fetch_json(app, &addr).await;
+    assert_eq!(
+        second["pendingSummary"],
+        serde_json::json!({ "txCount": 1, "capacityDelta": "700" })
+    );
 }

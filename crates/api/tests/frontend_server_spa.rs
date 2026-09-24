@@ -175,3 +175,78 @@ async fn frontend_server_routes_api_paths_to_the_proxy_not_the_spa_fallback() {
         .to_bytes();
     assert_eq!(deep_link_body, "<html>spa</html>");
 }
+
+/// A deep link whose last segment contains a dot is a route, not a file:
+/// `.cell` names (`/identities/dotcell/alice.cell`) and sub-names
+/// (`shop.alice.cell`) must get the SPA shell. Whether a path is a file is
+/// decided by whether the file exists — plus the one namespace the build owns:
+/// a missing path under the Vite asset directory is a stale chunk and 404s.
+#[tokio::test]
+async fn deep_link_with_dotted_segment_falls_back_to_index() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
+    std::fs::write(dir.path().join("favicon.ico"), "icon-bytes").unwrap();
+    std::fs::create_dir_all(dir.path().join("assets")).unwrap();
+    std::fs::write(
+        dir.path().join("assets").join("app.js"),
+        "console.log('ok');",
+    )
+    .unwrap();
+
+    let router = build_frontend_router(FrontendServiceConfig {
+        public_origin: None,
+        host: "127.0.0.1".to_string(),
+        port: 8100,
+        api_port: 8101,
+        ckb_network: "mainnet".to_string(),
+        ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+        build_version: "0.1.0+testbuild".to_string(),
+        frontend_dir: Some(PathBuf::from(dir.path())),
+        default_network: "mainnet".to_string(),
+        networks: vec![FrontendNetwork {
+            ckb_rpc_url: "http://127.0.0.1:8114".into(),
+            name: "mainnet".to_string(),
+            api_host: "127.0.0.1".to_string(),
+            api_port: 8101,
+        }],
+    })
+    .unwrap();
+
+    let get = |uri: &'static str| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            (status, body)
+        }
+    };
+
+    for deep_link in [
+        "/identities/dotcell/alice.cell",
+        "/identities/dotcell/shop.alice.cell",
+        "/mainnet/identities/dotcell/alice.cell",
+        "/identities/.bit",
+        "/assets",
+    ] {
+        let (status, body) = get(deep_link).await;
+        assert_eq!(status, StatusCode::OK, "{deep_link}");
+        assert_eq!(body, "<html>spa</html>", "{deep_link}");
+    }
+
+    // A file that exists is served as itself, at the root and under assets/.
+    let (status, body) = get("/favicon.ico").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "icon-bytes");
+    let (status, body) = get("/assets/app.js").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "console.log('ok');");
+
+    // A missing build asset is a 404, never the shell.
+    let (status, body) = get("/assets/app-stale.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_ne!(body, "<html>spa</html>");
+}

@@ -489,22 +489,23 @@ async fn frontend_filesystem_handler(State(state): State<FrontendFsState>, uri: 
         return serve_frontend_file(&candidate, path).await;
     }
 
-    if !path_looks_like_file(path) {
-        return serve_frontend_file(&state.index_path, "").await;
+    // Same rule as the embedded handler: whether a path is a file was just
+    // decided by looking; only the build's asset namespace may 404.
+    match embedded_frontend::classify_missing_path(path) {
+        embedded_frontend::MissingPath::SpaRoute => {
+            serve_frontend_file(&state.index_path, "").await
+        }
+        embedded_frontend::MissingPath::BuildAsset => {
+            (StatusCode::NOT_FOUND, "not found").into_response()
+        }
     }
-
-    (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 async fn serve_frontend_file(path: &Path, request_path: &str) -> Response {
     match tokio::fs::read(path).await {
         Ok(bytes) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            let cache_control = if request_path.starts_with("assets/") {
-                "public, max-age=31536000, immutable"
-            } else {
-                "no-cache"
-            };
+            let cache_control = embedded_frontend::cache_control_for(request_path);
 
             (
                 StatusCode::OK,
@@ -518,16 +519,6 @@ async fn serve_frontend_file(path: &Path, request_path: &str) -> Response {
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
-}
-
-fn path_looks_like_file(path: &str) -> bool {
-    let segment = match path.rsplit_once('/') {
-        Some((_, s)) => s,
-        None => path,
-    };
-    // A file has a dot-extension like "app.js" or "favicon.ico".
-    // Dot-prefixed segments like ".bit" are SPA route params, not files.
-    segment.contains('.') && !segment.starts_with('.')
 }
 
 #[cfg(test)]
@@ -581,18 +572,6 @@ mod tests {
                 .round_id,
             9
         );
-    }
-
-    #[test]
-    fn test_path_looks_like_file() {
-        assert!(path_looks_like_file("favicon.ico"));
-        assert!(path_looks_like_file("assets/app.js"));
-        assert!(!path_looks_like_file("script/0x1234"));
-        assert!(!path_looks_like_file("blocks"));
-        // Dot-prefixed segments are SPA route params, not files
-        assert!(!path_looks_like_file("identities/.bit"));
-        assert!(!path_looks_like_file("identities/did:ckb"));
-        assert!(!path_looks_like_file("identities/dotbit"));
     }
 
     #[tokio::test]
