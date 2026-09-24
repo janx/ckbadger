@@ -2029,3 +2029,76 @@ async fn pending_dotcell_registration_item_delta_carries_its_standard() {
     );
     assert_eq!(row["itemDeltas"][0]["standard"], "dotcell", "{json}");
 }
+
+// ── integration: a spent never-seen lock is encoded from the record ──────
+
+/// A pending transaction may spend a cell whose lock exists so far only as the
+/// output of another pending transaction, so no store row knows it. The mirror
+/// keeps that lock script on the record (`input_locks`); the address page must
+/// encode the sender from it exactly as it does for the record's own outputs —
+/// never `null`, never a store-derived guess.
+#[tokio::test]
+async fn pending_tx_spending_a_never_seen_lock_shows_its_real_address() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+
+    let secp =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let args = vec![0x6d; 20];
+    let sender: [u8; 32] = ckbadger_api::utils::address::compute_script_hash(&secp, 1, &args)
+        .try_into()
+        .unwrap();
+    let expected =
+        ckbadger_api::utils::address::script_to_address(&secp, 1, &args, "mainnet").unwrap();
+
+    let mut record = make_test_pool_record(
+        &[0xf8; 32],
+        &POOL_LOCK_HASH,
+        100_000_000_000,
+        1_700_000_600_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+    );
+    record.input_locks = vec![ckbadger_api::pool::PoolLockScript {
+        lock_hash: sender,
+        code_hash: secp.clone(),
+        hash_type: 1,
+        args: args.clone(),
+    }];
+    record
+        .actions
+        .as_mut()
+        .unwrap()
+        .participants
+        .push(ParticipantDelta {
+            id: ParticipantId::Lock(sender),
+            ckb_delta: -100_000_000_000,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: 0,
+            roles: 0,
+        });
+
+    let mut config = test_config(test_store());
+    config.ckb_network = "mainnet".to_string();
+    let state = test_app_state(config);
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(POOL_LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    assert_eq!(row["poolStatus"], "pending", "{json}");
+    let sender_hex = format!("0x{}", hex::encode(sender));
+    let party = row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["lockHash"] == sender_hex)
+        .unwrap_or_else(|| panic!("the sender is a party of the row: {json}"));
+    assert_eq!(party["address"], expected, "{json}");
+}

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
-use crate::pool::ResolvedCell;
+use crate::pool::PoolTxRecord;
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
@@ -30,28 +30,25 @@ use crate::AppState;
 ///
 /// A committed row's parties hold (or held) cells the indexer wrote, so the
 /// chain view's `CF_LOCK_SCRIPTS` knows every one of them. A tx-pool row may
-/// pay a lock no committed cell has used yet; that script is in the pool
-/// transaction's own outputs, which the mirror holds, and is encoded from
-/// there — a store miss for a brand-new lock is not "unknown". Either way the
-/// address comes from `encode_lock_address`, the one encoder; a lock known to
-/// neither is unresolved (`None`), never a fabricated address.
+/// pay a lock no committed cell has used yet, or spend a cell whose lock exists
+/// so far only as the output of another pending transaction; both scripts are
+/// on the mirror's record (its outputs and its spent inputs' locks) and are
+/// encoded from there — a store miss for a brand-new lock is not "unknown".
+/// Either way the address comes from `encode_lock_address`, the one encoder; a
+/// lock known to neither is unresolved (`None`), never a fabricated address.
 fn resolve_party_address(
     store: &CkbadgerStore,
     network: &str,
     lock_hash: &[u8; 32],
-    pool_outputs: Option<&[ResolvedCell]>,
+    pool_record: Option<&PoolTxRecord>,
     cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<Option<String>> {
-    if let Some(cell) = pool_outputs
-        .into_iter()
-        .flatten()
-        .find(|cell| cell.lock_script_hash.as_slice() == lock_hash)
-    {
+    if let Some(lock) = pool_record.and_then(|record| record.lock_script(lock_hash)) {
         return encode_lock_address(
             lock_hash,
-            &cell.lock_code_hash,
-            cell.lock_hash_type,
-            &cell.lock_args,
+            &lock.code_hash,
+            lock.hash_type,
+            &lock.args,
             network,
         )
         .map(Some);
@@ -83,13 +80,13 @@ fn participant_ref(
     store: &CkbadgerStore,
     network: &str,
     participant: &ParticipantDelta,
-    pool_outputs: Option<&[ResolvedCell]>,
+    pool_record: Option<&PoolTxRecord>,
     cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<ParticipantRef> {
     let roles = participant_roles::names(participant.roles);
     match participant.id {
         ParticipantId::Lock(hash) => Ok(ParticipantRef {
-            address: resolve_party_address(store, network, &hash, pool_outputs, cache)?,
+            address: resolve_party_address(store, network, &hash, pool_record, cache)?,
             lock_hash: Some(format!("0x{}", hex::encode(hash))),
             lock_hash_prefix: None,
             roles,
@@ -605,9 +602,9 @@ pub(crate) struct PoolRowMeta<'a> {
     pub status: String,
     pub time_added_to_pool: String,
     pub interpretation: crate::pool::InterpretationResponse,
-    /// The pool transaction's own outputs: the lock scripts of parties it
-    /// pays, which the chain view may not know yet.
-    pub outputs: &'a [ResolvedCell],
+    /// The mirror's record of the pool transaction: its outputs and its spent
+    /// inputs' lock scripts, which the chain view may not know yet.
+    pub record: &'a PoolTxRecord,
 }
 
 /// Build an address-scoped activity response from a TxActions for a specific participant.
@@ -640,7 +637,7 @@ pub(crate) fn build_activity_response(
                 store,
                 network,
                 p,
-                pool.as_ref().map(|meta| meta.outputs),
+                pool.as_ref().map(|meta| meta.record),
                 address_cache,
             )
         })
@@ -989,7 +986,7 @@ pub(crate) fn build_pool_activity_rows(
                 )?)
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
                 interpretation: crate::pool::InterpretationResponse::from(&record.interpretation),
-                outputs: &record.outputs,
+                record,
             }),
         )?);
         served.push(row);
