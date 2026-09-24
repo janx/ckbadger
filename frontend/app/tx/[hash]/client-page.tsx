@@ -20,6 +20,7 @@ import { Address } from '@/components/ui/address';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   api,
+  isServiceUnavailableError,
   type CellDep,
   type GraphNode,
   type ScriptLookupResponse,
@@ -196,10 +197,15 @@ export default function TransactionDetailPage() {
   } = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
+    // A 503 `service_unavailable` (a pending transaction whose parent the node
+    // does not know yet) is provisional too: it passes in seconds.
     refetchInterval: (query) =>
-      isProvisionalTransaction(query.state.data) ? DETAIL_PENDING_REFETCH_INTERVAL_MS : false,
+      isProvisionalTransaction(query.state.data) || isServiceUnavailableError(query.state.error)
+        ? DETAIL_PENDING_REFETCH_INTERVAL_MS
+        : false,
     refetchIntervalInBackground: true,
   });
+  const awaitingInputs = isServiceUnavailableError(error);
   const errorMessage = getErrorMessage(error);
   const isNotFoundError = errorMessage?.startsWith('API error: 404') ?? false;
   const isProvisional = isProvisionalTransaction(tx);
@@ -399,7 +405,33 @@ export default function TransactionDetailPage() {
       </div>
     );
   }
-  if (error || !tx) {
+  if (awaitingInputs && !tx) {
+    return (
+      <div className="bg-base-bg min-h-screen">
+        <Header />
+        <main className="container mx-auto px-4 py-4">
+          <PageHeader
+            title="Transaction"
+            hash={hash}
+            badge={<Badge variant="blue">Pending</Badge>}
+          />
+          <TerminalPanel>
+            <TerminalPanelContent className="py-12 text-center">
+              <div data-testid="tx-inputs-not-yet-resolvable">
+                <p className="text-text-dim text-sm">
+                  <PendingValue text="waiting for the node..." /> the inputs of this unconfirmed
+                  transaction cannot be resolved yet. Retrying automatically.
+                </p>
+                <p className="text-text-dim mt-3 break-all text-xs">{error.apiMessage}</p>
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        </main>
+      </div>
+    );
+  }
+  // A transient 503 on a later poll leaves the last good answer on screen.
+  if ((error && !awaitingInputs) || !tx) {
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />

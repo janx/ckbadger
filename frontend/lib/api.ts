@@ -76,6 +76,20 @@ export function isNetworkInitializingError(error: unknown): error is ApiRequestE
 }
 
 /**
+ * The resource exists but cannot be served YET (503 `service_unavailable`):
+ * something it derives from has not reached the node — e.g. a pending
+ * transaction whose parent the node does not know. Transient; the caller
+ * retries. Never partial data.
+ */
+export function isServiceUnavailableError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'service_unavailable' && candidate.status === 503;
+}
+
+/**
  * "The resource does not exist", read from the HTTP status the API answered
  * with — never from the rendered message text, which is prose and changes.
  */

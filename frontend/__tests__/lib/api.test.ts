@@ -1,4 +1,4 @@
-import { api, resolveApiBase } from '@/lib/api';
+import { api, isServiceUnavailableError, resolveApiBase } from '@/lib/api';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 import { DEFAULT_API_BASE } from '@/lib/runtime-config';
@@ -1319,6 +1319,37 @@ describe('api', () => {
         status: 503,
         apiMessage: 'script cache unavailable; warmup in progress',
       });
+    });
+
+    it('recognises a 503 service_unavailable for a transaction whose inputs are not resolvable yet', async () => {
+      server.use(
+        http.get('/api/:network/v1/transactions/:hash/detail', () => {
+          return HttpResponse.json(
+            {
+              error: 'service_unavailable',
+              message: 'inputs of uncommitted transaction 0xabc are not resolvable yet; retry',
+            },
+            { status: 503 }
+          );
+        })
+      );
+
+      const error = await api.getTransactionDetail('0xabc').catch((e: unknown) => e);
+      expect(isServiceUnavailableError(error)).toBe(true);
+    });
+
+    it('does not mistake other 503s for service_unavailable', async () => {
+      server.use(
+        http.get('/api/:network/v1/statistics/network', () => {
+          return HttpResponse.json(
+            { error: 'warmup_pending', message: 'warmup in progress' },
+            { status: 503 }
+          );
+        })
+      );
+
+      const error = await api.getNetworkStats().catch((e: unknown) => e);
+      expect(isServiceUnavailableError(error)).toBe(false);
     });
   });
 
