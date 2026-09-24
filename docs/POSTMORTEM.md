@@ -2840,4 +2840,531 @@ the one that describes the artifact is the one the artifact ends at.
 
 ---
 
-_Last updated: 2026-09-23_
+### PROTO-011: A junk Sale-Lock output halted sync on every node
+
+**Date**: 2026-09-24 (code review of `main` `d00ff2eb..87cab244`; latent, never triggered)
+
+**Symptom**: Any transaction that carries a `.cell` name cell and also one output locked by the
+DotCell Sale Lock code hash with args that are not 40 bytes stops the indexer at that block:
+`dotcell sale lock args must be 40 bytes, got 0`. Live sync loops CleanupAndRetry forever, bulk
+build exits, and every rebuild from genesis stops at the same height — on every node. CKB never
+runs a lock script when a cell is created, so anyone registering a name can add such an output.
+
+**Root Cause**: `sale_instances` treated the shape of the input domain as an invariant. It scans
+every input and output of a tx that touches a name, and `parse_sale_lock_args(args)?` turned
+"this cell's args are not `seller32 ‖ price`" into a hard error. A lock's args are validated only
+when the cell is spent; at creation they are whatever the creator wrote.
+
+**Fix**: `fix/review-a` a7f57abc. A Sale-Lock-coded cell with malformed args is simply not a
+sale instance: it is skipped with a debug line (tx hash, script hash, args length). A name whose
+owner prefix points at such a cell classifies as an ordinary Transfer. The `script_hash.len() <
+20` bail stays — that is the shape of our own data.
+
+**Why the tests missed it**: every `sale_instances` fixture used conforming 40-byte args; none
+contained a Sale-Lock-coded cell that was not a sale. Regressions:
+`junk_sale_lock_output_is_not_an_instance_and_does_not_error`,
+`a_listing_whose_sale_lock_args_are_malformed_classifies_as_transfer` and
+`junk_sale_lock_outputs_index_identically_on_both_paths` (live and bulk, identical rows).
+
+**Lesson**: Fail fast is for invariants, not for the input domain. What the chain lets anyone
+create must parse to "not an instance", never to "stop"; only a shape a type script enforces on
+chain may halt sync, and then live and bulk must halt the same way (IDX-013).
+
+**Files**: `crates/indexer/src/db/writer/dotcell_detector.rs`
+
+---
+
+### PROTO-012: The mNFT outpoint rows PROTO-010 left behind
+
+**Date**: 2026-09-24
+
+**Symptom**: After a reorg that orphans an mNFT transfer or class re-creation,
+`list_mnft_token_outpoints_by_token_id` also returns the orphaned outpoint; the item lifecycle
+feeds its tx hash to the tx index and `…/activities` answers 500 "nft lifecycle tx not found in
+tx index".
+
+**Root Cause**: PROTO-010 gave undo pre-images to the `stats_spore` outpoint rows of Spore,
+did:ckb, `.bit Cell` and `.cell` through one helper. mNFT writes its own class and token outpoint
+rows into another CF (`stats_mnft`, `put_mnft_{class,token}_outpoint`) and still wrote them bare.
+The stats sweep excludes outpoint prefixes by design, so nothing rolled them back.
+
+**Fix**: `fix/review-a` 459de75c. `put_mnft_outpoint_row` is the mNFT counterpart of
+`put_object_outpoint_rows`: it reads the pre-image (a failed read is an error, never "absent"),
+records it with `record_object_undo(.., CF_STATS_MNFT, ..)` under the batch's shared sequence,
+then writes. Both call sites go through it; the undo log stays the only owner of these prefixes.
+
+**Why the tests missed it**: PROTO-010's four regressions covered exactly the protocols its
+helper served — the fix was scoped by the helper's callers, not by the class "live-written
+reverse-index rows with no replay owner". Regressions:
+`mnft_transfer_rollback_removes_the_new_outpoint_row` and
+`mnft_class_recreate_rollback_removes_the_new_outpoint_row` (both assert `CF_CELLS` bytes are
+unchanged).
+
+**Lesson**: Enumerate a bug class by what the rows are, not by who calls the function you just
+fixed: here, every reverse-index row written in live mode that no replay stage owns.
+
+**Files**: `crates/indexer/src/db/writer/mnft.rs`, `crates/indexer/src/sync/batch.rs` (tests)
+
+---
+
+### IDX-010: A reorg wiped every `.cell` parent→child row
+
+**Date**: 2026-09-24
+
+**Symptom**: After any reorg — even one touching no `.cell` transaction —
+`GET /assets/identities/dotcell/items/<parent>` returned `children: []` for every parent on the
+network until a re-sync from genesis. Before that, recycled sub-names were listed as current
+children (no liveness filter), behind N+1 reads and a silent 200 cap.
+
+**Root Cause**: Rollback stage 10 range-deletes all of `identity_by_collection` and rebuilds it
+from the surviving identity entries, but it rebuilt only the `(sentinel, id)` rows. The `.cell`
+writers (live `db/writer/dotcell.rs`, bulk `owners/object.rs`) also file every sub-name under
+`pad_id_32(parent_id)` with no undo pre-image, so those rows had no owner in rollback.
+
+**Fix**: `fix/review-be` 3cc746d5 — the rebuild loop writes the parent row for every surviving
+`IdentityExtra::DotCell` with a `parent_id`, so the index is again "every sub-name ever
+registered", exactly as the forward writers produce it. `fix/review-d` 6872f5d2 — the read side
+filters `is_live`, reads with one `multi_get` per chunk and pages by cursor (the detail's first 50
+plus the new `…/items/{id_or_name}/children` endpoint).
+
+**Why the tests missed it**: no rollback test seeded a sub-name; the parent rows were added to a
+CF whose rebuild predates them. Regressions: `rollback_rebuilds_dotcell_parent_child_rows`
+(store) and `dotcell_children_are_live_only_and_paged` (API).
+
+**Lesson**: A stage that deletes a whole CF and rebuilds it owns every row shape any writer puts
+there. Adding a row shape to such a CF is not done until its rebuild writes it too.
+
+**Files**: `crates/ckbadger-store/src/reorg_ops.rs`, `crates/api/src/routes/identities.rs`
+
+---
+
+### IDX-011: Reorg repair set `last_activity` to a transaction the address was only named in
+
+**Date**: 2026-09-24
+
+**Symptom**: After a reorg, `addr_balance.last_activity` could point at a transaction in which
+the address held no cell but was named by a protocol (for example as a `.cell` `owner_to`) —
+visible in the active-address ranking and `lastActivityBlock`, and a state neither sync path
+produces, so a rebuild from genesis would not reproduce it.
+
+**Root Cause**: Stage 9a repaired `last_activity` through `list_addr_txs_recent`, which the
+participant model widened to merge `addr_txs` with the protocol-named `addr_txs_by_prefix` rows.
+The forward paths (bulk `owners/address.rs`, live `addresses.rs`) set it from cell participation
+only. The reader's semantics changed under the repair without the repair changing.
+
+**Fix**: `fix/review-be` bdcb3f9b. New `latest_cell_addr_tx_at_or_below` seeks `addr_txs` only
+(one seek, as before) and fails fast on a malformed key or a seek above the requested block;
+stage 9a uses it and `list_addr_txs_recent` stays the API's merged reader. `fix/review-a` fe7f7e16
+pins the forward rule.
+
+**Why the tests missed it**: the stage 9a test ("one seek per address", 500 noise addresses)
+seeded no prefix rows. Regressions: `rollback_last_activity_ignores_prefix_rows` (red before:
+`(3, tx3)`) and `named_only_participation_does_not_move_last_activity`.
+
+**Lesson**: A shared reader whose meaning widens changes every caller. A repair must read the
+same relation the forward path writes from, named for what it is ("cell participation"), not
+"the address's history".
+
+**Files**: `crates/ckbadger-store/src/{reorg_ops,address_ops,keys}.rs`
+
+---
+
+### IDX-012: Retention bounded itself by a tip that was not committed yet
+
+**Date**: 2026-09-24 (latent)
+
+**Symptom**: After a node outage or a laptop sleep longer than 1000 blocks, the first live batch
+with hourly retention armed failed "missing header for the entity-stats undo window block …
+store corruption": incident file, full cleanup rollback, refetch — and an operator told the store
+was corrupt. The retried batch then ran no retention and said nothing. Such a batch also
+committed its own below-floor `EntityStats` undo entries, which nothing ever pruned.
+
+**Root Cause**: Both retention stages were handed the batch's own uncommitted `last_block` as
+`committed_tip`. The cutoff reads the header at `tip − 1000` from the committed store before the
+batch's headers are merged, and the undo prune scans committed rows only. The periodic request
+was consumed by `swap(false)` inside the `if`, before anything was durable.
+
+**Fix**: `fix/review-a` 8c6efd7f. Both stages get `committed_tip_before_batch` = `first_block − 1`,
+which fails fast unless it equals the store's sync tip. The request is read without side effect
+and cleared only after the domain batch commits. A long batch's own leftovers are pruned by the
+next batch, whose tip has moved past them — no special case. (Plan Task 5.8, pinning a round's
+cutoff at its start, is tracked separately on the same lane.)
+
+**Why the tests missed it**: no test ran a live batch longer than the undo window with retention
+armed, and the request flag had no failure-path test. Regressions:
+`a_live_batch_longer_than_the_undo_window_commits_and_the_next_batch_prunes_it` (red before:
+"missing header … block=1600, committed_tip=2600"), `retention_flag_survives_a_failed_batch`,
+`committed_tip_before_batch_is_the_store_tip_or_an_error`.
+
+**Lesson**: In a batch writer "the tip" means two things; maintenance that reads the store must
+bound itself by the durable one. A one-shot request consumed before its work is durable is a
+lost request.
+
+**Files**: `crates/indexer/src/sync/batch.rs`, `crates/indexer/src/db/writer/statistics.rs`
+
+---
+
+### IDX-013: A deterministic parse error retried forever
+
+**Date**: 2026-09-24 (latent)
+
+**Symptom**: One committed Cells-Account-typed output that the strict `.cell` decoder rejects
+(layout version ≠ 3, records hash ≠ its witness, missing own-index witness, non-UTF-8 label) puts
+live sync into an endless cleanup → reset → refetch → same error loop, while bulk build exits on
+the same block. Each attempt beats the writer-phase heartbeat, so the stall watchdog never fires;
+the only trace is an uncapped stream of incident files. `dc3636ff`'s "stops the batch" meant
+"retries forever" on the live path.
+
+**Root Cause**: The live output pass propagated `DotCellParser` errors with a plain `?`, and
+`classify_batch_write_failure` treats anything but a `PreCommitInvariantError` as transient:
+CleanupAndRetry, with no cap.
+
+**Fix**: `fix/review-a` a05ede2f — `live_dotcell_name_cells` wraps each failure in
+`PreCommitInvariantError` with the block and bulk's own locator (`tx=0x…, output_index=N`), so
+live stops exactly like bulk. d9133fbb — `BatchFailureTracker`: the third consecutive
+CleanupAndRetry of the same start block stops live sync ("treating the error as deterministic");
+a commit or a new start block resets the count (plan R5). The Account type script is closed
+source, so whether it enforces these shapes could not be confirmed; all 444 name outputs on both
+networks conform, and fail-fast was kept (plan R1).
+
+**Why the tests missed it**: the failure tests drove bulk (`parse_protocol_facts`) and the parser
+directly; nothing sent a malformed name through the live writer and its failure classifier, and
+the retry loop had no termination test. Regressions:
+`dotcell_parse_error_on_live_path_is_a_precommit_invariant`,
+`a_dotcell_parse_error_stops_live_like_bulk_with_the_same_locator`,
+`batch_failure_tracker_escalates_on_third_identical_range` and its two siblings.
+
+**Lesson**: A failure policy whose default is "transient" must be bounded, or every deterministic
+error the classifier has not met yet becomes an infinite loop — one that also defeats the
+watchdog built to catch it.
+
+**Files**: `crates/indexer/src/sync/{batch,pipeline}.rs`, `crates/indexer/src/parser/dotcell.rs`
+
+---
+
+### STATS-011: Bulk and live disagreed on which cells make up a token's capacity history
+
+**Date**: 2026-09-24
+
+**Symptom**: On a bulk-built index, verify's `entity_capacity_history_matches_chain` reported a
+proven Fail for any token that ever had an owner-mode or other short-data sUDT/xUDT cell (data too
+short for a u128 amount): the daily cumulative did not equal the token's live capacity. A
+live-built index and verify's independent oracle both included those cells.
+
+**Root Cause**: The bulk token reducer entered `TOKEN_DAILY` only through `TokenCellView`, whose
+`let Some(amount) = udt_amount else { return Ok(None) }` skipped amount-less cells, while live
+`accumulate_daily!` ran for every UDT-typed cell. A facet gate ("has an amount") doubled as the
+membership gate on one path only, so the bulk index did not close on itself.
+
+**Fix**: `fix/review-a` 65ca224f (plan R3): a cell belongs to a token's capacity history when its
+type script is that sUDT/xUDT instance, whatever its data holds. Live uses the one predicate
+`pipeline::token_daily_member`; bulk `TokenOwner` keeps per-type-hash daily deltas for every
+Sudt/Xudt-tagged cell. Holders, supply, transfer counts and `TOKEN_HOURLY` still need an amount on
+both paths. The verify oracle is unchanged — it was right. `docs/TESTING.md` states the rule
+(`fix/review-be` b29966f2). Re-sync required.
+
+**Why the tests missed it**: no bulk/live parity fixture contained a short-data UDT cell, though
+the writer's own comments said testnet has them. Regressions:
+`token_owner_counts_capacity_of_udt_cells_without_amount` and
+`owner_mode_udt_cells_count_in_token_daily_on_both_paths` (`CF_TOKENS` and `CF_STATS_TOKEN`
+byte-identical, daily cumulative equal to the live cells).
+
+**Lesson**: When an independent check fails against an index, find which path wrote the index
+before touching the check.
+
+**Files**: `crates/indexer/src/sync/bulk_build/owners/token.rs`,
+`crates/indexer/src/sync/pipeline.rs`
+
+---
+
+### API-017: Six hand-copied sentinel tables, and `.cell` missing from three
+
+**Date**: 2026-09-24
+
+**Symptom**: `GET /assets/identities/dotcell/activities` was always `200 []` while the detail
+reported activities; the `.cell` collection page's capacity chart failed (400 on the `dotcell`
+alias, 404 on the hex sentinel); a `.cell` collection search hit linked to `/objects/{sentinel}`.
+The same surfaces worked for `.bit` and did:ckb.
+
+**Root Cause**: The sentinel ↔ standard mapping was retyped by hand in six places, and three —
+`is_identity_sentinel`, the `decode_object_collection_id` aliases and
+`search.rs::object_collection_href` — lacked `.cell`. The shared collection readers therefore took
+the object-CF branch, while both indexer paths write `.cell`'s feed to
+`identity_collection_activities`.
+
+**Fix**: `fix/review-d` f1f7defb. One table in `ckbadger_store::types` (`identity_sentinel_for`,
+`identity_sentinel_standard`, `identity_aliases`/`identity_alias`, `identity_route_slug`,
+`identity_display_name`), each column an exhaustive `match`, so a fifth standard does not compile
+until every column has its value; all six sites delegate. The undocumented bare `cell` alias is
+gone. Identity item deltas now carry their standard (`fix/review-a` 06f2784f, `fix/review-d`
+7838797c), so feed links no longer 404 into the mNFT route.
+
+**Why the tests missed it**: the `.bit` and did:ckb feeds and charts were tested; nothing hit the
+`.cell` collection feed or chart. One existing unit test had even frozen a stale copy —
+a `.bit Cell` hit linking to `/identities/0xfeed`, from a frontend route that had since moved.
+
+**Lesson**: A mapping written out N times is N definitions, and a new variant updates the ones
+someone remembers. Keep the table beside the enum and make every column exhaustive.
+
+**Files**: `crates/ckbadger-store/src/types.rs`, `crates/api/src/routes/{assets,identities,search}.rs`,
+`crates/api/src/utils/assets.rs`
+
+---
+
+### API-018: A hex lock hash served as an address
+
+**Date**: 2026-09-24
+
+**Symptom**: An activity participant whose lock script the store did not know got its hex lock
+hash in `address` — a fabricated address — and store read errors on that path were swallowed.
+The `.cell` party resolver instead answered 500 on a store error but `null` on an unencodable
+script: three lock → address resolvers, three error semantics.
+
+**Root Cause**: `resolve_lock_hash_address` fell back to the lock hash on `None` and
+`.ok().flatten()`-ed errors; the `.cell` resolvers `.ok()`-ed the encoding.
+
+**Fix**: `fix/review-d` 3e5e6bee. `utils::address::{encode_lock_address, resolve_lock_address}`
+is the only path: a store error is a 500; a lock the chain view never saw is `address: null` with
+`lockHash` kept; a stored script that cannot be encoded is corruption, an error naming the lock.
+A pool row resolves first from its own transaction's cells (`fix/review-c` 9eee4839 adds the
+spent inputs' locks); the frontend renders a lock party without an address by its lock hash
+(`fix/review-f` b09ec52b).
+
+**Why the tests missed it**: `test_address_activities_include_named_participation_with_zero_ckb_delta`
+asserted the other party's `address` is a string without seeding its `lock_scripts` row; it
+passed only through the fabricated fallback.
+
+**Lesson**: As in API-011, a field named `address` is derived from a lock script or it is null. A
+fallback that fills it with another value of the right type lets fixtures that forgot the data
+pass.
+
+**Files**: `crates/api/src/utils/address.rs`, `crates/api/src/routes/{activities,identities}.rs`
+
+---
+
+### API-019: An `assert!` inside a request handler, one more time
+
+**Date**: 2026-09-24 (latent; corrupt-row trigger)
+
+**Symptom**: A malformed `.cell` holder row in `stats_identity` reached
+`keys::decode_identity_owner20`, whose `assert!` runs inside the holders handler. The release
+profile is `panic = "abort"` with no catch-panic layer, so one corrupt row would take the whole
+API process — every endpoint, every client — down until the supervisor restarted it.
+
+**Root Cause**: The API-010 class, fourth round: an internal-invariant assert in a key decoder is
+correct; calling that decoder on data a handler read, with no fallible variant, is not.
+
+**Fix**: `fix/review-d` 6872f5d2. `try_decode_identity_owner20` returns an error (the asserting
+decoder delegates to it and keeps its `should_panic` test); the handler answers 500 naming the
+collection and the segment.
+
+**Why the tests missed it**: tests unwind on panic, and none seeded a malformed row. Regression:
+`dotcell_malformed_holder_row_is_a_500_not_an_abort` — the test process surviving is the proof.
+
+**Lesson**: With `panic = "abort"`, every assert reachable from stored or requested data is a
+remote kill switch. Decoders that handlers call need a fallible twin, and the sweep for this class
+has to be structural — asserting decoders called from `routes/` — not from memory.
+
+**Files**: `crates/ckbadger-store/src/keys.rs`, `crates/api/src/routes/identities.rs`
+
+---
+
+## Category: Tx-Pool Mirror
+
+### POOL-001: `data2` mapped to 3, and a unit test enshrined it
+
+**Date**: 2026-09-24
+
+**Symptom**: Every pool transaction whose lock or type used `hash_type: data2` hashed to a script
+hash no address has: the payee's page showed nothing pending, and `/transactions/{hash}/detail`
+for it answered 500 on `hash_type_to_str(3)`. Pool and chain disagreed until the transaction
+committed.
+
+**Root Cause**: `pool/source.rs::parse_hash_type` kept its own label → byte table with
+`"data2" => 3`. The wire value is 4 (the byte is a bit field: type flag + VM version), as in the
+four other tables the workspace already had.
+
+**Fix**: `fix/review-c` 9ec79c62. `ckbadger_common::hash_type` is the one table
+(`hash_type_from_label`, `hash_type_label`), tested against ckb-types / ckb-jsonrpc-types as an
+independent oracle; the pool parser, the indexer's `parse_hash_type`, `hash_type_to_str`,
+`routes/cells.rs` and `utils/script_resolution.rs` delegate to it.
+
+**Why the tests missed it**: the pool unit test asserted `parse_hash_type("data2") == 3` — the
+wrong constant written down as the expectation, so the test's oracle was the code under test. It
+now asserts 4. Regressions: `data2_is_four_not_three`, `hash_type_table_round_trips_every_label`,
+`pending_tx_with_data2_lock_is_attributed_to_its_address` (a real mirror round, then the address
+feed and `/tx`).
+
+**Lesson**: A lookup table's test needs an oracle its author did not write — here the upstream
+crate's own enum. And a fifth copy of a table is how a fifth value appears.
+
+**Files**: `crates/common/src/hash_type.rs`, `crates/api/src/pool/source.rs`
+
+---
+
+### POOL-002: The committed-but-unindexed `/tx` branch only worked against the mock
+
+**Date**: 2026-09-24
+
+**Symptom**: `/transactions/{hash}/detail` for a transaction the node had committed but this
+process had not indexed yet — seconds in live sync, hours during bulk sync — answered 500
+"missing fee from RPC and local computation" for every non-cellbase transaction, and would have
+rendered every input with null capacity, lock and address. The tx page, once that was fixed,
+threw on the provisional nulls (`committed_awaiting_index` was not treated as provisional).
+
+**Root Cause**: A real node returns `fee: null` for a committed transaction, and resolver v1's
+second step was `get_live_cell`, which reports a committed transaction's inputs — spent by
+definition — as not live. No input resolved, so no fee could be computed; the mirror record that
+already held the resolved outputs was ignored.
+
+**Fix**: `fix/review-c` 559dd4d9, resolver v2 (plan R4): an input is an output of a transaction the
+mirror's snapshot holds, otherwise `outputs[index]` of the parent from `get_transaction` — the
+node answers for committed and pool transactions alike, and an output is what its creating
+transaction says, spent or not. The `get_live_cell` path is deleted; the fee has one source
+(POOL-003); an input whose parent the node does not know is a `503 service_unavailable`; a
+committed answer always carries its block; the read view is released before the node round trips.
+b9bae238 bounds every mirror RPC (15 s), so a black-holed node is reported unhealthy instead of
+leaving a stale snapshot "healthy". `fix/review-f` f9e3a58c makes the tx page treat
+`committed_awaiting_index` as provisional and keep polling.
+
+**Why the tests missed it**: `test_committed_but_unindexed_transaction_is_served_provisionally`
+ran against a fake node that returned what no real node returns: the fixture embedded
+`"fee": "0x174"` and `mount_live_cell_rpc` kept the spent input live. It now serves `fee: null`
+and the parent only through `get_transaction`, with no live-cell mock. No tx-page test fed
+`committed_awaiting_index`.
+
+**Lesson**: A mock must follow the real node's contract for the state under test (committed ⇒
+`fee: null`, inputs dead), not the shape that makes the handler succeed. This branch existed for
+exactly the state the mock misrepresented.
+
+**Files**: `crates/api/src/pool/{resolve,source,refresh}.rs`, `crates/api/src/routes/transactions.rs`,
+`crates/api/tests/api_transactions.rs`, `frontend/app/tx/[hash]/client-page.tsx`
+
+---
+
+### POOL-003: A pending DAO withdrawal's fee understated by its compensation
+
+**Date**: 2026-09-24 (found while fixing POOL-002, beyond the review)
+
+**Symptom**: For an uncommitted Nervos DAO phase-2 withdrawal, the local fee helper returned
+`inputs − outputs` whenever that was non-negative, so a withdrawal whose compensation was smaller
+than its fee was priced at `fee − compensation`; one whose compensation exceeded the fee got no
+local fee at all (the node's pool fee, or a 500 on the committed branch). The builder marked such
+transactions `DaoCompensationUnavailable`.
+
+**Root Cause**: Phase-2 compensation needs `AR_deposit` and `AR_withdraw` — two headers — and v1
+declared it a non-goal. The helper keyed "cannot compute" on a symptom (outputs exceed inputs)
+instead of the cause (a withdraw-request input), and the symptom is absent whenever the fee is
+larger than the compensation.
+
+**Fix**: `fix/review-c` 559dd4d9. A spent withdraw-request cell is priced exactly: its capacity and
+its own occupied capacity (RFC-0023 counts the request cell's, not the deposit cell's),
+`AR_deposit` from `get_header_by_number` of the deposit block named in its data, `AR_withdraw` from
+`get_header` of the block that committed the request, through the same
+`calculate_dao_compensation_from_ar` live sync uses. The fee is `(Σ inputs + Σ compensation) −
+Σ outputs`; a negative result is an invariant error. `DaoCompensationUnavailable` no longer
+exists, and a withdrawal against an uncommitted request is an explicit error.
+
+**Why the tests missed it**: `test_compute_tx_fee_from_io_returns_none_for_dao_compensation`
+covered only a compensation larger than the fee, and asserted `None`; pending tests always got the
+node's own fee, so the helper was never the source. Its replacement,
+`test_compute_tx_fee_from_io_adds_dao_compensation_to_inputs`, covers both sides, and
+`pending_dao_withdrawal_is_served_with_its_exact_fee` /
+`test_dao_withdrawal_completion_is_priced_exactly` check the end-to-end value.
+
+**Lesson**: Branch on the cause, not on a symptom that only sometimes accompanies it.
+
+**Files**: `crates/api/src/pool/resolve.rs`, `crates/api/src/routes/transactions.rs`
+
+---
+
+## Category: Verification Suite
+
+### VERIFY-001: The default run read a paginated envelope as a bare array
+
+**Date**: 2026-09-24
+
+**Symptom**: `ckbadger verify --depth sampling` without `--entity` always ended
+`entity_capacity_history_matches_chain` Inconclusive with exit code 2, even when every entity
+matched the chain exactly — the check could never go green in its documented default mode.
+
+**Root Cause**: `default_candidates` deserialized `GET /tokens?limit=8` as `Vec<TokenListEntry>`,
+but `list_tokens` returns the `CursorPaginatedResponse` envelope, so the directory read failed on
+every run and set `candidate_gap`.
+
+**Fix**: `fix/review-be` 989a46eb. It reads `api_checks`' `CursorPage<TokenListEntry>`, one
+envelope type shared by both modules.
+
+**Why the tests missed it**: every test in `verify_entity_statistics.rs` supplied a `token:`
+selector, so the default path never ran. Regression:
+`default_run_reads_the_token_directory_envelope`.
+
+**Lesson**: The documented default invocation is the one most runs take; it needs its own test,
+and a verifier should reuse the wire type it reads instead of re-declaring it.
+
+**Files**: `crates/indexer/src/verify/{entity_history,api_checks}.rs`
+
+---
+
+### VERIFY-002: 404 and 500 were one error, so four checks passed on any failure
+
+**Date**: 2026-09-24
+
+**Symptom**: `dotcell_ring_integrity`, `dotcell_id_is_label_hash`, `dotcell_records_hash_parity`
+and `dotcell_owner_index_consistency` reported Pass with `items_checked = 0` when the API refused
+the connection, answered 500, timed out or drifted in schema — exactly the failures verify exists
+to catch.
+
+**Root Cause**: `api_get` bailed one flat error for every non-2xx status and every decode error,
+and `dotcell_live_items` read any error as "no .cell collection on this network" and passed.
+`CheckResult::not_applicable` existed for the real 404 case and was never used there.
+
+**Fix**: `fix/review-be` f48bf9be. `api_get_or_not_found` maps HTTP 404 — and only 404 — to
+`Ok(None)`, which becomes `not_applicable("… returned 404: no .cell deployment on this network")`;
+everything else is an Error. 90bcd9e6 also makes the two `--sample-count` readers declare
+`requires_sampling()` (at 0 they passed over an empty selection) and pages the owner-index check
+through an owner's whole name list instead of comparing one 100-row page to its count.
+
+**Why the tests missed it**: the four checks never ran against a failing API. Regressions:
+`dotcell_checks_are_not_applicable_on_a_404_collection`, `dotcell_checks_error_on_a_500_collection`,
+`api_get_or_not_found_maps_only_a_404_to_none`, `sample_count_readers_refuse_a_zero_sample`,
+`dotcell_owner_index_pages_through_an_owners_names`.
+
+**Lesson**: "Not applicable" has to be proven, never inferred from a failure. A check whose error
+path is green is not checking anything.
+
+**Files**: `crates/indexer/src/verify/{checks,api_checks}.rs`
+
+---
+
+### VERIFY-003: Selectors the run could not verify were silently dropped
+
+**Date**: 2026-09-24
+
+**Symptom**: `--entity token:0xA --entity spore:0xB` ended Pass with exit 0 and a manifest listing
+only `0xA`, although `docs/TESTING.md` promised that requesting an uncovered family is
+inconclusive. A bare or upper-case `--entity` id matched nothing in the export and ended
+Inconclusive for no visible reason.
+
+**Root Cause**: Selectors were partitioned into supported and unsupported, and the unsupported half
+was mentioned only when the supported half was empty. Ids were compared verbatim against the
+export's `0x`-lowercase form.
+
+**Fix**: `fix/review-be` 1f981f55 — every unsupported selector joins the inconclusive list with
+"family not covered by this delivery (token only)", is recorded in `manifest.json`, and the verdict
+can no longer be Pass. 90bcd9e6 — `EntitySelector::parse` canonicalizes ids to `0x` + lowercase
+and rejects anything that is not whole bytes of hex.
+
+**Why the tests missed it**: tests used all-token or all-unsupported selector lists, never a mix,
+and always `0x`-lowercase ids. Regressions:
+`token_plus_spore_selectors_end_inconclusive_and_name_the_spore_one`,
+`entity_selector_ids_are_canonical_hex`, `a_bare_uppercase_entity_id_selects_the_same_entity`.
+
+**Lesson**: Every input the user gave must come back in the output, verified or explained. A
+partition whose second half has no consumer is a silent drop.
+
+**Files**: `crates/indexer/src/verify/entity_history.rs`
+
+---
+
+_Last updated: 2026-09-24_
