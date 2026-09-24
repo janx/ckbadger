@@ -50,7 +50,7 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `identity_data`                  | identity_id (20B AccountCell / `.cell` name; 32B .bit Cell/did:ckb)           | IdentityEntry                                                        | Identity metadata with separate standards and lifecycles for .bit AccountCell, .bit Cell, did:ckb and `.cell` names                                                                                                                                        |
 | `mnft_collection_agg`            | collection_id                                                                 | MnftCollectionAggregate                                              | mNFT collection aggregate stats                                                                                                                                                                                                                            |
 | `object_collection_activities`   | collection_id + block + tx                                                    | ObjectCollectionActivityEntry                                        | Pre-computed object collection activity feed                                                                                                                                                                                                               |
-| `identity_by_collection`         | collection_id + identity_id                                                   | empty                                                                | Identity index by collection. A `.cell` sub-name is indexed twice: once under the `.cell` sentinel, once under its parent's padded 20-byte id, which is what lists a name's children                                                                       |
+| `identity_by_collection`         | collection_id + identity_id                                                   | empty                                                                | Identity index by collection. A `.cell` sub-name is indexed twice: once under the `.cell` sentinel, once under its parent's padded 20-byte id, which is what lists a name's children (see [below](#identity_by_collection-cell-parentchild-rows))          |
 | `identity_agg`                   | collection_id (sentinel 32B)                                                  | IdentityCollectionAgg                                                | Per-standard identity aggregates; .bit AccountCell and .bit Cell use different sentinels                                                                                                                                                                   |
 | `identity_collection_activities` | collection_id + block + tx                                                    | ObjectCollectionActivityEntry                                        | Pre-computed identity collection activity feed (domain)                                                                                                                                                                                                    |
 | `stats_identity`                 | collection_id + owner segment (32B)                                           | i64 (owner count)                                                    | Per-owner identity counts by collection. The owner segment is a lock hash for every standard but `.cell`, whose chain-level owner is a 20-byte prefix written as an explicit `owner20 ‖ 0^12` and decoded back by collection — never served as a lock hash |
@@ -98,6 +98,40 @@ The other cell indexes (`cell_by_lock`, `cell_by_type`, `cell_by_data_hash`) are
 script hash or data hash, which already encodes `hash_type`, so they keep the 74-byte
 `hash(32) + block(8 BE) + outpoint(34)` shape.
 
+### `identity_by_collection`: `.cell` parent→child rows
+
+Beside the `(sentinel, identity_id)` row every identity has, a `.cell` sub-name gets a second row
+keyed `pad_id_32(parent_id) ‖ child_id` — the parent's 20-byte name id zero-padded to the
+32-byte collection slot, then the child's 20-byte id; the value is empty.
+
+- The index lists **every** sub-name ever registered under the parent, recycled
+  (`is_live = false`) ones included — the same "ever registered" semantics as the sentinel rows.
+  Liveness is decided on read: the API's children listing filters `is_live` and pages by child
+  id.
+- The forward writers file the row when the sub-name is first inserted (live
+  `db/writer/dotcell.rs`, bulk `sync/bulk_build/owners/object.rs`). It records no undo pre-image:
+  rollback stage 10 range-deletes the whole CF and rebuilds it from the identity entries that
+  survive, writing the parent row for every surviving `IdentityExtra::DotCell` with a
+  `parent_id`, so a rebuilt index equals the forward one (POSTMORTEM IDX-010).
+
+### `activities` value: item deltas
+
+`TxActions` carries one `ItemDelta { item_id, kind, magnitude, negative }` per item a transaction
+moves. `kind` is `ItemKind::{Token, Object, Identity(IdentityStandard)}`: an identity delta keeps
+the standard the builder emitted it for, because `.cell`, `.bit` and short did:ckb ids are all 20
+bytes and the id alone cannot say which standard it belongs to. `ItemKind::tag()` is the one
+kind → participant-tag mapping. The value is bincode, so this is a layout change covered by a
+re-sync, not migrated.
+
+### `addr_txs` value: a closed transaction type
+
+`AddrTxValue { capacity_change, flags, tags }` (both `addr_txs` and `addr_txs_by_prefix`) stores
+`flags` as `AddrTxType`, a `#[repr(u8)]` enum on the same single byte as before: `0` received,
+`1` sent, `2` internal, `3` transfer, `4` named (a party a protocol named that holds no cell). A
+byte outside `0..=4` fails when the row is decoded, naming the byte, and every reader propagates
+that error with its lock/block/tx context — a corrupt byte is never rendered as some default
+label. The stored bytes of every valid row are unchanged.
+
 ### Script Modeling Note
 
 Script version and label metadata lives in `script_versions` and `script_versions_by_label` CFs,
@@ -128,12 +162,16 @@ model that future script schema refactors should follow.
 Key = `block_number(8B BE i64) + seq(8B BE u64)`. The sequence number carries its scope in the
 high bits: `seq = (scope << 48) | local`, where `local` counts entries within one block.
 
-| Scope         | Value    | Records                                                                |
-| ------------- | -------- | ---------------------------------------------------------------------- |
-| `TxContext`   | `0x0001` | Per-tx input/output shape used to derive cell and consumption rollback |
-| `DotBit`      | `0x0002` | `.bit` account/identity entity mutations                               |
-| `Object`      | `0x0003` | Spore, cluster and mNFT entity mutations                               |
-| `EntityStats` | `0x0004` | The eight per-entity daily/hourly stats buckets                        |
+| Scope         | Value    | Records                                                                                                       |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `TxContext`   | `0x0001` | Per-tx input/output shape used to derive cell and consumption rollback                                        |
+| `DotBit`      | `0x0002` | `.bit` account/identity entity mutations                                                                      |
+| `Object`      | `0x0003` | Object-writer entity mutations (Spore, cluster, mNFT, `.cell`, …) and the outpoint reverse-index rows (below) |
+| `EntityStats` | `0x0004` | The eight per-entity daily/hourly stats buckets                                                               |
+
+The scope table has one definition, `UndoSeqScope` in `crates/ckbadger-store/src/keys.rs`, next to
+the undo-log key codec (`UNDO_SEQ_SCOPE_SHIFT`, `UndoSeqScope::seq_base` / `owns`); the indexer
+re-exports it and the retention prune selects its entries through it.
 
 The `local` counter is **per block and shared by every writer in one committed batch**
 (`SharedUndoSeq`). Spore, mNFT and `.bit` batch states used to own three private counters that all
@@ -150,6 +188,18 @@ the **end of the previous block**, recorded once per `(block, key)` by `EntitySt
 (`crates/indexer/src/db/writer/entity_stats.rs`); `previous_value: None` means the row did not
 exist and rollback deletes it.
 
+**Outpoint reverse-index rows are owned by the undo log.** The `outpoint -> id` and
+`id -> outpoint` rows in `stats_spore` (`STATS_PREFIX_SPORE_OUTPOINT` /
+`STATS_PREFIX_SPORE_OUTPOINT_BY_ID`, written for Spore, did:ckb, `.bit Cell` and `.cell` through
+`BatchWriter::put_object_outpoint_rows`) and the mNFT class/token rows in `stats_mnft`
+(`STATS_PREFIX_MNFT_CLASS_OUTPOINT` / `STATS_PREFIX_MNFT_TOKEN_OUTPOINT`, written through
+`put_mnft_outpoint_row`) each record an `Object`-scope pre-image before they are written. The
+pre-image is read with `get_cf`, and a failed read is an error — never "the row did not exist",
+which would make rollback delete a row that had a value. None of these prefixes is in
+`STATS_REPLAY_CANDIDATE_PREFIXES`: the identity/object repair stage cannot clean them, because a
+rolled-back mint has already lost its entry to the undo replay that runs first, and a
+rolled-back transfer leaves its item alive (POSTMORTEM PROTO-010 and PROTO-012).
+
 **`addr_prefix_stats` owns no undo scope.** Rollback reverses it by the number of
 `addr_txs_by_prefix` rows it deletes — the same shape `addr_balance.txs_count` is reversed from the
 `addr_txs` rows it deletes — and then asserts the counter **equals** the surviving rows. An undo
@@ -161,7 +211,9 @@ rows written after it.
 advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
 `crates/indexer/src/sync/batch.rs`) and deletes the `EntityStats` entries it leaves behind, staged
 into the same batch as the blocks, so the floor and the deletions it describes are never
-separately durable. The floor is monotonic. `TxContext`, `DotBit` and `Object` entries are never
+separately durable. `committed_tip` is the durable tip the batch builds on (the block before its
+first block), because the prune can only see committed rows; a batch longer than the window
+leaves its own below-floor entries to the next batch, whose tip has moved past them. The floor is monotonic. `TxContext`, `DotBit` and `Object` entries are never
 pruned — they are removed only when replayed. Bulk build records no undo entries at all.
 
 ### `sync_meta` Fixed Keys
@@ -216,10 +268,24 @@ One row per hourly family that has a retention policy — `hourly_retention_stat
   every bucket above it is either present or was never written. It advances only when a round
   reaches the end of its family, and is monotonic — a clock that goes backwards un-deletes
   nothing.
-- `round_in_progress_cutoff_hour` and `cursor` describe an in-flight round and are diagnostic
-  only: below that cutoff, deletions have happened just up to `cursor`.
+- `round_in_progress_cutoff_hour` and `cursor` describe an in-flight round: below that cutoff,
+  deletions have happened just up to `cursor`. Readers must not treat them as a boundary.
 - Deletions and the state row are staged into the same block batch by the writer, so the
   persisted boundary always matches what was actually deleted.
+- A round's cutoff is the lower of two bounds: the read contract (`now − 48 h`) and the rollback
+  contract (the hour of the header at `committed_tip − ENTITY_STATS_UNDO_RETAIN_BLOCKS`, so no
+  hourly key a retained `EntityStats` undo entry could restore is deleted), and never below
+  `executed_cutoff_hour`. `committed_tip` is the block before the live batch's first block — the
+  store's durable sync tip, checked equal to it — never the batch's own uncommitted last block:
+  a batch longer than the undo window would otherwise read a header it has not committed yet and
+  report store corruption (POSTMORTEM IDX-012).
+- The periodic retention request is cleared only after the batch that served it commits; a
+  failed batch leaves it armed for the retry.
+- A round pins its cutoff when it starts: the first step writes `round_in_progress_cutoff_hour`,
+  later steps read it back instead of recomputing from a clock that has moved, and completion
+  advances `executed_cutoff_hour` to exactly that pinned value. A chain shorter than the undo
+  window has no block old enough to bound the rollback contract, so the step is skipped (with its
+  reason logged) rather than persisting an `i64::MIN` cutoff as authoritative.
 
 This row is the evidence that a missing hourly bucket is legitimate retention rather than
 corruption. A reader that cannot see it must report `unknown`, never "zero".
@@ -248,7 +314,10 @@ inline as Class C sealed aggregates:
   references that share code_hash bytes but differ in hash_type (data/type/data1/data2)
   on independent daily timelines.
 - `stats_token` stores total transfer counters, hourly transfer buckets, and `TokenDailyDelta`
-  rows keyed by token `type_script_hash`.
+  rows keyed by token `type_script_hash`. A token's daily capacity/knowledge history counts every
+  cell whose type script is that sUDT/xUDT instance, whatever its data holds (an owner-mode cell
+  too short for a u128 amount included); the amount facets — holders, supply, transfer counts,
+  `TOKEN_HOURLY` — need an amount. Bulk and live apply the same rule (POSTMORTEM STATS-011).
 
 ### stats_hodl Key Prefixes
 
