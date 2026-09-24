@@ -20,6 +20,7 @@ use std::sync::Arc;
 use ckbadger_indexer::db::{apply_hourly_increment, BatchWriter, EntityStatsOverlay};
 use ckbadger_indexer::sync::types::{EntityDailyChanges, EntityDateKey, ScriptDailyKey};
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys::UndoSeqScope;
 use ckbadger_store::types::{EpochStats, HourlyRetentionFamily};
 use ckbadger_store::{keys, CachedBlockHeader, CkbadgerStore, LiveCellInfo};
 use rocksdb::{Direction, IteratorMode};
@@ -1046,8 +1047,8 @@ async fn startup_fails_on_nonfresh_store_without_contract() {
 async fn prune_keeps_window_and_updates_floor() {
     let (domain, _append) = setup_split_stores();
 
-    const ENTITY: u64 = 0x0004 << 48;
-    const TX_CONTEXT: u64 = 0x0001 << 48;
+    const ENTITY: u64 = UndoSeqScope::EntityStats.seq_base();
+    const TX_CONTEXT: u64 = UndoSeqScope::TxContext.seq_base();
     let mut batch = StoreBatch::new(&domain);
     for block in 1..=1_200i64 {
         batch.put_reorg_undo_log_by_block(
@@ -1088,7 +1089,7 @@ async fn prune_keeps_window_and_updates_floor() {
     for item in iter {
         let (key, _) = item.unwrap();
         let (block, seq) = keys::decode_reorg_undo_log_key(&key);
-        if seq >> 48 == 0x0004 {
+        if UndoSeqScope::EntityStats.owns(seq) {
             entity_blocks.push(block);
         } else {
             tx_context_entries += 1;

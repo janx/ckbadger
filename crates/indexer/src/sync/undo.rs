@@ -53,7 +53,7 @@ pub(crate) fn next_undo_seq(
     *seq_entry = local_seq
         .checked_add(1)
         .expect("undo seq overflow for block-scoped rollback log");
-    ((scope as u64) << UNDO_SEQ_SCOPE_SHIFT) | local_seq
+    scope.seq_base() | local_seq
 }
 
 /// One `(block, cf, key)` whose pre-image more than one undo scope recorded.
@@ -69,7 +69,7 @@ pub(crate) struct UndoScopeOverlap {
 /// Every key mutation in `from_block..=to_block` that more than one undo scope
 /// recorded a pre-image for.
 ///
-/// The undo key is `block ‖ (scope << 48 | local seq)`, so rollback replays one
+/// The undo key is `block ‖ scope.seq_base() | local seq`, so rollback replays one
 /// block's entries scope-major (highest scope first), not in the order they
 /// were written across scopes. That is exact only while each key a block
 /// mutates is recorded by ONE scope: then its entries all sit in one scope and
@@ -283,6 +283,25 @@ mod tests {
     use ckbadger_store::keys;
     use ckbadger_store::CkbadgerStore;
 
+    /// The indexer composes sequence numbers with the store's own
+    /// `UndoSeqScope` (a re-export, not a copy), and the store's retention
+    /// prune reads them back with the same table, so the two cannot drift.
+    /// This compiles only while that holds; the discriminant values
+    /// themselves are pinned by the store's own table test.
+    #[test]
+    fn undo_seq_scope_is_the_stores_type() {
+        fn same_type<T>(_: T, _: T) {}
+        same_type(
+            UndoSeqScope::EntityStats,
+            ckbadger_store::keys::UndoSeqScope::EntityStats,
+        );
+        let seq = next_undo_seq(&mut HashMap::new(), 9, UndoSeqScope::EntityStats);
+        assert_eq!(
+            seq,
+            ckbadger_store::keys::UndoSeqScope::EntityStats.seq_base()
+        );
+    }
+
     #[test]
     fn undo_scope_overlaps_reports_a_key_recorded_by_two_scopes() {
         let dir = tempfile::tempdir().unwrap();
@@ -386,8 +405,8 @@ mod tests {
         let seq2 = next_undo_seq(&mut scope_map, block_num, UndoSeqScope::TxContext);
 
         assert_ne!(seq1, seq2);
-        assert_eq!(seq1 >> UNDO_SEQ_SCOPE_SHIFT, UndoSeqScope::TxContext as u64);
-        assert_eq!(seq2 >> UNDO_SEQ_SCOPE_SHIFT, UndoSeqScope::TxContext as u64);
+        assert!(UndoSeqScope::TxContext.owns(seq1));
+        assert!(UndoSeqScope::TxContext.owns(seq2));
         // Second call should have local seq = 1
         assert_eq!(seq2 & UNDO_SEQ_LOCAL_MAX, 1);
     }

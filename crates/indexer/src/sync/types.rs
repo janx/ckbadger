@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-// ── UndoSeqScope constants & enum ──────────────────────────────────────
+// ── UndoSeqScope: the store's one table ────────────────────────────────
 
-pub(crate) const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
-pub(crate) const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
+/// Undo sequence scopes are composed here and read back by the store's
+/// retention prune, so both sides use the store's single definition.
+pub(crate) use ckbadger_store::keys::{UndoSeqScope, UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub(crate) struct InternId(u32);
@@ -21,19 +22,6 @@ impl InternId {
     pub(crate) const fn as_usize(self) -> usize {
         self.0 as usize
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub(crate) enum UndoSeqScope {
-    TxContext = 0x0001,
-    DotBit = 0x0002,
-    Object = 0x0003,
-    /// Entity daily/hourly stats buckets (`SCRIPT_DAILY`, `TOKEN_DAILY`,
-    /// `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`,
-    /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
-    /// can prune exactly these entries without touching the other three.
-    EntityStats = 0x0004,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────

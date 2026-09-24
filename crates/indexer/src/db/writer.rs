@@ -251,7 +251,7 @@ mod undo_seq_tests {
     /// `undo_seq_by_block` that starts at 0, and both hand it to
     /// `record_object_undo`, which stamps every entry with the same
     /// `UndoSeqScope::Object`. Two object writes in one block therefore compute
-    /// the identical undo key `(block, (0x0003 << 48) | 0)` and the second
+    /// the identical undo key `(block, UndoSeqScope::Object.seq_base() | 0)` and the second
     /// silently overwrites the first inside the same `StoreBatch` — one
     /// entity's pre-image is lost before rollback ever runs.
     ///
@@ -580,18 +580,21 @@ mod undo_seq_tests {
             if block != BLOCK {
                 break;
             }
-            scopes.insert(seq >> 48);
+            scopes.insert(seq);
         }
-        assert_eq!(
-            scopes,
-            [
-                UndoSeqScope::DotBit as u64,
-                UndoSeqScope::Object as u64,
-                UndoSeqScope::EntityStats as u64
-            ]
-            .into_iter()
-            .collect(),
-            "the block must exercise all three key-mutation scopes"
+        for scope in [
+            UndoSeqScope::DotBit,
+            UndoSeqScope::Object,
+            UndoSeqScope::EntityStats,
+        ] {
+            assert!(
+                scopes.iter().any(|seq| scope.owns(*seq)),
+                "the block must exercise the {scope:?} scope"
+            );
+        }
+        assert!(
+            !scopes.iter().any(|seq| UndoSeqScope::TxContext.owns(*seq)),
+            "writer-level fixture: no tx contexts"
         );
         assert_eq!(
             crate::sync::undo::undo_scope_overlaps(store.as_ref(), BLOCK, BLOCK).unwrap(),

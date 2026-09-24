@@ -409,9 +409,8 @@ mod tests {
         assert_eq!(entries.len(), 2, "one undo entry per (block, key)");
         assert_eq!(entries[0].0, 5);
         assert_eq!(entries[1].0, 6);
-        assert_eq!(
-            entries[0].1 >> 48,
-            UndoSeqScope::EntityStats as u64,
+        assert!(
+            UndoSeqScope::EntityStats.owns(entries[0].1),
             "entity stats entries must carry their own scope"
         );
 

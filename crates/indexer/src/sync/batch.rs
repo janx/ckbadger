@@ -6985,7 +6985,7 @@ mod tests {
             ) {
                 let (key, _) = item.unwrap();
                 let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if block_num == 101 && seq >> 48 == 0x0004 {
+                if block_num == 101 && crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
                     entity_undo += 1;
                 }
             }
@@ -9123,7 +9123,7 @@ mod tests {
             ) {
                 let (key, _) = item.unwrap();
                 let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if seq >> 48 == crate::sync::types::UndoSeqScope::EntityStats as u64 {
+                if crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
                     out.push(block);
                 }
             }
