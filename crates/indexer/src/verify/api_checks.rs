@@ -137,11 +137,13 @@ struct CellListResponse {
     next_cursor: Option<String>,
 }
 
+/// The `CursorPaginatedResponse` envelope every cursor-paged list endpoint
+/// serves (`{data, limit, hasMore, nextCursor}`).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CursorPage<T> {
-    data: Vec<T>,
-    next_cursor: Option<String>,
+pub(super) struct CursorPage<T> {
+    pub(super) data: Vec<T>,
+    pub(super) next_cursor: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

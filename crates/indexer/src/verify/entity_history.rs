@@ -883,10 +883,12 @@ struct TokenListEntry {
 /// the run claims, and swallowing that error hid it.
 fn default_candidates(ctx: &CheckContext) -> (Vec<EntitySelector>, Option<String>) {
     let mut candidates = incident_selectors(ctx.network);
-    let listed: Result<Vec<TokenListEntry>, _> = super::checks::api_get(ctx, "tokens?limit=8");
+    // `GET /tokens` is cursor-paged: the entries sit in the envelope's `data`.
+    let listed: Result<super::api_checks::CursorPage<TokenListEntry>, _> =
+        super::checks::api_get(ctx, "tokens?limit=8");
     let uncovered = match listed {
-        Ok(entries) => {
-            for entry in entries {
+        Ok(page) => {
+            for entry in page.data {
                 if candidates.len() >= MAX_ENTITIES_PER_RUN {
                     break;
                 }

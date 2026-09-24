@@ -13,7 +13,7 @@ use ckbadger_indexer::verify::checks::{
 };
 use ckbadger_indexer::verify::entity_history::EntityCapacityHistoryMatchesChain;
 use serde_json::{json, Value};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const NODE_VERSION: &str = "0.119.0 (test)";
@@ -406,7 +406,9 @@ struct Wiring {
     api_url: String,
     rpc_url: String,
     declaration_path: std::path::PathBuf,
-    type_hash: String,
+    network: &'static str,
+    /// `--entity` selectors; empty is the default (no `--entity`) mode.
+    entities: Vec<EntitySelector>,
 }
 
 fn wiring(
@@ -419,13 +421,17 @@ fn wiring(
         api_url: format!("{}/api/v1", api.uri()),
         rpc_url: node.uri(),
         declaration_path: declaration_path.to_path_buf(),
-        type_hash: type_hash.to_string(),
+        network: "mainnet",
+        entities: vec![EntitySelector {
+            kind: "token".to_string(),
+            id: type_hash.to_string(),
+        }],
     }
 }
 
 fn context(wiring: &Wiring) -> CheckContext {
     CheckContext {
-        network: "mainnet",
+        network: wiring.network,
         api_url: wiring.api_url.clone(),
         rpc_url: Some(wiring.rpc_url.clone()),
         explorer_url: None,
@@ -434,10 +440,7 @@ fn context(wiring: &Wiring) -> CheckContext {
         seed: 42,
         tolerance: 0.001,
         cache_dir: None,
-        entities: vec![EntitySelector {
-            kind: "token".to_string(),
-            id: wiring.type_hash.clone(),
-        }],
+        entities: wiring.entities.clone(),
         verify_source_path: Some(wiring.declaration_path.clone()),
         evidence_dir: None,
         entity_budget: Default::default(),
@@ -742,6 +745,57 @@ async fn expected_values_do_not_depend_on_the_protocol_registry() {
         CheckStatus::Pass,
         "the oracle must not consult PROTOCOL_REGISTRY: {:?}",
         result.findings
+    );
+}
+
+/// Review #7: the default (no `--entity`) mode reads the head of the API's
+/// token directory, which `GET /tokens` serves as a `CursorPaginatedResponse`
+/// envelope. Deserializing it as a bare array failed on every run, so the
+/// default mode could never end anything but Inconclusive.
+#[tokio::test(flavor = "multi_thread")]
+async fn default_run_reads_the_token_directory_envelope() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/tokens"))
+        .and(query_param("limit", "8"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [{"typeScriptHash": type_hash, "name": "Fixture Token"}],
+            "limit": 8,
+            "hasMore": false,
+            "nextCursor": null,
+        })))
+        .mount(&api)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+
+    // A network with no incident selectors: the directory is the only source
+    // of candidates, so a directory that cannot be read leaves nothing.
+    let wiring = Wiring {
+        network: "devnet",
+        entities: vec![],
+        ..wiring(&api, &node, &declaration_path, &type_hash)
+    };
+    let result = run_check(wiring).await;
+
+    assert_eq!(
+        result.status,
+        CheckStatus::Pass,
+        "detail: {:?}, findings: {:?}",
+        result.detail,
+        result.findings
+    );
+    assert_eq!(result.items_checked, 1);
+    let detail = result.detail.clone().unwrap_or_default();
+    assert!(
+        !detail.contains("token directory could not be listed"),
+        "no candidate gap may be reported: {detail}"
     );
 }
 
