@@ -8155,6 +8155,299 @@ mod tests {
         }
     }
 
+    /// mNFT outpoint reverse-index rows through the real live write path and
+    /// the production two-phase rollback (#15, the mNFT half of PROTO-010).
+    mod mnft_live {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            seed_pre_parent_header, seed_script_info, seed_secp_script_info, write_live_block,
+            AR_DEPOSIT, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::mnft::{
+            MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH,
+        };
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        const ISSUER_ID: [u8; 20] = [0x44; 20];
+
+        fn class_id() -> Vec<u8> {
+            let mut id = ISSUER_ID.to_vec();
+            id.extend_from_slice(&7u32.to_le_bytes());
+            id
+        }
+
+        fn token_id() -> Vec<u8> {
+            let mut id = class_id();
+            id.extend_from_slice(&9u32.to_le_bytes());
+            id
+        }
+
+        fn type_script(code_hash: &str, args: &[u8]) -> Script {
+            Script {
+                code_hash: code_hash.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode(args)),
+            }
+        }
+
+        fn issuer_data() -> Vec<u8> {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&1u32.to_be_bytes());
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data
+        }
+
+        fn class_data(issued: u32) -> Vec<u8> {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&100u32.to_be_bytes());
+            data.extend_from_slice(&issued.to_be_bytes());
+            data.push(3);
+            for text in ["Genesis Class", "class description"] {
+                data.extend_from_slice(&(text.len() as u16).to_be_bytes());
+                data.extend_from_slice(text.as_bytes());
+            }
+            data.extend_from_slice(&0u16.to_be_bytes());
+            data
+        }
+
+        fn token_data() -> Vec<u8> {
+            let mut data = vec![0u8];
+            data.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+            data.push(1);
+            data.push(0);
+            data
+        }
+
+        fn input(prev_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([prev_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn output(capacity: u64, lock: Script, type_: Option<Script>) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_,
+            }
+        }
+
+        const ISSUER_CAPACITY: u64 = 250_00000000;
+        const CLASS_CAPACITY: u64 = 260_00000000;
+        const TOKEN_CAPACITY: u64 = 270_00000000;
+
+        /// Block 101 creates issuer, class (outpoint 0xe1:1) and token
+        /// (outpoint 0xe1:2) from the block-100 funding cell.
+        fn mint_block() -> BlockResponseWithCycles {
+            let mint = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    output(
+                        ISSUER_CAPACITY,
+                        lock_script(),
+                        Some(type_script(MNFT_ISSUER_CODE_HASH, &[0xab; 32])),
+                    ),
+                    output(
+                        CLASS_CAPACITY,
+                        lock_script(),
+                        Some(type_script(MNFT_CLASS_CODE_HASH, &class_id())),
+                    ),
+                    output(
+                        TOKEN_CAPACITY,
+                        lock_script(),
+                        Some(type_script(MNFT_TOKEN_CODE_HASH, &token_id())),
+                    ),
+                    output(
+                        FUNDING_CAPACITY
+                            - ISSUER_CAPACITY
+                            - CLASS_CAPACITY
+                            - TOKEN_CAPACITY
+                            - 100_000_000,
+                        lock_script(),
+                        None,
+                    ),
+                ],
+                outputs_data: vec![
+                    format!("0x{}", hex::encode(issuer_data())),
+                    format!("0x{}", hex::encode(class_data(1))),
+                    format!("0x{}", hex::encode(token_data())),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![],
+            };
+            block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, 100_000_000), mint])
+        }
+
+        /// Block 102 moves the token to lock B at outpoint 0xe2:0.
+        fn transfer_block() -> BlockResponseWithCycles {
+            let transfer = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 2)],
+                outputs: vec![output(
+                    TOKEN_CAPACITY - 100_000,
+                    lock_script_b(),
+                    Some(type_script(MNFT_TOKEN_CODE_HASH, &token_id())),
+                )],
+                outputs_data: vec![format!("0x{}", hex::encode(token_data()))],
+                witnesses: vec![],
+            };
+            block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc2, 100_000_000), transfer],
+            )
+        }
+
+        /// Block 102 re-creates the class cell at outpoint 0xe3:0 (an update).
+        fn class_recreate_block() -> BlockResponseWithCycles {
+            let recreate = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe3u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 1)],
+                outputs: vec![output(
+                    CLASS_CAPACITY - 100_000,
+                    lock_script(),
+                    Some(type_script(MNFT_CLASS_CODE_HASH, &class_id())),
+                )],
+                outputs_data: vec![format!("0x{}", hex::encode(class_data(1)))],
+                witnesses: vec![],
+            };
+            block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc2, 100_000_000), recreate],
+            )
+        }
+
+        fn cells_dump(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
+            store
+                .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
+                .map(|item| {
+                    let (key, value) = item.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        }
+
+        async fn indexed_through(last: BlockResponseWithCycles) -> Arc<CkbadgerStore> {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            for code_hash in [
+                MNFT_ISSUER_CODE_HASH,
+                MNFT_CLASS_CODE_HASH,
+                MNFT_TOKEN_CODE_HASH,
+            ] {
+                seed_script_info(store.as_ref(), code_hash);
+            }
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                mint_block(),
+                last,
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+            store
+        }
+
+        fn rollback_to(store: &CkbadgerStore, fork_point: i64) {
+            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(fork_point, Some(store), undo.tx_contexts)
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn mnft_transfer_rollback_removes_the_new_outpoint_row() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let store = indexed_through(transfer_block()).await;
+            assert_eq!(
+                store
+                    .list_mnft_token_outpoints_by_token_id(&token_id())
+                    .unwrap(),
+                vec![([0xe1u8; 32].to_vec(), 2), ([0xe2u8; 32].to_vec(), 0)],
+                "the fixture must move the token"
+            );
+            let cells_before = cells_dump(&store);
+
+            rollback_to(&store, 101);
+
+            assert_eq!(
+                store
+                    .list_mnft_token_outpoints_by_token_id(&token_id())
+                    .unwrap(),
+                vec![([0xe1u8; 32].to_vec(), 2)],
+                "only the surviving mint outpoint remains"
+            );
+            assert_eq!(
+                store
+                    .get_mnft_token_id_by_outpoint(&[0xe2u8; 32], 0)
+                    .unwrap(),
+                None,
+                "the rolled-back transfer's outpoint row is gone"
+            );
+            assert_eq!(
+                cells_dump(&store),
+                cells_before,
+                "append-only CF_CELLS bytes are untouched by rollback"
+            );
+        }
+
+        #[tokio::test]
+        async fn mnft_class_recreate_rollback_removes_the_new_outpoint_row() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let store = indexed_through(class_recreate_block()).await;
+            assert_eq!(
+                store
+                    .get_mnft_class_id_by_outpoint(&[0xe3u8; 32], 0)
+                    .unwrap(),
+                Some(class_id()),
+                "the fixture must re-create the class"
+            );
+            let cells_before = cells_dump(&store);
+
+            rollback_to(&store, 101);
+
+            assert_eq!(
+                store
+                    .get_mnft_class_id_by_outpoint(&[0xe3u8; 32], 0)
+                    .unwrap(),
+                None,
+                "the rolled-back class outpoint row is gone"
+            );
+            assert_eq!(
+                store
+                    .get_mnft_class_id_by_outpoint(&[0xe1u8; 32], 1)
+                    .unwrap(),
+                Some(class_id()),
+                "the surviving class outpoint row stays"
+            );
+            assert_eq!(cells_dump(&store), cells_before);
+        }
+    }
+
     // ── Unique Cell binding: live write path vs bulk build ────────────────
     //
     // The issuance co-occurrence rule binds a Unique Cell's token metadata to
