@@ -3136,8 +3136,9 @@ script: three lock → address resolvers, three error semantics.
 **Fix**: `fix/review-d` 3e5e6bee. `utils::address::{encode_lock_address, resolve_lock_address}`
 is the only path: a store error is a 500; a lock the chain view never saw is `address: null` with
 `lockHash` kept; a stored script that cannot be encoded is corruption, an error naming the lock.
-A pool row resolves first from its own transaction's cells (`fix/review-c` 9eee4839 adds the
-spent inputs' locks); the frontend renders a lock party without an address by its lock hash
+A pool row resolves first from its own transaction's cells — outputs and spent inputs
+(`fix/review-c` 9eee4839 records the inputs' locks, 903f8085 on the integration branch makes
+the resolver ask for them); the frontend renders a lock party without an address by its lock hash
 (`fix/review-f` b09ec52b).
 
 **Why the tests missed it**: `test_address_activities_include_named_participation_with_zero_ckb_delta`
@@ -3197,7 +3198,10 @@ four other tables the workspace already had.
 **Fix**: `fix/review-c` 9ec79c62. `ckbadger_common::hash_type` is the one table
 (`hash_type_from_label`, `hash_type_label`), tested against ckb-types / ckb-jsonrpc-types as an
 independent oracle; the pool parser, the indexer's `parse_hash_type`, `hash_type_to_str`,
-`routes/cells.rs` and `utils/script_resolution.rs` delegate to it.
+`routes/cells.rs` and `utils/script_resolution.rs` delegate to it. 45ac2b42 (integration branch)
+moved the last four copies onto it — `script_to_address`, the address parser's byte allow-list,
+the verify export's `hash_type_name`, and `ckb-store-reader`'s `convert_script`, whose silent
+`_ => "data"` default turned an unknown byte into a script hashing to something else.
 
 **Why the tests missed it**: the pool unit test asserted `parse_hash_type("data2") == 3` — the
 wrong constant written down as the expectation, so the test's oracle was the code under test. It
@@ -3235,7 +3239,8 @@ transaction says, spent or not. The `get_live_cell` path is deleted; the fee has
 committed answer always carries its block; the read view is released before the node round trips.
 b9bae238 bounds every mirror RPC (15 s), so a black-holed node is reported unhealthy instead of
 leaving a stale snapshot "healthy". `fix/review-f` f9e3a58c makes the tx page treat
-`committed_awaiting_index` as provisional and keep polling.
+`committed_awaiting_index` as provisional and keep polling, and b8b2614a (integration branch)
+keeps it polling through the transient 503 instead of showing "Failed to load transaction".
 
 **Why the tests missed it**: `test_committed_but_unindexed_transaction_is_served_provisionally`
 ran against a fake node that returned what no real node returns: the fixture embedded
