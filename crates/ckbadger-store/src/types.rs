@@ -1724,7 +1724,6 @@ pub struct HourlyRetentionState {
     /// Cutoff the in-flight round is sweeping towards, `None` when no round is
     /// in flight. Deletions below it have happened only up to `cursor`, so this
     /// is diagnostic: never use it as the retention boundary.
-    #[serde(default)]
     pub round_in_progress_cutoff_hour: Option<i64>,
     /// Where the current round stopped; `None` once the round is complete.
     pub cursor: Option<Vec<u8>>,
@@ -2977,6 +2976,54 @@ mod tests {
 
         assert_eq!(status.sync_started_block, 128);
         assert!(status.sync_started_at.is_some());
+    }
+
+    /// `HourlyRetentionState` is persisted with bincode, which is positional:
+    /// every field is always on the wire, so a serde field default can never
+    /// apply to it. The layout is pinned field by field, and a row written
+    /// without `round_in_progress_cutoff_hour` fails to decode instead of
+    /// reading the field as absent.
+    #[test]
+    fn hourly_retention_state_bincode_layout_is_positional() {
+        for in_progress in [None, Some(7i64)] {
+            let state = HourlyRetentionState {
+                policy_version: HOURLY_RETENTION_POLICY_VERSION,
+                family: HourlyRetentionFamily::Mnft,
+                executed_cutoff_hour: 42,
+                round_in_progress_cutoff_hour: in_progress,
+                cursor: Some(vec![9, 9]),
+                round_started_at: 100,
+                round_completed_at: None,
+            };
+            let mut expected = Vec::new();
+            expected.extend(bincode::serialize(&state.policy_version).unwrap());
+            expected.extend(bincode::serialize(&state.family).unwrap());
+            expected.extend(bincode::serialize(&state.executed_cutoff_hour).unwrap());
+            expected.extend(bincode::serialize(&state.round_in_progress_cutoff_hour).unwrap());
+            expected.extend(bincode::serialize(&state.cursor).unwrap());
+            expected.extend(bincode::serialize(&state.round_started_at).unwrap());
+            expected.extend(bincode::serialize(&state.round_completed_at).unwrap());
+
+            let bytes = bincode::serialize(&state).unwrap();
+            assert_eq!(bytes, expected);
+            assert_eq!(
+                bincode::deserialize::<HourlyRetentionState>(&bytes).unwrap(),
+                state
+            );
+        }
+
+        let without_field = (
+            HOURLY_RETENTION_POLICY_VERSION,
+            HourlyRetentionFamily::Mnft,
+            42i64,
+            Some(vec![9u8, 9]),
+            100i64,
+            None::<i64>,
+        );
+        assert!(bincode::deserialize::<HourlyRetentionState>(
+            &bincode::serialize(&without_field).unwrap()
+        )
+        .is_err());
     }
 }
 
