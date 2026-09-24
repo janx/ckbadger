@@ -327,6 +327,13 @@ interface TransactionDetail extends Omit<
   'blockNumber' | 'blockHash' | 'index' | 'timestamp'
 > {
   status: TransactionStatus;
+  /**
+   * Present only while this explorer has not indexed the transaction: `pending`
+   * or `proposed` in the node's pool, or `committed_awaiting_index` when the node
+   * has it in a block (`blockNumber`/`blockHash` set; `timestamp`, `confirmations`
+   * and `index` not yet known). Absent once the store has it.
+   */
+  poolStatus?: PoolStatus;
   pendingSince: string | null;
   blockNumber: number | null;
   blockHash: string | null;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, screen, waitFor, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api } from '@/lib/api';
@@ -90,6 +90,27 @@ function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTran
     outputsCapacity: null,
     inputsCommonKnowledgeSize: null,
     outputsCommonKnowledgeSize: null,
+  } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+}
+
+/**
+ * What `/tx/{hash}` serves for a transaction the node has committed but this
+ * explorer's store has not indexed yet: the committing block is known, the
+ * block time, confirmations and tx index are not.
+ */
+function createCommittedAwaitingIndexTransactionDetail(): Awaited<
+  ReturnType<typeof api.getTransactionDetail>
+> {
+  return {
+    ...createCommittedTransactionDetail(),
+    status: 'committed',
+    poolStatus: 'committed_awaiting_index',
+    pendingSince: null,
+    blockNumber: 123,
+    blockHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    index: null,
+    timestamp: null,
+    confirmations: null,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
 
@@ -204,6 +225,38 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionGraph).not.toHaveBeenCalled();
     expect(api.getTransactionCellDeps).not.toHaveBeenCalled();
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('serves a committed-but-unindexed transaction provisionally and polls until it is indexed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.getTransactionDetail)
+      .mockResolvedValueOnce(createCommittedAwaitingIndexTransactionDetail())
+      .mockResolvedValueOnce(createCommittedAwaitingIndexTransactionDetail())
+      .mockResolvedValue(createCommittedTransactionDetail());
+
+    render(<TransactionDetailPage />);
+
+    // The committing block is known and shown; the block time and the
+    // confirmation count are not known yet and are shown as pending.
+    expect(await screen.findByRole('link', { name: '#123' })).toBeInTheDocument();
+    expect(screen.getByText('Confirming')).toBeInTheDocument();
+    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Confirmations$/)).not.toBeInTheDocument();
+    expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
+
+    // Still provisional: the page keeps asking until the store has it.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('link', { name: '#123' })).toBeInTheDocument();
+
+    // Indexed: `poolStatus` is gone, the committed view renders, polling stops.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText(/4\s+Confirmations/)).toBeInTheDocument();
+    expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(9000));
+    expect(api.getTransactionDetail).toHaveBeenCalledTimes(3);
   });
 
   it('links unknown type script to code-hash detail page', async () => {

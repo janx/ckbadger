@@ -27,6 +27,7 @@ import {
 } from '@/lib/api';
 import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
+import { poolStatusLabel } from '@/components/ui/pool-status';
 import { analyzeWitness, buildScriptGroupLens } from '@/lib/witness-analysis';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
@@ -135,13 +136,23 @@ function getErrorMessage(error: unknown): string | null {
   }
   return null;
 }
-function isPendingTransactionStatus(
-  status: TransactionDetail['status'] | undefined
-): status is 'pending' | 'proposed' {
-  return status === 'pending' || status === 'proposed';
+/**
+ * A transaction this explorer has not indexed yet: still in the node's pool, or
+ * committed by the node in a block the store has not reached. Its block time,
+ * confirmations and derived sections do not exist here yet, so the page shows
+ * placeholders and keeps polling until the indexed record replaces it.
+ */
+function isProvisionalTransaction(tx: TransactionDetail | undefined): boolean {
+  if (!tx) return false;
+  return (
+    tx.status === 'pending' ||
+    tx.status === 'proposed' ||
+    tx.poolStatus === 'committed_awaiting_index'
+  );
 }
-function getTransactionStatusLabel(status: TransactionDetail['status']): string {
-  return status === 'proposed' ? 'Proposed' : status === 'pending' ? 'Pending' : 'Committed';
+function getTransactionStatusLabel(tx: TransactionDetail): string {
+  if (tx.poolStatus === 'committed_awaiting_index') return poolStatusLabel(tx.poolStatus);
+  return tx.status === 'proposed' ? 'Proposed' : tx.status === 'pending' ? 'Pending' : 'Committed';
 }
 function requireTransactionField<T>(
   value: T | null | undefined,
@@ -162,7 +173,7 @@ function PendingSectionPlaceholder({ label }: { label: string }) {
       <div className="space-y-2">
         <div className="text-text-bright font-mono text-sm uppercase tracking-[0.2em]">{label}</div>
         <p className="text-text-dim text-sm">
-          <PendingValue /> available after this transaction is committed.
+          <PendingValue /> available once this transaction is committed and indexed.
         </p>
       </div>
     </div>
@@ -186,36 +197,34 @@ export default function TransactionDetailPage() {
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
     refetchInterval: (query) =>
-      isPendingTransactionStatus(query.state.data?.status)
-        ? DETAIL_PENDING_REFETCH_INTERVAL_MS
-        : false,
+      isProvisionalTransaction(query.state.data) ? DETAIL_PENDING_REFETCH_INTERVAL_MS : false,
     refetchIntervalInBackground: true,
   });
   const errorMessage = getErrorMessage(error);
   const isNotFoundError = errorMessage?.startsWith('API error: 404') ?? false;
-  const isPendingTransaction = isPendingTransactionStatus(tx?.status);
-  const statusLabel = tx ? getTransactionStatusLabel(tx.status) : null;
+  const isProvisional = isProvisionalTransaction(tx);
+  const statusLabel = tx ? getTransactionStatusLabel(tx) : null;
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
     tx?.cycles,
-    (tx?.isCellbase ?? false) || isPendingTransaction,
+    (tx?.isCellbase ?? false) || isProvisional,
     tx?.cyclesStatus
   );
   const { data: graphData } = useQuery({
     queryKey: ['txGraph', hash],
     queryFn: () => api.getTransactionGraph(hash),
-    enabled: !!hash && !!tx && !isPendingTransaction,
+    enabled: !!hash && !!tx && !isProvisional,
   });
   const [txGraphView, setTxGraphView] = useState<TxGraphView>('flow');
   const { data: cellDeps, isLoading: cellDepsLoading } = useQuery({
     queryKey: ['txCellDeps', hash],
     queryFn: () => api.getTransactionCellDeps(hash),
-    enabled: !!hash && !!tx && !isPendingTransaction,
+    enabled: !!hash && !!tx && !isProvisional,
   });
   const { data: lifecycle } = useQuery({
     queryKey: ['txLifecycle', hash],
     queryFn: () => api.getTransactionLifecycle(hash),
-    enabled: !!hash && !!tx && !isPendingTransaction && !tx.isCellbase,
+    enabled: !!hash && !!tx && !isProvisional && !tx.isCellbase,
   });
   const codeHashes = useMemo(() => {
     if (!tx) return [];
@@ -409,22 +418,25 @@ export default function TransactionDetailPage() {
       </div>
     );
   }
-  const committedBlockNumber = isPendingTransaction
-    ? null
-    : requireTransactionField(tx.blockNumber, tx.hash, 'blockNumber');
-  const committedTimestamp = isPendingTransaction
+  // The node reports the committing block before this explorer indexes it, so a
+  // committed transaction always has one, provisional or not.
+  const committedBlockNumber =
+    tx.status === 'committed'
+      ? requireTransactionField(tx.blockNumber, tx.hash, 'blockNumber')
+      : null;
+  const committedTimestamp = isProvisional
     ? null
     : requireTransactionField(tx.timestamp, tx.hash, 'timestamp');
-  const committedConfirmations = isPendingTransaction
+  const committedConfirmations = isProvisional
     ? null
     : requireTransactionField(tx.confirmations, tx.hash, 'confirmations');
-  const carriedCapacity = isPendingTransaction
+  const carriedCapacity = isProvisional
     ? null
     : (
         BigInt(requireTransactionField(tx.outputsCapacity, tx.hash, 'outputsCapacity')) +
         BigInt(tx.fee)
       ).toString();
-  const commonKnowledgeSizeChange = isPendingTransaction
+  const commonKnowledgeSizeChange = isProvisional
     ? null
     : (() => {
         const inputUsed = BigInt(
@@ -443,7 +455,7 @@ export default function TransactionDetailPage() {
         );
         return outputUsed - inputUsed;
       })();
-  const committedCommonKnowledgeSizeChange = isPendingTransaction
+  const committedCommonKnowledgeSizeChange = isProvisional
     ? null
     : requireTransactionField(commonKnowledgeSizeChange, tx.hash, 'commonKnowledgeSizeChange');
   return (
@@ -454,7 +466,7 @@ export default function TransactionDetailPage() {
           title="Transaction"
           hash={tx.hash}
           badge={
-            isPendingTransaction ? (
+            isProvisional ? (
               <Badge variant={tx.status === 'proposed' ? 'gold' : 'blue'}>{statusLabel}</Badge>
             ) : (
               <Badge variant="green">
@@ -473,9 +485,9 @@ export default function TransactionDetailPage() {
           <TerminalPanelContent>
             <DataGrid>
               <DataField label="Block">
-                {isPendingTransaction ? (
+                {committedBlockNumber === null ? (
                   <PendingValue />
-                ) : tx.isCellbase ? (
+                ) : isProvisional || tx.isCellbase ? (
                   <Link
                     href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
                     className="text-interactive hover:underline"
@@ -547,7 +559,7 @@ export default function TransactionDetailPage() {
                   committedTimestamp ? new Date(committedTimestamp).toISOString() : undefined
                 }
               >
-                {isPendingTransaction ? (
+                {isProvisional ? (
                   <PendingValue />
                 ) : (
                   <>
@@ -562,7 +574,7 @@ export default function TransactionDetailPage() {
                   </>
                 )}
               </DataField>
-              {isPendingTransaction && tx.pendingSince && (
+              {isProvisional && tx.pendingSince && (
                 <DataField
                   label="Pending Since"
                   copyValue={new Date(tx.pendingSince).toISOString()}
@@ -606,7 +618,7 @@ export default function TransactionDetailPage() {
                       <span className="border-base-border inline-block h-3 w-3 animate-spin rounded-full border-2 border-t-transparent" />
                       <span className="cycles-calculating-marquee">Calculating ...</span>
                     </span>
-                  ) : isPendingTransaction ? (
+                  ) : isProvisional ? (
                     <PendingValue />
                   ) : hasFailed ? (
                     <span className="text-negative italic">Calculation failed</span>
@@ -616,7 +628,7 @@ export default function TransactionDetailPage() {
                 </DataField>
               )}
               <DataField label="Carried Capacity">
-                {isPendingTransaction ? (
+                {isProvisional ? (
                   <PendingValue />
                 ) : (
                   <Capacity
@@ -626,7 +638,7 @@ export default function TransactionDetailPage() {
                 )}
               </DataField>
               <DataField label="Common Knowledge Change">
-                {isPendingTransaction ? (
+                {isProvisional ? (
                   <PendingValue />
                 ) : (
                   (() => {
@@ -703,14 +715,14 @@ export default function TransactionDetailPage() {
                 <CellDepsTab
                   cellDeps={cellDeps}
                   isLoading={cellDepsLoading}
-                  isPending={isPendingTransaction}
+                  isPending={isProvisional}
                 />
               </TabsContent>
               <TabsContent
                 value="graph"
                 className="border-base-border/80 bg-base-surface/40 mt-0 rounded border p-4"
               >
-                {isPendingTransaction ? (
+                {isProvisional ? (
                   <PendingSectionPlaceholder label="Graph" />
                 ) : (
                   <div className="space-y-3">
