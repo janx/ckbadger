@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -1325,6 +1325,66 @@ pub fn stage_hourly_retention(
         }
     }
     Ok(())
+}
+
+/// The tip a live batch builds on: the last block already durable in the
+/// store, i.e. the block before the batch's first block.
+///
+/// Retention maintenance must bound itself by this tip, never by the batch's
+/// own last block: the batch's headers and undo entries are not committed
+/// while it is being staged, so a batch longer than the undo window would read
+/// a header that is not there yet (and call it store corruption), and would
+/// promise a coverage floor the batch's own undo entries sit below. The
+/// store's sync tip must agree; if it does not, the batch boundary is wrong.
+pub(super) fn committed_tip_before_batch(store: &CkbadgerStore, first_block: i64) -> Result<i64> {
+    let committed_tip = first_block
+        .checked_sub(1)
+        .ok_or_else(|| anyhow!("live batch first block underflow: first_block={first_block}"))?;
+    let (store_tip, store_tip_hash) = store.get_sync_tip()?;
+    let consistent = match store_tip_hash {
+        // An empty store: only a batch that starts at genesis builds on it.
+        None => first_block == 0,
+        Some(_) => store_tip == committed_tip,
+    };
+    if !consistent {
+        bail!(
+            "live batch does not build on the committed tip: first_block={}, expected committed tip {}, store sync tip {} (hash {})",
+            first_block,
+            committed_tip,
+            store_tip,
+            if store_tip_hash.is_some() { "present" } else { "absent" }
+        );
+    }
+    Ok(committed_tip)
+}
+
+/// The periodic task's request for one hourly-retention step, held by one
+/// batch. Reading it does not consume it: the request is cleared only by
+/// `served`, after the batch that staged the step has committed. A batch that
+/// fails leaves it armed for the retry.
+pub(super) struct HourlyRetentionRequest<'a> {
+    flag: &'a AtomicBool,
+    armed: bool,
+}
+
+impl<'a> HourlyRetentionRequest<'a> {
+    pub(super) fn read(flag: &'a AtomicBool, maintenance_allowed: bool) -> Self {
+        Self {
+            flag,
+            armed: maintenance_allowed && flag.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(super) fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    /// The batch that staged the step is durable: the request is served.
+    pub(super) fn served(self) {
+        if self.armed {
+            self.flag.store(false, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Stage the coverage-floor advance and the matching undo deletions.
@@ -4106,31 +4166,36 @@ impl Indexer {
             //
             // Bulk build records no undo entries at all and has no reorg
             // workflow, so it neither prunes nor needs a window.
+            //
+            // Both retention stages are bounded by the tip this batch builds on
+            // (`first_block - 1`), never by `last_block`: this batch's headers
+            // and undo entries are not committed yet. A batch longer than the
+            // undo window leaves some of its own entries below the floor its
+            // tip implies; the next batch, built on this tip, prunes them.
+            let retention_request =
+                HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
             if !bulk_sync_mode {
+                let committed_tip = committed_tip_before_batch(self.writer.store(), first_block)?;
                 stage_entity_stats_undo_retention(
                     self.writer.store(),
                     &mut data_batch,
-                    last_block,
+                    committed_tip,
                 )?;
-            }
 
-            // One bounded hourly-retention step, if the periodic task asked for
-            // one. Deletions and the advanced retention state go into the same
-            // batch as the blocks, so the persisted boundary always matches
-            // what was actually deleted, and no background task can delete a
-            // bucket while a rollback is restoring it. Bulk build never runs
-            // this maintenance path.
-            if !bulk_sync_mode
-                && self
-                    .hourly_retention_requested
-                    .swap(false, Ordering::Relaxed)
-            {
-                stage_hourly_retention(
-                    &self.writer,
-                    &mut data_batch,
-                    last_block,
-                    Utc::now().timestamp_millis(),
-                )?;
+                // One bounded hourly-retention step, if the periodic task asked
+                // for one. Deletions and the advanced retention state go into the
+                // same batch as the blocks, so the persisted boundary always
+                // matches what was actually deleted, and no background task can
+                // delete a bucket while a rollback is restoring it. Bulk build
+                // never runs this maintenance path.
+                if retention_request.is_armed() {
+                    stage_hourly_retention(
+                        &self.writer,
+                        &mut data_batch,
+                        committed_tip,
+                        Utc::now().timestamp_millis(),
+                    )?;
+                }
             }
 
             // The commit window, split into five non-overlapping parts. Each
@@ -4240,6 +4305,7 @@ impl Indexer {
                     first_block, last_block
                 )
             })?;
+            retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -5833,6 +5899,63 @@ mod tests {
     }
 
     #[test]
+    fn retention_flag_survives_a_failed_batch() {
+        let flag = AtomicBool::new(true);
+
+        // A batch reads the request, stages the step, then fails before its
+        // commit: the request must still be there for the retry.
+        {
+            let failed = HourlyRetentionRequest::read(&flag, true);
+            assert!(failed.is_armed());
+        }
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "a failed batch does not consume it"
+        );
+
+        let committed = HourlyRetentionRequest::read(&flag, true);
+        assert!(committed.is_armed());
+        committed.served();
+        assert!(!flag.load(Ordering::Relaxed), "a committed batch serves it");
+
+        // No request, or maintenance not allowed (bulk): nothing is armed and
+        // nothing is cleared.
+        assert!(!HourlyRetentionRequest::read(&flag, true).is_armed());
+        flag.store(true, Ordering::Relaxed);
+        let bulk = HourlyRetentionRequest::read(&flag, false);
+        assert!(!bulk.is_armed());
+        bulk.served();
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn committed_tip_before_batch_is_the_store_tip_or_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        // Empty store: only a batch from genesis builds on it.
+        assert_eq!(committed_tip_before_batch(&store, 0).unwrap(), -1);
+        let err = committed_tip_before_batch(&store, 5).unwrap_err();
+        assert!(err.to_string().contains("first_block=5"), "{err}");
+
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: 1_100,
+                tip_block_hash: vec![0x11; 32],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(committed_tip_before_batch(&store, 1_101).unwrap(), 1_100);
+        for wrong_first in [1_100, 1_102, 0] {
+            let err = committed_tip_before_batch(&store, wrong_first).unwrap_err();
+            assert!(
+                err.to_string().contains("store sync tip 1100"),
+                "first_block={wrong_first}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn dotcell_parse_error_on_live_path_is_a_precommit_invariant() {
         let mut tx = crate::parser::test_helpers::real_dotcell::T2_REGISTER_JOAOM.transaction();
         tx.witnesses.truncate(1);
@@ -5917,13 +6040,23 @@ mod tests {
             }
         }
 
-        fn block_hash(number: u64) -> [u8; 32] {
+        pub(super) fn block_hash(number: u64) -> [u8; 32] {
             let mut hash = [0x55u8; 32];
             hash[0..8].copy_from_slice(&number.to_le_bytes());
             hash
         }
 
         fn header(number: u64, ar: u64) -> HeaderView {
+            header_with_epoch_length(number, ar, 1800)
+        }
+
+        /// `header`, in an epoch of `epoch_length` blocks starting at block 100,
+        /// so a fixture can run past block 1899 inside one epoch.
+        pub(super) fn header_with_epoch_length(
+            number: u64,
+            ar: u64,
+            epoch_length: u64,
+        ) -> HeaderView {
             // DAO field: C (total issuance) and U (occupied) must satisfy
             // C > U for the secondary-miner split; AR drives compensation.
             // S (the unissued secondary pool) must cover the compensation this
@@ -5938,7 +6071,7 @@ mod tests {
             // Epoch 40 (length 1800) starts at block 100, so the first
             // fixture batch opens the epoch stats row exactly like a real
             // epoch boundary block would.
-            let epoch = (1800u64 << 40) | ((number - 100) << 24) | 40;
+            let epoch = (epoch_length << 40) | ((number - 100) << 24) | 40;
             HeaderView {
                 version: "0x0".to_string(),
                 compact_target: "0x1a08a97e".to_string(),
@@ -8239,6 +8372,162 @@ mod tests {
             assert!(
                 account_lock_party.item_deltas.is_empty(),
                 "the protocol's own lock never owns the names it holds"
+            );
+        }
+    }
+
+    /// Retention maintenance inside a live batch longer than the undo window
+    /// (#9): a node that was down for more than 1000 blocks catches up in
+    /// batches of up to 5000.
+    mod retention_live {
+        use super::live_dao_fee::{
+            cellbase_tx, header_with_epoch_length, indexer_for_live_write_test,
+            write_live_blocks_with_entity_changes, AR_DEPOSIT,
+        };
+        use super::*;
+        use crate::rpc::BlockView;
+        use ckbadger_store::types::HourlyRetentionFamily;
+
+        const EPOCH_LENGTH: u64 = 4000;
+        const TOKEN: [u8; 32] = [0x7a; 32];
+
+        fn cellbase_block(number: u64) -> BlockResponseWithCycles {
+            let hash_byte = (number % 251) as u8;
+            let mut cellbase = cellbase_tx(hash_byte, 100_000_000);
+            let mut hash = [hash_byte; 32];
+            hash[..8].copy_from_slice(&number.to_le_bytes());
+            cellbase.hash = format!("0x{}", hex::encode(hash));
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: header_with_epoch_length(number, AR_DEPOSIT, EPOCH_LENGTH),
+                    uncles: vec![],
+                    transactions: vec![cellbase],
+                    proposals: vec![],
+                },
+                cycles: None,
+            }
+        }
+
+        fn blocks(range: std::ops::RangeInclusive<u64>) -> Vec<BlockResponseWithCycles> {
+            range.map(cellbase_block).collect()
+        }
+
+        fn date_of(number: u64) -> u32 {
+            ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000 + number as i64 * 1000)
+        }
+
+        fn token_changes_at(blocks: &[u64]) -> EntityDailyChanges<EntityDateKey> {
+            let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+            for &block in blocks {
+                changes
+                    .add(
+                        block as i64,
+                        (TOKEN.to_vec(), date_of(block)),
+                        61_00000000,
+                        61_00000000,
+                    )
+                    .unwrap();
+            }
+            changes
+        }
+
+        /// Blocks that still hold an `EntityStats`-scope undo entry.
+        fn entity_stats_undo_blocks(store: &CkbadgerStore) -> Vec<i64> {
+            let mut out = Vec::new();
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, _) = item.unwrap();
+                let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                if seq >> 48 == crate::sync::types::UndoSeqScope::EntityStats as u64 {
+                    out.push(block);
+                }
+            }
+            out.dedup();
+            out
+        }
+
+        #[tokio::test]
+        async fn a_live_batch_longer_than_the_undo_window_commits_and_the_next_batch_prunes_it() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            // Reach a committed tip T = 1100, well past the 1000-block window.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(100..=1100),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            // One catch-up batch T+1..T+1500 with the periodic retention request
+            // armed, touching the token's daily bucket in block 1150 (below the
+            // floor this batch's own tip implies) and in block 2550 (above it).
+            indexer
+                .hourly_retention_requested
+                .store(true, Ordering::Relaxed);
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(1101..=2600),
+                token_changes_at(&[1150, 2550]),
+            )
+            .await
+            .expect("a >1000-block live batch must commit, not report store corruption");
+
+            assert!(
+                !indexer.hourly_retention_requested.load(Ordering::Relaxed),
+                "the committed batch served the retention request"
+            );
+            let state = store
+                .get_hourly_retention_state(HourlyRetentionFamily::Token)
+                .unwrap()
+                .expect("the retention step ran and its state is durable");
+            let header_100 = store.get_block_header(100).unwrap().unwrap();
+            assert_eq!(
+                state.executed_cutoff_hour,
+                header_100.timestamp / 3_600_000,
+                "the undo-window bound is the header at committed_tip(1100) - 1000"
+            );
+            assert_eq!(entity_stats_undo_blocks(&store), vec![1150, 2550]);
+            assert_eq!(
+                store
+                    .get_entity_stats_undo_contract()
+                    .unwrap()
+                    .unwrap()
+                    .coverage_floor_block,
+                100,
+                "the floor follows the tip the batch was built on"
+            );
+
+            // The next batch builds on T+1500: its floor is T+500 = 1600, which
+            // prunes the entry the long batch left below it.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(2601..=2601),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                entity_stats_undo_blocks(&store),
+                vec![2550],
+                "block 1150's EntityStats undo entry is pruned by the next batch"
+            );
+            assert_eq!(
+                store
+                    .get_entity_stats_undo_contract()
+                    .unwrap()
+                    .unwrap()
+                    .coverage_floor_block,
+                1600
             );
         }
     }
