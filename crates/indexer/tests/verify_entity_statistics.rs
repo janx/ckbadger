@@ -241,11 +241,11 @@ impl Respond for NodeResponder {
                 let mut calls = self.calls.lock().unwrap();
                 let page = *calls;
                 *calls += 1;
-                if page == 0 {
-                    json!({"objects": self.records, "last_cursor": "0xc1"})
-                } else {
-                    json!({"objects": [], "last_cursor": "0x"})
-                }
+                let limit =
+                    usize::from_str_radix(params[2].as_str().unwrap().trim_start_matches("0x"), 16)
+                        .unwrap();
+                let records: Vec<_> = self.records.iter().skip(page * limit).take(limit).collect();
+                json!({"objects": records, "last_cursor": format!("0xc{}", page + 1)})
             }
             "get_transaction" => {
                 let hash = params[0].as_str().unwrap();
@@ -516,6 +516,42 @@ async fn an_index_that_matches_the_chain_passes() {
         result.findings
     );
     assert_eq!(result.items_checked, 1, "items are entities, not rows");
+}
+
+/// The original 10k-request default could not finish even the first mainnet
+/// incident selector. Exercise an exhaustive history beyond that allowance:
+/// every distinct block and transaction must be fetched, with real pagination.
+#[tokio::test(flavor = "multi_thread")]
+async fn default_budget_verifies_a_history_requiring_more_than_ten_thousand_requests() {
+    const RECORDS: u64 = 5_001;
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let mut fixture = ChainFixture::new(&code_hash);
+    for block in 1..=RECORDS {
+        fixture.create(block, (block / 2_000) as i64, shape(1_000, 16, 20));
+    }
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &fixture.daily_rows(), RECORDS, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let evidence = dir.path().join("evidence");
+    let wiring = Wiring {
+        evidence_dir: Some(evidence.clone()),
+        ..wiring(&api, &node, &declaration_path, &type_hash)
+    };
+
+    let result = run_check(wiring).await;
+    assert_eq!(result.status, CheckStatus::Pass, "{:?}", result.detail);
+    assert_eq!(result.items_checked, 1);
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(evidence.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["entities"][0]["historyRecords"], RECORDS);
+    assert!(manifest["rpcRequests"].as_u64().unwrap() > 10_000);
+    assert_eq!(
+        manifest["rpcRequests"].as_u64().unwrap() as usize,
+        node.received_requests().await.unwrap().len()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

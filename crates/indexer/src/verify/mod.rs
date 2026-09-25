@@ -99,8 +99,7 @@ pub struct VerifyArgs {
     pub verify_source: Option<String>,
 
     /// RPC requests the chain-derived checks may spend for the whole run.
-    /// V3's initial value is not a proven default: raise it explicitly rather
-    /// than narrowing scope until a run fits.
+    /// Raise this explicitly for larger histories rather than narrowing scope.
     #[arg(long, default_value_t = entity_history::MAX_RPC_REQUESTS)]
     pub entity_max_rpc: usize,
 

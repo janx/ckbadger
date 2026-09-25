@@ -274,8 +274,8 @@ struct VerifyArgs {
     #[arg(long = "entity", value_name = "KIND:ID")]
     entities: Vec<String>,
 
-    /// RPC requests the chain-derived checks may spend per network. The initial
-    /// value is not a proven default: raise it rather than narrowing scope.
+    /// RPC requests the chain-derived checks may spend per network. Raise this
+    /// for larger histories rather than narrowing scope.
     #[arg(long, default_value_t = indexer_verify::entity_history::MAX_RPC_REQUESTS)]
     entity_max_rpc: usize,
 

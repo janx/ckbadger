@@ -4501,6 +4501,15 @@ struct DotCellItemListRecord {
     is_live: bool,
 }
 
+/// The address name list has its own wire contract, distinct from collection
+/// items (`nftId`, `isLive`). Require its identity field even when only counting.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotCellOwnerNameApiRecord {
+    #[serde(rename = "identityId")]
+    _identity_id: String,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DotCellRingApiRecord {
@@ -4781,7 +4790,7 @@ impl Check for DotCellOwnerIndexConsistency {
             };
             // The owner's whole list, not its first page: an owner with more
             // names than one page holds would otherwise always disagree.
-            let names: Vec<DotCellItemListRecord> = all_cursor_pages(
+            let names: Vec<DotCellOwnerNameApiRecord> = all_cursor_pages(
                 ctx,
                 &format!("addresses/{}/dotcell-names?limit=100", address),
             )?;
@@ -6853,7 +6862,12 @@ mod tests {
             .await;
             get(
                 &format!("addresses/{address}/dotcell-names"),
-                json!({"data": [item.clone()], "nextCursor": null}),
+                json!({"data": [{
+                    "identityId": id,
+                    "label": name.label,
+                    "name": format!("{}.cell", name.label),
+                    "expiredAt": 1_821_507_678u64,
+                }], "nextCursor": null}),
             )
             .mount(server)
             .await;
@@ -6964,7 +6978,9 @@ mod tests {
     }
 
     /// An owner holding more names than one `dotcell-names` page must be read
-    /// to the end before its list is compared with its counter.
+    /// to the end before its list is compared with its counter. The address
+    /// endpoint returns `identityId`, `label`, `name`, and `expiredAt`, not the
+    /// collection items' `nftId` and `isLive` fields.
     #[test]
     fn dotcell_owner_index_pages_through_an_owners_names() {
         const NAMES: usize = 101;
@@ -6973,9 +6989,10 @@ mod tests {
         let address = "ckb1qfixturebigowner";
         let item = |i: usize| {
             json!({
-                "nftId": format!("0x{i:040x}"),
+                "identityId": format!("0x{i:040x}"),
+                "label": format!("name{i}"),
                 "name": format!("name{i}.cell"),
-                "isLive": true,
+                "expiredAt": 1_821_507_678u64,
             })
         };
         let first_page: Vec<_> = (0..100).map(item).collect();
@@ -7033,5 +7050,44 @@ mod tests {
             "an owner's second page of names must be read: {:?}",
             result.findings
         );
+    }
+
+    #[test]
+    fn dotcell_owner_index_rejects_a_wrong_count_or_malformed_name() {
+        for (data, expected_status) in [
+            (json!([]), CheckStatus::Fail),
+            (json!([{"name": "support.cell"}]), CheckStatus::Error),
+        ] {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            mount_dotcell_single_name(&runtime, &server);
+            runtime.block_on(async {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/addresses/ckb1qfixtureowner/dotcell-names"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "data": data,
+                        "nextCursor": null,
+                    })))
+                    .with_priority(1)
+                    .mount(&server)
+                    .await;
+            });
+
+            let check = registered_check("dotcell_owner_index_consistency");
+            let completed = execute_check(
+                check.as_ref(),
+                &dotcell_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            assert_eq!(completed.status, expected_status);
+            if expected_status == CheckStatus::Fail {
+                let result = completed.result.unwrap();
+                assert!(
+                    result.findings[0].details[0].contains("address lists 0 names, counter says 1")
+                );
+            } else {
+                assert!(completed.status_reason.unwrap().contains("identityId"));
+            }
+        }
     }
 }

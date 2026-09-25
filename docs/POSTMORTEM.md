@@ -3382,4 +3382,38 @@ partition whose second half has no consumer is a silent drop.
 
 ---
 
-_Last updated: 2026-09-24_
+### VERIFY-004: The owner-name check decoded collection items, and the history budget did not fit mainnet
+
+**Date**: 2026-09-25
+
+**Symptom**: Sampling verification ended with 61 passes, an error in
+`dotcell_owner_index_consistency` (`missing field nftId`), and an inconclusive
+`entity_capacity_history_matches_chain` after its first token exhausted the 10k RPC budget.
+
+**Root causes**: The owner-name check reused the collection-item response type (`nftId`,
+`isLive`), but `/addresses/{addr}/dotcell-names` returns `identityId`, `label`, `name`, and
+`expiredAt`. Its mocks repeated the same wrong shape. The history check's initial run-wide
+budgets (200k records / 10k RPC requests) had never been calibrated against the full default
+mainnet selection; even the first incident token needed more than 10k requests.
+
+**Fix**: Decode owner names with their endpoint's own required identity field. Correct both
+single-name and multi-page fixtures and retain errors for malformed rows and failures for count
+mismatches. Raise the default history allowance to 2M records / 1M RPC requests, keeping the
+600-second limit, the same eight candidates, exhaustive exact comparisons, and inconclusive
+status on exhaustion. No store write path changes; no re-sync required.
+
+**Validation**: The corrected owner-name pagination fixture reproduced the exact decode error
+before the fix. A 5,001-block history reproduced the default RPC exhaustion. The unchanged
+chain oracle, rerun on mainnet at anchor 20,553,546 with explicit larger limits, verified all
+eight entities with zero differences: 1,418,527 records, 566,896 RPC requests, 267 seconds.
+A budget regression preserves coverage of those measured totals.
+
+**Lesson**: Mock each endpoint's actual wire contract, and measure exhaustive verification
+against its documented default selection before calling a budget sufficient.
+
+**Files**: `crates/indexer/src/verify/{api_checks,entity_history}.rs`,
+`crates/indexer/tests/verify_entity_statistics.rs`, `docs/TESTING.md`
+
+---
+
+_Last updated: 2026-09-25_

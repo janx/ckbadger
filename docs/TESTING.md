@@ -86,8 +86,8 @@ OPTIONS:
   --seed <N>               Deterministic sampling seed [default: 42]
   --tolerance <F>          Max explorer deviation, fraction [default: 0.001]
   --entity <KIND:ID>       Verify this entity exactly (repeatable), e.g. token:0x…
-  --entity-max-rpc <N>     RPC requests the chain-derived checks may spend, per network [default: 10000]
-  --entity-max-records <N> History records they may fold in, per network [default: 200000]
+  --entity-max-rpc <N>     RPC requests the chain-derived checks may spend, per network [default: 1000000]
+  --entity-max-records <N> History records they may fold in, per network [default: 2000000]
   --entity-budget-seconds <N>  Wall-clock seconds they may spend, per network [default: 600]
   --api-url <URL>          Override the ckbadger API base URL
   --rpc-url <URL>          Override the CKB RPC URL
@@ -229,13 +229,18 @@ from the chain and compares it against the index, with **zero tolerance** —
   read from its cursor envelope). A selector of a family this delivery does not
   cover is listed in the manifest as uncovered and makes the run
   `inconclusive`, whatever the other selectors found. Budgets (16 entities,
-  200k records, 10k RPC requests, 600 s) are initial values, not proven
-  defaults; exhausting one is `inconclusive`. Raise them with
+  2M records, 1M RPC requests, 600 s) apply to the whole run per network;
+  exhausting one is `inconclusive`. The original 10k-request allowance could
+  not finish even the first mainnet incident selector. Raise the limits with
   `--entity-max-rpc`, `--entity-max-records` and `--entity-budget-seconds`
   rather than narrowing scope until a run fits — the manifest records both the
   budget and the spend. Every node call is charged, source qualification and
   the post-walk anchor re-verification included, so the manifest's
   `rpcRequests` is exactly the number of requests the node received.
+  Calibration on mainnet at anchor 20,553,546 (2026-09-25): all eight default
+  candidates matched across 1,418,527 records and 566,896 RPC requests in 267 s.
+  The limits leave headroom over this measurement; larger future histories or
+  slower nodes may still require an explicit increase.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
   fully covered and why.

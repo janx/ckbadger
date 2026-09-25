@@ -37,11 +37,12 @@ use super::source::{
 };
 use crate::rpc::{CkbRpcClient, IndexerIoType, IndexerSearchKey, IndexerTxRecord, Script};
 
-/// Initial independent budget (V3). Not a proven default: it is measured and
-/// revised per network, and exhausting it is `Inconclusive`, never a pass.
+/// Independent run-wide budget. The original 10k-request allowance could not
+/// finish even the first mainnet incident token. Keep enough room for the full
+/// default candidate set; exhaustion is still `Inconclusive`, never a pass.
 pub const MAX_ENTITIES_PER_RUN: usize = 16;
-pub const MAX_HISTORY_RECORDS: usize = 200_000;
-pub const MAX_RPC_REQUESTS: usize = 10_000;
+pub const MAX_HISTORY_RECORDS: usize = 2_000_000;
+pub const MAX_RPC_REQUESTS: usize = 1_000_000;
 pub const MAX_WALL_SECONDS: u64 = 600;
 const PAGE_LIMIT: u32 = 1_000;
 const MAX_PAGES: usize = 10_000;
@@ -1835,7 +1836,7 @@ mod tests {
     /// editing a constant forces the alternative the plan forbids — narrowing
     /// scope until the run finishes.
     #[test]
-    fn the_budget_is_explicit_and_defaults_to_the_v3_initial_values() {
+    fn the_budget_is_explicit_and_defaults_to_the_published_limits() {
         let default = EntityBudget::default();
         assert_eq!(default.max_rpc_requests, MAX_RPC_REQUESTS);
         assert_eq!(default.max_records, MAX_HISTORY_RECORDS);
@@ -1849,6 +1850,21 @@ mod tests {
         let budget = raised.to_run_budget();
         assert_eq!(budget.max_rpc_requests(), 400_000);
         assert_eq!(budget.max_records(), 1_000_000);
+    }
+
+    /// Mainnet's unchanged eight-candidate selection at anchor 20,553,546
+    /// (2026-09-25) completed in 267 s. Neither its records nor its RPC calls
+    /// fitted the original defaults. Keep that measured workload covered.
+    #[test]
+    fn default_budget_covers_the_measured_mainnet_candidate_set() {
+        let defaults = EntityBudget::default();
+        let mut budget = defaults.to_run_budget();
+        budget.charge_records(1_418_527);
+        for _ in 0..566_896 {
+            budget.charge_request();
+        }
+        assert_eq!(budget.exhausted(), None);
+        assert!(defaults.wall_seconds > 267);
     }
 
     /// `ExportAnchor` mirrors the API's `Anchor`, whose `blockNumber` is `i64`.
