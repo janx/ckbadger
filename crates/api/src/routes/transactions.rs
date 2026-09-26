@@ -3,6 +3,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
+use ckb_store_reader::RpcTransactionView;
 use ckb_types::packed;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ use crate::response::{
     default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse, ScriptResponse,
 };
+use crate::routes::identities::{dotcell_record_response, DotCellRecordResponse};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
@@ -34,6 +36,7 @@ type TxIoBundle = (
     u128,
     Vec<String>,
     bool,
+    Vec<DotCellNameWitnessResponse>,
 );
 
 #[derive(Debug, Clone)]
@@ -47,6 +50,7 @@ struct PendingTxIoBundle {
     fee: u128,
     witnesses: Vec<String>,
     witnesses_available: bool,
+    dotcell_names: Vec<DotCellNameWitnessResponse>,
 }
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 
@@ -553,6 +557,103 @@ pub struct TransactionDetailResponse {
     pub outputs: Vec<TransactionOutputResponse>,
     pub witnesses: Vec<String>,
     pub witnesses_available: bool,
+    /// The `.cell` names this transaction creates, each with the records
+    /// payload decoded from the witness at its own output index. Absent when
+    /// the transaction creates none (or its witnesses are unavailable).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dotcell_names: Vec<DotCellNameWitnessResponse>,
+}
+
+/// A `.cell` name created by a transaction, with the records its creating
+/// witness carries (spec §1.3: `WitnessArgs.output_type` at the name cell's
+/// own output index, hash-verified against `data[1..33]`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DotCellNameWitnessResponse {
+    pub output_index: usize,
+    pub label: String,
+    pub name: String,
+    pub identity_id: String,
+    pub records_hash: String,
+    pub records: Vec<DotCellRecordResponse>,
+}
+
+/// The same string-encoded transaction, in the indexer's RPC type: the direct
+/// reader and the node lookup mirror the indexer's `rpc::TransactionView`
+/// field for field, and the `.cell` parser takes the indexer's.
+fn indexer_tx_view(tx: &RpcTransactionView) -> ckbadger_indexer::rpc::TransactionView {
+    use ckbadger_indexer::rpc::{CellDep, CellInput, CellOutput, OutPoint, Script};
+
+    let out_point = |p: &ckb_store_reader::RpcOutPoint| OutPoint {
+        tx_hash: p.tx_hash.clone(),
+        index: p.index.clone(),
+    };
+    let script = |s: &ckb_store_reader::RpcScript| Script {
+        code_hash: s.code_hash.clone(),
+        hash_type: s.hash_type.clone(),
+        args: s.args.clone(),
+    };
+    ckbadger_indexer::rpc::TransactionView {
+        hash: tx.hash.clone(),
+        version: tx.version.clone(),
+        cell_deps: tx
+            .cell_deps
+            .iter()
+            .map(|dep| CellDep {
+                out_point: out_point(&dep.out_point),
+                dep_type: dep.dep_type.clone(),
+            })
+            .collect(),
+        header_deps: tx.header_deps.clone(),
+        inputs: tx
+            .inputs
+            .iter()
+            .map(|input| CellInput {
+                since: input.since.clone(),
+                previous_output: out_point(&input.previous_output),
+            })
+            .collect(),
+        outputs: tx
+            .outputs
+            .iter()
+            .map(|output| CellOutput {
+                capacity: output.capacity.clone(),
+                lock: script(&output.lock),
+                type_: output.type_.as_ref().map(script),
+            })
+            .collect(),
+        outputs_data: tx.outputs_data.clone(),
+        witnesses: tx.witnesses.clone(),
+    }
+}
+
+/// The `.cell` names a transaction creates, decoded by the exact function the
+/// live indexer runs (`DotCellParser::parse_name_cells_with_output_indices`).
+///
+/// A name cell whose own-index witness is missing or does not hash to the
+/// cell's records hash is an error, not an empty list: its type script was
+/// verified on chain (or by the pool), so the mismatch is a broken invariant.
+/// The ring root is verified the same way but not listed: it is protocol
+/// infrastructure, not a name with an identity.
+fn dotcell_names_for_tx(
+    tx: &RpcTransactionView,
+) -> Result<Vec<DotCellNameWitnessResponse>, ApiRouteError> {
+    let names = ckbadger_indexer::parser::DotCellParser::parse_name_cells_with_output_indices(
+        &indexer_tx_view(tx),
+    )
+    .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    Ok(names
+        .into_iter()
+        .filter(|(_, name, _)| !name.is_root())
+        .map(|(output_index, name, records)| DotCellNameWitnessResponse {
+            output_index,
+            name: format!("{}.cell", name.label),
+            identity_id: format!("0x{}", hex::encode(name.id)),
+            records_hash: format!("0x{}", hex::encode(name.records_hash)),
+            records: records.iter().map(dotcell_record_response).collect(),
+            label: name.label,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -825,6 +926,7 @@ async fn get_transaction_detail(
             });
 
         let io = build_inputs_outputs_from_pool_tx(
+            rpc_tx,
             &resolved,
             &state.ckb_network,
             tx_lookup.block_number,
@@ -880,6 +982,7 @@ async fn get_transaction_detail(
             outputs: io.outputs,
             witnesses: io.witnesses,
             witnesses_available: io.witnesses_available,
+            dotcell_names: io.dotcell_names,
         });
     };
 
@@ -941,6 +1044,7 @@ async fn get_transaction_detail(
         outputs_occupied_capacity,
         witnesses,
         witnesses_available,
+        dotcell_names,
     ) = if let Some(ref ckb_store) = state.ckb_store {
         if hash_bytes.len() == 32 {
             let mut tx_hash_arr = [0u8; 32];
@@ -1009,11 +1113,12 @@ async fn get_transaction_detail(
         outputs,
         witnesses,
         witnesses_available,
+        dotcell_names,
     })
 }
 
 fn empty_inputs_outputs() -> TxIoBundle {
-    (vec![], vec![], 0, 0, 0, 0, vec![], false)
+    (vec![], vec![], 0, 0, 0, 0, vec![], false, vec![])
 }
 
 /// Build the `/tx/{hash}` response's inputs and outputs from a transaction the
@@ -1030,6 +1135,7 @@ fn empty_inputs_outputs() -> TxIoBundle {
 /// transaction and `None` for one still in the pool: only block 0's cells can
 /// be the genesis burn cell.
 fn build_inputs_outputs_from_pool_tx(
+    rpc_tx: &RpcTransactionView,
     resolved: &crate::pool::ResolvedPoolTx,
     network: &str,
     block_number: Option<i64>,
@@ -1258,6 +1364,7 @@ fn build_inputs_outputs_from_pool_tx(
         fee,
         witnesses: resolved.witnesses.clone(),
         witnesses_available: true,
+        dotcell_names: dotcell_names_for_tx(rpc_tx)?,
     })
 }
 
@@ -1275,6 +1382,7 @@ fn build_inputs_outputs_from_ckb(
 ) -> Result<TxIoBundle, ApiRouteError> {
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
     let witnesses = rpc_tx.witnesses.clone();
+    let dotcell_names = dotcell_names_for_tx(&rpc_tx)?;
 
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
@@ -1523,6 +1631,7 @@ fn build_inputs_outputs_from_ckb(
         outputs_occupied_capacity,
         witnesses,
         true,
+        dotcell_names,
     ))
 }
 
@@ -2410,6 +2519,7 @@ mod tests {
             outputs: vec![],
             witnesses: vec!["0x".to_string(), "0x1234".to_string()],
             witnesses_available: true,
+            dotcell_names: vec![],
         };
 
         let json = serde_json::to_value(&detail).unwrap();
@@ -2567,5 +2677,162 @@ mod tests {
         assert_eq!(derive_cycles_status(Some(3_380_228), false), None);
         // Cellbase transactions run no scripts; consensus counts them as 0.
         assert_eq!(derive_cycles_status(Some(0), true), None);
+    }
+
+    // ── `.cell` records on the tx page ───────────────────────────────────
+    // Chain data copied from `crates/indexer/src/parser/dotcell_fixtures.rs`
+    // (`T2_REGISTER_JOAOM`, testnet tx 0x89191ea4…386b at block 22471181;
+    // `M1_RING_ROOT`, mainnet tx 0x219d1540…15ed), node-verified 2026-09-24.
+    // That module is `#[cfg(test)]` in the indexer crate and not reachable here.
+
+    const T2_TX_HASH: &str = "0x89191ea4bae150f82521140968fae918040e724f647eadec02e02077d748386b";
+    /// `ACCOUNT_LOCK_CODE_HASH_TESTNET`.
+    const T2_ACCOUNT_LOCK: &str =
+        "0xede6a3d80717c3d7927eea678d095abbe68dbb08ca6fdbbbdd9de906455a4afd";
+    /// `ACCOUNT_TYPE_CODE_HASH_TESTNET`.
+    const T2_ACCOUNT_TYPE: &str =
+        "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9";
+    /// `NAMESPACE_ARGS_TESTNET`.
+    const T2_NAMESPACE_ARGS: &str = "0x2510c78057479c9b023fe6e98ce43979e92a1353";
+    /// `T2_OUT0_DATA`: `maria.cell`, whose records are in witness 0.
+    const T2_OUT0_DATA: &str = "0x033b339494bd0e29b77c0dca959bc4d6d87e4ac232bd7df9c1335163fe85f5eb18241e3586a41eb75dd6d68bf555acea74d6649ed529da856c0058e6c6f873af57732daae458be3c56c2c847b14158e6c6f873af57732daae458be3c56c2c847b1416d61726961";
+    /// `T2_WITNESS_0`: WitnessArgs whose output_type is maria's six records.
+    const T2_WITNESS_0: &str = "0xc901000010000000100000001c000000080000007265676973746572a901000006000b616464726573732e333039006400636b7431717266727763646e76737373776477706e337339763866703837656d617433303663746a77736d336e6d6c6b6a673871797a61326371677171397837357a75346c37676c64363036723665796430306d346c7a79337a6b786b71346e79777a752c01000009616464726573732e30003e00746231703237767464306a776d3235746478336d36746763757168346c6578756c3076736c7572683079637a633766393272667030736b737264737936742c0100000a616464726573732e3630002a003078656646324634436132444536656444363364416665343833383536463134453639346437333144442c0100000d70726f66696c652e656d61696c0011006d61726961406578616d706c652e636f6d2c0100000d70726f66696c652e70686f6e650010002b3335312039313220333435203637382c0100000a647765622e636b626673004800636b6266733a2f2f346266306362646261633066386538656231616664646534333963336263306234333731623366336165636538633730343866656630366566366563376231302c010000";
+    /// `M1_OUT0_DATA`: the mainnet ring root (empty label).
+    const M1_RING_ROOT_DATA: &str = "0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    /// `M1_RING_ROOT.witnesses[0]`: a secp witness whose output_type is the
+    /// empty records payload the root's records hash commits to.
+    const M1_WITNESS_0: &str = "0x5b00000010000000550000005500000041000000fee51268d7edab7259e6f1fb460d2d523859de3e132f0910daa784ae288bc6295b666e226cca500c490e193bf5a412d68f3b5d1dbe9c7695c5934d2954420db500020000000000";
+
+    fn rpc_script(code_hash: &str, args: &str) -> ckb_store_reader::RpcScript {
+        ckb_store_reader::RpcScript {
+            code_hash: code_hash.to_string(),
+            hash_type: "type".to_string(),
+            args: args.to_string(),
+        }
+    }
+
+    fn rpc_tx(
+        outputs: Vec<(ckb_store_reader::RpcCellOutput, &str)>,
+        witnesses: &[&str],
+    ) -> RpcTransactionView {
+        RpcTransactionView {
+            hash: T2_TX_HASH.to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs_data: outputs.iter().map(|(_, data)| data.to_string()).collect(),
+            outputs: outputs.into_iter().map(|(output, _)| output).collect(),
+            witnesses: witnesses.iter().map(|w| w.to_string()).collect(),
+        }
+    }
+
+    fn name_output(
+        lock: &str,
+        type_code_hash: &str,
+        args: &str,
+    ) -> ckb_store_reader::RpcCellOutput {
+        ckb_store_reader::RpcCellOutput {
+            capacity: "0x59682f000".to_string(),
+            lock: rpc_script(lock, "0x"),
+            type_: Some(rpc_script(type_code_hash, args)),
+        }
+    }
+
+    #[test]
+    fn test_dotcell_names_from_rpc_tx() {
+        let tx = rpc_tx(
+            vec![(
+                name_output(T2_ACCOUNT_LOCK, T2_ACCOUNT_TYPE, T2_NAMESPACE_ARGS),
+                T2_OUT0_DATA,
+            )],
+            &[T2_WITNESS_0],
+        );
+
+        let names = dotcell_names_for_tx(&tx).expect("maria's records decode");
+        assert_eq!(names.len(), 1);
+        let maria = &names[0];
+        assert_eq!(maria.output_index, 0);
+        assert_eq!(maria.label, "maria");
+        assert_eq!(maria.name, "maria.cell");
+        // blake2b("maria")[..20] under CKB's default personalization.
+        assert_eq!(
+            maria.identity_id,
+            "0x2224948f63975a7a0741139cd5d2a45b9fb02c03"
+        );
+        // The hash the cell carries in data[1..33].
+        assert_eq!(maria.records_hash, format!("0x{}", &T2_OUT0_DATA[4..68]));
+        assert_eq!(maria.records.len(), 6);
+        assert_eq!(maria.records[0].key, "address.309");
+        let decoded = maria.records[0]
+            .decoded_address
+            .as_ref()
+            .expect("address.309 is a CKB address");
+        assert!(decoded.address.starts_with("ckt1"), "{}", decoded.address);
+        assert_eq!(maria.records[5].key, "dweb.ckbfs");
+        assert!(maria.records[5]
+            .value_utf8
+            .as_deref()
+            .is_some_and(|v| v.starts_with("ckbfs://")));
+    }
+
+    #[test]
+    fn test_dotcell_names_hash_mismatch_is_an_error() {
+        // One payload byte changed (the last record's ttl): the payload no
+        // longer hashes to what the cell commits to.
+        let tampered = format!("{}1", &T2_WITNESS_0[..T2_WITNESS_0.len() - 1]);
+        let tx = rpc_tx(
+            vec![(
+                name_output(T2_ACCOUNT_LOCK, T2_ACCOUNT_TYPE, T2_NAMESPACE_ARGS),
+                T2_OUT0_DATA,
+            )],
+            &[&tampered],
+        );
+
+        let err = dotcell_names_for_tx(&tx).unwrap_err();
+        let message = err.1 .0.message;
+        assert!(message.contains("records hash mismatch"), "{message}");
+        assert!(message.contains("output_index=0"), "{message}");
+    }
+
+    #[test]
+    fn test_dotcell_names_empty_for_plain_tx() {
+        let plain = ckb_store_reader::RpcCellOutput {
+            capacity: "0x2540be400".to_string(),
+            lock: ckb_store_reader::RpcScript {
+                code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                    .to_string(),
+                hash_type: "type".to_string(),
+                args: "0x23870b08ec5f6260c50a63646170d61e26d155c7".to_string(),
+            },
+            type_: None,
+        };
+        let tx = rpc_tx(vec![(plain, "0x")], &[]);
+
+        assert!(dotcell_names_for_tx(&tx).unwrap().is_empty());
+    }
+
+    /// The ring root is protocol infrastructure, not a name: its (empty)
+    /// records payload is still verified against its hash, but it is not
+    /// listed as a name with an identity.
+    #[test]
+    fn test_dotcell_names_skip_the_ring_root_after_verifying_it() {
+        let root = name_output(
+            "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab",
+            "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54",
+            "0xb4f4302965b7d6421481a520ee7eb5971a5e808c",
+        );
+        let tx = rpc_tx(vec![(root.clone(), M1_RING_ROOT_DATA)], &[M1_WITNESS_0]);
+        assert!(dotcell_names_for_tx(&tx).unwrap().is_empty());
+
+        // A root with no witness at its index is still an error.
+        let tx = rpc_tx(vec![(root, M1_RING_ROOT_DATA)], &[]);
+        let err = dotcell_names_for_tx(&tx).unwrap_err();
+        assert!(
+            err.1 .0.message.contains("output_index=0"),
+            "{}",
+            err.1 .0.message
+        );
     }
 }
