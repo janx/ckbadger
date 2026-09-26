@@ -169,6 +169,64 @@ const mockCellWithPartialParsedData = {
   },
 };
 
+/** Mainnet `support.cell` (M2_OUT1_DATA) as the cell endpoint decodes it. */
+const mockDotCellNameCell = {
+  ...mockCellWithoutDao,
+  capacity: '24000000000',
+  dataSize: 105,
+  lock: {
+    codeHash: '0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab',
+    hashType: 'type',
+    args: '0x',
+  },
+  type: {
+    codeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
+    hashType: 'type',
+    args: '0xb4f4302965b7d6421481a520ee7eb5971a5e808c',
+  },
+  typeScriptHash: '0x6161616161616161616161616161616161616161616161616161616161616161',
+  protocolScript: { lock: 'dotcell-account-lock', type: 'dotcell-account' },
+  data: '0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e265b5fe7e7070b506f69bd8cabf9e4272111066455e00926c0057d926a44d83fc13b21ce037b1e31f4223e3c86757d926a44d83fc13b21ce037b1e31f4223e3c867737570706f7274',
+  dataAnalysis: {
+    deterministic: {
+      kind: 'dotcell_name',
+      summary:
+        "support.cell name cell (layout v3); owner 0x57d926a44d83fc13b21ce037b1e31f4223e3c867; expires 2027-09-21T06:21:18+00:00; records are in the creating transaction's witness at this output index",
+      segments: [
+        {
+          label: 'layout_version',
+          start: 0,
+          end: 1,
+          meaning: 'Layout version (u8)',
+          humanValue: '3',
+        },
+        {
+          label: 'expired_at',
+          start: 53,
+          end: 58,
+          meaning: 'Expiry, unix seconds (u40 little-endian)',
+          humanValue: '2027-09-21T06:21:18+00:00 (unix 1821507678)',
+        },
+        {
+          label: 'owner_hash20',
+          start: 58,
+          end: 78,
+          meaning: "Owner: first 20 bytes of the owner's lock script hash",
+          humanValue: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+        },
+        {
+          label: 'label',
+          start: 98,
+          end: 105,
+          meaning: 'Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]',
+          humanValue: 'support.cell · id 0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+        },
+      ],
+    },
+    heuristicGuesses: [],
+  },
+};
+
 const UNKNOWN_CODE_HASH = '0x709f3fda1234567890abcdef1234567890abcdef1234567890abcdefcce08649';
 const DEPLOYMENT_TYPE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const DEPLOYMENT_DATA_HASH = '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649';
@@ -411,6 +469,18 @@ describe('CellDetailPage', () => {
       )
     ).toBeTruthy();
     expect(screen.queryByText(/Deployment refs are shown as/i)).not.toBeInTheDocument();
+  });
+
+  it('links a .cell name cell to its identity page from the type script panel', async () => {
+    mockGetCell.mockResolvedValue(mockDotCellNameCell);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    const badge = await screen.findByRole('link', { name: 'support.cell' });
+    expect(badge).toHaveAttribute('href', '/mainnet/identities/dotcell/support');
+    expect(screen.getByText('owner 0x57d9...c867 · expires 2027-09-21')).toBeInTheDocument();
+    // No protocol block: the badge and the summary are the whole Layer-1 view.
+    expect(screen.queryByText('Nervos DAO')).not.toBeInTheDocument();
   });
 
   it('renders withdrawing DAO cell status correctly', async () => {
