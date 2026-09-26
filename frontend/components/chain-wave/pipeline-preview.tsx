@@ -59,7 +59,8 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
 
   return (
     <section className="overflow-visible">
-      <div className="mb-2 px-4">
+      {/* Heading aligns with the site-wide container used by the header, footer and page rows. */}
+      <div className="container mx-auto mb-2 px-4">
         <h2 className="text-text-bright text-base font-semibold sm:text-lg">
           Transaction Pipeline
         </h2>
@@ -80,16 +81,14 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
         </div>
       </div>
 
-      {/* Break out of container to full viewport width */}
-      <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen">
-        <MempoolBlocks
-          latestBlocks={initialBlocks}
-          chrome="flat"
-          showHeader={false}
-          showTxnLens
-          legendMode="none"
-        />
-      </div>
+      {/* The section is an ordinary full-width block; the track needs no viewport-unit breakout. */}
+      <MempoolBlocks
+        latestBlocks={initialBlocks}
+        chrome="flat"
+        showHeader={false}
+        showTxnLens
+        legendMode="none"
+      />
     </section>
   );
 }

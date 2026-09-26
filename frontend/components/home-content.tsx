@@ -57,58 +57,62 @@ export function HomeContent({ initialData }: HomeContentProps) {
   });
 
   return (
-    <main className="container mx-auto px-4 py-4 sm:py-6">
-      {stats && <SyncBanner stats={stats} />}
+    <main className="py-4 sm:py-6">
+      <div className="container mx-auto px-4">
+        {stats && <SyncBanner stats={stats} />}
 
-      {/* Row 1: Network Charts (Latest Block + Hash Rate) */}
-      <div ref={heroRef} className="mt-3">
-        <HomeCharts
-          stats={stats}
-          isLoading={statsLoading}
-          initialBlockTimeChart={initialData.blockTimeChart}
-          initialHashRateChart={initialData.hashRateChart}
-        />
-      </div>
-
-      {/* Row 2: Epoch + Tx Stats */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <EpochProgress
-          epochNumber={parseEpochInfo(stats).epochNumber}
-          epochIndex={parseEpochInfo(stats).epochIndex}
-          epochLength={parseEpochInfo(stats).epochLength}
-          latestBlock={stats?.latestBlock ?? 0}
-          estimatedTimeRemaining={stats?.estimatedEpochTime}
-        />
-        <MiniStatsCards />
-      </div>
-
-      {/* Row 3: CKBytes */}
-      <div className="mt-4">
-        <CKBytesCard stats={stats ?? null} />
-      </div>
-
-      {/* Row 4: Knowledge Size (left) | Nervos DAO (right) */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <div className="flex flex-col gap-4">
-          <KnowledgeSizeTrend />
-          <ActivityBarChartCard />
+        {/* Row 1: Network Charts (Latest Block + Hash Rate) */}
+        <div ref={heroRef} className="mt-3">
+          <HomeCharts
+            stats={stats}
+            isLoading={statsLoading}
+            initialBlockTimeChart={initialData.blockTimeChart}
+            initialHashRateChart={initialData.hashRateChart}
+          />
         </div>
-        <DaoOverview />
+
+        {/* Row 2: Epoch + Tx Stats */}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <EpochProgress
+            epochNumber={parseEpochInfo(stats).epochNumber}
+            epochIndex={parseEpochInfo(stats).epochIndex}
+            epochLength={parseEpochInfo(stats).epochLength}
+            latestBlock={stats?.latestBlock ?? 0}
+            estimatedTimeRemaining={stats?.estimatedEpochTime}
+          />
+          <MiniStatsCards />
+        </div>
+
+        {/* Row 3: CKBytes */}
+        <div className="mt-4">
+          <CKBytesCard stats={stats ?? null} />
+        </div>
+
+        {/* Row 4: Knowledge Size (left) | Nervos DAO (right) */}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div className="flex flex-col gap-4">
+            <KnowledgeSizeTrend />
+            <ActivityBarChartCard />
+          </div>
+          <DaoOverview />
+        </div>
+
+        {/* Row 5: Latest Activities | Activity Card */}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <LatestActivities isRealtime={isConnected} />
+          <ActivityCard isRealtime={isConnected} />
+        </div>
       </div>
 
-      {/* Row 5: Latest Activities | Activity Card */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <LatestActivities isRealtime={isConnected} />
-        <ActivityCard isRealtime={isConnected} />
-      </div>
-
-      {/* Row 6: Transaction Pipeline */}
+      {/* Row 6: Transaction Pipeline. A plain block sibling of the container rows spans the page
+          width on its own; sizing it in viewport units (w-screen, 50vw margins) overflows by the
+          vertical scrollbar width and adds a horizontal scrollbar. */}
       <div className="mt-4">
         <PipelinePreview initialBlocks={initialData.blocks} />
       </div>
 
       {/* Row 7: Latest Blocks & Transactions */}
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+      <div className="container mx-auto mt-5 grid gap-4 px-4 lg:grid-cols-2">
         <LatestBlocks isRealtime={isConnected} initialBlocks={initialData.blocks} />
         <LatestTransactions
           isRealtime={isConnected}
