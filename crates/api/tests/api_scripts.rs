@@ -2803,3 +2803,184 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
         2
     );
 }
+
+async fn post_script_lookup(app: axum::Router, code_hashes: &[&str]) -> serde_json::Value {
+    let body = serde_json::json!({ "codeHashes": code_hashes }).to_string();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&body).unwrap()
+}
+
+/// The lookup carries the queried reference's own label description, so the
+/// cell page can explain a protocol lock (e.g. the Cells Account Lock's empty
+/// args) without a second request. A reference without one answers `null`,
+/// present in the response, not an absent key.
+#[tokio::test]
+async fn test_script_lookup_serves_the_references_description() {
+    let store = test_store();
+
+    let version_hash = vec![0x7a; 32];
+    let described = vec![0x7b; 32];
+    let undescribed = vec![0x7c; 32];
+    const DESCRIPTION: &str = "Lock a .cell name sits under. Always-success by design: \
+        authority is decided by the Cells Account type script from the owner and manager \
+        hashes in the cell.";
+
+    store
+        .put_script_version(
+            &version_hash,
+            &ScriptVersionInfo {
+                version_hash: version_hash.clone(),
+                name: Some("Cells Account Lock".to_string()),
+                canonical_reference_hash: Some(described.clone()),
+                canonical_hash_type: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for reference in [&described, &undescribed] {
+        store
+            .put_script_reference_to_version_direct(1, reference, &version_hash)
+            .unwrap();
+    }
+    store
+        .put_script_info_direct(
+            &described,
+            &ScriptInfo {
+                code_hash: described.clone(),
+                hash_type: 1,
+                name: Some("Cells Account Lock".to_string()),
+                description: Some(DESCRIPTION.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &undescribed,
+            &ScriptInfo {
+                code_hash: undescribed.clone(),
+                hash_type: 1,
+                name: Some("Cells Account Lock".to_string()),
+                description: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (tx_hash, type_hash, block) in [
+        (vec![0xb1; 32], &described, 100i64),
+        (vec![0xb2; 32], &undescribed, 200i64),
+    ] {
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(type_hash.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 64,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(version_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_type(type_hash, block, &tx_hash, 0);
+        batch.put_cell_by_data_hash(&version_hash, block, &tx_hash, 0);
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let described_hex = format!("0x{}", hex::encode(&described));
+    let undescribed_hex = format!("0x{}", hex::encode(&undescribed));
+    let json = post_script_lookup(app, &[&described_hex, &undescribed_hex]).await;
+
+    assert_eq!(json[&described_hex]["resolutionState"], "resolved");
+    assert_eq!(json[&described_hex]["description"], DESCRIPTION);
+    let undescribed_entry = json[&undescribed_hex]
+        .as_object()
+        .unwrap_or_else(|| panic!("lookup entry missing: {json}"));
+    assert_eq!(
+        undescribed_entry.get("description"),
+        Some(&serde_json::Value::Null),
+        "a reference without a description answers null: {json}"
+    );
+}
+
+/// The ambiguous branch describes the queried reference too.
+#[tokio::test]
+async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
+    let store = test_store();
+
+    let reference_hash = vec![0x6a; 32];
+    let version_a = vec![0x6b; 32];
+    let version_b = vec![0x6c; 32];
+
+    store
+        .put_script_info_direct(
+            &reference_hash,
+            &ScriptInfo {
+                code_hash: reference_hash.clone(),
+                hash_type: 1,
+                name: Some("Described Lock".to_string()),
+                description: Some("What this lock decides.".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (tx_hash, data_hash, block) in [
+        (vec![0xc1; 32], &version_a, 10i64),
+        (vec![0xc2; 32], &version_b, 11i64),
+    ] {
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 64,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(data_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_type(&reference_hash, block, &tx_hash, 0);
+        batch.put_cell_by_data_hash(data_hash, block, &tx_hash, 0);
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+    let json = post_script_lookup(app, &[&reference_hash_hex]).await;
+
+    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
+    assert_eq!(
+        json[&reference_hash_hex]["description"],
+        "What this lock decides."
+    );
+}

@@ -813,6 +813,16 @@ export default function CellDetailPage() {
               </TerminalPanelHeader>
               <TerminalPanelContent>
                 <ScriptView script={cell.lock ?? null} collapsible={false} />
+                {/* A registry protocol lock says what it decides: its args alone
+                    (e.g. the Cells Account Lock's empty `0x`) do not. */}
+                {cell.protocolScript?.lock && lockScriptInfo?.description && (
+                  <div
+                    data-testid="lock-script-description"
+                    className="border-base-border/50 mt-3 border-t pt-3"
+                  >
+                    <span className="text-text text-sm">{lockScriptInfo.description}</span>
+                  </div>
+                )}
               </TerminalPanelContent>
             </TerminalPanel>
             <TerminalPanel>

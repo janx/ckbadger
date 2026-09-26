@@ -3,8 +3,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Cell, Token } from '@/lib/api';
+import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { formatNumber } from '@/lib/utils';
+import { formatNumber, truncateHash } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
 // Detection
@@ -18,14 +19,20 @@ type InventoryItemType =
   | 'mnft_issuer'
   | 'udt'
   | 'dotbit'
-  | 'did_ckb';
+  | 'did_ckb'
+  | 'dotcell'
+  | 'dotcell_ring';
 
 interface InventoryContext {
   itemType: InventoryItemType;
   itemId: string;
 }
 
-const DID_CKB_CODE_HASH = '0x079bb8c1dfb249f60d932f4b1a60fa5cb2a36af3653ac09464f262e2f3f682a9';
+// Registry protocol slugs the API serves as `cell.protocolScript` — the only
+// way this module recognises a protocol that has no deterministic decode.
+// No code hashes here: they differ per network and the registry owns them.
+const DID_CKB_SLUG = 'did-ckb';
+const DOTCELL_ACCOUNT_SLUG = 'dotcell-account';
 
 const DETERMINISTIC_KIND_MAP: Record<string, InventoryItemType> = {
   spore_cell: 'spore',
@@ -35,9 +42,40 @@ const DETERMINISTIC_KIND_MAP: Record<string, InventoryItemType> = {
   mnft_issuer_cell: 'mnft_issuer',
   udt_amount: 'udt',
   dotbit_account: 'dotbit',
+  dotcell_name: 'dotcell',
+  dotcell_ring_root: 'dotcell_ring',
 };
 
 const DAO_KINDS = new Set(['dao_deposit_cell', 'dao_withdraw_request_cell']);
+
+/**
+ * The `.cell` name from the decoded `label` segment, whose value reads
+ * `support.cell · id 0x…` — the part before the first ` · `. `null` when the
+ * cell carries no decoded label (no direct cell-data reader, or the ring root).
+ */
+function dotcellNameFromSegments(cell: Cell): string | null {
+  const segment = cell.dataAnalysis?.deterministic?.segments?.find((s) => s.label === 'label');
+  if (!segment?.humanValue) return null;
+  const name = segment.humanValue.split(' · ')[0];
+  return name.endsWith('.cell') ? name : null;
+}
+
+function detectItemId(cell: Cell, itemType: InventoryItemType): string {
+  switch (itemType) {
+    case 'udt':
+      return cell.typeScriptHash ?? '';
+    case 'dotcell': {
+      // The identity route accepts a name; the type args are the namespace,
+      // shared by every name, not this name's id.
+      const name = dotcellNameFromSegments(cell);
+      return name ? name.slice(0, -'.cell'.length) : '';
+    }
+    case 'dotcell_ring':
+      return '';
+    default:
+      return cell.type?.args ?? '';
+  }
+}
 
 function detectInventoryContext(cell: Cell): InventoryContext | null {
   if (!cell.type) return null;
@@ -50,16 +88,19 @@ function detectInventoryContext(cell: Cell): InventoryContext | null {
     const itemType = DETERMINISTIC_KIND_MAP[kind];
     if (!itemType) return null;
 
-    const itemId = itemType === 'udt' ? (cell.typeScriptHash ?? '') : cell.type.args;
-
-    return { itemType, itemId };
+    return { itemType, itemId: detectItemId(cell, itemType) };
   }
 
-  if (cell.type.codeHash === DID_CKB_CODE_HASH) {
-    return { itemType: 'did_ckb', itemId: cell.type.args };
+  switch (cell.protocolScript?.type) {
+    case DID_CKB_SLUG:
+      return { itemType: 'did_ckb', itemId: cell.type.args };
+    case DOTCELL_ACCOUNT_SLUG:
+      // No decoded data (no direct cell-data reader): the protocol is known,
+      // the name is not.
+      return { itemType: 'dotcell', itemId: '' };
+    default:
+      return null;
   }
-
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +136,10 @@ function getTypeLabel(itemType: InventoryItemType): string {
       return '.bit Account';
     case 'did_ckb':
       return 'DID:CKB Identity';
+    case 'dotcell':
+      return '.cell Name';
+    case 'dotcell_ring':
+      return '.cell Ring Root';
   }
 }
 
@@ -114,6 +159,10 @@ function getHref(ctx: InventoryContext): string | null {
       return `/identities/dotbit/${ctx.itemId}`;
     case 'did_ckb':
       return `/identities/did/${ctx.itemId}`;
+    case 'dotcell':
+      return ctx.itemId ? getIdentityItemDetailHref('dotcell', ctx.itemId) : '/identities/dotcell';
+    case 'dotcell_ring':
+      return '/identities/dotcell';
     case 'mnft_issuer':
       return null;
   }
@@ -193,6 +242,18 @@ export function useInventoryLabel(cell: Cell | undefined | null): InventoryLabel
       const det = cell.dataAnalysis?.deterministic;
       const indexSeg = det?.segments?.find((s) => s.label === 'token_index');
       if (indexSeg?.humanValue) displayName = `Token #${indexSeg.humanValue}`;
+      break;
+    }
+    case 'dotcell': {
+      displayName = dotcellNameFromSegments(cell);
+      const segments = cell.dataAnalysis?.deterministic?.segments;
+      const parts: string[] = [];
+      const ownerSeg = segments?.find((s) => s.label === 'owner_hash20');
+      if (ownerSeg?.humanValue) parts.push(`owner ${truncateHash(ownerSeg.humanValue, 6, 4)}`);
+      const expirySeg = segments?.find((s) => s.label === 'expired_at');
+      // `2027-09-21T06:21:18+00:00 (unix 1821507678)` → the UTC date.
+      if (expirySeg?.humanValue) parts.push(`expires ${expirySeg.humanValue.split('T')[0]}`);
+      summary = parts.length > 0 ? parts.join(' · ') : null;
       break;
     }
     default:

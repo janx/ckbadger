@@ -18,6 +18,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Capacity } from '@/components/ui/capacity';
 import { Address } from '@/components/ui/address';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import {
   api,
   isServiceUnavailableError,
@@ -27,6 +28,7 @@ import {
   type TransactionDetail,
 } from '@/lib/api';
 import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
+import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { analyzeWitness, buildScriptGroupLens } from '@/lib/witness-analysis';
@@ -1088,6 +1090,12 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     () => witnesses.map((witness, index) => analyzeWitness(witness, index, tx.inputsCount)),
     [tx.inputsCount, witnesses]
   );
+  // `.cell` records live in the witness at the name cell's own output index;
+  // the API decodes them (hash-verified) and says which witness that is.
+  const dotcellByWitness = useMemo(
+    () => new Map((tx.dotcellNames ?? []).map((name) => [name.outputIndex, name])),
+    [tx.dotcellNames]
+  );
   const scriptGroupLens = useMemo(() => buildScriptGroupLens(tx), [tx]);
   const [activeWitnessIndex, setActiveWitnessIndex] = useState<number | null>(
     () => witnessFromQuery
@@ -1141,6 +1149,8 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   }, [activeScriptGroupKey, activeWitnessIndex, scriptGroupLens]);
   const activeWitness =
     activeWitnessIndex !== null ? (witnessAnalyses[activeWitnessIndex] ?? null) : null;
+  const activeDotcell =
+    activeWitnessIndex !== null ? (dotcellByWitness.get(activeWitnessIndex) ?? null) : null;
   const activeScriptGroup =
     activeScriptGroupKey !== null
       ? (scriptGroupLens.find((group) => group.key === activeScriptGroupKey) ?? null)
@@ -1322,8 +1332,11 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                     {witness.role}
                   </Badge>
                 </div>
-                <div className="text-text mt-1 font-mono text-[11px]">
-                  {witness.byteLength.toLocaleString()} bytes
+                <div className="text-text mt-1 flex items-center gap-1.5 font-mono text-[11px]">
+                  <span>{witness.byteLength.toLocaleString()} bytes</span>
+                  {dotcellByWitness.has(witness.index) && (
+                    <Badge variant="gold">.cell records</Badge>
+                  )}
                 </div>
                 <div className="text-text-dim mt-0.5 truncate font-mono text-[11px]">
                   {witness.previewHex ? `0x${witness.previewHex.slice(0, 40)}` : '0x'}
@@ -1466,6 +1479,31 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               )}
             </div>
           </div>
+          {activeDotcell && (
+            <div
+              data-testid="tx-witness-dotcell-records"
+              className="border-base-border bg-base-bg/70 mb-3 rounded border"
+            >
+              <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 text-xs">
+                <Badge variant="gold">.cell records</Badge>
+                <span className="text-text">
+                  records payload of{' '}
+                  <Link
+                    href={getIdentityItemDetailHref('dotcell', activeDotcell.label)}
+                    className="text-emphasis font-mono hover:underline"
+                  >
+                    {activeDotcell.name}
+                  </Link>{' '}
+                  (output #{activeDotcell.outputIndex})
+                </span>
+              </div>
+              <DotCellRecordsTable records={activeDotcell.records} />
+              <div className="border-base-border text-text-dim flex min-w-0 items-center gap-2 border-t px-3 py-2 font-mono text-xs">
+                <span className="uppercase tracking-wider">Records Hash</span>
+                <HexDisplay value={activeDotcell.recordsHash} size="sm" />
+              </div>
+            </div>
+          )}
           {deterministicAnalysis && (
             <div
               data-testid="tx-witness-deterministic-section"

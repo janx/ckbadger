@@ -384,6 +384,22 @@ interface TransactionDetail extends Omit<
   }>;
   witnesses?: string[];
   witnessesAvailable?: boolean;
+  /**
+   * The `.cell` names this transaction creates, each with the records payload
+   * decoded (server-side, hash-verified) from the witness at its own output
+   * index. Absent when there are none.
+   */
+  dotcellNames?: DotCellNameWitness[];
+}
+
+/** A `.cell` name a transaction creates, with the records its witness carries. */
+interface DotCellNameWitness {
+  outputIndex: number;
+  label: string;
+  name: string;
+  identityId: string;
+  recordsHash: string;
+  records: DotCellRecord[];
 }
 
 interface DepGroupItem {
@@ -485,6 +501,13 @@ interface Cell {
   consumedByTx?: string;
   lock?: Script;
   type?: Script;
+  /**
+   * `/cells/{tx}/{index}` only: the registry protocol slug of each script
+   * (`dotcell-account`, `did-ckb`, …), `null` when that script is not a
+   * registered protocol. Protocols are recognised by these names, never by
+   * comparing code hashes in the frontend.
+   */
+  protocolScript?: { lock: string | null; type: string | null };
   data?: string;
   dataAnalysis?: CellDataAnalysis;
   isDepGroup?: boolean;
@@ -1619,6 +1642,8 @@ interface ScriptLookupInfo {
   referenceHash?: string;
   codeHash: string;
   name: string;
+  /** The queried reference's own label description; null when it has none. */
+  description?: string | null;
   deprecated?: boolean;
   scriptKind: string | null;
   decoderType: string | null;
@@ -1950,6 +1975,7 @@ export type {
   DotCellPartyRef,
   DotCellDecodedAddress,
   DotCellRecord,
+  DotCellNameWitness,
   DotCellNameRef,
   DotCellOutPoint,
   DotCellSale,

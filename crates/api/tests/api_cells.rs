@@ -217,6 +217,160 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     );
 }
 
+/// `.cell` Cells Account type script, mainnet (docs/metadata/scripts/dotcell-account.toml;
+/// `ACCOUNT_TYPE_CODE_HASH_MAINNET` in the indexer's dotcell fixtures).
+const DOTCELL_ACCOUNT_TYPE_MAINNET: &str =
+    "d96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54";
+/// `.cell` Cells Account Lock, mainnet (`ACCOUNT_LOCK_CODE_HASH_MAINNET`).
+const DOTCELL_ACCOUNT_LOCK_MAINNET: &str =
+    "9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab";
+/// The mainnet namespace args every name cell's type script carries
+/// (`NAMESPACE_ARGS_MAINNET`).
+const DOTCELL_NAMESPACE_ARGS_MAINNET: &str = "b4f4302965b7d6421481a520ee7eb5971a5e808c";
+
+fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
+    let lock_code_hash = hex::decode(DOTCELL_ACCOUNT_LOCK_MAINNET).unwrap();
+    let type_code_hash = hex::decode(DOTCELL_ACCOUNT_TYPE_MAINNET).unwrap();
+    let type_args = hex::decode(DOTCELL_NAMESPACE_ARGS_MAINNET).unwrap();
+    LiveCellInfo {
+        capacity: 240_00000000,
+        lock_script_hash: compute_script_hash(&lock_code_hash, 1, &[]),
+        lock_code_hash,
+        lock_hash_type: 1,
+        lock_args: vec![],
+        type_script_hash: Some(compute_script_hash(&type_code_hash, 1, &type_args)),
+        type_code_hash: Some(type_code_hash),
+        type_hash_type: Some(1),
+        type_args: Some(type_args),
+        data_size,
+        occupied_capacity: 0,
+        udt_amount: None,
+        data_hash: None,
+    }
+}
+
+/// The cell detail names each script's registry protocol by slug, so the
+/// frontend never compares code hashes to recognise `.cell` / did:ckb cells.
+#[tokio::test]
+async fn test_cell_detail_exposes_registry_protocol_slugs() {
+    let store = test_store();
+    let tx_hash = vec![0xc1; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx_hash, 0, &dotcell_name_cell_info(105), 123);
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["protocolScript"]["lock"], "dotcell-account-lock");
+    assert_eq!(json["protocolScript"]["type"], "dotcell-account");
+}
+
+/// `M2_OUT1_DATA` in the indexer's dotcell fixtures: `support.cell` as
+/// registered on mainnet (tx 0xf20d2e96…663e output 1), 105 bytes.
+const DOTCELL_SUPPORT_DATA: &str = "0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e265b5fe7e7070b506f69bd8cabf9e4272111066455e00926c0057d926a44d83fc13b21ce037b1e31f4223e3c86757d926a44d83fc13b21ce037b1e31f4223e3c867737570706f7274";
+
+/// Seed a CKB-node-format chain holding one transaction whose output 0 is a
+/// mainnet `.cell` name cell with `data`, plus the matching live-cell row in
+/// the domain store. Returns the router and the transaction hash.
+async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCkbChain) {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{Capacity, ScriptHashType, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let script = |code_hash: &str, args: &[u8]| {
+        let code_hash: [u8; 32] = hex::decode(code_hash).unwrap().try_into().unwrap();
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::new(code_hash))
+            .hash_type(ScriptHashType::Type.into())
+            .args(Bytes::from(args.to_vec()).pack())
+            .build()
+    };
+    let namespace = hex::decode(DOTCELL_NAMESPACE_ARGS_MAINNET).unwrap();
+    let output = packed::CellOutput::new_builder()
+        .capacity(Capacity::shannons(240_00000000).pack())
+        .lock(script(DOTCELL_ACCOUNT_LOCK_MAINNET, &[]))
+        .type_(Some(script(DOTCELL_ACCOUNT_TYPE_MAINNET, &namespace)).pack())
+        .build();
+    let data_size = data.len() as i32;
+    let tx = TransactionBuilder::default()
+        .output(output)
+        .output_data(Bytes::from(data).pack())
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = ckb_types::core::BlockBuilder::default()
+        .number(123u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx_hash, 0, &dotcell_name_cell_info(data_size), 123);
+    batch.commit().unwrap();
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    (create_router(config).await, tx_hash, chain)
+}
+
+/// The first test that walks the whole direct-read path: cell bytes from the
+/// CKB node store → `analyze_cell_data` → the `.cell` Layer-0 decode.
+#[tokio::test]
+async fn test_cell_detail_decodes_dotcell_name_from_ckb_store() {
+    let data = hex::decode(DOTCELL_SUPPORT_DATA).unwrap();
+    assert_eq!(data.len(), 105);
+    let (app, tx_hash, _chain) = dotcell_name_cell_app(data).await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(
+        json["dataAnalysis"]["deterministic"]["kind"],
+        "dotcell_name"
+    );
+    let segments = json["dataAnalysis"]["deterministic"]["segments"]
+        .as_array()
+        .expect("segments");
+    assert_eq!(segments.len(), 7);
+    assert_eq!(segments[6]["label"], "label");
+    assert!(
+        segments[6]["humanValue"]
+            .as_str()
+            .unwrap()
+            .starts_with("support.cell"),
+        "got {}",
+        segments[6]
+    );
+    assert_eq!(json["protocolScript"]["lock"], "dotcell-account-lock");
+    assert_eq!(json["protocolScript"]["type"], "dotcell-account");
+}
+
+/// A Cells Account cell whose bytes do not decode cannot have been stored by
+/// the indexer; the cell page reports it with the outpoint instead of
+/// rendering a guess.
+#[tokio::test]
+async fn test_cell_detail_undecodable_dotcell_data_is_an_internal_error() {
+    let mut data = hex::decode(DOTCELL_SUPPORT_DATA).unwrap();
+    data.truncate(97);
+    let (app, tx_hash, _chain) = dotcell_name_cell_app(data).await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&format!("outpoint=0x{}:0", hex::encode(tx_hash))),
+        "got {message}"
+    );
+    assert!(message.contains("need>=98"), "got {message}");
+}
+
 #[tokio::test]
 async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     let store = test_store();

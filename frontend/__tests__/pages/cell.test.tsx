@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
@@ -162,6 +162,64 @@ const mockCellWithPartialParsedData = {
           end: 8,
           meaning: 'Demo parsed header',
           humanValue: '0x0102030405060708',
+        },
+      ],
+    },
+    heuristicGuesses: [],
+  },
+};
+
+/** Mainnet `support.cell` (M2_OUT1_DATA) as the cell endpoint decodes it. */
+const mockDotCellNameCell = {
+  ...mockCellWithoutDao,
+  capacity: '24000000000',
+  dataSize: 105,
+  lock: {
+    codeHash: '0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab',
+    hashType: 'type',
+    args: '0x',
+  },
+  type: {
+    codeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
+    hashType: 'type',
+    args: '0xb4f4302965b7d6421481a520ee7eb5971a5e808c',
+  },
+  typeScriptHash: '0x6161616161616161616161616161616161616161616161616161616161616161',
+  protocolScript: { lock: 'dotcell-account-lock', type: 'dotcell-account' },
+  data: '0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e265b5fe7e7070b506f69bd8cabf9e4272111066455e00926c0057d926a44d83fc13b21ce037b1e31f4223e3c86757d926a44d83fc13b21ce037b1e31f4223e3c867737570706f7274',
+  dataAnalysis: {
+    deterministic: {
+      kind: 'dotcell_name',
+      summary:
+        "support.cell name cell (layout v3); owner 0x57d926a44d83fc13b21ce037b1e31f4223e3c867; expires 2027-09-21T06:21:18+00:00; records are in the creating transaction's witness at this output index",
+      segments: [
+        {
+          label: 'layout_version',
+          start: 0,
+          end: 1,
+          meaning: 'Layout version (u8)',
+          humanValue: '3',
+        },
+        {
+          label: 'expired_at',
+          start: 53,
+          end: 58,
+          meaning: 'Expiry, unix seconds (u40 little-endian)',
+          humanValue: '2027-09-21T06:21:18+00:00 (unix 1821507678)',
+        },
+        {
+          label: 'owner_hash20',
+          start: 58,
+          end: 78,
+          meaning: "Owner: first 20 bytes of the owner's lock script hash",
+          humanValue: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+        },
+        {
+          label: 'label',
+          start: 98,
+          end: 105,
+          meaning: 'Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]',
+          humanValue: 'support.cell · id 0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
         },
       ],
     },
@@ -413,6 +471,18 @@ describe('CellDetailPage', () => {
     expect(screen.queryByText(/Deployment refs are shown as/i)).not.toBeInTheDocument();
   });
 
+  it('links a .cell name cell to its identity page from the type script panel', async () => {
+    mockGetCell.mockResolvedValue(mockDotCellNameCell);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    const badge = await screen.findByRole('link', { name: 'support.cell' });
+    expect(badge).toHaveAttribute('href', '/mainnet/identities/dotcell/support');
+    expect(screen.getByText('owner 0x57d9...c867 · expires 2027-09-21')).toBeInTheDocument();
+    // No protocol block: the badge and the summary are the whole Layer-1 view.
+    expect(screen.queryByText('Nervos DAO')).not.toBeInTheDocument();
+  });
+
   it('renders withdrawing DAO cell status correctly', async () => {
     const withdrawingCell = {
       ...mockCellWithDao,
@@ -562,5 +632,80 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-coverage-grid')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-unparsed-ranges')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-byte-filter')).not.toBeInTheDocument();
+  });
+});
+
+describe('CellDetailPage lock panel', () => {
+  const mockLookupScripts = api.lookupScripts as ReturnType<typeof vi.fn>;
+  const ACCOUNT_LOCK_CODE_HASH = mockDotCellNameCell.lock.codeHash;
+  const SECP_CODE_HASH = mockCellWithoutDao.lock.codeHash;
+  const ACCOUNT_LOCK_DESCRIPTION =
+    'Lock a .cell name sits under. Always-success by design: authority is decided by the Cells Account type script from the owner and manager hashes in the cell.';
+
+  function lookupEntry(codeHash: string, name: string, description: string | null) {
+    return {
+      referenceHash: codeHash,
+      codeHash,
+      name,
+      description,
+      deprecated: false,
+      scriptKind: 'lock',
+      decoderType: null,
+      hashType: 'type',
+      codeCellTxHash: null,
+      codeCellOutputIndex: null,
+      liveCellsCount: 0,
+      ownedCapacitySum: '0',
+      ownedKnowledgeSum: '0',
+      codeCellsLiveCount: 0,
+      codeCellsTotal: 0,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    mockLookupScripts.mockImplementation(() => Promise.resolve({}));
+  });
+
+  it('shows the protocol lock description next to its empty args', async () => {
+    mockLookupScripts.mockImplementation(() =>
+      Promise.resolve({
+        [ACCOUNT_LOCK_CODE_HASH]: lookupEntry(
+          ACCOUNT_LOCK_CODE_HASH,
+          'Cells Account Lock',
+          ACCOUNT_LOCK_DESCRIPTION
+        ),
+      })
+    );
+    mockGetCell.mockResolvedValue(mockDotCellNameCell);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    const description = await screen.findByTestId('lock-script-description');
+    expect(description).toHaveTextContent(ACCOUNT_LOCK_DESCRIPTION);
+  });
+
+  it('does not show a description for a lock that is not a registry protocol', async () => {
+    mockLookupScripts.mockImplementation(() =>
+      Promise.resolve({
+        [SECP_CODE_HASH]: lookupEntry(SECP_CODE_HASH, 'Default Lock', 'Universal lock'),
+      })
+    );
+    mockGetCell.mockResolvedValue({
+      ...mockCellWithoutDao,
+      protocolScript: { lock: null, type: null },
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    // The lookup has landed once the lock's script badge renders.
+    await waitFor(() => {
+      expect(screen.getAllByText('Default Lock').length).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.queryByTestId('lock-script-description')).not.toBeInTheDocument();
+    expect(screen.queryByText('Universal lock')).not.toBeInTheDocument();
   });
 });

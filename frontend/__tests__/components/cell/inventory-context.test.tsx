@@ -198,12 +198,14 @@ describe('useInventoryLabel', () => {
         deterministic: {
           kind: 'dotbit_account',
           summary: '.bit Account',
+          // The shape `maybe_parse_dotbit_decode` emits: the AccountCell's
+          // UTF-8 name tail, data[80..], after the 80-byte fixed header.
           segments: [
             {
               label: 'account',
-              start: 0,
-              end: 9,
-              meaning: 'Account name',
+              start: 80,
+              end: 89,
+              meaning: 'DAS account name (UTF-8, includes .bit suffix)',
               humanValue: 'alice.bit',
             },
           ],
@@ -220,7 +222,23 @@ describe('useInventoryLabel', () => {
     expect(result.current!.href).toBe('/identities/dotbit/0xdotbit_account_id');
   });
 
-  it('returns DID:CKB label via code_hash fallback when no deterministic kind', () => {
+  it('returns DID:CKB label from protocolScript', () => {
+    const cell = makeCell({
+      // Any code hash: recognition comes from the registry slug the API
+      // resolved, on either network, never from a hardcoded hash.
+      type: { codeHash: '0xany_did_ckb_deployment', hashType: 'type', args: '0xdid_ckb_id' },
+      protocolScript: { lock: null, type: 'did-ckb' },
+      dataAnalysis: undefined,
+    });
+
+    const { result } = renderHook(() => useInventoryLabel(cell), { wrapper });
+
+    expect(result.current).not.toBeNull();
+    expect(result.current!.typeLabel).toBe('DID:CKB Identity');
+    expect(result.current!.href).toBe('/identities/did/0xdid_ckb_id');
+  });
+
+  it('does not recognise did:ckb by code hash alone', () => {
     const cell = makeCell({
       type: {
         codeHash: '0x079bb8c1dfb249f60d932f4b1a60fa5cb2a36af3653ac09464f262e2f3f682a9',
@@ -232,9 +250,124 @@ describe('useInventoryLabel', () => {
 
     const { result } = renderHook(() => useInventoryLabel(cell), { wrapper });
 
+    expect(result.current).toBeNull();
+  });
+
+  // The segment shapes below are what `maybe_parse_dotcell_decode` emits for
+  // the real mainnet `support.cell` (M2_OUT1_DATA).
+  const SUPPORT_SEGMENTS = [
+    { label: 'layout_version', start: 0, end: 1, meaning: 'Layout version (u8)', humanValue: '3' },
+    {
+      label: 'next_id',
+      start: 33,
+      end: 53,
+      meaning: 'Next name id in the ordered uniqueness ring (zero = end of ring)',
+      humanValue: '0x65b5fe7e7070b506f69bd8cabf9e427211106645',
+    },
+    {
+      label: 'expired_at',
+      start: 53,
+      end: 58,
+      meaning: 'Expiry, unix seconds (u40 little-endian)',
+      humanValue: '2027-09-21T06:21:18+00:00 (unix 1821507678)',
+    },
+    {
+      label: 'owner_hash20',
+      start: 58,
+      end: 78,
+      meaning: "Owner: first 20 bytes of the owner's lock script hash",
+      humanValue: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+    },
+    {
+      label: 'label',
+      start: 98,
+      end: 105,
+      meaning: 'Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]',
+      humanValue: 'support.cell · id 0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+    },
+  ];
+
+  it('returns .cell name label linking to the identity page', () => {
+    const cell = makeCell({
+      type: {
+        codeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
+        hashType: 'type',
+        args: '0xb4f4302965b7d6421481a520ee7eb5971a5e808c',
+      },
+      protocolScript: { lock: 'dotcell-account-lock', type: 'dotcell-account' },
+      dataAnalysis: {
+        deterministic: {
+          kind: 'dotcell_name',
+          summary: 'support.cell name cell (layout v3)',
+          segments: SUPPORT_SEGMENTS,
+        },
+        heuristicGuesses: [],
+      },
+    });
+
+    const { result } = renderHook(() => useInventoryLabel(cell), { wrapper });
+
     expect(result.current).not.toBeNull();
-    expect(result.current!.typeLabel).toBe('DID:CKB Identity');
-    expect(result.current!.href).toBe('/identities/did/0xdid_ckb_id');
+    expect(result.current!.typeLabel).toBe('.cell Name');
+    expect(result.current!.displayName).toBe('support.cell');
+    // The item route accepts a name; the namespace args are not the name id.
+    expect(result.current!.href).toBe('/identities/dotcell/support');
+    expect(result.current!.summary).toContain('owner 0x57d9...c867');
+    expect(result.current!.summary).toContain('expires 2027-09-21');
+  });
+
+  it('returns .cell ring root label without an item link', () => {
+    const cell = makeCell({
+      type: {
+        codeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
+        hashType: 'type',
+        args: '0xb4f4302965b7d6421481a520ee7eb5971a5e808c',
+      },
+      protocolScript: { lock: 'dotcell-account-lock', type: 'dotcell-account' },
+      dataAnalysis: {
+        deterministic: {
+          kind: 'dotcell_ring_root',
+          summary: '.cell ring root of namespace 0xb4f4…; first name id: end of ring',
+          segments: [
+            {
+              label: 'label',
+              start: 98,
+              end: 98,
+              meaning: 'Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]',
+              humanValue: '(empty)',
+            },
+          ],
+        },
+        heuristicGuesses: [],
+      },
+    });
+
+    const { result } = renderHook(() => useInventoryLabel(cell), { wrapper });
+
+    expect(result.current).not.toBeNull();
+    expect(result.current!.typeLabel).toBe('.cell Ring Root');
+    expect(result.current!.href).toBe('/identities/dotcell');
+    expect(result.current!.displayName).toBeNull();
+  });
+
+  it('returns .cell label from protocolScript when data analysis is absent', () => {
+    const cell = makeCell({
+      type: {
+        codeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
+        hashType: 'type',
+        args: '0xb4f4302965b7d6421481a520ee7eb5971a5e808c',
+      },
+      protocolScript: { lock: 'dotcell-account-lock', type: 'dotcell-account' },
+      dataAnalysis: undefined,
+    });
+
+    const { result } = renderHook(() => useInventoryLabel(cell), { wrapper });
+
+    expect(result.current).not.toBeNull();
+    expect(result.current!.typeLabel).toBe('.cell Name');
+    // Without the label the item cannot be located: link the collection.
+    expect(result.current!.href).toBe('/identities/dotcell');
+    expect(result.current!.displayName).toBeNull();
   });
 
   it('returns M-NFT token label with token index from segments', () => {

@@ -989,7 +989,11 @@ impl DotCellPartyResolver<'_> {
     }
 }
 
-fn dotcell_record_response(record: &ckbadger_store::types::DotCellRecord) -> DotCellRecordResponse {
+/// One record as the API serves it — the identity page and the tx page's
+/// witness view both build records through here.
+pub(super) fn dotcell_record_response(
+    record: &ckbadger_store::types::DotCellRecord,
+) -> DotCellRecordResponse {
     let value_utf8 = std::str::from_utf8(&record.value).ok().map(str::to_string);
     // Only `address.309` is a CKB address; the other `address.*` keys are BTC
     // and ETH addresses, which this decoder would reject anyway.

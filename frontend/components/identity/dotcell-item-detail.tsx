@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { Header } from '@/components/layout/header';
 import { DotCellParty } from '@/components/identity/dotcell-party';
+import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { IdentityActivityCard } from '@/components/identity/identity-activity-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DataField, DataGrid } from '@/components/ui/data-field';
@@ -348,50 +349,7 @@ function DotCellItemDetailView({ itemRef }: { itemRef: string }) {
           <TerminalPanel data-testid="dotcell-records">
             <TerminalPanelHeader indicator="active">Records</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
-              {detail.records.length === 0 ? (
-                <div className="text-text-dim p-4 font-mono text-sm">No records set.</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left font-mono text-sm">
-                    <thead>
-                      <tr className="border-base-border text-text-dim border-b text-xs uppercase tracking-wider">
-                        <th className="px-4 py-2 font-normal">Key</th>
-                        <th className="px-4 py-2 font-normal">Label</th>
-                        <th className="px-4 py-2 font-normal">Value</th>
-                        <th className="px-4 py-2 text-right font-normal">TTL</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.records.map((record, index) => (
-                        <tr
-                          key={`${record.key}-${record.label}-${index}`}
-                          className="border-base-border border-b last:border-b-0"
-                        >
-                          <td className="text-text-bright px-4 py-2 align-top">{record.key}</td>
-                          <td className="text-text-dim px-4 py-2 align-top">{record.label}</td>
-                          <td className="text-text break-all px-4 py-2 align-top">
-                            {record.decodedAddress ? (
-                              <Link
-                                href={`/address/${record.decodedAddress.address}`}
-                                className="text-aqua hover:underline"
-                              >
-                                {record.decodedAddress.address}
-                              </Link>
-                            ) : (
-                              // A record whose bytes are not UTF-8 shows its
-                              // hex; nothing is guessed on its behalf.
-                              (record.valueUtf8 ?? record.valueHex)
-                            )}
-                          </td>
-                          <td className="text-text-dim px-4 py-2 text-right align-top">
-                            {record.ttl}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <DotCellRecordsTable records={detail.records} />
             </TerminalPanelContent>
             <TerminalPanelFooter>
               <div className="text-text-dim flex min-w-0 items-center gap-2 font-mono text-xs">

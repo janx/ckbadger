@@ -1048,3 +1048,269 @@ async fn test_cell_deps_committed_tx_returns_deps_from_ckb_store() {
     assert_eq!(deps[0]["outPointIndex"], 1);
     assert_eq!(deps[0]["depType"], "dep_group");
 }
+
+// ── `.cell` records decoded from the creating transaction's witness ──────
+// Chain data copied from `crates/indexer/src/parser/dotcell_fixtures.rs`
+// `T2_REGISTER_JOAOM`: testnet tx 0x89191ea4…386b at block 22471181, which
+// registers `joaom.cell` (output 1, no records) and re-creates its ring
+// predecessor `maria.cell` (output 0, six records in witness 0). Node-verified
+// 2026-09-24. The fixture module is `#[cfg(test)]` in the indexer crate.
+
+const T2_ACCOUNT_LOCK: &str = "ede6a3d80717c3d7927eea678d095abbe68dbb08ca6fdbbbdd9de906455a4afd";
+const T2_ACCOUNT_TYPE: &str = "e0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9";
+const T2_NAMESPACE_ARGS: &str = "2510c78057479c9b023fe6e98ce43979e92a1353";
+/// `T2_OUT0_DATA` (`maria.cell`).
+const T2_OUT0_DATA: &str = "033b339494bd0e29b77c0dca959bc4d6d87e4ac232bd7df9c1335163fe85f5eb18241e3586a41eb75dd6d68bf555acea74d6649ed529da856c0058e6c6f873af57732daae458be3c56c2c847b14158e6c6f873af57732daae458be3c56c2c847b1416d61726961";
+/// `T2_OUT1_DATA` (`joaom.cell`).
+const T2_OUT1_DATA: &str = "0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e22cf2cdac7ab0e7b97f4b50475fb5ce1b32dfe711fbe68f6c0069e8165efb4cb3b2cd62300e7d16f41a1c65ceab69e8165efb4cb3b2cd62300e7d16f41a1c65ceab6a6f616f6d";
+/// `T2_WITNESS_0`: maria's six records in `output_type`.
+const T2_WITNESS_0: &str = "c901000010000000100000001c000000080000007265676973746572a901000006000b616464726573732e333039006400636b7431717266727763646e76737373776477706e337339763866703837656d617433303663746a77736d336e6d6c6b6a673871797a61326371677171397837357a75346c37676c64363036723665796430306d346c7a79337a6b786b71346e79777a752c01000009616464726573732e30003e00746231703237767464306a776d3235746478336d36746763757168346c6578756c3076736c7572683079637a633766393272667030736b737264737936742c0100000a616464726573732e3630002a003078656646324634436132444536656444363364416665343833383536463134453639346437333144442c0100000d70726f66696c652e656d61696c0011006d61726961406578616d706c652e636f6d2c0100000d70726f66696c652e70686f6e650010002b3335312039313220333435203637382c0100000a647765622e636b626673004800636b6266733a2f2f346266306362646261633066386538656231616664646534333963336263306234333731623366336165636538633730343866656630366566366563376231302c010000";
+/// `T2_WITNESS_1`: a secp witness whose `output_type` is joaom's empty records payload.
+const T2_WITNESS_1: &str = "7f00000010000000550000007900000041000000e329de7a51feb20409c370832f99a08b76236b2c6cdbb7cc5bbc2858d1bc69b753a8b932eaa752fa46c794eaa36adee5cd063a25760cbd0fa151034f6b0e66010020000000b749b13ab9026ab71f3cb0cc971d0dbf1030bae1f8b3a006a45055d5eec73f0a020000000000";
+
+/// The T2 transaction rebuilt from its chain bytes. `cell_deps` are not part of
+/// the fixture, so the hash differs from the chain's; nothing here reads it
+/// beyond looking the transaction up by it.
+fn t2_register_transaction() -> ckb_types::core::TransactionView {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{Capacity, ScriptHashType, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let script = |code_hash: &str, args: &str| {
+        let code_hash: [u8; 32] = hex::decode(code_hash).unwrap().try_into().unwrap();
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::new(code_hash))
+            .hash_type(ScriptHashType::Type.into())
+            .args(Bytes::from(hex::decode(args).unwrap()).pack())
+            .build()
+    };
+    let output = |capacity: u64, lock: packed::Script, type_: Option<packed::Script>| {
+        packed::CellOutput::new_builder()
+            .capacity(Capacity::shannons(capacity).pack())
+            .lock(lock)
+            .type_(type_.pack())
+            .build()
+    };
+    let input = |tx_hash: &str, index: u32| {
+        let tx_hash: [u8; 32] = hex::decode(tx_hash).unwrap().try_into().unwrap();
+        packed::CellInput::new(
+            packed::OutPoint::new_builder()
+                .tx_hash(packed::Byte32::new(tx_hash))
+                .index(index.pack())
+                .build(),
+            0,
+        )
+    };
+    let bytes = |hex_str: &str| Bytes::from(hex::decode(hex_str).unwrap()).pack();
+    let name_lock = || script(T2_ACCOUNT_LOCK, "");
+    let name_type = || Some(script(T2_ACCOUNT_TYPE, T2_NAMESPACE_ARGS));
+
+    TransactionBuilder::default()
+        .input(input(
+            "974fc983a62a6f7b977c6e2170695cc4aafc5a7544c1aa2513574f1563fa0fad",
+            0,
+        ))
+        .input(input(
+            "b1745c34666bed64ec8654b16ca3d34af815576ad8cad7330957b3a54c9b34ae",
+            0,
+        ))
+        .input(input(
+            "b1745c34666bed64ec8654b16ca3d34af815576ad8cad7330957b3a54c9b34ae",
+            1,
+        ))
+        .output(output(0x59682f000, name_lock(), name_type()))
+        .output_data(bytes(T2_OUT0_DATA))
+        .output(output(0x59682f000, name_lock(), name_type()))
+        .output_data(bytes(T2_OUT1_DATA))
+        .output(output(
+            0x5c89ddb680,
+            script(
+                "d23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac",
+                "000140911fa94eaef8c1d0eca81b23e1972ecb0548dc",
+            ),
+            None,
+        ))
+        .output_data(bytes(""))
+        .output(output(
+            0x19f6a3c11688,
+            script(
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                "23870b08ec5f6260c50a63646170d61e26d155c7",
+            ),
+            None,
+        ))
+        .output_data(bytes(""))
+        .witness(bytes(T2_WITNESS_0))
+        .witness(bytes(T2_WITNESS_1))
+        .build()
+}
+
+/// The tx page decodes each `.cell` name's records where they live — the
+/// witness at the name cell's own output index — through the same parser the
+/// indexer runs, and resolves the `address.309` record to a testnet address.
+#[tokio::test]
+async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
+    use ckb_types::prelude::*;
+
+    let block_number: i64 = 22_471_181;
+    let tx = t2_register_transaction();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = ckb_types::core::BlockBuilder::default()
+        .number((block_number as u64).pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        block_number,
+        &CachedBlockHeader {
+            hash: block_hash.to_vec(),
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&tx_hash, block_number, 0);
+    batch.put_tx_index(
+        block_number,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 3,
+            outputs_count: 4,
+            fee: 1000,
+            tx_size: 1500,
+            cycles: Some(1000),
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = block_number + 10;
+        })
+        .unwrap();
+
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    config.ckb_network = "testnet".to_string();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let names = json["dotcellNames"]
+        .as_array()
+        .unwrap_or_else(|| panic!("dotcellNames missing: {json}"));
+    assert_eq!(names.len(), 2, "both name outputs: {json}");
+
+    let maria = &names[0];
+    assert_eq!(maria["outputIndex"], 0);
+    assert_eq!(maria["name"], "maria.cell");
+    assert_eq!(
+        maria["identityId"],
+        "0x2224948f63975a7a0741139cd5d2a45b9fb02c03"
+    );
+    let records = maria["records"].as_array().expect("records");
+    assert_eq!(records.len(), 6);
+    assert_eq!(records[0]["key"], "address.309");
+    assert!(
+        records[0]["decodedAddress"]["address"]
+            .as_str()
+            .is_some_and(|address| address.starts_with("ckt1")),
+        "got {}",
+        records[0]
+    );
+
+    let joaom = &names[1];
+    assert_eq!(joaom["outputIndex"], 1);
+    assert_eq!(joaom["name"], "joaom.cell");
+    assert_eq!(
+        joaom["identityId"],
+        "0x241e3586a41eb75dd6d68bf555acea74d6649ed5"
+    );
+    assert_eq!(joaom["records"].as_array().map(Vec::len), Some(0));
+}
+
+/// The pending (pool) builder decodes `.cell` records through the same call:
+/// a name registration waiting in the pool already shows its records.
+#[tokio::test]
+async fn test_pending_transaction_detail_decodes_dotcell_records_from_witness() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+
+    // The standard pending fixture, its one output replaced by T2's
+    // `maria.cell` with the witness carrying maria's records.
+    let mut response = pending_transaction_rpc_response(&hash, "pending");
+    let tx = &mut response["result"]["transaction"];
+    tx["outputs"] = serde_json::json!([{
+        "capacity": "0x59682f000",
+        "lock": {
+            "code_hash": format!("0x{T2_ACCOUNT_LOCK}"),
+            "hash_type": "type",
+            "args": "0x"
+        },
+        "type": {
+            "code_hash": format!("0x{T2_ACCOUNT_TYPE}"),
+            "hash_type": "type",
+            "args": format!("0x{T2_NAMESPACE_ARGS}")
+        }
+    }]);
+    tx["outputs_data"] = serde_json::json!([format!("0x{T2_OUT0_DATA}")]);
+    tx["witnesses"] = serde_json::json!([format!("0x{T2_WITNESS_0}")]);
+    mount_transaction_rpc(&server, response).await;
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e974", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    config.ckb_network = "testnet".to_string();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "pending");
+    let names = json["dotcellNames"]
+        .as_array()
+        .unwrap_or_else(|| panic!("dotcellNames missing: {json}"));
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0]["outputIndex"], 0);
+    assert_eq!(names[0]["name"], "maria.cell");
+    let records = names[0]["records"].as_array().expect("records");
+    assert_eq!(records.len(), 6);
+    assert!(
+        records[0]["decodedAddress"]["address"]
+            .as_str()
+            .is_some_and(|address| address.starts_with("ckt1")),
+        "got {}",
+        records[0]
+    );
+}
