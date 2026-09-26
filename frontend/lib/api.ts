@@ -384,6 +384,22 @@ interface TransactionDetail extends Omit<
   }>;
   witnesses?: string[];
   witnessesAvailable?: boolean;
+  /**
+   * The `.cell` names this transaction creates, each with the records payload
+   * decoded (server-side, hash-verified) from the witness at its own output
+   * index. Absent when there are none.
+   */
+  dotcellNames?: DotCellNameWitness[];
+}
+
+/** A `.cell` name a transaction creates, with the records its witness carries. */
+interface DotCellNameWitness {
+  outputIndex: number;
+  label: string;
+  name: string;
+  identityId: string;
+  recordsHash: string;
+  records: DotCellRecord[];
 }
 
 interface DepGroupItem {
@@ -1959,6 +1975,7 @@ export type {
   DotCellPartyRef,
   DotCellDecodedAddress,
   DotCellRecord,
+  DotCellNameWitness,
   DotCellNameRef,
   DotCellOutPoint,
   DotCellSale,

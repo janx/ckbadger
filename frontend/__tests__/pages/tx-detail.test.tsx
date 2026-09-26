@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
@@ -470,6 +470,72 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+  });
+
+  it('decodes .cell records next to the witness that carries them', async () => {
+    const address =
+      'ckt1qrfrwcdnvssswdwpn3s9v8fp87emat306ctjwsm3nmlkjg8qyza2cqgqq9x75zu4l7gld606r6eyd00m4lzy3zkxkq4nywzu';
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...createCommittedTransactionDetail(),
+      dotcellNames: [
+        {
+          outputIndex: 1,
+          label: 'joaom',
+          name: 'joaom.cell',
+          identityId: '0x241e3586a41eb75dd6d68bf555acea74d6649ed5',
+          recordsHash: '0x3b339494bd0e29b77c0dca959bc4d6d87e4ac232bd7df9c1335163fe85f5eb18',
+          records: [
+            {
+              key: 'address.309',
+              label: '',
+              valueHex: '0x636b7431',
+              valueUtf8: address,
+              ttl: 300,
+              decodedAddress: {
+                address,
+                lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+              },
+            },
+            {
+              key: 'profile.email',
+              label: '',
+              valueHex: '0x6d61726961406578616d706c652e636f6d',
+              valueUtf8: 'maria@example.com',
+              ttl: 300,
+              decodedAddress: null,
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<TransactionDetailPage />);
+
+    expect(await screen.findByTestId('tx-witness-tab')).toBeInTheDocument();
+    // The witness list marks the witness at the name cell's own output index.
+    expect(
+      within(screen.getByTestId('tx-witness-item-1')).getByText('.cell records')
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('tx-witness-item-0')).queryByText('.cell records')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tx-witness-dotcell-records')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-1'));
+    const section = screen.getByTestId('tx-witness-dotcell-records');
+    expect(section).toHaveTextContent('records payload of joaom.cell (output #1)');
+    expect(within(section).getByRole('link', { name: 'joaom.cell' })).toHaveAttribute(
+      'href',
+      '/mainnet/identities/dotcell/joaom'
+    );
+    // Header row + the two records.
+    expect(within(section).getAllByRole('row')).toHaveLength(3);
+    expect(within(section).getByText('maria@example.com')).toBeInTheDocument();
+    // The client-side witness decode still renders beside it.
+    expect(screen.getByText('DASWitness')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(screen.queryByTestId('tx-witness-dotcell-records')).not.toBeInTheDocument();
   });
 
   it('toggles highlighted witness, script group, input, and output off on second click', async () => {
