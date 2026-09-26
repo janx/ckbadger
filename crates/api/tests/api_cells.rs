@@ -217,6 +217,56 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     );
 }
 
+/// `.cell` Cells Account type script, mainnet (docs/metadata/scripts/dotcell-account.toml;
+/// `ACCOUNT_TYPE_CODE_HASH_MAINNET` in the indexer's dotcell fixtures).
+const DOTCELL_ACCOUNT_TYPE_MAINNET: &str =
+    "d96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54";
+/// `.cell` Cells Account Lock, mainnet (`ACCOUNT_LOCK_CODE_HASH_MAINNET`).
+const DOTCELL_ACCOUNT_LOCK_MAINNET: &str =
+    "9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab";
+/// The mainnet namespace args every name cell's type script carries
+/// (`NAMESPACE_ARGS_MAINNET`).
+const DOTCELL_NAMESPACE_ARGS_MAINNET: &str = "b4f4302965b7d6421481a520ee7eb5971a5e808c";
+
+fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
+    let lock_code_hash = hex::decode(DOTCELL_ACCOUNT_LOCK_MAINNET).unwrap();
+    let type_code_hash = hex::decode(DOTCELL_ACCOUNT_TYPE_MAINNET).unwrap();
+    let type_args = hex::decode(DOTCELL_NAMESPACE_ARGS_MAINNET).unwrap();
+    LiveCellInfo {
+        capacity: 240_00000000,
+        lock_script_hash: compute_script_hash(&lock_code_hash, 1, &[]),
+        lock_code_hash,
+        lock_hash_type: 1,
+        lock_args: vec![],
+        type_script_hash: Some(compute_script_hash(&type_code_hash, 1, &type_args)),
+        type_code_hash: Some(type_code_hash),
+        type_hash_type: Some(1),
+        type_args: Some(type_args),
+        data_size,
+        occupied_capacity: 0,
+        udt_amount: None,
+        data_hash: None,
+    }
+}
+
+/// The cell detail names each script's registry protocol by slug, so the
+/// frontend never compares code hashes to recognise `.cell` / did:ckb cells.
+#[tokio::test]
+async fn test_cell_detail_exposes_registry_protocol_slugs() {
+    let store = test_store();
+    let tx_hash = vec![0xc1; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx_hash, 0, &dotcell_name_cell_info(105), 123);
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["protocolScript"]["lock"], "dotcell-account-lock");
+    assert_eq!(json["protocolScript"]["type"], "dotcell-account");
+}
+
 #[tokio::test]
 async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     let store = test_store();

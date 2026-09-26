@@ -147,6 +147,30 @@ pub struct CellDataAnalysis {
     pub heuristic_guesses: Vec<CellDataGuess>,
 }
 
+/// The registry protocol each of a cell's scripts belongs to, as the
+/// registry's own slug (`dotcell-account`, `did-ckb`, …). Consumers identify
+/// protocols by these names and never compare code hashes themselves. `null`
+/// on a side is a definite answer: that script is not a registered protocol.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellProtocolScript {
+    pub lock: Option<String>,
+    #[serde(rename = "type")]
+    pub type_script: Option<String>,
+}
+
+fn cell_protocol_script(info: &ckbadger_store::LiveCellInfo) -> CellProtocolScript {
+    let slug_of = |code_hash: &[u8]| {
+        PROTOCOL_REGISTRY
+            .get(code_hash)
+            .map(|protocol| protocol.slug().to_string())
+    };
+    CellProtocolScript {
+        lock: slug_of(&info.lock_code_hash),
+        type_script: info.type_code_hash.as_deref().and_then(slug_of),
+    }
+}
+
 pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
     let full_size = data_size as usize;
 
@@ -1620,6 +1644,8 @@ pub struct CellDetailResponse {
     pub lock: ScriptResponse,
     #[serde(rename = "type")]
     pub type_script: Option<ScriptResponse>,
+    /// Registry protocol slugs of `lock` / `type`; always present.
+    pub protocol_script: CellProtocolScript,
     pub data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_analysis: Option<CellDataAnalysis>,
@@ -3009,6 +3035,7 @@ async fn get_cell(
             args: format!("0x{}", hex::encode(&info.lock_args)),
         },
         type_script,
+        protocol_script: cell_protocol_script(&info),
         data: cell_data.map(|d| format!("0x{}", hex::encode(d))),
         data_analysis,
         is_dep_group: dep_group_result.is_dep_group,
@@ -4491,6 +4518,47 @@ mod tests {
 
         let analysis = analyze_cell_data(&info, &data, 40);
         assert!(analysis.deterministic.is_none());
+    }
+
+    // ── `.cell` (DotCell) fixtures ───────────────────────────────────────
+    // Copied from `crates/indexer/src/parser/dotcell_fixtures.rs` (node-verified
+    // chain data, 2026-09-24); that module is `#[cfg(test)]` in the indexer
+    // crate and not reachable from here.
+
+    /// `ACCOUNT_TYPE_CODE_HASH_MAINNET` (docs/metadata/scripts/dotcell-account.toml).
+    const DOTCELL_ACCOUNT_TYPE_MAINNET: &str =
+        "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54";
+    /// `ACCOUNT_LOCK_CODE_HASH_MAINNET` (docs/metadata/scripts/dotcell-account-lock.toml).
+    const DOTCELL_ACCOUNT_LOCK_MAINNET: &str =
+        "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab";
+
+    fn hex_bytes(value: &str) -> Vec<u8> {
+        hex::decode(value.trim_start_matches("0x")).unwrap()
+    }
+
+    #[test]
+    fn test_cell_protocol_script_uses_registry_slugs() {
+        let name_cell = LiveCellInfo {
+            lock_code_hash: hex_bytes(DOTCELL_ACCOUNT_LOCK_MAINNET),
+            lock_args: vec![],
+            type_code_hash: Some(hex_bytes(DOTCELL_ACCOUNT_TYPE_MAINNET)),
+            type_script_hash: Some(vec![0x61; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(hex_bytes("0xb4f4302965b7d6421481a520ee7eb5971a5e808c")),
+            ..make_payload()
+        };
+        let protocol = cell_protocol_script(&name_cell);
+        assert_eq!(protocol.lock.as_deref(), Some("dotcell-account-lock"));
+        assert_eq!(protocol.type_script.as_deref(), Some("dotcell-account"));
+
+        // A plain lock with no type script names no protocol on either side;
+        // `{lock: null, type: null}` is itself an answer, not an absence.
+        let plain = make_payload();
+        let protocol = cell_protocol_script(&plain);
+        assert_eq!(protocol.lock, None);
+        assert_eq!(protocol.type_script, None);
+        let json = serde_json::to_value(&protocol).unwrap();
+        assert_eq!(json, serde_json::json!({ "lock": null, "type": null }));
     }
 
     #[test]

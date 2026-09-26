@@ -45,6 +45,44 @@ pub enum ProtocolScript {
     DotCellPrice,
 }
 
+impl ProtocolScript {
+    /// The registry slug (`docs/metadata/scripts/<slug>.toml` file stem) that
+    /// names this protocol — the inverse of [`slug_to_protocol`]. API
+    /// consumers receive this string as a cell script's protocol identity so
+    /// they never match code hashes themselves.
+    pub fn slug(self) -> &'static str {
+        match self {
+            ProtocolScript::Dao => "nervos-dao",
+            ProtocolScript::Sudt => "simple-udt",
+            ProtocolScript::Xudt => "xudt",
+            ProtocolScript::SporeNft => "spore",
+            ProtocolScript::BitCell => "bit-cell",
+            ProtocolScript::DidCkb => "did-ckb",
+            // Not reachable through the registry (no bundled slug maps to it);
+            // named so the match stays exhaustive.
+            ProtocolScript::SporeDid => "spore-did",
+            ProtocolScript::Cluster => "spore-cluster",
+            ProtocolScript::MnftIssuer => "m-nft-issuer",
+            ProtocolScript::MnftClass => "m-nft-class",
+            ProtocolScript::MnftToken => "m-nft",
+            ProtocolScript::RgbppLock => "rgb",
+            ProtocolScript::BtcTimeLock => "btc-time-lock",
+            ProtocolScript::DotbitAccount => "bit-account",
+            ProtocolScript::FiberFunding => "fiber-funding-lock",
+            ProtocolScript::FiberCommitment => "fiber-commitment-lock",
+            ProtocolScript::StablePpAsset => "stable-asset",
+            ProtocolScript::StablePpPool => "stable-pool",
+            ProtocolScript::StablePpIntent => "stable-intent-lock",
+            ProtocolScript::StablePpVault => "stable-vault-lock",
+            ProtocolScript::UtxoSwapIntent => "utxoswap-intent-lock",
+            ProtocolScript::DotCellAccount => "dotcell-account",
+            ProtocolScript::DotCellAccountLock => "dotcell-account-lock",
+            ProtocolScript::DotCellSaleLock => "dotcell-sale-lock",
+            ProtocolScript::DotCellPrice => "dotcell-price",
+        }
+    }
+}
+
 /// Map a registry file's `metadata_slug` (file stem) to a protocol identity.
 /// Slugs not listed here are labels-only scripts with no parser detection.
 fn slug_to_protocol(slug: &str) -> Option<ProtocolScript> {
@@ -234,6 +272,47 @@ mod tests {
             )),
             None
         );
+    }
+
+    /// `slug()` is the inverse of `slug_to_protocol` for every protocol the
+    /// registry can actually hand out: the API serves these strings as the
+    /// protocol identity of a cell's scripts, so a slug that does not map back
+    /// would name a protocol the rest of the system does not know.
+    #[test]
+    fn slug_round_trips_for_every_registered_code_hash() {
+        let r = &*PROTOCOL_REGISTRY;
+        let mut seen = 0usize;
+        for (code_hash, protocol) in r.iter() {
+            assert_eq!(
+                slug_to_protocol(protocol.slug()),
+                Some(protocol),
+                "slug {:?} of {protocol:?} (code_hash 0x{}) must map back to it",
+                protocol.slug(),
+                hex::encode(code_hash)
+            );
+            seen += 1;
+        }
+        assert!(seen > 0, "registry must not be empty");
+    }
+
+    #[test]
+    fn slug_is_unique_per_variant() {
+        let r = &*PROTOCOL_REGISTRY;
+        let mut by_slug: HashMap<&'static str, ProtocolScript> = HashMap::new();
+        for (_, protocol) in r.iter() {
+            if let Some(prev) = by_slug.insert(protocol.slug(), protocol) {
+                assert_eq!(
+                    prev,
+                    protocol,
+                    "slug {:?} is shared by {prev:?} and {protocol:?}",
+                    protocol.slug()
+                );
+            }
+        }
+        // The retained legacy variant has its own slug too, distinct from all
+        // registry slugs (the match is exhaustive; nothing maps to it).
+        assert!(!by_slug.contains_key(ProtocolScript::SporeDid.slug()));
+        assert_eq!(slug_to_protocol(ProtocolScript::SporeDid.slug()), None);
     }
 
     #[test]

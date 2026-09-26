@@ -485,6 +485,13 @@ interface Cell {
   consumedByTx?: string;
   lock?: Script;
   type?: Script;
+  /**
+   * `/cells/{tx}/{index}` only: the registry protocol slug of each script
+   * (`dotcell-account`, `did-ckb`, …), `null` when that script is not a
+   * registered protocol. Protocols are recognised by these names, never by
+   * comparing code hashes in the frontend.
+   */
+  protocolScript?: { lock: string | null; type: string | null };
   data?: string;
   dataAnalysis?: CellDataAnalysis;
   isDepGroup?: boolean;
