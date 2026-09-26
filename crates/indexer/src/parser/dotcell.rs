@@ -8,6 +8,7 @@
 use anyhow::{anyhow, bail, Result};
 use ckb_hash::new_blake2b;
 use ckbadger_store::types::derive_dotcell_id;
+use std::ops::Range;
 
 use super::cell::ParsedCell;
 use super::registry::{ProtocolScript, PROTOCOL_REGISTRY};
@@ -20,6 +21,22 @@ pub const DOTCELL_LAYOUT_VERSION: u8 = 3;
 /// Fixed header length; the label runs from here to the end of the data.
 pub const DOTCELL_HEADER_LEN: usize = 98;
 pub const DOTCELL_ID_LEN: usize = 20;
+
+// Byte ranges of the name cell header (spec §1.2). The ONE offset table:
+// `parse_name_data` slices with these, and the API's cell-page segment view
+// labels the same bytes with them, so the two can never disagree.
+/// `[0..1]` layout version (u8).
+pub const DOTCELL_LAYOUT_VERSION_RANGE: Range<usize> = 0..1;
+/// `[1..33]` blake2b of the records payload.
+pub const DOTCELL_RECORDS_HASH_RANGE: Range<usize> = 1..33;
+/// `[33..53]` next id in the ordered ring (zero = end of ring).
+pub const DOTCELL_NEXT_ID_RANGE: Range<usize> = 33..53;
+/// `[53..58]` expiry, unix seconds, u40 little-endian.
+pub const DOTCELL_EXPIRY_RANGE: Range<usize> = 53..58;
+/// `[58..78]` owner = first 20 bytes of the owner's lock script hash.
+pub const DOTCELL_OWNER_RANGE: Range<usize> = 58..78;
+/// `[78..98]` manager = first 20 bytes of the manager's lock script hash.
+pub const DOTCELL_MANAGER_RANGE: Range<usize> = 78..98;
 /// `next == 0` marks the end of the uniqueness ring.
 pub const DOTCELL_ZERO_ID: [u8; 20] = [0u8; 20];
 /// Sale Lock args = `seller_lock_hash(32) ‖ price_shannons(u64 LE)`.
@@ -81,15 +98,17 @@ impl DotCellParser {
             .map_err(|e| anyhow!("dotcell label is not UTF-8: {e}"))?
             .to_string();
         let mut expiry = [0u8; 8];
-        expiry[..5].copy_from_slice(&data[53..58]);
+        expiry[..DOTCELL_EXPIRY_RANGE.len()].copy_from_slice(&data[DOTCELL_EXPIRY_RANGE]);
         let id = Self::derive_id(&label);
         Ok(DotCellNameData {
-            layout_version: data[0],
-            records_hash: data[1..33].try_into().expect("32 bytes"),
-            next_id: data[33..53].try_into().expect("20 bytes"),
+            layout_version: data[DOTCELL_LAYOUT_VERSION_RANGE.start],
+            records_hash: data[DOTCELL_RECORDS_HASH_RANGE]
+                .try_into()
+                .expect("32 bytes"),
+            next_id: data[DOTCELL_NEXT_ID_RANGE].try_into().expect("20 bytes"),
             expired_at: u64::from_le_bytes(expiry),
-            owner_hash20: data[58..78].try_into().expect("20 bytes"),
-            manager_hash20: data[78..98].try_into().expect("20 bytes"),
+            owner_hash20: data[DOTCELL_OWNER_RANGE].try_into().expect("20 bytes"),
+            manager_hash20: data[DOTCELL_MANAGER_RANGE].try_into().expect("20 bytes"),
             label,
             id,
         })
@@ -383,6 +402,34 @@ mod tests {
             assert!(DotCellParser::is_sale_lock(&bytes), "{hex} sale lock");
             assert!(!DotCellParser::is_account_lock(&bytes));
         }
+    }
+
+    /// The published field ranges tile the fixed header exactly, in order,
+    /// with each field its declared width — the API labels segments with
+    /// them, so a gap or overlap would mislabel chain bytes.
+    #[test]
+    fn header_ranges_tile_the_fixed_header() {
+        let ranges = [
+            DOTCELL_LAYOUT_VERSION_RANGE,
+            DOTCELL_RECORDS_HASH_RANGE,
+            DOTCELL_NEXT_ID_RANGE,
+            DOTCELL_EXPIRY_RANGE,
+            DOTCELL_OWNER_RANGE,
+            DOTCELL_MANAGER_RANGE,
+        ];
+        let mut cursor = 0;
+        for range in &ranges {
+            assert_eq!(
+                range.start, cursor,
+                "{range:?} must start where the previous ended"
+            );
+            cursor = range.end;
+        }
+        assert_eq!(cursor, DOTCELL_HEADER_LEN);
+        assert_eq!(
+            ranges.iter().map(|r| r.len()).collect::<Vec<_>>(),
+            vec![1, 32, DOTCELL_ID_LEN, 5, DOTCELL_ID_LEN, DOTCELL_ID_LEN]
+        );
     }
 
     #[test]

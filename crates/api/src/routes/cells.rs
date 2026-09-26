@@ -957,6 +957,148 @@ fn maybe_parse_dotbit_decode(
     })
 }
 
+/// Layer-0 decode of a `.cell` name cell or the ring root: the values come
+/// from the indexer's own `DotCellParser::parse_name_data` and the segment
+/// offsets from the parser's own field ranges — no second offset table here.
+///
+/// `Ok(None)`: not a Cells Account cell. `Err`: it is one and its data does
+/// not decode. The indexer refuses to store such a cell (live and bulk both
+/// bail), so meeting one here is a broken invariant, never a guess.
+fn maybe_parse_dotcell_decode(
+    info: &ckbadger_store::PositionedCellInfo,
+    data: &[u8],
+) -> anyhow::Result<Option<CellDeterministicDecode>> {
+    use anyhow::Context as _;
+    use ckbadger_indexer::parser::dotcell::{
+        DotCellParser, DOTCELL_EXPIRY_RANGE, DOTCELL_HEADER_LEN, DOTCELL_LAYOUT_VERSION_RANGE,
+        DOTCELL_MANAGER_RANGE, DOTCELL_NEXT_ID_RANGE, DOTCELL_OWNER_RANGE,
+        DOTCELL_RECORDS_HASH_RANGE, DOTCELL_ZERO_ID,
+    };
+
+    let Some(type_code_hash) = info.type_code_hash.as_deref() else {
+        return Ok(None);
+    };
+    if !DotCellParser::is_account_type_script(type_code_hash) {
+        return Ok(None);
+    }
+    let name =
+        DotCellParser::parse_name_data(data).context("dotcell name cell data does not decode")?;
+
+    let hex = |bytes: &[u8]| format!("0x{}", hex::encode(bytes));
+    let segment = |label: &str,
+                   range: std::ops::Range<usize>,
+                   meaning: &str,
+                   human_value: String| CellDataSegment {
+        label: label.to_string(),
+        start: range.start as i32,
+        end: range.end as i32,
+        meaning: meaning.to_string(),
+        human_value,
+    };
+
+    // A u40 always fits in i64 and in chrono's range; either failing means
+    // the parser handed back something that is not a u40.
+    let expired_at = i64::try_from(name.expired_at)
+        .ok()
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "dotcell expiry {} is not a representable u40 timestamp",
+                name.expired_at
+            )
+        })?
+        .to_rfc3339();
+    let next_id = if name.next_id == DOTCELL_ZERO_ID {
+        "end of ring".to_string()
+    } else {
+        hex(&name.next_id)
+    };
+    let owner = hex(&name.owner_hash20);
+    let manager = if name.manager_hash20 == name.owner_hash20 {
+        format!("{} (same as owner)", hex(&name.manager_hash20))
+    } else {
+        format!("{} (delegated)", hex(&name.manager_hash20))
+    };
+    let label = if name.is_root() {
+        "(empty)".to_string()
+    } else {
+        let mut value = format!("{}.cell · id {}", name.label, hex(&name.id));
+        if let Some(parent) = name.parent_label() {
+            value.push_str(&format!(" · sub-name of {parent}.cell"));
+        }
+        value
+    };
+
+    let segments = vec![
+        segment(
+            "layout_version",
+            DOTCELL_LAYOUT_VERSION_RANGE,
+            "Layout version (u8)",
+            name.layout_version.to_string(),
+        ),
+        segment(
+            "records_hash",
+            DOTCELL_RECORDS_HASH_RANGE,
+            "blake2b of the records payload, carried in WitnessArgs.output_type of the \
+             creating transaction's witness at this output index",
+            hex(&name.records_hash),
+        ),
+        segment(
+            "next_id",
+            DOTCELL_NEXT_ID_RANGE,
+            "Next name id in the ordered uniqueness ring (zero = end of ring)",
+            next_id.clone(),
+        ),
+        segment(
+            "expired_at",
+            DOTCELL_EXPIRY_RANGE,
+            "Expiry, unix seconds (u40 little-endian)",
+            format!("{expired_at} (unix {})", name.expired_at),
+        ),
+        segment(
+            "owner_hash20",
+            DOTCELL_OWNER_RANGE,
+            "Owner: first 20 bytes of the owner's lock script hash",
+            owner.clone(),
+        ),
+        segment(
+            "manager_hash20",
+            DOTCELL_MANAGER_RANGE,
+            "Manager: first 20 bytes of the manager's lock script hash",
+            manager,
+        ),
+        segment(
+            "label",
+            DOTCELL_HEADER_LEN..data.len(),
+            "Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]",
+            label,
+        ),
+    ];
+
+    if name.is_root() {
+        let namespace = info.type_args.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("dotcell ring root has a type code_hash but no stored type args")
+        })?;
+        return Ok(Some(CellDeterministicDecode {
+            kind: "dotcell_ring_root".to_string(),
+            summary: format!(
+                ".cell ring root of namespace {}; first name id: {next_id}",
+                hex(namespace)
+            ),
+            segments,
+        }));
+    }
+    Ok(Some(CellDeterministicDecode {
+        kind: "dotcell_name".to_string(),
+        summary: format!(
+            "{}.cell name cell (layout v{}); owner {owner}; expires {expired_at}; records are in \
+             the creating transaction's witness at this output index",
+            name.label, name.layout_version
+        ),
+        segments,
+    }))
+}
+
 fn maybe_parse_dep_group_decode(data: &[u8], data_size: i32) -> Option<CellDeterministicDecode> {
     let parsed = parse_dep_group(data, data_size);
     if !parsed.is_dep_group || data.len() < 4 {
@@ -1286,7 +1428,9 @@ fn build_script_hint_guess(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDataGuess> {
-    let type_code_hash = info.type_code_hash.as_ref()?;
+    let Some(type_code_hash) = info.type_code_hash.as_ref() else {
+        return build_lock_script_hint_guess(info, data);
+    };
 
     let (label, expectation, confidence) = if is_dao_type_code_hash(type_code_hash) {
         (
@@ -1350,8 +1494,31 @@ fn build_script_hint_guess(
             "expected at least 52 bytes: account_hash(32) + account_id(20)",
             "high",
         )
+    } else if PROTOCOL_REGISTRY.is(type_code_hash, ProtocolScript::DotCellAccount) {
+        // Unreachable in practice: an undecodable Account cell is an error in
+        // `maybe_parse_dotcell_decode`, never a hint. Kept so the family is
+        // described completely.
+        (
+            "Cells Account (.cell name)",
+            "expected 98-byte header (version, records hash, next id, u40 expiry, owner, manager) + UTF-8 label",
+            "high",
+        )
+    } else if PROTOCOL_REGISTRY.is(type_code_hash, ProtocolScript::DotCellPrice) {
+        // A price cell is not decoded on this page; say what it is without
+        // claiming its bytes are wrong.
+        return Some(CellDataGuess {
+            kind: "script_hint".to_string(),
+            confidence: "medium".to_string(),
+            reason: "Type script indicates Cells Price (.cell price cell); its payload is not decoded here"
+                .to_string(),
+            mime_type: None,
+            human_value: Some(format!(
+                "layout: version(u8) + factor_bps(u16 LE) + reserved(u16); observed length={} bytes",
+                data.len()
+            )),
+        });
     } else {
-        return None;
+        return build_lock_script_hint_guess(info, data);
     };
 
     Some(CellDataGuess {
@@ -1370,24 +1537,63 @@ fn build_script_hint_guess(
     })
 }
 
+/// A hint from the LOCK script, for `.cell` cells whose type script does not
+/// explain them: a Sale Lock offer cell, or an Account Lock cell that does
+/// not carry the Account type.
+fn build_lock_script_hint_guess(
+    info: &ckbadger_store::PositionedCellInfo,
+    data: &[u8],
+) -> Option<CellDataGuess> {
+    let (reason, expectation) = match PROTOCOL_REGISTRY.get(&info.lock_code_hash) {
+        Some(ProtocolScript::DotCellSaleLock) => (
+            "Lock script indicates Cells Sale Lock (.cell offer cell); its payload is not decoded here",
+            "lock args = seller_lock_hash(32) + price_shannons(u64 LE); data = molecule Script of the seller's payout lock",
+        ),
+        Some(ProtocolScript::DotCellAccountLock) => (
+            "Lock script indicates Cells Account Lock but the type script is not Cells Account",
+            "a Cells Account Lock cell is expected to carry the Cells Account type and a .cell name payload",
+        ),
+        _ => return None,
+    };
+    Some(CellDataGuess {
+        kind: "script_hint".to_string(),
+        confidence: "medium".to_string(),
+        reason: reason.to_string(),
+        mime_type: None,
+        human_value: Some(format!(
+            "{expectation}; observed length={} bytes",
+            data.len()
+        )),
+    })
+}
+
+/// Layer-0 analysis of a cell's data. Fallible: a cell whose script says it
+/// is a protocol cell the indexer decodes (and would have refused to store
+/// had it not decoded) but whose bytes do not decode here is a broken
+/// invariant, reported with context rather than shown as a guess.
 fn analyze_cell_data(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
     data_size: i32,
-) -> CellDataAnalysis {
-    let deterministic = maybe_parse_dao_decode(info, data)
-        .or_else(|| maybe_parse_spore_decode(info, data))
-        .or_else(|| maybe_parse_cluster_decode(info, data))
-        .or_else(|| maybe_parse_mnft_decode(info, data))
-        .or_else(|| maybe_parse_udt_decode(info, data))
-        .or_else(|| maybe_parse_dotbit_decode(info, data))
-        .or_else(|| {
-            if info.type_code_hash.is_none() {
-                maybe_parse_dep_group_decode(data, data_size)
-            } else {
-                None
-            }
-        });
+) -> anyhow::Result<CellDataAnalysis> {
+    // The fallible decoders come first: each either decodes its protocol's
+    // cell, says it is not one, or reports the broken invariant.
+    let deterministic = match maybe_parse_dotcell_decode(info, data)? {
+        Some(decode) => Some(decode),
+        None => maybe_parse_dao_decode(info, data)
+            .or_else(|| maybe_parse_spore_decode(info, data))
+            .or_else(|| maybe_parse_cluster_decode(info, data))
+            .or_else(|| maybe_parse_mnft_decode(info, data))
+            .or_else(|| maybe_parse_udt_decode(info, data))
+            .or_else(|| maybe_parse_dotbit_decode(info, data))
+            .or_else(|| {
+                if info.type_code_hash.is_none() {
+                    maybe_parse_dep_group_decode(data, data_size)
+                } else {
+                    None
+                }
+            }),
+    };
 
     let mut heuristic_guesses = build_heuristic_guesses(data);
     if deterministic.is_none() {
@@ -1396,10 +1602,10 @@ fn analyze_cell_data(
         }
     }
 
-    CellDataAnalysis {
+    Ok(CellDataAnalysis {
         deterministic,
         heuristic_guesses,
-    }
+    })
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -2977,7 +3183,13 @@ async fn get_cell(
 
     let data_analysis = cell_data
         .as_ref()
-        .map(|d| analyze_cell_data(&info, d, info.data_size));
+        .map(|d| analyze_cell_data(&info, d, info.data_size))
+        .transpose()
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "cell data analysis failed: outpoint={outpoint}: {e:#}"
+            ))
+        })?;
 
     let occupied_capacity_breakdown = estimated_occupied_capacity_breakdown(&info);
     let occupied_capacity = if info.occupied_capacity > 0 {
@@ -3958,7 +4170,7 @@ mod tests {
         let mut data = vec![0u8; 16];
         data[0] = 0x2a;
 
-        let analysis = analyze_cell_data(&info, &data, 16);
+        let analysis = analyze_cell_data(&info, &data, 16).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("deterministic decode");
         assert_eq!(deterministic.kind, "udt_amount");
         assert_eq!(deterministic.segments.len(), 1);
@@ -3988,7 +4200,7 @@ mod tests {
         let mut data = vec![0u8; 16];
         data[0] = 0x2a;
 
-        let analysis = analyze_cell_data(&info, &data, 16);
+        let analysis = analyze_cell_data(&info, &data, 16).expect("cell data analysis");
         let deterministic = analysis
             .deterministic
             .expect("testnet sUDT must classify as UDT via the registry");
@@ -4013,7 +4225,8 @@ mod tests {
         let cluster_id = vec![0xAA; 32];
         let data = make_spore_data("image/png", &[1, 2, 3, 4], Some(cluster_id.as_slice()));
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("spore decode");
         assert_eq!(deterministic.kind, "spore_cell");
         assert!(deterministic
@@ -4052,7 +4265,8 @@ mod tests {
         let info = positioned(info);
         let data = make_cluster_data("Genesis Collection", "Primary cluster");
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("spore cluster decode");
         assert_eq!(deterministic.kind, "spore_cluster_cell");
         assert!(deterministic
@@ -4084,7 +4298,8 @@ mod tests {
         data.extend_from_slice(&(info_blob.len() as u16).to_be_bytes());
         data.extend_from_slice(info_blob);
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft issuer decode");
         assert_eq!(deterministic.kind, "mnft_issuer_cell");
         assert!(deterministic
@@ -4120,7 +4335,8 @@ mod tests {
         data.extend_from_slice(&make_mnft_vartext("Main collection"));
         data.extend_from_slice(&make_mnft_vartext("renderer:v1"));
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft class decode");
         assert_eq!(deterministic.kind, "mnft_class_cell");
         assert!(deterministic
@@ -4153,7 +4369,8 @@ mod tests {
         let data = hex::decode("000000001400000014c0000a466972737420537465700004646573630000")
             .expect("valid hex");
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft class decode");
         assert_eq!(deterministic.kind, "mnft_class_cell");
         assert!(deterministic
@@ -4186,7 +4403,8 @@ mod tests {
         data.push(0x81); // configure
         data.push(0x04); // state
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("mnft token decode");
         assert_eq!(deterministic.kind, "mnft_token_cell");
         assert!(deterministic
@@ -4225,7 +4443,8 @@ mod tests {
         data.push(0x00); // configure
         data.push(0x00); // state
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis
             .deterministic
             .expect("testnet mNFT token must classify via the registry");
@@ -4246,7 +4465,8 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 8];
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao deposit decode");
         assert_eq!(deterministic.kind, "dao_deposit_cell");
         assert!(deterministic
@@ -4266,7 +4486,8 @@ mod tests {
         let block_number = 987654u64;
         let data = block_number.to_le_bytes().to_vec();
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao withdraw decode");
         assert_eq!(deterministic.kind, "dao_withdraw_request_cell");
         assert!(deterministic
@@ -4286,7 +4507,7 @@ mod tests {
         data.extend_from_slice(&[0xAB; 32]);
         data.extend_from_slice(&3u32.to_le_bytes());
 
-        let analysis = analyze_cell_data(&info, &data, 40);
+        let analysis = analyze_cell_data(&info, &data, 40).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dep group decode");
         assert_eq!(deterministic.kind, "dep_group_out_point_vec");
         assert_eq!(deterministic.segments[0].label, "count");
@@ -4306,7 +4527,8 @@ mod tests {
         let info = make_info();
         let data = b"\x89PNG\r\n\x1a\nhello".to_vec();
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis
             .heuristic_guesses
@@ -4319,7 +4541,8 @@ mod tests {
         let info = make_info();
         let data = b"\0asm\x01\0\0\0".to_vec();
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -4331,7 +4554,8 @@ mod tests {
         let info = make_info();
         let data = vec![0x50, 0x4B, 0x03, 0x04, 0x14, 0x00];
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -4343,7 +4567,8 @@ mod tests {
         let info = make_info();
         let data = vec![0x1F, 0x8B, 0x08, 0x00];
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -4362,7 +4587,8 @@ mod tests {
         let info = positioned(info);
         let data = make_spore_data("text/plain", b"hello spore text", None);
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("spore decode");
         let content_segment = deterministic
             .segments
@@ -4382,7 +4608,8 @@ mod tests {
         data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
         data.extend_from_slice(&[0x55, 0x66, 0x77, 0x88]);
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.mime_type.as_deref() == Some("application/x-molecule-table")
                 && g.human_value
@@ -4396,7 +4623,8 @@ mod tests {
         let info = make_info();
         let data = br#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#.to_vec();
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -4408,7 +4636,8 @@ mod tests {
         let info = make_info();
         let data = b"ipfs://bafybeigdyrztm".to_vec();
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis
             .heuristic_guesses
             .iter()
@@ -4420,14 +4649,16 @@ mod tests {
         let info = make_info();
 
         let u32_data = 12345u32.to_le_bytes().to_vec();
-        let u32_analysis = analyze_cell_data(&info, &u32_data, u32_data.len() as i32);
+        let u32_analysis =
+            analyze_cell_data(&info, &u32_data, u32_data.len() as i32).expect("cell data analysis");
         assert!(u32_analysis
             .heuristic_guesses
             .iter()
             .any(|g| g.kind == "numeric_pattern" && g.human_value.as_deref() == Some("12345")));
 
         let u64_data = 0u64.to_le_bytes().to_vec();
-        let u64_analysis = analyze_cell_data(&info, &u64_data, u64_data.len() as i32);
+        let u64_analysis =
+            analyze_cell_data(&info, &u64_data, u64_data.len() as i32).expect("cell data analysis");
         assert!(u64_analysis
             .heuristic_guesses
             .iter()
@@ -4448,7 +4679,8 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 4];
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.kind == "script_hint"
@@ -4471,7 +4703,8 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 20];
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.kind == "script_hint"
@@ -4492,7 +4725,8 @@ mod tests {
         let info = positioned(info);
         let data = vec![0u8; 8];
 
-        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
         assert!(analysis.heuristic_guesses.iter().any(|g| {
             g.kind == "script_hint"
@@ -4516,7 +4750,7 @@ mod tests {
         data.extend_from_slice(&[0xAB; 32]);
         data.extend_from_slice(&3u32.to_le_bytes());
 
-        let analysis = analyze_cell_data(&info, &data, 40);
+        let analysis = analyze_cell_data(&info, &data, 40).expect("cell data analysis");
         assert!(analysis.deterministic.is_none());
     }
 
@@ -4559,6 +4793,252 @@ mod tests {
         assert_eq!(protocol.type_script, None);
         let json = serde_json::to_value(&protocol).unwrap();
         assert_eq!(json, serde_json::json!({ "lock": null, "type": null }));
+    }
+
+    /// `M2_OUT1_DATA`: `support.cell` as registered on mainnet (105 bytes).
+    const DOTCELL_SUPPORT_DATA: &str = "0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e265b5fe7e7070b506f69bd8cabf9e4272111066455e00926c0057d926a44d83fc13b21ce037b1e31f4223e3c86757d926a44d83fc13b21ce037b1e31f4223e3c867737570706f7274";
+    /// `M1_OUT0_DATA`: the mainnet ring root (98 bytes, empty label).
+    const DOTCELL_RING_ROOT_DATA: &str = "0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    /// `PRICE_TYPE_CODE_HASH_MAINNET` (docs/metadata/scripts/dotcell-price.toml).
+    const DOTCELL_PRICE_TYPE_MAINNET: &str =
+        "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9";
+    /// `SALE_LOCK_CODE_HASH_MAINNET` (docs/metadata/scripts/dotcell-sale-lock.toml).
+    const DOTCELL_SALE_LOCK_MAINNET: &str =
+        "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879";
+
+    /// A mainnet `.cell` name cell: Account Lock (empty args) + Account type
+    /// under the mainnet namespace.
+    fn dotcell_name_info(data: &[u8]) -> ckbadger_store::PositionedCellInfo {
+        positioned(LiveCellInfo {
+            lock_code_hash: hex_bytes(DOTCELL_ACCOUNT_LOCK_MAINNET),
+            lock_args: vec![],
+            type_code_hash: Some(hex_bytes(DOTCELL_ACCOUNT_TYPE_MAINNET)),
+            type_script_hash: Some(vec![0x61; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(hex_bytes("0xb4f4302965b7d6421481a520ee7eb5971a5e808c")),
+            data_size: data.len() as i32,
+            ..make_payload()
+        })
+    }
+
+    fn dotcell_segment<'a>(
+        decode: &'a CellDeterministicDecode,
+        label: &str,
+    ) -> &'a CellDataSegment {
+        decode
+            .segments
+            .iter()
+            .find(|s| s.label == label)
+            .unwrap_or_else(|| panic!("segment {label} missing from {decode:?}"))
+    }
+
+    #[test]
+    fn test_analyze_cell_data_decodes_dotcell_name() {
+        let data = hex_bytes(DOTCELL_SUPPORT_DATA);
+        let info = dotcell_name_info(&data);
+
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let decode = analysis.deterministic.expect("dotcell name decode");
+        assert_eq!(decode.kind, "dotcell_name");
+        assert!(
+            decode.summary.contains("support.cell"),
+            "{}",
+            decode.summary
+        );
+
+        let shape: Vec<(&str, i32, i32)> = decode
+            .segments
+            .iter()
+            .map(|s| (s.label.as_str(), s.start, s.end))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("layout_version", 0, 1),
+                ("records_hash", 1, 33),
+                ("next_id", 33, 53),
+                ("expired_at", 53, 58),
+                ("owner_hash20", 58, 78),
+                ("manager_hash20", 78, 98),
+                ("label", 98, 105),
+            ]
+        );
+        assert_eq!(decode.segments[0].human_value, "3");
+        assert_eq!(
+            decode.segments[1].human_value,
+            "0x72ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e2"
+        );
+        assert_eq!(
+            decode.segments[2].human_value,
+            "0x65b5fe7e7070b506f69bd8cabf9e427211106645"
+        );
+        // 1,821,507,678 = 2027-09-21T06:21:18Z.
+        assert!(
+            decode.segments[3].human_value.contains("2027-09-21"),
+            "{}",
+            decode.segments[3].human_value
+        );
+        assert!(
+            decode.segments[3].human_value.contains("1821507678"),
+            "{}",
+            decode.segments[3].human_value
+        );
+        assert!(
+            decode.segments[3].meaning.contains("u40"),
+            "{}",
+            decode.segments[3].meaning
+        );
+        assert_eq!(
+            decode.segments[4].human_value,
+            "0x57d926a44d83fc13b21ce037b1e31f4223e3c867"
+        );
+        assert!(
+            decode.segments[5].human_value.contains("same as owner"),
+            "{}",
+            decode.segments[5].human_value
+        );
+        assert_eq!(
+            decode.segments[6].human_value,
+            "support.cell · id 0x62d71147ac82b83c8531126cacb0d2f072bfd94a"
+        );
+    }
+
+    #[test]
+    fn test_analyze_cell_data_decodes_dotcell_sub_name_parent() {
+        let mut data = hex_bytes(DOTCELL_SUPPORT_DATA);
+        data.truncate(98);
+        data.extend_from_slice(b"shop.support");
+        let info = dotcell_name_info(&data);
+
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let decode = analysis.deterministic.expect("dotcell sub-name decode");
+        assert_eq!(decode.kind, "dotcell_name");
+        let label = dotcell_segment(&decode, "label");
+        assert_eq!((label.start, label.end), (98, 110));
+        assert!(
+            label.human_value.starts_with("shop.support.cell · id 0x"),
+            "{}",
+            label.human_value
+        );
+        assert!(
+            label.human_value.contains("sub-name of support.cell"),
+            "{}",
+            label.human_value
+        );
+    }
+
+    #[test]
+    fn test_analyze_cell_data_decodes_dotcell_ring_root() {
+        let data = hex_bytes(DOTCELL_RING_ROOT_DATA);
+        let info = dotcell_name_info(&data);
+
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let decode = analysis.deterministic.expect("dotcell ring root decode");
+        assert_eq!(decode.kind, "dotcell_ring_root");
+        assert!(decode.summary.contains("ring root"), "{}", decode.summary);
+        assert_eq!(
+            dotcell_segment(&decode, "next_id").human_value,
+            "end of ring"
+        );
+        let label = dotcell_segment(&decode, "label");
+        assert_eq!((label.start, label.end), (98, 98));
+        assert_eq!(label.human_value, "(empty)");
+    }
+
+    #[test]
+    fn test_analyze_cell_data_decodes_dotcell_manager_delegated() {
+        let mut data = hex_bytes(DOTCELL_SUPPORT_DATA);
+        data[78..98].copy_from_slice(&[0xab; 20]);
+        let info = dotcell_name_info(&data);
+
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let decode = analysis.deterministic.expect("dotcell name decode");
+        let manager = dotcell_segment(&decode, "manager_hash20");
+        assert!(
+            manager.human_value.contains("delegated"),
+            "{}",
+            manager.human_value
+        );
+        assert!(
+            manager.human_value.contains(&"ab".repeat(20)),
+            "{}",
+            manager.human_value
+        );
+    }
+
+    #[test]
+    fn test_analyze_cell_data_dotcell_undecodable_is_an_error() {
+        let mut data = hex_bytes(DOTCELL_SUPPORT_DATA);
+        data.truncate(97);
+        let info = dotcell_name_info(&data);
+
+        let err = analyze_cell_data(&info, &data, data.len() as i32)
+            .expect_err("an Account-typed cell whose data does not decode is an invariant break");
+        let text = format!("{err:#}");
+        assert!(text.contains("dotcell"), "{text}");
+        assert!(text.contains("need>=98"), "{text}");
+    }
+
+    #[test]
+    fn test_analyze_cell_data_dotcell_heuristics_still_listed() {
+        let data = hex_bytes(DOTCELL_SUPPORT_DATA);
+        let info = dotcell_name_info(&data);
+
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        assert!(analysis.deterministic.is_some());
+        assert!(!analysis.heuristic_guesses.is_empty());
+        assert!(
+            analysis
+                .heuristic_guesses
+                .iter()
+                .all(|g| g.kind != "script_hint"),
+            "a decoded cell gets no script hint: {:?}",
+            analysis.heuristic_guesses
+        );
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_script_hint_for_dotcell_family() {
+        // A Price-typed cell this page does not decode says what it is.
+        let price = positioned(LiveCellInfo {
+            type_code_hash: Some(hex_bytes(DOTCELL_PRICE_TYPE_MAINNET)),
+            type_script_hash: Some(vec![0x62; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            ..make_payload()
+        });
+        let data = vec![0x01, 0x9f, 0x24];
+        let analysis =
+            analyze_cell_data(&price, &data, data.len() as i32).expect("cell data analysis");
+        assert!(analysis.deterministic.is_none());
+        assert_eq!(analysis.heuristic_guesses[0].kind, "script_hint");
+        assert!(
+            analysis.heuristic_guesses[0].reason.contains("Cells Price"),
+            "{:?}",
+            analysis.heuristic_guesses[0]
+        );
+
+        // No type script at all: the hint comes from the lock.
+        let sale = positioned(LiveCellInfo {
+            lock_code_hash: hex_bytes(DOTCELL_SALE_LOCK_MAINNET),
+            lock_args: vec![0x11; 40],
+            ..make_payload()
+        });
+        let analysis = analyze_cell_data(&sale, &[], 0).expect("cell data analysis");
+        assert!(analysis.deterministic.is_none());
+        assert_eq!(analysis.heuristic_guesses[0].kind, "script_hint");
+        assert!(
+            analysis.heuristic_guesses[0]
+                .reason
+                .contains("Cells Sale Lock"),
+            "{:?}",
+            analysis.heuristic_guesses[0]
+        );
     }
 
     #[test]
