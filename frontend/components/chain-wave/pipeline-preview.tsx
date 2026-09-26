@@ -59,6 +59,7 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
 
   return (
     <section className="overflow-visible">
+      {/* Heading aligns with the site-wide container used by the header, footer and page rows. */}
       <div className="container mx-auto mb-2 px-4">
         <h2 className="text-text-bright text-base font-semibold sm:text-lg">
           Transaction Pipeline
@@ -80,15 +81,14 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
         </div>
       </div>
 
-      <div data-testid="pipeline-preview-track" className="min-w-0">
-        <MempoolBlocks
-          latestBlocks={initialBlocks}
-          chrome="flat"
-          showHeader={false}
-          showTxnLens
-          legendMode="none"
-        />
-      </div>
+      {/* The section is an ordinary full-width block; the track needs no viewport-unit breakout. */}
+      <MempoolBlocks
+        latestBlocks={initialBlocks}
+        chrome="flat"
+        showHeader={false}
+        showTxnLens
+        legendMode="none"
+      />
     </section>
   );
 }

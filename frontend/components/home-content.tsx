@@ -57,75 +57,71 @@ export function HomeContent({ initialData }: HomeContentProps) {
   });
 
   return (
-    <>
-      <main
-        data-testid="home-page-grid"
-        className="grid grid-cols-[minmax(0,1fr)_minmax(0,1280px)_minmax(0,1fr)] py-4 sm:py-6"
-      >
-        <div className="col-start-2 min-w-0 px-4">
-          {stats && <SyncBanner stats={stats} />}
+    <main className="py-4 sm:py-6">
+      <div className="container mx-auto px-4">
+        {stats && <SyncBanner stats={stats} />}
 
-          {/* Row 1: Network Charts (Latest Block + Hash Rate) */}
-          <div ref={heroRef} className="mt-3">
-            <HomeCharts
-              stats={stats}
-              isLoading={statsLoading}
-              initialBlockTimeChart={initialData.blockTimeChart}
-              initialHashRateChart={initialData.hashRateChart}
-            />
-          </div>
-
-          {/* Row 2: Epoch + Tx Stats */}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <EpochProgress
-              epochNumber={parseEpochInfo(stats).epochNumber}
-              epochIndex={parseEpochInfo(stats).epochIndex}
-              epochLength={parseEpochInfo(stats).epochLength}
-              latestBlock={stats?.latestBlock ?? 0}
-              estimatedTimeRemaining={stats?.estimatedEpochTime}
-            />
-            <MiniStatsCards />
-          </div>
-
-          {/* Row 3: CKBytes */}
-          <div className="mt-4">
-            <CKBytesCard stats={stats ?? null} />
-          </div>
-
-          {/* Row 4: Knowledge Size (left) | Nervos DAO (right) */}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <div className="flex flex-col gap-4">
-              <KnowledgeSizeTrend />
-              <ActivityBarChartCard />
-            </div>
-            <DaoOverview />
-          </div>
-
-          {/* Row 5: Latest Activities | Activity Card */}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <LatestActivities isRealtime={isConnected} />
-            <ActivityCard isRealtime={isConnected} />
-          </div>
+        {/* Row 1: Network Charts (Latest Block + Hash Rate) */}
+        <div ref={heroRef} className="mt-3">
+          <HomeCharts
+            stats={stats}
+            isLoading={statsLoading}
+            initialBlockTimeChart={initialData.blockTimeChart}
+            initialHashRateChart={initialData.hashRateChart}
+          />
         </div>
 
-        {/* Row 6: Transaction Pipeline */}
-        <div data-testid="home-pipeline-row" className="col-span-full mt-4 min-w-0">
-          <PipelinePreview initialBlocks={initialData.blocks} />
+        {/* Row 2: Epoch + Tx Stats */}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <EpochProgress
+            epochNumber={parseEpochInfo(stats).epochNumber}
+            epochIndex={parseEpochInfo(stats).epochIndex}
+            epochLength={parseEpochInfo(stats).epochLength}
+            latestBlock={stats?.latestBlock ?? 0}
+            estimatedTimeRemaining={stats?.estimatedEpochTime}
+          />
+          <MiniStatsCards />
         </div>
 
-        {/* Row 7: Latest Blocks & Transactions */}
-        <div className="col-start-2 min-w-0 px-4">
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            <LatestBlocks isRealtime={isConnected} initialBlocks={initialData.blocks} />
-            <LatestTransactions
-              isRealtime={isConnected}
-              initialTransactions={initialData.transactions}
-            />
-          </div>
+        {/* Row 3: CKBytes */}
+        <div className="mt-4">
+          <CKBytesCard stats={stats ?? null} />
         </div>
-      </main>
+
+        {/* Row 4: Knowledge Size (left) | Nervos DAO (right) */}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div className="flex flex-col gap-4">
+            <KnowledgeSizeTrend />
+            <ActivityBarChartCard />
+          </div>
+          <DaoOverview />
+        </div>
+
+        {/* Row 5: Latest Activities | Activity Card */}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <LatestActivities isRealtime={isConnected} />
+          <ActivityCard isRealtime={isConnected} />
+        </div>
+      </div>
+
+      {/* Row 6: Transaction Pipeline. A plain block sibling of the container rows spans the page
+          width on its own; sizing it in viewport units (w-screen, 50vw margins) overflows by the
+          vertical scrollbar width and adds a horizontal scrollbar. */}
+      <div className="mt-4">
+        <PipelinePreview initialBlocks={initialData.blocks} />
+      </div>
+
+      {/* Row 7: Latest Blocks & Transactions */}
+      <div className="container mx-auto mt-5 grid gap-4 px-4 lg:grid-cols-2">
+        <LatestBlocks isRealtime={isConnected} initialBlocks={initialData.blocks} />
+        <LatestTransactions
+          isRealtime={isConnected}
+          initialTransactions={initialData.transactions}
+        />
+      </div>
+
       <LiveIndicator isConnected={isConnected} />
-    </>
+    </main>
   );
 }
 

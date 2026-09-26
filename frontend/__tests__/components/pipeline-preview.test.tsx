@@ -94,11 +94,29 @@ describe('PipelinePreview', () => {
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('lens:true');
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('header:false');
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('legend:none');
+  });
 
-    const track = screen.getByTestId('pipeline-preview-track');
-    expect(track).toHaveClass('min-w-0');
-    expect(track).not.toHaveClass('w-screen');
-    expect(track).not.toHaveClass('-ml-[50vw]');
-    expect(track).not.toHaveClass('-mr-[50vw]');
+  it('aligns the heading with the site container and renders the track without viewport-unit breakout', () => {
+    const pending = () => new Promise<never>(() => {});
+    vi.spyOn(api, 'getMempoolBlocks').mockImplementation(pending);
+    vi.spyOn(api, 'getMempoolTransactions').mockImplementation(pending);
+    vi.spyOn(api, 'getPendingProposals').mockImplementation(pending);
+    vi.spyOn(api, 'getBlocks').mockImplementation(pending);
+
+    const { container: root } = render(<PipelinePreview initialBlocks={[mockBlock(100, 200)]} />);
+
+    // Any class that sizes an element in viewport units (w-screen, -ml-[50vw], ...) is wider than
+    // the page once a vertical scrollbar is present and produces a horizontal scrollbar.
+    const viewportSizedClasses = Array.from(root.querySelectorAll<HTMLElement>('*'))
+      .flatMap((el) => Array.from(el.classList))
+      .filter((cls) => cls.includes('w-screen') || cls.includes('vw'));
+    expect(viewportSizedClasses).toEqual([]);
+
+    const headingWrapper = screen.getByText('Transaction Pipeline').closest('.container');
+    expect(headingWrapper).not.toBeNull();
+    expect(headingWrapper).toHaveClass('mx-auto');
+    expect(headingWrapper).toHaveClass('px-4');
+
+    expect(screen.getByTestId('mempool-blocks').closest('.container')).toBeNull();
   });
 });
