@@ -198,12 +198,14 @@ describe('useInventoryLabel', () => {
         deterministic: {
           kind: 'dotbit_account',
           summary: '.bit Account',
+          // The shape `maybe_parse_dotbit_decode` emits: the AccountCell's
+          // UTF-8 name tail, data[80..], after the 80-byte fixed header.
           segments: [
             {
               label: 'account',
-              start: 0,
-              end: 9,
-              meaning: 'Account name',
+              start: 80,
+              end: 89,
+              meaning: 'DAS account name (UTF-8, includes .bit suffix)',
               humanValue: 'alice.bit',
             },
           ],

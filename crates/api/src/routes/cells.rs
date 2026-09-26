@@ -878,16 +878,25 @@ fn maybe_parse_udt_decode(
     })
 }
 
+/// Layer-0 decode of a `.bit` AccountCell:
+/// `account_hash(32) ‖ account_id(20) ‖ next_account_id(20) ‖ expired_at(u64 LE) ‖ account`,
+/// where the tail is the UTF-8 account name itself (`casinox.bit`).
+///
+/// `Err` when the tail is not UTF-8: the DAS contracts only ever write the
+/// account name there, so a non-UTF-8 tail is corrupt data, not an opaque
+/// payload to be shown as bytes.
 fn maybe_parse_dotbit_decode(
     info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
-) -> Option<CellDeterministicDecode> {
-    let type_code_hash = info.type_code_hash.as_ref()?;
+) -> anyhow::Result<Option<CellDeterministicDecode>> {
+    let Some(type_code_hash) = info.type_code_hash.as_ref() else {
+        return Ok(None);
+    };
     if !is_dotbit_account_type_code_hash(type_code_hash) {
-        return None;
+        return Ok(None);
     }
     if data.len() < 52 {
-        return None;
+        return Ok(None);
     }
 
     let mut segments = Vec::new();
@@ -923,7 +932,11 @@ fn maybe_parse_dotbit_decode(
     }
 
     if data.len() >= 80 {
-        let expired_at = u64::from_le_bytes(data[72..80].try_into().ok()?);
+        let expired_at = u64::from_le_bytes(
+            data[72..80]
+                .try_into()
+                .expect("data length already checked as at least 80 bytes"),
+        );
         let expired_at_str = if let Ok(expired_i64) = i64::try_from(expired_at) {
             chrono::DateTime::from_timestamp(expired_i64, 0)
                 .map(|dt| dt.to_rfc3339())
@@ -941,20 +954,26 @@ fn maybe_parse_dotbit_decode(
     }
 
     if data.len() > 80 {
+        let account = std::str::from_utf8(&data[80..]).map_err(|e| {
+            anyhow::anyhow!(
+                "dotbit account name is not UTF-8: bytes 80..{} of the AccountCell data: {e}",
+                data.len()
+            )
+        })?;
         segments.push(CellDataSegment {
-            label: "trailing_payload".to_string(),
+            label: "account".to_string(),
             start: 80,
             end: data.len() as i32,
-            meaning: "Remaining bytes in account cell payload".to_string(),
-            human_value: format!("{} bytes", data.len() - 80),
+            meaning: "DAS account name (UTF-8, includes .bit suffix)".to_string(),
+            human_value: account.to_string(),
         });
     }
 
-    Some(CellDeterministicDecode {
+    Ok(Some(CellDeterministicDecode {
         kind: "dotbit_account".to_string(),
         summary: "DAS account cell layout detected from type script".to_string(),
         segments,
-    })
+    }))
 }
 
 /// Layer-0 decode of a `.cell` name cell or the ring root: the values come
@@ -1578,21 +1597,25 @@ fn analyze_cell_data(
 ) -> anyhow::Result<CellDataAnalysis> {
     // The fallible decoders come first: each either decodes its protocol's
     // cell, says it is not one, or reports the broken invariant.
-    let deterministic = match maybe_parse_dotcell_decode(info, data)? {
-        Some(decode) => Some(decode),
-        None => maybe_parse_dao_decode(info, data)
+    // Every decoder gates on its own registry protocol, so their order only
+    // decides which kind of failure surfaces first, never which decode wins.
+    let deterministic = if let Some(decode) = maybe_parse_dotcell_decode(info, data)? {
+        Some(decode)
+    } else if let Some(decode) = maybe_parse_dotbit_decode(info, data)? {
+        Some(decode)
+    } else {
+        maybe_parse_dao_decode(info, data)
             .or_else(|| maybe_parse_spore_decode(info, data))
             .or_else(|| maybe_parse_cluster_decode(info, data))
             .or_else(|| maybe_parse_mnft_decode(info, data))
             .or_else(|| maybe_parse_udt_decode(info, data))
-            .or_else(|| maybe_parse_dotbit_decode(info, data))
             .or_else(|| {
                 if info.type_code_hash.is_none() {
                     maybe_parse_dep_group_decode(data, data_size)
                 } else {
                     None
                 }
-            }),
+            })
     };
 
     let mut heuristic_guesses = build_heuristic_guesses(data);
@@ -4713,6 +4736,63 @@ mod tests {
                     .as_deref()
                     .is_some_and(|v| v.contains("at least 52 bytes"))
         }));
+    }
+
+    /// A `.bit` AccountCell shaped like mainnet `0xc51411d9…a33c:0`:
+    /// account_hash(32) + account_id(20) + next_account_id(20) +
+    /// expired_at(u64 LE) + the account name itself.
+    fn dotbit_account_cell(tail: &[u8]) -> (ckbadger_store::PositionedCellInfo, Vec<u8>) {
+        let info = positioned(LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(DOTBIT_ACCOUNT_CELL_TYPE_ID.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x54; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            ..make_payload()
+        });
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x11; 32]);
+        data.extend_from_slice(&[0x22; 20]);
+        data.extend_from_slice(&[0x33; 20]);
+        data.extend_from_slice(&1_800_000_000u64.to_le_bytes());
+        data.extend_from_slice(tail);
+        (info, data)
+    }
+
+    #[test]
+    fn test_analyze_cell_data_dotbit_emits_account_segment() {
+        let (info, data) = dotbit_account_cell(b"casinox.bit");
+        assert_eq!(data.len(), 91);
+
+        let analysis =
+            analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
+        let decode = analysis.deterministic.expect("dotbit decode");
+        assert_eq!(decode.kind, "dotbit_account");
+        let account = decode
+            .segments
+            .iter()
+            .find(|s| s.label == "account")
+            .unwrap_or_else(|| panic!("account segment missing: {decode:?}"));
+        assert_eq!((account.start, account.end), (80, 91));
+        assert_eq!(account.human_value, "casinox.bit");
+        assert!(
+            decode
+                .segments
+                .iter()
+                .all(|s| s.label != "trailing_payload"),
+            "the tail is the account name, not an opaque payload: {decode:?}"
+        );
+    }
+
+    #[test]
+    fn test_analyze_cell_data_dotbit_non_utf8_tail_is_an_error() {
+        let (info, data) = dotbit_account_cell(&[0xff, 0xfe]);
+
+        let err = analyze_cell_data(&info, &data, data.len() as i32)
+            .expect_err("an AccountCell whose name is not UTF-8 is corrupt data, not a payload");
+        let text = format!("{err:#}");
+        assert!(text.contains("dotbit account name is not UTF-8"), "{text}");
     }
 
     #[test]
