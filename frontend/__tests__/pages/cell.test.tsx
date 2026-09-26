@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
@@ -632,5 +632,80 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-coverage-grid')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-unparsed-ranges')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-byte-filter')).not.toBeInTheDocument();
+  });
+});
+
+describe('CellDetailPage lock panel', () => {
+  const mockLookupScripts = api.lookupScripts as ReturnType<typeof vi.fn>;
+  const ACCOUNT_LOCK_CODE_HASH = mockDotCellNameCell.lock.codeHash;
+  const SECP_CODE_HASH = mockCellWithoutDao.lock.codeHash;
+  const ACCOUNT_LOCK_DESCRIPTION =
+    'Lock a .cell name sits under. Always-success by design: authority is decided by the Cells Account type script from the owner and manager hashes in the cell.';
+
+  function lookupEntry(codeHash: string, name: string, description: string | null) {
+    return {
+      referenceHash: codeHash,
+      codeHash,
+      name,
+      description,
+      deprecated: false,
+      scriptKind: 'lock',
+      decoderType: null,
+      hashType: 'type',
+      codeCellTxHash: null,
+      codeCellOutputIndex: null,
+      liveCellsCount: 0,
+      ownedCapacitySum: '0',
+      ownedKnowledgeSum: '0',
+      codeCellsLiveCount: 0,
+      codeCellsTotal: 0,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    mockLookupScripts.mockImplementation(() => Promise.resolve({}));
+  });
+
+  it('shows the protocol lock description next to its empty args', async () => {
+    mockLookupScripts.mockImplementation(() =>
+      Promise.resolve({
+        [ACCOUNT_LOCK_CODE_HASH]: lookupEntry(
+          ACCOUNT_LOCK_CODE_HASH,
+          'Cells Account Lock',
+          ACCOUNT_LOCK_DESCRIPTION
+        ),
+      })
+    );
+    mockGetCell.mockResolvedValue(mockDotCellNameCell);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    const description = await screen.findByTestId('lock-script-description');
+    expect(description).toHaveTextContent(ACCOUNT_LOCK_DESCRIPTION);
+  });
+
+  it('does not show a description for a lock that is not a registry protocol', async () => {
+    mockLookupScripts.mockImplementation(() =>
+      Promise.resolve({
+        [SECP_CODE_HASH]: lookupEntry(SECP_CODE_HASH, 'Default Lock', 'Universal lock'),
+      })
+    );
+    mockGetCell.mockResolvedValue({
+      ...mockCellWithoutDao,
+      protocolScript: { lock: null, type: null },
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    // The lookup has landed once the lock's script badge renders.
+    await waitFor(() => {
+      expect(screen.getAllByText('Default Lock').length).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.queryByTestId('lock-script-description')).not.toBeInTheDocument();
+    expect(screen.queryByText('Universal lock')).not.toBeInTheDocument();
   });
 });

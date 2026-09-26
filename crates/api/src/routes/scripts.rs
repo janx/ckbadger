@@ -174,6 +174,9 @@ pub struct ScriptLookupInfo {
     pub reference_hash: String,
     pub code_hash: String,
     pub name: String,
+    /// The queried reference's own label description (`ScriptInfo.description`);
+    /// `null` when the reference has none.
+    pub description: Option<String>,
     pub deprecated: bool,
     pub script_kind: Option<String>,
     pub decoder_type: Option<String>,
@@ -1152,6 +1155,9 @@ fn build_lookup_info(
         reference_hash: reference_hash_hex.to_string(),
         code_hash: format!("0x{}", hex::encode(version_hash)),
         name: resolved_version_name(state, version_hash, version_info, "Unknown")?,
+        description: script_info
+            .as_ref()
+            .and_then(|info| info.description.clone()),
         deprecated: version_info.deprecated
             || script_info
                 .as_ref()
@@ -1318,6 +1324,7 @@ async fn lookup_scripts(
                         reference_hash: reference_hash_hex.clone(),
                         code_hash: reference_hash_hex.clone(),
                         name,
+                        description: merged.as_ref().and_then(|m| m.description.clone()),
                         deprecated,
                         script_kind,
                         decoder_type: None,

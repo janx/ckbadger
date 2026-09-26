@@ -1626,6 +1626,8 @@ interface ScriptLookupInfo {
   referenceHash?: string;
   codeHash: string;
   name: string;
+  /** The queried reference's own label description; null when it has none. */
+  description?: string | null;
   deprecated?: boolean;
   scriptKind: string | null;
   decoderType: string | null;
