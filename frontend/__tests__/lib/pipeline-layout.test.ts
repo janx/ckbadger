@@ -7,6 +7,7 @@ import {
   cardH,
   cardW,
   chainLayout,
+  chipSlots,
   chipsPerRow,
   inWindow,
   pack2D,
@@ -217,5 +218,23 @@ describe('pick: magnetic hit testing', () => {
   it('snaps to a proposal chip within 4 px of its centre', () => {
     expect(pick(targets, 202.5 + 3, 82.5)).toEqual({ kind: 'chip', card: 'blk', key: 'chip0' });
     expect(pick(targets, 202.5 + 5, 82.5)).toBeNull();
+  });
+});
+
+describe('chipSlots: proposal chips that fit, with room for "+N"', () => {
+  it('shows every chip when they fit', () => {
+    expect(chipSlots(48, 48)).toEqual({ shown: 48, overflow: 0 });
+    expect(chipSlots(0, 48)).toEqual({ shown: 0, overflow: 0 });
+  });
+
+  it('frees one chip slot per label glyph at the end of the last row', () => {
+    // "+255" is 4 glyphs of ~6 px = 4 chip pitches.
+    expect(chipSlots(299, 48)).toEqual({ shown: 44, overflow: 255 });
+    // A one-digit "+N" takes two slots.
+    expect(chipSlots(51, 48)).toEqual({ shown: 46, overflow: 5 });
+    expect(chipSlots(49, 48)).toEqual({ shown: 46, overflow: 3 });
+    const { shown, overflow } = chipSlots(1500, 48);
+    expect(shown + overflow).toBe(1500);
+    expect(48 - shown).toBeGreaterThanOrEqual(String(overflow).length + 1);
   });
 });

@@ -105,6 +105,20 @@ export function cardCols(sides: readonly number[], nProps: number, minCols: numb
   return clamp(minCols, G.maxCols, cols);
 }
 
+/**
+ * How many of `total` chips to draw in `cap` slots. When they do not fit, the last row gives up one
+ * slot per glyph of the "+N" label drawn at its end (a 10 px mono glyph is ~6 px, one chip pitch),
+ * so the label never covers a chip.
+ */
+export function chipSlots(total: number, cap: number): { shown: number; overflow: number } {
+  if (total <= cap) return { shown: total, overflow: 0 };
+  for (let r = 1; r <= cap; r++) {
+    const overflow = total - (cap - r);
+    if (r >= String(overflow).length + 1) return { shown: cap - r, overflow };
+  }
+  throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
+}
+
 export const cardH = (rows: number, extra = 0) =>
   G.fieldTop + extra + Math.max(1, rows) * U - 1 + G.padB - G.cardTop;
 
@@ -604,8 +618,8 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
   const b = g.block;
   const w = cardW(g.cols);
   const per = chipsPerRow(g.cols);
-  const cap = per * G.propRows;
-  const chips: SceneChip[] = g.own.slice(0, cap).map((p, i) => ({
+  const own = chipSlots(g.own.length, per * G.propRows);
+  const chips: SceneChip[] = g.own.slice(0, own.shown).map((p, i) => ({
     key: `${p.shortId}|`,
     proposal: p,
     x: G.padX + (i % per) * G.chipP,
@@ -670,7 +684,7 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     h: cardH(g.pack.rows, g.uExtra),
     cols: g.cols,
     chips,
-    chipOverflow: Math.max(0, g.own.length - cap),
+    chipOverflow: own.overflow,
     uncles,
     squares,
     hidden: g.pack.hidden + b.omittedTxs,
@@ -696,8 +710,8 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly P
     true
   );
   const per = chipsPerRow(cols);
-  const cap = per * G.propRows;
-  const ghostChips = Array.from({ length: Math.min(next.proposals, cap) }, (_, i) => ({
+  const slots = chipSlots(next.proposals, per * G.propRows);
+  const ghostChips = Array.from({ length: slots.shown }, (_, i) => ({
     x: G.padX + (i % per) * G.chipP,
     y: G.propTop + Math.floor(i / per) * G.chipP,
   }));
@@ -718,7 +732,7 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly P
       })),
     ],
     ghostChips,
-    chipOverflow: Math.max(0, next.proposals - cap),
+    chipOverflow: slots.overflow,
     hidden: fp.hidden + unknown,
   };
   return scene;

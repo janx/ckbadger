@@ -84,11 +84,12 @@ describe('PipelinePanel static render', () => {
     expect(states(T - 1)).toEqual(['waiting', 'waiting', 'waiting', 'waiting']);
     expect(states(T - 3).sort()).toEqual(['committed', 'committed', 'waiting']);
     expect(states(T - 12)).toContain('expired');
-    // T−7 proposed all 299 txs of T−5: three chip rows, the rest as +N.
+    // T−7 proposed all 299 txs of T−5: three chip rows, the rest as +N at the end of the last
+    // row, which gives up one chip slot per label glyph.
     const cap = chipsPerRow(G.maxCols) * G.propRows;
-    expect(states(T - 7)).toHaveLength(cap);
+    expect(states(T - 7)).toHaveLength(cap - 4);
     expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent(
-      `+${299 - cap}`
+      `+${299 - (cap - 4)}`
     );
   });
 
