@@ -144,6 +144,19 @@ describe('PipelinePanel static render', () => {
     expect(next.querySelectorAll('[data-sq]')).toHaveLength(0);
   });
 
+  it('counts the predicted txs the backend omitted as +N on the NEXT card', async () => {
+    const s = buildPipelineSnapshot();
+    const next = s.next as NonNullable<PipelineSnapshot['next']>;
+    const svg = await renderPanel({ ...s, next: { ...next, omittedTxs: 40 } });
+    const card = svg.querySelector('[data-next]') as SVGGElement;
+    expect(card.querySelectorAll('[data-ghost="tx"]')).toHaveLength(next.txs.length);
+    expect(card.querySelector('[data-hidden]')).toHaveTextContent('+40');
+    expect(card.querySelector('[data-count]')).toHaveTextContent(`~${next.txs.length + 40 + 1} tx`);
+    expect(screen.getByTestId('pipeline-stats')).toHaveTextContent(
+      `Next~${next.txs.length + 40 + 1} tx`
+    );
+  });
+
   it('writes "proposal window" exactly once on the canvas and a short subtitle', async () => {
     const svg = (await renderPanel()) as unknown as HTMLElement;
     expect(within(svg).getAllByText('proposal window')).toHaveLength(1);
@@ -514,6 +527,54 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-hover="ring"]')).not.toBeNull();
     act(() => usePipelineHoverStore.getState().clearHover());
     expect(svg).not.toHaveClass('is-focus');
+  });
+
+  const ghostCentre = (hash: string) => {
+    const next = scene.next as NonNullable<Scene['next']>;
+    const g = next.ghosts.find((k) => k.id === hash);
+    if (!g) throw new Error(`no ghost for ${hash}`);
+    return { clientX: next.x + g.x + g.s / 2, clientY: g.y + g.s / 2 };
+  };
+
+  it('rings the predicted ghost of a hovered pool tx and the pool square of a hovered ghost', async () => {
+    const svg = await renderPanel(snapshot);
+    const id = poolTxHash('w2');
+    const q = scene.pool?.proposed.squares.find((k) => k.id === id);
+    fireEvent.pointerMove(svg, { clientX: (q?.x as number) + 2, clientY: (q?.y as number) + 2 });
+    expect(svg.querySelector('[data-hover="ghost-ring"]')).not.toBeNull();
+    expect(svg.querySelector(`[data-next] [data-ghost-tx="${id}"]`)).not.toBeNull();
+
+    fireEvent.pointerMove(svg, { clientX: 5, clientY: 5 });
+    expect(svg.querySelector('[data-hover="ghost-ring"]')).toBeNull();
+    fireEvent.pointerMove(svg, ghostCentre(id));
+    expect(usePipelineHoverStore.getState().hoverTx).toBe(id);
+    expect(svg.querySelector('[data-hover="ring"]')).not.toBeNull();
+    expect(svg.querySelector('[data-hover="ghost-ring"]')).not.toBeNull();
+    expect(tooltip()).toHaveTextContent('predicted');
+    expect(tooltip()).toHaveTextContent(`#${(T + 1).toLocaleString('en-US')}`);
+    // Clicking the ghost pins the pool tx it predicts.
+    fireEvent.click(svg, ghostCentre(id));
+    expect(usePipelineHoverStore.getState().pinned).toBe(id);
+  });
+
+  it('explains a ghost whose tx is not in the listed pool without failing', async () => {
+    const outside = `0x${'ab'.repeat(32)}`;
+    const next = snapshot.next as NonNullable<PipelineSnapshot['next']>;
+    const s: PipelineSnapshot = {
+      ...snapshot,
+      next: { ...next, txs: [{ hash: outside, size: 900 }, ...next.txs] },
+    };
+    const svg = await renderPanel(s);
+    const sc = buildScene(s, VIEW_W, 'settled').next as NonNullable<Scene['next']>;
+    const g = sc.ghosts.find((k) => k.id === outside) as NonNullable<
+      Scene['next']
+    >['ghosts'][number];
+    fireEvent.pointerMove(svg, { clientX: sc.x + g.x + g.s / 2, clientY: g.y + g.s / 2 });
+    expect(screen.queryByTestId('pipeline-error')).toBeNull();
+    expect(tooltip()).toHaveTextContent('predicted');
+    expect(tooltip()).toHaveTextContent('not in the listed pool txs');
+    expect(svg.querySelector('[data-hover="ring"]')).toBeNull();
+    expect(svg.querySelector('[data-hover="ghost-ring"]')).not.toBeNull();
   });
 
   it('clears the hover when the pointer leaves', async () => {

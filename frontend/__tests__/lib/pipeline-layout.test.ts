@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { buildPipelineSnapshot, poolTxHash } from '@/__tests__/msw/fixtures/pipeline-snapshot';
+import type { PipelineSnapshot } from '@/lib/api';
 import {
   G,
   U,
   UNC,
+  buildScene,
   cardCols,
   cardH,
   cardW,
@@ -215,6 +218,15 @@ describe('pick: magnetic hit testing', () => {
     expect(pick(targets, 300 + 6 + 9, 103)).toBeNull();
   });
 
+  it('reports a predicted (ghost) square as a ghost hit', () => {
+    const withGhost: PickTargets = {
+      squares: [...targets.squares, { id: 'g', X: 400, Y: 100, s: 6, ghost: true }],
+      chips: [],
+    };
+    expect(pick(withGhost, 403, 103)).toEqual({ kind: 'ghost', id: 'g' });
+    expect(pick(withGhost, 400 + 6 + 5, 103)).toEqual({ kind: 'ghost', id: 'g' });
+  });
+
   it('snaps to a proposal chip within 4 px of its centre', () => {
     expect(pick(targets, 202.5 + 3, 82.5)).toEqual({ kind: 'chip', card: 'blk', key: 'chip0' });
     expect(pick(targets, 202.5 + 5, 82.5)).toBeNull();
@@ -236,5 +248,60 @@ describe('chipSlots: proposal chips that fit, with room for "+N"', () => {
     const { shown, overflow } = chipSlots(1500, 48);
     expect(shown + overflow).toBe(1500);
     expect(48 - shown).toBeGreaterThanOrEqual(String(overflow).length + 1);
+  });
+});
+
+describe('NEXT card from next.txs', () => {
+  const withNext = (next: NonNullable<PipelineSnapshot['next']>): PipelineSnapshot => ({
+    ...buildPipelineSnapshot(),
+    next,
+  });
+
+  it('draws one ghost per predicted tx, sized by its own bytes, in the backend order', () => {
+    const s = buildPipelineSnapshot();
+    const next = buildScene(s, 1600, 'settled').next as NonNullable<
+      ReturnType<typeof buildScene>['next']
+    >;
+    const ghosts = next.ghosts.filter((g) => !g.cellbase);
+    expect(ghosts.map((g) => g.id).sort()).toEqual(
+      (s.next as NonNullable<PipelineSnapshot['next']>).txs.map((t) => t.hash).sort()
+    );
+    expect(next.ghosts.filter((g) => g.cellbase)).toEqual([
+      { id: null, x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
+    ]);
+    expect(next.hidden).toBe(0);
+  });
+
+  it('draws a predicted tx that is not in the truncated pool list, and counts omitted ones as +N', () => {
+    const outside = `0x${'ab'.repeat(32)}`;
+    const scene = buildScene(
+      withNext({
+        txs: [
+          { hash: outside, size: 9000 },
+          { hash: poolTxHash('w0'), size: 1600 },
+        ],
+        omittedTxs: 3,
+        bytes: 10_600,
+        cycles: 5_000_000,
+        proposals: 5,
+      }),
+      1600,
+      'settled'
+    );
+    const next = scene.next as NonNullable<typeof scene.next>;
+    const big = next.ghosts.find((g) => g.id === outside);
+    expect(big?.s).toBe(4 * U - 1);
+    expect(next.ghosts.find((g) => g.id === poolTxHash('w0'))?.s).toBe(2 * U - 1);
+    expect(next.hidden).toBe(3);
+  });
+
+  it('rejects a negative omittedTxs', () => {
+    expect(() =>
+      buildScene(
+        withNext({ txs: [], omittedTxs: -1, bytes: 0, cycles: 0, proposals: 0 }),
+        1600,
+        'settled'
+      )
+    ).toThrow(/omittedTxs/);
   });
 });

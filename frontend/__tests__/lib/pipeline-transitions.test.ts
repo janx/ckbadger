@@ -97,7 +97,7 @@ function snap(blocks: PipelineBlock[], o: SnapOpts = {}): PipelineSnapshot {
       pendingTotal: o.pendingTotal ?? pending.length,
       proposedTotal: o.proposedTotal ?? proposed.length,
     },
-    next: { txHashes: [], bytes: 0, cycles: 0, proposals: pending.length },
+    next: { txs: [], omittedTxs: 0, bytes: 0, cycles: 0, proposals: pending.length },
   };
 }
 

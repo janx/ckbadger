@@ -225,7 +225,12 @@ export function buildPipelineSnapshot(): PipelineSnapshot {
       proposedTotal: proposed.length,
     },
     next: {
-      txHashes: committable.map((t) => t.hash),
+      // Listed like a block's txs: by size, descending.
+      txs: committable
+        .slice()
+        .sort((a, b) => b.size - a.size)
+        .map((t) => ({ hash: t.hash, size: t.size })),
+      omittedTxs: 0,
       bytes: committable.reduce((s, t) => s + t.size, 0),
       cycles: committable.reduce((s, t) => s + t.cycles, 0),
       proposals: Math.min(pending.length, 1500),
@@ -343,7 +348,12 @@ export function mineNext(s: PipelineSnapshot, o: MineOptions): PipelineSnapshot 
       proposedTotal: proposedList.length,
     },
     next: {
-      txHashes: committable.map((t) => t.hash),
+      // Listed like a block's txs: by size, descending.
+      txs: committable
+        .slice()
+        .sort((a, b) => b.size - a.size)
+        .map((t) => ({ hash: t.hash, size: t.size })),
+      omittedTxs: 0,
       bytes: committable.reduce((sum, t) => sum + t.size, 0),
       cycles: committable.reduce((sum, t) => sum + t.cycles, 0),
       proposals: Math.min(pendingList.length, s.consensus.maxBlockProposals),

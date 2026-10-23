@@ -53,6 +53,7 @@ import {
   shortHash,
   chipTip,
   nextTip,
+  predictedTip,
   txTip,
   uncleTip,
   windowTip,
@@ -102,7 +103,11 @@ function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined })
     <div data-testid="pipeline-stats" className="flex flex-wrap gap-x-[18px] gap-y-1">
       <Stat label="Mempool" value={pool ? fmtInt(pool.pendingTotal) : '—'} tone="text-aqua" />
       <Stat label="Proposed" value={pool ? fmtInt(pool.proposedTotal) : '—'} tone="text-gold" />
-      <Stat label="Next" value={next ? `~${next.txHashes.length + 1} tx` : '—'} tone="text-jade" />
+      <Stat
+        label="Next"
+        value={next ? `~${fmtInt(next.txs.length + next.omittedTxs + 1)} tx` : '—'}
+        tone="text-jade"
+      />
       <Stat
         label="Tip"
         value={snapshot ? `#${fmtInt(snapshot.tip.number)}` : '—'}
@@ -323,6 +328,17 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     for (const c of scene.cards) for (const q of c.squares) add(q, c.x);
     return out;
   }, [scene]);
+  // Predicted txs on the NEXT card, by hash, in absolute coordinates.
+  const ghostOfTx = useMemo(() => {
+    const out = new Map<string, { X: number; Y: number; s: number; size: number }>();
+    const next = scene.next;
+    if (!next) return out;
+    const sizes = new Map(next.next.txs.map((t) => [t.hash, t.size]));
+    for (const g of next.ghosts) {
+      if (g.id) out.set(g.id, { X: next.x + g.x, Y: g.y, s: g.s, size: sizes.get(g.id) as number });
+    }
+    return out;
+  }, [scene]);
   const chipOfTx = useMemo(() => {
     const out = new Map<string, { X: number; Y: number }>();
     for (const c of scene.cards) {
@@ -379,6 +395,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const hovered = hoverTx ? (squares.get(hoverTx) ?? null) : null;
   const pinnedSq = pinned && pinned !== hoverTx ? (squares.get(pinned) ?? null) : null;
   const chip = hoverTx ? (chipOfTx.get(hoverTx) ?? null) : null;
+  const ghost = hoverTx ? (ghostOfTx.get(hoverTx) ?? null) : null;
   const onIds = useMemo(() => new Set(hovered && hoverTx ? [hoverTx] : []), [hovered, hoverTx]);
 
   // The reward link of a hovered cellbase, to the cellbase of the block it pays.
@@ -452,6 +469,20 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       nextArc = info.kind === 'cellbase' ? info.block.number : null;
       nextCursor = 'pointer';
       show(txTip(info, snapshot, Date.now()));
+    } else if (hit?.kind === 'ghost') {
+      // A predicted tx: linked to its pool square by hash when the listed pool has it.
+      const g = ghostOfTx.get(hit.id);
+      if (!g) throw new Error(`pipeline: picked ghost ${hit.id} is not on the NEXT card`);
+      const info = index.get(hit.id);
+      setHover({ block: null, tx: hit.id, window: null });
+      nextCursor = 'pointer';
+      show(
+        predictedTip(
+          { hash: hit.id, size: g.size },
+          info?.kind === 'proposed' ? info.tx : null,
+          snapshot
+        )
+      );
     } else if (hit?.kind === 'chip') {
       const card = scene.cards.find((c) => c.id === hit.card);
       const k = card?.chips.find((x) => x.key === hit.key);
@@ -502,7 +533,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     const p = toLocal(e);
     const hit = pick(targets, p.x, p.y);
     const id =
-      hit?.kind === 'tx'
+      hit?.kind === 'tx' || hit?.kind === 'ghost'
         ? hit.id
         : hit?.kind === 'chip'
           ? (scene.cards.find((c) => c.id === hit.card)?.chips.find((k) => k.key === hit.key)
@@ -646,6 +677,9 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             </>
           )}
           {pinnedSq && <Ring q={pinnedSq} pad={2.5} testId="pin-ring" dashed />}
+          {ghost && (
+            <Ring q={{ ...ghost, stage: 'committed' }} pad={2} testId="ghost-ring" dashed />
+          )}
         </g>
       </MotionSvg>
       <PipelineTooltip ref={tipRef} content={tip} />

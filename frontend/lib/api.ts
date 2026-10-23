@@ -1919,9 +1919,18 @@ interface PipelinePool {
   proposedTotal: number;
 }
 
+interface PipelineNextTx {
+  hash: string;
+  /** Serialized size in block (raw + 4). */
+  size: number;
+}
+
 /** Predicted next block, cellbase excluded. */
 interface PipelineNext {
-  txHashes: string[];
+  /** Predicted txs by size, descending (like `PipelineBlock.txs`); capped by the backend. */
+  txs: PipelineNextTx[];
+  /** Predicted count − txs.length. */
+  omittedTxs: number;
   bytes: number;
   cycles: number;
   proposals: number;
@@ -2153,6 +2162,7 @@ export type {
   PipelineBlock,
   PipelinePoolTx,
   PipelinePool,
+  PipelineNextTx,
   PipelineNext,
   PipelineSnapshot,
   KnownScript,

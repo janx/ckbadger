@@ -127,8 +127,9 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
               />
             ) : (
               <rect
-                key={i}
+                key={q.id ?? i}
                 data-ghost="tx"
+                data-ghost-tx={q.id ?? undefined}
                 x={q.x + 0.5}
                 y={q.y + 0.5}
                 width={q.s - 1}
@@ -155,7 +156,7 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
           y={G.cardTop + next.h + 11}
           textAnchor="end"
           className={T10}
-        >{`~${next.next.txHashes.length + 1} tx`}</text>
+        >{`~${next.predicted + 1} tx`}</text>
       </g>
     </g>
   );

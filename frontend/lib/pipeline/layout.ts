@@ -366,6 +366,8 @@ export interface PickSquare {
   X: number;
   Y: number;
   s: number;
+  /** A predicted tx on the NEXT card. */
+  ghost?: boolean;
 }
 
 export interface PickChip {
@@ -383,6 +385,7 @@ export interface PickTargets {
 
 export type PickHit =
   | { kind: 'tx'; id: string }
+  | { kind: 'ghost'; id: string }
   | { kind: 'chip'; card: string; key: string }
   | null;
 
@@ -400,7 +403,8 @@ export function pick(targets: PickTargets, x: number, y: number): PickHit {
       near = n;
     }
   }
-  if (inside) return { kind: 'tx', id: inside.id };
+  const hitOf = (n: PickSquare): PickHit => ({ kind: n.ghost ? 'ghost' : 'tx', id: n.id });
+  if (inside) return hitOf(inside);
   let chip: PickChip | null = null;
   let chipD = 4;
   for (const k of targets.chips) {
@@ -411,7 +415,7 @@ export function pick(targets: PickTargets, x: number, y: number): PickHit {
     }
   }
   if (chip && (!near || chipD < nearD)) return { kind: 'chip', card: chip.card, key: chip.key };
-  return near ? { kind: 'tx', id: near.id } : null;
+  return near ? hitOf(near) : null;
 }
 
 // ---------- Scene: one snapshot → the target geometry of everything drawn ----------
@@ -469,6 +473,8 @@ export interface SceneCard {
 }
 
 export interface SceneGhost {
+  /** The predicted tx; null for the predicted cellbase. */
+  id: string | null;
   x: number;
   y: number;
   s: number;
@@ -485,8 +491,10 @@ export interface SceneNext {
   ghosts: SceneGhost[];
   ghostChips: { x: number; y: number }[];
   chipOverflow: number;
-  /** Predicted txs not drawn: field overflow plus hashes outside the (truncated) proposed list. */
+  /** Predicted txs not drawn: field overflow plus the ones the backend omitted. */
   hidden: number;
+  /** All predicted txs (drawn or not). */
+  predicted: number;
 }
 
 export interface ScenePoolGrid {
@@ -691,20 +699,15 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
   };
 }
 
-function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly PipelinePoolTx[]) {
-  const byHash = new Map(proposed.map((t) => [t.hash, t]));
-  const known: PipelinePoolTx[] = [];
-  let unknown = 0;
-  for (const h of next.txHashes) {
-    const t = byHash.get(h);
-    if (t) known.push(t);
-    else unknown++;
+function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
+  if (!Number.isInteger(next.omittedTxs) || next.omittedTxs < 0) {
+    throw new Error(`pipeline: next.omittedTxs ${next.omittedTxs} is not a count`);
   }
-  const order = known.sort(bySize);
-  const sides = order.map((t) => squareSide(t.size));
+  // Drawn in the backend's order (by size, descending), like a block's txs.
+  const sides = next.txs.map((t) => squareSide(t.size));
   const cols = cardCols(sides, next.proposals);
   const fp = pack2D(
-    order.map((t, i) => ({ id: t.hash, n: sides[i] })),
+    next.txs.map((t, i) => ({ id: t.hash, n: sides[i] })),
     cols,
     G.fieldRows,
     true
@@ -715,7 +718,7 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly P
     x: G.padX + (i % per) * G.chipP,
     y: G.propTop + Math.floor(i / per) * G.chipP,
   }));
-  const scene: SceneNext = {
+  return {
     number: s.tip.number + 1,
     x: G.nextX,
     w: cardW(cols),
@@ -723,8 +726,9 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly P
     cols,
     next,
     ghosts: [
-      { x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
+      { id: null, x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
       ...fp.pos.map((q) => ({
+        id: q.id,
         x: G.padX + q.c * U,
         y: G.fieldTop + q.r * U,
         s: q.n * U - 1,
@@ -733,9 +737,9 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly P
     ],
     ghostChips,
     chipOverflow: slots.overflow,
-    hidden: fp.hidden + unknown,
+    hidden: fp.hidden + next.omittedTxs,
+    predicted: next.txs.length + next.omittedTxs,
   };
-  return scene;
 }
 
 /**
@@ -796,8 +800,7 @@ export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase
   const geoms = s.blocks.map(cardGeom);
   const slots = chainLayout(geoms, viewW, phase === 'landing');
   const cards = slots.map((slot) => sceneCard(geoms[slot.index], slot.x, slot.slot));
-  const next =
-    phase === 'settled' && s.next && s.pool ? sceneNext(s, s.next, s.pool.proposed) : null;
+  const next = phase === 'settled' && s.next ? sceneNext(s, s.next) : null;
   return {
     viewW,
     phase,
@@ -816,6 +819,11 @@ export function pickTargets(scene: Scene): PickTargets {
   if (scene.pool) {
     for (const q of [...scene.pool.pending.squares, ...scene.pool.proposed.squares]) {
       squares.push({ id: q.id, X: q.x, Y: q.y, s: q.s });
+    }
+  }
+  if (scene.next) {
+    for (const g of scene.next.ghosts) {
+      if (g.id) squares.push({ id: g.id, X: scene.next.x + g.x, Y: g.y, s: g.s, ghost: true });
     }
   }
   for (const c of scene.cards) {

@@ -252,7 +252,7 @@ export function nextTip(s: PipelineSnapshot): TipContent {
     title: `Next ${num(H)}`,
     tag: 'not mined',
     rows: [
-      ['transactions', `cellbase + ~${next.txHashes.length} predicted`],
+      ['transactions', `cellbase + ~${fmtInt(next.txs.length + next.omittedTxs)} predicted`],
       ['proposals', `${fmtInt(next.proposals)} pending txs`],
       ['bytes', pct(next.bytes, s.consensus.maxBlockBytes)],
       ['cycles', pct(next.cycles, s.consensus.maxBlockCycles)],
@@ -260,6 +260,31 @@ export function nextTip(s: PipelineSnapshot): TipContent {
       ['parent', num(s.tip.number)],
     ],
     foot: 'Dashed = not yet real: a prediction from the pool and the proposal window.',
+  };
+}
+
+/** A predicted tx on the NEXT card; `pool` is its pool entry when the listed pool has it. */
+export function predictedTip(
+  tx: { hash: string; size: number },
+  pool: PipelinePoolTx | null,
+  s: PipelineSnapshot
+): TipContent {
+  const rows: [string, string][] = [
+    ['size · area', `${fmtBytes(tx.size)} · ${pct(tx.size, s.consensus.maxBlockBytes)}`],
+    ['predicted for', num(s.tip.number + 1)],
+  ];
+  if (pool?.proposedIn) {
+    rows.push(['proposal in', num(pool.proposedIn.block)], ['fee rate', feeRate(pool.feeRate)]);
+  }
+  return {
+    key: `ghost:${tx.hash}`,
+    tone: TONE.committed,
+    title: shortHash(tx.hash),
+    tag: 'predicted',
+    rows,
+    foot: pool
+      ? 'Dashed = not yet real: the next block is predicted to commit this pool tx.'
+      : 'Dashed = not yet real. Its tx is not in the listed pool txs: the pool list is truncated.',
   };
 }
 
