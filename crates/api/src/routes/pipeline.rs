@@ -55,16 +55,16 @@ use crate::{AppState, RequestReadView};
 /// Blocks the snapshot shows, newest first (frontend `layout.ts` `G.maxBlocks`).
 pub(crate) const PIPELINE_BLOCKS: i64 = 24;
 /// Committed transactions served per block besides the cellbase: the most a
-/// card can draw — its field is `G.cardCols × G.fieldRows` = 9 × 14 cells in
-/// frontend `layout.ts` and the cellbase takes the first, so 125 1×1 squares.
-pub(crate) const PIPELINE_BLOCK_TXS: usize = 125;
+/// card can draw — its field is `G.cardCols × G.fieldRows` = 9 × 8 cells in
+/// frontend `layout.ts` and the cellbase takes the first, so 71 1×1 squares.
+pub(crate) const PIPELINE_BLOCK_TXS: usize = 71;
 
-/// Pending pool transactions served: the pending grid's capacity, 10 × 8
+/// Pending pool transactions served: the pending grid's capacity, 8 × 5
 /// (`G.memCols × G.pendRows` in frontend `layout.ts`).
-pub(crate) const PIPELINE_POOL_PENDING: usize = 80;
-/// Proposed pool transactions served: the proposed grid's capacity, 10 × 12
+pub(crate) const PIPELINE_POOL_PENDING: usize = 40;
+/// Proposed pool transactions served: the proposed grid's capacity, 8 × 6
 /// (`G.memCols × G.propPoolRows` in frontend `layout.ts`).
-pub(crate) const PIPELINE_POOL_PROPOSED: usize = 120;
+pub(crate) const PIPELINE_POOL_PROPOSED: usize = 48;
 
 /// Genesis is the chain's first block; nothing lies below it.
 const GENESIS: i64 = 0;
