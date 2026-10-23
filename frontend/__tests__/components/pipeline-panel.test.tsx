@@ -210,6 +210,34 @@ describe('PipelinePanel static render', () => {
     expect(svg.querySelector('[data-chain-sub]')).toBeNull();
   });
 
+  it('keys the canvas in one legend line: the stages, then cellbase, cycles and unknown', async () => {
+    await renderPanel();
+    const legend = screen.getByTestId('pipeline-legend');
+    // The empty entry is the divider between the stage colours and the rest.
+    expect([...legend.children].map((el) => el.textContent)).toEqual([
+      'pending',
+      'proposed',
+      'too early',
+      'committed',
+      'expired',
+      '',
+      'cellbase',
+      'cycles',
+      'unknown',
+    ]);
+    // No usage hint under the canvas while nothing is pinned.
+    expect(screen.queryByTestId('pipeline-selection')).toBeNull();
+    expect(screen.getByTestId('pipeline-panel')).not.toHaveTextContent(/hover a/i);
+  });
+
+  it('puts what the panel shows and how to use it in the "?" title', async () => {
+    await renderPanel();
+    const title = screen.getByText('?').getAttribute('title') ?? '';
+    expect(title).toContain('proposed in one block and committed in a later block');
+    expect(title).toContain('Square area = bytes; shade = cycles.');
+    expect(title).toMatch(/Hover a tx or a proposal.*click a tx to pin it/);
+  });
+
   it('shows the header stats from the snapshot', async () => {
     await renderPanel();
     const stats = screen.getByTestId('pipeline-stats');
@@ -561,6 +589,22 @@ describe('PipelinePanel interactions', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(usePipelineHoverStore.getState().pinned).toBeNull();
     expect(svg.querySelector('[data-hover="pin-ring"]')).toBeNull();
+  });
+
+  it('replaces the legend with the selection line while a tx is pinned', async () => {
+    const svg = await renderPanel(snapshot);
+    expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-selection')).toBeNull();
+
+    const q = scene.pool?.pending.squares.find((k) => k.id === poolTxHash('q1'));
+    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
+    expect(screen.queryByTestId('pipeline-legend')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-selection')).toBeNull();
   });
 
   it('follows hovers coming from the Latest Blocks and Latest Transactions rows', async () => {
