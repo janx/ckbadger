@@ -4,7 +4,6 @@ use axum::{
     Extension, Router,
 };
 use ckb_store_reader::RpcTransactionView;
-use ckb_types::packed;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,6 +18,7 @@ use crate::response::{
     CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::identities::{dotcell_record_response, DotCellRecordResponse};
+use crate::routes::proposal_window::block_proposal_zone;
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
@@ -2191,32 +2191,21 @@ async fn get_transaction_lifecycle(
                 let Some(block) = ckb_store_c.get_block(&hash) else {
                     continue;
                 };
-                let contains_short_id = |proposals: packed::ProposalShortIdVec| {
-                    proposals
-                        .into_iter()
-                        .any(|id| id.raw_data().to_vec() == short_hash_c)
-                };
-                // The block's own proposal zone owns the attribution when both it and
-                // one of its uncles carry the short id.
-                if contains_short_id(block.data().proposals()) {
+                // CKB consensus counts the proposal zones of the uncles a block
+                // embeds, so a tx can legitimately be proposed only inside an
+                // uncle; the shared zone puts the block's own proposals first,
+                // so they own the attribution when both carry the short id.
+                let zone = block_proposal_zone(&block);
+                if let Some(entry) = zone.iter().find(|p| p.short_id == short_hash_c) {
                     return Some(ProposalWindowHit {
                         block_number: bn,
                         block_hash: header.hash.clone(),
                         timestamp: header.timestamp,
-                        uncle: None,
+                        uncle: entry
+                            .uncle
+                            .as_ref()
+                            .map(|uncle| (uncle.number, uncle.hash.to_vec())),
                     });
-                }
-                // CKB consensus counts the proposal zones of the uncles a block
-                // embeds, so a tx can legitimately be proposed only inside an uncle.
-                for uncle in block.uncles() {
-                    if contains_short_id(uncle.data().proposals()) {
-                        return Some(ProposalWindowHit {
-                            block_number: bn,
-                            block_hash: header.hash.clone(),
-                            timestamp: header.timestamp,
-                            uncle: Some((uncle.number() as i64, uncle.hash().raw_data().to_vec())),
-                        });
-                    }
                 }
             }
             None

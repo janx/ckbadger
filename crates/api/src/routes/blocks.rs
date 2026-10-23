@@ -15,6 +15,7 @@ use std::sync::Arc;
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::routes::hardforks::HardforkResourceResponse;
+use crate::routes::proposal_window::{block_proposal_zone, resolve_committed_txs};
 use crate::routes::transactions::tx_serialized_size_in_block;
 use crate::utils::{
     parse_block_number, parse_hash32, parse_optional_block_cursor_start, script_to_address,
@@ -759,12 +760,34 @@ async fn get_block_fee_stats(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockProposal {
+    /// Position in the block's proposal zone (own proposals first, then the
+    /// embedded uncles').
     pub proposal_index: i16,
     pub proposal_id: String,
+    /// The embedded uncle that carried this proposal; `None` for one of the
+    /// block's own proposals.
+    pub uncle: Option<ProposalUncle>,
     pub committed_tx_hash: Option<String>,
     pub committed_block_number: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalUncle {
+    /// The uncle's own header number (not the containing block's).
+    pub number: i64,
+    pub hash: String,
+}
+
+/// The block's whole proposal zone — its own proposals plus those of the
+/// uncles it embeds ([`block_proposal_zone`]) — each resolved to the
+/// transaction that committed it through the shared commitment-window helper
+/// (the same path `/graph/proposals` uses). A proposal not committed within
+/// the window blocks that exist stays null: honest data near the tip.
+///
+/// The zone lives only in the node DB. Without the reader, or when the node DB
+/// does not hold the block the store indexed, the proposals are unknown, not
+/// empty: both are errors naming the cause.
 async fn get_block_proposals(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -784,61 +807,61 @@ async fn get_block_proposals(
         parse_block_number(&id, "block number")?
     };
 
+    let store_c = store.clone();
+    let header = tokio::task::spawn_blocking(move || store_c.get_block_header(block_number))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Block not found"))?;
+
+    let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
+        ApiError::internal(
+            "block proposals are read from the node DB; configure ckb_db_path so the API \
+             can open it",
+        )
+    })?;
+    let hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "block {block_number} hash in the store is {} bytes, not 32",
+            header.hash.len()
+        ))
+    })?;
+    let block = ckb_store.get_block(&hash).ok_or_else(|| {
+        ApiError::internal(format!(
+            "block {block_number} 0x{} is indexed but not in the node DB",
+            hex::encode(hash)
+        ))
+    })?;
+
     let window = state.consensus().await?.tx_proposal_window;
+    let zone = block_proposal_zone(&block);
+    let short_ids: Vec<Vec<u8>> = zone.iter().map(|p| p.short_id.clone()).collect();
+    let commitments = resolve_committed_txs(ckb_store, window, block_number, &short_ids);
 
-    // Read proposals from CKB node's RocksDB (raw block data)
-    let proposals: Vec<BlockProposal> = if let Some(ref ckb_store) = state.ckb_store {
-        // Get the block hash from our store
-        let store_c = store.clone();
-        let header = tokio::task::spawn_blocking(move || store_c.get_block_header(block_number))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        match header {
-            Some(h) if h.hash.len() == 32 => {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&h.hash);
-                if let Some(block) = ckb_store.get_block(&hash) {
-                    // CKB proposal IDs are 10-byte tx hash prefixes; resolve
-                    // each to its committing transaction through the shared
-                    // commit-window helper (the same path /graph/proposals
-                    // uses). Proposals not committed within the window blocks
-                    // that exist stay null — honest data near the tip.
-                    let short_ids: Vec<Vec<u8>> = block
-                        .data()
-                        .proposals()
-                        .into_iter()
-                        .map(|proposal_id| proposal_id.raw_data().to_vec())
-                        .collect();
-                    let commitments = crate::routes::proposal_window::resolve_committed_txs(
-                        ckb_store,
-                        window,
-                        block_number,
-                        &short_ids,
-                    );
-                    short_ids
-                        .into_iter()
-                        .zip(commitments)
-                        .enumerate()
-                        .map(|(i, (proposal_bytes, commitment))| BlockProposal {
-                            proposal_index: i as i16,
-                            proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
-                            committed_tx_hash: commitment
-                                .as_ref()
-                                .map(|(tx_hash, _)| format!("0x{}", hex::encode(tx_hash))),
-                            committed_block_number: commitment.map(|(_, number)| number),
-                        })
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
-            _ => vec![],
-        }
-    } else {
-        vec![]
-    };
+    let proposals = zone
+        .into_iter()
+        .zip(commitments)
+        .enumerate()
+        .map(|(i, (proposal, commitment))| {
+            let proposal_index = i16::try_from(i).map_err(|_| {
+                ApiError::internal(format!(
+                    "block {block_number} proposal zone index {i} exceeds i16"
+                ))
+            })?;
+            Ok(BlockProposal {
+                proposal_index,
+                proposal_id: format!("0x{}", hex::encode(&proposal.short_id)),
+                uncle: proposal.uncle.map(|uncle| ProposalUncle {
+                    number: uncle.number,
+                    hash: format!("0x{}", hex::encode(uncle.hash)),
+                }),
+                committed_tx_hash: commitment
+                    .as_ref()
+                    .map(|(tx_hash, _)| format!("0x{}", hex::encode(tx_hash))),
+                committed_block_number: commitment.map(|(_, number)| number),
+            })
+        })
+        .collect::<Result<Vec<_>, crate::response::ApiRouteError>>()?;
 
     ok(proposals)
 }
