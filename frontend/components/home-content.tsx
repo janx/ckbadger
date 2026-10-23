@@ -104,10 +104,8 @@ export function HomeContent({ initialData }: HomeContentProps) {
         </div>
       </div>
 
-      {/* Row 6: Transaction Pipeline. A plain block sibling of the container rows spans the page
-          width on its own; sizing it in viewport units (w-screen, 50vw margins) overflows by the
-          vertical scrollbar width and adds a horizontal scrollbar. */}
-      <div className="mt-4 px-4">
+      {/* Row 6: Transaction Pipeline */}
+      <div className="container mx-auto mt-4 px-4">
         <PipelinePanel />
       </div>
 

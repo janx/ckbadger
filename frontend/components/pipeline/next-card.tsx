@@ -1,35 +1,26 @@
 'use client';
 
 import { GHOST, diamondPath, tok } from '@/lib/pipeline/encoding';
-import { G, tail4, type ScenePhase, type SceneNext } from '@/lib/pipeline/layout';
+import { G, tail4, type SceneNext } from '@/lib/pipeline/layout';
 import type { DimLevel } from '@/components/pipeline/block-card';
-import { T10, T10C, TZ } from '@/components/pipeline/svg-text';
+import { T10, T10C, T11C, TZ } from '@/components/pipeline/svg-text';
 
 interface NextColumnProps {
-  phase: ScenePhase;
   available: boolean;
 }
 
-/** The NEXT column labels: what the three rows of a block are. */
-export function NextColumn({ phase, available }: NextColumnProps) {
-  const sub = !available ? 'unavailable' : phase === 'landing' ? 'just mined' : 'being assembled';
+/** The NEXT zone title, and why its card is missing when the pool is unavailable. */
+export function NextColumn({ available }: NextColumnProps) {
   return (
     <g data-next-column pointerEvents="none">
-      <text x={G.nextLblX} y={16} className={TZ}>
+      <text x={G.nextX} y={16} className={TZ}>
         Next
       </text>
-      <text x={G.nextLblX} y={30} className={T10}>
-        {sub}
-      </text>
-      <text x={G.nextLblX} y={G.chainY + 4} className={T10}>
-        block
-      </text>
-      <text x={G.nextLblX} y={G.propTop + 8} className={T10}>
-        proposals
-      </text>
-      <text x={G.nextLblX} y={G.fieldTop + 8} className={T10}>
-        txs
-      </text>
+      {!available && (
+        <text x={G.nextX} y={30} className={T10}>
+          unavailable
+        </text>
+      )}
     </g>
   );
 }
@@ -77,7 +68,7 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
           vectorEffect="non-scaling-stroke"
           style={{ stroke: tok('border') }}
         />
-        <text x={G.padX} y={G.chainY + 3.5} className={T10C}>
+        <text x={G.padX} y={G.chainY + 3.5} className={T11C}>
           {tail4(next.number)}
         </text>
         <g data-ghost-chips>
@@ -104,11 +95,6 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
               textAnchor="end"
               className={T10}
             >{`+${next.chipOverflow}`}</text>
-          )}
-          {next.ghostChips.length === 0 && (
-            <text x={G.padX} y={G.propTop + 7} className={T10}>
-              none
-            </text>
           )}
         </g>
         <g data-ghosts>

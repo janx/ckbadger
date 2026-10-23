@@ -15,7 +15,7 @@ import {
 import type { PipelineSnapshot } from '@/lib/api';
 import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
 import { chipPaint } from '@/lib/pipeline/encoding';
-import { G, buildScene, chipsPerRow, windowRuler, type Scene } from '@/lib/pipeline/layout';
+import { G, buildScene, windowRuler, type Scene } from '@/lib/pipeline/layout';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
 
@@ -84,22 +84,26 @@ describe('PipelinePanel static render', () => {
     expect(states(T - 1)).toEqual(['waiting', 'waiting', 'waiting', 'waiting']);
     expect(states(T - 3).sort()).toEqual(['committed', 'committed', 'waiting']);
     expect(states(T - 12)).toContain('expired');
-    // T−7 proposed all 299 txs of T−5: three chip rows, the rest as +N at the end of the last
-    // row, which gives up one chip slot per label glyph.
-    const cap = chipsPerRow(G.maxCols) * G.propRows;
-    expect(states(T - 7)).toHaveLength(cap - 4);
-    expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent(
-      `+${299 - (cap - 4)}`
-    );
+    // T−7 proposed all 299 txs of T−5. The fixed card holds three rows of 12 chips (9 columns of
+    // 8 px at a 6 px pitch); "+267" at the end of the last row gives up one slot per glyph.
+    expect(states(T - 7)).toHaveLength(36 - 4);
+    expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent('+267');
   });
 
-  it('draws an uncle as a small dashed card holding its own proposal chips', async () => {
+  it('draws an uncle as a dashed mini-card labelled "uncle" inside the fixed-width card', async () => {
     const svg = await renderPanel();
-    const uncle = card(svg, T - 1).querySelector('[data-uncle="0"]') as SVGGElement;
+    const host = card(svg, T - 1);
+    const uncle = host.querySelector('[data-uncle="0"]') as SVGGElement;
     expect(uncle).not.toBeNull();
-    expect(uncle).toHaveTextContent(`uncle …${String(T - 2).slice(-4)}`);
-    expect(uncle.querySelector('rect')).toHaveAttribute('stroke-dasharray', '2 2');
-    expect(card(svg, T - 1).querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
+    // Just the word: the uncle's number is in its tooltip.
+    expect([...uncle.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
+    const box = uncle.querySelector('rect') as SVGRectElement;
+    expect(box).toHaveAttribute('stroke-dasharray', '2 2');
+    const hostW = Number(host.querySelector('[data-box]')?.getAttribute('width')) + 1;
+    expect(hostW).toBe(81);
+    expect(Number(box.getAttribute('x'))).toBe(G.padX);
+    expect(Number(box.getAttribute('x')) + Number(box.getAttribute('width'))).toBe(hostW - G.padX);
+    expect(host.querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
     // An uncle carries a header and proposals, never transactions.
     expect(uncle.querySelectorAll('[data-sq]')).toHaveLength(0);
   });
@@ -108,11 +112,35 @@ describe('PipelinePanel static render', () => {
     const svg = await renderPanel();
     const full = card(svg, T - 5);
     const squares = full.querySelectorAll('[data-sq]');
-    // 14 × 17 cells minus the cellbase hold 237 of the 238 listed txs; 61 more were omitted.
-    expect(squares).toHaveLength(238);
+    // 9 × 14 cells hold the cellbase and 125 of the 238 listed txs; 113 more do not fit and 61
+    // were omitted by the backend.
+    expect(squares).toHaveLength(126);
     expect(squares[0]).toHaveAttribute('data-stage', 'cellbase');
-    expect(full.querySelector('[data-hidden]')).toHaveTextContent('+62');
+    expect(full.querySelector('[data-hidden]')).toHaveTextContent('+174');
     expect(full.querySelector('[data-count]')).toHaveTextContent('300 tx');
+  });
+
+  it('draws no "none" text in an empty proposal row, on a block card or on NEXT', async () => {
+    const s = buildPipelineSnapshot();
+    const next = s.next as NonNullable<PipelineSnapshot['next']>;
+    const svg = await renderPanel({ ...s, next: { ...next, proposals: 0 } });
+    // T−8 has no proposals at all; T−6 has only the ones its uncle carries.
+    for (const n of [T - 8, T - 6]) {
+      expect(card(svg, n).querySelectorAll('[data-chip]:not([data-uncle-index])')).toHaveLength(0);
+      expect(within(card(svg, n) as unknown as HTMLElement).queryByText('none')).toBeNull();
+    }
+    const nextCard = svg.querySelector('[data-next]') as SVGGElement;
+    expect(nextCard.querySelectorAll('[data-ghost-chip]')).toHaveLength(0);
+    expect(within(nextCard as unknown as HTMLElement).queryByText('none')).toBeNull();
+  });
+
+  it('writes the block and NEXT numbers in the card headers at 11 px', async () => {
+    const svg = await renderPanel();
+    expect(card(svg, T).querySelector('[data-block-number]')).toHaveClass('text-[11px]');
+    const nextNumber = within(svg.querySelector('[data-next]') as unknown as HTMLElement).getByText(
+      `…${String(T + 1).slice(-4)}`
+    );
+    expect(nextNumber).toHaveClass('text-[11px]');
   });
 
   it('draws a tx whose cycles are still pending as a dashed square', async () => {
@@ -157,13 +185,29 @@ describe('PipelinePanel static render', () => {
     );
   });
 
-  it('writes "proposal window" exactly once on the canvas and a short subtitle', async () => {
+  it('writes "proposal window" exactly once on the canvas and no idle subtitles', async () => {
     const svg = (await renderPanel()) as unknown as HTMLElement;
     expect(within(svg).getAllByText('proposal window')).toHaveLength(1);
-    expect(within(svg).getByText('newest → older')).toBeInTheDocument();
     // The ruler: two ticks, around the heights NEXT may pack proposals from.
     const ticks = svg.querySelector('[data-ruler-ticks]')?.getAttribute('d') ?? '';
     expect(ticks.match(/M/g)).toHaveLength(2);
+    // Zone titles only: no subtitles under them and no row labels beside NEXT.
+    for (const word of ['Mempool', 'Next', 'Chain']) {
+      expect(within(svg).getByText(word)).toBeInTheDocument();
+    }
+    for (const gone of [
+      'newest → older',
+      'transaction pool',
+      'being assembled',
+      'just mined',
+      'unavailable',
+      'block',
+      'proposals',
+      'txs',
+    ]) {
+      expect(within(svg).queryByText(gone)).toBeNull();
+    }
+    expect(svg.querySelector('[data-chain-sub]')).toBeNull();
   });
 
   it('shows the header stats from the snapshot', async () => {
@@ -188,6 +232,7 @@ describe('PipelinePanel static render', () => {
     expect(svg.querySelector('[data-pool-status]')).toHaveTextContent('pool ≠ synced tip');
     expect(svg.querySelectorAll('[data-pool-grid]')).toHaveLength(0);
     expect(svg.querySelector('[data-next]')).toBeNull();
+    expect(svg.querySelector('[data-next-column]')?.textContent).toBe('Nextunavailable');
     expect(svg.querySelectorAll('[data-card]').length).toBeGreaterThanOrEqual(G.minBlocks);
     expect(screen.getByTestId('pipeline-stats')).toHaveTextContent('Mempool—');
   });
@@ -439,6 +484,8 @@ describe('PipelinePanel interactions', () => {
     const box = card(svg, T - 1).querySelector('[data-uncle="0"] rect') as SVGRectElement;
     fireEvent.pointerMove(box, { clientX: c.x + G.padX + 30, clientY: u.y + 4 });
     expect(tooltip()).toHaveTextContent('not on the chain');
+    // The mini-card only says "uncle"; its number is here.
+    expect(tooltip()).toHaveTextContent(`height#${(T - 2).toLocaleString('en-US')}`);
     expect(tooltip()).toHaveTextContent(`included by#${(T - 1).toLocaleString('en-US')}`);
     expect(usePipelineHoverStore.getState()).toMatchObject({
       hoverBlock: T - 1,

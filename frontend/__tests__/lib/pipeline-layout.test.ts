@@ -1,30 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { buildPipelineSnapshot, poolTxHash } from '@/__tests__/msw/fixtures/pipeline-snapshot';
-import type { PipelineSnapshot } from '@/lib/api';
 import {
+  FIXTURE_TIP,
+  buildPipelineSnapshot,
+  committedTxHash,
+  mineNext,
+  poolTxHash,
+  shortIdOf,
+} from '@/__tests__/msw/fixtures/pipeline-snapshot';
+import type { PipelineSnapshot, PipelineTx } from '@/lib/api';
+import {
+  BLOCK_FIELD_CAPACITY,
   G,
+  POOL_PENDING_CAPACITY,
+  POOL_PROPOSED_CAPACITY,
   U,
   UNC,
+  UNCLE_CHIPS_PER_ROW,
   buildScene,
-  cardCols,
   cardH,
-  cardW,
   chainLayout,
   chipSlots,
-  chipsPerRow,
   inWindow,
   pack2D,
   pick,
   uncleBoxH,
-  uncleChipsPerRow,
   unclesH,
   windowRange,
   windowRuler,
   type PickTargets,
   type RulerSlot,
+  type Scene,
 } from '@/lib/pipeline/layout';
 
 const MAINNET = { proposalWindowClosest: 2, proposalWindowFarthest: 10 };
+const T = FIXTURE_TIP;
+/** The card width of the design: 9 columns of the 8 px grid plus the side padding. */
+const CARD_W = 81;
+
+function cardOf(scene: Scene, n: number) {
+  const c = scene.cards.find((k) => k.block.number === n);
+  if (!c) throw new Error(`card #${n} is not on screen`);
+  return c;
+}
+
+/** A card's height for a tx field of `rows` rows and no uncles. */
+const heightForRows = (rows: number) => G.fieldTop - G.cardTop + rows * U - 1 + G.padB;
 
 function occupied(pos: { c: number; r: number; n: number }[]): Set<string> {
   const cells = new Set<string>();
@@ -82,76 +102,146 @@ describe('pack2D: first-fit grid packing', () => {
   });
 });
 
-describe('card width', () => {
-  it('grows with the number of proposals so they fit in three chip rows', () => {
-    const few = cardCols([1], 3);
-    const many = cardCols([1], 40);
-    expect(few).toBe(G.minCols);
-    expect(chipsPerRow(many) * G.propRows).toBeGreaterThanOrEqual(40);
-    expect(many).toBeGreaterThan(few);
+describe('grid capacities', () => {
+  it('are the 1×1 cells of the pool grids and of a block field on the 8 px grid', () => {
+    expect(U).toBe(8);
+    // The backend truncates its lists to these: pending 10 × 8, proposed 10 × 12, block 9 × 14.
+    expect(POOL_PENDING_CAPACITY).toBe(80);
+    expect(POOL_PROPOSED_CAPACITY).toBe(120);
+    expect(BLOCK_FIELD_CAPACITY).toBe(126);
+  });
+});
+
+describe('card size', () => {
+  const scene = buildScene(buildPipelineSnapshot(), 1600, 'settled');
+
+  it('is the same width for every card, whatever its txs, proposals and uncles', () => {
+    // On screen: quiet blocks, a block with 299 txs (T−5), one with 299 proposals (T−7) and two
+    // that carry an uncle (T−1, T−6).
+    for (const n of [T - 5, T - 7, T - 1, T - 6, T - 8]) expect(cardOf(scene, n).w).toBe(CARD_W);
+    expect(new Set(scene.cards.map((c) => c.w))).toEqual(new Set([CARD_W]));
+    expect(scene.next?.w).toBe(CARD_W);
+    expect(G.cardW).toBe(CARD_W);
   });
 
-  it('is at least 11 columns when the block carries an uncle', () => {
-    expect(cardCols([1], 0, UNC.minCols)).toBe(11);
+  it('keeps that width for a just-mined block landing at NEXT', () => {
+    const s1 = buildPipelineSnapshot();
+    const s2 = mineNext(s1, { commit: [poolTxHash('w0')], propose: [poolTxHash('q0')] });
+    const landing = buildScene(s2, 1600, 'landing').cards[0];
+    expect(landing.slot).toBe('landing');
+    expect(landing.w).toBe(CARD_W);
   });
 
-  it('never exceeds 14 columns', () => {
-    expect(cardCols(Array(400).fill(1), 2000)).toBe(G.maxCols);
-    expect(cardW(G.maxCols)).toBe(G.maxCols * U - 1 + 2 * G.padX);
+  it('gives a block with 0–2 txs a 3-row tx field', () => {
+    const quiet = scene.cards.filter((c) => !c.block.uncles.length && c.block.txs.length <= 2);
+    expect(new Set(quiet.map((c) => c.block.txs.length))).toEqual(new Set([0, 1, 2]));
+    for (const c of quiet) expect(c.h).toBe(heightForRows(3));
+  });
+
+  it('grows the tx field past 3 rows as far as the field allows', () => {
+    expect(cardOf(scene, T - 5).h).toBe(heightForRows(G.fieldRows));
+  });
+
+  it('shows "+N" for the 1×1 txs that do not fit the 9 × 14 field', () => {
+    const s = buildPipelineSnapshot();
+    const n = T - 8; // no txs, proposals or uncles in the fixture
+    const txs: PipelineTx[] = Array.from({ length: 200 }, (_, i) => ({
+      hash: committedTxHash(n, i),
+      size: 330,
+      fee: '330',
+      feeRate: '1000',
+      cycles: 1_000_000,
+      cyclesStatus: 'done',
+      proposedIn: { block: n - 2, uncleIndex: null },
+    }));
+    const blocks = s.blocks.map((b) =>
+      b.number === n ? { ...b, txs, txCount: 1 + txs.length, omittedTxs: 0 } : b
+    );
+    const card = cardOf(buildScene({ ...s, blocks }, 1600, 'settled'), n);
+    // 9 × 14 = 126 cells: the cellbase and 125 txs; the other 75 are counted, not drawn.
+    expect(card.squares).toHaveLength(126);
+    expect(card.squares.every((q) => q.x + q.s <= card.w - G.padX)).toBe(true);
+    expect(card.hidden).toBe(75);
+    expect(card.w).toBe(CARD_W);
   });
 });
 
 describe('uncle box', () => {
   it('is a header only without proposals, one chip row, then two at most', () => {
-    const cols = 11;
-    const per = uncleChipsPerRow(cols);
-    expect(uncleBoxH(cols, 0)).toBe(UNC.head + UNC.padB);
-    expect(uncleBoxH(cols, 1)).toBe(UNC.head + G.chipP + UNC.padB);
-    expect(uncleBoxH(cols, per)).toBe(UNC.head + G.chipP + UNC.padB);
-    expect(uncleBoxH(cols, per + 1)).toBe(UNC.head + 2 * G.chipP + UNC.padB);
-    expect(uncleBoxH(cols, per * 5)).toBe(UNC.head + 2 * G.chipP + UNC.padB);
+    const per = UNCLE_CHIPS_PER_ROW;
+    expect(uncleBoxH(0)).toBe(UNC.head + UNC.padB);
+    expect(uncleBoxH(1)).toBe(UNC.head + G.chipP + UNC.padB);
+    expect(uncleBoxH(per)).toBe(UNC.head + G.chipP + UNC.padB);
+    expect(uncleBoxH(per + 1)).toBe(UNC.head + 2 * G.chipP + UNC.padB);
+    expect(uncleBoxH(per * 5)).toBe(UNC.head + 2 * G.chipP + UNC.padB);
   });
 
   it('adds its area to the card height', () => {
-    const extra = unclesH(11, [2]);
-    expect(extra).toBe(UNC.top + uncleBoxH(11, 2) + UNC.gap);
+    const extra = unclesH([2]);
+    expect(extra).toBe(UNC.top + uncleBoxH(2) + UNC.gap);
     expect(cardH(3, extra) - cardH(3)).toBe(extra);
-    expect(unclesH(11, [])).toBe(0);
+    expect(unclesH([])).toBe(0);
+  });
+
+  it('fits the fixed card width, labelled "uncle", with its proposal chips inside', () => {
+    const s = buildPipelineSnapshot();
+    // T−1 carries the uncle T−2 with two proposals; give that uncle 30 more.
+    const extra = Array.from({ length: 30 }, (_, i) => ({
+      shortId: shortIdOf(committedTxHash(T - 2, 900 + i)),
+      uncleIndex: 0,
+      state: 'waiting' as const,
+      txHash: null,
+      committedBlock: null,
+    }));
+    const blocks = s.blocks.map((b) =>
+      b.number === T - 1 ? { ...b, proposals: [...b.proposals, ...extra] } : b
+    );
+    const card = cardOf(buildScene({ ...s, blocks }, 1600, 'settled'), T - 1);
+    expect(card.w).toBe(CARD_W);
+    expect(card.uncles.map((u) => u.label)).toEqual(['uncle']);
+    const chips = card.chips.filter((k) => k.proposal.uncleIndex === 0);
+    // Two rows of the mini-card are drawn; the rest is its "+N".
+    expect(chips).toHaveLength(2 * UNCLE_CHIPS_PER_ROW);
+    expect(card.uncles[0].overflow).toBe(32 - 2 * UNCLE_CHIPS_PER_ROW);
+    for (const k of chips) {
+      expect(k.x).toBeGreaterThanOrEqual(G.padX + 3);
+      expect(k.x + G.chip).toBeLessThanOrEqual(card.w - G.padX - 3);
+    }
   });
 });
 
 describe('chainLayout', () => {
-  const cards = (n: number, cols = 6) => Array.from({ length: n }, () => ({ cols }));
-
-  it('stops at the view width once 12 cards are shown', () => {
-    const slots = chainLayout(cards(24), 1600, false);
-    expect(slots.length).toBeGreaterThanOrEqual(12);
+  it('stops at the view width once at least 11 cards are shown', () => {
+    const slots = chainLayout(24, 1600, false);
+    expect(slots.length).toBeGreaterThanOrEqual(11);
     expect(slots.length).toBeLessThan(24);
     const last = slots[slots.length - 1];
     expect(last.x + last.w).toBeLessThanOrEqual(1600 - 10);
-    const nextX = last.x + last.w + G.gap;
-    expect(nextX + cardW(6)).toBeGreaterThan(1600 - 10);
+    expect(last.x + last.w + G.gap + CARD_W).toBeGreaterThan(1600 - 10);
     expect(slots[0].x).toBe(G.chainX0);
+    expect(
+      slots.every((sl, i) => sl.w === CARD_W && sl.x === G.chainX0 + i * (CARD_W + G.gap))
+    ).toBe(true);
   });
 
-  it('always shows at least 12 cards, even past a narrow view', () => {
-    expect(chainLayout(cards(24, 14), 760, false)).toHaveLength(12);
+  it('always shows at least 11 cards, even past a narrow view', () => {
+    expect(chainLayout(24, 760, false)).toHaveLength(11);
   });
 
   it('never shows more than 24 cards', () => {
-    expect(chainLayout(cards(30, 6), 100_000, false)).toHaveLength(G.maxBlocks);
+    expect(chainLayout(30, 100_000, false)).toHaveLength(G.maxBlocks);
   });
 
   it('puts a landing block at the NEXT position and keeps the chain slots of the others', () => {
-    const settled = chainLayout(cards(13), 2400, false);
-    const landing = chainLayout(cards(14), 2400, true);
-    expect(landing[0]).toMatchObject({ index: 0, x: G.nextX, slot: 'landing' });
+    const settled = chainLayout(13, 2400, false);
+    const landing = chainLayout(14, 2400, true);
+    expect(landing[0]).toMatchObject({ index: 0, x: G.nextX, w: CARD_W, slot: 'landing' });
     expect(landing[1].x).toBe(settled[0].x);
     expect(landing[1].index).toBe(1);
   });
 
-  it('starts the chain past the widest NEXT card', () => {
-    expect(G.chainX0).toBe(G.nextX + cardW(G.maxCols) + G.gap);
+  it('starts the chain one gap past the NEXT card', () => {
+    expect(G.chainX0).toBe(G.nextX + CARD_W + G.gap);
   });
 });
 

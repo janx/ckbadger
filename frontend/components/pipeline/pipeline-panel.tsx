@@ -60,7 +60,7 @@ import {
   type TipContent,
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
-import { T10, T10C, TZ, fmtInt } from '@/components/pipeline/svg-text';
+import { T10C, TZ, fmtInt } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
 
 const SVG_LABEL =
@@ -601,15 +601,15 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
           ))}
         </g>
         <g data-layer="labels" pointerEvents="none">
-          <NextColumn phase={scene.phase} available={snapshot.next !== null} />
+          <NextColumn available={snapshot.next !== null} />
           <text x={G.chainX0} y={16} className={TZ}>
             Chain
           </text>
-          <text data-chain-sub x={G.chainX0} y={30} className={arc ? T10C : T10}>
-            {arc
-              ? `the cellbase of ${tail4(arc.from)} pays the reward of ${tail4(arc.to)}, ${arc.from - arc.to} blocks back`
-              : 'newest → older'}
-          </text>
+          {arc && (
+            <text data-chain-sub x={G.chainX0} y={30} className={T10C}>
+              {`the cellbase of ${tail4(arc.from)} pays the reward of ${tail4(arc.to)}, ${arc.from - arc.to} blocks back`}
+            </text>
+          )}
           <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} />
         </g>
         <g data-layer="hover" pointerEvents="none">

@@ -3,7 +3,7 @@
 import { tok } from '@/lib/pipeline/encoding';
 import { G, U, type Scene, type ScenePoolGrid } from '@/lib/pipeline/layout';
 import type { DimLevel } from '@/components/pipeline/block-card';
-import { T10, T10B, T10C, TZ, fmtInt } from '@/components/pipeline/svg-text';
+import { T10B, T10C, TZ, fmtInt } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 
 interface PoolZoneProps {
@@ -48,9 +48,6 @@ export function PoolZone({ scene, dimOf, onIds }: PoolZoneProps) {
       <g pointerEvents="none">
         <text x={G.memX0} y={16} className={TZ}>
           Mempool
-        </text>
-        <text x={G.memX0} y={30} className={T10}>
-          transaction pool
         </text>
         <line
           x1={G.memX0}
