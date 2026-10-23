@@ -1815,6 +1815,8 @@ interface BlockProposal {
   proposalId: string;
   committedTxHash: string | null;
   committedBlockNumber: number | null;
+  /** The uncle that carried this proposal; null for the block's own proposals. */
+  uncle: { number: number; hash: string } | null;
 }
 
 type CyclesCalculationStatus = 'done' | 'calculating' | 'queued' | 'failed' | 'notFound';
