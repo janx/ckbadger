@@ -84,7 +84,9 @@ export default function BlockDetailPage() {
   const { data: proposals, error: proposalsError } = useQuery({
     queryKey: ['block-proposals', id],
     queryFn: () => api.getBlockProposals(id),
-    enabled: !!block && block.proposalsCount > 0,
+    // Uncles carry proposals too, and the block's zone lists them, so a block with uncles may
+    // have proposals even when its own count is 0.
+    enabled: !!block && (block.proposalsCount > 0 || block.unclesCount > 0),
   });
 
   const { data: hardforkTimeline } = useQuery({
@@ -380,7 +382,7 @@ export default function BlockDetailPage() {
             </TabsContent>
 
             <TabsContent value="proposals" className="m-0">
-              {block.proposalsCount > 0 ? (
+              {(block.proposalsCount > 0 || block.unclesCount > 0) && proposals?.length !== 0 ? (
                 proposalsError ? (
                   <TerminalRow
                     hoverable={false}

@@ -247,6 +247,39 @@ describe('BlockDetailPage', () => {
     expect(ownRow).not.toHaveTextContent(/uncle/);
   });
 
+  it('lists uncle-carried proposals of a block with no proposals of its own', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 0, unclesCount: 1 });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([
+      {
+        proposalIndex: 0,
+        proposalId: '0xaabbccddeeff00112233',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: { number: 8_775_637, hash: `0x${'ee'.repeat(32)}` },
+      },
+    ]);
+
+    render(<BlockDetailPage />);
+    fireEvent.click(await screen.findByText('Proposals (0)'));
+
+    const row = (await screen.findByText('0xaabbccddeeff00112233')).closest(
+      '[data-testid="block-proposal-row"]'
+    ) as HTMLElement;
+    expect(row).toHaveTextContent('uncle #8,775,637');
+    expect(screen.queryByText('No proposals in this block')).not.toBeInTheDocument();
+  });
+
+  it('says there are no proposals when the block and its uncles proposed nothing', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 0, unclesCount: 1 });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([]);
+
+    render(<BlockDetailPage />);
+    fireEvent.click(await screen.findByText('Proposals (0)'));
+
+    expect(await screen.findByText('No proposals in this block')).toBeInTheDocument();
+    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+  });
+
   it('shows an error row instead of loading forever when the proposals request fails', async () => {
     vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 3 });
     vi.mocked(api.getBlockProposals).mockRejectedValue(
