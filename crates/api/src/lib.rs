@@ -552,9 +552,11 @@ impl RequestReadView {
     /// Stop pinning the view for the rest of this request.
     ///
     /// Only for handlers whose contract is to observe the *next* view — the
-    /// cycles long-poll waits for the indexer to write a result, so it must let
-    /// catch-up run. Everything read after this call may come from a newer
-    /// view than what was read before it.
+    /// cycles long-poll waits for the indexer to write a result, and
+    /// `/pipeline` waits for the store to reach the node's pool tip, so both
+    /// must let catch-up run. Everything read after this call may come from a
+    /// newer view than what was read before it; a handler that still needs
+    /// one coherent view pins its own (`/pipeline` pins one per attempt).
     pub fn release(&self) {
         let _ = self.0.lock().expect("request read view poisoned").take();
     }

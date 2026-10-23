@@ -14,7 +14,11 @@
 //!   node's `get_block_economic_state(..).finalized_at`;
 //! - a pool transaction's stage comes from the same zones, not from the node's
 //!   pending/proposed labels (those only feed the P1 check), and only when
-//!   the pool was read at ckbadger's sync tip (`status`);
+//!   the pool was read at ckbadger's sync tip (`status`). The node has a block
+//!   a moment before ckbadger indexes it, so the request first waits, at most
+//!   [`PIPELINE_TIP_WAIT`], for the two tips to agree; it holds no read view
+//!   while it waits, and the snapshot is built under the one view whose tip
+//!   ended the wait;
 //! - NEXT is a prediction from the committable pool transactions and the
 //!   consensus block limits.
 //!
@@ -24,17 +28,20 @@
 //!
 //! Read-only: store + node DB (`CkbChainReader`) reads and node RPC calls.
 
-use axum::{extract::State, routing::get, Router};
+use axum::{extract::State, routing::get, Extension, Router};
 use ckb_store_reader::CkbChainReader;
 use ckb_types::prelude::*;
+use ckbadger_store::read_view::{self, ReadViewGuard};
 use ckbadger_store::{CachedBlockHeader, CkbadgerStore, TxIndexEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::Instant;
 
 use crate::cache::{CacheTtl, InMemoryCache};
 use crate::consensus::{ConsensusParams, ProposalWindow};
-use crate::pool::{HttpPoolSource, PoolSource, RawTxPool};
+use crate::pool::{HttpPoolSource, PoolSource, RawTxPool, TxPoolInfo};
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::routes::blocks::fetch_block_economic_state;
 use crate::routes::proposal_window::{
@@ -43,7 +50,7 @@ use crate::routes::proposal_window::{
 use crate::routes::transactions::{
     tx_cycles_status, tx_fee_rate, tx_fee_rate_value, tx_serialized_size_in_block, TxCyclesStatus,
 };
-use crate::AppState;
+use crate::{AppState, RequestReadView};
 
 /// Blocks the snapshot shows, newest first (frontend `layout.ts` `G.maxBlocks`).
 pub(crate) const PIPELINE_BLOCKS: i64 = 24;
@@ -61,6 +68,30 @@ pub(crate) const PIPELINE_POOL_PROPOSED: usize = 204;
 
 /// Genesis is the chain's first block; nothing lies below it.
 const GENESIS: i64 = 0;
+
+/// How long `/pipeline` waits for ckbadger's sync tip and the node's pool tip
+/// to agree before it serves the chain alone, as `poolTipMismatch`.
+///
+/// The node attaches a block before ckbadger has it: the live indexer polls
+/// the node once a second (`[indexer] poll_interval_ms` = 1000), writes the
+/// block, and this API's secondaries see it at their next catch-up, which
+/// also runs once a second. On mainnet the store view trails the node by
+/// 1–2 s, and by up to ~3 s when both cadences line up badly; the pool can
+/// trail too, since ckb updates it asynchronously after attaching a block. A
+/// 3 s bound covers that normal lag, so a mismatch past it means the indexer
+/// really is behind. It is also well under the 8–10 s mainnet block interval,
+/// so a waited snapshot is still the newest one when it is served.
+pub const PIPELINE_TIP_WAIT: Duration = Duration::from_secs(3);
+
+/// How often a waiting `/pipeline` re-reads both tips.
+///
+/// The store view only advances at the API's 1 s catch-up, so polling much
+/// faster buys nothing, while each attempt briefly pins a view and asks the
+/// node for `tx_pool_info`. A quarter of the catch-up cadence serves a
+/// snapshot within 250 ms of the catch-up that makes the tips agree, in at
+/// most 13 attempts per waiting request (one at once, one per poll, the last
+/// at the deadline).
+const PIPELINE_TIP_POLL: Duration = Duration::from_millis(250);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/pipeline", get(get_pipeline))
@@ -92,9 +123,10 @@ pub struct PipelineSnapshot {
 pub enum SnapshotStatus {
     /// The tx pool was read at ckbadger's sync tip: pool and chain are one view.
     Ok,
-    /// The node's pool tip differs from ckbadger's sync tip (number or hash), or
-    /// moved while the pool was read, so pool stages cannot be derived from
-    /// the chain the snapshot shows.
+    /// The node's pool tip still differs from ckbadger's sync tip (number or
+    /// hash), or moved while the pool was read, after [`PIPELINE_TIP_WAIT`]:
+    /// pool stages cannot be derived from the chain the snapshot shows, and
+    /// the indexer (or the node's pool) really is behind.
     PoolTipMismatch,
 }
 
@@ -315,12 +347,14 @@ fn hash32(bytes: &[u8], what: &str) -> Result<[u8; 32], ApiRouteError> {
         .map_err(|_| ApiError::internal(format!("{what} is {} bytes, not 32", bytes.len())))
 }
 
-fn load_chain(
-    store: &CkbadgerStore,
-    ckb: &CkbChainReader,
-    mem_cache: &InMemoryCache,
-    window: ProposalWindow,
-) -> Result<LoadedChain, ApiRouteError> {
+/// ckbadger's sync tip, as one pinned read view reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SyncTip {
+    number: i64,
+    hash: [u8; 32],
+}
+
+fn read_sync_tip(store: &CkbadgerStore) -> Result<SyncTip, ApiRouteError> {
     let sync = store
         .get_sync_status()
         .map_err(|e| ApiError::internal(format!("sync status unavailable: {e}")))?;
@@ -329,8 +363,45 @@ fn load_chain(
             "no block indexed yet (indexer still starting?)",
         ));
     }
-    let tip = sync.tip_block_number;
-    let tip_hash = hash32(&sync.tip_block_hash, "sync tip hash")?;
+    Ok(SyncTip {
+        number: sync.tip_block_number,
+        hash: hash32(&sync.tip_block_hash, "sync tip hash")?,
+    })
+}
+
+/// One pinned read view and ckbadger's sync tip as read under it. Every store
+/// and node-DB read of one snapshot happens while this is alive, so the whole
+/// chain section is one view.
+struct PinnedTip {
+    tip: SyncTip,
+    _view: ReadViewGuard,
+}
+
+/// Pin a fresh read view and read the sync tip under it.
+async fn pin_sync_tip(store: &Arc<CkbadgerStore>) -> Result<PinnedTip, ApiRouteError> {
+    let store = store.clone();
+    tokio::task::spawn_blocking(move || {
+        let view = read_view::acquire_read();
+        let tip = read_sync_tip(&store)?;
+        Ok(PinnedTip { tip, _view: view })
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("pipeline sync tip read panicked: {e}")))?
+}
+
+/// Load the chain ending at `tip`, the sync tip read under the caller's pinned
+/// view (the one the pool read was compared against).
+fn load_chain(
+    store: &CkbadgerStore,
+    ckb: &CkbChainReader,
+    mem_cache: &InMemoryCache,
+    window: ProposalWindow,
+    sync_tip: SyncTip,
+) -> Result<LoadedChain, ApiRouteError> {
+    let SyncTip {
+        number: tip,
+        hash: tip_hash,
+    } = sync_tip;
 
     let span = (PIPELINE_BLOCKS - 1) + window.farthest();
     let lowest = (tip - span).max(GENESIS);
@@ -1002,24 +1073,28 @@ fn link_pool_to_proposals(
 }
 
 // ---------------------------------------------------------------------------
-// Tx pool read (node RPC, cached 2 s per ckbadger tip)
+// Tx pool read (node RPC, cached 2 s per ckbadger tip) and the tip wait
 // ---------------------------------------------------------------------------
 
-/// The tx pool as one read: `tx_pool_info`, the verbose pool, `tx_pool_info`
-/// again. Cached for the mempool endpoints' 2 s, keyed by ckbadger's tip hash
-/// so a new block never serves a pool read against the previous tip.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PoolRead {
-    /// The node's tip, as the last `tx_pool_info` of the read reported it.
-    tip_number: u64,
-    tip_hash: [u8; 32],
-    /// `Some` only when the node's tip was ckbadger's sync tip before and after
-    /// the verbose pool was read: then the pool belongs to the chain shown.
-    entries: Option<Vec<PoolEntry>>,
+/// What one bracketed read of the node's tx pool saw: `tx_pool_info`, the
+/// verbose pool, `tx_pool_info` again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PoolRead {
+    /// The node's tip was ckbadger's sync tip before and after the verbose
+    /// pool was read: the pool belongs to the chain the snapshot shows.
+    AtTip(Vec<PoolEntry>),
+    /// The node's tip is not ckbadger's sync tip (number or hash), or moved
+    /// while the pool was read. The node's tip as the last `tx_pool_info` of
+    /// the read reported it.
+    Elsewhere { number: u64, hash: [u8; 32] },
 }
 
-fn pool_read_cache_key(tip_hash: &[u8; 32]) -> String {
-    format!("pipeline:pool:{}", hex::encode(tip_hash))
+/// Only reads at a tip are cached, for the mempool endpoints' 2 s, under that
+/// whole tip (number and hash): a hit is a pool read at exactly the tip the
+/// snapshot's chain ends at, never one from another block or fork. A read
+/// elsewhere is not cached — it is what the tip wait is waiting to change.
+fn pool_read_cache_key(tip: &SyncTip) -> String {
+    format!("pipeline:pool:{}:{}", tip.number, hex::encode(tip.hash))
 }
 
 fn pool_entries(raw: RawTxPool) -> Vec<PoolEntry> {
@@ -1041,60 +1116,115 @@ fn pool_entries(raw: RawTxPool) -> Vec<PoolEntry> {
 }
 
 async fn read_pool(
-    state: &AppState,
-    tip: i64,
-    tip_hash: &[u8; 32],
+    source: &dyn PoolSource,
+    mem_cache: &InMemoryCache,
+    tip: &SyncTip,
 ) -> Result<PoolRead, ApiRouteError> {
-    let key = pool_read_cache_key(tip_hash);
-    if let Some(cached) = state.mem_cache.get::<PoolRead>(&key) {
-        return Ok(cached);
+    let key = pool_read_cache_key(tip);
+    if let Some(entries) = mem_cache.get::<Vec<PoolEntry>>(&key) {
+        return Ok(PoolRead::AtTip(entries));
     }
     let node = |e: String| ApiError::internal(format!("tx pool read failed: {e}"));
-    let source = HttpPoolSource::new(state.ckb_rpc_url.clone());
-    let at_tip =
-        |number: u64, hash: &[u8; 32]| i64::try_from(number) == Ok(tip) && hash == tip_hash;
+    let at_tip = |info: &TxPoolInfo| {
+        i64::try_from(info.tip_number) == Ok(tip.number) && info.tip_hash == tip.hash
+    };
+    let elsewhere = |info: TxPoolInfo| PoolRead::Elsewhere {
+        number: info.tip_number,
+        hash: info.tip_hash,
+    };
 
     let before = source.tx_pool_info().await.map_err(node)?;
-    let read = if !at_tip(before.tip_number, &before.tip_hash) {
-        PoolRead {
-            tip_number: before.tip_number,
-            tip_hash: before.tip_hash,
-            entries: None,
+    if !at_tip(&before) {
+        return Ok(elsewhere(before));
+    }
+    let raw = source.raw_tx_pool_verbose().await.map_err(node)?;
+    // A block landing during the read leaves the verbose pool belonging to
+    // either tip: not a read at ckbadger's tip.
+    let after = source.tx_pool_info().await.map_err(node)?;
+    if !at_tip(&after) {
+        return Ok(elsewhere(after));
+    }
+    let entries = pool_entries(raw);
+    mem_cache.set(&key, &entries, CacheTtl::MEMPOOL_INFO);
+    Ok(PoolRead::AtTip(entries))
+}
+
+/// Wait, at most [`PIPELINE_TIP_WAIT`], for ckbadger's sync tip and the
+/// node's pool tip to agree, then hand back the view to build the snapshot
+/// under and the pool read made against it.
+///
+/// Each attempt pins a fresh view, reads the sync tip under it and reads the
+/// pool against that tip. Tips that agree (number and hash) end the wait at
+/// once. Otherwise the attempt's view is dropped before sleeping, because a
+/// pinned view blocks the catch-up the wait is for, and the next attempt pins
+/// a new one. One loop covers every way the tips part: the node ahead of the
+/// store (the indexer has not written the block yet), the store ahead of the
+/// node (ckb updates its pool after attaching a block), and the same height on
+/// two forks (a reorg race). An attempt at the deadline that still disagrees
+/// is returned as it is: the snapshot is then built under its view, as a
+/// `poolTipMismatch`.
+async fn await_pool_at_sync_tip(
+    store: &Arc<CkbadgerStore>,
+    mem_cache: &InMemoryCache,
+    source: &dyn PoolSource,
+) -> Result<(PinnedTip, PoolRead), ApiRouteError> {
+    let deadline = Instant::now() + PIPELINE_TIP_WAIT;
+    loop {
+        let pinned = pin_sync_tip(store).await?;
+        let read = read_pool(source, mem_cache, &pinned.tip).await?;
+        let now = Instant::now();
+        if matches!(read, PoolRead::AtTip(_)) || now >= deadline {
+            return Ok((pinned, read));
         }
-    } else {
-        let raw = source.raw_tx_pool_verbose().await.map_err(node)?;
-        // A block landing during the read leaves the verbose pool belonging to
-        // either tip: not a read at ckbadger's tip.
-        let after = source.tx_pool_info().await.map_err(node)?;
-        let coherent = at_tip(after.tip_number, &after.tip_hash);
-        PoolRead {
-            tip_number: after.tip_number,
-            tip_hash: after.tip_hash,
-            entries: coherent.then(|| pool_entries(raw)),
-        }
-    };
-    state.mem_cache.set(&key, &read, CacheTtl::MEMPOOL_INFO);
-    Ok(read)
+        drop(pinned);
+        tokio::time::sleep_until(deadline.min(now + PIPELINE_TIP_POLL)).await;
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
-async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineSnapshot> {
+async fn get_pipeline(
+    State(state): State<Arc<AppState>>,
+    // Optional so the handler still works in routers built without the
+    // read-view middleware.
+    read_view: Option<Extension<RequestReadView>>,
+) -> ApiResult<PipelineSnapshot> {
+    // The tip wait must let catch-up run, so the request's own pin goes
+    // before anything is read: each attempt pins its own view, and the
+    // snapshot is built under the view of the attempt that ends the wait.
+    if let Some(Extension(view)) = read_view {
+        view.release();
+    }
     let consensus = state.consensus().await?.clone();
-    let window = consensus.tx_proposal_window;
     let ckb = state.ckb_store.clone().ok_or_else(|| {
         ApiError::internal(
             "/pipeline reads proposal zones and uncles from the node DB; \
              configure ckb_db_path so the API can open it",
         )
     })?;
+    let source = HttpPoolSource::new(state.ckb_rpc_url.clone());
+    let (pinned, pool_read) =
+        await_pool_at_sync_tip(&state.store, &state.mem_cache, &source).await?;
+    ok(build_snapshot(&state, &consensus, ckb, pinned, pool_read).await?)
+}
 
+/// Build the snapshot at `pinned`'s sync tip, every store and node-DB read
+/// under its view, with the pool section from `pool_read`.
+async fn build_snapshot(
+    state: &AppState,
+    consensus: &ConsensusParams,
+    ckb: Arc<CkbChainReader>,
+    pinned: PinnedTip,
+    pool_read: PoolRead,
+) -> Result<PipelineSnapshot, ApiRouteError> {
+    let window = consensus.tx_proposal_window;
     let chain = {
         let store = state.store.clone();
         let mem_cache = state.mem_cache.clone();
-        tokio::task::spawn_blocking(move || load_chain(&store, &ckb, &mem_cache, window))
+        let tip = pinned.tip;
+        tokio::task::spawn_blocking(move || load_chain(&store, &ckb, &mem_cache, window, tip))
             .await
             .map_err(|e| ApiError::internal(format!("pipeline chain load panicked: {e}")))??
     };
@@ -1103,9 +1233,11 @@ async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineS
     for block in chain.shown() {
         pays.insert(
             block.number,
-            resolve_pays(&state, window, &chain, block).await?,
+            resolve_pays(state, window, &chain, block).await?,
         );
     }
+    // Every store read of the snapshot is done.
+    drop(pinned);
 
     let mut blocks = build_chain(window, &chain, &pays).map_err(ApiError::internal)?;
 
@@ -1123,20 +1255,21 @@ async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineS
         }
     }
 
-    let tip = &chain.blocks[&chain.tip];
-    let pool_read = read_pool(&state, chain.tip, &tip.hash).await?;
-    let pool_tip = BlockRef {
-        number: i64::try_from(pool_read.tip_number).map_err(|_| {
-            ApiError::internal(format!(
-                "tx_pool_info tip number {} does not fit i64",
-                pool_read.tip_number
-            ))
-        })?,
-        hash: hex(&pool_read.tip_hash),
+    let tip = BlockRef {
+        number: chain.tip,
+        hash: hex(&chain.blocks[&chain.tip].hash),
     };
-    let (status, pool, next) = match pool_read.entries {
-        None => (SnapshotStatus::PoolTipMismatch, None, None),
-        Some(entries) => {
+    let (status, pool_tip, pool, next) = match pool_read {
+        PoolRead::Elsewhere { number, hash } => {
+            let pool_tip = BlockRef {
+                number: i64::try_from(number).map_err(|_| {
+                    ApiError::internal(format!("tx_pool_info tip number {number} does not fit i64"))
+                })?,
+                hash: hex(&hash),
+            };
+            (SnapshotStatus::PoolTipMismatch, pool_tip, None, None)
+        }
+        PoolRead::AtTip(entries) => {
             let zone_at = |n: i64| {
                 chain
                     .blocks
@@ -1148,19 +1281,16 @@ async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineS
                 classify_pool(window, chain.tip, zone_at, entries).map_err(ApiError::internal)?;
             link_pool_to_proposals(&mut blocks, &classified).map_err(ApiError::internal)?;
             let pool = build_pool(&classified);
-            let next = predict_next(&consensus, &classified, pool.pending_total)
+            let next = predict_next(consensus, &classified, pool.pending_total)
                 .map_err(ApiError::internal)?;
-            (SnapshotStatus::Ok, Some(pool), Some(next))
+            (SnapshotStatus::Ok, tip.clone(), Some(pool), Some(next))
         }
     };
 
-    ok(PipelineSnapshot {
+    Ok(PipelineSnapshot {
         status,
-        consensus: PipelineConsensus::from(&consensus),
-        tip: BlockRef {
-            number: chain.tip,
-            hash: hex(&tip.hash),
-        },
+        consensus: PipelineConsensus::from(consensus),
+        tip,
         pool_tip,
         blocks,
         pool,
@@ -1171,6 +1301,8 @@ async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineS
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pool::fake::FakePoolSource;
+    use crate::pool::PoolEntryMeta;
 
     fn mainnet_window() -> ProposalWindow {
         ProposalWindow::new(2, 10).unwrap()
@@ -1428,5 +1560,222 @@ mod tests {
         assert_eq!(proposal_state(w, 100, 100, false), ProposalState::Early);
         assert_eq!(proposal_state(w, 100, 99, false), ProposalState::Early);
         assert_eq!(proposal_state(w, 100, 98, false), ProposalState::Waiting);
+    }
+
+    // -----------------------------------------------------------------------
+    // Waiting for ckbadger's sync tip and the node's pool tip to agree
+    // -----------------------------------------------------------------------
+
+    /// A store whose sync tip is `(number, hash)`.
+    fn store_at(number: i64, hash: [u8; 32]) -> (tempfile::TempDir, Arc<CkbadgerStore>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        move_sync_tip(&store, number, hash);
+        (dir, store)
+    }
+
+    fn move_sync_tip(store: &CkbadgerStore, number: i64, hash: [u8; 32]) {
+        store
+            .update_sync_status(|s| {
+                s.tip_block_number = number;
+                s.tip_block_hash = hash.to_vec();
+            })
+            .unwrap();
+    }
+
+    fn node_at(number: u64, hash: [u8; 32]) -> TxPoolInfo {
+        TxPoolInfo {
+            tip_hash: hash,
+            tip_number: number,
+            last_txs_updated_at: 1,
+        }
+    }
+
+    fn one_pending_tx() -> RawTxPool {
+        RawTxPool {
+            pending: vec![(
+                [0x0C; 32],
+                PoolEntryMeta {
+                    fee: 1_000,
+                    size: 500,
+                    cycles: 10,
+                    ancestors_count: 0,
+                    time_added_to_pool_ms: 1,
+                },
+            )],
+            proposed: vec![],
+        }
+    }
+
+    fn calls(source: &FakePoolSource, method: &str) -> usize {
+        source.calls().iter().filter(|call| *call == method).count()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tip_wait_gives_up_at_its_deadline() {
+        let (_dir, store) = store_at(13, [0x13; 32]);
+        let source = FakePoolSource::new();
+        source.set_info(node_at(12, [0x12; 32]));
+
+        let started = Instant::now();
+        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &source)
+            .await
+            .unwrap();
+        let waited = started.elapsed();
+
+        assert!(waited >= PIPELINE_TIP_WAIT, "gave up after {waited:?}");
+        assert!(
+            waited < PIPELINE_TIP_WAIT + PIPELINE_TIP_POLL,
+            "overran its deadline: {waited:?}"
+        );
+        assert_eq!(
+            pinned.tip,
+            SyncTip {
+                number: 13,
+                hash: [0x13; 32]
+            }
+        );
+        assert_eq!(
+            read,
+            PoolRead::Elsewhere {
+                number: 12,
+                hash: [0x12; 32]
+            }
+        );
+        // One read at once, one per poll, the last one at the deadline.
+        let reads = (PIPELINE_TIP_WAIT.as_millis() / PIPELINE_TIP_POLL.as_millis()) as usize + 1;
+        assert_eq!(calls(&source, "tx_pool_info"), reads);
+        assert_eq!(
+            calls(&source, "get_raw_tx_pool"),
+            0,
+            "a pool at another tip is never read"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tip_wait_serves_once_a_lagging_pool_reaches_the_sync_tip() {
+        let (_dir, store) = store_at(13, [0x13; 32]);
+        let source = Arc::new(FakePoolSource::new());
+        // ckb attached block 13 and ckbadger indexed it, but the node has not
+        // updated its pool for it yet.
+        source.set_info(node_at(12, [0x12; 32]));
+        source.set_raw_pool(one_pending_tx());
+        let node = source.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(PIPELINE_TIP_POLL * 3 + PIPELINE_TIP_POLL / 2).await;
+            node.set_info(node_at(13, [0x13; 32]));
+        });
+
+        let started = Instant::now();
+        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &*source)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            started.elapsed(),
+            PIPELINE_TIP_POLL * 4,
+            "served at the first poll after the pool caught up"
+        );
+        assert_eq!(pinned.tip.number, 13);
+        let PoolRead::AtTip(entries) = read else {
+            panic!("expected the pool at the sync tip, got {read:?}");
+        };
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tip_wait_follows_the_store_through_a_reorg_at_equal_height() {
+        // ckbadger indexed block 13 A while the node switched to 13 B: the
+        // same height on two forks.
+        let (_dir, store) = store_at(13, [0xA0; 32]);
+        let source = FakePoolSource::new();
+        source.set_info(node_at(13, [0xB0; 32]));
+        source.set_raw_pool(one_pending_tx());
+        let indexer = store.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(PIPELINE_TIP_POLL + PIPELINE_TIP_POLL / 2).await;
+            // The indexer rolls A back and indexes B.
+            move_sync_tip(&indexer, 13, [0xB0; 32]);
+        });
+
+        let started = Instant::now();
+        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &source)
+            .await
+            .unwrap();
+
+        assert_eq!(started.elapsed(), PIPELINE_TIP_POLL * 2);
+        assert_eq!(
+            pinned.tip,
+            SyncTip {
+                number: 13,
+                hash: [0xB0; 32]
+            },
+            "the snapshot is built at the tip both sides agree on"
+        );
+        assert!(matches!(read, PoolRead::AtTip(_)), "{read:?}");
+    }
+
+    #[tokio::test]
+    async fn pool_read_elsewhere_is_never_cached() {
+        let source = FakePoolSource::new();
+        let cache = InMemoryCache::new();
+        let tip = SyncTip {
+            number: 13,
+            hash: [0x13; 32],
+        };
+        source.set_info(node_at(12, [0x12; 32]));
+        let lagging = read_pool(&source, &cache, &tip).await.unwrap();
+        assert!(matches!(lagging, PoolRead::Elsewhere { .. }), "{lagging:?}");
+
+        // The node's pool catches up a moment later: the next read sees it, not
+        // a cached mismatch.
+        source.set_info(node_at(13, [0x13; 32]));
+        source.set_raw_pool(one_pending_tx());
+        let caught_up = read_pool(&source, &cache, &tip).await.unwrap();
+        assert!(matches!(caught_up, PoolRead::AtTip(_)), "{caught_up:?}");
+    }
+
+    #[tokio::test]
+    async fn pool_read_cache_serves_only_the_tip_it_was_read_at() {
+        let source = FakePoolSource::new();
+        let cache = InMemoryCache::new();
+        let a = SyncTip {
+            number: 13,
+            hash: [0xA0; 32],
+        };
+        source.set_info(node_at(13, [0xA0; 32]));
+        source.set_raw_pool(one_pending_tx());
+        let at_a = read_pool(&source, &cache, &a).await.unwrap();
+        assert!(
+            matches!(at_a, PoolRead::AtTip(ref e) if e.len() == 1),
+            "{at_a:?}"
+        );
+
+        // Read again at the same tip: the cached read, the node is not asked.
+        source.clear_calls();
+        assert_eq!(read_pool(&source, &cache, &a).await.unwrap(), at_a);
+        assert!(source.calls().is_empty(), "{:?}", source.calls());
+
+        // Another tip never gets that read: the key is the whole tip, number
+        // and hash.
+        source.set_raw_pool(RawTxPool::default());
+        for other in [
+            SyncTip {
+                number: 13,
+                hash: [0xB0; 32],
+            },
+            SyncTip {
+                number: 14,
+                hash: [0xA0; 32],
+            },
+        ] {
+            let number = u64::try_from(other.number).unwrap();
+            source.set_info(node_at(number, other.hash));
+            assert_eq!(
+                read_pool(&source, &cache, &other).await.unwrap(),
+                PoolRead::AtTip(vec![]),
+                "{other:?}"
+            );
+        }
     }
 }

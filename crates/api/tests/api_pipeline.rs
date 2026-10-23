@@ -10,6 +10,9 @@ mod common;
 
 use common::*;
 use std::collections::BTreeMap;
+use std::time::Duration;
+
+use ckbadger_api::routes::PIPELINE_TIP_WAIT;
 
 use ckb_types::bytes::Bytes;
 use ckb_types::core::{BlockBuilder, BlockView, EpochNumberWithFraction, TransactionView};
@@ -163,73 +166,94 @@ struct StoreSeed {
     broken_parent: Option<u64>,
     /// Block whose tx index row 0 is stored as a non-cellbase (C3).
     no_cellbase: Option<u64>,
+    /// The store's sync tip when the indexer lags the node: blocks above it
+    /// are in the node DB only. `None` indexes the whole chain.
+    indexed_tip: Option<u64>,
 }
 
 fn seed_store(chain: &FixtureChain, seed: &StoreSeed) -> Arc<CkbadgerStore> {
     let store = test_store();
+    let indexed_tip = seed.indexed_tip.unwrap_or(chain.tip());
     let mut batch = StoreBatch::new(store.as_ref());
-    for block in &chain.blocks {
-        let number = block.number();
-        let hash: [u8; 32] = block.hash().unpack();
-        let mut parent_hash: [u8; 32] = block.parent_hash().unpack();
-        if seed.broken_parent == Some(number) {
-            parent_hash = [0xEE; 32];
-        }
-        let spec = &chain.specs[&number];
-        let header_cycles: Option<i64> = spec.txs.iter().map(|tx| tx.cycles).sum::<Option<i64>>();
-        batch.put_block_header(
-            number as i64,
-            &CachedBlockHeader {
-                hash: hash.to_vec(),
-                parent_hash: parent_hash.to_vec(),
-                timestamp: block.timestamp() as i64,
-                epoch_number: 1,
-                epoch_index: 0,
-                epoch_length: 1800,
-                dao: vec![0; 32],
-                transactions_count: block.transactions().len() as i32,
-                uncles_count: block.uncles().data().len() as i32,
-                proposals_count: block.data().proposals().len() as i32,
-                compact_target: 0,
-                miner_lock_hash: None,
-                cycles: header_cycles,
-            },
-        );
-        for (index, tx) in block.transactions().iter().enumerate() {
-            let tx_hash: [u8; 32] = tx.hash().unpack();
-            let (fee, cycles) = if index == 0 {
-                (0, None)
-            } else {
-                let fixture = &spec.txs[index - 1];
-                (fixture.fee, fixture.cycles)
-            };
-            batch.put_tx_hash_map(&tx_hash, number as i64, index as i32);
-            batch.put_tx_index(
-                number as i64,
-                index as i32,
-                &TxIndexEntry {
-                    is_cellbase: index == 0 && seed.no_cellbase != Some(number),
-                    timestamp: block.timestamp() as i64,
-                    inputs_count: 1,
-                    outputs_count: 1,
-                    fee,
-                    tx_size: tx.data().as_slice().len() as i32,
-                    cycles,
-                    semantic_tags: 0,
-                },
-            );
-        }
+    for number in 0..=indexed_tip {
+        put_block_rows(&mut batch, chain, number, seed);
     }
     batch.commit().unwrap();
-    let tip_hash = chain.hash(chain.tip());
-    let tip = chain.tip() as i64;
+    set_sync_tip(&store, chain, indexed_tip);
+    store
+}
+
+/// What the indexer writes for one block: its header and its tx index rows.
+fn put_block_rows(batch: &mut StoreBatch, chain: &FixtureChain, number: u64, seed: &StoreSeed) {
+    let block = &chain.blocks[number as usize];
+    let hash: [u8; 32] = block.hash().unpack();
+    let mut parent_hash: [u8; 32] = block.parent_hash().unpack();
+    if seed.broken_parent == Some(number) {
+        parent_hash = [0xEE; 32];
+    }
+    let spec = &chain.specs[&number];
+    let header_cycles: Option<i64> = spec.txs.iter().map(|tx| tx.cycles).sum::<Option<i64>>();
+    batch.put_block_header(
+        number as i64,
+        &CachedBlockHeader {
+            hash: hash.to_vec(),
+            parent_hash: parent_hash.to_vec(),
+            timestamp: block.timestamp() as i64,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: block.transactions().len() as i32,
+            uncles_count: block.uncles().data().len() as i32,
+            proposals_count: block.data().proposals().len() as i32,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: header_cycles,
+        },
+    );
+    for (index, tx) in block.transactions().iter().enumerate() {
+        let tx_hash: [u8; 32] = tx.hash().unpack();
+        let (fee, cycles) = if index == 0 {
+            (0, None)
+        } else {
+            let fixture = &spec.txs[index - 1];
+            (fixture.fee, fixture.cycles)
+        };
+        batch.put_tx_hash_map(&tx_hash, number as i64, index as i32);
+        batch.put_tx_index(
+            number as i64,
+            index as i32,
+            &TxIndexEntry {
+                is_cellbase: index == 0 && seed.no_cellbase != Some(number),
+                timestamp: block.timestamp() as i64,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee,
+                tx_size: tx.data().as_slice().len() as i32,
+                cycles,
+                semantic_tags: 0,
+            },
+        );
+    }
+}
+
+fn set_sync_tip(store: &CkbadgerStore, chain: &FixtureChain, number: u64) {
+    let hash = chain.hash(number);
     store
         .update_sync_status(|s| {
-            s.tip_block_number = tip;
-            s.tip_block_hash = tip_hash.to_vec();
+            s.tip_block_number = number as i64;
+            s.tip_block_hash = hash.to_vec();
         })
         .unwrap();
-    store
+}
+
+/// The indexer catching up by one block: the block's rows first, then the
+/// sync tip, as live sync commits them.
+fn index_block(store: &CkbadgerStore, chain: &FixtureChain, number: u64) {
+    let mut batch = StoreBatch::new(store);
+    put_block_rows(&mut batch, chain, number, &StoreSeed::default());
+    batch.commit().unwrap();
+    set_sync_tip(store, chain, number);
 }
 
 /// `get_block_economic_state` for every block the fixture's cellbases pay:
@@ -246,9 +270,32 @@ async fn mount_reward_targets(server: &MockServer, chain: &FixtureChain) {
 }
 
 struct PipelineApp {
+    /// The production router behind this binary's [`REQUESTS`] gate.
     app: axum::Router,
+    /// The same router without the gate, for the one test that holds the gate
+    /// exclusively while its own request runs.
+    ungated_app: axum::Router,
+    store: Arc<CkbadgerStore>,
     server: MockServer,
     _chain_db: TestCkbChain,
+}
+
+/// The read view is process-wide: `pinned_read_scopes()` counts the requests
+/// of every test in this binary. Each request runs under a shared permit;
+/// the test that asserts a waiting request pins nothing holds the permit
+/// exclusively, so no other test's request is in flight while it counts.
+static REQUESTS: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+async fn shared_request_permit(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let _permit = REQUESTS.read().await;
+    next.run(request).await
+}
+
+fn gated(app: axum::Router) -> axum::Router {
+    app.layer(axum::middleware::from_fn(shared_request_permit))
 }
 
 /// Seed both stores from `chain`, point the node RPC at a wiremock that
@@ -282,14 +329,16 @@ async fn pipeline_app_with(
     }
     let mut config = test_config_with_ckb_db_path(
         store.clone(),
-        store,
+        store.clone(),
         chain_db.path.clone(),
         Some(chain_db.cleanup.clone()),
     );
     config.ckb_rpc_url = server.uri();
-    let app = create_router(config).await;
+    let ungated_app = create_router(config).await;
     PipelineApp {
-        app,
+        app: gated(ungated_app.clone()),
+        ungated_app,
+        store,
         server,
         _chain_db: chain_db,
     }
@@ -738,7 +787,7 @@ async fn test_pipeline_requires_the_node_db() {
     let chain = FixtureChain::build(3, BTreeMap::new());
     let store = seed_store(&chain, &StoreSeed::default());
     // `test_app_state` opens no CKB node reader.
-    let app = create_router_without_warmup(test_config(store));
+    let app = gated(create_router_without_warmup(test_config(store)));
     let (status, json) = get_json(&app, "/pipeline").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
     assert!(
@@ -757,7 +806,10 @@ async fn test_pipeline_block_missing_from_node_fails() {
         .filter(|b| b.number() != 4)
         .cloned()
         .collect();
-    let fixture = pipeline_app_with(&chain, StoreSeed::default(), &node_blocks, true, None).await;
+    // The pool agrees with the sync tip, so the snapshot gets as far as the chain.
+    let pool = pool_at_tip(&chain, vec![], vec![]);
+    let fixture =
+        pipeline_app_with(&chain, StoreSeed::default(), &node_blocks, true, Some(pool)).await;
     let (status, json) = get_json(&fixture.app, "/pipeline").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
     let message = json["message"].as_str().unwrap();
@@ -1319,4 +1371,224 @@ async fn test_pipeline_pool_read_straddling_a_block_is_a_mismatch() {
     );
     assert_eq!(json["pool"], serde_json::Value::Null);
     assert_eq!(json["next"], serde_json::Value::Null);
+}
+
+// ---------------------------------------------------------------------------
+// Waiting for the two tips to agree
+// ---------------------------------------------------------------------------
+
+/// `tx_pool_info` naming `(number, hash)` as the node's tip.
+fn pool_info_at(number: u64, hash: &str) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tip_hash": hash,
+            "tip_number": format!("0x{number:x}"),
+            "last_txs_updated_at": "0x1",
+            "pending": "0x0",
+            "proposed": "0x0",
+            "orphan": "0x0"
+        }
+    }))
+}
+
+async fn tx_pool_info_calls(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .expect("wiremock records requests")
+        .iter()
+        .filter(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("node RPC request bodies are JSON");
+            body["method"] == "tx_pool_info"
+        })
+        .count()
+}
+
+/// Wait (bounded) until the handler has read the node's pool tip at least once.
+async fn first_pool_tip_read(server: &MockServer) {
+    let started = std::time::Instant::now();
+    while tx_pool_info_calls(server).await == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the request never read the node's pool tip"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+/// The node has block 14 a moment before ckbadger's indexer writes it (live
+/// mainnet: 1–2 s, on 20–40% of blocks). The request waits for the store and
+/// serves one coherent snapshot instead of blanking its pool and NEXT.
+#[tokio::test]
+async fn test_pipeline_waits_for_the_store_to_reach_the_pool_tip() {
+    let chain = FixtureChain::build(14, BTreeMap::new());
+    let pending = pool_entry(pool_hash([0xC1; 10], 1), 500, 1_000, 10, 1);
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed {
+            indexed_tip: Some(13),
+            ..Default::default()
+        },
+        &chain.blocks,
+        true,
+        Some(pool_at_tip(&chain, vec![pending.clone()], vec![])),
+    )
+    .await;
+
+    let app = fixture.app.clone();
+    let request = tokio::spawn(async move { get_json(&app, "/pipeline").await });
+    // The handler has seen the node at 14 and the store at 13; a moment later
+    // the indexer writes block 14.
+    first_pool_tip_read(&fixture.server).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    index_block(&fixture.store, &chain, 14);
+
+    let (status, json) = request.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "ok", "{json}");
+    assert_eq!(
+        json["tip"],
+        serde_json::json!({ "number": 14, "hash": chain.hash_hex(14) })
+    );
+    assert_eq!(json["poolTip"], json["tip"]);
+    assert_eq!(
+        json["blocks"][0]["number"], 14,
+        "the chain section is at the tip it waited for"
+    );
+    assert_eq!(json["pool"]["pendingTotal"], 1, "{json}");
+    assert_eq!(json["pool"]["pending"][0]["hash"], pending.hash);
+    assert!(json["next"].is_object(), "{json}");
+}
+
+/// ckb updates its tx pool asynchronously after attaching a block, so the pool
+/// can still name the previous tip after ckbadger has indexed the new one.
+#[tokio::test]
+async fn test_pipeline_waits_for_the_pool_to_reach_the_sync_tip() {
+    let chain = FixtureChain::build(13, BTreeMap::new());
+    let fixture = pipeline_app_with(&chain, StoreSeed::default(), &chain.blocks, true, None).await;
+    // The node's first two pool reads still name block 12; every later one, 13.
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "tx_pool_info" }),
+        ))
+        .respond_with(pool_info_at(12, &chain.hash_hex(12)))
+        .up_to_n_times(2)
+        .mount(&fixture.server)
+        .await;
+    let pending = pool_entry(pool_hash([0xC2; 10], 2), 500, 1_000, 10, 1);
+    mount_tx_pool_rpc_at(
+        &fixture.server,
+        &pool_at_tip(&chain, vec![pending.clone()], vec![]),
+    )
+    .await;
+
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "ok", "{json}");
+    assert_eq!(json["tip"]["number"], 13);
+    assert_eq!(json["poolTip"], json["tip"]);
+    assert_eq!(json["pool"]["pendingTotal"], 1, "{json}");
+    assert_eq!(json["pool"]["pending"][0]["hash"], pending.hash);
+    assert_eq!(
+        tx_pool_info_calls(&fixture.server).await,
+        4,
+        "two reads at block 12, then the bracketed read at 13"
+    );
+}
+
+/// Past the bound the indexer really is behind: the chain is served alone.
+///
+/// Real time, not paused: while a request waits on wiremock's real socket, a
+/// paused clock auto-advances to the next pending timer (the API's 1 s
+/// catch-up loop, then reqwest's own 15 s request timeout), so node calls
+/// would time out spuriously. The bound's exact virtual-time behaviour is
+/// pinned against the scripted pool source by the unit test
+/// `routes::pipeline::tests::tip_wait_gives_up_at_its_deadline`.
+#[tokio::test]
+async fn test_pipeline_still_behind_at_the_deadline_is_a_mismatch() {
+    let chain = FixtureChain::build(6, BTreeMap::new());
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed {
+            indexed_tip: Some(5),
+            ..Default::default()
+        },
+        &chain.blocks,
+        true,
+        Some(pool_at_tip(&chain, vec![], vec![])),
+    )
+    .await;
+
+    let started = std::time::Instant::now();
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    let waited = started.elapsed();
+
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert!(
+        waited >= PIPELINE_TIP_WAIT,
+        "answered after {waited:?}, before the {PIPELINE_TIP_WAIT:?} bound"
+    );
+    assert_eq!(json["status"], "poolTipMismatch", "{json}");
+    assert_eq!(
+        json["poolTip"],
+        serde_json::json!({ "number": 6, "hash": chain.hash_hex(6) })
+    );
+    assert_eq!(json["tip"]["number"], 5);
+    assert_eq!(json["pool"], serde_json::Value::Null);
+    assert_eq!(json["next"], serde_json::Value::Null);
+    assert_eq!(json["blocks"].as_array().unwrap().len(), 5);
+    assert!(
+        tx_pool_info_calls(&fixture.server).await > 1,
+        "it re-read the node while waiting"
+    );
+}
+
+/// A waiting request must not hold a read view: a pinned view blocks the very
+/// catch-up that would let the store reach the node's tip.
+#[tokio::test]
+async fn test_pipeline_holds_no_read_view_while_it_waits() {
+    let chain = FixtureChain::build(14, BTreeMap::new());
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed {
+            indexed_tip: Some(13),
+            ..Default::default()
+        },
+        &chain.blocks,
+        true,
+        Some(pool_at_tip(&chain, vec![], vec![])),
+    )
+    .await;
+
+    // No other test's request runs while this one counts pinned views.
+    let exclusive = REQUESTS.write().await;
+    let app = fixture.ungated_app.clone();
+    let request = tokio::spawn(async move { get_json(&app, "/pipeline").await });
+
+    // After its first read (store 13, node 14) the handler waits. Well inside
+    // the bound, the process must show no pinned view.
+    first_pool_tip_read(&fixture.server).await;
+    let started = std::time::Instant::now();
+    while ckbadger_store::read_view::pinned_read_scopes() != 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the waiting request keeps a read view pinned ({} pinned)",
+            ckbadger_store::read_view::pinned_read_scopes()
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        !request.is_finished(),
+        "the request is still waiting for the indexer"
+    );
+    drop(exclusive);
+
+    index_block(&fixture.store, &chain, 14);
+    let (status, json) = request.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "ok", "{json}");
+    assert_eq!(json["tip"]["number"], 14);
 }
