@@ -57,7 +57,12 @@ async fn test_get_block_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    // The detail asks the node for the block's reward; this fixture block is
+    // not finalized there.
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    config.ckb_rpc_url = server.uri();
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks/8775638")
@@ -526,4 +531,114 @@ async fn test_block_proposals_unknown_block_is_not_found() {
     let app = create_router(test_config(test_store())).await;
     let (status, json) = get_json(&app, "/blocks/440/proposals").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "got {json}");
+}
+
+// ---------------------------------------------------------------------------
+// The block detail's mining reward used to swallow every failure into
+// `miningRewardTxHash: null`: a malformed `finalized_at`
+// (`hex::decode(..).ok()?`), a wrong-length one (`return None`), no node
+// reader (`ckb_store?`), a finalizing block missing from the node DB. A node
+// answer the API cannot use is an error, not a missing field. `null` remains
+// the honest answer only when the node reports the block not finalized yet.
+// ---------------------------------------------------------------------------
+
+/// A block whose cellbase (index 0) pays an earlier block's reward.
+fn build_finalizing_block(number: u64) -> ckb_types::core::BlockView {
+    use ckb_types::prelude::*;
+    let cellbase = ckb_types::core::TransactionBuilder::default()
+        .input(ckb_types::packed::CellInput::new_cellbase_input(number))
+        .output(ckb_types::packed::CellOutput::new_builder().build())
+        .output_data(ckb_types::bytes::Bytes::new().pack())
+        .build();
+    build_proposal_block(number, &[], &[cellbase])
+}
+
+#[tokio::test]
+async fn test_mining_reward_names_the_finalizing_cellbase() {
+    use ckb_types::prelude::*;
+
+    let finalizing = build_finalizing_block(511);
+    let finalizing_hash: [u8; 32] = finalizing.hash().unpack();
+    let cellbase_hash: [u8; 32] = finalizing.transactions()[0].hash().unpack();
+
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let chain = seed_ckb_chain(&[finalizing]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_rpc(
+        &server,
+        &[(
+            &format!("0x{}", hex::encode([0x50u8; 32])),
+            &format!("0x{}", hex::encode(finalizing_hash)),
+        )],
+    )
+    .await;
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    // primary + secondary + committed + proposal of the fixture reward.
+    assert_eq!(
+        json["miningReward"],
+        BLOCK_ECONOMIC_STATE_REWARD_TOTAL.to_string()
+    );
+    assert_eq!(
+        json["miningRewardTxHash"],
+        format!("0x{}", hex::encode(cellbase_hash))
+    );
+}
+
+#[tokio::test]
+async fn test_mining_reward_bad_finalized_at_is_error() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let server = MockServer::start().await;
+    // A 2-byte `finalized_at` names no block.
+    mount_block_economic_state_rpc(
+        &server,
+        &[(&format!("0x{}", hex::encode([0x50u8; 32])), "0x1234")],
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "an unusable node answer must not become `miningRewardTxHash: null`, got {json}"
+    );
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("finalized_at"), "{message}");
+    assert!(message.contains("0x1234"), "{message}");
+}
+
+#[tokio::test]
+async fn test_mining_reward_finalizing_block_missing_from_node_is_error() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let server = MockServer::start().await;
+    let finalized_at = format!("0x{}", hex::encode([0x51u8; 32]));
+    mount_block_economic_state_rpc(
+        &server,
+        &[(&format!("0x{}", hex::encode([0x50u8; 32])), &finalized_at)],
+    )
+    .await;
+    // The (empty) node DB does not hold the finalizing block.
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains(&finalized_at), "{message}");
 }

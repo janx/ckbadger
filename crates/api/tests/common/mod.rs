@@ -571,6 +571,56 @@ pub async fn mount_header_rpc(server: &MockServer, number: u64, hash: &str, ar: 
     }
 }
 
+/// `primary + secondary + committed + proposal` of the `miner_reward` every
+/// [`mount_block_economic_state_rpc`] answer carries.
+pub const BLOCK_ECONOMIC_STATE_REWARD_TOTAL: u128 = 0x1000 + 0x200 + 0x30 + 0x4;
+
+/// The node's `get_block_economic_state`: each `(block_hash, finalized_at)`
+/// pair answers for exactly that block hash (any other hash gets wiremock's
+/// 404, which the API must treat as an error).
+pub async fn mount_block_economic_state_rpc(server: &MockServer, pairs: &[(&str, &str)]) {
+    for (block_hash, finalized_at) in pairs {
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "method": "get_block_economic_state",
+                "params": [block_hash]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "finalized_at": finalized_at,
+                    "issuance": { "primary": "0x1000", "secondary": "0x200" },
+                    "miner_reward": {
+                        "primary": "0x1000",
+                        "secondary": "0x200",
+                        "committed": "0x30",
+                        "proposal": "0x4"
+                    },
+                    "txs_fee": "0x34"
+                }
+            })))
+            .mount(server)
+            .await;
+    }
+}
+
+/// The node's `get_block_economic_state` for blocks it has not finalized yet:
+/// `result: null`, for any block hash.
+pub async fn mount_block_economic_state_not_finalized(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_block_economic_state" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        })))
+        .mount(server)
+        .await;
+}
+
 /// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
 /// these pending transactions (`(tx_hash, time_added_to_pool_hex)`).
 pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {

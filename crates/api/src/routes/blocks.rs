@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
-use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::routes::proposal_window::{block_proposal_zone, resolve_committed_txs};
 use crate::routes::transactions::tx_serialized_size_in_block;
@@ -365,15 +367,18 @@ async fn get_block(
 
     match block_result {
         Some((block_num, header)) => {
-            let block_hash = format!("0x{}", hex::encode(&header.hash));
+            let block_hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+                ApiError::internal(format!(
+                    "block {block_num} hash in the store is {} bytes, not 32",
+                    header.hash.len()
+                ))
+            })?;
             let header_info = enrich_from_rocksdb(&ckb_store, &header.hash);
 
             // Get miner message from CKB's RocksDB
-            let miner_message = ckb_store.as_ref().and_then(|s| {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&header.hash);
-                s.get_miner_message(&hash)
-            });
+            let miner_message = ckb_store
+                .as_ref()
+                .and_then(|s| s.get_miner_message(&block_hash));
 
             // The block's own miner, from the cellbase witness lock.
             let miner_address = get_miner_address_from_store(
@@ -389,9 +394,10 @@ async fn get_block(
                 state.ckb_store.as_ref(),
                 &state.cache,
             )
-            .await;
+            .await?;
+            // `None` only while the node has not finalized this block's reward.
             let (mining_reward, mining_reward_tx_hash) = match reward_info {
-                Some(info) => (Some(info.reward), info.cellbase_tx_hash),
+                Some(info) => (Some(info.reward), Some(info.cellbase_tx_hash)),
                 None => (None, None),
             };
             let activation = {
@@ -479,26 +485,43 @@ fn get_miner_address_from_store(
 #[derive(Debug, Deserialize)]
 struct RpcResponse<T> {
     result: Option<T>,
+    error: Option<RpcErrorBody>,
 }
 
 #[derive(Debug, Deserialize)]
-struct BlockEconomicState {
-    miner_reward: MinerReward,
+struct RpcErrorBody {
+    code: i64,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBlockEconomicState {
+    miner_reward: RawMinerReward,
     finalized_at: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct MinerReward {
+struct RawMinerReward {
     primary: String,
     secondary: String,
     committed: String,
     proposal: String,
 }
 
+/// A finalized block's economics, as the node's `get_block_economic_state`
+/// reports them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BlockEconomicState {
+    /// The block that finalized this block's reward — its cellbase pays it.
+    pub finalized_at: [u8; 32],
+    /// `primary + secondary + committed + proposal`, shannons.
+    pub miner_reward_total: u128,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct MiningRewardInfo {
     reward: String,
-    cellbase_tx_hash: Option<String>,
+    cellbase_tx_hash: String,
 }
 
 fn parse_hex_u128(hex: &str, field_name: &str) -> Result<u128, String> {
@@ -511,109 +534,113 @@ fn parse_hex_u128(hex: &str, field_name: &str) -> Result<u128, String> {
     })
 }
 
-async fn get_mining_reward(
+/// The node's `get_block_economic_state(block_hash)` — the one fetch both the
+/// block detail's mining reward and the pipeline's cellbase targets use.
+///
+/// `Ok(None)` means exactly one thing: the node answered `null`, i.e. the block
+/// is not finalized yet. A transport failure, an RPC error and a malformed
+/// field are errors naming the block.
+pub(crate) async fn fetch_block_economic_state(
     rpc_url: &str,
-    block_hash: &str,
-    ckb_store: Option<&Arc<CkbChainReader>>,
-    cache: &CacheBackend,
-) -> Option<MiningRewardInfo> {
-    let cache_key = CacheKeys::mining_reward(block_hash);
-    if let Some(cached) = cache.get::<MiningRewardInfo>(&cache_key).await {
-        return Some(cached);
-    }
-
-    let client = crate::utils::shared_http_client();
-    let response = client
+    block_hash: &[u8; 32],
+) -> Result<Option<BlockEconomicState>, ApiRouteError> {
+    let hash_hex = format!("0x{}", hex::encode(block_hash));
+    let call = format!("get_block_economic_state({hash_hex})");
+    let response: RpcResponse<RawBlockEconomicState> = crate::utils::shared_http_client()
         .post(rpc_url)
         .json(&serde_json::json!({
             "id": 1,
             "jsonrpc": "2.0",
             "method": "get_block_economic_state",
-            "params": [block_hash]
+            "params": [hash_hex]
         }))
         .send()
         .await
-        .ok()?;
+        .map_err(|e| ApiError::internal(format!("{call} request failed: {e}")))?
+        .json()
+        .await
+        .map_err(|e| ApiError::internal(format!("{call} response undecodable: {e}")))?;
 
-    let rpc_result: RpcResponse<BlockEconomicState> = response.json().await.ok()?;
-    let economic_state = rpc_result.result?;
-
-    let primary = match parse_hex_u128(&economic_state.miner_reward.primary, "miner_reward.primary")
-    {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!("{}", e);
-            return None;
-        }
-    };
-    let secondary = match parse_hex_u128(
-        &economic_state.miner_reward.secondary,
-        "miner_reward.secondary",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!("{}", e);
-            return None;
-        }
-    };
-    let committed = match parse_hex_u128(
-        &economic_state.miner_reward.committed,
-        "miner_reward.committed",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!("{}", e);
-            return None;
-        }
-    };
-    let proposal = match parse_hex_u128(
-        &economic_state.miner_reward.proposal,
-        "miner_reward.proposal",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!("{}", e);
-            return None;
-        }
+    if let Some(error) = response.error {
+        return Err(ApiError::internal(format!(
+            "{call} RPC error {}: {}",
+            error.code, error.message
+        )));
+    }
+    let Some(raw) = response.result else {
+        return Ok(None);
     };
 
-    let total = primary + secondary + committed + proposal;
+    let finalized_at = crate::pool::source::parse_hex_hash32(
+        &raw.finalized_at,
+        "get_block_economic_state.finalized_at",
+    )
+    .map_err(|e| ApiError::internal(format!("{call}: {e}")))?;
+    let reward = |value: &str, field: &str| {
+        parse_hex_u128(value, field).map_err(|e| ApiError::internal(format!("{call}: {e}")))
+    };
+    let miner_reward_total = reward(&raw.miner_reward.primary, "miner_reward.primary")?
+        + reward(&raw.miner_reward.secondary, "miner_reward.secondary")?
+        + reward(&raw.miner_reward.committed, "miner_reward.committed")?
+        + reward(&raw.miner_reward.proposal, "miner_reward.proposal")?;
 
-    let cellbase_tx_hash = get_cellbase_tx_hash(ckb_store, &economic_state.finalized_at);
+    Ok(Some(BlockEconomicState {
+        finalized_at,
+        miner_reward_total,
+    }))
+}
 
+/// The block's total miner reward and the cellbase that pays it. `Ok(None)`
+/// while the node has not finalized the block; every other gap is an error.
+async fn get_mining_reward(
+    rpc_url: &str,
+    block_hash: &[u8; 32],
+    ckb_store: Option<&Arc<CkbChainReader>>,
+    cache: &CacheBackend,
+) -> Result<Option<MiningRewardInfo>, ApiRouteError> {
+    let cache_key = CacheKeys::mining_reward(&format!("0x{}", hex::encode(block_hash)));
+    if let Some(cached) = cache.get::<MiningRewardInfo>(&cache_key).await {
+        return Ok(Some(cached));
+    }
+
+    let Some(economic_state) = fetch_block_economic_state(rpc_url, block_hash).await? else {
+        return Ok(None);
+    };
     let info = MiningRewardInfo {
-        reward: total.to_string(),
-        cellbase_tx_hash,
+        reward: economic_state.miner_reward_total.to_string(),
+        cellbase_tx_hash: get_cellbase_tx_hash(ckb_store, &economic_state.finalized_at)?,
     };
 
     cache.set(&cache_key, &info, CacheTtl::MINING_REWARD).await;
 
-    Some(info)
+    Ok(Some(info))
 }
 
-/// Get cellbase tx hash by looking up the block in the CKB node's RocksDB.
+/// The cellbase of the block that finalized a reward — the transaction that
+/// pays it — read from the CKB node's RocksDB.
 fn get_cellbase_tx_hash(
     ckb_store: Option<&Arc<CkbChainReader>>,
-    finalized_at_hash: &str,
-) -> Option<String> {
-    let hash_vec = hex::decode(
-        finalized_at_hash
-            .strip_prefix("0x")
-            .unwrap_or(finalized_at_hash),
-    )
-    .ok()?;
-
-    if hash_vec.len() != 32 {
-        return None;
-    }
-
-    let ckb = ckb_store?;
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(&hash_vec);
-    let block = ckb.get_block(&hash)?;
-    let txs = block.transactions();
-    let cellbase = txs.first()?;
-    Some(format!("0x{}", hex::encode(cellbase.hash().raw_data())))
+    finalized_at: &[u8; 32],
+) -> Result<String, ApiRouteError> {
+    let ckb = ckb_store.ok_or_else(|| {
+        ApiError::internal(
+            "the mining reward's cellbase is read from the node DB; configure ckb_db_path \
+             so the API can open it",
+        )
+    })?;
+    let block = ckb.get_block(finalized_at).ok_or_else(|| {
+        ApiError::internal(format!(
+            "block 0x{} finalized this reward but is not in the node DB",
+            hex::encode(finalized_at)
+        ))
+    })?;
+    let cellbase = block.transactions().into_iter().next().ok_or_else(|| {
+        ApiError::internal(format!(
+            "block 0x{} has no cellbase",
+            hex::encode(finalized_at)
+        ))
+    })?;
+    Ok(format!("0x{}", hex::encode(cellbase.hash().raw_data())))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -861,7 +888,7 @@ async fn get_block_proposals(
                 committed_block_number: commitment.map(|(_, number)| number),
             })
         })
-        .collect::<Result<Vec<_>, crate::response::ApiRouteError>>()?;
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     ok(proposals)
 }
