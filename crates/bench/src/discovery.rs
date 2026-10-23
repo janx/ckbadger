@@ -573,20 +573,22 @@ async fn discover_params(
         params.top_script_names = validate_ids(client, base, candidates, "scripts/{id}").await;
     }
 
-    // live_cell_outpoint from /cells/live?limit=1
-    let live_cells = fetch_json(client, &format!("{}/cells/live?limit=1", base)).await?;
-    if let Some(first) = data_array(&live_cells).and_then(|arr| arr.first()) {
-        let tx_hash = first
-            .get("txHash")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let output_index = first
-            .get("outputIndex")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as u32;
-        if !tx_hash.is_empty() {
-            params.live_cell_outpoint = Some((tx_hash, output_index));
+    // live_cell_outpoint from the first live cell of the top address
+    if let Some(lock_hash) = params.top_lock_hashes.first() {
+        let live_cells = fetch_json(client, &live_cell_discovery_url(base, lock_hash)).await?;
+        if let Some(first) = data_array(&live_cells).and_then(|arr| arr.first()) {
+            let tx_hash = first
+                .get("txHash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let output_index = first
+                .get("outputIndex")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as u32;
+            if !tx_hash.is_empty() {
+                params.live_cell_outpoint = Some((tx_hash, output_index));
+            }
         }
     }
 
@@ -755,9 +757,23 @@ pub async fn check_connectivity(api_base: &str, client: &reqwest::Client) -> Res
     Ok(())
 }
 
+/// `/cells/live` lists only through an index, so discovery filters by a lock hash.
+fn live_cell_discovery_url(base: &str, lock_hash: &str) -> String {
+    format!("{base}/cells/live?lock_script_hash={lock_hash}&limit=1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_cell_discovery_filters_by_a_lock_hash() {
+        // `/cells/live` answers 400 without a lock or type script hash filter.
+        assert_eq!(
+            live_cell_discovery_url("http://h/api/v1", "0xab"),
+            "http://h/api/v1/cells/live?lock_script_hash=0xab&limit=1"
+        );
+    }
 
     #[test]
     fn test_data_array_extracts_from_cursor_paginated() {
