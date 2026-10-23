@@ -13,13 +13,13 @@
 //! - a cellbase pays block `X - (farthest + 1)`, cross-checked against the
 //!   node's `get_block_economic_state(..).finalized_at`;
 //! - a pool transaction's stage comes from the same zones, not from the node's
-//!   pending/proposed labels (those only feed the P1/P2 checks), and only when
+//!   pending/proposed labels (those only feed the P1 check), and only when
 //!   the pool was read at ckbadger's sync tip (`status`);
 //! - NEXT is a prediction from the committable pool transactions and the
 //!   consensus block limits.
 //!
 //! Chain-guaranteed invariants are checked, never repaired: a violation is a
-//! 500 naming the invariant (C1–C5, P1–P3) and the block/transaction it broke
+//! 500 naming the invariant (C1–C5, P1, P3) and the block/transaction it broke
 //! on.
 //!
 //! Read-only: store + node DB (`CkbChainReader`) reads and node RPC calls.
@@ -721,8 +721,8 @@ async fn resolve_pays(
 // Tx pool section (pure)
 // ---------------------------------------------------------------------------
 
-/// How the node labels a pool transaction. Used only to check P1/P2: the
-/// stage the snapshot serves is derived from the chain's proposal zones.
+/// How the node labels a pool transaction. Used only to check P1: the stage
+/// the snapshot serves is derived from the chain's proposal zones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum RpcPoolStage {
     Pending,
@@ -762,11 +762,15 @@ struct ClassifiedPoolTx {
 }
 
 /// Stage every pool transaction from the proposal zones of the blocks whose
-/// proposals are still open at `tip`, and check the node's own labels against
-/// that (P1, P2). The node splits proposals exactly this way: those the next
-/// block may commit (`[tip + 1 - farthest, tip + 1 - closest]`) are its
-/// "proposed" set; newer ones (`(tip + 1 - closest, tip]`, its "gap") it
-/// still lists as pending.
+/// proposals are still open at `tip`, and check the node's "proposed" label
+/// against that (P1): a node lists as proposed only what the next block may
+/// commit (`[tip + 1 - farthest, tip + 1 - closest]`).
+///
+/// The converse is not an invariant. A node with `[block_assembler]` moves
+/// committable entries to proposed and lists its gap (`(tip + 1 - closest,
+/// tip]`) as pending, but a node without one never moves anything out of
+/// pending (ckb v0.209 `tx-pool/src/process.rs` `_update_tx_pool_for_reorg`,
+/// `mine_mode`), so a pending label says nothing about proposals.
 fn classify_pool<'z>(
     window: ProposalWindow,
     tip: i64,
@@ -802,21 +806,11 @@ fn classify_pool<'z>(
             let committable_hit = latest(true);
             let gap_hit = latest(false);
             let tx = hex(&entry.hash);
-            match (entry.rpc_stage, committable_hit) {
-                (RpcPoolStage::Proposed, None) => {
-                    return Err(format!(
-                        "P1: the node lists {tx} as proposed at tip {tip}, but no block in \
-                         [{committable_lo}, {committable_hi}] proposed it"
-                    ))
-                }
-                (RpcPoolStage::Pending, Some(hit)) => {
-                    return Err(format!(
-                        "P2: the node lists {tx} as pending at tip {tip}, but block {} proposed \
-                         it inside [{committable_lo}, {committable_hi}]",
-                        hit.block
-                    ))
-                }
-                _ => {}
+            if entry.rpc_stage == RpcPoolStage::Proposed && committable_hit.is_none() {
+                return Err(format!(
+                    "P1: the node lists {tx} as proposed at tip {tip}, but no block in \
+                     [{committable_lo}, {committable_hi}] proposed it"
+                ));
             }
             if entry.size == 0 {
                 return Err(format!("the node reports pool tx {tx} with size 0"));
@@ -1289,8 +1283,11 @@ mod tests {
     fn classify_pool_checks_the_node_labels() {
         let p1 = classify(vec![entry(4, RpcPoolStage::Proposed, 100, 1, 1)]).unwrap_err();
         assert!(p1.starts_with("P1:"), "{p1}");
-        let p2 = classify(vec![entry(1, RpcPoolStage::Pending, 100, 1, 1)]).unwrap_err();
-        assert!(p2.starts_with("P2:"), "{p2}");
+        // A non-mining node lists every pool tx as pending, committable ones included: the
+        // chain stages it.
+        let pending = classify(vec![entry(1, RpcPoolStage::Pending, 100, 1, 1)]).unwrap();
+        assert_eq!(pending[0].proposed_in.map(|p| p.block), Some(95));
+        assert!(pending[0].committable);
         // A gap tx the node calls pending is consistent.
         assert!(classify(vec![entry(2, RpcPoolStage::Pending, 100, 1, 1)]).is_ok());
     }

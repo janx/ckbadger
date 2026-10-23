@@ -1016,8 +1016,12 @@ async fn test_pipeline_pool_invariant_p1() {
     assert!(message.contains("tip 13"), "{message}");
 }
 
+/// A node without `[block_assembler]` never moves pool entries out of pending
+/// (ckb v0.209 `tx-pool/src/process.rs` `_update_tx_pool_for_reorg`, `mine_mode`), so
+/// its pending label says nothing about proposals. The stage comes from the chain.
+/// Live mainnet regression: a 500 "P2: the node lists .. as pending" on a non-mining node.
 #[tokio::test]
-async fn test_pipeline_pool_invariant_p2() {
+async fn test_pipeline_pool_stage_ignores_non_mining_pending_label() {
     let id = [0xB8; 10];
     let chain = FixtureChain::build(
         13,
@@ -1029,9 +1033,9 @@ async fn test_pipeline_pool_invariant_p2() {
             },
         )]),
     );
-    // Proposed at tip - 3, committable — yet the node calls it pending.
-    let mislabelled = pool_entry(pool_hash(id, 8), 500, 1_000, 10, 1);
-    let pool = pool_at_tip(&chain, vec![mislabelled.clone()], vec![]);
+    // Proposed at tip - 3, committable — and the non-mining node still calls it pending.
+    let tx = pool_entry(pool_hash(id, 8), 500, 1_000, 10, 1);
+    let pool = pool_at_tip(&chain, vec![tx.clone()], vec![]);
     let fixture = pipeline_app_with(
         &chain,
         StoreSeed::default(),
@@ -1041,10 +1045,23 @@ async fn test_pipeline_pool_invariant_p2() {
     )
     .await;
     let (status, json) = get_json(&fixture.app, "/pipeline").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
-    let message = json["message"].as_str().unwrap();
-    assert!(message.contains("P2"), "{message}");
-    assert!(message.contains(&mislabelled.hash), "{message}");
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(
+        json["pool"]["pending"].as_array().unwrap().len(),
+        0,
+        "{json}"
+    );
+    let proposed = json["pool"]["proposed"].as_array().unwrap();
+    assert_eq!(proposed.len(), 1, "{json}");
+    assert_eq!(proposed[0]["hash"], tx.hash);
+    assert_eq!(proposed[0]["proposedIn"]["block"], 10);
+    let next: Vec<&str> = json["next"]["txs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["hash"].as_str().unwrap())
+        .collect();
+    assert_eq!(next, vec![tx.hash.as_str()], "the next block may commit it");
 }
 
 #[tokio::test]
