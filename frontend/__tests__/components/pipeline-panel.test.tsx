@@ -112,8 +112,8 @@ describe('PipelinePanel static render', () => {
     const svg = await renderPanel();
     const full = card(svg, T - 5);
     const squares = full.querySelectorAll('[data-sq]');
-    // 9 × 14 cells hold the cellbase and 125 of the 238 listed txs; 113 more do not fit and 61
-    // were omitted by the backend.
+    // 9 × 14 cells hold the cellbase and all 125 listed txs; the other 174 were omitted by the
+    // backend, which never lists more than a card can draw.
     expect(squares).toHaveLength(126);
     expect(squares[0]).toHaveAttribute('data-stage', 'cellbase');
     expect(full.querySelector('[data-hidden]')).toHaveTextContent('+174');

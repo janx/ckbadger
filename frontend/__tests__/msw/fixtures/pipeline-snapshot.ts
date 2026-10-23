@@ -120,7 +120,8 @@ export function buildPipelineSnapshot(): PipelineSnapshot {
   commit(T - 1, 0, T - 4);
   commit(T - 1, 1, T - 4);
   commit(T - 2, 0, T - 5);
-  // Block T−5 is full: 299 commits, all proposed in T−7 → 238 listed, 61 omitted.
+  // Block T−5 is full: 299 commits, all proposed in T−7 → 125 listed (the backend cap: a 9 × 14
+  // field less the cellbase), 174 omitted.
   for (let i = 0; i < 299; i++) commit(T - 5, i, T - 7, { size: 330 + (i % 7) * 40 });
   // A commit of the uncle-carried proposal path: T−6 carried an uncle whose proposal T−4 commits.
   at(T - 6).uncles.push({ number: T - 7, hash: uncleHash(T - 7) });
@@ -193,7 +194,7 @@ export function buildPipelineSnapshot(): PipelineSnapshot {
     const pendingCycles = txs.some((t) => t.cycles === null);
     b.cycles = pendingCycles ? null : txs.reduce((s, t) => s + (t.cycles as number), 0);
     b.cyclesPending = pendingCycles;
-    b.txs = txs.slice(0, 238);
+    b.txs = txs.slice(0, 125);
     b.omittedTxs = txs.length - b.txs.length;
     // Zone order: the block's own proposals first, then each uncle's.
     b.proposals.sort((a, c) => (a.uncleIndex ?? -1) - (c.uncleIndex ?? -1));
