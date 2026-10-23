@@ -18,12 +18,15 @@ use crate::response::{
     CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::identities::{dotcell_record_response, DotCellRecordResponse};
-use crate::routes::proposal_window::block_proposal_zone;
+use crate::routes::proposal_window::{
+    block_proposal_zone, earliest_proposal_in_window, ZoneProposal,
+};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
 };
 use crate::{AppState, RequestReadView};
+use std::convert::Infallible;
 use tracing::instrument;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -76,10 +79,15 @@ pub(crate) fn tx_serialized_size_in_block(molecule_size: i32) -> i32 {
 /// serves as `txSize`. Single definition for every fee rate the API returns
 /// (transaction detail, pending detail, block fee-stats).
 pub(crate) fn tx_fee_rate(fee: u128, size_in_block: i32) -> String {
+    tx_fee_rate_value(fee, size_in_block).to_string()
+}
+
+/// [`tx_fee_rate`] as a number, for callers that order by it.
+pub(crate) fn tx_fee_rate_value(fee: u128, size_in_block: i32) -> u128 {
     let denominator = u128::try_from(size_in_block).unwrap_or_else(|_| {
         panic!("fee-rate call sites guard size_in_block > 0, got {size_in_block}")
     });
-    (fee * 1000 / denominator).to_string()
+    fee * 1000 / denominator
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -125,14 +133,33 @@ pub struct TransactionResponse {
     pub timestamp: String,
 }
 
+/// Where a committed transaction's cycles stand, from the store's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TxCyclesStatus {
+    Done,
+    Pending,
+    /// The replay failed (`-1`); it will not be retried on its own.
+    Failed,
+}
+
+/// The single reading of a stored `cycles` value.
+pub(crate) fn tx_cycles_status(cycles: Option<i64>) -> TxCyclesStatus {
+    match cycles {
+        Some(c) if c > 0 => TxCyclesStatus::Done,
+        Some(-1) => TxCyclesStatus::Failed,
+        _ => TxCyclesStatus::Pending,
+    }
+}
+
 fn derive_cycles_status(cycles: Option<i64>, is_cellbase: bool) -> Option<String> {
     if is_cellbase {
         return None;
     }
-    match cycles {
-        Some(c) if c > 0 => None,
-        Some(-1) => Some("failed".to_string()),
-        _ => Some("pending".to_string()),
+    match tx_cycles_status(cycles) {
+        TxCyclesStatus::Done => None,
+        TxCyclesStatus::Failed => Some("failed".to_string()),
+        TxCyclesStatus::Pending => Some("pending".to_string()),
     }
 }
 
@@ -2176,39 +2203,42 @@ async fn get_transaction_lifecycle(
         let ckb_store_c = ckb_store.clone();
         let short_hash_c = short_hash.clone();
         tokio::task::spawn_blocking(move || -> Option<ProposalWindowHit> {
-            for bn in window
-                .proposal_range(commit_block_number)
-                .filter(|bn| *bn >= 0)
-            {
+            // CKB consensus counts the proposal zones of the uncles a block
+            // embeds, so a tx can legitimately be proposed only inside an
+            // uncle; the shared zone puts the block's own proposals first, so
+            // they own the attribution when both carry the short id.
+            let mut headers = std::collections::HashMap::new();
+            let zone_of = |bn: i64| -> Result<Option<Vec<ZoneProposal>>, Infallible> {
                 let Ok(Some(header)) = store_c.get_block_header(bn) else {
-                    continue;
+                    return Ok(None);
                 };
                 if header.hash.len() != 32 {
-                    continue;
+                    return Ok(None);
                 }
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&header.hash);
                 let Some(block) = ckb_store_c.get_block(&hash) else {
-                    continue;
+                    return Ok(None);
                 };
-                // CKB consensus counts the proposal zones of the uncles a block
-                // embeds, so a tx can legitimately be proposed only inside an
-                // uncle; the shared zone puts the block's own proposals first,
-                // so they own the attribution when both carry the short id.
-                let zone = block_proposal_zone(&block);
-                if let Some(entry) = zone.iter().find(|p| p.short_id == short_hash_c) {
-                    return Some(ProposalWindowHit {
-                        block_number: bn,
-                        block_hash: header.hash.clone(),
-                        timestamp: header.timestamp,
-                        uncle: entry
-                            .uncle
-                            .as_ref()
-                            .map(|uncle| (uncle.number, uncle.hash.to_vec())),
-                    });
-                }
-            }
-            None
+                headers.insert(bn, (header.hash, header.timestamp));
+                Ok(Some(block_proposal_zone(&block)))
+            };
+            let hit = match earliest_proposal_in_window(
+                window,
+                commit_block_number,
+                &short_hash_c,
+                zone_of,
+            ) {
+                Ok(hit) => hit?,
+                Err(never) => match never {},
+            };
+            let (block_hash, timestamp) = headers.remove(&hit.block_number)?;
+            Some(ProposalWindowHit {
+                block_number: hit.block_number,
+                block_hash,
+                timestamp,
+                uncle: hit.uncle.map(|uncle| (uncle.number, uncle.hash.to_vec())),
+            })
         })
         .await
         .unwrap_or(None)
