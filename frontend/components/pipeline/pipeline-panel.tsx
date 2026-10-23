@@ -60,7 +60,7 @@ import {
   type TipContent,
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
-import { T10, T10C, TZ, fmtInt } from '@/components/pipeline/svg-text';
+import { T10C, TZ, fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
 
 const SVG_LABEL =
@@ -601,15 +601,15 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
           ))}
         </g>
         <g data-layer="labels" pointerEvents="none">
-          <NextColumn phase={scene.phase} available={snapshot.next !== null} />
+          <NextColumn available={snapshot.next !== null} />
           <text x={G.chainX0} y={16} className={TZ}>
             Chain
           </text>
-          <text data-chain-sub x={G.chainX0} y={30} className={arc ? T10C : T10}>
-            {arc
-              ? `the cellbase of ${tail4(arc.from)} pays the reward of ${tail4(arc.to)}, ${arc.from - arc.to} blocks back`
-              : 'newest → older'}
-          </text>
+          {arc && (
+            <text data-chain-sub x={G.chainX0} y={30} className={T10C}>
+              {`the cellbase of ${tail4(arc.from)} pays the reward of ${tail4(arc.to)}, ${arc.from - arc.to} blocks back`}
+            </text>
+          )}
           <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} />
         </g>
         <g data-layer="hover" pointerEvents="none">
@@ -687,8 +687,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   );
 }
 
-const SELECT_HINT =
-  'Hover a transaction or a proposal to see how they connect. Click to pin a transaction and follow it from the pool to the block that commits it.';
+/** The "?" beside the title: what the panel shows and how to use it, kept off the canvas. */
+const PIPELINE_HELP = [
+  'Two-step confirmation: a tx is proposed in one block and committed in a later block inside its proposal window.',
+  'Square area = bytes; shade = cycles.',
+  'Hover a tx or a proposal to see how they connect; click a tx to pin it and follow it from the pool to the block that commits it.',
+].join('\n');
 
 const TAG_TONE = {
   pending: 'text-aqua border-aqua/50',
@@ -736,50 +740,43 @@ function selectionText(
   return null;
 }
 
-function SelectionLine({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
+/** The footer: the legend, or — while a tx is pinned — where that tx is now. */
+function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
   const pinned = usePipelineHoverStore((s) => s.pinned);
   const clearPin = usePipelineHoverStore((s) => s.clearPin);
-  const sel = pinned && snapshot ? selectionText(pinned, snapshot) : null;
+  if (!pinned) return <PipelineLegend />;
+  const sel = snapshot ? selectionText(pinned, snapshot) : null;
   return (
     <div
       data-testid="pipeline-selection"
       aria-live="polite"
-      className="text-text mb-1.5 flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]"
+      className={`${FOOTER_ROW} text-text gap-x-3 text-[11px]`}
     >
-      {pinned ? (
+      <span className="text-text-dim text-[10px] uppercase tracking-wider">Selected</span>
+      <span className="text-text-bright">{shortHash(pinned)}</span>
+      {sel ? (
         <>
-          <span className="text-text-dim text-[10px] uppercase tracking-wider">Selected</span>
-          <span className="text-text-bright">{shortHash(pinned)}</span>
-          {sel ? (
-            <>
-              <span
-                className={`rounded border px-1.5 py-[3px] text-[10px] leading-none ${TAG_TONE[sel.tag]}`}
-              >
-                {sel.tag}
-              </span>
-              <span>{sel.text}</span>
-            </>
-          ) : (
-            <span>no longer in view</span>
-          )}
-          <Link href={`/tx/${pinned}`} className="text-aqua border-aqua/40 border-b no-underline">
-            open tx ↗
-          </Link>
-          <button
-            type="button"
-            aria-label="Clear selection"
-            onClick={clearPin}
-            className="border-base-border text-text hover:text-text-bright rounded border px-[7px] py-[3px] text-[11px]"
+          <span
+            className={`rounded border px-1.5 py-[3px] text-[10px] leading-none ${TAG_TONE[sel.tag]}`}
           >
-            ×
-          </button>
+            {sel.tag}
+          </span>
+          <span>{sel.text}</span>
         </>
       ) : (
-        <>
-          <span className="text-text-dim text-[10px] uppercase tracking-wider">Select</span>
-          <span>{SELECT_HINT}</span>
-        </>
+        <span>no longer in view</span>
       )}
+      <Link href={`/tx/${pinned}`} className="text-aqua border-aqua/40 border-b no-underline">
+        open tx ↗
+      </Link>
+      <button
+        type="button"
+        aria-label="Clear selection"
+        onClick={clearPin}
+        className="border-base-border text-text hover:text-text-bright rounded border px-[7px] py-[3px] text-[11px]"
+      >
+        ×
+      </button>
     </div>
   );
 }
@@ -793,7 +790,7 @@ export function PipelinePanel() {
         <span className="flex items-center gap-2.5">
           Transaction Pipeline
           <span
-            title="Two-step confirmation: a tx is proposed in one block and committed in a later block inside its proposal window."
+            title={PIPELINE_HELP}
             className="border-text-dim/70 text-text-dim inline-block h-3.5 w-3.5 rounded-full border text-center font-mono text-[9px] normal-case leading-3 tracking-normal"
           >
             ?
@@ -812,8 +809,7 @@ export function PipelinePanel() {
         </StatusRow>
       )}
       <TerminalPanelFooter>
-        <SelectionLine snapshot={data} />
-        <PipelineLegend />
+        <PipelineFooter snapshot={data} />
       </TerminalPanelFooter>
     </TerminalPanel>
   );

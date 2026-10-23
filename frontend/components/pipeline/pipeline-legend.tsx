@@ -1,12 +1,12 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { FOOTER_ROW } from '@/components/pipeline/svg-text';
 import type { PipelineProposalState } from '@/lib/api';
 import {
   chipPaint,
   diamondPath,
   paintSquare,
-  tok,
   type ShadeStep,
   type SquareStage,
   type SquareStyle,
@@ -63,31 +63,40 @@ function Key({ children, tight = false }: { children: ReactNode; tight?: boolean
   );
 }
 
-/** What each mark on the canvas means. Explanations live here and in the hover, not on the canvas. */
+/**
+ * One quiet line: the stage colours (tx squares and proposal chips share them), the cellbase, the
+ * cycles shades and the dashed outline. Everything labelled on the canvas itself (the proposal
+ * window, uncles), explained in a hover or in the "?" title (area = bytes, how to use it) is left
+ * out.
+ */
 export function PipelineLegend() {
   const cellbase = paintSquare('cellbase', 'solid', 0);
-  const committedFill = paintSquare('committed', 'solid', 1).fill;
   return (
     <div
       data-testid="pipeline-legend"
-      className="text-text-dim flex flex-wrap gap-x-4 gap-y-1.5 font-mono text-[10px] leading-snug"
+      className={`${FOOTER_ROW} text-text-dim gap-x-3.5 text-[10px]`}
     >
       <Key>
         <Sq stage="pending" />
-        pending tx
+        pending
       </Key>
       <Key>
         <Sq stage="proposed" />
-        proposed tx
+        proposed
       </Key>
       <Key>
         <Sq stage="proposed" style="hollow" />
-        too early to commit
+        too early
       </Key>
       <Key>
         <Sq stage="committed" />
-        committed tx
+        committed
       </Key>
+      <Key>
+        <Chip state="expired" />
+        expired
+      </Key>
+      <span className="bg-base-border h-2.5 w-px" aria-hidden />
       <Key>
         <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden>
           <path d={diamondPath(1.5, 1.5, 7)} style={{ fill: cellbase.fill }} />
@@ -95,76 +104,14 @@ export function PipelineLegend() {
         cellbase
       </Key>
       <Key tight>
-        <Chip state="waiting" />
-        <Chip state="early" />
-        <Chip state="committed" />
-        <Chip state="expired" />
-        <span className="ml-1">proposals: waiting · too early · committed later · expired</span>
-      </Key>
-      <Key>
-        <svg width={34} height={12} viewBox="0 0 34 12" aria-hidden>
-          <path d="M2 1V11M32 1V11" style={{ stroke: tok('gold') }} />
-          <path d="M2 6H32" strokeWidth={1.5} style={{ stroke: tok('gold') }} />
-        </svg>
-        proposal window
-      </Key>
-      <Key>
-        <svg width={22} height={12} viewBox="0 0 22 12" aria-hidden>
-          <rect
-            x={0.5}
-            y={0.5}
-            width={21}
-            height={11}
-            rx={2.5}
-            strokeDasharray="2 2"
-            style={{ fill: tok('surface'), stroke: tok('ink-dim') }}
-          />
-          <rect
-            x={4}
-            y={5}
-            width={5}
-            height={5}
-            rx={1}
-            style={{ fill: chipPaint('waiting').fill }}
-          />
-          <rect
-            x={11}
-            y={5}
-            width={5}
-            height={5}
-            rx={1}
-            style={{ fill: chipPaint('committed').fill }}
-          />
-        </svg>
-        uncle, carried inside the block that includes it
-      </Key>
-      <Key>
-        <svg width={26} height={8} viewBox="0 -4 26 8" aria-hidden>
-          <path
-            d="M1 0L24 0M20 -3L24 0L20 3"
-            fill="none"
-            strokeOpacity={0.85}
-            style={{ stroke: tok('jade') }}
-          />
-        </svg>
-        parent link
-      </Key>
-      <Key tight>
         {([0, 1, 2, 3] as const).map((s) => (
-          <Sq key={s} stage="committed" step={s} />
+          <Sq key={s} stage="committed" step={s} size={6} />
         ))}
-        <span className="ml-1">cycles: fewer → more</span>
+        <span className="ml-1">cycles</span>
       </Key>
       <Key>
         <Sq stage="committed" style="dashed" />
-        cycles unknown
-      </Key>
-      <Key>
-        <svg width={24} height={14} viewBox="0 0 24 14" aria-hidden>
-          <rect x={0} y={7} width={6} height={6} rx={1} style={{ fill: committedFill }} />
-          <rect x={9} y={0} width={13} height={13} rx={1.5} style={{ fill: committedFill }} />
-        </svg>
-        area = bytes
+        unknown
       </Key>
     </div>
   );

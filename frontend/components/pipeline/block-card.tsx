@@ -2,7 +2,7 @@
 
 import { chipPaint, tok } from '@/lib/pipeline/encoding';
 import { G, tail4, type SceneCard } from '@/lib/pipeline/layout';
-import { T10, T10C, T10G } from '@/components/pipeline/svg-text';
+import { T10, T10C, T11C, T11G } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 
 export type DimLevel = 'false' | 'true' | 'soft';
@@ -23,7 +23,6 @@ interface BlockCardProps {
  */
 export function BlockCard({ card, numberInWindow, highlighted, dim, onIds }: BlockCardProps) {
   const { block } = card;
-  const own = card.chips.filter((k) => k.proposal.uncleIndex === null).length;
   return (
     <g
       data-card={card.id}
@@ -68,7 +67,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds }: Blo
           data-block-number
           x={G.padX}
           y={G.chainY + 3.5}
-          className={numberInWindow ? T10G : T10C}
+          className={numberInWindow ? T11G : T11C}
         >
           {tail4(block.number)}
         </text>
@@ -131,11 +130,6 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds }: Blo
               textAnchor="end"
               className={T10}
             >{`+${card.chipOverflow}`}</text>
-          )}
-          {own === 0 && (
-            <text x={G.padX} y={G.propTop + 7} className={T10}>
-              none
-            </text>
           )}
         </g>
         <g data-field>

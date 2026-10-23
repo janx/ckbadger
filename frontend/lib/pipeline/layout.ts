@@ -1,8 +1,11 @@
 /**
  * Geometry of the transaction pipeline, ported from the approved prototype
- * (docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html). All functions are pure.
+ * (docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html). The geometry now
+ * deliberately differs from that file: the panel sits in the page container like the other homepage
+ * rows, so the grid is 8 px instead of 7, every card is a fixed 9 columns wide instead of growing
+ * with its content, and the pool and NEXT columns are narrower. All functions are pure.
  *
- * A 7 px grid: a tx is an n×n square of cells (area ∝ bytes), a proposal is a 5 px chip. Cards are
+ * An 8 px grid: a tx is an n×n square of cells (area ∝ bytes), a proposal is a 5 px chip. Cards are
  * top-aligned; the chain runs through the card headers.
  */
 
@@ -25,7 +28,7 @@ import {
   type TxLook,
 } from '@/lib/pipeline/encoding';
 
-export const U = 7;
+export const U = 8;
 
 const CHAIN_BASE = {
   H: 240,
@@ -39,70 +42,64 @@ const CHAIN_BASE = {
   chipP: 6,
   sepY: 97,
   fieldTop: 102,
-  fieldRows: 17,
+  /**
+   * Every card (a block, NEXT, the landing block) is this many columns wide whatever it holds; what
+   * does not fit is counted as "+N" (proposal chips, txs) instead of widening the card.
+   */
+  cardCols: 9,
+  fieldRows: 14,
   padB: 5,
   memX0: 14,
-  memCols: 17,
+  memCols: 10,
   pendLblY: 48,
   pendTop: 56,
   pendRows: 8,
   propLblY: 128,
   propPoolTop: 136,
   propPoolRows: 12,
-  divX: 146,
-  nextLblX: 152,
-  nextX: 214,
-  gap: 20,
-  minCols: 6,
-  maxCols: 14,
-  minBlocks: 12,
+  divX: 103,
+  nextX: 110,
+  gap: 12,
+  minBlocks: 11,
   maxBlocks: 24,
 } as const;
 
+/** Card width in px: `cardCols` cells and the padding on both sides. */
+const CARD_W = CHAIN_BASE.cardCols * U - 1 + 2 * CHAIN_BASE.padX;
+
 export const G = {
   ...CHAIN_BASE,
-  // The chain starts past the widest card NEXT can grow to, so a busy NEXT never moves the chain.
-  chainX0: CHAIN_BASE.nextX + CHAIN_BASE.maxCols * U - 1 + 2 * CHAIN_BASE.padX + CHAIN_BASE.gap,
+  cardW: CARD_W,
+  // The chain starts one gap past NEXT; NEXT never changes width, so it never moves the chain.
+  chainX0: CHAIN_BASE.nextX + CARD_W + CHAIN_BASE.gap,
 } as const;
 
 /** An uncle travels inside the block that includes it: its header and proposals, never its txs. */
-export const UNC = { top: 4, head: 11, gap: 3, padB: 3, minCols: 11, chipRows: 2 } as const;
+export const UNC = { top: 4, head: 11, gap: 3, padB: 3, chipRows: 2 } as const;
 
 /**
  * Grid capacities in 1×1 cells. The backend truncates the pool lists and a block's tx list to these
- * (crates/api/src/routes/pipeline.rs cross-references them): pending 17 × 8, proposed 17 × 12,
- * block field 14 × 17.
+ * (crates/api/src/routes/pipeline.rs cross-references them): pending 10 × 8 = 80, proposed
+ * 10 × 12 = 120, block field 9 × 14 = 126.
  */
 export const POOL_PENDING_CAPACITY = G.memCols * G.pendRows;
 export const POOL_PROPOSED_CAPACITY = G.memCols * G.propPoolRows;
-export const BLOCK_FIELD_CAPACITY = G.maxCols * G.fieldRows;
+export const BLOCK_FIELD_CAPACITY = G.cardCols * G.fieldRows;
 
-const clamp = (lo: number, hi: number, v: number) => Math.min(hi, Math.max(lo, v));
+/** Proposal chips per row of a card's proposal area. */
+export const CHIPS_PER_ROW = Math.floor((G.cardCols * U) / G.chipP);
+/** Proposal chips per row inside an uncle mini-card, inset 3 px on both sides. */
+export const UNCLE_CHIPS_PER_ROW = Math.floor((G.cardCols * U - 1 - 6) / G.chipP);
 
-export const cardW = (cols: number) => cols * U - 1 + 2 * G.padX;
-export const chipsPerRow = (cols: number) => Math.floor((cols * U) / G.chipP);
-export const uncleChipsPerRow = (cols: number) => Math.floor((cols * U - 1 - 6) / G.chipP);
-
-export function uncleBoxH(cols: number, nProposals: number): number {
-  const rows = nProposals
-    ? Math.min(UNC.chipRows, Math.ceil(nProposals / uncleChipsPerRow(cols)))
-    : 0;
+export function uncleBoxH(nProposals: number): number {
+  const rows = nProposals ? Math.min(UNC.chipRows, Math.ceil(nProposals / UNCLE_CHIPS_PER_ROW)) : 0;
   return UNC.head + rows * G.chipP + UNC.padB;
 }
 
 /** Height of the uncle area of a card (0 without uncles); `counts` = proposals per uncle. */
-export function unclesH(cols: number, counts: readonly number[]): number {
+export function unclesH(counts: readonly number[]): number {
   if (!counts.length) return 0;
-  return UNC.top + counts.reduce((h, n) => h + uncleBoxH(cols, n) + UNC.gap, 0);
-}
-
-/** Card columns: room for the tx area, the widest square and the block's own proposals. */
-export function cardCols(sides: readonly number[], nProps: number, minCols: number = G.minCols) {
-  const area = sides.reduce((s, n) => s + n * n, 0) + 1;
-  let cols = Math.max(Math.ceil(Math.sqrt(area * 1.6)), ...sides);
-  const needPerRow = Math.ceil(nProps / G.propRows);
-  while (chipsPerRow(cols) < needPerRow && cols < G.maxCols) cols++;
-  return clamp(minCols, G.maxCols, cols);
+  return UNC.top + counts.reduce((h, n) => h + uncleBoxH(n) + UNC.gap, 0);
 }
 
 /**
@@ -119,8 +116,11 @@ export function chipSlots(total: number, cap: number): { shown: number; overflow
   throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
 }
 
+/** A quiet block still reads as a block: its tx field is at least this many rows tall. */
+const MIN_FIELD_ROWS = 3;
+
 export const cardH = (rows: number, extra = 0) =>
-  G.fieldTop + extra + Math.max(1, rows) * U - 1 + G.padB - G.cardTop;
+  G.fieldTop + extra + Math.max(MIN_FIELD_ROWS, rows) * U - 1 + G.padB - G.cardTop;
 
 export interface PackItem {
   id: string;
@@ -192,25 +192,22 @@ export interface ChainSlot {
 }
 
 /**
- * Card x positions, newest first. At least `minBlocks` cards, at most `maxBlocks`, otherwise cut at
- * the view width. A landing block (just mined, still being settled) sits at the NEXT position.
+ * x positions of `count` cards, newest first. At least `minBlocks` cards, at most `maxBlocks`,
+ * otherwise cut at the view width. A landing block (just mined, still being settled) sits at the
+ * NEXT position.
  */
-export function chainLayout(
-  cards: readonly { cols: number }[],
-  viewW: number,
-  landing: boolean
-): ChainSlot[] {
+export function chainLayout(count: number, viewW: number, landing: boolean): ChainSlot[] {
   const out: ChainSlot[] = [];
+  const w = G.cardW;
   let x: number = G.chainX0;
   let n = 0;
   let i0 = 0;
   if (landing) {
-    if (!cards.length) throw new Error('pipeline: a landing layout needs the landing block');
-    out.push({ index: 0, x: G.nextX, w: cardW(cards[0].cols), slot: 'landing' });
+    if (!count) throw new Error('pipeline: a landing layout needs the landing block');
+    out.push({ index: 0, x: G.nextX, w, slot: 'landing' });
     i0 = 1;
   }
-  for (let i = i0; i < cards.length; i++) {
-    const w = cardW(cards[i].cols);
+  for (let i = i0; i < count; i++) {
     if (n >= G.maxBlocks || (n >= G.minBlocks && x + w > viewW - 10)) break;
     out.push({ index: i, x, w, slot: 'chain' });
     x += w + G.gap;
@@ -462,7 +459,6 @@ export interface SceneCard {
   x: number;
   w: number;
   h: number;
-  cols: number;
   chips: SceneChip[];
   /** Own proposals that do not fit the three chip rows. */
   chipOverflow: number;
@@ -486,7 +482,6 @@ export interface SceneNext {
   x: number;
   w: number;
   h: number;
-  cols: number;
   next: PipelineNext;
   ghosts: SceneGhost[];
   ghostChips: { x: number; y: number }[];
@@ -582,7 +577,6 @@ function poolGrid(
 
 interface CardGeom {
   block: PipelineBlock;
-  cols: number;
   uExtra: number;
   pack: PackResult;
   own: PipelineProposal[];
@@ -607,25 +601,19 @@ function cardGeom(b: PipelineBlock): CardGeom {
     }
   }
   const order = b.txs.slice().sort(bySize);
-  const sides = order.map((t) => squareSide(t.size));
-  const cols = cardCols(sides, own.length, b.uncles.length ? UNC.minCols : G.minCols);
-  const uExtra = unclesH(
-    cols,
-    byUncle.map((u) => u.length)
-  );
+  const uExtra = unclesH(byUncle.map((u) => u.length));
   const pack = pack2D(
-    order.map((t, i) => ({ id: t.hash, n: sides[i] })),
-    cols,
+    order.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
+    G.cardCols,
     G.fieldRows - Math.ceil(uExtra / U),
     true
   );
-  return { block: b, cols, uExtra, pack, own, byUncle };
+  return { block: b, uExtra, pack, own, byUncle };
 }
 
 function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
   const b = g.block;
-  const w = cardW(g.cols);
-  const per = chipsPerRow(g.cols);
+  const per = CHIPS_PER_ROW;
   const own = chipSlots(g.own.length, per * G.propRows);
   const chips: SceneChip[] = g.own.slice(0, own.shown).map((p, i) => ({
     key: `${p.shortId}|`,
@@ -635,17 +623,17 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
   }));
   const uncles: SceneUncle[] = [];
   let top: number = G.fieldTop - 1;
-  const per2 = uncleChipsPerRow(g.cols);
+  const per2 = UNCLE_CHIPS_PER_ROW;
   const cap2 = per2 * UNC.chipRows;
   g.byUncle.forEach((list, ui) => {
-    const h = uncleBoxH(g.cols, list.length);
+    const h = uncleBoxH(list.length);
     const ref = b.uncles[ui];
     uncles.push({
       index: ui,
       ref,
       y: top,
       h,
-      label: `uncle ${tail4(ref.number)}`,
+      label: 'uncle',
       overflow: Math.max(0, list.length - cap2),
     });
     list.slice(0, cap2).forEach((p, i) => {
@@ -688,9 +676,8 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     block: b,
     slot,
     x,
-    w,
+    w: G.cardW,
     h: cardH(g.pack.rows, g.uExtra),
-    cols: g.cols,
     chips,
     chipOverflow: own.overflow,
     uncles,
@@ -704,15 +691,13 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
     throw new Error(`pipeline: next.omittedTxs ${next.omittedTxs} is not a count`);
   }
   // Drawn in the backend's order (by size, descending), like a block's txs.
-  const sides = next.txs.map((t) => squareSide(t.size));
-  const cols = cardCols(sides, next.proposals);
   const fp = pack2D(
-    next.txs.map((t, i) => ({ id: t.hash, n: sides[i] })),
-    cols,
+    next.txs.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
+    G.cardCols,
     G.fieldRows,
     true
   );
-  const per = chipsPerRow(cols);
+  const per = CHIPS_PER_ROW;
   const slots = chipSlots(next.proposals, per * G.propRows);
   const ghostChips = Array.from({ length: slots.shown }, (_, i) => ({
     x: G.padX + (i % per) * G.chipP,
@@ -721,9 +706,8 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
   return {
     number: s.tip.number + 1,
     x: G.nextX,
-    w: cardW(cols),
+    w: G.cardW,
     h: cardH(fp.rows),
-    cols,
     next,
     ghosts: [
       { id: null, x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
@@ -798,7 +782,7 @@ export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase
   }
 
   const geoms = s.blocks.map(cardGeom);
-  const slots = chainLayout(geoms, viewW, phase === 'landing');
+  const slots = chainLayout(geoms.length, viewW, phase === 'landing');
   const cards = slots.map((slot) => sceneCard(geoms[slot.index], slot.x, slot.slot));
   const next = phase === 'settled' && s.next ? sceneNext(s, s.next) : null;
   return {
