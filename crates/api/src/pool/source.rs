@@ -78,6 +78,9 @@ pub struct NodeHeader {
 }
 
 /// Read-only node RPC the mirror depends on.
+// `#[async_trait]` marks each boxed-future method `#[must_use]`, which clippy
+// (1.99) flags as redundant on a type that is already `#[must_use]`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait PoolSource: Send + Sync {
     async fn tx_pool_info(&self) -> Result<TxPoolInfo, String>;

@@ -1711,10 +1711,8 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         let mut set = HashSet::new();
         if let Some(raw) = raw {
             assert_eq!(raw.len() % 32, 0, "addr set row must be whole 32B hashes");
-            for chunk in raw.chunks_exact(32) {
-                let mut lh = [0u8; 32];
-                lh.copy_from_slice(chunk);
-                set.insert(lh);
+            for lh in raw.as_chunks::<32>().0 {
+                set.insert(*lh);
             }
         }
         set

@@ -49,6 +49,9 @@ impl ProbeResult {
     }
 }
 
+// `#[async_trait]` marks each boxed-future method `#[must_use]`, which clippy
+// (1.99) flags as redundant on a type that is already `#[must_use]`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Prober: Send + Sync {
     /// Normalize one address into a peer-keyed dial candidate. A peer hint is

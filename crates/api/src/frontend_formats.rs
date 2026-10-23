@@ -512,7 +512,7 @@ async fn fetch_json(
         }
         budget
             .bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
                 total
                     .checked_add(chunk.len())
                     .filter(|bytes| *bytes <= 64 * 1024 * 1024)

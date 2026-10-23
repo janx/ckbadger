@@ -376,6 +376,9 @@ type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// peer, and `extract_client_ip` treats a loopback peer with no forwarded
 /// address as local — so the rate limiter skips it and every proxied socket is
 /// effectively un-limited. The HTTP path already forwards them; this mirrors it.
+///
+/// The error is tungstenite's own (`connect_async`'s), passed through unboxed.
+#[allow(clippy::result_large_err)]
 async fn connect_upstream_ws(
     upstream: &UpstreamTarget,
     client_ip: IpAddr,
