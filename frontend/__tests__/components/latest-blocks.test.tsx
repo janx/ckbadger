@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
 import { LatestBlocks } from '@/components/latest-blocks';
+import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { api, type Block } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -80,5 +81,39 @@ describe('LatestBlocks', () => {
       'href',
       '/mainnet/blocks/8775639'
     );
+  });
+
+  it('highlights its row for the block hovered in the pipeline and anchors the window on hover', async () => {
+    usePipelineHoverStore.getState().clear();
+    const blocks = [mockBlock(8_775_639), mockBlock(8_775_638)];
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      data: blocks,
+      total: blocks.length,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<LatestBlocks initialBlocks={blocks} />);
+    const row = (await screen.findByRole('link', { name: /#\s*8,775,638/i })).closest(
+      '[data-block-row]'
+    ) as HTMLElement;
+    expect(row).toHaveAttribute('data-highlighted', 'false');
+
+    act(() =>
+      usePipelineHoverStore.getState().setHover({ block: 8_775_638, tx: null, window: null })
+    );
+    expect(row).toHaveAttribute('data-highlighted', 'true');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(row).toHaveAttribute('data-highlighted', 'false');
+
+    fireEvent.pointerEnter(row);
+    expect(usePipelineHoverStore.getState()).toMatchObject({
+      hoverBlock: 8_775_638,
+      windowBlock: 8_775_638,
+      hoverTx: null,
+    });
+    fireEvent.pointerLeave(row);
+    expect(usePipelineHoverStore.getState().hoverBlock).toBeNull();
+    expect(usePipelineHoverStore.getState().windowBlock).toBeNull();
   });
 });

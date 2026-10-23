@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { act, render as renderPlain } from '@testing-library/react';
+import { act, fireEvent, render as renderPlain } from '@testing-library/react';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { server } from '@/__tests__/msw/server';
 import {
@@ -15,7 +15,8 @@ import {
 import type { PipelineSnapshot } from '@/lib/api';
 import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
 import { chipPaint } from '@/lib/pipeline/encoding';
-import { G, buildScene, chipsPerRow } from '@/lib/pipeline/layout';
+import { G, buildScene, chipsPerRow, windowRuler, type Scene } from '@/lib/pipeline/layout';
+import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
 
 const VIEW_W = 1600;
@@ -325,5 +326,200 @@ describe('PipelineCanvas motion', () => {
     const sq = card.querySelector(`[data-sq="${w0}"]`) as SVGRectElement;
     expect(Number(sq.getAttribute('x'))).toBeCloseTo(target?.x as number, 1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('PipelinePanel interactions', () => {
+  const snapshot = buildPipelineSnapshot();
+  const scene: Scene = buildScene(snapshot, VIEW_W, 'settled');
+  const cardOf = (n: number) => {
+    const c = scene.cards.find((k) => k.block.number === n);
+    if (!c) throw new Error(`card ${n} not on screen`);
+    return c;
+  };
+  const squareCentre = (n: number, id: string) => {
+    const c = cardOf(n);
+    const q = c.squares.find((k) => k.id === id);
+    if (!q) throw new Error(`square ${id} not in card ${n}`);
+    return { clientX: c.x + q.x + q.s / 2, clientY: q.y + q.s / 2 };
+  };
+  const chipCentre = (n: number, key: string) => {
+    const c = cardOf(n);
+    const k = c.chips.find((x) => x.key === key);
+    if (!k) throw new Error(`chip ${key} not in card ${n}`);
+    return { clientX: c.x + k.x + G.chip / 2, clientY: k.y + G.chip / 2 };
+  };
+
+  beforeEach(() => {
+    usePipelineHoverStore.getState().clear();
+    // jsdom has neither PointerEvent nor layout: a MouseEvent-based PointerEvent and 1:1 boxes.
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      writable: true,
+      value: class PointerEventStub extends MouseEvent {},
+    });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: VIEW_W,
+      height: G.H,
+      right: VIEW_W,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'PointerEvent');
+    vi.restoreAllMocks();
+  });
+
+  const tooltip = () => screen.getByTestId('pipeline-tooltip');
+  const dimOfCard = (svg: Element, n: number) =>
+    card(svg, n).querySelector(':scope > [data-dim]')?.getAttribute('data-dim');
+
+  it('rings the proposal of a hovered committed tx, links them in gold and steps the rest back', async () => {
+    const svg = await renderPanel(snapshot);
+    const id = committedTxHash(T, 2);
+    fireEvent.pointerMove(svg, squareCentre(T, id));
+
+    expect(tooltip()).toHaveTextContent('committed in');
+    expect(tooltip()).toHaveTextContent(`#${T.toLocaleString('en-US')}`);
+    expect(tooltip()).toHaveTextContent(`#${(T - 2).toLocaleString('en-US')} (2 blocks earlier)`);
+    expect(svg).toHaveClass('is-focus');
+    expect(svg.querySelector(`[data-sq="${id}"]`)).toHaveClass('is-on');
+    const ring = svg.querySelector('[data-hover="chip-ring"]') as SVGRectElement;
+    const chip = chipCentre(T - 2, `${shortIdOf(id)}|`);
+    expect(Number(ring.getAttribute('x')) + Number(ring.getAttribute('width')) / 2).toBeCloseTo(
+      chip.clientX,
+      1
+    );
+    expect(svg.querySelector('[data-hover="link"]')).toHaveAttribute('stroke-dasharray', '2 2');
+    // The window now belongs to the block that committed it.
+    expect(dimOfCard(svg, T)).toBe('false');
+    expect(dimOfCard(svg, T - 5)).toBe('false');
+    expect(dimOfCard(svg, T - 1)).toBe('true');
+    expect(usePipelineHoverStore.getState()).toMatchObject({
+      hoverTx: id,
+      hoverBlock: T,
+      windowBlock: T,
+    });
+  });
+
+  it('names the uncle that carried a hovered proposal chip', async () => {
+    const svg = await renderPanel(snapshot);
+    fireEvent.pointerMove(svg, chipCentre(T - 1, `${shortIdOf(poolTxHash('u0'))}|0`));
+    expect(tooltip()).toHaveTextContent('Proposal');
+    expect(tooltip()).toHaveTextContent(
+      new RegExp(`carried by\\s*uncle #${(T - 2).toLocaleString('en-US')}`)
+    );
+    expect(tooltip()).toHaveTextContent('in the pool, proposed');
+  });
+
+  it('explains an uncle box without moving the window', async () => {
+    const svg = await renderPanel(snapshot);
+    const c = cardOf(T - 1);
+    const u = c.uncles[0];
+    const box = card(svg, T - 1).querySelector('[data-uncle="0"] rect') as SVGRectElement;
+    fireEvent.pointerMove(box, { clientX: c.x + G.padX + 30, clientY: u.y + 4 });
+    expect(tooltip()).toHaveTextContent('not on the chain');
+    expect(tooltip()).toHaveTextContent(`included by#${(T - 1).toLocaleString('en-US')}`);
+    expect(usePipelineHoverStore.getState()).toMatchObject({
+      hoverBlock: T - 1,
+      windowBlock: null,
+    });
+    expect(dimOfCard(svg, T - 3)).toBe('false');
+  });
+
+  it('explains the window lane with a help cursor and steps back pool txs outside it', async () => {
+    const svg = await renderPanel(snapshot);
+    const slots = [
+      {
+        number: T + 1,
+        x: (scene.next as NonNullable<Scene['next']>).x,
+        w: (scene.next as NonNullable<Scene['next']>).w,
+        mined: false,
+      },
+      ...scene.cards.map((c) => ({ number: c.block.number, x: c.x, w: c.w, mined: true })),
+    ];
+    const ruler = windowRuler(slots, T + 1, snapshot.consensus, VIEW_W);
+    fireEvent.pointerMove(svg, {
+      clientX: (ruler.ticks[0] as number) + 10,
+      clientY: G.cardTop - 8,
+    });
+    expect(tooltip()).toHaveTextContent('Proposal window');
+    expect(tooltip()).toHaveTextContent('pool txs it can pack6 of 9');
+    expect(svg.style.cursor).toBe('help');
+    const dimOf = (name: string) =>
+      svg.querySelector(`[data-sq="${poolTxHash(name)}"]`)?.parentElement?.getAttribute('data-dim');
+    expect(dimOf('w0')).toBe('false');
+    expect(dimOf('e0')).toBe('true');
+    expect(dimOf('q0')).toBe('true');
+  });
+
+  it('anchors the window on a hovered block and steps back the blocks outside it', async () => {
+    const svg = await renderPanel(snapshot);
+    const c = cardOf(T - 3);
+    const box = card(svg, T - 3).querySelector('[data-box]') as SVGRectElement;
+    fireEvent.pointerMove(box, { clientX: c.x + c.w / 2, clientY: G.cardTop + 5 });
+    expect(tooltip()).toHaveTextContent(`Block #${(T - 3).toLocaleString('en-US')}`);
+    expect(box).toHaveAttribute('stroke-opacity', '1');
+    expect(dimOfCard(svg, T - 3)).toBe('false');
+    expect(dimOfCard(svg, T - 5)).toBe('false');
+    expect(dimOfCard(svg, T)).toBe('true');
+    expect(dimOfCard(svg, T - 2)).toBe('true');
+    expect(svg.querySelector(`[data-sq="${poolTxHash('q0')}"]`)?.parentElement).toHaveAttribute(
+      'data-dim',
+      'soft'
+    );
+  });
+
+  it('draws the reward link of a hovered cellbase and says what it pays', async () => {
+    const svg = await renderPanel(snapshot);
+    fireEvent.pointerMove(svg, squareCentre(T, snapshot.blocks[0].cellbase.hash));
+    expect(svg.querySelector('[data-hover="reward"]')).not.toBeNull();
+    expect(svg.querySelector('[data-chain-sub]')).toHaveTextContent(
+      `the cellbase of …${String(T).slice(-4)} pays the reward of …${String(T - 11).slice(-4)}, 11 blocks back`
+    );
+    expect(svg.querySelector('[data-ruler-ticks]')).toHaveAttribute('opacity', '0.15');
+    expect(tooltip()).toHaveTextContent('Cellbase');
+  });
+
+  it('pins a tx on click and lets Escape unpin it', async () => {
+    const svg = await renderPanel(snapshot);
+    const id = poolTxHash('q1');
+    const q = scene.pool?.pending.squares.find((k) => k.id === id);
+    const at = { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 };
+    fireEvent.click(svg, at);
+    expect(usePipelineHoverStore.getState().pinned).toBe(id);
+    expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
+    expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('waiting to be proposed');
+    expect(svg.querySelector('[data-hover="pin-ring"]')).not.toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    expect(svg.querySelector('[data-hover="pin-ring"]')).toBeNull();
+  });
+
+  it('follows hovers coming from the Latest Blocks and Latest Transactions rows', async () => {
+    const svg = await renderPanel(snapshot);
+    act(() => usePipelineHoverStore.getState().setHover({ block: T - 3, tx: null, window: T - 3 }));
+    expect(card(svg, T - 3).querySelector('[data-box]')).toHaveAttribute('stroke-opacity', '1');
+    expect(dimOfCard(svg, T)).toBe('true');
+    const id = committedTxHash(T, 1);
+    act(() => usePipelineHoverStore.getState().setHover({ block: T, tx: id, window: T }));
+    expect(svg.querySelector(`[data-sq="${id}"]`)).toHaveClass('is-on');
+    expect(svg.querySelector('[data-hover="ring"]')).not.toBeNull();
+    act(() => usePipelineHoverStore.getState().clearHover());
+    expect(svg).not.toHaveClass('is-focus');
+  });
+
+  it('clears the hover when the pointer leaves', async () => {
+    const svg = await renderPanel(snapshot);
+    fireEvent.pointerMove(svg, squareCentre(T, committedTxHash(T, 2)));
+    fireEvent.pointerLeave(svg);
+    expect(screen.queryByTestId('pipeline-tooltip')).toBeNull();
+    expect(usePipelineHoverStore.getState()).toMatchObject({ hoverTx: null, hoverBlock: null });
   });
 });
