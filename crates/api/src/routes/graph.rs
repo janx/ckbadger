@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
-use crate::routes::proposal_window::{resolve_committed_txs, PROPOSAL_W_CLOSE, PROPOSAL_W_FAR};
+use crate::routes::proposal_window::resolve_committed_txs;
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{parse_hash32, parse_output_index, validate_block_number};
 use crate::AppState;
@@ -633,9 +633,11 @@ async fn get_proposal_graph(
 
     let block_hash = block_header.hash;
 
-    // NC-Max: w_close=2, w_far=10 (proposals can commit 2-10 blocks later)
-    let earliest_commit = block_number + PROPOSAL_W_CLOSE;
-    let latest_commit = block_number + PROPOSAL_W_FAR;
+    // NC-Max: a proposal commits `closest ..= farthest` blocks later, per the
+    // chain's consensus window.
+    let window = state.consensus().await?.tx_proposal_window;
+    let earliest_commit = block_number + window.closest();
+    let latest_commit = block_number + window.farthest();
 
     // Get the block's full proposal zone (own + embedded uncles') from CKB store
     let proposals: Vec<ZoneProposal> = if let Some(ref ckb_store) = state.ckb_store {
@@ -674,7 +676,7 @@ async fn get_proposal_graph(
     // short id is the first 10 bytes of the tx hash.
     let short_ids: Vec<Vec<u8>> = proposals.iter().map(|p| p.short_id.clone()).collect();
     let commitments: Vec<Option<(Vec<u8>, i64)>> = match state.ckb_store {
-        Some(ref ckb_store) => resolve_committed_txs(ckb_store, block_number, &short_ids),
+        Some(ref ckb_store) => resolve_committed_txs(ckb_store, window, block_number, &short_ids),
         // Without the reader `proposals` is already empty; keep the shape.
         None => vec![None; short_ids.len()],
     };
@@ -765,8 +767,8 @@ async fn get_proposal_graph(
             total_proposals: proposals_count,
             committed_count,
             commitment_window: ProposalCommitmentWindow {
-                close: PROPOSAL_W_CLOSE,
-                far: PROPOSAL_W_FAR,
+                close: window.closest(),
+                far: window.farthest(),
                 earliest_commit_block: earliest_commit,
                 latest_commit_block: latest_commit,
             },

@@ -429,3 +429,86 @@ async fn test_proposal_graph_commit_window_semantics_pinned() {
     assert_eq!(commit_nodes[0]["data"]["blockNumber"], 443);
     assert_eq!(commit_nodes[0]["data"]["committedCount"], 2);
 }
+
+// ---------------------------------------------------------------------------
+// The commitment window is the chain's consensus `tx_proposal_window`, read
+// from the node's `get_consensus` — not a mainnet constant. A chain whose
+// window differs (devnet / custom spec) must see its own window.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_proposal_graph_window_comes_from_node_consensus() {
+    let txs = committed_transactions();
+    let specs = vec![FixtureBlock {
+        number: SOURCE_BLOCK,
+        proposals: vec![txs[1].proposal_short_id()],
+        uncles: vec![],
+        transactions: vec![],
+    }];
+    let (store, chain) = seed_proposal_fixture(&specs);
+    let server = MockServer::start().await;
+    let mut consensus = mainnet_get_consensus_result();
+    consensus["tx_proposal_window"] = serde_json::json!({ "closest": "0x3", "farthest": "0xc" });
+    mount_consensus_rpc(&server, consensus).await;
+
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    config.ckb_rpc_url = server.uri();
+    // Production wiring: nothing preloaded, the API asks the node.
+    config.consensus = None;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/graph/proposals/{SOURCE_BLOCK}")).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let window = &json["metadata"]["commitmentWindow"];
+    assert_eq!(window["close"], 3);
+    assert_eq!(window["far"], 12);
+    assert_eq!(window["earliestCommitBlock"], SOURCE_BLOCK + 3);
+    assert_eq!(window["latestCommitBlock"], SOURCE_BLOCK + 12);
+}
+
+#[tokio::test]
+async fn test_proposal_graph_fails_when_node_cannot_report_consensus() {
+    let specs = vec![FixtureBlock {
+        number: SOURCE_BLOCK,
+        proposals: vec![],
+        uncles: vec![],
+        transactions: vec![],
+    }];
+    let (store, chain) = seed_proposal_fixture(&specs);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_consensus" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32000, "message": "node is starting" }
+        })))
+        .mount(&server)
+        .await;
+
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    config.ckb_rpc_url = server.uri();
+    config.consensus = None;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/graph/proposals/{SOURCE_BLOCK}")).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "no hardcoded window may stand in for the node's, got {json}"
+    );
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("get_consensus"), "{message}");
+}

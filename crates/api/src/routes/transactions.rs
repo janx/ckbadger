@@ -12,6 +12,7 @@ use std::time::Duration as StdDuration;
 use tokio::time::{sleep, Instant};
 
 use crate::cache::InMemoryCache;
+use crate::consensus::ProposalWindow;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
@@ -2047,9 +2048,12 @@ pub struct CommitmentWindow {
     pub far: i64,
 }
 
-impl Default for CommitmentWindow {
-    fn default() -> Self {
-        Self { close: 2, far: 10 }
+impl From<ProposalWindow> for CommitmentWindow {
+    fn from(window: ProposalWindow) -> Self {
+        Self {
+            close: window.closest(),
+            far: window.farthest(),
+        }
     }
 }
 
@@ -2059,6 +2063,7 @@ async fn get_transaction_lifecycle(
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionLifecycleResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
+    let window = state.consensus().await?.tx_proposal_window;
 
     let short_hash = if hash_bytes.len() >= 10 {
         hash_bytes[..10].to_vec()
@@ -2097,7 +2102,7 @@ async fn get_transaction_lifecycle(
                 proposed_in_uncle: None,
                 committed_in: None,
                 commitment_distance: None,
-                commitment_window: CommitmentWindow::default(),
+                commitment_window: CommitmentWindow::from(window),
                 is_cellbase: false,
                 confirmations: None,
             });
@@ -2157,32 +2162,24 @@ async fn get_transaction_lifecycle(
                 timestamp: commit_ts_str,
             }),
             commitment_distance: None,
-            commitment_window: CommitmentWindow::default(),
+            commitment_window: CommitmentWindow::from(window),
             is_cellbase: true,
             confirmations: Some(compute_confirmations(commit_block_number)),
         });
     }
 
     // Look for proposal block in CKB node's RocksDB
-    // A tx committed in block C must be proposed in block P where: C - 10 <= P <= C - 2
+    // A tx committed in block C must be proposed in block P where:
+    // C - farthest <= P <= C - closest (blocks below genesis do not exist).
     let proposed_in = if let Some(ref ckb_store) = state.ckb_store {
         let store_c = state.store.clone();
         let ckb_store_c = ckb_store.clone();
         let short_hash_c = short_hash.clone();
         tokio::task::spawn_blocking(move || -> Option<ProposalWindowHit> {
-            if commit_block_number < 2 {
-                return None;
-            }
-            let start = if commit_block_number > 10 {
-                commit_block_number - 10
-            } else {
-                0
-            };
-            let end = commit_block_number - 2;
-            if start > end {
-                return None;
-            }
-            for bn in start..=end {
+            for bn in window
+                .proposal_range(commit_block_number)
+                .filter(|bn| *bn >= 0)
+            {
                 let Ok(Some(header)) = store_c.get_block_header(bn) else {
                     continue;
                 };
@@ -2264,7 +2261,7 @@ async fn get_transaction_lifecycle(
             timestamp: commit_ts_str,
         }),
         commitment_distance,
-        commitment_window: CommitmentWindow::default(),
+        commitment_window: CommitmentWindow::from(window),
         is_cellbase: false,
         confirmations: Some(compute_confirmations(commit_block_number)),
     })
@@ -2530,10 +2527,10 @@ mod tests {
     }
 
     #[test]
-    fn test_commitment_window_default() {
-        let window = CommitmentWindow::default();
-        assert_eq!(window.close, 2);
-        assert_eq!(window.far, 10);
+    fn test_commitment_window_from_consensus_window() {
+        let window = CommitmentWindow::from(ProposalWindow::new(3, 12).unwrap());
+        assert_eq!(window.close, 3);
+        assert_eq!(window.far, 12);
     }
 
     #[test]

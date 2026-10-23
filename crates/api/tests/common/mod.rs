@@ -11,6 +11,7 @@ pub use wiremock::matchers::{body_partial_json, method};
 pub use wiremock::{Mock, MockServer, ResponseTemplate};
 
 pub use ckbadger_api::cache::{CacheBackend, InMemoryCache};
+pub use ckbadger_api::consensus::{ConsensusCell, ConsensusParams};
 pub use ckbadger_api::cycles::CyclesClient;
 pub use ckbadger_api::routes::api_routes;
 pub use ckbadger_api::utils::address::compute_script_hash;
@@ -34,6 +35,36 @@ pub use ckbadger_store::types::{
     SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActions, TxIndexEntry, TypeCallEntry,
 };
 pub use ckbadger_store::CkbadgerStore;
+
+/// The `result` object of a mainnet `get_consensus` response (fixture shared
+/// with the `consensus` unit tests).
+pub fn mainnet_get_consensus_result() -> serde_json::Value {
+    serde_json::from_str(include_str!("../fixtures/mainnet_get_consensus.json"))
+        .expect("mainnet get_consensus fixture is valid JSON")
+}
+
+/// Mainnet consensus parameters, parsed by the production parser from the
+/// fixture. Test configs hand them to the API up front — test wiring, so no
+/// test depends on a live node; production reads them from `get_consensus`.
+pub fn mainnet_consensus() -> ConsensusParams {
+    ConsensusParams::from_get_consensus(&mainnet_get_consensus_result())
+        .expect("mainnet get_consensus fixture parses")
+}
+
+/// The node's `get_consensus`, answering with `result`.
+pub async fn mount_consensus_rpc(server: &MockServer, result: serde_json::Value) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_consensus" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": result
+        })))
+        .mount(server)
+        .await;
+}
 
 pub fn test_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
@@ -112,6 +143,7 @@ pub fn test_config_with_ckb_db_path(
         crawler_enabled: false,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
+        consensus: Some(mainnet_consensus()),
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
         slow_request_threshold_ms: 100,
@@ -155,6 +187,10 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         cache: CacheBackend::new(),
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        consensus: Arc::new(match config.consensus {
+            Some(params) => ConsensusCell::preloaded(params),
+            None => ConsensusCell::new(),
+        }),
         cycles_client: CyclesClient::disabled(),
         ckb_store: None,
         ckb_db_cleanup: config.ckb_db_cleanup,

@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod consensus;
 pub mod cycles;
 pub mod embedded_frontend;
 pub mod entry;
@@ -28,6 +29,7 @@ use tracing::Level;
 
 use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
+use consensus::{ConsensusCell, ConsensusParams};
 use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
 use pool::PoolMirror;
@@ -75,6 +77,9 @@ pub struct AppState {
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
+    /// The chain's consensus parameters (proposal window, block limits), read
+    /// from the node's `get_consensus` on first use. Use [`AppState::consensus`].
+    pub consensus: Arc<ConsensusCell>,
     pub cycles_client: Arc<CyclesClient>,
     /// Direct read-only access to the resolved CKB RocksDB path.
     pub ckb_store: Option<Arc<CkbChainReader>>,
@@ -179,6 +184,17 @@ impl AppState {
         }
     }
 
+    /// The chain's consensus parameters, the API's one source for the NC-Max
+    /// proposal window and the block limits. Loaded once from the node's
+    /// `get_consensus`; when the node cannot answer the request fails — no
+    /// hardcoded value stands in (a testnet or devnet chain may differ).
+    pub async fn consensus(&self) -> Result<&ConsensusParams, ApiRouteError> {
+        self.consensus
+            .get_or_load(&self.ckb_rpc_url)
+            .await
+            .map_err(|e| ApiError::internal(format!("consensus parameters unavailable: {e}")))
+    }
+
     /// The genesis economic baseline (issuance / burnt / virtual-occupied),
     /// derived once at block 0 and persisted by the indexer. Read-only from the
     /// secondary domain store. Fails fast if the indexer has not derived it yet
@@ -208,6 +224,10 @@ pub struct AppConfig {
     pub crawler_enabled: bool,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
+    /// Consensus parameters the caller already holds — test fixtures hand the
+    /// API a chain's parameters this way. Production passes `None`: the API
+    /// reads them from the node's `get_consensus` on first use.
+    pub consensus: Option<ConsensusParams>,
     pub rate_limit_per_second: Option<u32>,
     pub rate_limit_burst: Option<u32>,
     pub slow_request_threshold_ms: u64,
@@ -306,6 +326,10 @@ pub async fn create_router(config: AppConfig) -> Router {
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        consensus: Arc::new(match config.consensus {
+            Some(params) => ConsensusCell::preloaded(params),
+            None => ConsensusCell::new(),
+        }),
         cycles_client,
         ckb_store,
         ckb_db_cleanup: config.ckb_db_cleanup,

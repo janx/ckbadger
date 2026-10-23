@@ -784,6 +784,8 @@ async fn get_block_proposals(
         parse_block_number(&id, "block number")?
     };
 
+    let window = state.consensus().await?.tx_proposal_window;
+
     // Read proposals from CKB node's RocksDB (raw block data)
     let proposals: Vec<BlockProposal> = if let Some(ref ckb_store) = state.ckb_store {
         // Get the block hash from our store
@@ -811,6 +813,7 @@ async fn get_block_proposals(
                         .collect();
                     let commitments = crate::routes::proposal_window::resolve_committed_txs(
                         ckb_store,
+                        window,
                         block_number,
                         &short_ids,
                     );

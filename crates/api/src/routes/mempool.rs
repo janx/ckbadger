@@ -296,8 +296,6 @@ async fn get_mempool_transactions(
     ok(result)
 }
 
-const CKB_BLOCK_SIZE_LIMIT: u64 = 597_000;
-const CKB_BLOCK_CYCLES_LIMIT: u64 = 3_500_000_000;
 const CKB_AVG_BLOCK_TIME_SECONDS: u32 = 10;
 const MIN_PENDING_BLOCKS: usize = 3;
 
@@ -308,6 +306,10 @@ async fn get_mempool_blocks(
     if let Some(cached) = state.cache.get::<MempoolBlocksResponse>(cache_key).await {
         return ok(cached);
     }
+
+    let consensus = state.consensus().await?;
+    let (max_block_bytes, max_block_cycles) =
+        (consensus.max_block_bytes, consensus.max_block_cycles);
 
     let pool = fetch_raw_tx_pool_verbose(&state.ckb_rpc_url)
         .await
@@ -335,8 +337,8 @@ async fn get_mempool_blocks(
     let mut current_cycles: u64 = 0;
 
     for (_hash, size, fee, cycles, fee_rate) in all_txs {
-        let would_exceed_size = current_size + size > CKB_BLOCK_SIZE_LIMIT;
-        let would_exceed_cycles = current_cycles + cycles > CKB_BLOCK_CYCLES_LIMIT;
+        let would_exceed_size = current_size + size > max_block_bytes;
+        let would_exceed_cycles = current_cycles + cycles > max_block_cycles;
 
         if would_exceed_size || would_exceed_cycles {
             if !current_block_txs.is_empty() {
