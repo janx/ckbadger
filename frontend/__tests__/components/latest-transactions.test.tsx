@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
 import { LatestTransactions } from '@/components/latest-transactions';
+import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { api, type Transaction } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -57,5 +58,42 @@ describe('LatestTransactions', () => {
     );
     expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  it('highlights the row of the tx hovered or pinned in the pipeline and hovers it back', async () => {
+    usePipelineHoverStore.getState().clear();
+    const txs: Transaction[] = [mockTx('0xtx1'), mockTx('0xtx2')];
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: txs,
+      total: txs.length,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<LatestTransactions initialTransactions={txs} />);
+    const row = (await screen.findByTitle('Click to copy: 0xtx2')).closest(
+      '[data-tx-row]'
+    ) as HTMLElement;
+    expect(row).toHaveAttribute('data-highlighted', 'false');
+
+    act(() =>
+      usePipelineHoverStore.getState().setHover({ block: null, tx: '0xtx2', window: null })
+    );
+    expect(row).toHaveAttribute('data-highlighted', 'true');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    act(() => usePipelineHoverStore.getState().togglePin('0xtx2'));
+    expect(row).toHaveAttribute('data-highlighted', 'true');
+    act(() => usePipelineHoverStore.getState().clearPin());
+    expect(row).toHaveAttribute('data-highlighted', 'false');
+
+    fireEvent.pointerEnter(row);
+    // A committed tx anchors the proposal window on the block that committed it.
+    expect(usePipelineHoverStore.getState()).toMatchObject({
+      hoverTx: '0xtx2',
+      hoverBlock: 8_775_638,
+      windowBlock: 8_775_638,
+    });
+    fireEvent.pointerLeave(row);
+    expect(usePipelineHoverStore.getState().hoverTx).toBeNull();
   });
 });

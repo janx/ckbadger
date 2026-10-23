@@ -81,10 +81,12 @@ export default function BlockDetailPage() {
     },
   });
 
-  const { data: proposals } = useQuery({
+  const { data: proposals, error: proposalsError } = useQuery({
     queryKey: ['block-proposals', id],
     queryFn: () => api.getBlockProposals(id),
-    enabled: !!block && block.proposalsCount > 0,
+    // Uncles carry proposals too, and the block's zone lists them, so a block with uncles may
+    // have proposals even when its own count is 0.
+    enabled: !!block && (block.proposalsCount > 0 || block.unclesCount > 0),
   });
 
   const { data: hardforkTimeline } = useQuery({
@@ -380,10 +382,18 @@ export default function BlockDetailPage() {
             </TabsContent>
 
             <TabsContent value="proposals" className="m-0">
-              {block.proposalsCount > 0 ? (
-                proposals?.length ? (
+              {(block.proposalsCount > 0 || block.unclesCount > 0) && proposals?.length !== 0 ? (
+                proposalsError ? (
+                  <TerminalRow
+                    hoverable={false}
+                    className="text-rouge py-8 text-center font-mono text-sm"
+                    data-testid="block-proposals-error"
+                  >
+                    Failed to load proposals: {proposalsError.message}
+                  </TerminalRow>
+                ) : proposals?.length ? (
                   proposals.map((proposal) => (
-                    <TerminalRow key={proposal.proposalId}>
+                    <TerminalRow key={proposal.proposalId} data-testid="block-proposal-row">
                       <div className="flex items-center justify-between">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-3">
@@ -391,6 +401,14 @@ export default function BlockDetailPage() {
                             <span className="text-text font-mono text-sm">
                               {proposal.proposalId}
                             </span>
+                            {proposal.uncle && (
+                              <span
+                                className="border-base-border text-text-dim rounded border border-dashed px-1.5 py-0.5 font-mono text-[10px]"
+                                title={`Carried by uncle ${proposal.uncle.hash}`}
+                              >
+                                uncle #{proposal.uncle.number.toLocaleString()}
+                              </span>
+                            )}
                           </div>
                           {proposal.committedTxHash && (
                             <div className="flex items-center gap-2 text-xs">

@@ -1815,6 +1815,140 @@ interface BlockProposal {
   proposalId: string;
   committedTxHash: string | null;
   committedBlockNumber: number | null;
+  /** The uncle that carried this proposal; null for the block's own proposals. */
+  uncle: { number: number; hash: string } | null;
+}
+
+/**
+ * `GET /pipeline` — one snapshot of the homepage transaction pipeline. Every chain fact here
+ * (proposal states, `proposedIn`, cellbase payee, pool stages, the next-block prediction) is
+ * derived once on the backend from the same proposal zones; the frontend only lays it out.
+ */
+type PipelineStatus = 'ok' | 'poolTipMismatch';
+
+interface PipelineConsensus {
+  proposalWindowClosest: number;
+  proposalWindowFarthest: number;
+  maxBlockBytes: number;
+  maxBlockCycles: number;
+  maxBlockProposals: number;
+}
+
+interface PipelineBlockRef {
+  number: number;
+  hash: string;
+}
+
+type PipelineProposalState = 'early' | 'waiting' | 'committed' | 'expired';
+
+interface PipelineProposal {
+  /** `0x` + 10 bytes. */
+  shortId: string;
+  /** Index into `PipelineBlock.uncles`; null = the block's own proposal. */
+  uncleIndex: number | null;
+  state: PipelineProposalState;
+  /** The committed tx, or the matching pool tx; null when neither is known. */
+  txHash: string | null;
+  committedBlock: number | null;
+}
+
+interface PipelineProposedIn {
+  block: number;
+  uncleIndex: number | null;
+}
+
+type PipelineCyclesStatus = 'done' | 'pending' | 'failed';
+
+interface PipelineTx {
+  hash: string;
+  size: number;
+  fee: string;
+  /** Shannons per KB. */
+  feeRate: string;
+  cycles: number | null;
+  cyclesStatus: PipelineCyclesStatus;
+  /** The earliest proposal inside the commit window [c − farthest, c − closest]. */
+  proposedIn: PipelineProposedIn;
+}
+
+interface PipelineCellbase {
+  hash: string;
+  size: number;
+  /** The block whose reward this cellbase pays (`finalized_at`); null before it exists. */
+  pays: PipelineBlockRef | null;
+}
+
+interface PipelineBlock {
+  number: number;
+  hash: string;
+  parentHash: string;
+  timestamp: string;
+  /** Includes the cellbase. */
+  txCount: number;
+  /** Σ serialized size in block (raw + 4), cellbase included. */
+  bytes: number;
+  cycles: number | null;
+  cyclesPending: boolean;
+  /** Zone order: the block's own proposals first, then the uncles'. */
+  proposals: PipelineProposal[];
+  uncles: PipelineBlockRef[];
+  /** Non-cellbase txs by bytes, descending; capped by the backend. */
+  txs: PipelineTx[];
+  /** txCount − 1 − txs.length. */
+  omittedTxs: number;
+  cellbase: PipelineCellbase;
+}
+
+interface PipelinePoolTx {
+  hash: string;
+  size: number;
+  fee: string;
+  feeRate: string;
+  cycles: number;
+  /** Milliseconds since the epoch. */
+  arrivedAt: number;
+  /** Non-null only in `proposed`. */
+  proposedIn: PipelineProposedIn | null;
+}
+
+interface PipelinePool {
+  pending: PipelinePoolTx[];
+  proposed: PipelinePoolTx[];
+  /** Totals before truncation. */
+  pendingTotal: number;
+  proposedTotal: number;
+}
+
+interface PipelineNextTx {
+  hash: string;
+  /** Serialized size in block (raw + 4). */
+  size: number;
+}
+
+/** Predicted next block, cellbase excluded. */
+interface PipelineNext {
+  /** Predicted txs by size, descending (like `PipelineBlock.txs`); capped by the backend. */
+  txs: PipelineNextTx[];
+  /** Predicted count − txs.length. */
+  omittedTxs: number;
+  bytes: number;
+  cycles: number;
+  proposals: number;
+}
+
+interface PipelineSnapshot {
+  status: PipelineStatus;
+  consensus: PipelineConsensus;
+  /** ckbadger sync tip (store). */
+  tip: PipelineBlockRef;
+  /** Node tx pool tip. */
+  poolTip: PipelineBlockRef;
+  /** Newest → older. */
+  blocks: PipelineBlock[];
+  /** null when status != 'ok'. */
+  pool: PipelinePool | null;
+  /** null when status != 'ok'. */
+  next: PipelineNext | null;
 }
 
 type CyclesCalculationStatus = 'done' | 'calculating' | 'queued' | 'failed' | 'notFound';
@@ -2016,6 +2150,21 @@ export type {
   PendingProposalsResponse,
   BlockFeeStats,
   BlockProposal,
+  PipelineStatus,
+  PipelineConsensus,
+  PipelineBlockRef,
+  PipelineProposalState,
+  PipelineProposal,
+  PipelineProposedIn,
+  PipelineCyclesStatus,
+  PipelineTx,
+  PipelineCellbase,
+  PipelineBlock,
+  PipelinePoolTx,
+  PipelinePool,
+  PipelineNextTx,
+  PipelineNext,
+  PipelineSnapshot,
   KnownScript,
   ScriptObservedReferenceApi as ScriptObservedReference,
   ScriptVersionDeploymentApi as ScriptVersionDeployment,
@@ -3111,6 +3260,10 @@ export const api = {
 
   getPendingProposals: (): Promise<PendingProposalsResponse> => {
     return fetchApi('/mempool/pending-proposals');
+  },
+
+  getPipeline: (): Promise<PipelineSnapshot> => {
+    return fetchApi('/pipeline');
   },
 
   getScripts: (params: ScriptQueryParams = {}): Promise<CursorPaginatedResponse<KnownScript>> => {

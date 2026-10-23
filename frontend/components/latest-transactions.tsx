@@ -12,6 +12,7 @@ import {
   TerminalRow,
 } from '@/components/ui/terminal-panel';
 import { HexDisplay } from '@/components/ui/hex-display';
+import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 
 interface LatestTransactionsProps {
   isRealtime?: boolean;
@@ -25,6 +26,11 @@ export function LatestTransactions({
   compact = false,
 }: LatestTransactionsProps) {
   const [newTxHash, setNewTxHash] = useState<string | null>(null);
+  // Cross-highlight with the transaction pipeline (hovered or pinned there, or hovered here).
+  const hoverTx = usePipelineHoverStore((s) => s.hoverTx);
+  const pinned = usePipelineHoverStore((s) => s.pinned);
+  const setHover = usePipelineHoverStore((s) => s.setHover);
+  const clearHover = usePipelineHoverStore((s) => s.clearHover);
   const prevTxsRef = useRef<string[]>([]);
 
   const {
@@ -100,9 +106,17 @@ export function LatestTransactions({
           : txs?.data?.slice(0, compact ? 4 : 8).map((tx) => (
               <TerminalRow
                 key={tx.hash}
+                data-tx-row={tx.hash}
+                data-highlighted={hoverTx === tx.hash || pinned === tx.hash}
+                // A committed tx anchors the proposal window on the block that committed it.
+                onPointerEnter={() =>
+                  setHover({ block: tx.blockNumber, tx: tx.hash, window: tx.blockNumber })
+                }
+                onPointerLeave={clearHover}
                 className={cn(
                   'transition-all duration-500',
-                  newTxHash === tx.hash && 'bg-interactive/10 shadow-interactive-glow'
+                  newTxHash === tx.hash && 'bg-interactive/10 shadow-interactive-glow',
+                  (hoverTx === tx.hash || pinned === tx.hash) && 'bg-base-elevated/70'
                 )}
               >
                 <div className="flex items-center justify-between gap-4">

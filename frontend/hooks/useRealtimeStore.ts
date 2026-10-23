@@ -110,6 +110,7 @@ function connectWebSocket(network: string) {
       reconnectAttempts = 0;
       wsInstance?.send(JSON.stringify({ action: 'subscribe', channel: 'new_block' }));
       wsInstance?.send(JSON.stringify({ action: 'subscribe', channel: 'new_transaction' }));
+      wsInstance?.send(JSON.stringify({ action: 'subscribe', channel: 'reorg' }));
     };
 
     wsInstance.onmessage = (event) => {
@@ -168,6 +169,12 @@ export function useRealtimeData() {
 
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
+      // A new block or a reorg changes every derived fact of the pipeline snapshot (proposal
+      // states, pool stages, the next-block prediction): refetch it now instead of waiting for
+      // the next poll.
+      if (message.type === 'new_block' || message.type === 'reorg') {
+        queryClient.invalidateQueries({ queryKey: ['pipeline'] });
+      }
       if (message.type === 'new_block') {
         const blockData = message.data as Block;
         setLatestBlock(blockData);
