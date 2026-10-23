@@ -607,6 +607,22 @@ describe('PipelinePanel interactions', () => {
     expect(screen.queryByTestId('pipeline-selection')).toBeNull();
   });
 
+  it('keeps the footer one fixed-height row whether it shows the legend or the selection', async () => {
+    // jsdom does not lay out, so the contract is the shared row class: one fixed height, no wrap,
+    // no extra margin — pinning a tx must not change the panel height.
+    const row = (el: HTMLElement) => el.className.split(/\s+/);
+    const svg = await renderPanel(snapshot);
+    const legend = row(screen.getByTestId('pipeline-legend'));
+    const q = scene.pool?.pending.squares.find((k) => k.id === poolTxHash('q1'));
+    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    const selection = row(screen.getByTestId('pipeline-selection'));
+    for (const classes of [legend, selection]) {
+      expect(classes).toContain('h-6');
+      expect(classes).not.toContain('flex-wrap');
+      expect(classes.some((c) => /^(m[by]?|min-h)-/.test(c))).toBe(false);
+    }
+  });
+
   it('follows hovers coming from the Latest Blocks and Latest Transactions rows', async () => {
     const svg = await renderPanel(snapshot);
     act(() => usePipelineHoverStore.getState().setHover({ block: T - 3, tx: null, window: T - 3 }));

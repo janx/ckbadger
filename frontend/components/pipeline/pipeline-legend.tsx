@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { FOOTER_ROW } from '@/components/pipeline/svg-text';
 import type { PipelineProposalState } from '@/lib/api';
 import {
   chipPaint,
@@ -73,7 +74,7 @@ export function PipelineLegend() {
   return (
     <div
       data-testid="pipeline-legend"
-      className="text-text-dim flex flex-wrap items-center gap-x-3.5 gap-y-1 font-mono text-[10px] leading-snug"
+      className={`${FOOTER_ROW} text-text-dim gap-x-3.5 text-[10px]`}
     >
       <Key>
         <Sq stage="pending" />

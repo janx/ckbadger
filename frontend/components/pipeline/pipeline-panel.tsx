@@ -60,7 +60,7 @@ import {
   type TipContent,
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
-import { T10C, TZ, fmtInt } from '@/components/pipeline/svg-text';
+import { T10C, TZ, fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
 
 const SVG_LABEL =
@@ -750,7 +750,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
     <div
       data-testid="pipeline-selection"
       aria-live="polite"
-      className="text-text mb-1.5 flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]"
+      className={`${FOOTER_ROW} text-text gap-x-3 text-[11px]`}
     >
       <span className="text-text-dim text-[10px] uppercase tracking-wider">Selected</span>
       <span className="text-text-bright">{shortHash(pinned)}</span>
