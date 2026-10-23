@@ -252,9 +252,16 @@ struct PipelineApp {
 }
 
 /// Seed both stores from `chain`, point the node RPC at a wiremock that
-/// answers the reward targets, and mount the production router.
+/// answers the reward targets and an empty tx pool at the chain's tip, and
+/// mount the production router.
 async fn pipeline_app(chain: &FixtureChain, seed: StoreSeed) -> PipelineApp {
-    pipeline_app_with(chain, seed, &chain.blocks, true).await
+    let empty_pool = PoolRpc {
+        tip_number: chain.tip(),
+        tip_hash: chain.hash_hex(chain.tip()),
+        pending: vec![],
+        proposed: vec![],
+    };
+    pipeline_app_with(chain, seed, &chain.blocks, true, Some(empty_pool)).await
 }
 
 async fn pipeline_app_with(
@@ -262,12 +269,16 @@ async fn pipeline_app_with(
     seed: StoreSeed,
     node_blocks: &[BlockView],
     mount_rewards: bool,
+    pool: Option<PoolRpc>,
 ) -> PipelineApp {
     let store = seed_store(chain, &seed);
     let chain_db = seed_ckb_chain(node_blocks);
     let server = MockServer::start().await;
     if mount_rewards {
         mount_reward_targets(&server, chain).await;
+    }
+    if let Some(pool) = pool {
+        mount_tx_pool_rpc_at(&server, &pool).await;
     }
     let mut config = test_config_with_ckb_db_path(
         store.clone(),
@@ -624,7 +635,19 @@ async fn test_pipeline_cellbase_target_finalized_elsewhere_fails() {
         .iter()
         .map(|(a, b)| (a.as_str(), b.as_str()))
         .collect();
-    let fixture = pipeline_app_with(&chain, StoreSeed::default(), &chain.blocks, false).await;
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        false,
+        Some(PoolRpc {
+            tip_number: chain.tip(),
+            tip_hash: chain.hash_hex(chain.tip()),
+            pending: vec![],
+            proposed: vec![],
+        }),
+    )
+    .await;
     mount_block_economic_state_rpc(&fixture.server, &pairs).await;
 
     let (status, json) = get_json(&fixture.app, "/pipeline").await;
@@ -734,7 +757,7 @@ async fn test_pipeline_block_missing_from_node_fails() {
         .filter(|b| b.number() != 4)
         .cloned()
         .collect();
-    let fixture = pipeline_app_with(&chain, StoreSeed::default(), &node_blocks, true).await;
+    let fixture = pipeline_app_with(&chain, StoreSeed::default(), &node_blocks, true, None).await;
     let (status, json) = get_json(&fixture.app, "/pipeline").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
     let message = json["message"].as_str().unwrap();
@@ -777,4 +800,506 @@ async fn test_pipeline_broken_parent_link_fails() {
     let message = json["message"].as_str().unwrap();
     assert!(message.contains("C5"), "{message}");
     assert!(message.contains("block 4"), "{message}");
+}
+
+// ---------------------------------------------------------------------------
+// Pool section, NEXT prediction, tip consistency
+// ---------------------------------------------------------------------------
+
+/// A pool transaction hash whose proposal short id is `short_id`.
+fn pool_hash(short_id: [u8; 10], tail: u8) -> [u8; 32] {
+    let mut hash = [tail; 32];
+    hash[..10].copy_from_slice(&short_id);
+    hash
+}
+
+fn pool_entry(hash: [u8; 32], size: u64, fee: u64, cycles: u64, arrived_at_ms: u64) -> PoolRpcTx {
+    PoolRpcTx {
+        hash: hex32(hash),
+        size,
+        fee,
+        cycles,
+        timestamp_ms: arrived_at_ms,
+    }
+}
+
+fn pool_at_tip(chain: &FixtureChain, pending: Vec<PoolRpcTx>, proposed: Vec<PoolRpcTx>) -> PoolRpc {
+    PoolRpc {
+        tip_number: chain.tip(),
+        tip_hash: chain.hash_hex(chain.tip()),
+        pending,
+        proposed,
+    }
+}
+
+fn pool_tx_json(list: &serde_json::Value, hash: [u8; 32]) -> &serde_json::Value {
+    let hash = hex32(hash);
+    list.as_array()
+        .expect("pool list")
+        .iter()
+        .find(|t| t["hash"] == hash.as_str())
+        .unwrap_or_else(|| panic!("pool tx {hash} in {list}"))
+}
+
+#[tokio::test]
+async fn test_pipeline_pool_tip_mismatch() {
+    let chain = FixtureChain::build(13, BTreeMap::new());
+    let stray = pool_entry(pool_hash([0xA9; 10], 1), 500, 1_000, 10, 1);
+    // Behind by one block; and the same height on another fork.
+    for (number, hash) in [(12u64, chain.hash_hex(12)), (13, hex32([0x99; 32]))] {
+        let fixture = pipeline_app_with(
+            &chain,
+            StoreSeed::default(),
+            &chain.blocks,
+            true,
+            Some(PoolRpc {
+                tip_number: number,
+                tip_hash: hash.clone(),
+                pending: vec![stray.clone()],
+                proposed: vec![],
+            }),
+        )
+        .await;
+        let (status, json) = get_json(&fixture.app, "/pipeline").await;
+        assert_eq!(status, StatusCode::OK, "got {json}");
+        assert_eq!(
+            json["status"], "poolTipMismatch",
+            "pool tip {number} {hash}"
+        );
+        assert_eq!(
+            json["poolTip"],
+            serde_json::json!({ "number": number, "hash": hash })
+        );
+        assert_eq!(json["tip"]["number"], 13);
+        assert_eq!(json["pool"], serde_json::Value::Null);
+        assert_eq!(json["next"], serde_json::Value::Null);
+        assert_eq!(
+            json["blocks"].as_array().unwrap().len(),
+            13,
+            "the chain is still served"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_pipeline_pool_stage_from_chain_zones() {
+    let gap_id = [0xA1; 10];
+    let set_id = [0xA2; 10];
+    let uncle_id = [0xA3; 10];
+    let fresh_id = [0xA4; 10];
+    let chain = FixtureChain::build(
+        20,
+        specs(vec![
+            (
+                17,
+                BlockSpec {
+                    proposals: vec![ProposalShortId::new(set_id)],
+                    ..Default::default()
+                },
+            ),
+            (
+                18,
+                BlockSpec {
+                    uncles: vec![vec![ProposalShortId::new(uncle_id)]],
+                    ..Default::default()
+                },
+            ),
+            (
+                20,
+                BlockSpec {
+                    proposals: vec![ProposalShortId::new(gap_id)],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    );
+    let gap = pool_entry(pool_hash(gap_id, 1), 400, 4_000, 100, 10);
+    let set = pool_entry(pool_hash(set_id, 2), 500, 2_000, 200, 20);
+    let uncle = pool_entry(pool_hash(uncle_id, 3), 600, 1_200, 300, 30);
+    let fresh = pool_entry(pool_hash(fresh_id, 4), 700, 7_000, 400, 40);
+    // The node lists the tip-proposed tx as pending (its "gap"); the chain's
+    // zones say it is proposed, just too recent for the next block.
+    let pool = pool_at_tip(
+        &chain,
+        vec![gap.clone(), fresh.clone()],
+        vec![set.clone(), uncle.clone()],
+    );
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(pool),
+    )
+    .await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["poolTip"], json["tip"]);
+
+    let pool = &json["pool"];
+    assert_eq!(pool["pendingTotal"], 1);
+    assert_eq!(pool["proposedTotal"], 3);
+    let pending = pool_tx_json(&pool["pending"], pool_hash(fresh_id, 4));
+    assert_eq!(pending["proposedIn"], serde_json::Value::Null);
+    assert_eq!(pending["size"], 700);
+    assert_eq!(pending["fee"], "7000");
+    assert_eq!(pending["feeRate"], (7_000u64 * 1000 / 700).to_string());
+    assert_eq!(pending["cycles"], 400);
+    assert_eq!(pending["arrivedAt"], 40);
+
+    // Newest proposal first.
+    let order: Vec<&str> = pool["proposed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["hash"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        order,
+        vec![gap.hash.as_str(), uncle.hash.as_str(), set.hash.as_str()]
+    );
+    assert_eq!(
+        pool_tx_json(&pool["proposed"], pool_hash(gap_id, 1))["proposedIn"],
+        serde_json::json!({ "block": 20, "uncleIndex": null })
+    );
+    assert_eq!(
+        pool_tx_json(&pool["proposed"], pool_hash(set_id, 2))["proposedIn"],
+        serde_json::json!({ "block": 17, "uncleIndex": null })
+    );
+    assert_eq!(
+        pool_tx_json(&pool["proposed"], pool_hash(uncle_id, 3))["proposedIn"],
+        serde_json::json!({ "block": 18, "uncleIndex": 0 })
+    );
+
+    // The proposal each staged pool tx points at names it.
+    let early = proposal_json(block_json(&json, 20), &ProposalShortId::new(gap_id));
+    assert_eq!(early["state"], "early");
+    assert_eq!(early["txHash"], gap.hash);
+    let waiting = proposal_json(block_json(&json, 17), &ProposalShortId::new(set_id));
+    assert_eq!(waiting["state"], "waiting");
+    assert_eq!(waiting["txHash"], set.hash);
+    let carried = proposal_json(block_json(&json, 18), &ProposalShortId::new(uncle_id));
+    assert_eq!(carried["uncleIndex"], 0);
+    assert_eq!(carried["txHash"], uncle.hash);
+
+    // NEXT may commit only what the window allows: not the gap tx.
+    let next: Vec<&str> = json["next"]["txs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["hash"].as_str().unwrap())
+        .collect();
+    assert_eq!(next.len(), 2, "{json}");
+    assert!(next.contains(&set.hash.as_str()) && next.contains(&uncle.hash.as_str()));
+    assert_eq!(json["next"]["proposals"], 1, "one unproposed tx to propose");
+}
+
+#[tokio::test]
+async fn test_pipeline_pool_invariant_p1() {
+    let chain = FixtureChain::build(13, BTreeMap::new());
+    let unproposed = pool_entry(pool_hash([0xB7; 10], 7), 500, 1_000, 10, 1);
+    let pool = pool_at_tip(&chain, vec![], vec![unproposed.clone()]);
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(pool),
+    )
+    .await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("P1"), "{message}");
+    assert!(message.contains(&unproposed.hash), "{message}");
+    assert!(message.contains("tip 13"), "{message}");
+}
+
+#[tokio::test]
+async fn test_pipeline_pool_invariant_p2() {
+    let id = [0xB8; 10];
+    let chain = FixtureChain::build(
+        13,
+        specs(vec![(
+            10,
+            BlockSpec {
+                proposals: vec![ProposalShortId::new(id)],
+                ..Default::default()
+            },
+        )]),
+    );
+    // Proposed at tip - 3, committable — yet the node calls it pending.
+    let mislabelled = pool_entry(pool_hash(id, 8), 500, 1_000, 10, 1);
+    let pool = pool_at_tip(&chain, vec![mislabelled.clone()], vec![]);
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(pool),
+    )
+    .await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("P2"), "{message}");
+    assert!(message.contains(&mislabelled.hash), "{message}");
+}
+
+#[tokio::test]
+async fn test_pipeline_next_prediction() {
+    let ids: Vec<[u8; 10]> = (0..5u8).map(|i| [0xD0 + i; 10]).collect();
+    let gap_id = [0xDA; 10];
+    let chain = FixtureChain::build(
+        20,
+        specs(vec![
+            (
+                18,
+                BlockSpec {
+                    proposals: ids.iter().map(|id| ProposalShortId::new(*id)).collect(),
+                    ..Default::default()
+                },
+            ),
+            (
+                20,
+                BlockSpec {
+                    proposals: vec![ProposalShortId::new(gap_id)],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    );
+    // feeRate = fee * 1000 / size.
+    let best = pool_entry(pool_hash(ids[0], 1), 300_000, 300_000_000, 1_000, 50); // 1_000_000
+    let too_big = pool_entry(pool_hash(ids[1], 2), 300_000, 240_000_000, 1_000, 10); // 800_000, no room left
+    let early_arrival = pool_entry(pool_hash(ids[2], 3), 2_000, 1_000_000, 2_000, 5); // 500_000
+    let late_arrival = pool_entry(pool_hash(ids[3], 4), 1_000, 500_000, 3_000, 60); // 500_000
+    let cycle_heavy = pool_entry(pool_hash(ids[4], 5), 500, 100_000, 3_500_000_000, 1); // 200_000, cycles overflow
+    let gap = pool_entry(pool_hash(gap_id, 6), 100, 1_000_000, 10, 1); // best rate, but too early
+    let fresh = pool_entry(pool_hash([0xDF; 10], 7), 100, 1_000_000, 10, 1);
+    let pool = pool_at_tip(
+        &chain,
+        vec![gap.clone(), fresh.clone()],
+        vec![
+            best.clone(),
+            too_big.clone(),
+            early_arrival.clone(),
+            late_arrival.clone(),
+            cycle_heavy.clone(),
+        ],
+    );
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(pool),
+    )
+    .await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+
+    let next = &json["next"];
+    assert_eq!(
+        next["txs"],
+        serde_json::json!([
+            { "hash": best.hash, "size": 300_000 },
+            { "hash": early_arrival.hash, "size": 2_000 },
+            { "hash": late_arrival.hash, "size": 1_000 },
+        ]),
+        "greedy by fee rate within maxBlockBytes / maxBlockCycles, served largest first"
+    );
+    assert_eq!(next["omittedTxs"], 0);
+    assert_eq!(next["bytes"], 303_000);
+    assert_eq!(next["cycles"], 6_000);
+    // min(unproposed pool txs, maxBlockProposals): the gap tx is already proposed.
+    assert_eq!(next["proposals"], 1);
+}
+
+#[tokio::test]
+async fn test_pipeline_pool_caps_and_totals() {
+    let proposed_ids: Vec<[u8; 10]> = (0..210u16)
+        .map(|i| {
+            let mut id = [0xC0; 10];
+            id[1..3].copy_from_slice(&i.to_be_bytes());
+            id
+        })
+        .collect();
+    let chain = FixtureChain::build(
+        20,
+        specs(vec![(
+            19,
+            BlockSpec {
+                proposals: proposed_ids
+                    .iter()
+                    .map(|id| ProposalShortId::new(*id))
+                    .collect(),
+                ..Default::default()
+            },
+        )]),
+    );
+    let pending: Vec<PoolRpcTx> = (0..150u16)
+        .map(|i| {
+            let mut id = [0xE0; 10];
+            id[1..3].copy_from_slice(&i.to_be_bytes());
+            pool_entry(pool_hash(id, 1), 300, 1_000, 10, u64::from(i))
+        })
+        .collect();
+    let proposed: Vec<PoolRpcTx> = proposed_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| pool_entry(pool_hash(*id, 2), 300, 1_000, 10, i as u64))
+        .collect();
+    let pool = pool_at_tip(&chain, pending, proposed);
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(pool),
+    )
+    .await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+
+    let pool = &json["pool"];
+    assert_eq!(pool["pending"].as_array().unwrap().len(), 136);
+    assert_eq!(pool["pendingTotal"], 150);
+    assert_eq!(pool["proposed"].as_array().unwrap().len(), 204);
+    assert_eq!(pool["proposedTotal"], 210);
+    // The oldest pending arrivals are the ones kept.
+    assert_eq!(pool["pending"][0]["arrivedAt"], 0);
+    assert_eq!(pool["pending"][135]["arrivedAt"], 135);
+    // Truncation is the grids' only: NEXT still sees every committable tx.
+    assert_eq!(json["next"]["txs"].as_array().unwrap().len(), 210);
+}
+
+/// The node's tx-pool sizes an entry as `tx.data().serialized_size_in_block()`
+/// (molecule + 4) — the convention the store's committed sizes are served in.
+/// Served side by side, the same transaction must report one size whether it
+/// sits in the pool or in a block. The node-side convention is asserted here
+/// from fixture bytes; it is to be confirmed against a live node (plan Task 12).
+#[tokio::test]
+async fn test_pool_size_matches_committed_size_convention() {
+    let tx = fixture_tx(77, 123);
+    let node_pool_size = tx.tx.data().serialized_size_in_block() as u64;
+
+    // Committed in block 5 (proposed in 3).
+    let committed_chain = FixtureChain::build(
+        6,
+        specs(vec![
+            (
+                3,
+                BlockSpec {
+                    proposals: vec![short_id(&tx)],
+                    ..Default::default()
+                },
+            ),
+            (
+                5,
+                BlockSpec {
+                    txs: vec![tx.clone()],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    );
+    let committed = pipeline_app(&committed_chain, StoreSeed::default()).await;
+    let (status, json) = get_json(&committed.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let committed_size = tx_json(block_json(&json, 5), &tx_hash(&tx))["size"].clone();
+
+    // In the pool, proposed in block 5 of another chain at tip 6.
+    let pool_chain = FixtureChain::build(
+        6,
+        specs(vec![(
+            5,
+            BlockSpec {
+                proposals: vec![short_id(&tx)],
+                ..Default::default()
+            },
+        )]),
+    );
+    let hash: [u8; 32] = tx.tx.hash().unpack();
+    let pool = pool_at_tip(
+        &pool_chain,
+        vec![],
+        vec![pool_entry(hash, node_pool_size, 1_000, 10, 1)],
+    );
+    let pooled = pipeline_app_with(
+        &pool_chain,
+        StoreSeed::default(),
+        &pool_chain.blocks,
+        true,
+        Some(pool),
+    )
+    .await;
+    let (status, json) = get_json(&pooled.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let pooled_size = pool_tx_json(&json["pool"]["proposed"], hash)["size"].clone();
+
+    assert_eq!(pooled_size, committed_size);
+    assert_eq!(committed_size, size_in_block(&tx.tx));
+}
+
+/// The node's tip moved between the two `tx_pool_info` reads that bracket the
+/// verbose pool: the pool may belong to either tip, so it is not served
+/// against the chain the snapshot shows.
+#[tokio::test]
+async fn test_pipeline_pool_read_straddling_a_block_is_a_mismatch() {
+    let chain = FixtureChain::build(13, BTreeMap::new());
+    let fixture = pipeline_app_with(&chain, StoreSeed::default(), &chain.blocks, true, None).await;
+    let next_tip = hex32([0x14; 32]);
+    let info = |number: u64, hash: &str| {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tip_hash": hash,
+                "tip_number": format!("0x{number:x}"),
+                "last_txs_updated_at": "0x1",
+                "pending": "0x0",
+                "proposed": "0x0",
+                "orphan": "0x0"
+            }
+        }))
+    };
+    // First read: ckbadger's tip. Every later read: the next block.
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "tx_pool_info" }),
+        ))
+        .respond_with(info(13, &chain.hash_hex(13)))
+        .up_to_n_times(1)
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "tx_pool_info" }),
+        ))
+        .respond_with(info(14, &next_tip))
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_raw_tx_pool" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "pending": {}, "proposed": {} }
+        })))
+        .mount(&fixture.server)
+        .await;
+
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "poolTipMismatch");
+    assert_eq!(
+        json["poolTip"],
+        serde_json::json!({ "number": 14, "hash": next_tip })
+    );
+    assert_eq!(json["pool"], serde_json::Value::Null);
+    assert_eq!(json["next"], serde_json::Value::Null);
 }

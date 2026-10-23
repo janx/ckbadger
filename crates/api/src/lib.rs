@@ -590,6 +590,7 @@ const POLLING_PATHS: &[&str] = &[
     "/api/v1/mempool/transactions",
     "/api/v1/mempool/blocks",
     "/api/v1/mempool/pending-proposals",
+    "/api/v1/pipeline",
 ];
 
 fn is_polling_path(path: &str) -> bool {
@@ -710,6 +711,7 @@ mod tests {
         assert!(is_polling_path("/api/v1/mempool/blocks"));
         assert!(is_polling_path("/api/v1/mempool/pending-proposals"));
         assert!(is_polling_path("/api/v1/statistics/recent-blocks"));
+        assert!(is_polling_path("/api/v1/pipeline"));
 
         assert!(!is_polling_path("/api/v1/blocks"));
         assert!(!is_polling_path("/api/v1/blocks/12345"));

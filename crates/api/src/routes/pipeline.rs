@@ -11,10 +11,16 @@
 //! - a committed transaction's `proposedIn` is the earliest proposal inside
 //!   `[c - farthest, c - closest]` — the proposal the proposal reward pays;
 //! - a cellbase pays block `X - (farthest + 1)`, cross-checked against the
-//!   node's `get_block_economic_state(..).finalized_at`.
+//!   node's `get_block_economic_state(..).finalized_at`;
+//! - a pool transaction's stage comes from the same zones, not from the node's
+//!   pending/proposed labels (those only feed the P1/P2 checks), and only when
+//!   the pool was read at ckbadger's sync tip (`status`);
+//! - NEXT is a prediction from the committable pool transactions and the
+//!   consensus block limits.
 //!
 //! Chain-guaranteed invariants are checked, never repaired: a violation is a
-//! 500 naming the invariant (C1–C5) and the block/transaction it broke on.
+//! 500 naming the invariant (C1–C5, P1–P3) and the block/transaction it broke
+//! on.
 //!
 //! Read-only: store + node DB (`CkbChainReader`) reads and node RPC calls.
 
@@ -28,13 +34,14 @@ use std::sync::Arc;
 
 use crate::cache::{CacheTtl, InMemoryCache};
 use crate::consensus::{ConsensusParams, ProposalWindow};
+use crate::pool::{HttpPoolSource, PoolSource, RawTxPool};
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::routes::blocks::fetch_block_economic_state;
 use crate::routes::proposal_window::{
     block_proposal_zone, earliest_proposal_in_window, resolve_committed_txs_with, ZoneProposal,
 };
 use crate::routes::transactions::{
-    tx_cycles_status, tx_fee_rate, tx_serialized_size_in_block, TxCyclesStatus,
+    tx_cycles_status, tx_fee_rate, tx_fee_rate_value, tx_serialized_size_in_block, TxCyclesStatus,
 };
 use crate::AppState;
 
@@ -44,6 +51,13 @@ pub(crate) const PIPELINE_BLOCKS: i64 = 24;
 /// capacity of a full-width card, `G.maxCols × G.fieldRows` = 14 × 17 in
 /// frontend `layout.ts`.
 pub(crate) const PIPELINE_BLOCK_TXS: usize = 238;
+
+/// Pending pool transactions served: the pending grid's capacity, 17 × 8
+/// (`G.memCols × G.pendRows` in frontend `layout.ts`).
+pub(crate) const PIPELINE_POOL_PENDING: usize = 136;
+/// Proposed pool transactions served: the proposed grid's capacity, 17 × 12
+/// (`G.memCols × G.propPoolRows` in frontend `layout.ts`).
+pub(crate) const PIPELINE_POOL_PROPOSED: usize = 204;
 
 /// Genesis is the chain's first block; nothing lies below it.
 const GENESIS: i64 = 0;
@@ -59,11 +73,78 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineSnapshot {
+    pub status: SnapshotStatus,
     pub consensus: PipelineConsensus,
     /// ckbadger's sync tip (store).
     pub tip: BlockRef,
+    /// The node's tip as `tx_pool_info` reports it.
+    pub pool_tip: BlockRef,
     /// Newest first, at most [`PIPELINE_BLOCKS`].
     pub blocks: Vec<PipelineBlock>,
+    /// `None` unless `status` is `ok`.
+    pub pool: Option<PipelinePool>,
+    /// `None` unless `status` is `ok`.
+    pub next: Option<PipelineNext>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SnapshotStatus {
+    /// The tx pool was read at ckbadger's sync tip: pool and chain are one view.
+    Ok,
+    /// The node's pool tip differs from ckbadger's sync tip (number or hash), or
+    /// moved while the pool was read, so pool stages cannot be derived from
+    /// the chain the snapshot shows.
+    PoolTipMismatch,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelinePool {
+    pub pending: Vec<PipelinePoolTx>,
+    pub proposed: Vec<PipelinePoolTx>,
+    /// Counts before truncation.
+    pub pending_total: usize,
+    pub proposed_total: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelinePoolTx {
+    pub hash: String,
+    /// The node's entry size: serialized size in block (molecule + 4).
+    pub size: u64,
+    pub fee: String,
+    /// Shannons per 1000 bytes, [`tx_fee_rate`].
+    pub fee_rate: String,
+    pub cycles: u64,
+    /// When the node accepted it into its pool, ms.
+    pub arrived_at: u64,
+    /// Set exactly for the transactions in `proposed`.
+    pub proposed_in: Option<ProposedIn>,
+}
+
+/// The predicted next block, cellbase excluded.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineNext {
+    /// Largest first, at most [`PIPELINE_BLOCK_TXS`] (as a block's `txs`).
+    pub txs: Vec<NextTx>,
+    /// Predicted transactions beyond `txs`.
+    pub omitted_txs: usize,
+    pub bytes: u64,
+    pub cycles: u64,
+    /// Proposals the next block can carry: unproposed pool transactions, up
+    /// to `max_block_proposals_limit`.
+    pub proposals: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NextTx {
+    pub hash: String,
+    /// Serialized size in block (molecule + 4), as [`PipelinePoolTx::size`].
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -637,6 +718,372 @@ async fn resolve_pays(
 }
 
 // ---------------------------------------------------------------------------
+// Tx pool section (pure)
+// ---------------------------------------------------------------------------
+
+/// How the node labels a pool transaction. Used only to check P1/P2: the
+/// stage the snapshot serves is derived from the chain's proposal zones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum RpcPoolStage {
+    Pending,
+    Proposed,
+}
+
+/// One verbose `get_raw_tx_pool` entry, every field the node's own value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PoolEntry {
+    hash: [u8; 32],
+    rpc_stage: RpcPoolStage,
+    /// The node's entry size — serialized size in block (molecule + 4), the
+    /// convention `tx_serialized_size_in_block` gives committed transactions.
+    size: u64,
+    fee: u64,
+    cycles: u64,
+    arrived_at_ms: u64,
+}
+
+impl PoolEntry {
+    fn short_id(&self) -> &[u8] {
+        &self.hash[..10]
+    }
+}
+
+/// A pool transaction with its chain-derived stage.
+#[derive(Debug, Clone)]
+struct ClassifiedPoolTx {
+    entry: PoolEntry,
+    /// The proposal that stages it: the latest one the next block may commit
+    /// from, else the latest one still too recent (the node's "gap").
+    proposed_in: Option<ProposedIn>,
+    /// The next block (tip + 1) may commit it.
+    committable: bool,
+    /// Shannons per 1000 bytes — the served `feeRate`, numerically.
+    fee_rate: u128,
+}
+
+/// Stage every pool transaction from the proposal zones of the blocks whose
+/// proposals are still open at `tip`, and check the node's own labels against
+/// that (P1, P2). The node splits proposals exactly this way: those the next
+/// block may commit (`[tip + 1 - farthest, tip + 1 - closest]`) are its
+/// "proposed" set; newer ones (`(tip + 1 - closest, tip]`, its "gap") it
+/// still lists as pending.
+fn classify_pool<'z>(
+    window: ProposalWindow,
+    tip: i64,
+    zone_at: impl Fn(i64) -> Result<&'z [ZoneProposal], String>,
+    entries: Vec<PoolEntry>,
+) -> Result<Vec<ClassifiedPoolTx>, String> {
+    let committable_lo = tip + 1 - window.farthest();
+    let committable_hi = tip + 1 - window.closest();
+
+    // short id -> every open proposal of it, `(block, uncle index)`.
+    let mut open: HashMap<&[u8], Vec<ProposedIn>> = HashMap::new();
+    for number in committable_lo.max(GENESIS)..=tip {
+        for proposal in zone_at(number)? {
+            open.entry(proposal.short_id.as_slice())
+                .or_default()
+                .push(ProposedIn {
+                    block: number,
+                    uncle_index: proposal.uncle.as_ref().map(|u| u.index),
+                });
+        }
+    }
+
+    entries
+        .into_iter()
+        .map(|entry| {
+            let hits = open.get(entry.short_id()).map(Vec::as_slice).unwrap_or(&[]);
+            let latest = |committable: bool| {
+                hits.iter()
+                    .filter(|hit| (hit.block <= committable_hi) == committable)
+                    .max_by_key(|hit| hit.block)
+                    .copied()
+            };
+            let committable_hit = latest(true);
+            let gap_hit = latest(false);
+            let tx = hex(&entry.hash);
+            match (entry.rpc_stage, committable_hit) {
+                (RpcPoolStage::Proposed, None) => {
+                    return Err(format!(
+                        "P1: the node lists {tx} as proposed at tip {tip}, but no block in \
+                         [{committable_lo}, {committable_hi}] proposed it"
+                    ))
+                }
+                (RpcPoolStage::Pending, Some(hit)) => {
+                    return Err(format!(
+                        "P2: the node lists {tx} as pending at tip {tip}, but block {} proposed \
+                         it inside [{committable_lo}, {committable_hi}]",
+                        hit.block
+                    ))
+                }
+                _ => {}
+            }
+            if entry.size == 0 {
+                return Err(format!("the node reports pool tx {tx} with size 0"));
+            }
+            let fee_rate = tx_fee_rate_value(u128::from(entry.fee), pool_size_i32(&entry)?);
+            Ok(ClassifiedPoolTx {
+                proposed_in: committable_hit.or(gap_hit),
+                committable: committable_hit.is_some(),
+                fee_rate,
+                entry,
+            })
+        })
+        .collect()
+}
+
+fn pool_size_i32(entry: &PoolEntry) -> Result<i32, String> {
+    i32::try_from(entry.size).map_err(|_| {
+        format!(
+            "the node reports pool tx {} with size {}, beyond any block",
+            hex(&entry.hash),
+            entry.size
+        )
+    })
+}
+
+/// Fee rate desc, then arrival asc, then hash — the order the next block's
+/// packer is predicted to take committable transactions in.
+fn by_fee_rate_then_arrival(a: &ClassifiedPoolTx, b: &ClassifiedPoolTx) -> std::cmp::Ordering {
+    b.fee_rate
+        .cmp(&a.fee_rate)
+        .then(a.entry.arrived_at_ms.cmp(&b.entry.arrived_at_ms))
+        .then(a.entry.hash.cmp(&b.entry.hash))
+}
+
+/// Predict the next block's transactions (cellbase excluded): the
+/// committable pool transactions by fee rate desc / arrival asc, each taken
+/// when it still fits `max_block_bytes` and `max_block_cycles` and skipped
+/// when it does not (the packer keeps scanning). `proposals` is how many
+/// unproposed transactions the next block can propose.
+fn predict_next(
+    consensus: &ConsensusParams,
+    classified: &[ClassifiedPoolTx],
+    pending_total: usize,
+) -> Result<PipelineNext, String> {
+    let mut candidates: Vec<&ClassifiedPoolTx> =
+        classified.iter().filter(|tx| tx.committable).collect();
+    candidates.sort_by(|a, b| by_fee_rate_then_arrival(a, b));
+
+    let (mut bytes, mut cycles) = (0u64, 0u64);
+    let mut picked: Vec<NextTx> = Vec::new();
+    for tx in candidates {
+        let with_bytes = bytes
+            .checked_add(tx.entry.size)
+            .ok_or_else(|| "predicted next-block bytes overflow u64".to_string())?;
+        let with_cycles = cycles
+            .checked_add(tx.entry.cycles)
+            .ok_or_else(|| "predicted next-block cycles overflow u64".to_string())?;
+        if with_bytes > consensus.max_block_bytes || with_cycles > consensus.max_block_cycles {
+            continue;
+        }
+        bytes = with_bytes;
+        cycles = with_cycles;
+        picked.push(NextTx {
+            hash: hex(&tx.entry.hash),
+            size: tx.entry.size,
+        });
+    }
+
+    // Served like a block's transactions: largest first (stable, so equal
+    // sizes keep their packing order), capped at the card's capacity.
+    picked.sort_by_key(|tx| std::cmp::Reverse(tx.size));
+    let predicted = picked.len();
+    picked.truncate(PIPELINE_BLOCK_TXS);
+    let omitted_txs = predicted - picked.len();
+
+    let pending = u64::try_from(pending_total)
+        .map_err(|_| format!("pending pool count {pending_total} does not fit u64"))?;
+    Ok(PipelineNext {
+        txs: picked,
+        omitted_txs,
+        bytes,
+        cycles,
+        proposals: pending.min(consensus.max_block_proposals_limit),
+    })
+}
+
+fn pool_tx(tx: &ClassifiedPoolTx) -> PipelinePoolTx {
+    PipelinePoolTx {
+        hash: hex(&tx.entry.hash),
+        size: tx.entry.size,
+        fee: tx.entry.fee.to_string(),
+        fee_rate: tx.fee_rate.to_string(),
+        cycles: tx.entry.cycles,
+        arrived_at: tx.entry.arrived_at_ms,
+        proposed_in: tx.proposed_in,
+    }
+}
+
+/// The pool grids: pending oldest first; proposed by newest proposal, then
+/// oldest arrival. Truncated to the grids' capacities with the totals kept.
+fn build_pool(classified: &[ClassifiedPoolTx]) -> PipelinePool {
+    let mut pending: Vec<&ClassifiedPoolTx> = classified
+        .iter()
+        .filter(|tx| tx.proposed_in.is_none())
+        .collect();
+    let mut proposed: Vec<&ClassifiedPoolTx> = classified
+        .iter()
+        .filter(|tx| tx.proposed_in.is_some())
+        .collect();
+    pending.sort_by(|a, b| {
+        a.entry
+            .arrived_at_ms
+            .cmp(&b.entry.arrived_at_ms)
+            .then(a.entry.hash.cmp(&b.entry.hash))
+    });
+    proposed.sort_by(|a, b| {
+        let block = |tx: &ClassifiedPoolTx| tx.proposed_in.map(|p| p.block);
+        block(b)
+            .cmp(&block(a))
+            .then(a.entry.arrived_at_ms.cmp(&b.entry.arrived_at_ms))
+            .then(a.entry.hash.cmp(&b.entry.hash))
+    });
+    let (pending_total, proposed_total) = (pending.len(), proposed.len());
+    PipelinePool {
+        pending: pending
+            .into_iter()
+            .take(PIPELINE_POOL_PENDING)
+            .map(pool_tx)
+            .collect(),
+        proposed: proposed
+            .into_iter()
+            .take(PIPELINE_POOL_PROPOSED)
+            .map(pool_tx)
+            .collect(),
+        pending_total,
+        proposed_total,
+    }
+}
+
+/// Name, on every not-yet-committed proposal of a shown block, the pool
+/// transaction it proposes; then check P3: every staged pool transaction is
+/// named by the proposal its `proposedIn` points at (block and uncle).
+fn link_pool_to_proposals(
+    blocks: &mut [PipelineBlock],
+    classified: &[ClassifiedPoolTx],
+) -> Result<(), String> {
+    let mut by_short_id: HashMap<String, &ClassifiedPoolTx> = HashMap::new();
+    for tx in classified {
+        if let Some(other) = by_short_id.insert(hex(tx.entry.short_id()), tx) {
+            return Err(format!(
+                "pool transactions {} and {} share proposal short id {}",
+                hex(&other.entry.hash),
+                hex(&tx.entry.hash),
+                hex(tx.entry.short_id())
+            ));
+        }
+    }
+    for block in blocks.iter_mut() {
+        for proposal in block.proposals.iter_mut() {
+            if proposal.tx_hash.is_none() {
+                proposal.tx_hash = by_short_id
+                    .get(&proposal.short_id)
+                    .map(|tx| hex(&tx.entry.hash));
+            }
+        }
+    }
+    for tx in classified {
+        let Some(proposed_in) = tx.proposed_in else {
+            continue;
+        };
+        let tx_hash = hex(&tx.entry.hash);
+        let short_id = hex(tx.entry.short_id());
+        let named = blocks
+            .iter()
+            .find(|b| b.number == proposed_in.block)
+            .and_then(|b| b.proposals.iter().find(|p| p.short_id == short_id))
+            .is_some_and(|p| {
+                p.uncle_index == proposed_in.uncle_index && p.tx_hash.as_deref() == Some(&tx_hash)
+            });
+        if !named {
+            return Err(format!(
+                "P3: pool tx {tx_hash} is staged by block {} (uncle {:?}), but that block's \
+                 proposal {short_id} does not name it",
+                proposed_in.block, proposed_in.uncle_index
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tx pool read (node RPC, cached 2 s per ckbadger tip)
+// ---------------------------------------------------------------------------
+
+/// The tx pool as one read: `tx_pool_info`, the verbose pool, `tx_pool_info`
+/// again. Cached for the mempool endpoints' 2 s, keyed by ckbadger's tip hash
+/// so a new block never serves a pool read against the previous tip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PoolRead {
+    /// The node's tip, as the last `tx_pool_info` of the read reported it.
+    tip_number: u64,
+    tip_hash: [u8; 32],
+    /// `Some` only when the node's tip was ckbadger's sync tip before and after
+    /// the verbose pool was read: then the pool belongs to the chain shown.
+    entries: Option<Vec<PoolEntry>>,
+}
+
+fn pool_read_cache_key(tip_hash: &[u8; 32]) -> String {
+    format!("pipeline:pool:{}", hex::encode(tip_hash))
+}
+
+fn pool_entries(raw: RawTxPool) -> Vec<PoolEntry> {
+    let stage = |stage: RpcPoolStage| {
+        move |(hash, meta): ([u8; 32], crate::pool::PoolEntryMeta)| PoolEntry {
+            hash,
+            rpc_stage: stage,
+            size: meta.size,
+            fee: meta.fee,
+            cycles: meta.cycles,
+            arrived_at_ms: meta.time_added_to_pool_ms,
+        }
+    };
+    raw.pending
+        .into_iter()
+        .map(stage(RpcPoolStage::Pending))
+        .chain(raw.proposed.into_iter().map(stage(RpcPoolStage::Proposed)))
+        .collect()
+}
+
+async fn read_pool(
+    state: &AppState,
+    tip: i64,
+    tip_hash: &[u8; 32],
+) -> Result<PoolRead, ApiRouteError> {
+    let key = pool_read_cache_key(tip_hash);
+    if let Some(cached) = state.mem_cache.get::<PoolRead>(&key) {
+        return Ok(cached);
+    }
+    let node = |e: String| ApiError::internal(format!("tx pool read failed: {e}"));
+    let source = HttpPoolSource::new(state.ckb_rpc_url.clone());
+    let at_tip =
+        |number: u64, hash: &[u8; 32]| i64::try_from(number) == Ok(tip) && hash == tip_hash;
+
+    let before = source.tx_pool_info().await.map_err(node)?;
+    let read = if !at_tip(before.tip_number, &before.tip_hash) {
+        PoolRead {
+            tip_number: before.tip_number,
+            tip_hash: before.tip_hash,
+            entries: None,
+        }
+    } else {
+        let raw = source.raw_tx_pool_verbose().await.map_err(node)?;
+        // A block landing during the read leaves the verbose pool belonging to
+        // either tip: not a read at ckbadger's tip.
+        let after = source.tx_pool_info().await.map_err(node)?;
+        let coherent = at_tip(after.tip_number, &after.tip_hash);
+        PoolRead {
+            tip_number: after.tip_number,
+            tip_hash: after.tip_hash,
+            entries: coherent.then(|| pool_entries(raw)),
+        }
+    };
+    state.mem_cache.set(&key, &read, CacheTtl::MEMPOOL_INFO);
+    Ok(read)
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -666,7 +1113,7 @@ async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineS
         );
     }
 
-    let blocks = build_chain(window, &chain, &pays).map_err(ApiError::internal)?;
+    let mut blocks = build_chain(window, &chain, &pays).map_err(ApiError::internal)?;
 
     // Same contract as /blocks/{id}/fee-stats: a block whose cycles are not
     // known yet asks the indexer's cycles worker to compute them.
@@ -683,13 +1130,47 @@ async fn get_pipeline(State(state): State<Arc<AppState>>) -> ApiResult<PipelineS
     }
 
     let tip = &chain.blocks[&chain.tip];
+    let pool_read = read_pool(&state, chain.tip, &tip.hash).await?;
+    let pool_tip = BlockRef {
+        number: i64::try_from(pool_read.tip_number).map_err(|_| {
+            ApiError::internal(format!(
+                "tx_pool_info tip number {} does not fit i64",
+                pool_read.tip_number
+            ))
+        })?,
+        hash: hex(&pool_read.tip_hash),
+    };
+    let (status, pool, next) = match pool_read.entries {
+        None => (SnapshotStatus::PoolTipMismatch, None, None),
+        Some(entries) => {
+            let zone_at = |n: i64| {
+                chain
+                    .blocks
+                    .get(&n)
+                    .map(|b| b.body.zone.as_slice())
+                    .ok_or_else(|| format!("block {n} with open proposals was not loaded"))
+            };
+            let classified =
+                classify_pool(window, chain.tip, zone_at, entries).map_err(ApiError::internal)?;
+            link_pool_to_proposals(&mut blocks, &classified).map_err(ApiError::internal)?;
+            let pool = build_pool(&classified);
+            let next = predict_next(&consensus, &classified, pool.pending_total)
+                .map_err(ApiError::internal)?;
+            (SnapshotStatus::Ok, Some(pool), Some(next))
+        }
+    };
+
     ok(PipelineSnapshot {
+        status,
         consensus: PipelineConsensus::from(&consensus),
         tip: BlockRef {
             number: chain.tip,
             hash: hex(&tip.hash),
         },
+        pool_tip,
         blocks,
+        pool,
+        next,
     })
 }
 
@@ -715,6 +1196,232 @@ mod tests {
         assert_eq!(proposal_state(w, tip, 90, false), ProposalState::Expired);
         assert_eq!(proposal_state(w, tip, 90, true), ProposalState::Committed);
         assert_eq!(proposal_state(w, tip, 100, true), ProposalState::Committed);
+    }
+
+    fn consensus(max_block_proposals_limit: u64) -> ConsensusParams {
+        ConsensusParams {
+            tx_proposal_window: mainnet_window(),
+            max_block_bytes: 1_000,
+            max_block_cycles: 1_000,
+            max_block_proposals_limit,
+        }
+    }
+
+    fn entry(id: u8, stage: RpcPoolStage, size: u64, fee: u64, cycles: u64) -> PoolEntry {
+        let mut hash = [0xFF; 32];
+        hash[..10].copy_from_slice(&[id; 10]);
+        PoolEntry {
+            hash,
+            rpc_stage: stage,
+            size,
+            fee,
+            cycles,
+            arrived_at_ms: u64::from(id),
+        }
+    }
+
+    fn zone(ids: &[u8]) -> Vec<ZoneProposal> {
+        ids.iter()
+            .map(|id| ZoneProposal {
+                short_id: vec![*id; 10],
+                uncle: None,
+            })
+            .collect()
+    }
+
+    /// Zones of blocks 91..=100 (tip 100): id 1 at 95, id 2 at the tip, id 3
+    /// at 91 and again at the tip.
+    fn zones() -> HashMap<i64, Vec<ZoneProposal>> {
+        (91..=100)
+            .map(|n| {
+                let ids: &[u8] = match n {
+                    95 => &[1],
+                    100 => &[2, 3],
+                    91 => &[3],
+                    _ => &[],
+                };
+                (n, zone(ids))
+            })
+            .collect()
+    }
+
+    fn classify(entries: Vec<PoolEntry>) -> Result<Vec<ClassifiedPoolTx>, String> {
+        let zones = zones();
+        classify_pool(
+            mainnet_window(),
+            100,
+            |n| {
+                zones
+                    .get(&n)
+                    .map(Vec::as_slice)
+                    .ok_or_else(|| format!("no zone {n}"))
+            },
+            entries,
+        )
+    }
+
+    #[test]
+    fn classify_pool_stages_from_zones() {
+        let classified = classify(vec![
+            entry(1, RpcPoolStage::Proposed, 100, 1_000, 1),
+            entry(2, RpcPoolStage::Pending, 100, 1_000, 1),
+            entry(3, RpcPoolStage::Proposed, 100, 1_000, 1),
+            entry(4, RpcPoolStage::Pending, 100, 1_000, 1),
+        ])
+        .unwrap();
+        let stage = |i: usize| {
+            (
+                classified[i].proposed_in.map(|p| p.block),
+                classified[i].committable,
+            )
+        };
+        assert_eq!(stage(0), (Some(95), true));
+        // Proposed at the tip: staged, but too early for the next block.
+        assert_eq!(stage(1), (Some(100), false));
+        // Proposed at 91 (committable) and again at the tip (gap): the
+        // committable proposal stages it, as the node's own split does.
+        assert_eq!(stage(2), (Some(91), true));
+        assert_eq!(stage(3), (None, false));
+        assert_eq!(classified[0].fee_rate, 10_000);
+    }
+
+    #[test]
+    fn classify_pool_checks_the_node_labels() {
+        let p1 = classify(vec![entry(4, RpcPoolStage::Proposed, 100, 1, 1)]).unwrap_err();
+        assert!(p1.starts_with("P1:"), "{p1}");
+        let p2 = classify(vec![entry(1, RpcPoolStage::Pending, 100, 1, 1)]).unwrap_err();
+        assert!(p2.starts_with("P2:"), "{p2}");
+        // A gap tx the node calls pending is consistent.
+        assert!(classify(vec![entry(2, RpcPoolStage::Pending, 100, 1, 1)]).is_ok());
+    }
+
+    #[test]
+    fn predict_next_skips_what_does_not_fit_and_caps_proposals() {
+        // feeRate (per KB): 1 -> 10_000, 2 -> 20_000, 3 -> 5_000, 4 -> 30_000.
+        let classified = classify(vec![
+            entry(1, RpcPoolStage::Proposed, 600, 6_000, 10),
+            entry(3, RpcPoolStage::Proposed, 300, 1_500, 10),
+            entry(2, RpcPoolStage::Pending, 100, 2_000, 10),
+            entry(4, RpcPoolStage::Pending, 100, 3_000, 10),
+        ])
+        .unwrap();
+        let next = predict_next(&consensus(1), &classified, 5).unwrap();
+        // Only committable txs (1, 3); both fit 1_000 bytes.
+        let hashes: Vec<String> = next.txs.iter().map(|t| t.hash.clone()).collect();
+        assert_eq!(
+            hashes,
+            vec![
+                hex(&classified[0].entry.hash),
+                hex(&classified[1].entry.hash)
+            ]
+        );
+        assert_eq!((next.bytes, next.cycles), (900, 20));
+        assert_eq!(next.proposals, 1, "min(pending, max_block_proposals_limit)");
+
+        let tight = ConsensusParams {
+            max_block_bytes: 650,
+            ..consensus(1500)
+        };
+        let next = predict_next(&tight, &classified, 5).unwrap();
+        assert_eq!(next.txs.len(), 1);
+        assert_eq!(next.bytes, 600);
+        assert_eq!(next.proposals, 5);
+    }
+
+    #[test]
+    fn predict_next_serves_at_most_a_card_of_txs() {
+        let classified: Vec<ClassifiedPoolTx> = (0..300u32)
+            .map(|i| {
+                let mut hash = [0u8; 32];
+                hash[..4].copy_from_slice(&i.to_be_bytes());
+                ClassifiedPoolTx {
+                    entry: PoolEntry {
+                        hash,
+                        rpc_stage: RpcPoolStage::Proposed,
+                        size: 1 + u64::from(i % 3),
+                        fee: 1,
+                        cycles: 1,
+                        arrived_at_ms: u64::from(i),
+                    },
+                    proposed_in: Some(ProposedIn {
+                        block: 99,
+                        uncle_index: None,
+                    }),
+                    committable: true,
+                    fee_rate: 1,
+                }
+            })
+            .collect();
+        let next = predict_next(&consensus(1500), &classified, 0).unwrap();
+        assert_eq!(next.txs.len(), PIPELINE_BLOCK_TXS);
+        assert_eq!(next.omitted_txs, 300 - PIPELINE_BLOCK_TXS);
+        assert_eq!(next.bytes, 600, "bytes cover every predicted tx");
+        assert!(next.txs.windows(2).all(|w| w[0].size >= w[1].size));
+    }
+
+    fn shown_block(number: i64, proposals: Vec<PipelineProposal>) -> PipelineBlock {
+        PipelineBlock {
+            number,
+            hash: hex(&[number as u8; 32]),
+            parent_hash: hex(&[0; 32]),
+            timestamp: "2023-11-14T22:13:20+00:00".to_string(),
+            tx_count: 1,
+            bytes: 300,
+            cycles: Some(0),
+            cycles_pending: false,
+            proposals,
+            uncles: vec![],
+            txs: vec![],
+            omitted_txs: 0,
+            cellbase: PipelineCellbase {
+                hash: hex(&[0xCB; 32]),
+                size: 300,
+                pays: None,
+            },
+        }
+    }
+
+    fn open_proposal(id: u8, uncle_index: Option<usize>) -> PipelineProposal {
+        PipelineProposal {
+            short_id: hex(&[id; 10]),
+            uncle_index,
+            state: ProposalState::Waiting,
+            tx_hash: None,
+            committed_block: None,
+        }
+    }
+
+    #[test]
+    fn link_names_the_pool_tx_on_its_proposal() {
+        let classified = classify(vec![entry(1, RpcPoolStage::Proposed, 100, 1, 1)]).unwrap();
+        let mut blocks = vec![shown_block(95, vec![open_proposal(1, None)])];
+        link_pool_to_proposals(&mut blocks, &classified).unwrap();
+        assert_eq!(
+            blocks[0].proposals[0].tx_hash,
+            Some(hex(&classified[0].entry.hash))
+        );
+    }
+
+    #[test]
+    fn link_fails_when_the_staging_proposal_does_not_match() {
+        let classified = classify(vec![entry(1, RpcPoolStage::Proposed, 100, 1, 1)]).unwrap();
+        // The served zone says the id came from an uncle; the pool tx's stage says
+        // the block's own proposal (P3).
+        let mut blocks = vec![shown_block(95, vec![open_proposal(1, Some(0))])];
+        let err = link_pool_to_proposals(&mut blocks, &classified).unwrap_err();
+        assert!(err.starts_with("P3:"), "{err}");
+        // A staging block missing from the shown chain is the same violation.
+        let err = link_pool_to_proposals(&mut [], &classified).unwrap_err();
+        assert!(err.starts_with("P3:"), "{err}");
+    }
+
+    #[test]
+    fn link_rejects_two_pool_txs_with_one_short_id() {
+        let mut twin = entry(4, RpcPoolStage::Pending, 100, 1, 1);
+        twin.hash[31] = 0x00;
+        let classified = classify(vec![entry(4, RpcPoolStage::Pending, 100, 1, 1), twin]).unwrap();
+        let err = link_pool_to_proposals(&mut [], &classified).unwrap_err();
+        assert!(err.contains("share proposal short id"), "{err}");
     }
 
     #[test]

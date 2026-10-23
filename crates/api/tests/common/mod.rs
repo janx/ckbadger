@@ -621,9 +621,29 @@ pub async fn mount_block_economic_state_not_finalized(server: &MockServer) {
         .await;
 }
 
-/// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
-/// these pending transactions (`(tx_hash, time_added_to_pool_hex)`).
-pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
+/// One verbose `get_raw_tx_pool` entry, as the node reports it.
+#[derive(Debug, Clone)]
+pub struct PoolRpcTx {
+    pub hash: String,
+    /// The node's entry size (serialized size in block: molecule + 4).
+    pub size: u64,
+    pub fee: u64,
+    pub cycles: u64,
+    /// `timestamp`: when the node accepted it into its pool, ms.
+    pub timestamp_ms: u64,
+}
+
+/// The node's tx pool at a tip: `tx_pool_info` plus verbose `get_raw_tx_pool`.
+#[derive(Debug, Clone)]
+pub struct PoolRpc {
+    pub tip_number: u64,
+    pub tip_hash: String,
+    pub pending: Vec<PoolRpcTx>,
+    pub proposed: Vec<PoolRpcTx>,
+}
+
+/// Mount `pool` as the node's `tx_pool_info` and verbose `get_raw_tx_pool`.
+pub async fn mount_tx_pool_rpc_at(server: &MockServer, pool: &PoolRpc) {
     Mock::given(method("POST"))
         .and(body_partial_json(
             serde_json::json!({ "method": "tx_pool_info" }),
@@ -632,34 +652,35 @@ pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
             "jsonrpc": "2.0",
             "id": 1,
             "result": {
-                "tip_hash": format!("0x{}", "77".repeat(32)),
-                "tip_number": "0x3e8",
+                "tip_hash": pool.tip_hash,
+                "tip_number": format!("0x{:x}", pool.tip_number),
                 "last_txs_updated_at": "0x1",
-                "pending": format!("0x{:x}", pending.len()),
-                "proposed": "0x0",
+                "pending": format!("0x{:x}", pool.pending.len()),
+                "proposed": format!("0x{:x}", pool.proposed.len()),
                 "orphan": "0x0"
             }
         })))
         .mount(server)
         .await;
 
-    let entries: serde_json::Map<String, serde_json::Value> = pending
-        .iter()
-        .map(|(hash, timestamp)| {
-            (
-                hash.to_string(),
-                serde_json::json!({
-                    "cycles": "0x5208",
-                    "size": "0x1f4",
-                    "fee": "0x174",
-                    "ancestors_count": "0x0",
-                    "ancestors_size": "0x1f4",
-                    "ancestors_cycles": "0x5208",
-                    "timestamp": timestamp
-                }),
-            )
-        })
-        .collect();
+    let entries = |txs: &[PoolRpcTx]| -> serde_json::Map<String, serde_json::Value> {
+        txs.iter()
+            .map(|tx| {
+                (
+                    tx.hash.clone(),
+                    serde_json::json!({
+                        "cycles": format!("0x{:x}", tx.cycles),
+                        "size": format!("0x{:x}", tx.size),
+                        "fee": format!("0x{:x}", tx.fee),
+                        "ancestors_count": "0x0",
+                        "ancestors_size": format!("0x{:x}", tx.size),
+                        "ancestors_cycles": format!("0x{:x}", tx.cycles),
+                        "timestamp": format!("0x{:x}", tx.timestamp_ms)
+                    }),
+                )
+            })
+            .collect()
+    };
     Mock::given(method("POST"))
         .and(body_partial_json(
             serde_json::json!({ "method": "get_raw_tx_pool" }),
@@ -667,10 +688,38 @@ pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "result": { "pending": entries, "proposed": {} }
+            "result": { "pending": entries(&pool.pending), "proposed": entries(&pool.proposed) }
         })))
         .mount(server)
         .await;
+}
+
+/// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
+/// these pending transactions (`(tx_hash, time_added_to_pool_hex)`), at the
+/// fixed tip `0x3e8` / `0x77…77`, each entry 500 bytes, fee 0x174, 0x5208
+/// cycles.
+pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
+    let pending = pending
+        .iter()
+        .map(|(hash, timestamp)| PoolRpcTx {
+            hash: hash.to_string(),
+            size: 0x1f4,
+            fee: 0x174,
+            cycles: 0x5208,
+            timestamp_ms: u64::from_str_radix(timestamp.trim_start_matches("0x"), 16)
+                .expect("fixture pool timestamp is hex"),
+        })
+        .collect();
+    mount_tx_pool_rpc_at(
+        server,
+        &PoolRpc {
+            tip_number: 0x3e8,
+            tip_hash: format!("0x{}", "77".repeat(32)),
+            pending,
+            proposed: vec![],
+        },
+    )
+    .await;
 }
 
 /// Run ONE tx-pool mirror round against the node at `rpc_url`, publishing into
