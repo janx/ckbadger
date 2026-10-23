@@ -15,6 +15,25 @@
   --color-interactive-hover: #2edba3;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
+
+  /* Transaction pipeline (components/pipeline): painted through lib/pipeline/encoding.ts. */
+  --pipeline-surface: var(--color-surface);
+  --pipeline-elevated: var(--color-elevated);
+  --pipeline-border: var(--color-border);
+  --pipeline-border-subtle: var(--color-border-subtle);
+  --pipeline-ink-bright: #dee2ec;
+  --pipeline-ink: #a0a8be;
+  --pipeline-ink-dim: #606880;
+  --pipeline-jade: var(--color-emphasis);
+  --pipeline-aqua: var(--color-interactive);
+  --pipeline-gold: #f2c55c;
+  /* Stage fills: aqua / gold / jade stepped to OKLCH L≈0.66 for filled marks on dark. */
+  --pipeline-pending: #3e9dca;
+  --pipeline-proposed: #bb881a;
+  --pipeline-committed: #00ac7c;
+  --pipeline-ember: #d4883a;
+  /* A dropped tx greys out toward ember: a neutral at the stage fills' luma, half ember. */
+  --pipeline-drop: color-mix(in srgb, #898989, var(--pipeline-ember));
 }
 
 body {
@@ -680,5 +699,24 @@ body::before {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Transaction pipeline: hover focus steps every other square back (one rule, no per-frame paint). */
+.pipeline-svg.is-focus [data-sq]:not(.is-on) {
+  opacity: 0.3;
+}
+.pipeline-svg [data-dim] {
+  transition: opacity 140ms ease-out;
+}
+.pipeline-svg [data-dim='true'] {
+  opacity: 0.35;
+}
+.pipeline-svg [data-dim='soft'] {
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-svg [data-dim] {
+    transition: none;
   }
 }

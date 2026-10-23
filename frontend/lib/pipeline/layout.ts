@@ -6,6 +6,25 @@
  * top-aligned; the chain runs through the card headers.
  */
 
+import type {
+  PipelineBlock,
+  PipelineBlockRef,
+  PipelineNext,
+  PipelinePoolTx,
+  PipelineProposal,
+  PipelineProposedIn,
+  PipelineSnapshot,
+  PipelineTx,
+} from '@/lib/api';
+import {
+  squareSide,
+  txLook,
+  type ShadeStep,
+  type SquareStage,
+  type SquareStyle,
+  type TxLook,
+} from '@/lib/pipeline/encoding';
+
 export const U = 7;
 
 const CHAIN_BASE = {
@@ -379,4 +398,415 @@ export function pick(targets: PickTargets, x: number, y: number): PickHit {
   }
   if (chip && (!near || chipD < nearD)) return { kind: 'chip', card: chip.card, key: chip.key };
   return near ? { kind: 'tx', id: near.id } : null;
+}
+
+// ---------- Scene: one snapshot → the target geometry of everything drawn ----------
+
+export type ScenePhase = 'settled' | 'landing';
+
+export interface SceneSquare {
+  /** tx hash (the cellbase hash for the cellbase). */
+  id: string;
+  kind: 'tx' | 'cellbase';
+  stage: SquareStage;
+  style: SquareStyle;
+  step: ShadeStep;
+  /** Local to the container: the pool (absolute) or the card group (translated by the card x). */
+  x: number;
+  y: number;
+  s: number;
+  /** 'pool' or the block hash of the card. */
+  container: string;
+}
+
+export interface SceneChip {
+  key: string;
+  proposal: PipelineProposal;
+  /** Local to the card. */
+  x: number;
+  y: number;
+}
+
+export interface SceneUncle {
+  index: number;
+  ref: PipelineBlockRef;
+  y: number;
+  h: number;
+  label: string;
+  overflow: number;
+}
+
+export interface SceneCard {
+  /** Block hash. */
+  id: string;
+  block: PipelineBlock;
+  slot: 'landing' | 'chain';
+  x: number;
+  w: number;
+  h: number;
+  cols: number;
+  chips: SceneChip[];
+  /** Own proposals that do not fit the three chip rows. */
+  chipOverflow: number;
+  uncles: SceneUncle[];
+  squares: SceneSquare[];
+  /** Txs not drawn: the field's overflow plus the ones the backend omitted. */
+  hidden: number;
+}
+
+export interface SceneGhost {
+  x: number;
+  y: number;
+  s: number;
+  cellbase: boolean;
+}
+
+export interface SceneNext {
+  number: number;
+  x: number;
+  w: number;
+  h: number;
+  cols: number;
+  next: PipelineNext;
+  ghosts: SceneGhost[];
+  ghostChips: { x: number; y: number }[];
+  chipOverflow: number;
+  /** Predicted txs not drawn: field overflow plus hashes outside the (truncated) proposed list. */
+  hidden: number;
+}
+
+export interface ScenePoolGrid {
+  squares: SceneSquare[];
+  total: number;
+  hidden: number;
+}
+
+export interface Scene {
+  viewW: number;
+  phase: ScenePhase;
+  snapshot: PipelineSnapshot;
+  /** The window defaults to the block after this one (NEXT, or the landing block). */
+  windowTip: number;
+  pool: { pending: ScenePoolGrid; proposed: ScenePoolGrid } | null;
+  next: SceneNext | null;
+  cards: SceneCard[];
+}
+
+export const tail4 = (n: number) => `…${String(n).slice(-4)}`;
+
+interface Sized {
+  hash: string;
+  size: number;
+  feeRate: string;
+}
+
+/** Big squares first, then by fee rate (prototype `bySize`). */
+const bySize = (a: Sized, b: Sized) =>
+  squareSide(b.size) - squareSide(a.size) || Number(b.feeRate) - Number(a.feeRate);
+
+const square = (
+  id: string,
+  kind: SceneSquare['kind'],
+  look: TxLook,
+  x: number,
+  y: number,
+  s: number,
+  container: string
+): SceneSquare => ({
+  id,
+  kind,
+  stage: look.stage,
+  style: look.style,
+  step: look.step,
+  x,
+  y,
+  s,
+  container,
+});
+
+function poolGrid(
+  txs: readonly PipelinePoolTx[],
+  total: number,
+  top: number,
+  rows: number,
+  lookOf: (t: PipelinePoolTx) => TxLook
+): ScenePoolGrid {
+  if (total < txs.length) {
+    throw new Error(`pipeline: pool total ${total} is below the ${txs.length} txs listed`);
+  }
+  const byHash = new Map(txs.map((t) => [t.hash, t]));
+  const p = pack2D(
+    txs.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
+    G.memCols,
+    rows,
+    false
+  );
+  return {
+    squares: p.pos.map((q) =>
+      square(
+        q.id,
+        'tx',
+        lookOf(byHash.get(q.id) as PipelinePoolTx),
+        G.memX0 + q.c * U,
+        top + q.r * U,
+        q.n * U - 1,
+        'pool'
+      )
+    ),
+    total,
+    hidden: p.hidden + (total - txs.length),
+  };
+}
+
+interface CardGeom {
+  block: PipelineBlock;
+  cols: number;
+  uExtra: number;
+  pack: PackResult;
+  own: PipelineProposal[];
+  byUncle: PipelineProposal[][];
+}
+
+function cardGeom(b: PipelineBlock): CardGeom {
+  if (b.omittedTxs !== b.txCount - 1 - b.txs.length) {
+    throw new Error(
+      `pipeline: block #${b.number} omittedTxs ${b.omittedTxs} != txCount ${b.txCount} − 1 − ${b.txs.length} listed`
+    );
+  }
+  const own: PipelineProposal[] = [];
+  const byUncle: PipelineProposal[][] = b.uncles.map(() => []);
+  for (const p of b.proposals) {
+    if (p.uncleIndex === null) own.push(p);
+    else if (p.uncleIndex >= 0 && p.uncleIndex < byUncle.length) byUncle[p.uncleIndex].push(p);
+    else {
+      throw new Error(
+        `pipeline: block #${b.number} proposal ${p.shortId} points at uncle ${p.uncleIndex} of ${b.uncles.length}`
+      );
+    }
+  }
+  const order = b.txs.slice().sort(bySize);
+  const sides = order.map((t) => squareSide(t.size));
+  const cols = cardCols(sides, own.length, b.uncles.length ? UNC.minCols : G.minCols);
+  const uExtra = unclesH(
+    cols,
+    byUncle.map((u) => u.length)
+  );
+  const pack = pack2D(
+    order.map((t, i) => ({ id: t.hash, n: sides[i] })),
+    cols,
+    G.fieldRows - Math.ceil(uExtra / U),
+    true
+  );
+  return { block: b, cols, uExtra, pack, own, byUncle };
+}
+
+function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
+  const b = g.block;
+  const w = cardW(g.cols);
+  const per = chipsPerRow(g.cols);
+  const cap = per * G.propRows;
+  const chips: SceneChip[] = g.own.slice(0, cap).map((p, i) => ({
+    key: `${p.shortId}|`,
+    proposal: p,
+    x: G.padX + (i % per) * G.chipP,
+    y: G.propTop + Math.floor(i / per) * G.chipP,
+  }));
+  const uncles: SceneUncle[] = [];
+  let top: number = G.fieldTop - 1;
+  const per2 = uncleChipsPerRow(g.cols);
+  const cap2 = per2 * UNC.chipRows;
+  g.byUncle.forEach((list, ui) => {
+    const h = uncleBoxH(g.cols, list.length);
+    const ref = b.uncles[ui];
+    uncles.push({
+      index: ui,
+      ref,
+      y: top,
+      h,
+      label: `uncle ${tail4(ref.number)}`,
+      overflow: Math.max(0, list.length - cap2),
+    });
+    list.slice(0, cap2).forEach((p, i) => {
+      chips.push({
+        key: `${p.shortId}|${ui}`,
+        proposal: p,
+        x: G.padX + 3 + (i % per2) * G.chipP,
+        y: top + UNC.head + Math.floor(i / per2) * G.chipP,
+      });
+    });
+    top += h + UNC.gap;
+  });
+  const ft = G.fieldTop + g.uExtra;
+  const txByHash = new Map(b.txs.map((t) => [t.hash, t]));
+  const squares: SceneSquare[] = [
+    square(
+      b.cellbase.hash,
+      'cellbase',
+      txLook({ stage: 'cellbase', cycles: null, tooEarly: false }),
+      G.padX,
+      ft,
+      U - 1,
+      b.hash
+    ),
+    ...g.pack.pos.map((q) => {
+      const t = txByHash.get(q.id) as PipelineTx;
+      return square(
+        q.id,
+        'tx',
+        txLook({ stage: 'committed', cycles: t.cycles, tooEarly: false }),
+        G.padX + q.c * U,
+        ft + q.r * U,
+        q.n * U - 1,
+        b.hash
+      );
+    }),
+  ];
+  return {
+    id: b.hash,
+    block: b,
+    slot,
+    x,
+    w,
+    h: cardH(g.pack.rows, g.uExtra),
+    cols: g.cols,
+    chips,
+    chipOverflow: Math.max(0, g.own.length - cap),
+    uncles,
+    squares,
+    hidden: g.pack.hidden + b.omittedTxs,
+  };
+}
+
+function sceneNext(s: PipelineSnapshot, next: PipelineNext, proposed: readonly PipelinePoolTx[]) {
+  const byHash = new Map(proposed.map((t) => [t.hash, t]));
+  const known: PipelinePoolTx[] = [];
+  let unknown = 0;
+  for (const h of next.txHashes) {
+    const t = byHash.get(h);
+    if (t) known.push(t);
+    else unknown++;
+  }
+  const order = known.sort(bySize);
+  const sides = order.map((t) => squareSide(t.size));
+  const cols = cardCols(sides, next.proposals);
+  const fp = pack2D(
+    order.map((t, i) => ({ id: t.hash, n: sides[i] })),
+    cols,
+    G.fieldRows,
+    true
+  );
+  const per = chipsPerRow(cols);
+  const cap = per * G.propRows;
+  const ghostChips = Array.from({ length: Math.min(next.proposals, cap) }, (_, i) => ({
+    x: G.padX + (i % per) * G.chipP,
+    y: G.propTop + Math.floor(i / per) * G.chipP,
+  }));
+  const scene: SceneNext = {
+    number: s.tip.number + 1,
+    x: G.nextX,
+    w: cardW(cols),
+    h: cardH(fp.rows),
+    cols,
+    next,
+    ghosts: [
+      { x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
+      ...fp.pos.map((q) => ({
+        x: G.padX + q.c * U,
+        y: G.fieldTop + q.r * U,
+        s: q.n * U - 1,
+        cellbase: false,
+      })),
+    ],
+    ghostChips,
+    chipOverflow: Math.max(0, next.proposals - cap),
+    hidden: fp.hidden + unknown,
+  };
+  return scene;
+}
+
+/**
+ * Lay out one snapshot. Every chain fact comes from the snapshot; this only places it. Contract
+ * violations the layout depends on throw with context instead of being drawn around.
+ */
+export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase): Scene {
+  if ((s.status === 'ok') !== (s.pool !== null) || (s.pool === null) !== (s.next === null)) {
+    throw new Error(
+      `pipeline: status ${s.status} with pool ${s.pool ? 'present' : 'null'} and next ${s.next ? 'present' : 'null'}`
+    );
+  }
+  if (!s.blocks.length || s.blocks[0].hash !== s.tip.hash) {
+    throw new Error(`pipeline: newest block is not the tip #${s.tip.number} ${s.tip.hash}`);
+  }
+  const byNumber = new Map(s.blocks.map((b) => [b.number, b]));
+
+  let pool: Scene['pool'] = null;
+  if (s.pool) {
+    const p = s.pool;
+    const pending = p.pending.slice().sort((a, b) => a.arrivedAt - b.arrivedAt);
+    const proposed = p.proposed
+      .slice()
+      .sort(
+        (a, b) =>
+          (b.proposedIn as PipelineProposedIn).block - (a.proposedIn as PipelineProposedIn).block ||
+          a.arrivedAt - b.arrivedAt
+      );
+    for (const t of pending) {
+      if (t.proposedIn !== null) throw new Error(`pipeline: pending tx ${t.hash} has a proposedIn`);
+    }
+    pool = {
+      pending: poolGrid(pending, p.pendingTotal, G.pendTop, G.pendRows, (t) =>
+        txLook({ stage: 'pending', cycles: t.cycles, tooEarly: false })
+      ),
+      proposed: poolGrid(proposed, p.proposedTotal, G.propPoolTop, G.propPoolRows, (t) => {
+        const at = t.proposedIn;
+        if (!at) throw new Error(`pipeline: proposed tx ${t.hash} has no proposedIn`);
+        const blk = byNumber.get(at.block);
+        const proposal = blk?.proposals.find(
+          (q) => q.txHash === t.hash && q.uncleIndex === at.uncleIndex
+        );
+        if (!proposal) {
+          throw new Error(
+            `pipeline: proposed tx ${t.hash} names #${at.block} (uncle ${at.uncleIndex}) but that block has no proposal for it`
+          );
+        }
+        // "Too early" is the proposal's own state: the backend decides it once.
+        return txLook({
+          stage: 'proposed',
+          cycles: t.cycles,
+          tooEarly: proposal.state === 'early',
+        });
+      }),
+    };
+  }
+
+  const geoms = s.blocks.map(cardGeom);
+  const slots = chainLayout(geoms, viewW, phase === 'landing');
+  const cards = slots.map((slot) => sceneCard(geoms[slot.index], slot.x, slot.slot));
+  const next =
+    phase === 'settled' && s.next && s.pool ? sceneNext(s, s.next, s.pool.proposed) : null;
+  return {
+    viewW,
+    phase,
+    snapshot: s,
+    windowTip: phase === 'landing' ? s.tip.number - 1 : s.tip.number,
+    pool,
+    next,
+    cards,
+  };
+}
+
+/** Absolute pick targets of a scene, in drawing order. */
+export function pickTargets(scene: Scene): PickTargets {
+  const squares: PickSquare[] = [];
+  const chips: PickChip[] = [];
+  if (scene.pool) {
+    for (const q of [...scene.pool.pending.squares, ...scene.pool.proposed.squares]) {
+      squares.push({ id: q.id, X: q.x, Y: q.y, s: q.s });
+    }
+  }
+  for (const c of scene.cards) {
+    for (const q of c.squares) squares.push({ id: q.id, X: c.x + q.x, Y: q.y, s: q.s });
+    for (const k of c.chips) chips.push({ card: c.id, key: k.key, X: c.x + k.x, Y: k.y });
+  }
+  return { squares, chips };
 }
