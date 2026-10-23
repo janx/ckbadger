@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
+import { act, render as renderPlain } from '@testing-library/react';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { server } from '@/__tests__/msw/server';
 import {
@@ -7,10 +8,15 @@ import {
   blockHash,
   buildPipelineSnapshot,
   committedTxHash,
+  mineNext,
+  poolTxHash,
+  shortIdOf,
 } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import type { PipelineSnapshot } from '@/lib/api';
-import { PipelinePanel } from '@/components/pipeline/pipeline-panel';
+import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
+import { chipPaint } from '@/lib/pipeline/encoding';
 import { G, buildScene, chipsPerRow } from '@/lib/pipeline/layout';
+import { diffSnapshots } from '@/lib/pipeline/transitions';
 
 const VIEW_W = 1600;
 const T = FIXTURE_TIP;
@@ -202,5 +208,122 @@ describe('PipelinePanel static render', () => {
     render(<PipelinePanel />);
     const row = await screen.findByTestId('pipeline-error');
     expect(row).toHaveTextContent(/names #\d+.*no proposal for it/);
+  });
+});
+
+describe('PipelineCanvas motion', () => {
+  const s1 = buildPipelineSnapshot();
+  const w0 = poolTxHash('w0');
+  const q0 = poolTxHash('q0');
+  const s2 = mineNext(s1, { commit: [w0], propose: [q0] });
+  const t = diffSnapshots(s1, s2);
+  const newHash = blockHash(T + 1);
+
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        'setTimeout',
+        'clearTimeout',
+        'requestAnimationFrame',
+        'cancelAnimationFrame',
+        'performance',
+      ],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const at = (ms: number) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+
+  it('boots without animating and measures before drawing', () => {
+    const { getByTestId } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    expect(svg.getAttribute('viewBox')).toBe(`0 0 ${VIEW_W} ${G.H}`);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(svg.querySelector('[data-layer="exit"]')?.childElementCount).toBe(0);
+  });
+
+  it('lands a mined block at NEXT, flies its commit in from the pool, then joins the chain', () => {
+    expect(t.mode).toBe('mined');
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    const poolX = Number(svg.querySelector(`[data-pool] [data-sq="${w0}"]`)?.getAttribute('x'));
+    rerender(<PipelineCanvas snapshot={s2} />);
+
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    expect(landing).toHaveAttribute('data-slot', 'landing');
+    expect(landing.getAttribute('transform')).toBe(`translate(${G.nextX.toFixed(2)},0.00)`);
+    expect(svg.querySelector('[data-next]')).toBeNull();
+    // Dashed until its commits land.
+    expect(landing.querySelector('[data-box]')).toHaveAttribute('stroke-dasharray', '3 2');
+    // The commit starts where it sat in the pool, expressed in the landing card's coordinates.
+    const sq = landing.querySelector(`[data-sq="${w0}"]`) as SVGRectElement;
+    expect(Number(sq.getAttribute('x'))).toBeCloseTo(poolX - G.nextX, 1);
+
+    at(t.contact + 20);
+    const target = buildScene(s2, VIEW_W, 'landing').cards[0].squares.find((q) => q.id === w0);
+    expect(Number(sq.getAttribute('x'))).toBeCloseTo(target?.x as number, 1);
+
+    // React flushes the phase step when act() ends; the 700 ms move runs after that.
+    at(t.settleAt - t.contact);
+    at(800);
+    const joined = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    expect(joined).toHaveAttribute('data-slot', 'chain');
+    expect(joined.getAttribute('transform')).toBe(`translate(${G.chainX0.toFixed(2)},0.00)`);
+    expect(joined.querySelector('[data-box]')).not.toHaveAttribute('stroke-dasharray');
+    expect(svg.querySelector('[data-next]')).not.toBeNull();
+    expect(svg.querySelectorAll('[data-card]')).toHaveLength(
+      buildScene(s2, VIEW_W, 'settled').cards.length
+    );
+  });
+
+  it('retires the block that leaves the screen through the exit layer', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    const before = buildScene(s1, VIEW_W, 'settled').cards.length;
+    rerender(<PipelineCanvas snapshot={s2} />);
+    at(t.settleAt + 10);
+    const exitLayer = svg.querySelector('[data-layer="exit"]') as SVGGElement;
+    const visibleAfter = buildScene(s2, VIEW_W, 'settled').cards.length;
+    // Every card that no longer fits leaves as a clone (none of them still claims a block).
+    expect(exitLayer.childElementCount).toBeGreaterThanOrEqual(before + 1 - visibleAfter);
+    expect(exitLayer.querySelectorAll('[data-card]')).toHaveLength(0);
+    at(700);
+    expect(exitLayer.querySelectorAll('g').length).toBe(0);
+  });
+
+  it('resolves a proposal chip when its commit lands, not before', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const chip = svg.querySelector(
+      `[data-card="${blockHash(T - 1)}"] [data-chip="${shortIdOf(w0)}|"]`
+    ) as SVGRectElement;
+    expect(chip).toHaveAttribute('data-state', 'committed');
+    expect(chip.style.getPropertyValue('fill')).toBe(chipPaint('waiting').fill);
+    at(t.contact + 20);
+    expect(chip.style.getPropertyValue('fill')).toBe(chipPaint('committed').fill);
+  });
+
+  it('shows the final state at once with reduced motion', () => {
+    stubMatchMedia(true);
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const card = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    expect(card).toHaveAttribute('data-slot', 'chain');
+    expect(card.getAttribute('transform')).toBe(`translate(${G.chainX0.toFixed(2)},0.00)`);
+    expect(svg.querySelector('[data-next]')).not.toBeNull();
+    expect(svg.querySelector('[data-layer="exit"]')?.childElementCount).toBe(0);
+    expect(svg.querySelector('[data-layer="fx"]')?.childElementCount).toBe(0);
+    const target = buildScene(s2, VIEW_W, 'settled').cards[0].squares.find((q) => q.id === w0);
+    const sq = card.querySelector(`[data-sq="${w0}"]`) as SVGRectElement;
+    expect(Number(sq.getAttribute('x'))).toBeCloseTo(target?.x as number, 1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

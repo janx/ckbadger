@@ -234,3 +234,119 @@ export function buildPipelineSnapshot(): PipelineSnapshot {
 }
 
 export const pipelineSnapshot: PipelineSnapshot = buildPipelineSnapshot();
+
+interface MineOptions {
+  /** Pool-proposed txs the new block commits (each must be inside its window). */
+  commit: string[];
+  /** Pending txs the new block proposes. */
+  propose: string[];
+}
+
+/**
+ * The snapshot after one more block on top of `s`, applying the same rules the backend uses:
+ * commits resolve their proposals, the old tip's early proposals start waiting, proposals whose
+ * window closed expire (their pool txs leave the pool), and `next` is re-predicted.
+ */
+export function mineNext(s: PipelineSnapshot, o: MineOptions): PipelineSnapshot {
+  const pool = s.pool;
+  if (!pool || !s.next) throw new Error('fixture: mineNext needs a pool');
+  const n = s.tip.number + 1;
+  const far = s.consensus.proposalWindowFarthest;
+  const close = s.consensus.proposalWindowClosest;
+  const blocks = s.blocks.map((b) => ({ ...b, proposals: b.proposals.map((p) => ({ ...p })) }));
+  const byNumber = new Map(blocks.map((b) => [b.number, b]));
+  const proposed = new Map(pool.proposed.map((t) => [t.hash, t]));
+  const pending = new Map(pool.pending.map((t) => [t.hash, t]));
+
+  const txs: PipelineTx[] = o.commit.map((hash) => {
+    const t = proposed.get(hash);
+    if (!t?.proposedIn) throw new Error(`fixture: ${hash} is not proposed`);
+    const p = t.proposedIn.block;
+    if (n - p < close || n - p > far) throw new Error(`fixture: ${hash} cannot commit in #${n}`);
+    const proposal = byNumber
+      .get(p)
+      ?.proposals.find((q) => q.txHash === hash && q.uncleIndex === t.proposedIn?.uncleIndex);
+    if (!proposal) throw new Error(`fixture: no proposal for ${hash} in #${p}`);
+    proposal.state = 'committed';
+    proposal.committedBlock = n;
+    proposed.delete(hash);
+    return {
+      hash,
+      size: t.size,
+      fee: t.fee,
+      feeRate: t.feeRate,
+      cycles: t.cycles,
+      cyclesStatus: 'done',
+      proposedIn: t.proposedIn,
+    };
+  });
+  for (const b of blocks) {
+    for (const p of b.proposals) {
+      if (p.state === 'early') p.state = 'waiting';
+      if (p.state === 'waiting' && b.number + far <= n) {
+        p.state = 'expired';
+        if (p.txHash) proposed.delete(p.txHash);
+      }
+    }
+  }
+  const own: PipelineProposal[] = o.propose.map((hash) => {
+    const t = pending.get(hash);
+    if (!t) throw new Error(`fixture: ${hash} is not pending`);
+    pending.delete(hash);
+    proposed.set(hash, { ...t, proposedIn: { block: n, uncleIndex: null } });
+    return {
+      shortId: shortIdOf(hash),
+      uncleIndex: null,
+      state: 'early',
+      txHash: hash,
+      committedBlock: null,
+    };
+  });
+  const sorted = txs.slice().sort((a, b) => b.size - a.size);
+  const mined: PipelineBlock = {
+    number: n,
+    hash: blockHash(n),
+    parentHash: s.tip.hash,
+    timestamp: new Date(FIXTURE_NOW + (n - T) * 8000).toISOString(),
+    txCount: 1 + sorted.length,
+    bytes: CELLBASE_SIZE + sorted.reduce((sum, t) => sum + t.size, 0),
+    cycles: sorted.reduce((sum, t) => sum + (t.cycles as number), 0),
+    cyclesPending: false,
+    proposals: own,
+    uncles: [],
+    txs: sorted,
+    omittedTxs: 0,
+    cellbase: {
+      hash: cellbaseHash(n),
+      size: CELLBASE_SIZE,
+      pays: { number: n - 11, hash: blockHash(n - 11) },
+    },
+  };
+  const nextBlocks = [mined, ...blocks.slice(0, blocks.length - 1)];
+  const pendingList = [...pending.values()];
+  const proposedList = [...proposed.values()];
+  const committable = proposedList
+    .filter((t) => {
+      const p = (t.proposedIn as NonNullable<PipelinePoolTx['proposedIn']>).block;
+      return p >= n - (far - 1) && p <= n - (close - 1);
+    })
+    .sort((a, b) => Number(b.feeRate) - Number(a.feeRate) || a.arrivedAt - b.arrivedAt);
+  return {
+    ...s,
+    tip: { number: n, hash: mined.hash },
+    poolTip: { number: n, hash: mined.hash },
+    blocks: nextBlocks,
+    pool: {
+      pending: pendingList,
+      proposed: proposedList,
+      pendingTotal: pendingList.length,
+      proposedTotal: proposedList.length,
+    },
+    next: {
+      txHashes: committable.map((t) => t.hash),
+      bytes: committable.reduce((sum, t) => sum + t.size, 0),
+      cycles: committable.reduce((sum, t) => sum + t.cycles, 0),
+      proposals: Math.min(pendingList.length, s.consensus.maxBlockProposals),
+    },
+  };
+}
