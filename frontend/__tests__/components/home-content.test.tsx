@@ -10,8 +10,8 @@ vi.mock('@/components/home-charts', () => ({
 }));
 vi.mock('@/components/mini-stats-cards', () => ({ MiniStatsCards: () => null }));
 vi.mock('@/components/chain-wave/epoch-progress', () => ({ EpochProgress: () => null }));
-vi.mock('@/components/chain-wave/pipeline-preview', () => ({
-  PipelinePreview: () => <div data-testid="pipeline-preview" />,
+vi.mock('@/components/pipeline/pipeline-panel', () => ({
+  PipelinePanel: () => <div data-testid="pipeline-panel" />,
 }));
 vi.mock('@/components/dao-overview', () => ({ DaoOverview: () => null }));
 vi.mock('@/components/home-layer2', () => ({ KnowledgeSizeTrend: () => null }));
@@ -71,7 +71,7 @@ describe('HomeContent layout', () => {
 
   it('renders the transaction pipeline as a full-width sibling of the container rows', () => {
     const main = renderHome();
-    const pipeline = screen.getByTestId('pipeline-preview');
+    const pipeline = screen.getByTestId('pipeline-panel');
 
     expect(main).toContainElement(pipeline);
     expect(pipeline.closest('.container')).toBeNull();
