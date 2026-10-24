@@ -19,11 +19,16 @@ export function useFreshKeys(keys: string[] | null, holdMs = 2000): Set<string> 
     previous.current = new Set(current);
     if (before === null) return;
     const added = current.filter((k) => !before.has(k));
-    if (added.length === 0) return;
-    setFresh(new Set(added));
+    if (added.length > 0) setFresh(new Set(added));
+  }, [joined]);
+
+  // The hold runs from when a set of keys became fresh. It lives apart from the list diff, so a
+  // later change that adds nothing (a poll reordering the list) cannot cancel it.
+  useEffect(() => {
+    if (fresh.size === 0) return;
     const timer = setTimeout(() => setFresh(new Set()), holdMs);
     return () => clearTimeout(timer);
-  }, [joined, holdMs]);
+  }, [fresh, holdMs]);
 
   return fresh;
 }
