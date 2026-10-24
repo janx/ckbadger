@@ -1410,7 +1410,13 @@ impl Check for ExplorerTotalDeposit {
     }
 }
 
-/// X3: Compare /charts/hash-rate vs explorer avg_hash_rate (tolerance-based).
+/// The explorer's daily `avg_hash_rate` is hashes per millisecond (it divides
+/// the day's difficulty sum by its block-time sum in ms); `/charts/hash-rate`
+/// serves hashes per second.
+const EXPLORER_HASH_RATE_MS_PER_S: f64 = 1000.0;
+
+/// X3: Compare /charts/hash-rate (H/s) vs explorer avg_hash_rate (H/ms),
+/// tolerance-based, in H/s.
 pub struct ExplorerHashRate;
 
 impl Check for ExplorerHashRate {
@@ -1440,13 +1446,28 @@ impl Check for ExplorerHashRate {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                let ours: f64 = our_val.parse::<f64>().unwrap_or(0.0);
-                if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", 0.02)
-                {
+                checked += 1;
+                let (Ok(ours), Ok(theirs_per_ms)) =
+                    (our_val.parse::<f64>(), explorer_val.parse::<f64>())
+                else {
+                    findings.push(Finding {
+                        entity: date.clone(),
+                        details: vec![format!(
+                            "avg_hash_rate: unparseable value, ours='{our_val}', explorer='{explorer_val}'"
+                        )],
+                    });
+                    progress.inc(1);
+                    continue;
+                };
+                if let Some(f) = compare_tolerance_f64_values(
+                    ours,
+                    theirs_per_ms * EXPLORER_HASH_RATE_MS_PER_S,
+                    date,
+                    "avg_hash_rate (H/s)",
+                    0.02,
+                ) {
                     findings.push(f);
                 }
-                checked += 1;
             }
             progress.inc(1);
         }
@@ -2857,6 +2878,85 @@ mod tests {
                 .to_string()
                 .contains("unsupported network for cell-count verification"),
             "unexpected error: {error}"
+        );
+    }
+
+    /// Serve `/charts/hash-rate` (ours) and the explorer's daily
+    /// `avg_hash_rate` for the two most recent complete days, then run X3.
+    fn run_hash_rate_check(our_values: [&str; 2], explorer_values: [&str; 2]) -> CheckResult {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let dates = last_30_days();
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/hash-rate"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        { "date": dates[1], "value": our_values[0] },
+                        { "date": dates[0], "value": our_values[1] }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/avg_hash_rate"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        { "attributes": {
+                            "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[1]).to_string(),
+                            "avg_hash_rate": explorer_values[0]
+                        } },
+                        { "attributes": {
+                            "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[0]).to_string(),
+                            "avg_hash_rate": explorer_values[1]
+                        } }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+        });
+        ExplorerHashRate
+            .run(
+                &explorer_test_context(&server),
+                &ProgressReporter::new(None),
+            )
+            .unwrap()
+    }
+
+    /// Regression (STATS-012): our daily hash rate is H/s; the explorer's
+    /// `avg_hash_rate` is H/ms (92_949_601_742_978 for a ~93 PH/s day). X3 must
+    /// compare the same unit — the live mainnet values of 2026-10-21/22.
+    #[test]
+    fn hash_rate_check_compares_our_h_per_s_with_explorer_h_per_ms() {
+        let result = run_hash_rate_check(
+            ["92910713513358000", "92718383560638000"],
+            ["92949601742978.195255", "92754129821178.168946"],
+        );
+        assert!(result.passed(), "findings: {:?}", result.findings);
+        assert_eq!(result.items_checked, 2);
+
+        // The old daily value (H/ms) is 1000× below the explorer in H/s.
+        let stale_unit = run_hash_rate_check(
+            ["92910713514", "92718383561"],
+            ["92949601742978.195255", "92754129821178.168946"],
+        );
+        assert!(!stale_unit.passed(), "an H/ms value must not pass as H/s");
+    }
+
+    #[test]
+    fn hash_rate_check_reports_an_unparseable_value_of_ours() {
+        let result = run_hash_rate_check(
+            ["not-a-number", "92718383560638000"],
+            ["92949601742978.195255", "92754129821178.168946"],
+        );
+        assert!(!result.passed());
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.details.iter().any(|d| d.contains("not-a-number"))),
+            "findings: {:?}",
+            result.findings
         );
     }
 

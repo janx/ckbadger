@@ -260,15 +260,7 @@ pub(crate) fn occupied_capacity_shannons_i64(
 // DAO field extraction
 // ---------------------------------------------------------------------------
 
-pub(crate) fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
-    if dao.len() < 32 {
-        return None;
-    }
-    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
-    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
-    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
-    Some((c, s, u))
-}
+pub(crate) use ckbadger_common::dao::extract_dao_csu;
 
 pub(crate) fn extract_ar_i64_from_dao(dao: &[u8], block_number: i64) -> Result<i64> {
     let ar = DaoParser::extract_ar_from_dao_field(dao)

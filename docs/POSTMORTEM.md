@@ -3416,4 +3416,224 @@ against its documented default selection before calling a budget sufficient.
 
 ---
 
-_Last updated: 2026-09-25_
+## Category: Statistics & Charts
+
+### STATS-012: The daily hash-rate chart served H/ms under an H/s label
+
+**Date**: 2026-10-24
+
+**Symptom**: `/charts/hash-rate` gave `91751013574721` for 2026-10-23 — 91.8 T — while
+`/statistics/network` reported 93.91 PH/s and the tip difficulty (850 P) over the ~8.4 s block
+time is ~100 PH/s. Every point of the chart was 1000× low; the homepage and `/charts` pages
+labelled it "Hash Rate (H/s)".
+
+**Root Cause**: `calculate_daily_hash_rate` (`crates/api/src/routes/statistics.rs`) returned
+`difficulty_sum / block_time_sum_ms` — hashes per millisecond, the official explorer's API unit
+for `avg_hash_rate` (9.18e13 for the same day). The unit was chosen deliberately in March 2026
+("match CKB explorer convention") so verify's X3 could compare raw numbers; the 07-28 audit
+moved `/statistics/network` to true H/s and left the chart behind, so the two hash rates on one
+page differed by 1000×. A unit test named `..._uses_milliseconds` enshrined the H/ms value.
+
+**Fix**: divide the day's work by its mined span in seconds — the same form as the window
+estimator `estimate_hash_rate_from_window`. Verify's X3 now converts the explorer's H/ms with a
+named constant before comparing, and reports an unparseable value instead of reading it as 0.
+No consumer compensated for the old unit: the frontend charts plot the value as H/s.
+
+**Why the tests missed it**: the unit tests pinned H/ms (`100 H/ms`, `73_466_099_633.87`), and X3
+compared like with like on the explorer's unit, so every check agreed with the wrong label.
+Regressions: `test_calculate_daily_hash_rate_is_hashes_per_second`,
+`hash_rate_check_compares_our_h_per_s_with_explorer_h_per_ms`.
+
+**Lesson**: Matching an external system's numbers is not the same as matching its unit. Convert
+at the comparison boundary (verify), never in the served value, and pin the unit in the test
+name.
+
+**Files**: `crates/api/src/routes/statistics.rs`, `crates/api/tests/api_statistics.rs`,
+`crates/indexer/src/verify/explorer.rs`
+
+---
+
+### STATS-013: Three definitions of "today", and three daily charts with none
+
+**Date**: 2026-10-24
+
+**Symptom**: On 2026-10-24 `/charts/average-block-time`, `/dao/charts/total-deposit` and
+`/stats/daily-activities` all ended with a point for 2026-10-24 — the partial current day — while
+`/charts/hash-rate` stopped at 10-23. The homepage's daily-change bars (DAO deposits, activity)
+therefore ended on a partial day, against the CLAUDE.md rule and STATS-003.
+
+**Root Cause**: Each daily handler decided for itself which day was incomplete. Hash rate,
+difficulty and uncle rate dropped the maximum row date of their own series; knowledge size and its
+composition chart dropped the wall-clock UTC+8 date (`current_ckb_date_key`); the inflation chart
+dropped the sync-tip block's date; and average block time, total deposit and daily activities
+dropped nothing. The wall-clock rule was wrong on its own terms too: an indexer that lags the
+chain (catching up after a restart) still has the tip block's day only partly indexed after
+midnight, and that day was charted as complete.
+
+**Fix** (ab5932e4, superseded by STATS-014): one API helper, `utils/stats_day.rs`, that took the
+UTC+8 `block_date` of the indexed tip block as the in-progress day, treated every earlier day as
+complete, and treated a row dated after the tip day as corruption. The nine handlers named above
+used it and `current_ckb_date_key` was deleted. The commit and this entry first said "every daily
+chart"; that was not true — transaction-count, cell-count, capacity-turnover-ratio and three DAO
+charts still had no rule (STATS-014). The tip-day rule itself was also wrong: see STATS-014.
+
+**Why the tests missed it**: no fixture seeded a tip block next to its daily rows, so "the last row
+is today" was the only shape any test knew, and the three violators had no test that put a tip day
+in the data at all. Regressions: `test_average_block_time_chart_excludes_the_in_progress_tip_day`,
+`test_total_deposit_chart_excludes_the_in_progress_tip_day`,
+`test_daily_activities_exclude_the_in_progress_tip_day`,
+`test_knowledge_size_chart_excludes_a_lagging_tip_day`,
+`test_knowledge_composition_chart_excludes_a_lagging_tip_day`.
+
+**Lesson**: A rule every chart must follow needs one function every chart calls; copies drift
+into different rules, and an endpoint written later copies none of them. "Complete" is a fact
+about the indexed chain, not the clock.
+
+**Files**: `crates/api/src/utils/stats_day.rs` (now `stats_bucket.rs`),
+`crates/api/src/routes/{statistics,dao}.rs`, `crates/api/tests/{api_charts,api_dao,api_statistics}.rs`,
+`crates/api/tests/common/mod.rs`
+
+---
+
+### STATS-014: A legal backward timestamp served as corruption, and two definitions of "complete"
+
+**Date**: 2026-10-24
+
+**Symptom**: Found in review, not yet seen live. Take a tip block dated 23:59:58 (UTC+8) on day D
+whose parent is dated 00:00:02 on D+1. Every daily chart and `/statistics/tx-stats` would answer
+500 ("a row … after the indexed tip block's day … no block can be dated after the tip") until a
+later-dated block arrived. A reviewer scanned ~900k mainnet headers and found no backward step, but
+the chain allows one. Separately, six daily charts — `/charts/transaction-count`,
+`/charts/cell-count`, `/charts/capacity-turnover-ratio`, `/dao/charts/daily-deposit`,
+`/daily-depositors` and `/circulation-ratio` — still charted the partial current day, because
+STATS-013 never reached them.
+
+**Root Cause**: STATS-013 assumed "the tip is the newest-dated block". CKB only requires a block's
+timestamp to exceed the median time of the 37 blocks before it. A block may therefore be dated
+before its parent (`reorg_ops.rs` already relied on this for DAO snapshots). The tip-day rule
+called that legal state corruption. It also called a day complete too early: a tip at 00:00:30
+does not stop the next block from being dated 23:59:59 the day before while the median time is
+still before midnight. Meanwhile the bulk indexer already sealed activity buckets on the
+median-time watermark (`bulk_build/mod.rs`), so the API and the indexer held two different
+definitions of "complete".
+
+**Fix**: one definition for both crates, `ckbadger_common::stats_bucket`: a bucket (an hour or a
+UTC+8 day) is complete when its end is at or below the median time of the newest 37 indexed blocks
+(`median_time_ms`, `is_bucket_complete`).
+
+- The bulk sealer calls it unchanged (44dea317, a move).
+- The API reads the window once per request (`utils::stats_bucket::ChainTime`, which fails on a gap
+  in the window) and judges every daily handler with it: the nine of STATS-013 plus the six above.
+- A row dated after the tip's day is in progress, not an error. Rows in a store without blocks, a
+  tip hour or day with no bucket, and malformed keys stay errors.
+- `/statistics/tx-stats` drops the positional "the last bucket is in progress" contract: each point
+  carries `complete: bool`, because more than one trailing bucket can be in progress.
+- The inflation chart's cache is keyed by the last complete day.
+- `total-supply` and `secondary-issuance` still include the current day on purpose (verify S16).
+
+**Why the tests missed it**: every fixture had monotonic timestamps and a lone tip header, so "tip
+day = newest day" held in all of them; one test even pinned the 500. Regressions:
+`test_daily_chart_serves_a_tip_dated_before_its_parent_across_midnight`,
+`test_daily_chart_waits_for_the_median_time_to_pass_midnight`,
+`test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour`,
+`test_tx_stats_marks_buckets_complete_by_median_time_across_midnight`,
+`test_average_block_time_chart_treats_a_row_after_the_tip_day_as_in_progress`,
+`test_transaction_and_cell_daily_charts_exclude_in_progress_days`,
+`test_dao_daily_charts_exclude_in_progress_days`.
+
+**Lesson**: Derive "can this still change?" from the consensus rule that bounds it, not from the
+usual order of the data. Before adding a definition, look for one that already exists — here the
+indexer had the right one. A claim like "every chart" needs a grep, not memory.
+
+**Files**: `crates/common/src/stats_bucket.rs`, `crates/indexer/src/sync/bulk_build/mod.rs`,
+`crates/api/src/utils/stats_bucket.rs`, `crates/api/src/routes/{statistics,dao}.rs`,
+`crates/api/tests/{api_charts,api_dao,api_statistics}.rs`, `crates/api/tests/common/mod.rs`
+
+---
+
+### STATS-015: The CKBytes bar counted the DAO cells' occupied capacity twice
+
+**Date**: 2026-10-24
+
+**Symptom**: The homepage bar split circulation into Knowledge, Nervos DAO and Free, but its parts
+summed to more than 100%. Measured against the node at block 20,820,367: 22,375 live DAO cells
+occupy 2,285,438 CKB. That amount was inside Knowledge and inside the DAO segment, so Free was
+understated by the same amount.
+
+**Root Cause**: Knowledge is `U − virtual_occupied`, the occupied capacity of every live cell —
+DAO cells included. The DAO segment used `totalDeposited`, the full capacity of phase-0 deposits.
+No figure for the DAO cells' free capacity existed, so the frontend subtracted two overlapping
+quantities from circulation.
+
+**Fix**: the indexer's tip-scoped DAO aggregate (`DaoLatestStatistics`, domain store, rewritten
+on every batch commit, every rollback and at startup) now carries:
+
+- `dao_capacity`: the capacity of every live DAO cell;
+- `dao_free_capacity`: Σ(capacity − exact occupied) over those cells, using the request cell's own
+  occupied capacity for phase-1 cells.
+
+It is computed in the existing per-commit scan, and a phase-1 entry without its request occupied
+capacity is an error. `GET /statistics/ckbytes-allocation` reads `circulating = C − burnt − S`
+and `knowledge = U − virtual_occupied` from the header of the block that aggregate was computed
+at. So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
+negative `free` is a 500. Phase-1 cells are in the segment: they remain DAO-typed and locked
+until phase 2, and their occupied part is in `U` like any live cell's. `free` also holds the
+block rewards and fees of the last 11 blocks: they are issued in `C` but not yet paid into a
+cell. No re-sync; the indexer's startup refresh writes the new layout.
+
+**Why the tests missed it**: nothing compared the bar's parts with the whole. Regressions:
+`test_refresh_dao_statistics_sums_free_capacity_of_live_dao_cells`,
+`test_ckbytes_allocation_partitions_circulation_at_one_block`,
+`test_ckbytes_allocation_fails_fast_when_the_parts_exceed_circulation`.
+
+**Lesson**: Before stacking quantities into a bar, write each one as a sum over cells. Two
+quantities that both sum over the same cells cannot sit side by side.
+
+**Files**: `crates/ckbadger-store/src/types.rs`, `crates/indexer/src/db/writer/statistics.rs`,
+`crates/api/src/routes/statistics.rs`, `crates/api/src/utils/supply.rs`,
+`crates/api/tests/api_statistics.rs`
+
+---
+
+### API-020: Exact integers handed to a reader that parses doubles
+
+**Date**: 2026-10-24
+
+**Symptom**: Found in review by the frontend lane, not yet seen in a live value. Activity responses
+carried DAO protocol-action `capacity` and `compensation`, and a decoded Fiber commitment lock's
+`delayEpoch` and `version`, as JSON numbers. A browser parses every JSON number as an IEEE double,
+so any value above 2^53 was rounded before the frontend saw it. That means a DAO cell over
+~90,071,992 CKB, or a relative-epoch `since` with its flag bits set (`0xa001000000000006`, which
+every real commitment lock carries).
+
+**Root Cause**: Typed response fields carry amounts as strings, but the two free-form JSON values
+the API passes through did not:
+
+- `protocolActions[].metadata`, stored by the indexer's detectors;
+- `lockCalls[].decoded`, decoded per request.
+
+Fiber and UTXOSwap metadata already wrote amounts as strings. The DAO builder and the commitment
+decoder wrote numbers. Rust and serde_json kept them exact, so no Rust test could see the loss.
+
+**Fix**: `utils::exact_json::integers_as_strings`, one function at the response boundary.
+`convert_protocol_action` and `convert_lock_call` both call it. Every integer in those two values
+leaves as its exact decimal string, whatever its size, so a field's type never depends on its value.
+A non-integer number is an error naming its JSON path. Stored metadata is unchanged; no re-sync.
+This covers `/addresses/{addr}/activities`, `/activities`, `/activities/latest` and the WebSocket
+activity broadcast.
+
+**Why the tests missed it**: the loss happens in the JavaScript parser. Every Rust assertion
+compared serde_json numbers, which are exact. One test even pinned `vaultCount: 2` as a number.
+Regression: `test_activity_free_form_json_carries_integers_as_exact_strings` (2^53 + 1 shannons
+and a flagged `since`).
+
+**Lesson**: A JSON contract read by JavaScript has two number types: safe integers and everything
+else. Any integer that comes from chain data must be a string, and that should be enforced in one
+place at the boundary, not remembered per field.
+
+**Files**: `crates/api/src/utils/exact_json.rs`, `crates/api/src/routes/activities.rs`,
+`crates/api/tests/api_activities.rs`
+
+---
+
+_Last updated: 2026-10-24_

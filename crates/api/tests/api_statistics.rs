@@ -335,7 +335,8 @@ async fn test_tx_stats_reads_from_derived_store() {
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_block_header(
-        100,
+        // The only block: the whole median-time window.
+        0,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
             parent_hash: vec![0u8; 32],
@@ -948,6 +949,8 @@ async fn test_daily_block_charts_read_from_derived_store() {
             )
             .unwrap();
     }
+    // 2026-01-02 holds the indexed tip block: in progress, not charted.
+    seed_tip_block_on_utc8_day(&core_store, 220, "2026-01-02");
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -1209,8 +1212,9 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         .unwrap()
         .timestamp_millis();
     let mut batch = StoreBatch::new(core_store.as_ref());
+    // The only block: the whole median-time window, at noon of the tip day.
     batch.put_block_header(
-        1,
+        0,
         &CachedBlockHeader {
             hash: vec![0x55; 32],
             parent_hash: vec![0x44; 32],
@@ -1312,11 +1316,16 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
         .unwrap()
         .timestamp_millis();
     let mut batch = StoreBatch::new(core_store.as_ref());
-    for (number, timestamp) in [
+    // Genesis, the first mined block, then a full 37-block median-time window
+    // ending at the tip (one second apart), so the median time sits on the tip
+    // day. With only three blocks the median would be 2020-05-22 and, by CKB's
+    // median-time rule, no later day could be complete.
+    let mut headers = vec![
         (0, 1_589_276_230_000), // testnet genesis: 2020-05-12 17:37:10 UTC+8
         (1, 1_590_137_711_584), // first mined block: 2020-05-22 16:55:11.584 UTC+8
-        (2, tip_timestamp),
-    ] {
+    ];
+    headers.extend((2..=38).map(|n| (n, tip_timestamp - (38 - n) * 1_000)));
+    for (number, timestamp) in headers {
         batch.put_block_header(
             number,
             &CachedBlockHeader {
@@ -1997,7 +2006,8 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_block_header(
-        100,
+        // The only block: the whole median-time window.
+        0,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
             parent_hash: vec![0u8; 32],
@@ -2073,6 +2083,246 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
         json["currentDay"], 456,
         "currentDay must be today's natural-day bucket, not a rolling hourly sum"
     );
+}
+
+fn seed_tx_stats_buckets(store: &CkbadgerStore, hours: &[(&str, i32)], days: &[(&str, i32)]) {
+    for &(start, txs) in hours {
+        let hour = utc_ms(start) / 1000;
+        store
+            .put_hourly_stats(
+                &chrono::DateTime::from_timestamp(hour, 0)
+                    .unwrap()
+                    .format("%Y%m%d%H")
+                    .to_string(),
+                &HourlyStats {
+                    hour,
+                    blocks_count: 1,
+                    transactions_count: txs,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    for &(date, txs) in days {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 1,
+                    transactions_count: txs,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+}
+
+/// The `/statistics/tx-stats` contract (see `TxStatsResponse`): every bucket
+/// says whether it is `complete`, by CKB's median-time rule — never by its
+/// position. Regression (STATS-014): the tip (14:59:58Z) follows a parent
+/// dated 15:00:02Z, which is legal; the 15:00 bucket used to 500 the endpoint
+/// as "after the tip". The median time is the tip's 14:59:58, so the 14:00
+/// and 15:00 hours and the 10-23 day (UTC+8) are all still in progress.
+#[tokio::test]
+async fn test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour() {
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T14:59:50Z")),
+            (1, utc_ms("2026-10-23T15:00:02Z")),
+            (2, utc_ms("2026-10-23T14:59:58Z")),
+        ],
+    );
+    seed_tx_stats_buckets(
+        &store,
+        &[
+            ("2026-10-23T13:00:00Z", 710),
+            ("2026-10-23T14:00:00Z", 720),
+            ("2026-10-23T15:00:00Z", 2),
+        ],
+        &[("20261022", 16_000), ("20261023", 17_000)],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/tx-stats").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "currentHour": 2,
+            "currentDay": 17000,
+            "hourlyData": [
+                { "label": "13:00", "value": 710, "complete": true },
+                { "label": "14:00", "value": 720, "complete": false },
+                { "label": "15:00", "value": 2, "complete": false }
+            ],
+            "dailyData": [
+                { "label": "10/22", "value": 16000, "complete": true },
+                { "label": "10/23", "value": 17000, "complete": false }
+            ]
+        })
+    );
+}
+
+/// The same across midnight UTC+8: the tip (23:59:58 on 10-23) follows a
+/// parent dated 00:00:02 on 10-24, so the newest hour and day buckets are not
+/// the tip's, and both of the newest days are in progress.
+#[tokio::test]
+async fn test_tx_stats_marks_buckets_complete_by_median_time_across_midnight() {
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T15:59:50Z")),
+            (1, utc_ms("2026-10-23T16:00:02Z")),
+            (2, utc_ms("2026-10-23T15:59:58Z")),
+        ],
+    );
+    seed_tx_stats_buckets(
+        &store,
+        &[
+            ("2026-10-23T14:00:00Z", 720),
+            ("2026-10-23T15:00:00Z", 700),
+            ("2026-10-23T16:00:00Z", 3),
+        ],
+        &[("20261022", 16_000), ("20261023", 17_000), ("20261024", 3)],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/tx-stats").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "currentHour": 3,
+            "currentDay": 3,
+            "hourlyData": [
+                { "label": "14:00", "value": 720, "complete": true },
+                { "label": "15:00", "value": 700, "complete": false },
+                { "label": "16:00", "value": 3, "complete": false }
+            ],
+            "dailyData": [
+                { "label": "10/22", "value": 16000, "complete": true },
+                { "label": "10/23", "value": 17000, "complete": false },
+                { "label": "10/24", "value": 3, "complete": false }
+            ]
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Daily charts stop at the day before the indexed tip block's day (STATS-013)
+// ---------------------------------------------------------------------------
+
+/// Regression: `/stats/daily-activities` served the tip block's partial day
+/// as its last point (20261024 on the live stack), so the homepage's daily
+/// activity bars ended on a drop. `days=N` is the last N complete days.
+#[tokio::test]
+async fn test_daily_activities_exclude_the_in_progress_tip_day() {
+    let store = test_store();
+    for (date, transfers) in [("20240114", 30), ("20240115", 40), ("20240116", 5)] {
+        store
+            .put_daily_activity_stats(
+                date,
+                &ckbadger_store::types::DailyActivityStats {
+                    transfer_count: transfers,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let days: Vec<(&str, u64)> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["date"].as_str().unwrap(),
+                d["transferCount"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(days, vec![("20240114", 30), ("20240115", 40)], "{json}");
+
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=1").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json.as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(json[0]["date"], "20240115", "the last complete day: {json}");
+}
+
+fn knowledge_size_day(knowledge_size: i128) -> DailyStats {
+    DailyStats {
+        blocks_count: 1,
+        knowledge_size: Some(knowledge_size),
+        ..Default::default()
+    }
+}
+
+/// Regression: the knowledge-size chart judged "today" by the wall clock. An
+/// indexer that lags the chain — catching up after a restart — still has the
+/// tip block's day only partly indexed after midnight has passed, and that day
+/// was charted as complete. The reference is the indexed tip, not the clock.
+#[tokio::test]
+async fn test_knowledge_size_chart_excludes_a_lagging_tip_day() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    store
+        .put_daily_stats("20240115", &knowledge_size_day(100_000_000_000))
+        .unwrap();
+    store
+        .put_daily_stats("20240116", &knowledge_size_day(100_100_000_000))
+        .unwrap();
+    // The tip block is years before the wall-clock day.
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/knowledge-size").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let dates: Vec<&str> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["date"].as_str().unwrap())
+        .collect();
+    assert_eq!(dates, vec!["2024-01-15"], "{json}");
+}
+
+/// The composition chart shares the knowledge-size chart's day rule (both used
+/// the wall clock); a lagging tip day must be absent from both.
+#[tokio::test]
+async fn test_knowledge_composition_chart_excludes_a_lagging_tip_day() {
+    let store = test_store();
+    store
+        .put_daily_stats("20240115", &knowledge_size_day(100_000_000_000))
+        .unwrap();
+    store
+        .put_daily_stats("20240116", &knowledge_size_day(100_100_000_000))
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let state = test_app_state(test_config(store));
+    // No typed scripts: the whole knowledge size is plain transfer cells.
+    state.mem_cache.set(
+        ckbadger_api::warmup::CACHE_KEY_SCRIPTS_ALL,
+        &Vec::<(Vec<u8>, ckbadger_store::ScriptInfo)>::new(),
+        std::time::Duration::from_secs(60),
+    );
+    let app = router_from_state(state);
+
+    let (status, json) = get_json(&app, "/charts/common-knowledge-composition").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let dates: Vec<&str> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["date"].as_str().unwrap())
+        .collect();
+    assert_eq!(dates, vec!["2024-01-15"], "{json}");
 }
 
 // ---------------------------------------------------------------------------
@@ -2238,9 +2488,10 @@ async fn test_network_stats_fails_fast_when_knowledge_size_is_negative() {
 /// UTC+8, so its 598 blocks were mined in 67_712_964 ms, not 86_400_000 ms.
 /// The stored `DailyStats.block_time_sum_ms` is that exact span (it sums every
 /// `ts(b) − ts(b−1)` gap for blocks on the day), so the hash rate is
-/// `Σdifficulty / block_time_sum_ms` = 73_466_099_633.87 H/ms — matching the
-/// node and the official explorer. The full-day divisor returned
-/// 57_576_474_071 (−21.6%).
+/// `Σdifficulty / (block_time_sum_ms / 1000)` = 73_466_099_633_870 H/s — the
+/// official explorer's 73_466_099_633.87, which it serves in H/ms. The
+/// full-day divisor understated it by 21.6%, and the millisecond divisor
+/// served H/ms under an H/s label (STATS-012).
 ///
 /// `DailyStats` is the only place inter-block time is stored; `DailyBlockStats`
 /// supplies the difficulty and block count that form the numerator.
@@ -2291,6 +2542,7 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
             },
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&store, 1_298, "2019-11-17");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2310,7 +2562,7 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
         1,
         "the incomplete latest day is excluded: {json}"
     );
-    assert_eq!(data[0]["value"], "73466099634");
+    assert_eq!(data[0]["value"], "73466099633870");
 }
 
 /// Regression: testnet's genesis day contains only block 0. Block 1 was mined
@@ -2332,7 +2584,8 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
     for (date, block_count, block_time_sum_ms, block_time_count) in [
         ("20200512", 1, 0, 0),
         ("20200522", 2, 20_000, 2),
-        // Latest/incomplete date: present only so 20200522 is chart-eligible.
+        // The indexed tip block's (incomplete) day: present only so 20200522
+        // is chart-eligible.
         ("20200523", 1, 10_000, 1),
     ] {
         store
@@ -2357,6 +2610,15 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
             )
             .unwrap();
     }
+    // Blocks 1..=4 on 2020-05-23; the window with genesis has its median there,
+    // so 2020-05-22 is complete. (The tip helper would overwrite block 0.)
+    let tip_ms = utc_ms("2020-05-23T04:00:00Z");
+    seed_block_headers_at(
+        &store,
+        &(1..=4)
+            .map(|n| (n, tip_ms - (4 - n) * 1_000))
+            .collect::<Vec<_>>(),
+    );
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2373,7 +2635,8 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
         json["data"],
         serde_json::json!([{
             "date": "2020-05-22",
-            "value": "100",
+            // 2 blocks of difficulty 1_000_000 over a 20 s span.
+            "value": "100000",
             "value2": null
         }]),
         "the undefined genesis day must be absent without hiding later exact points: {json}"
@@ -2417,6 +2680,7 @@ async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
             },
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&store, 200, "2026-01-02");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2463,6 +2727,7 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
             },
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&store, 200, "2026-01-02");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2588,5 +2853,158 @@ async fn test_forks_recent_surfaces_persisted_shallow_reorg() {
     assert_eq!(
         json["deepFork"]["detected"], false,
         "a shallow reorg must not be reported as a deep fork"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CKBytes allocation: circulation split into exact, non-overlapping parts
+// ---------------------------------------------------------------------------
+
+fn dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {
+    let mut dao = vec![0u8; 32];
+    dao[0..8].copy_from_slice(&c.to_le_bytes());
+    dao[16..24].copy_from_slice(&s.to_le_bytes());
+    dao[24..32].copy_from_slice(&u.to_le_bytes());
+    dao
+}
+
+fn seed_dao_latest(
+    store: &CkbadgerStore,
+    tip_block_number: i64,
+    dao_capacity: i128,
+    dao_free: i128,
+) {
+    let latest = ckbadger_store::DaoLatestStatistics {
+        tip_block_number,
+        total_deposited: dao_capacity,
+        total_depositors: 1,
+        active_deposits: 1,
+        total_compensation_paid: 0,
+        unclaimed_compensation: 0,
+        average_deposit_days: "1 days".to_string(),
+        estimated_apc: "2.00".to_string(),
+        mining_reward: 0,
+        deposit_compensation: 0,
+        burnt: 0,
+        pending_withdrawal_capacity: 0,
+        dao_capacity,
+        dao_free_capacity: dao_free,
+    };
+    store
+        .put_stats_key(
+            &ckbadger_store::keys::encode_stats_key(
+                ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+                b"latest",
+            ),
+            &bincode::serialize(&latest).unwrap(),
+        )
+        .unwrap();
+}
+
+/// Seed blocks 10 and 11 (the sync tip) with different DAO fields; block 10
+/// carries mainnet-shaped C, S and U.
+fn seed_allocation_headers(store: &Arc<CkbadgerStore>) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut header = recent_block_header(10, 1_700_000_000_000);
+    header.dao = dao_field(
+        4_790_000_000_000_000_000,
+        30_000_000_000_000_000,
+        519_967_746_700_000_000,
+    );
+    batch.put_block_header(10, &header);
+    let mut later = recent_block_header(11, 1_700_000_010_000);
+    later.dao = dao_field(
+        4_790_000_001_000_000_000,
+        30_000_000_100_000_000,
+        519_967_746_800_000_000,
+    );
+    batch.put_block_header(11, &later);
+    batch.commit().unwrap();
+}
+
+/// BE-4: the homepage CKBytes bar must partition circulation exactly.
+/// Knowledge (`U − virtual_occupied`) already holds every live cell's occupied
+/// capacity — the DAO cells' included — so the DAO part is the DAO cells'
+/// FREE capacity, and Free is the rest. Every term is read at ONE block: the
+/// block the indexer computed the DAO aggregate at (10 here, while the tip is
+/// already 11), so the three parts always sum to the circulation they split.
+#[tokio::test]
+async fn test_ckbytes_allocation_partitions_circulation_at_one_block() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_allocation_headers(&store);
+    // 22,378 live DAO cells of 102 CKB occupied each.
+    seed_dao_latest(
+        &store,
+        10,
+        812_889_561_643_799_700,
+        812_889_561_643_799_700 - 22_378 * 102_00000000,
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "blockNumber": 10,
+            // C − genesis burnt − S
+            "circulating": "3920000000000000000",
+            // U − genesis virtual_occupied
+            "knowledge": "15967746700000000",
+            "daoFree": "812661306043799700",
+            // circulating − knowledge − daoFree
+            "free": "3091370947256200300",
+            "daoCapacity": "812889561643799700"
+        })
+    );
+}
+
+/// The parts can never exceed the whole: a DAO free capacity larger than
+/// what circulation leaves after Knowledge is corruption, not a zero Free.
+#[tokio::test]
+async fn test_ckbytes_allocation_fails_fast_when_the_parts_exceed_circulation() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_allocation_headers(&store);
+    seed_dao_latest(
+        &store,
+        10,
+        4_000_000_000_000_000_000,
+        3_910_000_000_000_000_000,
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("block 10")
+            && message.contains("3920000000000000000")
+            && message.contains("3910000000000000000"),
+        "error must name the block and the terms: {json}"
+    );
+}
+
+/// The DAO aggregate is indexer-written: absent before the first block it is
+/// `initializing`; absent at a synced tip it is a 500 (API-006 semantics).
+#[tokio::test]
+async fn test_ckbytes_allocation_needs_the_dao_aggregate() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let app = create_router(test_config(store.clone())).await;
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+
+    seed_allocation_headers(&store);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dao_latest_stats"),
+        "{json}"
     );
 }

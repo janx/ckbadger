@@ -528,6 +528,14 @@ pub struct DaoLatestStatistics {
     /// Capacity of status=1 cells (withdraw-request pending completion).
     #[serde(default)]
     pub pending_withdrawal_capacity: i128,
+    /// Capacity of every live NervosDAO cell: phase-0 deposits and phase-1
+    /// withdraw-request cells (`total_deposited + pending_withdrawal_capacity`).
+    pub dao_capacity: i128,
+    /// Free capacity of every live NervosDAO cell: `capacity − exact occupied
+    /// capacity` of each phase-0 deposit cell and each phase-1 request cell.
+    /// The occupied part is already inside the DAO header's `U`, so this is
+    /// the DAO share of circulation that `U` does not count.
+    pub dao_free_capacity: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

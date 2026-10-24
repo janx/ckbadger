@@ -1251,6 +1251,8 @@ impl BatchWriter {
 
         let mut total_deposited: i128 = 0;
         let mut pending_withdrawal_capacity: i128 = 0;
+        let mut dao_capacity: i128 = 0;
+        let mut dao_free_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
@@ -1260,8 +1262,34 @@ impl BatchWriter {
 
         for scan_status in [0i16, 1] {
             self.store
-                .scan_dao_deposits_by_status(scan_status, |_, entry| {
+                .scan_dao_deposits_by_status(scan_status, |outpoint, entry| {
                     active_deposits += 1;
+
+                    // The live DAO cell is the deposit (phase 0) or the
+                    // withdraw-request cell (phase 1), which keeps the
+                    // deposit's capacity but may carry another lock.
+                    let live_cell_occupied = match entry.status {
+                        0 => entry.occupied_capacity,
+                        _ => entry.withdraw_request_occupied_capacity.ok_or_else(|| {
+                            anyhow!(
+                                "phase-1 DAO entry has no withdraw_request_occupied_capacity: deposit_outpoint=0x{}, status={}",
+                                hex::encode(outpoint),
+                                entry.status
+                            )
+                        })?,
+                    };
+                    let free = entry.capacity.checked_sub(live_cell_occupied).filter(|free| *free >= 0)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "live DAO cell occupies more than its capacity: deposit_outpoint=0x{}, status={}, capacity={}, occupied={}",
+                                hex::encode(outpoint),
+                                entry.status,
+                                entry.capacity,
+                                live_cell_occupied
+                            )
+                        })?;
+                    dao_capacity += i128::from(entry.capacity);
+                    dao_free_capacity += i128::from(free);
 
                     // Status-specific accounting
                     if entry.status == 1 {
@@ -1367,6 +1395,8 @@ impl BatchWriter {
             deposit_compensation,
             burnt,
             pending_withdrawal_capacity,
+            dao_capacity,
+            dao_free_capacity,
         };
 
         // Batch all DAO stats writes atomically
@@ -2122,6 +2152,140 @@ mod tests {
             daily_depositor_addresses: 0,
             protocol_deposited: Some(202_00000000),
         }
+    }
+
+    /// A `DaoDepositCacheEntry` in `status` with the given capacities; phase-1
+    /// and phase-2 entries carry the request cell's exact occupied capacity.
+    fn dao_free_test_entry(
+        capacity: i64,
+        occupied_capacity: i64,
+        status: i16,
+        withdraw_request_occupied_capacity: Option<i64>,
+    ) -> DaoDepositCacheEntry {
+        DaoDepositCacheEntry {
+            capacity,
+            occupied_capacity,
+            deposit_block_number: 50,
+            deposit_timestamp: 1_700_000_000_000 - 86_400_000,
+            lock_script_hash: vec![status as u8 + 1; 32],
+            deposit_ar: 2,
+            status,
+            withdraw_request_tx: (status >= 1).then(|| vec![0x03; 32]),
+            withdraw_request_output_index: (status >= 1).then_some(0),
+            withdraw_request_block: (status >= 1).then_some(80),
+            withdraw_request_ar: (status >= 1).then_some(2),
+            withdraw_block: (status == 2).then_some(90),
+            withdraw_tx: (status == 2).then(|| vec![0x05; 32]),
+            withdraw_request_occupied_capacity,
+            withdraw_to_output_index: (status == 2).then_some(0),
+            compensation: (status == 2).then_some(0),
+        }
+    }
+
+    /// Seed a tip (block 100, AR 2) plus the block-80 request header and the
+    /// tip-day DAO snapshot the refresh requires, then the given entries.
+    fn seed_dao_free_fixture(store: &Arc<CkbadgerStore>, entries: &[DaoDepositCacheEntry]) {
+        let header = |hash: u8, timestamp: i64| {
+            let mut dao = vec![0u8; 32];
+            dao[8..16].copy_from_slice(&2u64.to_le_bytes());
+            CachedBlockHeader {
+                hash: vec![hash; 32],
+                parent_hash: vec![0u8; 32],
+                timestamp,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 100,
+                dao,
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            }
+        };
+        let mut seed = StoreBatch::new(store);
+        seed.put_block_header(100, &header(0x11, 1_700_000_000_000));
+        seed.put_block_header(80, &header(0x22, 1_700_000_000_000 - 3_600_000));
+        for (i, entry) in entries.iter().enumerate() {
+            seed.put_dao_deposit(&keys::encode_outpoint(&[0xA0 + i as u8; 32], 0), entry);
+        }
+        let snapshot = DaoDailySnapshot {
+            date: "2023-11-15".to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance: 9_000_000_000i128 * 100_000_000i128,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
+            cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
+            protocol_deposited: None,
+        };
+        seed.put_stats(
+            &keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20231115"),
+            &bincode::serialize(&snapshot).unwrap(),
+        );
+        seed.commit().unwrap();
+    }
+
+    /// The homepage partitions circulation into Knowledge (which already holds
+    /// every live cell's occupied capacity, DAO cells included), the DAO cells'
+    /// FREE capacity, and the rest. The DAO term is exact per live cell: a
+    /// phase-0 deposit counts against its own occupied capacity, a phase-1
+    /// withdraw request against the REQUEST cell's (it may carry another lock:
+    /// here 115 CKB at deposit, 102 CKB once requested). Claimed deposits have
+    /// no live DAO cell left.
+    #[test]
+    fn test_refresh_dao_statistics_sums_free_capacity_of_live_dao_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        seed_dao_free_fixture(
+            &store,
+            &[
+                dao_free_test_entry(200_00000000, 102_00000000, 0, None),
+                dao_free_test_entry(300_00000000, 115_00000000, 1, Some(102_00000000)),
+                dao_free_test_entry(150_00000000, 102_00000000, 2, Some(102_00000000)),
+            ],
+        );
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        writer.refresh_latest_dao_statistics().unwrap();
+        let latest = store.get_latest_dao_statistics().unwrap().unwrap();
+
+        // (200 − 102) + (300 − 102) CKB.
+        assert_eq!(latest.dao_free_capacity, 296_00000000);
+        // Every live DAO cell's capacity, both phases.
+        assert_eq!(latest.dao_capacity, 500_00000000);
+    }
+
+    /// A phase-1 entry without its request cell's occupied capacity cannot be
+    /// split into occupied and free: the refresh fails naming the cell.
+    #[test]
+    fn test_refresh_dao_statistics_fails_without_request_occupied_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        seed_dao_free_fixture(
+            &store,
+            &[dao_free_test_entry(300_00000000, 102_00000000, 1, None)],
+        );
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let err = writer
+            .refresh_latest_dao_statistics()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("withdraw_request_occupied_capacity"), "{err}");
     }
 
     #[test]

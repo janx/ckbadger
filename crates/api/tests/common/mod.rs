@@ -90,6 +90,63 @@ pub fn seed_genesis_baseline(store: &Arc<CkbadgerStore>) {
         .unwrap();
 }
 
+/// Seed the indexed tip block `number` at 12:00 UTC+8 on `utc8_date`
+/// (`YYYY-MM-DD`), preceded by the rest of its median-time window — the 36
+/// blocks before it (or every block down to genesis), one second apart. The
+/// median time is then a few seconds before noon of that day, so daily charts
+/// treat that day as in progress and every earlier day as complete
+/// (`ckbadger_common::stats_bucket`).
+pub fn seed_tip_block_on_utc8_day(store: &CkbadgerStore, number: i64, utc8_date: &str) {
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let timestamp = chrono::NaiveDate::parse_from_str(utc8_date, "%Y-%m-%d")
+        .unwrap()
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_local_timezone(utc8)
+        .single()
+        .unwrap()
+        .timestamp_millis();
+    let window = ckbadger_common::stats_bucket::MEDIAN_TIME_BLOCK_COUNT as i64;
+    let blocks: Vec<(i64, i64)> = ((number - (window - 1)).max(0)..=number)
+        .map(|n| (n, timestamp - (number - n) * 1_000))
+        .collect();
+    seed_block_headers_at(store, &blocks);
+}
+
+/// Seed block headers `(number, timestamp_ms)`. The newest 37 by number form
+/// the median-time window that decides which stats buckets are complete.
+pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
+    let mut batch = StoreBatch::new(store);
+    for &(number, timestamp) in blocks {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![(number % 251) as u8; 32],
+                parent_hash: vec![0u8; 32],
+                timestamp,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+}
+
+/// Milliseconds of an RFC 3339 instant (`2026-10-23T15:59:58Z`).
+pub fn utc_ms(rfc3339: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .unwrap()
+        .timestamp_millis()
+}
+
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());

@@ -3,6 +3,7 @@
 use crate::keys::{self, stats_prefix};
 use crate::store::CkbadgerStore;
 use crate::types::*;
+use ckbadger_common::dao::extract_dao_csu;
 
 use crate::bytes_to_hex;
 use anyhow::Context;
@@ -1519,16 +1520,6 @@ impl CkbadgerStore {
         batch.put_stats(&key, &bincode::serialize(&snapshot)?);
         Ok(())
     }
-}
-
-fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
-    if dao.len() < 32 {
-        return None;
-    }
-    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
-    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
-    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
-    Some((c, s, u))
 }
 
 fn extract_dao_ar(dao: &[u8]) -> Option<u64> {

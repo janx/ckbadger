@@ -174,6 +174,19 @@ pub fn calculate_miner_secondary_issuance(
     Ok(miner)
 }
 
+/// Extract `C` (total issuance), `S` (unissued secondary pool) and `U`
+/// (occupied capacity) from a 32-byte header DAO field (little-endian u64s;
+/// RFC-0023). `None` for a field shorter than 32 bytes.
+pub fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
+    if dao.len() < 32 {
+        return None;
+    }
+    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
+    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
+    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
+    Some((c, s, u))
+}
+
 /// Extract the S field (secondary pool) from a 32-byte DAO header as u64.
 pub fn extract_s_from_dao(dao: &[u8]) -> Option<u64> {
     if dao.len() < 24 {

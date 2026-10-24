@@ -10,6 +10,7 @@ pub mod hex;
 pub mod label_import;
 pub mod network;
 pub mod proposal;
+pub mod stats_bucket;
 pub mod sync;
 pub mod token;
 pub mod types;

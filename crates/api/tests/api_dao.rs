@@ -72,6 +72,8 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         deposit_compensation: 19_00000000,
         burnt: 23_00000000,
         pending_withdrawal_capacity: 5_00000000,
+        dao_capacity: 128_00000000,
+        dao_free_capacity: 26_00000000,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -175,6 +177,8 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         deposit_compensation: 0,
         burnt: 0,
         pending_withdrawal_capacity: 0,
+        dao_capacity: 0,
+        dao_free_capacity: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -280,6 +284,8 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
         deposit_compensation: 0,
         burnt: 0,
         pending_withdrawal_capacity: 0,
+        dao_capacity: 0,
+        dao_free_capacity: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -356,6 +362,8 @@ async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
     );
     let value = bincode::serialize(&snapshot).unwrap();
     store.put_cf(store.cf_stats_dao(), &key, &value).unwrap();
+    // The indexed tip is on the next day, so 2024-01-15 is complete.
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
 
     let second_request = Request::builder()
         .uri("/api/v1/dao/charts/total-deposit")
@@ -375,6 +383,107 @@ async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
     assert_eq!(second_data[0]["date"], "2024-01-15");
     assert_eq!(second_data[0]["value"], "123");
     assert_eq!(second_data[0]["value2"], "7");
+}
+
+fn total_deposit_snapshot(date: &str, total_deposited: i128, depositors: i64) -> DaoDailySnapshot {
+    DaoDailySnapshot {
+        date: date.to_string(),
+        total_deposited,
+        depositors_count: depositors,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: total_deposited,
+        total_issuance: 0,
+        secondary_pool: 0,
+        occupied_capacity: 0,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
+        cumulative_depositors: depositors,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    }
+}
+
+fn put_total_deposit_snapshot(store: &CkbadgerStore, snapshot: &DaoDailySnapshot) {
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        snapshot.date.replace('-', "").as_bytes(),
+    );
+    store
+        .put_cf(
+            store.cf_stats_dao(),
+            &key,
+            &bincode::serialize(snapshot).unwrap(),
+        )
+        .unwrap();
+}
+
+/// Regression (STATS-013): the snapshot of the indexed tip block's day is a
+/// running value, so the daily total-deposit chart must stop at the day before
+/// it — the homepage and the DAO card derive daily changes from consecutive
+/// points, and the last one was a partial day (2026-10-24 on the live stack).
+#[tokio::test]
+async fn test_total_deposit_chart_excludes_the_in_progress_tip_day() {
+    let store = test_store();
+    put_total_deposit_snapshot(
+        &store,
+        &total_deposit_snapshot("2024-01-15", 123_00000000, 7),
+    );
+    put_total_deposit_snapshot(
+        &store,
+        &total_deposit_snapshot("2024-01-16", 100_00000000, 8),
+    );
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/dao/charts/total-deposit").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"],
+        serde_json::json!([{ "date": "2024-01-15", "value": "123", "value2": "7" }]),
+        "the tip block's day is in progress and must not be charted: {json}"
+    );
+}
+
+/// Regression (STATS-014): the daily-deposit, daily-depositors and
+/// circulation-ratio charts charted the partial current day. They follow the
+/// same median-time rule as total-deposit now.
+#[tokio::test]
+async fn test_dao_daily_charts_exclude_in_progress_days() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    for (date, cumulative, deposits) in [
+        ("2024-01-15", 100_00000000, 1),
+        ("2024-01-16", 300_00000000, 3),
+    ] {
+        let mut snapshot = total_deposit_snapshot(date, cumulative, deposits);
+        snapshot.new_deposits = deposits;
+        snapshot.daily_depositor_addresses = deposits;
+        snapshot.total_issuance = 3_400_000_000_000_000_000;
+        put_total_deposit_snapshot(&store, &snapshot);
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        "/dao/charts/daily-deposit",
+        "/dao/charts/daily-depositors",
+        "/dao/charts/circulation-ratio",
+    ] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        let dates: Vec<&str> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| point["date"].as_str().unwrap())
+            .collect();
+        assert_eq!(dates, vec!["2024-01-15"], "{path}: {json}");
+    }
 }
 
 #[tokio::test]
@@ -1016,6 +1125,8 @@ async fn test_daily_deposit_chart_includes_first_snapshot_day() {
     let store = test_store();
     seed_dao_daily_snapshot(&store, "2019-11-16", 3_715_755_618_324_833, 33);
     seed_dao_daily_snapshot(&store, "2019-11-17", 3_815_755_618_324_833, 77);
+    // The indexed tip is on the next day, so both snapshot days are complete.
+    seed_tip_block_on_utc8_day(&store, 1_300, "2019-11-18");
 
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/dao/charts/daily-deposit").await;

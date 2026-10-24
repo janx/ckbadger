@@ -47,6 +47,8 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
             },
         )
         .unwrap();
+    // The indexed tip is on the next day, so 2024-01-15 is complete.
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
 
     let second_request = Request::builder()
         .uri("/api/v1/charts/average-block-time")
@@ -66,6 +68,92 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
     // Canonical chart date format, converted from the RocksDB day key.
     assert_eq!(second_data[0]["date"], "2024-01-15");
     assert_eq!(second_data[0]["value"], "12.00");
+}
+
+/// Regression (STATS-013): the indexed tip block's day is still in progress, so
+/// the daily average-block-time chart must stop at the day before it. It used
+/// to chart every row, including today's partial one (2026-10-24 on the live
+/// stack, beside a hash-rate chart that stopped at 10-23).
+#[tokio::test]
+async fn test_average_block_time_chart_excludes_the_in_progress_tip_day() {
+    let store = test_store();
+    for (date, sum_ms, count) in [
+        ("20240115", 86_400_000, 9_000),
+        ("20240116", 3_600_000, 300),
+    ] {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: count,
+                    block_time_sum_ms: sum_ms,
+                    block_time_count: count,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"],
+        serde_json::json!([{ "date": "2024-01-15", "value": "9.60", "value2": null }]),
+        "the tip block's day is in progress and must not be charted: {json}"
+    );
+}
+
+/// A row dated after the tip block's day is legal (a block may be dated before
+/// its parent): it is in progress and not charted — never a 500.
+#[tokio::test]
+async fn test_average_block_time_chart_treats_a_row_after_the_tip_day_as_in_progress() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240117",
+            &DailyStats {
+                blocks_count: 1,
+                block_time_sum_ms: 10_000,
+                block_time_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"], serde_json::json!([]), "{json}");
+}
+
+/// Daily rows are written together with the blocks they aggregate, so rows in
+/// a store without any block are corruption, reported instead of charted.
+#[tokio::test]
+async fn test_average_block_time_chart_fails_fast_on_rows_without_any_block() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240115",
+            &DailyStats {
+                blocks_count: 1,
+                block_time_sum_ms: 10_000,
+                block_time_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("2024-01-15") && message.contains("no indexed block"),
+        "error must name the row and the missing blocks: {json}"
+    );
 }
 
 #[tokio::test]
@@ -812,6 +900,8 @@ async fn test_date_keyed_charts_emit_canonical_iso_dates() {
             )
             .unwrap();
     }
+    // 2024-01-16 holds the indexed tip block: in progress, not charted.
+    seed_tip_block_on_utc8_day(&store, 200, "2024-01-16");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -838,5 +928,231 @@ async fn test_date_keyed_charts_emit_canonical_iso_dates() {
                 "uri={uri} must emit YYYY-MM-DD dates, got {date}"
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Uncle rate carries the chain's NC-Max orphan-rate target
+// ---------------------------------------------------------------------------
+
+/// Two complete days of uncle-rate data plus the tip block's day.
+fn seed_uncle_rate_days(store: &CkbadgerStore) {
+    for (date, uncles) in [("20240115", 250), ("20240116", 200)] {
+        store
+            .put_daily_block_stats(
+                date,
+                &DailyBlockStats {
+                    avg_difficulty: 1_000_000.0,
+                    block_count: 10_000,
+                    total_uncles: uncles,
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(store, 20_000, "2024-01-16");
+}
+
+/// The homepage draws the uncle-rate chart against the NC-Max orphan-rate
+/// target (RFC-0020), a consensus parameter: the response carries it from the
+/// node's `get_consensus` (mainnet `1/40` = 2.5%), next to the unchanged chart
+/// fields, and a cached response carries it too.
+#[tokio::test]
+async fn test_uncle_rate_chart_carries_the_orphan_rate_target() {
+    let store = test_store();
+    seed_uncle_rate_days(&store);
+    let app = create_router(test_config(store.clone())).await;
+
+    let (status, computed) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{computed}");
+    assert_eq!(
+        computed,
+        serde_json::json!({
+            "data": [{ "date": "2024-01-15", "value": "0.025000", "value2": null }],
+            "title": "Uncle Rate",
+            "yAxisLabel": "Uncle Rate",
+            "y2AxisLabel": null,
+            "orphanRateTarget": { "numerator": 1, "denominator": 40 }
+        })
+    );
+
+    // Change the stored day: a recomputed response would differ, so an
+    // identical one is the cached value — and it still carries the target.
+    store
+        .put_daily_block_stats(
+            "20240115",
+            &DailyBlockStats {
+                avg_difficulty: 1_000_000.0,
+                block_count: 10_000,
+                total_uncles: 1,
+            },
+        )
+        .unwrap();
+    let (status, cached) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{cached}");
+    assert_eq!(cached, computed);
+}
+
+/// The target is the node's, not a mainnet constant: a chain with another
+/// `orphan_rate_target` must see its own.
+#[tokio::test]
+async fn test_uncle_rate_target_comes_from_the_node_consensus() {
+    let store = test_store();
+    seed_uncle_rate_days(&store);
+    let server = MockServer::start().await;
+    let mut consensus = mainnet_get_consensus_result();
+    consensus["orphan_rate_target"] = serde_json::json!({ "denom": "0x14", "numer": "0x1" });
+    mount_consensus_rpc(&server, consensus).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    // Production wiring: nothing preloaded, the API asks the node.
+    config.consensus = None;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["orphanRateTarget"],
+        serde_json::json!({ "numerator": 1, "denominator": 20 }),
+        "{json}"
+    );
+}
+
+/// A node whose `get_consensus` lacks `orphan_rate_target` cannot be charted
+/// against its target: the request fails naming the field, with no fallback.
+#[tokio::test]
+async fn test_uncle_rate_chart_fails_without_an_orphan_rate_target() {
+    let store = test_store();
+    seed_uncle_rate_days(&store);
+    let server = MockServer::start().await;
+    let mut consensus = mainnet_get_consensus_result();
+    consensus
+        .as_object_mut()
+        .unwrap()
+        .remove("orphan_rate_target");
+    mount_consensus_rpc(&server, consensus).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    config.consensus = None;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(message.contains("orphan_rate_target"), "{json}");
+}
+
+// ---------------------------------------------------------------------------
+// Complete days follow CKB's median time, not the tip block's date
+// ---------------------------------------------------------------------------
+
+fn seed_block_time_days(store: &CkbadgerStore, dates: &[&str]) {
+    for date in dates {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 10,
+                    block_time_sum_ms: 100_000,
+                    block_time_count: 10,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+}
+
+fn charted_dates(json: &serde_json::Value) -> Vec<String> {
+    json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| point["date"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Regression (STATS-014): CKB only bounds a timestamp by the median time of
+/// the 37 blocks before it, so the tip (23:59:58 on 10-23, UTC+8) may follow a
+/// parent dated 00:00:02 on 10-24. That is a legal chain, not corruption: the
+/// 10-24 row must not 500 the chart. The median time is the tip's 23:59:58,
+/// so 10-23 and 10-24 are both still in progress and 10-22 is the last
+/// complete day.
+#[tokio::test]
+async fn test_daily_chart_serves_a_tip_dated_before_its_parent_across_midnight() {
+    let store = test_store();
+    seed_block_time_days(&store, &["20261022", "20261023", "20261024"]);
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T15:59:50Z")), // 23:59:50 UTC+8, 10-23
+            (1, utc_ms("2026-10-23T16:00:02Z")), // 00:00:02 UTC+8, 10-24
+            (2, utc_ms("2026-10-23T15:59:58Z")), // tip: 23:59:58, 10-23
+        ],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(charted_dates(&json), vec!["2026-10-22"], "{json}");
+}
+
+/// The tip block's date is not the reference either way: a tip at 00:00:30 on
+/// 10-24 does not complete 10-23 while the median time (23:59:55) is still
+/// before midnight — a later block may yet be dated 10-23.
+#[tokio::test]
+async fn test_daily_chart_waits_for_the_median_time_to_pass_midnight() {
+    let store = test_store();
+    seed_block_time_days(&store, &["20261022", "20261023", "20261024"]);
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T15:59:50Z")), // 23:59:50 UTC+8, 10-23
+            (1, utc_ms("2026-10-23T15:59:55Z")), // 23:59:55 UTC+8, 10-23
+            (2, utc_ms("2026-10-23T16:00:30Z")), // tip: 00:00:30, 10-24
+        ],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(charted_dates(&json), vec!["2026-10-22"], "{json}");
+}
+
+/// Regression (STATS-014): transaction-count, cell-count and
+/// capacity-turnover-ratio charted the partial current day — they had no
+/// completeness rule at all. Every daily chart stops at the last day the
+/// median-time rule calls complete.
+#[tokio::test]
+async fn test_transaction_and_cell_daily_charts_exclude_in_progress_days() {
+    let store = test_store();
+    for date in ["20240115", "20240116"] {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 10,
+                    transactions_count: 50,
+                    total_all_cells: 10,
+                    total_live_cells: 8,
+                    total_dead_cells: 2,
+                    knowledge_size: Some(100_000_000_000),
+                    used_capacity_consumed: 1_000,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        "/charts/transaction-count",
+        "/charts/cell-count",
+        "/charts/capacity-turnover-ratio",
+    ] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        assert_eq!(charted_dates(&json), vec!["2024-01-15"], "{path}: {json}");
     }
 }
