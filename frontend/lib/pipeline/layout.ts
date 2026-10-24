@@ -259,20 +259,49 @@ export interface WindowHit {
   xf: number;
 }
 
+/** Where the window's one line of text goes (drawn with text-anchor middle at `x`). */
+export interface WindowLabelGeom {
+  /** Centre of the text. */
+  x: number;
+  /** The label's room: the text plus `LABEL_PAD` on both sides. */
+  x0: number;
+  x1: number;
+  /** Between the ticks (the dimension line breaks around it), or outside, before the near tick. */
+  at: 'between' | 'outside';
+}
+
 export interface RulerGeom {
   ticks: number[];
-  labelX: number | null;
+  /** null when the label fits nowhere in view (the near tick itself is outside the view). */
+  label: WindowLabelGeom | null;
   hit: WindowHit | null;
   /** The window runs past the last card on screen; the dotted tail carries it on. */
   tailOpen: boolean;
 }
 
-/** Two ticks in the middle of the gaps at both ends of the window of H, and one word of label. */
+/** The room the dimension line leaves on each side of its label. */
+const LABEL_PAD = 6;
+
+/**
+ * The proposal window of H as a dimension line: a tick in the middle of the gap at each end of the
+ * window that is on screen (the far end is often past the last card), and where `label` goes.
+ *
+ * The label follows the drafting rule for dimension text, in this order:
+ * 1. Between the ticks, centred on the part of the window in view (from the near tick to the far
+ *    tick, or to the view edge when the far end is off screen), when the text and its padding fit
+ *    there. The dimension line breaks around it.
+ * 2. Otherwise outside the window, its padding ending at the near tick (the newer side, towards
+ *    NEXT). The dimension line is then drawn whole.
+ * 3. Otherwise no label: only when the near tick is itself outside the view.
+ * So the text is always fully inside [0, viewW] and never crosses a tick. The static render and the
+ * motion layer both draw the ticks, the line (`rulerPath`) and the label from this one result.
+ */
 export function windowRuler(
   slots: readonly RulerSlot[],
   H: number,
   w: WindowParams,
-  viewW: number
+  viewW: number,
+  text: string
 ): RulerGeom {
   const at = (num: number) => slots.find((s) => s.number === num) ?? null;
   const hc = at(H);
@@ -291,12 +320,22 @@ export function windowRuler(
     xf = q ? (far.x + far.w + q.x) / 2 : far.x + far.w + G.gap / 2;
     ticks.push(xf);
   }
+  let label: WindowLabelGeom | null = null;
+  if (xn !== null && xn >= 0 && xn <= viewW) {
+    const room = labelWidth(text) + 2 * LABEL_PAD;
+    const end = Math.min(xf ?? viewW, viewW);
+    if (room <= end - xn) {
+      const x = (xn + end) / 2;
+      label = { x, x0: x - room / 2, x1: x + room / 2, at: 'between' };
+    } else if (room <= xn) {
+      label = { x: xn - room / 2, x0: xn - room, x1: xn, at: 'outside' };
+    }
+  }
   const mined = slots.filter((s) => s.mined);
   const last = mined.length ? mined.reduce((a, b) => (b.x > a.x ? b : a)) : null;
   return {
     ticks,
-    // The label sits in the middle of the dimension line between the two ticks.
-    labelX: xn === null ? null : (xn + (xf ?? viewW)) / 2,
+    label,
     hit:
       xn === null
         ? null
@@ -306,18 +345,18 @@ export function windowRuler(
 }
 
 /**
- * The window as a dimension line: two ticks dropping onto the header row, joined by a line at
- * `winY` that the label sits on. One path, shared by the static render and the motion layer.
+ * The hovered window: the ticks rise from above the dimension line at `winY` onto the header row,
+ * and the line joins them, broken around a label that sits between them. One path, shared by the
+ * static render and the motion layer.
  */
-export function rulerPath(r: RulerGeom, label: string): string {
+export function rulerPath(r: RulerGeom): string {
   const f = (v: number) => v.toFixed(1);
   const ticks = r.ticks.map((x) => `M${f(x)} ${G.winY - 5}V${G.cardTop + G.headH}`).join('');
-  if (!r.hit || r.labelX === null) return ticks;
-  const half = labelWidth(label) / 2 + 6;
+  if (!r.hit) return ticks;
   const { xn, xf } = r.hit;
-  // The line breaks around the label; a label wider than the span leaves only the ticks.
-  if (r.labelX - half <= xn || r.labelX + half >= xf) return ticks;
-  return `${ticks}M${f(xn)} ${G.winY}H${f(r.labelX - half)}M${f(r.labelX + half)} ${G.winY}H${f(xf)}`;
+  const y = G.winY;
+  if (r.label?.at !== 'between') return `${ticks}M${f(xn)} ${y}H${f(xf)}`;
+  return `${ticks}M${f(xn)} ${y}H${f(r.label.x0)}M${f(r.label.x1)} ${y}H${f(xf)}`;
 }
 
 /**
@@ -333,10 +372,14 @@ export function labelWidth(text: string): number {
   return text.length * 6;
 }
 
-/** The window's one line of text: whose window it is, and what the ticks bound. */
-export function windowLabel(anchor: number, isNext: boolean, w: WindowParams): string {
+/**
+ * The window's one line of text: whose window it is, and what the ticks bound. `windowTip` is the
+ * scene's: the window of `windowTip + 1` is the one of the block being formed.
+ */
+export function windowLabel(H: number, windowTip: number, w: WindowParams): string {
   const n = w.proposalWindowFarthest - w.proposalWindowClosest + 1;
-  return `${isNext ? 'next block can' : `${tail4(anchor)} could`} commit txs proposed in these ${n} blocks`;
+  const whose = H === windowTip + 1 ? 'next block can' : `${tail4(H)} could`;
+  return `${whose} commit txs proposed in these ${n} blocks`;
 }
 
 export interface ChainSlotState extends RulerSlot {

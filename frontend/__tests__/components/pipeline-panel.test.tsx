@@ -29,6 +29,7 @@ import {
   G,
   buildScene,
   inWindow,
+  labelWidth,
   rulerPath,
   tail4,
   windowLabel,
@@ -107,6 +108,31 @@ const rulerSlots = (scene: Scene): RulerSlot[] => [
 const CHAIN_Y = String(G.chainY + 0.5);
 const isPlainLine = (d: string | null) =>
   d === 'M0 0' || new RegExp(`^(M[\\d.]+ ${CHAIN_Y}L[\\d.]+ ${CHAIN_Y})+$`).test(d ?? '');
+
+/**
+ * The drawn window label is fully inside [0, viewW], clear of every tick, and the dimension line
+ * never runs under it. Reads only the DOM, so it checks the static render and the motion layer alike.
+ */
+function expectLabelClear(svg: Element, width: number) {
+  const label = svg.querySelector('[data-window-label]') as SVGTextElement;
+  expect(label).not.toBeNull();
+  expect(label).toHaveAttribute('text-anchor', 'middle');
+  const half = labelWidth(label.textContent ?? '') / 2;
+  const x = Number(label.getAttribute('x'));
+  const [l, r] = [x - half, x + half];
+  expect(l).toBeGreaterThanOrEqual(0);
+  expect(r).toBeLessThanOrEqual(width);
+  const d = svg.querySelector('[data-ruler-ticks]')?.getAttribute('d') ?? '';
+  const ticks = [...d.matchAll(/M([\d.]+) [\d.]+V/g)].map((m) => Number(m[1]));
+  expect(ticks.length).toBeGreaterThan(0);
+  for (const tx of ticks) expect(tx < l || tx > r).toBe(true);
+  const line = [...d.matchAll(/M([\d.]+) [\d.]+H([\d.]+)/g)].map((m) => [
+    Number(m[1]),
+    Number(m[2]),
+  ]);
+  expect(line.length).toBeGreaterThan(0);
+  for (const [a, b] of line) expect(b <= l || a >= r).toBe(true);
+}
 
 describe('PipelinePanel static render', () => {
   it('draws one card per visible block, newest first', async () => {
@@ -341,7 +367,13 @@ describe('PipelinePanel static render', () => {
     expect(svg.querySelector('[data-window-label]')).toBeNull();
     expect(svg.querySelector('[data-ruler-ticks]')).toBeNull();
     const scene = buildScene(s, VIEW_W, 'settled');
-    const ruler = windowRuler(rulerSlots(scene), T + 1, s.consensus, VIEW_W);
+    const ruler = windowRuler(
+      rulerSlots(scene),
+      T + 1,
+      s.consensus,
+      VIEW_W,
+      windowLabel(T + 1, T, s.consensus)
+    );
     expect(ruler.ticks).toHaveLength(2);
     const marks = svg.querySelector('[data-window-marks]') as SVGPathElement;
     expect(marks).toHaveAttribute('d', windowMarksPath(ruler));
@@ -701,6 +733,22 @@ describe('PipelineCanvas motion', () => {
     }
   );
 
+  it('keeps a hovered window label inside the view and off the ticks while the cards move', () => {
+    viewW = CONTAINER_VIEW_W;
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    // Hovered from the Latest Blocks row: the window of T−4 starts near the right edge.
+    act(() => usePipelineHoverStore.getState().setHover({ block: T - 4, tx: null, window: T - 4 }));
+    expectLabelClear(svg, CONTAINER_VIEW_W);
+    rerender(<PipelineCanvas snapshot={s2} />);
+    // Through the landing and the 700 ms move one slot to the right, frame by frame.
+    for (let ms = 0; ms < t.settleAt + 900; ms += 16) {
+      at(16);
+      expectLabelClear(svg, CONTAINER_VIEW_W);
+    }
+    expect(svg.querySelector(`[data-card="${newHash}"]`)).toHaveAttribute('data-slot', 'chain');
+  });
+
   it('resolves a proposal dot when its commit lands, not before', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
@@ -846,7 +894,13 @@ describe('PipelinePanel interactions', () => {
 
   it('explains the window lane with a help cursor and steps back pool txs outside it', async () => {
     const svg = await renderPanel(snapshot);
-    const ruler = windowRuler(rulerSlots(scene), T + 1, snapshot.consensus, VIEW_W);
+    const ruler = windowRuler(
+      rulerSlots(scene),
+      T + 1,
+      snapshot.consensus,
+      VIEW_W,
+      windowLabel(T + 1, T, snapshot.consensus)
+    );
     fireEvent.pointerMove(svg, {
       clientX: (ruler.ticks[0] as number) + 10,
       clientY: G.cardTop - 8,
@@ -868,13 +922,19 @@ describe('PipelinePanel interactions', () => {
     const svg = await renderPanel(snapshot);
     hoverNext(svg);
     expect(tooltip()).toHaveTextContent(`Next #${fmt(T + 1)}`);
-    const text = windowLabel(T + 1, true, snapshot.consensus);
+    const text = windowLabel(T + 1, T, snapshot.consensus);
     expect(text).toBe('next block can commit txs proposed in these 9 blocks');
     expect(svg.querySelector('[data-window-label]')?.textContent).toBe(text);
-    const ruler = windowRuler(rulerSlots(scene), T + 1, snapshot.consensus, VIEW_W);
+    const ruler = windowRuler(
+      rulerSlots(scene),
+      T + 1,
+      snapshot.consensus,
+      VIEW_W,
+      windowLabel(T + 1, T, snapshot.consensus)
+    );
     const ticks = svg.querySelector('[data-ruler-ticks]') as SVGPathElement;
     // One path for the static render and the motion layer.
-    expect(ticks).toHaveAttribute('d', rulerPath(ruler, text));
+    expect(ticks).toHaveAttribute('d', rulerPath(ruler));
     // Two ticks and the dimension line between them, broken around the label.
     expect(ticks.getAttribute('d')?.match(/V/g)).toHaveLength(2);
     expect(ticks.getAttribute('d')?.match(/H/g)).toHaveLength(2);
@@ -896,7 +956,7 @@ describe('PipelinePanel interactions', () => {
     expect(tooltip()).toHaveTextContent('Proposal window');
     expect(tooltip()).toHaveTextContent(`next block#${fmt(T + 1)}`);
     expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
-      windowLabel(T + 1, true, snapshot.consensus)
+      windowLabel(T + 1, T, snapshot.consensus)
     );
     expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass('fill-gold');
     expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass('fill-gold');
@@ -922,6 +982,37 @@ describe('PipelinePanel interactions', () => {
       'soft'
     );
   });
+
+  it.each([T - 3, T - 4, T - 5])(
+    'keeps the window label of #%i inside the 1280 px container and off the ticks',
+    async (n) => {
+      viewW = CONTAINER_VIEW_W;
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        width: CONTAINER_VIEW_W,
+        height: G.H,
+        right: CONTAINER_VIEW_W,
+        bottom: G.H,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const svg = await renderPanel(snapshot);
+      const c = buildScene(snapshot, CONTAINER_VIEW_W, 'settled').cards.find(
+        (k) => k.block.number === n
+      );
+      if (!c) throw new Error(`#${n} is not on screen`);
+      fireEvent.pointerMove(card(svg, n).querySelector('[data-box]') as Element, {
+        clientX: c.x + c.w / 2,
+        clientY: G.cardTop + 5,
+      });
+      expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
+        `${tail4(n)} could commit txs proposed in these 9 blocks`
+      );
+      expectLabelClear(svg, CONTAINER_VIEW_W);
+    }
+  );
 
   it('turns the dotted tail gold while the drawn window runs off the screen', async () => {
     const svg = await renderPanel(snapshot);

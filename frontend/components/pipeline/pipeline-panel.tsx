@@ -361,13 +361,19 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const rulerSlots: RulerSlot[] = scene.next
     ? [{ number: scene.next.number, x: scene.next.x, w: scene.next.w, mined: false }, ...chainSlots]
     : chainSlots;
-  const ruler = windowRuler(rulerSlots, anchor, consensus, scene.viewW);
-  const windowText = windowLabel(anchor, anchor === defaultH, consensus);
+  const windowText = windowLabel(anchor, scene.windowTip, consensus);
+  const ruler = windowRuler(rulerSlots, anchor, consensus, scene.viewW, windowText);
   // The window is drawn in full only while something that has one is hovered: NEXT, a block, the
   // proposed well or the lane itself. At rest only its gold links and the marks across the chain
   // line show it.
   const showWindow = lane || windowBlock !== null;
-  const laneGeom = windowRuler(rulerSlots, defaultH, consensus, scene.viewW).hit;
+  const laneGeom = windowRuler(
+    rulerSlots,
+    defaultH,
+    consensus,
+    scene.viewW,
+    windowLabel(defaultH, scene.windowTip, consensus)
+  ).hit;
   const paths = chainPaths(
     chainSlots,
     scene.next ? { x: scene.next.x, w: scene.next.w } : null,
@@ -575,7 +581,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
         <g pointerEvents="none">
           <ChainLine paths={paths} tailOpen={ruler.tailOpen} windowEmphasis={lane} />
           <WindowMarks ruler={ruler} />
-          {showWindow && <WindowTicks ruler={ruler} faded={arc !== null} label={windowText} />}
+          {showWindow && <WindowTicks ruler={ruler} faded={arc !== null} />}
         </g>
         <PoolZone scene={scene} dimOf={poolDim} onIds={onIds} />
         <g data-layer="cards">

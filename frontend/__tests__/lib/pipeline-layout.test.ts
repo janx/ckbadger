@@ -32,7 +32,9 @@ import {
   windowMarksPath,
   windowRange,
   windowRuler,
+  labelWidth,
   type ChainSlotState,
+  type WindowLabelGeom,
   type PickTargets,
   type RulerSlot,
   type Scene,
@@ -362,6 +364,19 @@ describe('chainLayout', () => {
 });
 
 describe('proposal window', () => {
+  /** The label of the window of `H` when NEXT is #101. */
+  const textOf = (H: number) => windowLabel(H, 100, MAINNET);
+  /** NEXT #101 and the chain #100 … #85, each 60 px wide with a 20 px gap. */
+  const slots: RulerSlot[] = [
+    { number: 101, x: 214, w: 60, mined: false },
+    ...Array.from({ length: 16 }, (_, i) => ({
+      number: 100 - i,
+      x: 400 + i * 80,
+      w: 60,
+      mined: true,
+    })),
+  ];
+
   it('is the heights [H − farthest, H − closest]', () => {
     expect(windowRange(100, MAINNET)).toEqual({ from: 90, to: 98 });
     expect(inWindow(90, 100, MAINNET)).toBe(true);
@@ -371,51 +386,49 @@ describe('proposal window', () => {
   });
 
   it('puts both ticks in the middle of the gap between neighbouring cards', () => {
-    // NEXT is #101, then the chain #100 … #85, each 60 px wide with a 20 px gap.
-    const slots: RulerSlot[] = [{ number: 101, x: 214, w: 60, mined: false }];
-    for (let i = 0; i < 16; i++)
-      slots.push({ number: 100 - i, x: 400 + i * 80, w: 60, mined: true });
-    const ruler = windowRuler(slots, 101, MAINNET, 2000);
+    const ruler = windowRuler(slots, 101, MAINNET, 2000, textOf(101));
     const at = (n: number) => slots.find((s) => s.number === n) as RulerSlot;
     // Near edge: between #100 (H−1) and #99 (H−2). Far edge: between #91 (H−10) and #90 (H−11).
     const xn = (at(100).x + at(100).w + at(99).x) / 2;
     const xf = (at(91).x + at(91).w + at(90).x) / 2;
     expect(ruler.ticks).toEqual([xn, xf]);
-    expect(ruler.labelX).toBe((xn + xf) / 2);
+    // The label fits between them: centred, with the line broken around it.
+    expect(ruler.label?.at).toBe('between');
+    expect(ruler.label?.x).toBe((xn + xf) / 2);
     expect(ruler.tailOpen).toBe(false);
   });
 
   it('lets the window run off the last card when its far edge is not on screen', () => {
-    const slots: RulerSlot[] = [];
-    for (let i = 0; i < 5; i++)
-      slots.push({ number: 100 - i, x: 400 + i * 80, w: 60, mined: true });
-    const ruler = windowRuler(slots, 101, MAINNET, 1000);
+    const chain = slots.filter((s) => s.mined).slice(0, 5);
+    const ruler = windowRuler(chain, 101, MAINNET, 1000, textOf(101));
     expect(ruler.ticks).toHaveLength(1);
     expect(ruler.tailOpen).toBe(true);
     expect(ruler.hit?.xf).toBe(1000);
   });
 
   it('has no ruler when the near edge is not on screen', () => {
-    const ruler = windowRuler([{ number: 100, x: 400, w: 60, mined: true }], 120, MAINNET, 1000);
+    const ruler = windowRuler(
+      [{ number: 100, x: 400, w: 60, mined: true }],
+      120,
+      MAINNET,
+      1000,
+      textOf(120)
+    );
     expect(ruler.ticks).toEqual([]);
-    expect(ruler.labelX).toBeNull();
+    expect(ruler.label).toBeNull();
     expect(ruler.hit).toBeNull();
     expect(windowMarksPath(ruler)).toBe('');
   });
 
   it('marks the window at rest with a short gold mark across the chain line at each tick', () => {
-    const ruler = { ticks: [480, 1461], labelX: null, hit: null, tailOpen: false };
+    const ruler = { ticks: [480, 1461], label: null, hit: null, tailOpen: false };
     // chainY 37: each mark runs from 4.5 px above the line to 5.5 px below it.
     expect(windowMarksPath(ruler)).toBe('M480.0 32.5V42.5M1461.0 32.5V42.5');
   });
 
   it('raises the ticks to the dimension line when hovered and breaks the line around the label', () => {
-    const slots: RulerSlot[] = [{ number: 101, x: 214, w: 60, mined: false }];
-    for (let i = 0; i < 16; i++)
-      slots.push({ number: 100 - i, x: 400 + i * 80, w: 60, mined: true });
-    const ruler = windowRuler(slots, 101, MAINNET, 2000);
-    const label = windowLabel(101, true, MAINNET);
-    const d = rulerPath(ruler, label);
+    const ruler = windowRuler(slots, 101, MAINNET, 2000, textOf(101));
+    const d = rulerPath(ruler);
     const [xn, xf] = ruler.ticks;
     // Both ticks drop from above the dimension line onto the header row.
     expect(d).toContain(`M${xn.toFixed(1)} ${G.winY - 5}V${G.cardTop + G.headH}`);
@@ -426,16 +439,102 @@ describe('proposal window', () => {
     expect(segs.every((g) => g[1] === G.winY)).toBe(true);
     expect(segs[0][0]).toBeCloseTo(xn, 1);
     expect(segs[1][2]).toBeCloseTo(xf, 1);
-    expect(segs[0][2]).toBeLessThan(segs[1][0]);
+    // The break is exactly the label's room.
+    expect(segs[0][2]).toBeCloseTo(ruler.label?.x0 as number, 1);
+    expect(segs[1][0]).toBeCloseTo(ruler.label?.x1 as number, 1);
   });
 
   it('writes one line naming whose window it is and how many blocks it spans', () => {
-    expect(windowLabel(101, true, MAINNET)).toBe(
+    expect(windowLabel(101, 100, MAINNET)).toBe(
       'next block can commit txs proposed in these 9 blocks'
     );
-    expect(windowLabel(18_734_755, false, MAINNET)).toBe(
+    expect(windowLabel(18_734_755, 18_734_800, MAINNET)).toBe(
       '…4755 could commit txs proposed in these 9 blocks'
     );
+  });
+});
+
+describe('window label placement: inside the view, never across a tick', () => {
+  // The 1280 px container: NEXT, then 8 blocks; the window of a block runs right, towards older ones.
+  const W = CONTAINER_VIEW_W;
+  const TIP = 18_734_755;
+  const NEXT = TIP + 1;
+  const slots: RulerSlot[] = [
+    { number: NEXT, x: G.nextX, w: CARD_W, mined: false },
+    ...chainLayout(8, W, false).map((sl, i) => ({
+      number: TIP - i,
+      x: sl.x,
+      w: sl.w,
+      mined: true,
+    })),
+  ];
+  const place = (H: number) => {
+    const text = windowLabel(H, TIP, MAINNET);
+    return { text, ruler: windowRuler(slots, H, MAINNET, W, text) };
+  };
+  const textBox = (label: WindowLabelGeom, text: string) => [
+    label.x - labelWidth(text) / 2,
+    label.x + labelWidth(text) / 2,
+  ];
+
+  it('centres the label between the ticks when it fits there, even with the far end off screen', () => {
+    // T−3: near tick at 916, far end past the edge; 1246 − 916 = 330 ≥ 294 + 2 · 6.
+    const { text, ruler } = place(TIP - 3);
+    expect(labelWidth(text)).toBe(294);
+    expect(ruler.ticks).toEqual([916]);
+    expect(ruler.label).toEqual({
+      x: (916 + W) / 2,
+      x0: (916 + W) / 2 - 153,
+      x1: (916 + W) / 2 + 153,
+      at: 'between',
+    });
+    const [l, r] = textBox(ruler.label as WindowLabelGeom, text);
+    expect(l).toBeGreaterThan(916);
+    expect(r).toBeLessThanOrEqual(W);
+  });
+
+  it('puts it outside the window, before the near tick, when the window in view is too short', () => {
+    // T−4 and T−5: near ticks at 1025 and 1134; the label (294 px + padding) no longer fits.
+    for (const [H, xn] of [
+      [TIP - 4, 1025],
+      [TIP - 5, 1134],
+    ]) {
+      const { text, ruler } = place(H);
+      expect(ruler.ticks).toEqual([xn]);
+      expect(ruler.label).toEqual({ x: xn - 153, x0: xn - 306, x1: xn, at: 'outside' });
+      const [l, r] = textBox(ruler.label as WindowLabelGeom, text);
+      expect(l).toBeGreaterThanOrEqual(0);
+      expect(r).toBe(xn - 6);
+      // The dimension line is then drawn whole, from the tick to the view edge.
+      expect(rulerPath(ruler)).toBe(
+        `M${xn.toFixed(1)} ${G.winY - 5}V${G.cardTop + G.headH}M${xn.toFixed(1)} ${G.winY}H${W.toFixed(1)}`
+      );
+    }
+  });
+
+  it('keeps every hovered window label of the row inside [0, viewW] and clear of its ticks', () => {
+    for (const s of slots) {
+      const { text, ruler } = place(s.number);
+      if (!ruler.label) {
+        // Only a window whose near end is off screen has no label (and no ruler at all).
+        expect(ruler.hit).toBeNull();
+        continue;
+      }
+      const [l, r] = textBox(ruler.label, text);
+      expect(l).toBeGreaterThanOrEqual(0);
+      expect(r).toBeLessThanOrEqual(W);
+      for (const tx of ruler.ticks) expect(tx < l || tx > r).toBe(true);
+    }
+  });
+
+  it('draws no label when the near tick itself is past the view edge', () => {
+    // A narrow 760 px view still lays out 8 blocks: the window of T−4 starts at 1025, off view.
+    const text = windowLabel(TIP - 4, TIP, MAINNET);
+    const ruler = windowRuler(slots, TIP - 4, MAINNET, 760, text);
+    expect(ruler.ticks).toEqual([1025]);
+    expect(ruler.label).toBeNull();
+    // The ruler itself is still drawn (and clipped by the view).
+    expect(rulerPath(ruler)).toContain('M1025.0 16H760.0');
   });
 });
 

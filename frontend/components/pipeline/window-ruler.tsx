@@ -30,12 +30,8 @@ export function WindowMarks({ ruler }: { ruler: RulerGeom }) {
 }
 
 /** The hovered window: two ticks and the dimension line between them; the rest is in the hover. */
-export function WindowTicks({
-  ruler,
-  faded,
-  label,
-}: Omit<WindowRulerProps, 'emphasis'> & { label: string }) {
-  const d = rulerPath(ruler, label);
+export function WindowTicks({ ruler, faded }: Omit<WindowRulerProps, 'emphasis'>) {
+  const d = rulerPath(ruler);
   return (
     <path
       data-ruler-ticks
@@ -51,13 +47,13 @@ export function WindowTicks({
   );
 }
 
-/** The window's one line of text, centred in the break of its dimension line. */
+/** The window's one line of text, where `windowRuler` put it: in the line's break, or beside it. */
 export function WindowLabel({ ruler, emphasis, faded, text }: WindowRulerProps & { text: string }) {
-  if (ruler.labelX === null) return null;
+  if (ruler.label === null) return null;
   return (
     <text
       data-window-label
-      x={ruler.labelX.toFixed(1)}
+      x={ruler.label.x.toFixed(1)}
       y={G.winY + 3.5}
       textAnchor="middle"
       opacity={faded ? 0.15 : 1}

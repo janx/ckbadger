@@ -13,6 +13,7 @@ import {
   G,
   chainPaths,
   rulerPath,
+  windowLabel,
   windowMarksPath,
   windowRuler,
   type ChainSlotState,
@@ -1059,7 +1060,13 @@ export class SceneMotion {
       });
     }
     const paths = chainPaths(slots, next, H, consensus, scene.viewW);
-    const ruler = windowRuler(nextSlot ? [nextSlot, ...slots] : slots, H, consensus, scene.viewW);
+    const ruler = windowRuler(
+      nextSlot ? [nextSlot, ...slots] : slots,
+      H,
+      consensus,
+      scene.viewW,
+      windowLabel(H, scene.windowTip, consensus)
+    );
     const set = (sel: string, d: string) => svg.querySelector(sel)?.setAttribute('d', d || 'M0 0');
     set('[data-path="solid"]', paths.solid);
     set('[data-path="pend"]', paths.pend);
@@ -1071,12 +1078,12 @@ export class SceneMotion {
       tail.setAttribute('stroke-opacity', ruler.tailOpen ? '0.7' : '0.25');
     }
     set('[data-window-marks]', windowMarksPath(ruler));
+    set('[data-ruler-ticks]', rulerPath(ruler));
     const label = svg.querySelector('[data-window-label]');
-    set('[data-ruler-ticks]', rulerPath(ruler, label?.textContent ?? ''));
     if (label) {
-      if (ruler.labelX === null) label.setAttribute('visibility', 'hidden');
+      if (ruler.label === null) label.setAttribute('visibility', 'hidden');
       else {
-        label.setAttribute('x', ruler.labelX.toFixed(1));
+        label.setAttribute('x', ruler.label.x.toFixed(1));
         label.removeAttribute('visibility');
       }
     }
