@@ -8,9 +8,9 @@ import { api, type NetworkStats } from '@/lib/api';
 import { parseEpoch, type EpochInfo } from '@/lib/epoch';
 
 /**
- * The chain vitals strip under the header, on every page: block, epoch progress, block time,
- * hash rate, difficulty, and whether realtime updates are live. It replaces the homepage's old hero
- * numbers, epoch card and floating LIVE pill.
+ * The chain vitals strip under the header, on every page: whether realtime updates are live (a dot
+ * before the block), block, epoch progress, block time, hash rate and difficulty — one row on a
+ * desktop. It replaces the homepage's old hero numbers, epoch card and floating LIVE pill.
  */
 export function VitalsStrip() {
   const { data: stats } = useQuery({
@@ -25,10 +25,13 @@ export function VitalsStrip() {
     <section
       aria-label="Chain vitals"
       data-testid="vitals-strip"
-      className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 font-mono md:gap-x-9 md:gap-y-2.5 md:py-3"
+      className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 font-mono md:gap-x-6 md:gap-y-2.5 md:py-3"
     >
-      {stats ? <Vitals stats={stats} /> : <VitalsLoading />}
-      {isConnected && <LiveStatus />}
+      {stats ? (
+        <Vitals stats={stats} connected={isConnected} />
+      ) : (
+        <VitalsLoading connected={isConnected} />
+      )}
     </section>
   );
 }
@@ -54,12 +57,24 @@ function Vital({ label, href, children }: { label: string; href?: string; childr
   );
 }
 
-function Vitals({ stats }: { stats: NetworkStats }) {
+/** The realtime dot and the item it leads, kept together so the dot never wraps alone. */
+function Lead({ connected, children }: { connected: boolean; children: ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <LiveDot connected={connected} />
+      {children}
+    </div>
+  );
+}
+
+function Vitals({ stats, connected }: { stats: NetworkStats; connected: boolean }) {
   return (
     <>
-      <Vital label="Block" href={`/blocks/${stats.latestBlock}`}>
-        #{stats.latestBlock.toLocaleString('en-US')}
-      </Vital>
+      <Lead connected={connected}>
+        <Vital label="Block" href={`/blocks/${stats.latestBlock}`}>
+          #{stats.latestBlock.toLocaleString('en-US')}
+        </Vital>
+      </Lead>
       <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
       <Vital label="Block time">{stats.avgBlockTime}</Vital>
       <Vital label="Hash rate" href="/charts/hash-rate">
@@ -106,7 +121,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
       <span className={VALUE}>{epoch.number.toLocaleString('en-US')}</span>
       <span
         aria-hidden="true"
-        className="bg-base-border flex h-1 w-12 overflow-hidden rounded-sm md:w-[72px]"
+        className="bg-base-border flex h-1 w-12 overflow-hidden rounded-sm md:w-14"
       >
         <span
           data-testid="vitals-epoch-progress"
@@ -122,28 +137,49 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
   );
 }
 
-function VitalsLoading() {
+const LOADING_LABELS = ['Block', 'Epoch', 'Block time', 'Hash rate', 'Difficulty'];
+
+function LoadingVital({ label }: { label: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5 md:gap-2">
+      <span className={LABEL}>{label}</span>
+      <span
+        aria-hidden="true"
+        className="bg-base-elevated inline-block h-3 w-16 animate-pulse rounded"
+      />
+    </div>
+  );
+}
+
+function VitalsLoading({ connected }: { connected: boolean }) {
+  const [first, ...rest] = LOADING_LABELS;
   return (
     <>
-      {['Block', 'Epoch', 'Block time', 'Hash rate', 'Difficulty'].map((label) => (
-        <div key={label} className="flex items-baseline gap-1.5 md:gap-2">
-          <span className={LABEL}>{label}</span>
-          <span
-            aria-hidden="true"
-            className="bg-base-elevated inline-block h-3 w-16 animate-pulse rounded"
-          />
-        </div>
+      <Lead connected={connected}>
+        <LoadingVital label={first} />
+      </Lead>
+      {rest.map((label) => (
+        <LoadingVital key={label} label={label} />
       ))}
     </>
   );
 }
 
-/** Shown while the realtime WebSocket is connected. */
-function LiveStatus() {
+/**
+ * Whether the realtime socket is up: a jade dot when it is, a dim one when it is not. The word is
+ * its accessible name and tooltip; the dot is always there, so the strip never shifts on connect.
+ */
+function LiveDot({ connected }: { connected: boolean }) {
   return (
-    <div role="status" data-testid="vitals-live" className="ml-auto flex items-center gap-2">
-      <span aria-hidden="true" className="bg-jade h-[7px] w-[7px] rounded-full" />
-      <span className="text-jade text-[11px] md:text-xs">Live</span>
-    </div>
+    <span
+      role="status"
+      data-testid="vitals-live"
+      data-live={connected}
+      aria-label={connected ? 'Live' : 'Not live'}
+      title={
+        connected ? 'Live: realtime updates connected' : 'Not live: realtime updates not connected'
+      }
+      className={`h-[7px] w-[7px] shrink-0 self-center rounded-full ${connected ? 'bg-jade' : 'bg-base-border'}`}
+    />
   );
 }

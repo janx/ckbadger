@@ -100,17 +100,37 @@ describe('VitalsStrip', () => {
     expect(screen.queryByTestId('vitals-epoch-progress')).not.toBeInTheDocument();
   });
 
-  it('shows Live only while the realtime connection is up', async () => {
+  it('leads with the realtime dot, labelled Live only while the connection is up', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
-    await screen.findByText('#20,819,143');
-    expect(screen.queryByTestId('vitals-live')).not.toBeInTheDocument();
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+
+    // The dot sits immediately before the Block item, and is there whether or not the socket is
+    // up, so the strip does not shift when it connects.
+    const dot = screen.getByTestId('vitals-live');
+    const lead = strip.firstElementChild as HTMLElement;
+    expect(lead).toContainElement(dot);
+    expect(dot.nextElementSibling).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
+    expect(dot).toHaveAttribute('data-live', 'false');
+    expect(dot).toHaveAccessibleName('Not live');
 
     act(() => useRealtimeStore.setState({ isConnected: true }));
-    expect(screen.getByTestId('vitals-live')).toHaveTextContent('Live');
+    expect(dot).toHaveAttribute('data-live', 'true');
+    expect(dot).toHaveAccessibleName('Live');
+    expect(dot).toHaveAttribute('title', 'Live: realtime updates connected');
 
     act(() => useRealtimeStore.setState({ isConnected: false }));
-    expect(screen.queryByTestId('vitals-live')).not.toBeInTheDocument();
+    expect(dot).toHaveAttribute('data-live', 'false');
+  });
+
+  it('spaces the items 24 px apart from md up, with a 56 px epoch bar, so one row fits at 1280', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    expect(strip).toHaveClass('md:gap-x-6');
+    const bar = (await screen.findByTestId('vitals-epoch-progress')).parentElement as HTMLElement;
+    expect(bar).toHaveClass('md:w-14');
   });
 
   it('keeps the labels in place while the stats load', () => {
