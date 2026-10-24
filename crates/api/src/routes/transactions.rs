@@ -8,7 +8,7 @@ use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
-use tokio::time::{sleep, Instant};
+use tokio::time::Instant;
 
 use crate::cache::InMemoryCache;
 use crate::consensus::ProposalWindow;
@@ -25,7 +25,7 @@ use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_res
 use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
 };
-use crate::{AppState, RequestReadView};
+use crate::{AppState, RequestReadView, RequestWait};
 use std::convert::Infallible;
 use tracing::instrument;
 
@@ -1807,6 +1807,7 @@ async fn trigger_cycles_calculation(
     // Optional so the handler still works in routers built without the
     // read-view middleware (unit tests mounting `routes()` directly).
     read_view: Option<Extension<RequestReadView>>,
+    wait: RequestWait,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
@@ -1857,12 +1858,13 @@ async fn trigger_cycles_calculation(
             // view: it waits for the indexer to write the cycles result, which
             // only becomes visible after a catch-up. Keeping the request's pin
             // would block that catch-up and guarantee a timeout, so release it
-            // before waiting. Everything read above was pinned.
+            // before waiting. Everything read above was pinned. The wait itself
+            // goes through `wait`, so the request log does not call it slow.
             if let Some(Extension(view)) = read_view {
                 view.release();
             }
 
-            ok(wait_cycles_result(&state, &hash, &hash_bytes).await?)
+            ok(wait_cycles_result(&state, &hash, &hash_bytes, &wait).await?)
         }
     }
 }
@@ -1885,6 +1887,7 @@ async fn wait_cycles_result(
     state: &Arc<AppState>,
     hash: &str,
     hash_bytes: &[u8],
+    wait: &RequestWait,
 ) -> Result<CyclesStatusResponse, ApiRouteError> {
     let deadline = Instant::now() + state.cycles_client.wait_timeout();
 
@@ -1941,7 +1944,7 @@ async fn wait_cycles_result(
             });
         }
 
-        sleep(state.cycles_client.poll_interval()).await;
+        wait.sleep(state.cycles_client.poll_interval()).await;
     }
 }
 

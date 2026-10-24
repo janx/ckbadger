@@ -337,6 +337,100 @@ pub async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json
     (status, json)
 }
 
+/// Every event `ckbadger_api` logs on this thread while the capture lives, as
+/// the API's plain-text log lines (no ANSI), every level.
+///
+/// `#[tokio::test]` runs the router, its layers and every spawned request task
+/// on the test's own thread, so the HTTP request log lands here; events
+/// emitted on `spawn_blocking` threads do not.
+///
+/// One process-wide subscriber (installed by the first capture) formats every
+/// `ckbadger_api` event and hands it to the emitting thread's capture, if any.
+/// A per-thread default subscriber is not enough: a callsite another test's
+/// thread registered first, under no subscriber, stays disabled for it.
+pub struct LogCapture {
+    buffer: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+thread_local! {
+    static THREAD_LOG_CAPTURE: std::cell::RefCell<Option<Arc<std::sync::Mutex<Vec<u8>>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+static LOG_CAPTURE_SUBSCRIBER: std::sync::Once = std::sync::Once::new();
+
+/// Writes a formatted event to the emitting thread's capture; drops it on a
+/// thread that captures nothing.
+struct ThreadLogCaptureWriter;
+
+impl std::io::Write for ThreadLogCaptureWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        THREAD_LOG_CAPTURE.with(|capture| {
+            if let Some(buffer) = capture.borrow().as_ref() {
+                buffer
+                    .lock()
+                    .expect("log capture poisoned")
+                    .extend_from_slice(bytes);
+            }
+        });
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogCapture {
+    pub fn start() -> Self {
+        LOG_CAPTURE_SUBSCRIBER.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new("ckbadger_api=trace"))
+                .with_ansi(false)
+                .with_writer(|| ThreadLogCaptureWriter)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("LogCapture installs the only global subscriber of an API test binary");
+        });
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+        THREAD_LOG_CAPTURE.with(|capture| {
+            let previous = capture.borrow_mut().replace(buffer.clone());
+            assert!(previous.is_none(), "one LogCapture per thread at a time");
+        });
+        Self { buffer }
+    }
+
+    /// The captured lines containing every one of `needles`.
+    pub fn lines_with(&self, needles: &[&str]) -> Vec<String> {
+        let bytes = self.buffer.lock().expect("log capture poisoned");
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter(|line| needles.iter().all(|needle| line.contains(needle)))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The `name=<integer>` field of `line`.
+    pub fn field(line: &str, name: &str) -> u64 {
+        let key = format!(" {name}=");
+        let start = line
+            .find(&key)
+            .unwrap_or_else(|| panic!("no {name} field in log line: {line}"))
+            + key.len();
+        line[start..]
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|digits| digits.parse().ok())
+            .unwrap_or_else(|| panic!("{name} is not an integer in log line: {line}"))
+    }
+}
+
+impl Drop for LogCapture {
+    fn drop(&mut self) {
+        THREAD_LOG_CAPTURE.with(|capture| capture.borrow_mut().take());
+    }
+}
+
 pub fn compute_blake2b_data_hash(data: &[u8]) -> Vec<u8> {
     let mut hasher = ckb_hash::new_blake2b();
     hasher.update(data);
@@ -579,27 +673,40 @@ pub const BLOCK_ECONOMIC_STATE_REWARD_TOTAL: u128 = 0x1000 + 0x200 + 0x30 + 0x4;
 /// pair answers for exactly that block hash (any other hash gets wiremock's
 /// 404, which the API must treat as an error).
 pub async fn mount_block_economic_state_rpc(server: &MockServer, pairs: &[(&str, &str)]) {
+    mount_block_economic_state_rpc_delayed(server, pairs, std::time::Duration::ZERO).await;
+}
+
+/// [`mount_block_economic_state_rpc`], each answer sent after `delay`.
+pub async fn mount_block_economic_state_rpc_delayed(
+    server: &MockServer,
+    pairs: &[(&str, &str)],
+    delay: std::time::Duration,
+) {
     for (block_hash, finalized_at) in pairs {
         Mock::given(method("POST"))
             .and(body_partial_json(serde_json::json!({
                 "method": "get_block_economic_state",
                 "params": [block_hash]
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {
-                    "finalized_at": finalized_at,
-                    "issuance": { "primary": "0x1000", "secondary": "0x200" },
-                    "miner_reward": {
-                        "primary": "0x1000",
-                        "secondary": "0x200",
-                        "committed": "0x30",
-                        "proposal": "0x4"
-                    },
-                    "txs_fee": "0x34"
-                }
-            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "finalized_at": finalized_at,
+                            "issuance": { "primary": "0x1000", "secondary": "0x200" },
+                            "miner_reward": {
+                                "primary": "0x1000",
+                                "secondary": "0x200",
+                                "committed": "0x30",
+                                "proposal": "0x4"
+                            },
+                            "txs_fee": "0x34"
+                        }
+                    }))
+                    .set_delay(delay),
+            )
             .mount(server)
             .await;
     }

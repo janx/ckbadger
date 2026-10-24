@@ -318,6 +318,18 @@ async fn pipeline_app_with(
     mount_rewards: bool,
     pool: Option<PoolRpc>,
 ) -> PipelineApp {
+    pipeline_app_configured(chain, seed, node_blocks, mount_rewards, pool, |_| {}).await
+}
+
+/// [`pipeline_app_with`], with `configure` adjusting the API config last.
+async fn pipeline_app_configured(
+    chain: &FixtureChain,
+    seed: StoreSeed,
+    node_blocks: &[BlockView],
+    mount_rewards: bool,
+    pool: Option<PoolRpc>,
+    configure: impl FnOnce(&mut AppConfig),
+) -> PipelineApp {
     let store = seed_store(chain, &seed);
     let chain_db = seed_ckb_chain(node_blocks);
     let server = MockServer::start().await;
@@ -334,6 +346,7 @@ async fn pipeline_app_with(
         Some(chain_db.cleanup.clone()),
     );
     config.ckb_rpc_url = server.uri();
+    configure(&mut config);
     let ungated_app = create_router(config).await;
     PipelineApp {
         app: gated(ungated_app.clone()),
@@ -1595,4 +1608,119 @@ async fn test_pipeline_holds_no_read_view_while_it_waits() {
     assert_eq!(status, StatusCode::OK, "got {json}");
     assert_eq!(json["status"], "ok", "{json}");
     assert_eq!(json["tip"]["number"], 14);
+}
+
+// ---------------------------------------------------------------------------
+// Request log: the tip wait is not slowness
+// ---------------------------------------------------------------------------
+
+/// The slow-request threshold the request-log tests run under: well above
+/// what building a fixture snapshot costs, well below the waits they stage.
+const SLOW_MS: u64 = 1_000;
+
+/// The `http_request` span field naming this endpoint in a log line.
+const PIPELINE_LOG_PATH: &str = "path=\"/api/v1/pipeline\"";
+
+/// A request that waits on purpose for the store to reach the node's pool tip
+/// is not slow: the wait is what it is for. Live mainnet logged ~2,400 "slow
+/// request" warnings for `/pipeline` in 15 h, each a 1–3 s tip wait.
+#[tokio::test]
+async fn test_pipeline_tip_wait_is_not_a_slow_request() {
+    let chain = FixtureChain::build(14, BTreeMap::new());
+    let fixture = pipeline_app_configured(
+        &chain,
+        StoreSeed {
+            indexed_tip: Some(13),
+            ..Default::default()
+        },
+        &chain.blocks,
+        true,
+        Some(pool_at_tip(&chain, vec![], vec![])),
+        |config| config.slow_request_threshold_ms = SLOW_MS,
+    )
+    .await;
+    let logs = LogCapture::start();
+
+    let app = fixture.app.clone();
+    let request = tokio::spawn(async move { get_json(&app, "/pipeline").await });
+    // The handler waits for the store (13) to reach the node (14); the indexer
+    // writes block 14 well past the slow-request threshold.
+    first_pool_tip_read(&fixture.server).await;
+    tokio::time::sleep(Duration::from_millis(SLOW_MS + 500)).await;
+    index_block(&fixture.store, &chain, 14);
+    let (status, json) = request.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "ok", "{json}");
+
+    assert!(
+        logs.lines_with(&[PIPELINE_LOG_PATH, "slow request"])
+            .is_empty(),
+        "the tip wait was logged as a slow request: {:#?}",
+        logs.lines_with(&[PIPELINE_LOG_PATH])
+    );
+    let completed = logs.lines_with(&[PIPELINE_LOG_PATH, "completed"]);
+    assert_eq!(completed.len(), 1, "{completed:#?}");
+    let latency_ms = LogCapture::field(&completed[0], "latency_ms");
+    let waited_ms = LogCapture::field(&completed[0], "waited_ms");
+    assert!(
+        waited_ms >= SLOW_MS + 500,
+        "the log reports the wait: {}",
+        completed[0]
+    );
+    assert!(latency_ms >= waited_ms, "{}", completed[0]);
+}
+
+/// Waiting does not hide slowness: a request whose own work (here the node's
+/// `get_block_economic_state`, after the wait) passes the threshold is still
+/// a slow request, though its wait alone is past the threshold too.
+#[tokio::test]
+async fn test_pipeline_slow_work_is_a_slow_request_although_it_also_waited() {
+    let chain = FixtureChain::build(14, BTreeMap::new());
+    let fixture = pipeline_app_configured(
+        &chain,
+        StoreSeed {
+            indexed_tip: Some(13),
+            ..Default::default()
+        },
+        &chain.blocks,
+        false,
+        Some(pool_at_tip(&chain, vec![], vec![])),
+        |config| config.slow_request_threshold_ms = SLOW_MS,
+    )
+    .await;
+    // Three reward targets (blocks 12, 13, 14 pay 1, 2, 3), each answered
+    // slowly: together half a second past the threshold.
+    let per_call = Duration::from_millis(SLOW_MS / 2);
+    for x in 12..=chain.tip() {
+        mount_block_economic_state_rpc_delayed(
+            &fixture.server,
+            &[(&chain.hash_hex(x - 11), &chain.hash_hex(x))],
+            per_call,
+        )
+        .await;
+    }
+    let logs = LogCapture::start();
+
+    let app = fixture.app.clone();
+    let request = tokio::spawn(async move { get_json(&app, "/pipeline").await });
+    first_pool_tip_read(&fixture.server).await;
+    tokio::time::sleep(Duration::from_millis(SLOW_MS + 500)).await;
+    index_block(&fixture.store, &chain, 14);
+    let (status, json) = request.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "ok", "{json}");
+
+    let slow = logs.lines_with(&[PIPELINE_LOG_PATH, "slow request"]);
+    assert_eq!(
+        slow.len(),
+        1,
+        "slow work after the wait must be reported: {:#?}",
+        logs.lines_with(&[PIPELINE_LOG_PATH])
+    );
+    assert!(
+        LogCapture::field(&slow[0], "latency_ms")
+            >= SLOW_MS + 500 + 3 * per_call.as_millis() as u64,
+        "{}",
+        slow[0]
+    );
 }

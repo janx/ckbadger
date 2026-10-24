@@ -7,6 +7,7 @@ mod frontend_formats;
 pub mod frontend_proxy;
 pub mod middleware;
 pub mod pool;
+pub mod request_log;
 pub mod response;
 pub mod routes;
 pub mod utils;
@@ -36,6 +37,8 @@ use pool::PoolMirror;
 use response::{ApiError, ApiRouteError};
 use warmup::SporeCache;
 use ws::WsManager;
+
+pub use request_log::RequestWait;
 
 #[derive(Debug)]
 pub struct CleanupPathGuard {
@@ -459,6 +462,8 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let slow_threshold = std::time::Duration::from_millis(config.slow_request_threshold_ms);
 
+    // The span every request's log lines carry; `request_log::log_request`
+    // (just inside it) writes the one line per finished request.
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|request: &axum::http::Request<_>| {
             tracing::info_span!(
@@ -468,50 +473,7 @@ pub async fn create_router(config: AppConfig) -> Router {
                 query = request.uri().query().unwrap_or(""),
             )
         })
-        .on_response(
-            move |response: &axum::http::Response<_>,
-                  latency: std::time::Duration,
-                  span: &tracing::Span| {
-                let status = response.status().as_u16();
-                let latency_ms = latency.as_millis() as u64;
-                let size = response
-                    .headers()
-                    .get(axum::http::header::CONTENT_LENGTH)
-                    .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
-                    .and_then(|v: &str| v.parse::<u64>().ok())
-                    .unwrap_or(0);
-                let is_polling = response
-                    .extensions()
-                    .get::<PollingRequestMarker>()
-                    .is_some();
-
-                if latency >= slow_threshold {
-                    tracing::warn!(
-                        parent: span,
-                        status,
-                        latency_ms,
-                        size,
-                        "slow request"
-                    );
-                } else if is_polling {
-                    tracing::debug!(
-                        parent: span,
-                        status,
-                        latency_ms,
-                        size,
-                        "completed"
-                    );
-                } else {
-                    tracing::info!(
-                        parent: span,
-                        status,
-                        latency_ms,
-                        size,
-                        "completed"
-                    );
-                }
-            },
-        )
+        .on_response(())
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
     Router::new()
@@ -523,7 +485,10 @@ pub async fn create_router(config: AppConfig) -> Router {
         .layer(rate_limit_layer)
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(axum::middleware::from_fn(mark_polling_request))
+        .layer(axum::middleware::from_fn_with_state(
+            slow_threshold,
+            request_log::log_request,
+        ))
         .layer(trace_layer)
         .with_state(state)
 }
@@ -557,6 +522,8 @@ impl RequestReadView {
     /// must let catch-up run. Everything read after this call may come from a
     /// newer view than what was read before it; a handler that still needs
     /// one coherent view pins its own (`/pipeline` pins one per attempt).
+    /// Such a handler sleeps through [`RequestWait`], so the request log does
+    /// not count its wait as slowness.
     pub fn release(&self) {
         let _ = self.0.lock().expect("request read view poisoned").take();
     }
@@ -574,40 +541,6 @@ pub async fn pin_read_view(
     request.extensions_mut().insert(view.clone());
     let response = next.run(request).await;
     drop(view);
-    response
-}
-
-/// Marker inserted into response extensions for high-frequency polling endpoints.
-/// TraceLayer's `on_response` checks for this to log at DEBUG instead of INFO.
-#[derive(Clone)]
-struct PollingRequestMarker;
-
-/// Paths frequently polled by the frontend (5-10s intervals) that generate
-/// excessive log volume at INFO level. Logged at DEBUG instead.
-const POLLING_PATHS: &[&str] = &[
-    "/api/v1/statistics/network",
-    "/api/v1/statistics/recent-blocks",
-    "/api/v1/activities/latest",
-    "/api/v1/mempool/info",
-    "/api/v1/mempool/transactions",
-    "/api/v1/mempool/blocks",
-    "/api/v1/mempool/pending-proposals",
-    "/api/v1/pipeline",
-];
-
-fn is_polling_path(path: &str) -> bool {
-    POLLING_PATHS.contains(&path)
-}
-
-async fn mark_polling_request(
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let polling = is_polling_path(request.uri().path());
-    let mut response = next.run(request).await;
-    if polling {
-        response.extensions_mut().insert(PollingRequestMarker);
-    }
     response
 }
 
@@ -702,23 +635,5 @@ mod tests {
         // Verify the module-level routes() function returns a valid router.
         // This exercises the route merging logic in routes::api_routes().
         let _router: Router<Arc<AppState>> = routes::api_routes();
-    }
-
-    #[test]
-    fn test_polling_path_detection() {
-        assert!(is_polling_path("/api/v1/statistics/network"));
-        assert!(is_polling_path("/api/v1/activities/latest"));
-        assert!(is_polling_path("/api/v1/mempool/info"));
-        assert!(is_polling_path("/api/v1/mempool/transactions"));
-        assert!(is_polling_path("/api/v1/mempool/blocks"));
-        assert!(is_polling_path("/api/v1/mempool/pending-proposals"));
-        assert!(is_polling_path("/api/v1/statistics/recent-blocks"));
-        assert!(is_polling_path("/api/v1/pipeline"));
-
-        assert!(!is_polling_path("/api/v1/blocks"));
-        assert!(!is_polling_path("/api/v1/blocks/12345"));
-        assert!(!is_polling_path("/api/v1/transactions/0xabc"));
-        assert!(!is_polling_path("/api/v1/search"));
-        assert!(!is_polling_path("/api/v1/statistics/tx-stats"));
     }
 }

@@ -50,7 +50,7 @@ use crate::routes::proposal_window::{
 use crate::routes::transactions::{
     tx_cycles_status, tx_fee_rate, tx_fee_rate_value, tx_serialized_size_in_block, TxCyclesStatus,
 };
-use crate::{AppState, RequestReadView};
+use crate::{AppState, RequestReadView, RequestWait};
 
 /// Blocks the snapshot shows, newest first (frontend `layout.ts` `G.maxBlocks`).
 pub(crate) const PIPELINE_BLOCKS: i64 = 24;
@@ -1165,11 +1165,13 @@ async fn read_pool(
 /// node (ckb updates its pool after attaching a block), and the same height on
 /// two forks (a reorg race). An attempt at the deadline that still disagrees
 /// is returned as it is: the snapshot is then built under its view, as a
-/// `poolTipMismatch`.
+/// `poolTipMismatch`. The sleeps between attempts go through `wait`: they are
+/// the request's deliberate wait, not its work.
 async fn await_pool_at_sync_tip(
     store: &Arc<CkbadgerStore>,
     mem_cache: &InMemoryCache,
     source: &dyn PoolSource,
+    wait: &RequestWait,
 ) -> Result<(PinnedTip, PoolRead), ApiRouteError> {
     let deadline = Instant::now() + PIPELINE_TIP_WAIT;
     loop {
@@ -1180,7 +1182,8 @@ async fn await_pool_at_sync_tip(
             return Ok((pinned, read));
         }
         drop(pinned);
-        tokio::time::sleep_until(deadline.min(now + PIPELINE_TIP_POLL)).await;
+        wait.sleep_until(deadline.min(now + PIPELINE_TIP_POLL))
+            .await;
     }
 }
 
@@ -1193,6 +1196,7 @@ async fn get_pipeline(
     // Optional so the handler still works in routers built without the
     // read-view middleware.
     read_view: Option<Extension<RequestReadView>>,
+    wait: RequestWait,
 ) -> ApiResult<PipelineSnapshot> {
     // The tip wait must let catch-up run, so the request's own pin goes
     // before anything is read: each attempt pins its own view, and the
@@ -1209,7 +1213,7 @@ async fn get_pipeline(
     })?;
     let source = HttpPoolSource::new(state.ckb_rpc_url.clone());
     let (pinned, pool_read) =
-        await_pool_at_sync_tip(&state.store, &state.mem_cache, &source).await?;
+        await_pool_at_sync_tip(&state.store, &state.mem_cache, &source, &wait).await?;
     ok(build_snapshot(&state, &consensus, ckb, pinned, pool_read).await?)
 }
 
@@ -1620,13 +1624,19 @@ mod tests {
         let source = FakePoolSource::new();
         source.set_info(node_at(12, [0x12; 32]));
 
+        let wait = RequestWait::default();
         let started = Instant::now();
-        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &source)
+        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &source, &wait)
             .await
             .unwrap();
         let waited = started.elapsed();
 
         assert!(waited >= PIPELINE_TIP_WAIT, "gave up after {waited:?}");
+        assert_eq!(
+            wait.waited(),
+            waited,
+            "every moment between the attempts is the request's deliberate wait"
+        );
         assert!(
             waited < PIPELINE_TIP_WAIT + PIPELINE_TIP_POLL,
             "overran its deadline: {waited:?}"
@@ -1669,8 +1679,9 @@ mod tests {
             node.set_info(node_at(13, [0x13; 32]));
         });
 
+        let wait = RequestWait::default();
         let started = Instant::now();
-        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &*source)
+        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &*source, &wait)
             .await
             .unwrap();
 
@@ -1679,6 +1690,7 @@ mod tests {
             PIPELINE_TIP_POLL * 4,
             "served at the first poll after the pool caught up"
         );
+        assert_eq!(wait.waited(), PIPELINE_TIP_POLL * 4);
         assert_eq!(pinned.tip.number, 13);
         let PoolRead::AtTip(entries) = read else {
             panic!("expected the pool at the sync tip, got {read:?}");
@@ -1701,12 +1713,14 @@ mod tests {
             move_sync_tip(&indexer, 13, [0xB0; 32]);
         });
 
+        let wait = RequestWait::default();
         let started = Instant::now();
-        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &source)
+        let (pinned, read) = await_pool_at_sync_tip(&store, &InMemoryCache::new(), &source, &wait)
             .await
             .unwrap();
 
         assert_eq!(started.elapsed(), PIPELINE_TIP_POLL * 2);
+        assert_eq!(wait.waited(), PIPELINE_TIP_POLL * 2);
         assert_eq!(
             pinned.tip,
             SyncTip {
