@@ -610,6 +610,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             onCapacityRangeChange={setCapacityRange}
             capacityChart={capacityChart}
             isCapacityChartLoading={isCapacityChartLoading}
+            subject={`cluster ${cluster.clusterId}`}
             totalCapacity={cluster.ownedCapacity}
             commonKnowledgeSize={cluster.ownedKnowledge}
           />

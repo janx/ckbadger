@@ -379,6 +379,7 @@ export default function MnftClassDetailPage({ classId: routeClassId }: MnftClass
           onCapacityRangeChange={setCapacityRange}
           capacityChart={capacityChart}
           isCapacityChartLoading={isCapacityChartLoading}
+          subject={`class ${collection.collectionId}`}
           totalCapacity={collection.ownedCapacity}
           commonKnowledgeSize={collection.ownedKnowledge}
         />

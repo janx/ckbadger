@@ -315,6 +315,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
           onCapacityRangeChange={setCapacityRange}
           capacityChart={capacityChart}
           isCapacityChartLoading={isCapacityChartLoading}
+          subject={`identity collection ${collection.collectionId}`}
           totalCapacity={collection.ownedCapacity}
           commonKnowledgeSize={collection.ownedKnowledge}
           totalCapacityLabel="Owned Capacity"

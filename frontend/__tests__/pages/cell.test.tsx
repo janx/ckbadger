@@ -384,6 +384,20 @@ describe('CellDetailPage', () => {
     expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
   });
 
+  it('shows a cell detail without its common knowledge size as an error, not a 0 share', async () => {
+    const { commonKnowledgeSize: _omitted, ...withoutSize } = mockCellWithoutDao;
+    mockGetCell.mockResolvedValue(withoutSize);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    const alert = await screen.findByTestId('cell-capacity-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent(
+      `Owned capacity unavailable: the detail for cell ${mockCellWithoutDao.txHash}:${mockCellWithoutDao.outputIndex} has no commonKnowledgeSize`
+    );
+    expect(screen.queryByText(/Common Knowledge:/)).toBeNull();
+  });
+
   it('renders inferred bytes segment entry in the legend', async () => {
     mockGetCell.mockResolvedValue({
       ...mockCellWithDao,

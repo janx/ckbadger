@@ -643,6 +643,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             onCapacityRangeChange={setCapacityRange}
             capacityChart={collectionCapacityChart}
             isCapacityChartLoading={isCollectionCapacityChartLoading}
+            subject={`collection ${collection.collectionId}`}
             totalCapacity={collection.ownedCapacity}
             commonKnowledgeSize={collection.ownedKnowledge}
             totalCapacityLabel="Owned Capacity"
@@ -1032,6 +1033,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 ]
                   .filter((field) => field !== null)
                   .join(', ')}
+              </div>
+            ) : !spore.isLive && spore.ownedCapacity === '0' && spore.ownedKnowledge === '0' ? (
+              <div
+                data-testid="spore-owned-capacity-none"
+                className="text-text-dim mt-4 font-mono text-xs"
+              >
+                Owned Capacity: none — the spore cell has been consumed
               </div>
             ) : (
               <CapacityUtilization

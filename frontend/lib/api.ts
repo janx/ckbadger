@@ -1125,8 +1125,10 @@ interface SporeCluster {
   holdersCount: number;
   activitiesCount: number;
   createdAtBlock: number;
-  ownedCapacity?: string | null;
-  ownedKnowledge?: string | null;
+  /** Shannons; null when the index holds no aggregate for the cluster. */
+  ownedCapacity: string | null;
+  /** Shannons; null when the index holds no aggregate for the cluster. */
+  ownedKnowledge: string | null;
   composition?: {
     tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     fullyOnchainCount: number;

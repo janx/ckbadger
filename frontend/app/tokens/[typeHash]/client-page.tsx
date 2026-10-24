@@ -274,6 +274,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
           onCapacityRangeChange={setCapacityRange}
           capacityChart={capacityChart}
           isCapacityChartLoading={isCapacityChartLoading}
+          subject={`token ${token.typeScriptHash}`}
           totalCapacity={token.totalCapacity}
           commonKnowledgeSize={token.totalCommonKnowledgeSize}
           totalCapacityLabel="Owned Capacity"

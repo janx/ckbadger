@@ -259,6 +259,21 @@ describe('SporeDetailPage', () => {
     );
   });
 
+  it('says a consumed spore owns no capacity, instead of hiding the bar', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      isLive: false,
+      ownedCapacity: '0',
+      ownedKnowledge: '0',
+    });
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    const state = await screen.findByTestId('spore-owned-capacity-none');
+    expect(state).toHaveTextContent('Owned Capacity: none — the spore cell has been consumed');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('shows owned capacity from the spore detail', async () => {
     vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 

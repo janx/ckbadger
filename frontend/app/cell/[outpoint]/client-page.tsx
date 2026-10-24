@@ -477,13 +477,23 @@ export default function CellDetailPage() {
             <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="space-y-3">
-                <CapacityUtilization
-                  totalCapacity={capacityView.totalCapacity.toString()}
-                  commonKnowledgeSize={
-                    capacityView.used !== null ? capacityView.used.toString() : '0'
-                  }
-                  totalLabel="Owned Capacity"
-                />
+                {/* The cell detail always carries commonKnowledgeSize; absent is an error. */}
+                {capacityView.used === null ? (
+                  <div
+                    role="alert"
+                    data-testid="cell-capacity-error"
+                    className="text-rouge font-mono text-xs"
+                  >
+                    Owned capacity unavailable: the detail for cell {cell.txHash}:{cell.outputIndex}{' '}
+                    has no commonKnowledgeSize
+                  </div>
+                ) : (
+                  <CapacityUtilization
+                    totalCapacity={capacityView.totalCapacity.toString()}
+                    commonKnowledgeSize={capacityView.used.toString()}
+                    totalLabel="Owned Capacity"
+                  />
+                )}
                 {capacityView.hasBreakdown ? (
                   <>
                     <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
