@@ -68,6 +68,11 @@ describe('niceTicks', () => {
     expect(flat[flat.length - 1]).toBeGreaterThan(10);
   });
 
+  it('puts an anchor value on a tick, e.g. the 2.5 % orphan-rate target', () => {
+    expect(niceTicks(2.42, 2.84, 4, 2.5).values).toEqual([2.3, 2.5, 2.7, 2.9]);
+    expect(niceTicks(0, 878, 4, 250).values).toEqual([-250, 250, 750, 1250]);
+  });
+
   it('rejects an inverted or non-finite range', () => {
     expect(() => niceTicks(3, 2)).toThrow(/above max/);
     expect(() => niceTicks(0, Number.POSITIVE_INFINITY)).toThrow(/finite/);

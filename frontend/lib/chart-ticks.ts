@@ -41,13 +41,15 @@ export function stepDecimals(step: number): number {
 }
 
 /**
- * Round ticks covering [min, max]: about `target` of them, every one a multiple of a 1/2/2.5/5
- * step. A flat series gets a domain around its value (or [0, 1] for zero) so the axis is never
- * degenerate.
+ * Round ticks covering [min, max]: about `target` of them, evenly spaced by a 1/2/2.5/5 × 10^k
+ * step. They are multiples of the step, or — with `anchor` — the anchor plus multiples of it, so a
+ * reference value (a consensus target) is itself a tick. A flat series gets a domain around its
+ * value (or [0, 1] for zero) so the axis is never degenerate.
  */
-export function niceTicks(min: number, max: number, target = 4): Ticks {
+export function niceTicks(min: number, max: number, target = 4, anchor = 0): Ticks {
   assertFinite('niceTicks: min', min);
   assertFinite('niceTicks: max', max);
+  assertFinite('niceTicks: anchor', anchor);
   if (min > max) throw new Error(`niceTicks: min ${min} is above max ${max}`);
   if (!Number.isInteger(target) || target < 2) {
     throw new Error(`niceTicks: target must be an integer of at least 2, got ${target}`);
@@ -64,12 +66,12 @@ export function niceTicks(min: number, max: number, target = 4): Ticks {
     }
   }
   const step = niceStep((hi - lo) / (target - 1));
-  const decimals = stepDecimals(step);
-  const first = Math.floor(lo / step + 1e-9);
-  const last = Math.ceil(hi / step - 1e-9);
+  const decimals = Math.max(stepDecimals(step), anchor === 0 ? 0 : stepDecimals(anchor));
+  const first = Math.floor((lo - anchor) / step + 1e-9);
+  const last = Math.ceil((hi - anchor) / step - 1e-9);
   const values: number[] = [];
   for (let i = first; i <= last; i++) {
-    values.push(Number((i * step).toFixed(decimals)));
+    values.push(Number((anchor + i * step).toFixed(decimals)));
   }
   return { values, step };
 }
