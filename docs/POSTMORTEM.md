@@ -3532,6 +3532,12 @@ UTC+8 day) is complete when its end is at or below the median time of the newest
 - `total-supply` and `secondary-issuance` still include the current day on purpose (verify S16).
 - Review B: `/charts/miner-address-distribution` decided its "last 7 complete days" by the wall
   clock; it now ends at `ChainTime::last_complete_day()`.
+- Review C: the median time is monotone only along one chain — a rollback lowers it to the fork
+  point's, so a complete day can reopen. Daily chart caches (and the 10 s tx-stats cache) were
+  keyed by name alone and could keep serving a reopened day as complete for their TTL. They are now
+  keyed by the last complete day (tx-stats: the last complete hour), so a reopen or a midnight
+  rollover replaces them at once. Regression:
+  `test_daily_chart_cache_drops_a_day_that_a_rollback_reopened` (a real `rollback_to_block`).
 
 **Not routed, open defect (review B)**: the live DAO daily-snapshot writer (`sync/batch.rs`,
 `completed_dao_snapshot_boundaries`) still treats every date in a batch except the newest as

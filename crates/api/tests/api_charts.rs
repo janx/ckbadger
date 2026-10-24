@@ -1156,3 +1156,39 @@ async fn test_transaction_and_cell_daily_charts_exclude_in_progress_days() {
         assert_eq!(charted_dates(&json), vec!["2024-01-15"], "{path}: {json}");
     }
 }
+
+/// Review C: the chain's median time is not monotone across a reorg — a
+/// rollback lowers it to the fork point's — so a day can go from complete back
+/// to in progress. A daily chart cached while that day was complete must not
+/// keep showing it: the cache is keyed by the last complete day.
+#[tokio::test]
+async fn test_daily_chart_cache_drops_a_day_that_a_rollback_reopened() {
+    let store = test_store();
+    seed_block_time_days(&store, &["20240114", "20240115"]);
+    // Blocks 0..=36 late on 2024-01-15 (UTC+8), then 37..=73 at noon on
+    // 2024-01-16: the median time is on the 16th, so the 15th is complete.
+    let mut blocks: Vec<(i64, i64)> = (0..=36)
+        .map(|n| (n, utc_ms("2024-01-15T15:00:00Z") + n * 1_000))
+        .collect();
+    blocks.extend((37..=73).map(|n| (n, utc_ms("2024-01-16T04:00:00Z") + n * 1_000)));
+    seed_block_headers_at(&store, &blocks);
+    let app = create_router(test_config(store.clone())).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        charted_dates(&json),
+        vec!["2024-01-14", "2024-01-15"],
+        "{json}"
+    );
+
+    // A reorg back to block 36: the median time falls back onto the 15th.
+    store.rollback_to_block(36).unwrap();
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        charted_dates(&json),
+        vec!["2024-01-14"],
+        "a reopened day must not be served from the cache: {json}"
+    );
+}

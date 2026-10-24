@@ -8,9 +8,16 @@
 //!
 //! What the rule does guarantee is a floor. Every future block is dated after
 //! the median time of the newest 37 indexed blocks (the window ending at the
-//! tip), and that median never decreases. So a bucket `[start, end)` whose end
-//! is at or below it can never receive another block: it is complete. Every
-//! later bucket — including any dated after the tip's own — is in progress.
+//! tip), and along one chain that median never decreases. So a bucket
+//! `[start, end)` whose end is at or below it can never receive another block
+//! of this chain: it is complete. Every later bucket — including any dated
+//! after the tip's own — is in progress.
+//!
+//! A reorg is the exception: rolling back to a fork point lowers the median
+//! time to the fork point's, so a complete bucket can reopen. The bulk sealer
+//! never meets one (it builds a fresh store); readers that cache by
+//! completeness must key the cache by it (the API keys daily charts by the
+//! last complete day).
 //!
 //! The bulk indexer seals activity buckets with this rule and the API judges
 //! every daily chart and the transaction stats with it; both call

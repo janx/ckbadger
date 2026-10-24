@@ -19,7 +19,9 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
-use crate::utils::stats_bucket::{is_complete_day_key, parse_day_key, ChainTime};
+use crate::utils::stats_bucket::{
+    complete_days_cache_key, is_complete_day_key, load_chain_time, parse_day_key, ChainTime,
+};
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
     protocol_circulating, script_to_address,
@@ -217,18 +219,27 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
 
 #[instrument(skip(state), level = "debug")]
 async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsResponse> {
-    let cache_key = "statistics:tx-stats";
+    // Keyed by the last complete hour, which also moves whenever a day's
+    // completeness does, so no cached `complete` flag outlives a reorg.
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = format!(
+        "statistics:tx-stats:complete-through-hour:{}",
+        chain.map_or_else(
+            || "none".to_string(),
+            |chain| chain.last_complete_hour_start_secs().to_string()
+        )
+    );
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<TxStatsResponse>(cache_key).await {
         return ok(cached);
     }
 
     let store = state.store.clone();
-    let (chain, hourly_stats, daily_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
+    let (hourly_stats, daily_stats) = tokio::task::spawn_blocking(move || {
         let internal = |e: anyhow::Error| ApiError::internal(e.to_string());
         let hourly = store.list_hourly_stats_with_keys().map_err(internal)?;
         let daily = store.list_daily_stats_with_dates().map_err(internal)?;
-        Ok::<_, ApiRouteError>((chain, hourly, daily))
+        Ok::<_, ApiRouteError>((hourly, daily))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))??;
@@ -1381,16 +1392,12 @@ async fn get_most_utilized_assets_chart(
 async fn get_transaction_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    let chain = load_chain_time(&state.store).await?;
     let store = state.store.clone();
-    let (chain, daily_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_stats_with_dates()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_stats.len());
     for (date_str, stats) in daily_stats {
@@ -1415,16 +1422,12 @@ async fn get_transaction_count_chart(
 async fn get_cell_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    let chain = load_chain_time(&state.store).await?;
     let store = state.store.clone();
-    let (chain, daily_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_stats_with_dates()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // The stored values are already cumulative running totals (each day carries
     // forward the previous day's totals + today's deltas); complete days only.
@@ -1597,7 +1600,9 @@ async fn get_ckbytes_allocation(
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:knowledge-size:v2";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:knowledge-size:v2", chain)?;
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if chart_response_has_data(&cached) {
             return ok(cached);
@@ -1606,15 +1611,10 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
     }
 
     let store = state.store.clone();
-    let (chain, daily_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_stats_with_dates()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let store = state.store.clone();
     let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
@@ -1764,7 +1764,9 @@ fn build_liquid_supply_by_date_map(
 async fn get_common_knowledge_composition_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:common-knowledge-composition:v1";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:common-knowledge-composition:v1", chain)?;
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         if stacked_chart_response_has_data(&cached) {
             return ok(cached);
@@ -1773,15 +1775,10 @@ async fn get_common_knowledge_composition_chart(
     }
 
     let store = state.store.clone();
-    let (chain, daily_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_stats_with_dates()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     // Complete days only — the same rule as the knowledge-size chart.
     let mut knowledge_by_date: BTreeMap<u32, i128> = BTreeMap::new();
     for (date_key, stats) in daily_stats {
@@ -2042,12 +2039,13 @@ pub(crate) fn empty_address_cohort_response() -> ChartResponse {
 async fn get_capacity_turnover_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:capacity-turnover-ratio:v1";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:capacity-turnover-ratio:v1", chain)?;
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
 
-    let chain = ChainTime::load(&state.store)?;
     let mut daily_stats = state
         .store
         .list_daily_stats_with_dates()
@@ -2394,7 +2392,9 @@ async fn get_epoch_time_length_chart(
 async fn get_average_block_time_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:average-block-time";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:average-block-time", chain)?;
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if chart_response_has_data(&cached) {
             return ok(cached);
@@ -2403,15 +2403,10 @@ async fn get_average_block_time_chart(
     }
 
     let store = state.store.clone();
-    let (chain, daily_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_stats_with_dates()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_stats.len());
     for (date_str, stats) in daily_stats {
@@ -2808,31 +2803,22 @@ async fn fetch_network_stats_from_db(
     })
 }
 
-/// The daily block stats rows together with the in-progress day that judges
-/// them, read in one blocking task under the request's pinned view.
+/// The daily block stats rows, read off the async runtime under the request's
+/// pinned view.
 async fn load_daily_block_stats(
     state: &AppState,
-) -> Result<
-    (
-        Option<ChainTime>,
-        Vec<(String, ckbadger_store::DailyBlockStats)>,
-    ),
-    ApiRouteError,
-> {
+) -> Result<Vec<(String, ckbadger_store::DailyBlockStats)>, ApiRouteError> {
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_block_stats()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    tokio::task::spawn_blocking(move || store.list_daily_block_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))
 }
 
 async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:hash-rate";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:hash-rate", chain)?;
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if chart_response_has_data(&cached) {
             return ok(cached);
@@ -2844,17 +2830,15 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     // The day's mined span comes from `DailyStats.block_time_sum_ms`, the single
     // place inter-block time is stored; `DailyBlockStats` carries the difficulty
     // and block count that form the numerator.
-    let (chain, daily_block_stats, daily_stats, genesis_header) =
-        tokio::task::spawn_blocking(move || {
-            let chain = ChainTime::load(&store)?;
-            let internal = |e: anyhow::Error| ApiError::internal(e.to_string());
-            let block_stats = store.list_daily_block_stats().map_err(internal)?;
-            let stats = store.list_daily_stats_with_dates().map_err(internal)?;
-            let genesis_header = store.get_block_header(0).map_err(internal)?;
-            Ok::<_, ApiRouteError>((chain, block_stats, stats, genesis_header))
-        })
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))??;
+    let (daily_block_stats, daily_stats, genesis_header) = tokio::task::spawn_blocking(move || {
+        let internal = |e: anyhow::Error| ApiError::internal(e.to_string());
+        let block_stats = store.list_daily_block_stats().map_err(internal)?;
+        let stats = store.list_daily_stats_with_dates().map_err(internal)?;
+        let genesis_header = store.get_block_header(0).map_err(internal)?;
+        Ok::<_, ApiRouteError>((block_stats, stats, genesis_header))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
 
     let daily_stats_by_date: HashMap<String, ckbadger_store::DailyStats> =
         daily_stats.into_iter().collect();
@@ -2904,12 +2888,14 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
 }
 
 async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:difficulty";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:difficulty", chain)?;
+    let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
 
-    let (chain, daily_block_stats) = load_daily_block_stats(&state).await?;
+    let daily_block_stats = load_daily_block_stats(&state).await?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
@@ -2959,7 +2945,9 @@ pub struct UncleRateChartResponse {
 async fn get_uncle_rate_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<UncleRateChartResponse> {
-    let cache_key = "chart:uncle-rate";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:uncle-rate", chain)?;
+    let cache_key = cache_key.as_str();
     // The cached value is the whole response, target included; the target is
     // a consensus constant of the chain this process serves.
     if let Some(cached) = state.cache.get::<UncleRateChartResponse>(cache_key).await {
@@ -2967,7 +2955,7 @@ async fn get_uncle_rate_chart(
     }
 
     let target = state.consensus().await?.orphan_rate_target;
-    let (chain, daily_block_stats) = load_daily_block_stats(&state).await?;
+    let daily_block_stats = load_daily_block_stats(&state).await?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
@@ -3852,19 +3840,10 @@ where
 }
 
 async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let store = state.store.clone();
-    let chain = tokio::task::spawn_blocking(move || ChainTime::load(&store))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))??;
-    // Keyed by the newest complete day, so the chart rolls over as soon as the
-    // median time passes midnight.
-    let cache_key = format!(
-        "chart:inflation-rate:v3:{}",
-        match chain {
-            Some(chain) => chain.last_complete_day()?.format("%Y%m%d").to_string(),
-            None => "empty".to_string(),
-        }
-    );
+    let chain = load_chain_time(&state.store).await?;
+    // Keyed by the last complete day: the chart rolls over as soon as the
+    // median time passes midnight, and a reorg that reopens a day drops it.
+    let cache_key = complete_days_cache_key("chart:inflation-rate:v3", chain)?;
     if let Some(cached) = state.cache.get::<ChartResponse>(&cache_key).await {
         return ok(cached);
     }
@@ -4101,7 +4080,9 @@ async fn get_daily_activity_stats(
 ) -> ApiResult<Vec<DailyActivityStatsResponse>> {
     // days=0 means return all data (used by charts)
     let days = params.days;
-    let cache_key = format!("stats:daily-activity-stats:{}", days);
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key =
+        complete_days_cache_key(&format!("stats:daily-activity-stats:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4112,15 +4093,10 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let (chain, all_stats) = tokio::task::spawn_blocking(move || {
-        let chain = ChainTime::load(&store)?;
-        let rows = store
-            .list_daily_activity_stats()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((chain, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Complete days only: the tip block's day is still in progress.
     let mut complete_stats = Vec::with_capacity(all_stats.len());
