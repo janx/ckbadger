@@ -55,16 +55,19 @@ use crate::{AppState, RequestReadView};
 /// Blocks the snapshot shows, newest first (frontend `layout.ts` `G.maxBlocks`).
 pub(crate) const PIPELINE_BLOCKS: i64 = 24;
 /// Committed transactions served per block besides the cellbase: the most a
-/// card can draw — its field is `G.cardCols × G.fieldRows` = 9 × 8 cells in
-/// frontend `layout.ts` and the cellbase takes the first, so 71 1×1 squares.
-pub(crate) const PIPELINE_BLOCK_TXS: usize = 71;
+/// card can draw — its field is `BLOCK_FIELD_CAPACITY` = `G.cardCols ×
+/// G.fieldRows` = 8 × 5 cells in frontend `layout.ts` and the cellbase takes
+/// the first, so 39 1×1 squares. NEXT's card is the same size and lists the same.
+pub(crate) const PIPELINE_BLOCK_TXS: usize = 39;
 
-/// Pending pool transactions served: the pending grid's capacity, 8 × 5
-/// (`G.memCols × G.pendRows` in frontend `layout.ts`).
-pub(crate) const PIPELINE_POOL_PENDING: usize = 40;
-/// Proposed pool transactions served: the proposed grid's capacity, 8 × 6
-/// (`G.memCols × G.propPoolRows` in frontend `layout.ts`).
-pub(crate) const PIPELINE_POOL_PROPOSED: usize = 48;
+/// Pending pool transactions served: the pending card's body capacity,
+/// `POOL_PENDING_CAPACITY` = `G.cardCols × G.poolRows` = 8 × 7 in frontend
+/// `layout.ts`.
+pub(crate) const PIPELINE_POOL_PENDING: usize = 56;
+/// Proposed pool transactions served: the proposed card's body capacity,
+/// `POOL_PROPOSED_CAPACITY` = `G.cardCols × G.poolRows` = 8 × 7 in frontend
+/// `layout.ts`.
+pub(crate) const PIPELINE_POOL_PROPOSED: usize = 56;
 
 /// Genesis is the chain's first block; nothing lies below it.
 const GENESIS: i64 = 0;

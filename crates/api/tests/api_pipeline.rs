@@ -760,9 +760,9 @@ async fn test_pipeline_caps_block_txs() {
 
     let b3 = block_json(&json, 3);
     assert_eq!(b3["txCount"], 300);
-    // A card field is 9 × 8 cells and the cellbase takes the first: 71 txs fit.
-    assert_eq!(b3["txs"].as_array().unwrap().len(), 71);
-    assert_eq!(b3["omittedTxs"], 228);
+    // A card field is 8 × 5 cells and the cellbase takes the first: 39 txs fit.
+    assert_eq!(b3["txs"].as_array().unwrap().len(), 39);
+    assert_eq!(b3["omittedTxs"], 260);
     // The cap keeps the largest transactions, largest first.
     let served: Vec<i64> = b3["txs"]
         .as_array()
@@ -772,7 +772,7 @@ async fn test_pipeline_caps_block_txs() {
         .collect();
     let mut expected: Vec<i64> = txs.iter().map(|t| size_in_block(&t.tx)).collect();
     expected.sort_unstable_by(|a, b| b.cmp(a));
-    expected.truncate(71);
+    expected.truncate(39);
     assert_eq!(served, expected);
     // Bytes still cover every transaction, kept or not.
     let expected_bytes: i64 = chain.blocks[3]
@@ -1234,17 +1234,18 @@ async fn test_pipeline_pool_caps_and_totals() {
     assert_eq!(status, StatusCode::OK, "got {json}");
 
     let pool = &json["pool"];
-    assert_eq!(pool["pending"].as_array().unwrap().len(), 40);
+    // Each pool card's body is 8 × 7 cells: 56 txs fit.
+    assert_eq!(pool["pending"].as_array().unwrap().len(), 56);
     assert_eq!(pool["pendingTotal"], 150);
-    assert_eq!(pool["proposed"].as_array().unwrap().len(), 48);
+    assert_eq!(pool["proposed"].as_array().unwrap().len(), 56);
     assert_eq!(pool["proposedTotal"], 210);
     // The oldest pending arrivals are the ones kept.
     assert_eq!(pool["pending"][0]["arrivedAt"], 0);
-    assert_eq!(pool["pending"][39]["arrivedAt"], 39);
+    assert_eq!(pool["pending"][55]["arrivedAt"], 55);
     // The pool grids truncate only what they draw: NEXT predicts from every committable tx and
     // lists as many as its card can draw (the block cap), counting the rest.
-    assert_eq!(json["next"]["txs"].as_array().unwrap().len(), 71);
-    assert_eq!(json["next"]["omittedTxs"], 139);
+    assert_eq!(json["next"]["txs"].as_array().unwrap().len(), 39);
+    assert_eq!(json["next"]["omittedTxs"], 171);
 }
 
 /// The node's tx-pool sizes an entry as `tx.data().serialized_size_in_block()`
