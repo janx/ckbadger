@@ -47,6 +47,8 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
             },
         )
         .unwrap();
+    // The indexed tip is on the next day, so 2024-01-15 is complete.
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
 
     let second_request = Request::builder()
         .uri("/api/v1/charts/average-block-time")
@@ -66,6 +68,69 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
     // Canonical chart date format, converted from the RocksDB day key.
     assert_eq!(second_data[0]["date"], "2024-01-15");
     assert_eq!(second_data[0]["value"], "12.00");
+}
+
+/// Regression (STATS-013): the indexed tip block's day is still in progress, so
+/// the daily average-block-time chart must stop at the day before it. It used
+/// to chart every row, including today's partial one (2026-10-24 on the live
+/// stack, beside a hash-rate chart that stopped at 10-23).
+#[tokio::test]
+async fn test_average_block_time_chart_excludes_the_in_progress_tip_day() {
+    let store = test_store();
+    for (date, sum_ms, count) in [
+        ("20240115", 86_400_000, 9_000),
+        ("20240116", 3_600_000, 300),
+    ] {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: count,
+                    block_time_sum_ms: sum_ms,
+                    block_time_count: count,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"],
+        serde_json::json!([{ "date": "2024-01-15", "value": "9.60", "value2": null }]),
+        "the tip block's day is in progress and must not be charted: {json}"
+    );
+}
+
+/// No daily row can be dated after the indexed tip block's day; meeting one is
+/// corruption, reported with the row and the tip day instead of being skipped.
+#[tokio::test]
+async fn test_average_block_time_chart_fails_fast_on_a_row_after_the_tip_day() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240117",
+            &DailyStats {
+                blocks_count: 1,
+                block_time_sum_ms: 10_000,
+                block_time_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("2024-01-17") && message.contains("2024-01-16"),
+        "error must name the row and the tip day: {json}"
+    );
 }
 
 #[tokio::test]
@@ -812,6 +877,8 @@ async fn test_date_keyed_charts_emit_canonical_iso_dates() {
             )
             .unwrap();
     }
+    // 2024-01-16 holds the indexed tip block: in progress, not charted.
+    seed_tip_block_on_utc8_day(&store, 200, "2024-01-16");
 
     let config = test_config(store);
     let app = create_router(config).await;

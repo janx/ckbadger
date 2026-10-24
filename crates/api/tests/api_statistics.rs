@@ -948,6 +948,8 @@ async fn test_daily_block_charts_read_from_derived_store() {
             )
             .unwrap();
     }
+    // 2026-01-02 holds the indexed tip block: in progress, not charted.
+    seed_tip_block_on_utc8_day(&core_store, 220, "2026-01-02");
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -2076,6 +2078,120 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
 }
 
 // ---------------------------------------------------------------------------
+// Daily charts stop at the day before the indexed tip block's day (STATS-013)
+// ---------------------------------------------------------------------------
+
+/// Regression: `/stats/daily-activities` served the tip block's partial day
+/// as its last point (20261024 on the live stack), so the homepage's daily
+/// activity bars ended on a drop. `days=N` is the last N complete days.
+#[tokio::test]
+async fn test_daily_activities_exclude_the_in_progress_tip_day() {
+    let store = test_store();
+    for (date, transfers) in [("20240114", 30), ("20240115", 40), ("20240116", 5)] {
+        store
+            .put_daily_activity_stats(
+                date,
+                &ckbadger_store::types::DailyActivityStats {
+                    transfer_count: transfers,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let days: Vec<(&str, u64)> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["date"].as_str().unwrap(),
+                d["transferCount"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(days, vec![("20240114", 30), ("20240115", 40)], "{json}");
+
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=1").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json.as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(json[0]["date"], "20240115", "the last complete day: {json}");
+}
+
+fn knowledge_size_day(knowledge_size: i128) -> DailyStats {
+    DailyStats {
+        blocks_count: 1,
+        knowledge_size: Some(knowledge_size),
+        ..Default::default()
+    }
+}
+
+/// Regression: the knowledge-size chart judged "today" by the wall clock. An
+/// indexer that lags the chain — catching up after a restart — still has the
+/// tip block's day only partly indexed after midnight has passed, and that day
+/// was charted as complete. The reference is the indexed tip, not the clock.
+#[tokio::test]
+async fn test_knowledge_size_chart_excludes_a_lagging_tip_day() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    store
+        .put_daily_stats("20240115", &knowledge_size_day(100_000_000_000))
+        .unwrap();
+    store
+        .put_daily_stats("20240116", &knowledge_size_day(100_100_000_000))
+        .unwrap();
+    // The tip block is years before the wall-clock day.
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/knowledge-size").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let dates: Vec<&str> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["date"].as_str().unwrap())
+        .collect();
+    assert_eq!(dates, vec!["2024-01-15"], "{json}");
+}
+
+/// The composition chart shares the knowledge-size chart's day rule (both used
+/// the wall clock); a lagging tip day must be absent from both.
+#[tokio::test]
+async fn test_knowledge_composition_chart_excludes_a_lagging_tip_day() {
+    let store = test_store();
+    store
+        .put_daily_stats("20240115", &knowledge_size_day(100_000_000_000))
+        .unwrap();
+    store
+        .put_daily_stats("20240116", &knowledge_size_day(100_100_000_000))
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let state = test_app_state(test_config(store));
+    // No typed scripts: the whole knowledge size is plain transfer cells.
+    state.mem_cache.set(
+        ckbadger_api::warmup::CACHE_KEY_SCRIPTS_ALL,
+        &Vec::<(Vec<u8>, ckbadger_store::ScriptInfo)>::new(),
+        std::time::Duration::from_secs(60),
+    );
+    let app = router_from_state(state);
+
+    let (status, json) = get_json(&app, "/charts/common-knowledge-composition").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let dates: Vec<&str> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["date"].as_str().unwrap())
+        .collect();
+    assert_eq!(dates, vec!["2024-01-15"], "{json}");
+}
+
+// ---------------------------------------------------------------------------
 // Common Knowledge Size: one definition on every surface
 // ---------------------------------------------------------------------------
 
@@ -2292,6 +2408,7 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
             },
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&store, 1_298, "2019-11-17");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2333,7 +2450,8 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
     for (date, block_count, block_time_sum_ms, block_time_count) in [
         ("20200512", 1, 0, 0),
         ("20200522", 2, 20_000, 2),
-        // Latest/incomplete date: present only so 20200522 is chart-eligible.
+        // The indexed tip block's (incomplete) day: present only so 20200522
+        // is chart-eligible.
         ("20200523", 1, 10_000, 1),
     ] {
         store
@@ -2358,6 +2476,7 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
             )
             .unwrap();
     }
+    seed_tip_block_on_utc8_day(&store, 4, "2020-05-23");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2419,6 +2538,7 @@ async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
             },
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&store, 200, "2026-01-02");
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -2465,6 +2585,7 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
             },
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&store, 200, "2026-01-02");
 
     let config = test_config(store);
     let app = create_router(config).await;

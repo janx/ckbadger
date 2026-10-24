@@ -19,6 +19,7 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
+use crate::utils::stats_day::{is_complete_day_key, InProgressDay};
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
     script_to_address,
@@ -1462,10 +1463,15 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
     }
 
     let store = state.store.clone();
-    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, daily_stats) = tokio::task::spawn_blocking(move || {
+        let in_progress = InProgressDay::load(&store)?;
+        let rows = store
+            .list_daily_stats_with_dates()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((in_progress, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
 
     let store = state.store.clone();
     let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
@@ -1475,11 +1481,11 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
     let genesis_burnt = state.genesis_baseline()?.burnt;
     let liquid_by_date = build_liquid_supply_by_date_map(&snapshots, genesis_burnt)?;
 
-    // Exclude the current incomplete day to prevent cache divergence with composition chart.
-    let today_key = current_ckb_date_key();
+    // Complete days only — the same rule as the composition chart, so the two
+    // never disagree on the last day.
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_stats.len());
     for (date_str, stats) in daily_stats {
-        if date_str.as_str() == today_key {
+        if !is_complete_day_key(in_progress, "daily stats", &date_str)? {
             continue;
         }
         let Some(ks) = stats.knowledge_size else {
@@ -1624,15 +1630,19 @@ async fn get_common_knowledge_composition_chart(
     }
 
     let store = state.store.clone();
-    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    // Exclude the current incomplete day to prevent cache divergence with knowledge-size chart.
-    let today_key = current_ckb_date_key();
+    let (in_progress, daily_stats) = tokio::task::spawn_blocking(move || {
+        let in_progress = InProgressDay::load(&store)?;
+        let rows = store
+            .list_daily_stats_with_dates()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((in_progress, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
+    // Complete days only — the same rule as the knowledge-size chart.
     let mut knowledge_by_date: BTreeMap<u32, i128> = BTreeMap::new();
     for (date_key, stats) in daily_stats {
-        if date_key.as_str() == today_key {
+        if !is_complete_day_key(in_progress, "daily stats", &date_key)? {
             continue;
         }
         let Some(knowledge) = stats.knowledge_size else {
@@ -2240,13 +2250,21 @@ async fn get_average_block_time_chart(
     }
 
     let store = state.store.clone();
-    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, daily_stats) = tokio::task::spawn_blocking(move || {
+        let in_progress = InProgressDay::load(&store)?;
+        let rows = store
+            .list_daily_stats_with_dates()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((in_progress, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_stats.len());
     for (date_str, stats) in daily_stats {
+        if !is_complete_day_key(in_progress, "daily stats", &date_str)? {
+            continue;
+        }
         let Some(avg_time_ms) = stats.avg_block_time_ms() else {
             continue;
         };
@@ -2637,6 +2655,29 @@ async fn fetch_network_stats_from_db(
     })
 }
 
+/// The daily block stats rows together with the in-progress day that judges
+/// them, read in one blocking task under the request's pinned view.
+async fn load_daily_block_stats(
+    state: &AppState,
+) -> Result<
+    (
+        Option<InProgressDay>,
+        Vec<(String, ckbadger_store::DailyBlockStats)>,
+    ),
+    ApiRouteError,
+> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let in_progress = InProgressDay::load(&store)?;
+        let rows = store
+            .list_daily_block_stats()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((in_progress, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+}
+
 async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:hash-rate";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
@@ -2650,15 +2691,17 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     // The day's mined span comes from `DailyStats.block_time_sum_ms`, the single
     // place inter-block time is stored; `DailyBlockStats` carries the difficulty
     // and block count that form the numerator.
-    let (daily_block_stats, daily_stats, genesis_header) = tokio::task::spawn_blocking(move || {
-        let block_stats = store.list_daily_block_stats()?;
-        let stats = store.list_daily_stats_with_dates()?;
-        let genesis_header = store.get_block_header(0)?;
-        anyhow::Ok((block_stats, stats, genesis_header))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, daily_block_stats, daily_stats, genesis_header) =
+        tokio::task::spawn_blocking(move || {
+            let in_progress = InProgressDay::load(&store)?;
+            let internal = |e: anyhow::Error| ApiError::internal(e.to_string());
+            let block_stats = store.list_daily_block_stats().map_err(internal)?;
+            let stats = store.list_daily_stats_with_dates().map_err(internal)?;
+            let genesis_header = store.get_block_header(0).map_err(internal)?;
+            Ok::<_, ApiRouteError>((in_progress, block_stats, stats, genesis_header))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
 
     let daily_stats_by_date: HashMap<String, ckbadger_store::DailyStats> =
         daily_stats.into_iter().collect();
@@ -2668,19 +2711,10 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
             .to_string()
     });
 
-    // Exclude the last day (incomplete) like the SQL version did
-    let max_date = daily_block_stats
-        .iter()
-        .map(|(d, _)| d.as_str())
-        .max()
-        .map(|s| s.to_string());
-
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
-        if stats.avg_difficulty <= 0.0
-            || max_date
-                .as_ref()
-                .is_some_and(|m| date_str.as_str() >= m.as_str())
+        if !is_complete_day_key(in_progress, "daily block stats", &date_str)?
+            || stats.avg_difficulty <= 0.0
         {
             continue;
         }
@@ -2722,32 +2756,21 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         return ok(cached);
     }
 
-    let store = state.store.clone();
-    let daily_block_stats = tokio::task::spawn_blocking(move || store.list_daily_block_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, daily_block_stats) = load_daily_block_stats(&state).await?;
 
-    let max_date = daily_block_stats
-        .iter()
-        .map(|(d, _)| d.as_str())
-        .max()
-        .map(|s| s.to_string());
-
-    let data: Vec<ChartDataPoint> = daily_block_stats
-        .into_iter()
-        .filter(|(date, stats)| {
-            stats.avg_difficulty > 0.0
-                && max_date.as_ref().is_none_or(|m| date.as_str() < m.as_str())
-        })
-        .map(|(date_str, stats)| {
-            Ok(ChartDataPoint {
-                date: format_chart_date(&date_str)?,
-                value: format!("{:.0}", stats.avg_difficulty),
-                value2: None,
-            })
-        })
-        .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
+    for (date_str, stats) in daily_block_stats {
+        if !is_complete_day_key(in_progress, "daily block stats", &date_str)?
+            || stats.avg_difficulty <= 0.0
+        {
+            continue;
+        }
+        data.push(ChartDataPoint {
+            date: format_chart_date(&date_str)?,
+            value: format!("{:.0}", stats.avg_difficulty),
+            value2: None,
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -2767,34 +2790,24 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         return ok(cached);
     }
 
-    let store = state.store.clone();
-    let daily_block_stats = tokio::task::spawn_blocking(move || store.list_daily_block_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, daily_block_stats) = load_daily_block_stats(&state).await?;
 
-    let max_date = daily_block_stats
-        .iter()
-        .map(|(d, _)| d.as_str())
-        .max()
-        .map(|s| s.to_string());
-
-    let data: Vec<ChartDataPoint> = daily_block_stats
-        .into_iter()
-        .filter(|(date, _)| max_date.as_ref().is_none_or(|m| date.as_str() < m.as_str()))
-        .map(|(date_str, stats)| {
-            let uncle_rate = if stats.block_count > 0 {
-                stats.total_uncles as f64 / stats.block_count as f64
-            } else {
-                0.0
-            };
-            Ok(ChartDataPoint {
-                date: format_chart_date(&date_str)?,
-                value: format!("{:.6}", uncle_rate),
-                value2: None,
-            })
-        })
-        .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
+    for (date_str, stats) in daily_block_stats {
+        if !is_complete_day_key(in_progress, "daily block stats", &date_str)? {
+            continue;
+        }
+        let uncle_rate = if stats.block_count > 0 {
+            stats.total_uncles as f64 / stats.block_count as f64
+        } else {
+            0.0
+        };
+        data.push(ChartDataPoint {
+            date: format_chart_date(&date_str)?,
+            value: format!("{:.6}", uncle_rate),
+            value2: None,
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -3641,32 +3654,11 @@ where
 }
 
 async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
-        .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
-
     let store = state.store.clone();
-    let tip_timestamp = tokio::task::spawn_blocking(move || {
-        Ok::<_, anyhow::Error>(
-            store
-                .get_sync_tip_block()?
-                .map(|(_, header)| header.timestamp),
-        )
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-    let incomplete_tip_date = tip_timestamp
-        .map(|timestamp| {
-            DateTime::from_timestamp_millis(timestamp)
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "invalid sync-tip block timestamp while building inflation chart: {}",
-                        timestamp
-                    ))
-                })
-                .map(|date_time| date_time.with_timezone(&utc8).date_naive())
-        })
-        .transpose()?;
+    let incomplete_tip_date = tokio::task::spawn_blocking(move || InProgressDay::load(&store))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??
+        .map(|in_progress| in_progress.date());
     let cache_key = format!(
         "chart:inflation-rate:v2:{}",
         incomplete_tip_date
@@ -3720,16 +3712,6 @@ fn format_chart_date(date_key: &str) -> Result<String, ApiRouteError> {
                 "malformed chart date key {date_key:?} (expected YYYYMMDD): {error}"
             ))
         })
-}
-
-/// Current CKB day (UTC+8) as "YYYYMMDD" key. Used to exclude incomplete current day from charts.
-fn current_ckb_date_key() -> String {
-    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
-    Utc::now()
-        .with_timezone(&utc8)
-        .date_naive()
-        .format("%Y%m%d")
-        .to_string()
 }
 
 fn hodl_wave_cache_has_holder_count(response: &StackedAreaChartResponse) -> bool {
@@ -3930,12 +3912,26 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, all_stats) = tokio::task::spawn_blocking(move || {
+        let in_progress = InProgressDay::load(&store)?;
+        let rows = store
+            .list_daily_activity_stats()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((in_progress, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
 
-    // days=0 returns all data; otherwise take the last N days
+    // Complete days only: the tip block's day is still in progress.
+    let mut complete_stats = Vec::with_capacity(all_stats.len());
+    for (date, stats) in all_stats {
+        if is_complete_day_key(in_progress, "daily activity stats", &date)? {
+            complete_stats.push((date, stats));
+        }
+    }
+    let all_stats = complete_stats;
+
+    // days=0 returns all complete days; otherwise the last N complete days
     let selected: Vec<_> = if days == 0 {
         all_stats
     } else {

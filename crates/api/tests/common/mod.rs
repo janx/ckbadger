@@ -90,6 +90,42 @@ pub fn seed_genesis_baseline(store: &Arc<CkbadgerStore>) {
         .unwrap();
 }
 
+/// Seed the indexed tip block `number` at 12:00 UTC+8 on `utc8_date`
+/// (`YYYY-MM-DD`). Daily charts treat that day as in progress and every earlier
+/// day as complete (`ckbadger_api::utils::stats_day`); a daily row in a store
+/// without a tip block, or dated after the tip's day, is an error.
+pub fn seed_tip_block_on_utc8_day(store: &CkbadgerStore, number: i64, utc8_date: &str) {
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let timestamp = chrono::NaiveDate::parse_from_str(utc8_date, "%Y-%m-%d")
+        .unwrap()
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_local_timezone(utc8)
+        .single()
+        .unwrap()
+        .timestamp_millis();
+    let mut batch = StoreBatch::new(store);
+    batch.put_block_header(
+        number,
+        &CachedBlockHeader {
+            hash: vec![(number % 251) as u8; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+}
+
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());

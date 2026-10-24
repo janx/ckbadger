@@ -3453,4 +3453,47 @@ name.
 
 ---
 
+### STATS-013: Three definitions of "today", and three daily charts with none
+
+**Date**: 2026-10-24
+
+**Symptom**: On 2026-10-24 `/charts/average-block-time`, `/dao/charts/total-deposit` and
+`/stats/daily-activities` all ended with a point for 2026-10-24 — the partial current day — while
+`/charts/hash-rate` stopped at 10-23. The homepage's daily-change bars (DAO deposits, activity)
+therefore ended on a partial day, against the CLAUDE.md rule and STATS-003.
+
+**Root Cause**: Each daily handler decided for itself which day was incomplete. Hash rate,
+difficulty and uncle rate dropped the maximum row date of their own series; knowledge size and its
+composition chart dropped the wall-clock UTC+8 date (`current_ckb_date_key`); the inflation chart
+dropped the sync-tip block's date; and average block time, total deposit and daily activities
+dropped nothing. The wall-clock rule was wrong on its own terms too: an indexer that lags the
+chain (catching up after a restart) still has the tip block's day only partly indexed after
+midnight, and that day was charted as complete.
+
+**Fix**: one definition, `crates/api/src/utils/stats_day.rs`: the in-progress day is the UTC+8
+`block_date` of the indexed tip block — the same function the writers key daily rows with. Every
+earlier day is complete; a row dated after the tip day, or any row in a store without blocks, is an
+error naming the series, the row and the tip day; a non-canonical date key is an error. All nine
+daily handlers above use it, and `current_ckb_date_key` is gone. `/statistics/tx-stats` keeps its
+in-progress buckets by contract (see its doc comment). The DAO card's daily deltas only gain: their
+last bar is now a complete day.
+
+**Why the tests missed it**: no fixture seeded a tip block next to its daily rows, so "the last row
+is today" was the only shape any test knew, and the three violators had no test that put a tip day
+in the data at all. Regressions: `test_average_block_time_chart_excludes_the_in_progress_tip_day`,
+`test_total_deposit_chart_excludes_the_in_progress_tip_day`,
+`test_daily_activities_exclude_the_in_progress_tip_day`,
+`test_knowledge_size_chart_excludes_a_lagging_tip_day`,
+`test_knowledge_composition_chart_excludes_a_lagging_tip_day`,
+`test_average_block_time_chart_fails_fast_on_a_row_after_the_tip_day`.
+
+**Lesson**: A rule every chart must follow needs one function every chart calls; copies drift
+into different rules, and an endpoint written later copies none of them. "Complete" is a fact
+about the indexed chain, not the clock.
+
+**Files**: `crates/api/src/utils/stats_day.rs`, `crates/api/src/routes/{statistics,dao}.rs`,
+`crates/api/tests/{api_charts,api_dao,api_statistics}.rs`, `crates/api/tests/common/mod.rs`
+
+---
+
 _Last updated: 2026-10-24_

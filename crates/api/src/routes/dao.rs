@@ -16,6 +16,7 @@ use crate::response::{
     chart_response_has_data, default_limit, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
     ChartResponse, CursorPaginatedResponse,
 };
+use crate::utils::stats_day::{is_complete_iso_day, InProgressDay};
 use crate::utils::{
     dao_supply, parse_hash32, script_to_address, shannon_to_ckb, shannon_to_ckb_signed,
     validate_block_number,
@@ -1046,22 +1047,30 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     }
 
     let store = state.store.clone();
-    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (in_progress, snapshots) = tokio::task::spawn_blocking(move || {
+        let in_progress = InProgressDay::load(&store)?;
+        let rows = store
+            .list_dao_daily_snapshots()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((in_progress, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
     let depositors_series = build_total_depositors_series(&snapshots)?;
 
-    let data: Vec<ChartDataPoint> = snapshots
-        .iter()
-        .map(|s| -> Result<ChartDataPoint, ApiRouteError> {
-            Ok(ChartDataPoint {
-                date: s.date.clone(),
-                value: shannon_to_ckb(&s.total_deposited.to_string()),
-                value2: Some(depositor_series_value(&depositors_series, &s.date)?.to_string()),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // Complete days only: the tip block's snapshot is a running value, and
+    // consumers derive daily changes from consecutive points.
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(snapshots.len());
+    for s in &snapshots {
+        if !is_complete_iso_day(in_progress, "DAO daily snapshots", &s.date)? {
+            continue;
+        }
+        data.push(ChartDataPoint {
+            date: s.date.clone(),
+            value: shannon_to_ckb(&s.total_deposited.to_string()),
+            value2: Some(depositor_series_value(&depositors_series, &s.date)?.to_string()),
+        });
+    }
 
     let response = ChartResponse {
         data,
