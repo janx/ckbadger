@@ -241,7 +241,10 @@ export function diffSnapshots(prev: PipelineSnapshot | null, next: PipelineSnaps
       number: newest.number,
       cellbase: newest.cellbase.hash,
       contact,
-      payee: pays && payeeBlock ? { ...pays, cellbase: payeeBlock.cellbase.hash } : null,
+      payee:
+        pays && payeeBlock
+          ? { number: pays.number, hash: pays.hash, cellbase: payeeBlock.cellbase.hash }
+          : null,
     });
   }
 

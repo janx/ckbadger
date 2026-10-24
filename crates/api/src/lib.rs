@@ -90,6 +90,8 @@ pub struct AppState {
     pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
     /// In-memory cache for assets/tokens/object data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
+    /// `/pipeline`'s verified cellbase payments, bounded, by paying block hash.
+    pub pipeline_pays: Arc<routes::PipelinePaysCache>,
     /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
     pub asset_cache_warmup_error: Arc<RwLock<Option<String>>>,
     /// Background task status for observability (API-side tasks only).
@@ -337,6 +339,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         ckb_store,
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache,
+        pipeline_pays: Arc::new(routes::PipelinePaysCache::new()),
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
         background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),
         dob_decode_dir: config.dob_decode_dir,

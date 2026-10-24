@@ -1,5 +1,7 @@
 import type {
   PipelineBlock,
+  PipelineCellbasePays,
+  PipelineCellbaseReward,
   PipelinePoolTx,
   PipelineProposal,
   PipelineSnapshot,
@@ -37,6 +39,35 @@ export const poolTxHash = (name: string) =>
   hex64('9e', [...name].reduce((acc, ch) => acc * 131 + ch.charCodeAt(0), 7) % 2 ** 40);
 export const shortIdOf = (hash: string) => hash.slice(0, 22);
 
+/** Blocks up to this height pay no reward: their target would be genesis or earlier. */
+const FINALIZATION_DELAY = 11;
+
+/**
+ * The reward block `p` earned, paid by the cellbase of block `p + 11`, in exact shannons: an
+ * epoch's primary issuance, a secondary share that moves with the block and a fee split. `total`
+ * is the exact sum of the parts, the capacity the backend checks against the cellbase output.
+ */
+export function rewardOf(p: number): PipelineCellbaseReward {
+  const primary = BigInt(53_272_450_532);
+  const secondary = BigInt(10_228_311_644 + (p % 97) * 1_301);
+  const committed = BigInt(1_000_000 + (p % 13) * 77_777);
+  const proposal = BigInt((p % 7) * 12_345);
+  return {
+    primary: String(primary),
+    secondary: String(secondary),
+    committed: String(committed),
+    proposal: String(proposal),
+    total: String(primary + secondary + committed + proposal),
+    paid: true,
+  };
+}
+
+/** What the cellbase of block `n` pays: block `n − 11` and its reward; null up to block 11. */
+export function paysOf(n: number): PipelineCellbasePays | null {
+  const p = n - FINALIZATION_DELAY;
+  return p > 0 ? { number: p, hash: blockHash(p), reward: rewardOf(p) } : null;
+}
+
 const sizeFor = (seed: number) => 330 + ((seed * 137) % 900);
 const feeFor = (size: number, rateKb: number) => String(Math.ceil((size * rateKb) / 1000));
 
@@ -57,7 +88,7 @@ function emptyBlock(n: number): PipelineBlock {
     cellbase: {
       hash: cellbaseHash(n),
       size: CELLBASE_SIZE,
-      pays: n - 11 >= 0 ? { number: n - 11, hash: blockHash(n - 11) } : null,
+      pays: paysOf(n),
     },
   };
 }
@@ -331,7 +362,7 @@ export function mineNext(s: PipelineSnapshot, o: MineOptions): PipelineSnapshot 
     cellbase: {
       hash: cellbaseHash(n),
       size: CELLBASE_SIZE,
-      pays: { number: n - 11, hash: blockHash(n - 11) },
+      pays: paysOf(n),
     },
   };
   const nextBlocks = [mined, ...blocks.slice(0, blocks.length - 1)];

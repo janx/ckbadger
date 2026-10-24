@@ -195,6 +195,7 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         ckb_store: None,
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache: InMemoryCache::new(),
+        pipeline_pays: Arc::new(ckbadger_api::routes::PipelinePaysCache::new()),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
         dob_decode_dir: config.dob_decode_dir,
@@ -665,15 +666,46 @@ pub async fn mount_header_rpc(server: &MockServer, number: u64, hash: &str, ar: 
     }
 }
 
-/// `primary + secondary + committed + proposal` of the `miner_reward` every
-/// [`mount_block_economic_state_rpc`] answer carries.
-pub const BLOCK_ECONOMIC_STATE_REWARD_TOTAL: u128 = 0x1000 + 0x200 + 0x30 + 0x4;
+/// A `get_block_economic_state.miner_reward`, shannons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MockMinerReward {
+    pub primary: u64,
+    pub secondary: u64,
+    pub committed: u64,
+    pub proposal: u64,
+}
+
+impl MockMinerReward {
+    pub const fn total(&self) -> u64 {
+        self.primary + self.secondary + self.committed + self.proposal
+    }
+}
+
+/// The `miner_reward` every [`mount_block_economic_state_rpc`] answer carries,
+/// at mainnet magnitudes: 532.72450532 CKB primary issuance, a 102.28311644 CKB
+/// secondary share, and the miner/proposer split of one 2,057,612-shannon fee
+/// (committed = fee − ⌊0.4 · fee⌋).
+pub const MOCK_MINER_REWARD: MockMinerReward = MockMinerReward {
+    primary: 53_272_450_532,
+    secondary: 10_228_311_644,
+    committed: 1_234_568,
+    proposal: 89_012,
+};
+
+/// `primary + secondary + committed + proposal` of [`MOCK_MINER_REWARD`].
+pub const BLOCK_ECONOMIC_STATE_REWARD_TOTAL: u64 = MOCK_MINER_REWARD.total();
 
 /// The node's `get_block_economic_state`: each `(block_hash, finalized_at)`
 /// pair answers for exactly that block hash (any other hash gets wiremock's
 /// 404, which the API must treat as an error).
 pub async fn mount_block_economic_state_rpc(server: &MockServer, pairs: &[(&str, &str)]) {
-    mount_block_economic_state_rpc_delayed(server, pairs, std::time::Duration::ZERO).await;
+    mount_block_economic_state_rpc_with(
+        server,
+        pairs,
+        MOCK_MINER_REWARD,
+        std::time::Duration::ZERO,
+    )
+    .await;
 }
 
 /// [`mount_block_economic_state_rpc`], each answer sent after `delay`.
@@ -682,6 +714,17 @@ pub async fn mount_block_economic_state_rpc_delayed(
     pairs: &[(&str, &str)],
     delay: std::time::Duration,
 ) {
+    mount_block_economic_state_rpc_with(server, pairs, MOCK_MINER_REWARD, delay).await;
+}
+
+/// [`mount_block_economic_state_rpc`] answering `reward` after `delay`.
+pub async fn mount_block_economic_state_rpc_with(
+    server: &MockServer,
+    pairs: &[(&str, &str)],
+    reward: MockMinerReward,
+    delay: std::time::Duration,
+) {
+    let hex = |shannons: u64| format!("0x{shannons:x}");
     for (block_hash, finalized_at) in pairs {
         Mock::given(method("POST"))
             .and(body_partial_json(serde_json::json!({
@@ -695,14 +738,18 @@ pub async fn mount_block_economic_state_rpc_delayed(
                         "id": 1,
                         "result": {
                             "finalized_at": finalized_at,
-                            "issuance": { "primary": "0x1000", "secondary": "0x200" },
-                            "miner_reward": {
-                                "primary": "0x1000",
-                                "secondary": "0x200",
-                                "committed": "0x30",
-                                "proposal": "0x4"
+                            // The whole secondary issuance; the miner gets a share.
+                            "issuance": {
+                                "primary": hex(reward.primary),
+                                "secondary": hex(reward.secondary * 3)
                             },
-                            "txs_fee": "0x34"
+                            "miner_reward": {
+                                "primary": hex(reward.primary),
+                                "secondary": hex(reward.secondary),
+                                "committed": hex(reward.committed),
+                                "proposal": hex(reward.proposal)
+                            },
+                            "txs_fee": hex(2_057_612)
                         }
                     }))
                     .set_delay(delay),

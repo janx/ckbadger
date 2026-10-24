@@ -514,8 +514,28 @@ struct RawMinerReward {
 pub(crate) struct BlockEconomicState {
     /// The block that finalized this block's reward — its cellbase pays it.
     pub finalized_at: [u8; 32],
-    /// `primary + secondary + committed + proposal`, shannons.
-    pub miner_reward_total: u128,
+    /// The reward's four parts (`miner_reward`), shannons.
+    pub miner_reward: MinerReward,
+    /// `primary + secondary + committed + proposal`, shannons: the capacity of
+    /// the reward cell the finalizing block's cellbase creates.
+    pub miner_reward_total: u64,
+}
+
+/// The reward of a finalized block's miner, as ckb's `RewardCalculator`
+/// splits it (`core::MinerReward`), shannons. Each part is a CKB `Capacity`
+/// (u64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MinerReward {
+    /// Primary issuance: the block's whole primary block reward.
+    pub primary: u64,
+    /// The miner's share of the block's secondary issuance.
+    pub secondary: u64,
+    /// What the block's committed transactions paid, less the proposers'
+    /// share (`BlockReward::tx_fee`).
+    pub committed: u64,
+    /// The proposers' share of the fees of the transactions this block (or
+    /// an uncle it embeds) proposed first, committed within their window.
+    pub proposal: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -576,16 +596,35 @@ pub(crate) async fn fetch_block_economic_state(
         "get_block_economic_state.finalized_at",
     )
     .map_err(|e| ApiError::internal(format!("{call}: {e}")))?;
-    let reward = |value: &str, field: &str| {
-        parse_hex_u128(value, field).map_err(|e| ApiError::internal(format!("{call}: {e}")))
+    let reward = |value: &str, field: &str| -> Result<u64, ApiRouteError> {
+        let shannons =
+            parse_hex_u128(value, field).map_err(|e| ApiError::internal(format!("{call}: {e}")))?;
+        u64::try_from(shannons).map_err(|_| {
+            ApiError::internal(format!(
+                "{call}: {field} {value} exceeds a CKB capacity (u64 shannons)"
+            ))
+        })
     };
-    let miner_reward_total = reward(&raw.miner_reward.primary, "miner_reward.primary")?
-        + reward(&raw.miner_reward.secondary, "miner_reward.secondary")?
-        + reward(&raw.miner_reward.committed, "miner_reward.committed")?
-        + reward(&raw.miner_reward.proposal, "miner_reward.proposal")?;
+    let miner_reward = MinerReward {
+        primary: reward(&raw.miner_reward.primary, "miner_reward.primary")?,
+        secondary: reward(&raw.miner_reward.secondary, "miner_reward.secondary")?,
+        committed: reward(&raw.miner_reward.committed, "miner_reward.committed")?,
+        proposal: reward(&raw.miner_reward.proposal, "miner_reward.proposal")?,
+    };
+    let miner_reward_total = miner_reward
+        .primary
+        .checked_add(miner_reward.secondary)
+        .and_then(|sum| sum.checked_add(miner_reward.committed))
+        .and_then(|sum| sum.checked_add(miner_reward.proposal))
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "{call}: miner_reward {miner_reward:?} sums past a CKB capacity (u64 shannons)"
+            ))
+        })?;
 
     Ok(Some(BlockEconomicState {
         finalized_at,
+        miner_reward,
         miner_reward_total,
     }))
 }

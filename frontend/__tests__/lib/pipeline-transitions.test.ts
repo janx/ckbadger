@@ -12,6 +12,7 @@ import {
   diffSnapshots,
   type TransitionEvent,
 } from '@/lib/pipeline/transitions';
+import { rewardOf } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 
 const bh = (n: number, fork = '') => `0xb${fork}${n}`;
 
@@ -57,7 +58,7 @@ function blk(n: number, o: BlkOpts = {}): PipelineBlock {
     cellbase: {
       hash: `${o.hash ?? bh(n)}-cb`,
       size: 336,
-      pays: { number: n - 11, hash: bh(n - 11) },
+      pays: { number: n - 11, hash: bh(n - 11), reward: rewardOf(n - 11) },
     },
   };
 }

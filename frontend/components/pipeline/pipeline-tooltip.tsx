@@ -12,6 +12,7 @@ import type {
 import { shadeStep, tok } from '@/lib/pipeline/encoding';
 import { inWindow, tail4, windowRange } from '@/lib/pipeline/layout';
 import { fmtInt } from '@/components/pipeline/svg-text';
+import { formatCapacity } from '@/lib/utils';
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
 export interface TipContent {
@@ -108,19 +109,41 @@ export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipConten
   };
 }
 
+/**
+ * A cellbase: the block whose reward it pays, that reward (its total on the parent row, then the
+ * base issuance and the two fee shares), and which block pays its own block's reward.
+ */
 export function cellbaseTip(b: PipelineBlock, s: PipelineSnapshot): TipContent {
+  const pays = b.cellbase.pays;
   const paidBy = s.blocks.find((x) => x.cellbase.pays?.hash === b.hash) ?? null;
+  const rows: [string, string][] = [['block', num(b.number)]];
+  let foot =
+    "Every block starts with a cellbase. It mints new CKB and pays the reward of an earlier block — the one whose reward became final here (its finalized_at), once that block's proposal window had closed.";
+  if (pays) {
+    const r = pays.reward;
+    rows.push(
+      [
+        'pays reward of',
+        `${num(pays.number)} · ${formatCapacity(r.total)}${r.paid ? '' : ' · not paid'}`,
+      ],
+      ['· base issuance', formatCapacity(BigInt(r.primary) + BigInt(r.secondary))],
+      ['· committed fees', `${fmtInt(Number(r.committed))} sh`],
+      ['· proposal fees', `${fmtInt(Number(r.proposal))} sh`]
+    );
+    if (!r.paid) {
+      foot += ` The reward of ${num(pays.number)} is less than the occupied capacity of the cell that would hold it, so this cellbase has no output and the reward is not issued.`;
+    }
+  } else {
+    rows.push(['pays reward of', 'none yet']);
+  }
+  rows.push(['own reward', paidBy ? `paid by ${num(paidBy.number)}` : 'paid by a later block']);
   return {
     key: `cellbase:${b.hash}`,
     tone: TONE.committed,
     title: 'Cellbase',
     tag: 'first tx',
-    rows: [
-      ['block', num(b.number)],
-      ['pays reward of', b.cellbase.pays ? num(b.cellbase.pays.number) : 'none yet'],
-      ['own reward', paidBy ? `paid by ${num(paidBy.number)}` : 'paid by a later block'],
-    ],
-    foot: "Every block starts with a cellbase. It mints new CKB and pays the reward of an earlier block — the one whose reward became final here (its finalized_at), once that block's proposal window had closed.",
+    rows,
+    foot,
   };
 }
 

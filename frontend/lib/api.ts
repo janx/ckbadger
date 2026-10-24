@@ -1871,11 +1871,42 @@ interface PipelineTx {
   proposedIn: PipelineProposedIn;
 }
 
+/**
+ * The reward of the block a cellbase pays, as the node's `get_block_economic_state(target)
+ * .miner_reward` reports it: exact shannons, as decimal strings.
+ */
+interface PipelineCellbaseReward {
+  /** Primary issuance: the target's whole primary block reward. */
+  primary: string;
+  /** The miner's share of the target's secondary issuance. */
+  secondary: string;
+  /** The fees of the transactions the target committed, less the proposers' share. */
+  committed: string;
+  /** The proposers' share of the fees of the transactions the target proposed first. */
+  proposal: string;
+  /** primary + secondary + committed + proposal. */
+  total: string;
+  /**
+   * False only when `total` cannot cover the occupied capacity of its own reward cell: CKB then
+   * creates no cellbase output and the reward is not issued. Otherwise the cellbase's one output
+   * holds exactly `total`.
+   */
+  paid: boolean;
+}
+
+/** The block a cellbase pays (`finalized_at` names the cellbase's block) and its reward. */
+interface PipelineCellbasePays extends PipelineBlockRef {
+  reward: PipelineCellbaseReward;
+}
+
 interface PipelineCellbase {
   hash: string;
   size: number;
-  /** The block whose reward this cellbase pays (`finalized_at`); null before it exists. */
-  pays: PipelineBlockRef | null;
+  /**
+   * Null exactly for blocks at height `proposalWindowFarthest + 1` or below (1–11 on mainnet): their
+   * target would be genesis or earlier, so they pay no reward and their cellbase has no output.
+   */
+  pays: PipelineCellbasePays | null;
 }
 
 interface PipelineBlock {
@@ -2158,6 +2189,8 @@ export type {
   PipelineProposedIn,
   PipelineCyclesStatus,
   PipelineTx,
+  PipelineCellbaseReward,
+  PipelineCellbasePays,
   PipelineCellbase,
   PipelineBlock,
   PipelinePoolTx,

@@ -73,6 +73,70 @@ struct BlockSpec {
     /// One entry per embedded uncle: that uncle's proposal zone.
     uncles: Vec<Vec<ProposalShortId>>,
     txs: Vec<FixtureTx>,
+    cellbase: CellbaseOutput,
+}
+
+/// The finalization delay under the mainnet consensus fixture: farthest + 1.
+const FINALIZATION_DELAY: u64 = 11;
+
+/// What a fixture block's cellbase outputs.
+#[derive(Clone, Copy, Default)]
+enum CellbaseOutput {
+    /// What CKB requires: nothing up to [`FINALIZATION_DELAY`], above it one
+    /// output paying [`BLOCK_ECONOMIC_STATE_REWARD_TOTAL`] (the reward every
+    /// mocked `get_block_economic_state` reports) to the target's lock.
+    #[default]
+    ByConsensus,
+    /// No output.
+    Nothing,
+    /// One output of this capacity, to the target's lock.
+    Paying(u64),
+}
+
+/// The lock block `number`'s miner names in its cellbase witness: a
+/// secp256k1-shaped script (20-byte args), so a cell under it occupies
+/// 8 + 32 + 1 + 20 = 61 CKB.
+fn miner_lock(number: u64) -> packed::Script {
+    let mut args = [0u8; 20];
+    args[..8].copy_from_slice(&number.to_le_bytes());
+    packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x9B; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::from(args.to_vec()).pack())
+        .build()
+}
+
+/// Block `number`'s cellbase: the reward output `output` asks for, and a
+/// witness naming the block's miner lock.
+fn fixture_cellbase(number: u64, output: CellbaseOutput) -> TransactionView {
+    let capacity = match output {
+        CellbaseOutput::ByConsensus if number > FINALIZATION_DELAY => {
+            Some(BLOCK_ECONOMIC_STATE_REWARD_TOTAL)
+        }
+        CellbaseOutput::ByConsensus | CellbaseOutput::Nothing => None,
+        CellbaseOutput::Paying(capacity) => Some(capacity),
+    };
+    let witness = packed::CellbaseWitness::new_builder()
+        .lock(miner_lock(number))
+        .message(Bytes::new().pack())
+        .build();
+    let mut cellbase = ckb_types::core::TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(number))
+        .witness(witness.as_bytes().pack());
+    if let Some(capacity) = capacity {
+        let target = number
+            .checked_sub(FINALIZATION_DELAY)
+            .expect("a paying cellbase has a target");
+        cellbase = cellbase
+            .output(
+                packed::CellOutput::new_builder()
+                    .capacity(capacity.pack())
+                    .lock(miner_lock(target))
+                    .build(),
+            )
+            .output_data(Bytes::new().pack());
+    }
+    cellbase.build()
 }
 
 /// Blocks `0..=tip`, each with a cellbase at index 0.
@@ -88,12 +152,7 @@ impl FixtureChain {
         let mut parent = packed::Byte32::zero();
         for number in 0..=tip {
             let spec = specs.entry(number).or_default().clone();
-            let cellbase = ckb_types::core::TransactionBuilder::default()
-                .input(packed::CellInput::new_cellbase_input(number))
-                .output(packed::CellOutput::new_builder().build())
-                .output_data(Bytes::new().pack())
-                .witness(Bytes::from(vec![0u8; 8]).pack())
-                .build();
+            let cellbase = fixture_cellbase(number, spec.cellbase);
             let mut builder = BlockBuilder::default()
                 .number(number.pack())
                 .epoch(epoch.pack())
@@ -259,8 +318,8 @@ fn index_block(store: &CkbadgerStore, chain: &FixtureChain, number: u64) {
 /// `get_block_economic_state` for every block the fixture's cellbases pay:
 /// block `X - 11` is finalized at `X` (mainnet window: farthest 10).
 async fn mount_reward_targets(server: &MockServer, chain: &FixtureChain) {
-    let pairs: Vec<(String, String)> = (12..=chain.tip())
-        .map(|x| (chain.hash_hex(x - 11), chain.hash_hex(x)))
+    let pairs: Vec<(String, String)> = (FINALIZATION_DELAY + 1..=chain.tip())
+        .map(|x| (chain.hash_hex(x - FINALIZATION_DELAY), chain.hash_hex(x)))
         .collect();
     let pairs: Vec<(&str, &str)> = pairs
         .iter()
@@ -670,7 +729,11 @@ async fn test_pipeline_cellbase_pays_finalized_block() {
     for x in [12u64, 13] {
         assert_eq!(
             block_json(&json, x)["cellbase"]["pays"],
-            serde_json::json!({ "number": x - 11, "hash": chain.hash_hex(x - 11) }),
+            serde_json::json!({
+                "number": x - 11,
+                "hash": chain.hash_hex(x - 11),
+                "reward": expected_reward(MOCK_MINER_REWARD, true),
+            }),
             "block {x}'s cellbase pays block {}",
             x - 11
         );
@@ -718,6 +781,291 @@ async fn test_pipeline_cellbase_target_finalized_elsewhere_fails() {
     assert!(message.contains("C4"), "{message}");
     assert!(message.contains(&chain.hash_hex(13)), "{message}");
     assert!(message.contains(&chain.hash_hex(2)), "{message}");
+}
+
+/// The `reward` a cellbase pays as `/pipeline` serves it: exact shannons.
+fn expected_reward(reward: MockMinerReward, paid: bool) -> serde_json::Value {
+    serde_json::json!({
+        "primary": reward.primary.to_string(),
+        "secondary": reward.secondary.to_string(),
+        "committed": reward.committed.to_string(),
+        "proposal": reward.proposal.to_string(),
+        "total": reward.total().to_string(),
+        "paid": paid,
+    })
+}
+
+/// `get_block_economic_state` requests the node received.
+async fn economic_state_calls(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .expect("wiremock records requests")
+        .iter()
+        .filter(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("node RPC request bodies are JSON");
+            body["method"] == "get_block_economic_state"
+        })
+        .count()
+}
+
+/// The reward the cellbase pays is the target's `miner_reward`, part by part,
+/// and its output holds exactly the total (C6).
+#[tokio::test]
+async fn test_pipeline_cellbase_pays_the_reported_reward() {
+    let chain = FixtureChain::build(13, BTreeMap::new());
+    let fixture = pipeline_app(&chain, StoreSeed::default()).await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+
+    let reward = &block_json(&json, 13)["cellbase"]["pays"]["reward"];
+    assert_eq!(reward["primary"], "53272450532");
+    assert_eq!(reward["secondary"], "10228311644");
+    assert_eq!(reward["committed"], "1234568");
+    assert_eq!(reward["proposal"], "89012");
+    // 53_272_450_532 + 10_228_311_644 + 1_234_568 + 89_012.
+    assert_eq!(reward["total"], "63502085756");
+    assert_eq!(reward["paid"], true);
+    let output_capacity: u64 = chain.blocks[13].transactions()[0]
+        .outputs()
+        .get(0)
+        .expect("block 13's cellbase pays")
+        .capacity()
+        .unpack();
+    assert_eq!(reward["total"], output_capacity.to_string());
+}
+
+/// C6: a cellbase output that is not the reported reward is a broken chain
+/// view, never served.
+#[tokio::test]
+async fn test_pipeline_cellbase_output_not_the_reported_reward_fails() {
+    let chain = FixtureChain::build(
+        13,
+        specs(vec![(
+            13,
+            BlockSpec {
+                cellbase: CellbaseOutput::Paying(BLOCK_ECONOMIC_STATE_REWARD_TOTAL - 1),
+                ..Default::default()
+            },
+        )]),
+    );
+    let fixture = pipeline_app(&chain, StoreSeed::default()).await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("C6"), "{message}");
+    assert!(message.contains("block 13"), "{message}");
+    assert!(message.contains(&chain.hash_hex(13)), "{message}");
+    assert!(message.contains(&chain.hash_hex(2)), "{message}");
+    assert!(
+        message.contains(&(BLOCK_ECONOMIC_STATE_REWARD_TOTAL - 1).to_string()),
+        "{message}"
+    );
+}
+
+/// A reward too small for its own cell is not paid: CKB creates no output and
+/// the cellbase is empty (ckb `RewardVerifier`). Served, as `paid: false`.
+#[tokio::test]
+async fn test_pipeline_reward_too_small_for_its_cell_is_not_paid() {
+    // 60 CKB in all: less than the 61 CKB a cell under the target's lock occupies.
+    let tiny = MockMinerReward {
+        primary: 5_900_000_000,
+        secondary: 99_000_000,
+        committed: 900_000,
+        proposal: 100_000,
+    };
+    let chain = FixtureChain::build(
+        13,
+        specs(vec![(
+            13,
+            BlockSpec {
+                cellbase: CellbaseOutput::Nothing,
+                ..Default::default()
+            },
+        )]),
+    );
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        false,
+        Some(pool_at_tip(&chain, vec![], vec![])),
+    )
+    .await;
+    mount_block_economic_state_rpc(
+        &fixture.server,
+        &[(&chain.hash_hex(1), &chain.hash_hex(12))],
+    )
+    .await;
+    mount_block_economic_state_rpc_with(
+        &fixture.server,
+        &[(&chain.hash_hex(2), &chain.hash_hex(13))],
+        tiny,
+        Duration::ZERO,
+    )
+    .await;
+
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(
+        block_json(&json, 13)["cellbase"]["pays"],
+        serde_json::json!({
+            "number": 2,
+            "hash": chain.hash_hex(2),
+            "reward": expected_reward(tiny, false),
+        })
+    );
+    assert_eq!(
+        block_json(&json, 12)["cellbase"]["pays"]["reward"],
+        expected_reward(MOCK_MINER_REWARD, true)
+    );
+}
+
+/// C6: an empty cellbase whose reward would cover its own cell is not a reward
+/// CKB declined to pay.
+#[tokio::test]
+async fn test_pipeline_empty_cellbase_with_a_payable_reward_fails() {
+    let chain = FixtureChain::build(
+        13,
+        specs(vec![(
+            13,
+            BlockSpec {
+                cellbase: CellbaseOutput::Nothing,
+                ..Default::default()
+            },
+        )]),
+    );
+    let fixture = pipeline_app(&chain, StoreSeed::default()).await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("C6"), "{message}");
+    assert!(message.contains(&chain.hash_hex(13)), "{message}");
+    assert!(message.contains("no output"), "{message}");
+}
+
+/// C6: a block with no reward to pay (its target would be genesis or earlier)
+/// has an empty cellbase; one that pays something anyway is not served.
+#[tokio::test]
+async fn test_pipeline_cellbase_paying_before_the_first_target_fails() {
+    let chain = FixtureChain::build(
+        13,
+        specs(vec![(
+            11,
+            BlockSpec {
+                cellbase: CellbaseOutput::Paying(BLOCK_ECONOMIC_STATE_REWARD_TOTAL),
+                ..Default::default()
+            },
+        )]),
+    );
+    let fixture = pipeline_app(&chain, StoreSeed::default()).await;
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("C6"), "{message}");
+    assert!(message.contains("block 11"), "{message}");
+    assert!(message.contains(&chain.hash_hex(11)), "{message}");
+}
+
+/// A reward whose parts sum past a CKB capacity names the paying block.
+#[tokio::test]
+async fn test_pipeline_reward_parts_past_a_capacity_fail() {
+    let chain = FixtureChain::build(12, BTreeMap::new());
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        false,
+        Some(pool_at_tip(&chain, vec![], vec![])),
+    )
+    .await;
+    mount_block_economic_state_rpc_with(
+        &fixture.server,
+        &[(&chain.hash_hex(1), &chain.hash_hex(12))],
+        MockMinerReward {
+            primary: u64::MAX,
+            secondary: 1,
+            committed: 0,
+            proposal: 0,
+        },
+        Duration::ZERO,
+    )
+    .await;
+
+    let (status, json) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("block 12"), "{message}");
+    assert!(message.contains(&chain.hash_hex(12)), "{message}");
+    assert!(message.contains(&chain.hash_hex(1)), "{message}");
+    assert!(message.contains("u64"), "{message}");
+}
+
+/// A verified payment is fetched once per paying block: polls of the same
+/// chain ask the node nothing more, and a new block asks only for itself.
+#[tokio::test]
+async fn test_pipeline_cellbase_rewards_are_cached_per_paying_block() {
+    let chain = FixtureChain::build(14, BTreeMap::new());
+    let fixture = pipeline_app_with(
+        &chain,
+        StoreSeed {
+            indexed_tip: Some(13),
+            ..Default::default()
+        },
+        &chain.blocks,
+        true,
+        Some(PoolRpc {
+            tip_number: 13,
+            tip_hash: chain.hash_hex(13),
+            pending: vec![],
+            proposed: vec![],
+        }),
+    )
+    .await;
+
+    let (status, first) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {first}");
+    assert_eq!(first["status"], "ok", "{first}");
+    assert_eq!(
+        economic_state_calls(&fixture.server).await,
+        2,
+        "blocks 12 and 13 pay blocks 1 and 2"
+    );
+
+    let (status, second) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {second}");
+    assert_eq!(economic_state_calls(&fixture.server).await, 2);
+    for x in [12u64, 13] {
+        assert_eq!(
+            block_json(&second, x)["cellbase"],
+            block_json(&first, x)["cellbase"],
+            "block {x}"
+        );
+    }
+
+    // Block 14 arrives at both ends.
+    index_block(&fixture.store, &chain, 14);
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "tx_pool_info" }),
+        ))
+        .respond_with(pool_info_at(14, &chain.hash_hex(14)))
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    let (status, third) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "got {third}");
+    assert_eq!(third["tip"]["number"], 14, "{third}");
+    assert_eq!(
+        economic_state_calls(&fixture.server).await,
+        3,
+        "only block 14's payment (block 3) is new"
+    );
+    assert_eq!(
+        block_json(&third, 14)["cellbase"]["pays"]["reward"],
+        expected_reward(MOCK_MINER_REWARD, true)
+    );
 }
 
 #[tokio::test]

@@ -31,7 +31,7 @@ use std::sync::Arc;
 use crate::AppState;
 
 /// Public so tests can hold `/pipeline` to its own bound.
-pub use pipeline::PIPELINE_TIP_WAIT;
+pub use pipeline::{PipelinePaysCache, PIPELINE_TIP_WAIT};
 
 pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()

@@ -11,7 +11,9 @@
 //! - a committed transaction's `proposedIn` is the earliest proposal inside
 //!   `[c - farthest, c - closest]` — the proposal the proposal reward pays;
 //! - a cellbase pays block `X - (farthest + 1)`, cross-checked against the
-//!   node's `get_block_economic_state(..).finalized_at`;
+//!   node's `get_block_economic_state(..).finalized_at`, and the reward it
+//!   pays is that call's `miner_reward`, cross-checked against the cellbase's
+//!   own output (C6);
 //! - a pool transaction's stage comes from the same zones, not from the node's
 //!   pending/proposed labels (those only feed the P1 check), and only when
 //!   the pool was read at ckbadger's sync tip (`status`). The node has a block
@@ -23,27 +25,30 @@
 //!   consensus block limits.
 //!
 //! Chain-guaranteed invariants are checked, never repaired: a violation is a
-//! 500 naming the invariant (C1–C5, P1, P3) and the block/transaction it broke
+//! 500 naming the invariant (C1–C6, P1, P3) and the block/transaction it broke
 //! on.
 //!
 //! Read-only: store + node DB (`CkbChainReader`) reads and node RPC calls.
 
-use axum::{extract::State, routing::get, Extension, Router};
+use axum::{extract::State, routing::get, Extension, Json, Router};
 use ckb_store_reader::CkbChainReader;
+use ckb_types::core::Capacity;
+use ckb_types::packed;
 use ckb_types::prelude::*;
 use ckbadger_store::read_view::{self, ReadViewGuard};
 use ckbadger_store::{CachedBlockHeader, CkbadgerStore, TxIndexEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
-use crate::cache::{CacheTtl, InMemoryCache};
+use crate::cache::{BoundedCache, CacheTtl, InMemoryCache};
 use crate::consensus::{ConsensusParams, ProposalWindow};
 use crate::pool::{HttpPoolSource, PoolSource, RawTxPool, TxPoolInfo};
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
-use crate::routes::blocks::fetch_block_economic_state;
+use crate::routes::blocks::{fetch_block_economic_state, BlockEconomicState};
 use crate::routes::proposal_window::{
     block_proposal_zone, earliest_proposal_in_window, resolve_committed_txs_with, ZoneProposal,
 };
@@ -284,9 +289,51 @@ pub struct PipelineTx {
 pub struct PipelineCellbase {
     pub hash: String,
     pub size: i32,
-    /// The block whose reward this cellbase pays; `None` while that would be
-    /// genesis or earlier (those blocks' cellbases pay nothing).
-    pub pays: Option<BlockRef>,
+    /// The block whose reward this cellbase pays, and that reward.
+    ///
+    /// `None` exactly when the block is at height `farthest + 1` or below
+    /// (blocks 1–11 on mainnet): its target would be genesis or earlier, CKB
+    /// finalizes no reward there, and its cellbase has no output. Every other
+    /// shown block finalizes its target by construction (C4), so its `pays`
+    /// is always present; a node that cannot report it is an error, never a
+    /// `None`.
+    pub pays: Option<CellbasePays>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellbasePays {
+    /// The target block, `X - (farthest + 1)`, which the node reports
+    /// finalized at this cellbase's block.
+    pub number: i64,
+    pub hash: String,
+    pub reward: CellbaseReward,
+}
+
+/// The target block's reward, as `get_block_economic_state(target)
+/// .miner_reward` reports it. Amounts are exact shannons, decimal strings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellbaseReward {
+    /// Primary issuance: the target's whole primary block reward.
+    pub primary: String,
+    /// The miner's share of the target's secondary issuance.
+    pub secondary: String,
+    /// The fees of the transactions the target committed, less the
+    /// proposers' share.
+    pub committed: String,
+    /// The proposers' share of the fees of the transactions the target (or an
+    /// uncle it embeds) proposed first, committed within their window.
+    pub proposal: String,
+    /// `primary + secondary + committed + proposal`.
+    pub total: String,
+    /// Whether the cellbase pays it. CKB pays a reward by creating the
+    /// cellbase's one output, of capacity `total`, under the lock the target's
+    /// cellbase witness names; when `total` cannot cover that cell's own
+    /// occupied capacity the cellbase has no output and the reward is not
+    /// issued, so `paid` is `false`. Otherwise the output's capacity is
+    /// exactly `total` (C6).
+    pub paid: bool,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -306,6 +353,9 @@ struct NodeBody {
     zone: Vec<ZoneProposal>,
     /// Transaction hashes in block order; index 0 is the cellbase.
     tx_hashes: Vec<[u8; 32]>,
+    /// The capacity of each cellbase output, shannons (CKB allows none or
+    /// one).
+    cellbase_capacities: Vec<u64>,
 }
 
 fn node_body_cache_key(hash: &[u8; 32]) -> String {
@@ -488,6 +538,20 @@ fn load_node_body(
             .iter()
             .map(|tx| tx.hash().unpack())
             .collect(),
+        cellbase_capacities: block
+            .transactions()
+            .first()
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "C3: block {number} {} has no transactions in the node DB, not even a \
+                     cellbase",
+                    hex(hash)
+                ))
+            })?
+            .outputs()
+            .into_iter()
+            .map(|output| output.capacity().unpack())
+            .collect(),
     };
     mem_cache.set(&key, &body, CacheTtl::BLOCK);
     Ok(body)
@@ -549,12 +613,12 @@ fn proposal_state(
 }
 
 /// Build the shown blocks, newest first. `pays` maps each shown block number to
-/// its verified reward target. Fails with the invariant (C2, C3, C5) and the
-/// block/transaction it broke on.
+/// what its cellbase pays, verified. Fails with the invariant (C2, C3, C5) and
+/// the block/transaction it broke on.
 fn build_chain(
     window: ProposalWindow,
     chain: &LoadedChain,
-    pays: &HashMap<i64, Option<BlockRef>>,
+    pays: &HashMap<i64, Option<CellbasePays>>,
 ) -> Result<Vec<PipelineBlock>, String> {
     // C5: the blocks read form one chain.
     for (parent, block) in chain.blocks.values().zip(chain.blocks.values().skip(1)) {
@@ -722,28 +786,78 @@ fn build_chain(
 }
 
 // ---------------------------------------------------------------------------
-// Cellbase reward targets (node RPC, cached per block hash)
+// Cellbase payments (node RPC + node DB, cached per paying block hash)
 // ---------------------------------------------------------------------------
 
-fn pays_cache_key(hash: &[u8; 32]) -> String {
-    format!("pipeline:pays:{}", hex::encode(hash))
+/// How many verified cellbase payments `/pipeline` keeps: twice the blocks it
+/// shows, so the blocks a reorg replaced never push the shown ones out. A new
+/// block adds one entry; the oldest insert goes first.
+pub(crate) const PIPELINE_PAYS_CACHE: NonZeroUsize =
+    NonZeroUsize::new(2 * PIPELINE_BLOCKS as usize).expect("PIPELINE_BLOCKS is positive");
+
+/// What each shown block's cellbase pays — its target and that target's
+/// reward, verified (C4, C6) — keyed by the PAYING block's hash.
+///
+/// That key fixes the value: a block hash fixes every ancestor, hence the
+/// target, the target's reward (its proposal reward depends on the blocks up
+/// to the payer's parent) and the payer's cellbase output. The target's own
+/// hash would not: its `get_block_economic_state` follows whichever chain the
+/// node holds above it.
+pub struct PipelinePaysCache(BoundedCache<[u8; 32], CellbasePays>);
+
+impl PipelinePaysCache {
+    pub fn new() -> Self {
+        Self(BoundedCache::new(PIPELINE_PAYS_CACHE))
+    }
 }
 
-/// The block whose reward `block`'s cellbase pays: `X - (farthest + 1)`, the
-/// finalization delay. Blocks whose target would be genesis or earlier pay
-/// nothing. C4: the node must report that target finalized AT `block`.
+impl Default for PipelinePaysCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CellbaseReward {
+    fn new(economic_state: &BlockEconomicState, paid: bool) -> Self {
+        let reward = economic_state.miner_reward;
+        Self {
+            primary: reward.primary.to_string(),
+            secondary: reward.secondary.to_string(),
+            committed: reward.committed.to_string(),
+            proposal: reward.proposal.to_string(),
+            total: economic_state.miner_reward_total.to_string(),
+            paid,
+        }
+    }
+}
+
+/// What block `X`'s cellbase pays: block `X - (farthest + 1)`'s reward (the
+/// finalization delay). Blocks whose target would be genesis or earlier pay
+/// nothing and have no reward output. C4: the node reports that target
+/// finalized AT `X`. C6: the cellbase pays the reported reward by CKB's rule.
 async fn resolve_pays(
     state: &AppState,
+    ckb: &CkbChainReader,
     window: ProposalWindow,
     chain: &LoadedChain,
     block: &LoadedBlock,
-) -> Result<Option<BlockRef>, ApiRouteError> {
+) -> Result<Option<CellbasePays>, ApiRouteError> {
     let target = block.number - (window.farthest() + 1);
     if target <= GENESIS {
+        // ckb `RewardVerifier`: without a finalization target the cellbase
+        // creates no output.
+        if !block.body.cellbase_capacities.is_empty() {
+            return Err(ApiError::internal(format!(
+                "C6: block {} {} has no reward to pay (its target {target} would be genesis or \
+                 earlier), yet its cellbase has {} output(s)",
+                block.number,
+                hex(&block.hash),
+                block.body.cellbase_capacities.len()
+            )));
+        }
         return Ok(None);
     }
-    let key = pays_cache_key(&block.hash);
-    if let Some(cached) = state.mem_cache.get::<BlockRef>(&key) {
+    if let Some(cached) = state.pipeline_pays.0.get(&block.hash) {
         return Ok(Some(cached));
     }
     let target_hash = match chain.blocks.get(&target) {
@@ -763,7 +877,16 @@ async fn resolve_pays(
         }
     };
     let economic_state = fetch_block_economic_state(&state.ckb_rpc_url, &target_hash)
-        .await?
+        .await
+        .map_err(|(status, Json(mut error))| {
+            error.message = format!(
+                "block {} {} pays the reward of block {target}: {}",
+                block.number,
+                hex(&block.hash),
+                error.message
+            );
+            (status, Json(error))
+        })?
         .ok_or_else(|| {
             ApiError::internal(format!(
                 "C4: block {} {} is indexed, yet the node reports its reward target \
@@ -783,12 +906,87 @@ async fn resolve_pays(
             hex(&economic_state.finalized_at)
         )));
     }
-    let pays = BlockRef {
+    let total = economic_state.miner_reward_total;
+    let paid = cellbase_pays_reward(&block.body.cellbase_capacities, total, || {
+        reward_cell_lacks_capacity(ckb, target, &target_hash, total)
+    })
+    .map_err(|e| {
+        ApiError::internal(format!(
+            "C6: block {} {} pays the reward of block {target} {} ({:?}, total {total}): {e}",
+            block.number,
+            hex(&block.hash),
+            hex(&target_hash),
+            economic_state.miner_reward
+        ))
+    })?;
+    let pays = CellbasePays {
         number: target,
         hash: hex(&target_hash),
+        reward: CellbaseReward::new(&economic_state, paid),
     };
-    state.mem_cache.set(&key, &pays, CacheTtl::BLOCK);
+    state.pipeline_pays.0.insert(block.hash, pays.clone());
     Ok(Some(pays))
+}
+
+/// C6, ckb's `RewardVerifier` rule for a block with a finalization target:
+/// its cellbase pays the target's reward `total` as its one output, of
+/// capacity exactly `total` — unless `total` cannot cover that output's own
+/// occupied capacity (`lacks_capacity`), in which case the cellbase has no
+/// output at all. Returns whether the reward is paid.
+fn cellbase_pays_reward(
+    cellbase_capacities: &[u64],
+    total: u64,
+    lacks_capacity: impl FnOnce() -> Result<bool, String>,
+) -> Result<bool, String> {
+    match cellbase_capacities {
+        [capacity] if *capacity == total => Ok(true),
+        [capacity] => Err(format!(
+            "its cellbase output holds {capacity} shannons, not the reward total"
+        )),
+        [] if lacks_capacity()? => Ok(false),
+        [] => Err(
+            "its cellbase has no output, yet the reward covers the occupied capacity \
+                   of a cell under the target's lock"
+                .to_string(),
+        ),
+        outputs => Err(format!(
+            "its cellbase has {} outputs; a cellbase has at most one",
+            outputs.len()
+        )),
+    }
+}
+
+/// Whether a reward cell of `total` shannons under the lock the target's
+/// cellbase witness names lacks capacity for itself: the test ckb's
+/// `RewardVerifier` applies (`CellOutput::is_lack_of_capacity`, no data).
+fn reward_cell_lacks_capacity(
+    ckb: &CkbChainReader,
+    target: i64,
+    target_hash: &[u8; 32],
+    total: u64,
+) -> Result<bool, String> {
+    let block = ckb.get_block(target_hash).ok_or_else(|| {
+        format!(
+            "its target block {target} {} is not in the node DB",
+            hex(target_hash)
+        )
+    })?;
+    let witness = block
+        .transactions()
+        .first()
+        .and_then(|cellbase| cellbase.witnesses().get(0))
+        .ok_or_else(|| format!("target block {target} has no cellbase witness in the node DB"))?;
+    let lock = packed::CellbaseWitness::from_slice(&witness.raw_data())
+        .map_err(|e| {
+            format!("target block {target}'s cellbase witness is not a CellbaseWitness: {e}")
+        })?
+        .lock();
+    packed::CellOutput::new_builder()
+        .capacity(Capacity::shannons(total).pack())
+        .lock(lock)
+        .build()
+        .is_lack_of_capacity(Capacity::zero())
+        .map_err(|e| format!("occupied capacity of the reward cell: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,6 +1427,7 @@ async fn build_snapshot(
     let window = consensus.tx_proposal_window;
     let chain = {
         let store = state.store.clone();
+        let ckb = ckb.clone();
         let mem_cache = state.mem_cache.clone();
         let tip = pinned.tip;
         tokio::task::spawn_blocking(move || load_chain(&store, &ckb, &mem_cache, window, tip))
@@ -1240,7 +1439,7 @@ async fn build_snapshot(
     for block in chain.shown() {
         pays.insert(
             block.number,
-            resolve_pays(state, window, &chain, block).await?,
+            resolve_pays(state, &ckb, window, &chain, block).await?,
         );
     }
     // Every store read of the snapshot is done.
@@ -1515,6 +1714,53 @@ mod tests {
                 pays: None,
             },
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // C6: what a cellbase pays
+    // -----------------------------------------------------------------------
+
+    fn never_asked() -> Result<bool, String> {
+        panic!("a cellbase with an output never needs the reward cell's occupied capacity")
+    }
+
+    #[test]
+    fn a_cellbase_output_of_exactly_the_total_pays_it() {
+        assert_eq!(
+            cellbase_pays_reward(&[63_502], 63_502, never_asked),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn a_cellbase_output_other_than_the_total_is_an_error() {
+        for capacity in [63_501, 63_503] {
+            let error = cellbase_pays_reward(&[capacity], 63_502, never_asked).unwrap_err();
+            assert!(error.contains(&capacity.to_string()), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_empty_cellbase_pays_nothing_only_for_a_reward_too_small_for_its_cell() {
+        assert_eq!(cellbase_pays_reward(&[], 60, || Ok(true)), Ok(false));
+        let error = cellbase_pays_reward(&[], 63_502, || Ok(false)).unwrap_err();
+        assert!(error.contains("no output"), "{error}");
+        assert_eq!(
+            cellbase_pays_reward(&[], 60, || Err("target not in the node DB".to_string())),
+            Err("target not in the node DB".to_string())
+        );
+    }
+
+    #[test]
+    fn a_cellbase_has_at_most_one_output() {
+        let error = cellbase_pays_reward(&[1, 63_501], 63_502, never_asked).unwrap_err();
+        assert!(error.contains("2 outputs"), "{error}");
+    }
+
+    #[test]
+    fn the_pays_cache_outlives_the_shown_window() {
+        assert!(PIPELINE_PAYS_CACHE.get() >= 2 * PIPELINE_BLOCKS as usize);
+        assert_eq!(PipelinePaysCache::new().0.capacity(), PIPELINE_PAYS_CACHE);
     }
 
     fn open_proposal(id: u8, uncle_index: Option<usize>) -> PipelineProposal {
