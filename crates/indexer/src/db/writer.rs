@@ -226,7 +226,7 @@ pub(crate) use addresses::build_script_reference_rollup_state;
 #[cfg(test)]
 pub(crate) use addresses::collect_current_script_reference_rollup_state;
 pub(crate) use cells::is_cross_store_inconsistency;
-pub use dao::{DaoWithdrawalContext, DaoWithdrawalContextTrait};
+pub(crate) use dao::LiveDaoBatch;
 pub use reorg::ReorgResult;
 pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;

@@ -805,7 +805,6 @@ mod tests {
         inputs: Vec<crate::parser::transaction::ParsedInput>,
         cells: Vec<crate::parser::cell::ParsedCell>,
         witnesses: Vec<String>,
-        outputs_data: Vec<String>,
     ) -> TxData {
         let inputs_count =
             i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
@@ -821,7 +820,6 @@ mod tests {
             inputs,
             cells,
             witnesses,
-            outputs_data,
             total_input_capacity: 0,
             total_output_capacity: 0,
             fee: 0,
@@ -1391,7 +1389,6 @@ mod tests {
             }],
             vec![dummy_dao_cell(20_000_000_000, false)],
             vec![],
-            vec!["0x0100000000000000".to_string()],
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
@@ -1483,7 +1480,6 @@ mod tests {
             vec![],
             vec![dummy_dao_cell_with_lock(capacity, true, lock_hash.clone())],
             vec![],
-            vec!["0x0000000000000000".to_string()],
         );
         let phase1 = dummy_tx_data(
             [0x62; 32],
@@ -1495,7 +1491,6 @@ mod tests {
             }],
             vec![dummy_dao_cell_with_lock(capacity, false, lock_hash.clone())],
             vec![],
-            vec!["0x0100000000000000".to_string()],
         );
 
         let consumed_dao_map = DaoConsumedMap::new();
@@ -1567,7 +1562,6 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![],
             vec![],
             vec![],
         );
@@ -1657,7 +1651,6 @@ mod tests {
             }],
             vec![],
             vec![],
-            vec![],
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
@@ -1732,7 +1725,6 @@ mod tests {
             }],
             vec![dummy_dao_cell(9_900_000_000, false)],
             vec![],
-            vec!["0x0100000000000000".to_string()],
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
@@ -1803,7 +1795,6 @@ mod tests {
             }],
             vec![],
             vec![],
-            vec![],
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
@@ -1872,7 +1863,6 @@ mod tests {
                 dummy_dao_cell_with_lock(300_00000000, true, lock_hash.clone()),
             ],
             vec![],
-            vec![],
         );
 
         // Step 2: Phase-1 — consume the first deposit (status=0), create withdraw-request.
@@ -1886,7 +1876,6 @@ mod tests {
             }],
             vec![dummy_dao_cell(200_00000000, false)],
             vec![],
-            vec!["0x0100000000000000".to_string()],
         );
 
         // Step 3: Phase-2 — consume the first withdraw-request (status=1).
@@ -1898,7 +1887,6 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![],
             vec![],
             vec![],
         );

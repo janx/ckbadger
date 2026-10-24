@@ -12,7 +12,6 @@ use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
     MnftTypeIndex, ParticipantId, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
@@ -23,7 +22,8 @@ use ckbadger_store::CkbadgerStore;
 use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
 use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::writer::DaoSnapshotBoundary;
-use crate::db::{BatchWriter, DaoWithdrawalContext};
+use crate::db::writer::LiveDaoBatch;
+use crate::db::BatchWriter;
 use crate::parser::{
     BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotCellParser, DotbitParser,
     MnftParser, ScriptParser, SporeParser, TransactionParser, UdtParser,
@@ -570,16 +570,38 @@ fn build_activity_input_views<'a>(
         .collect()
 }
 
-/// Extract outpoints whose DAO status == 1 (withdraw request) from consumed_dao_map.
-/// The returned set lets T_ACT classify inputs without per-input RocksDB reads.
-fn dao_withdraw_outpoints_from_map(
-    consumed_dao_map: &crate::sync::dao_helpers::DaoConsumedMap,
-) -> HashSet<(Vec<u8>, i16)> {
-    consumed_dao_map
-        .iter()
-        .filter(|(_, row)| row.status == 1) // status == 1 means withdraw request
-        .map(|(k, _)| k.clone())
-        .collect()
+/// Every live DAO cell is exactly one lifecycle entry: a deposit (status 0)
+/// or a withdraw request (status 1). The cell layer counts live DAO-typed
+/// cells in the live-cell summary from created/consumed cells alone; the
+/// lifecycle counts them from `dao_deposits`. Before the batch commits, the
+/// post-batch lifecycle count (committed status-0/1 rows plus this batch's
+/// net change) must equal the post-batch summary's DAO class.
+///
+/// A lost transition — a completion that never moved its deposit to
+/// status 2 (POSTMORTEM DAO-032), a deposit never recorded, a rollback that
+/// restored one side only — breaks this equality at the first batch that
+/// commits it, instead of surfacing weeks later as wrong `/dao/statistics`.
+fn ensure_dao_lifecycle_matches_live_dao_cells(
+    store: &CkbadgerStore,
+    live_dao: &LiveDaoBatch,
+    summary: &LiveCellSummary,
+) -> Result<()> {
+    let deposits = store.count_dao_deposits_by_status(0)?;
+    let requests = store.count_dao_deposits_by_status(1)?;
+    let lifecycle = i128::from(deposits) + i128::from(requests) + live_dao.live_dao_cell_delta();
+    if lifecycle != i128::from(summary.dao) {
+        bail!(
+            "DAO lifecycle disagrees with the live DAO cells at block {} (0x{}): status-0/1 entries after this batch={} (committed deposits={}, committed requests={}, batch delta={}), live DAO-typed cells={}; a DAO transition was lost or duplicated — fix the writer, then purge and re-sync from genesis",
+            summary.tip_block_number,
+            hex::encode(summary.tip_block_hash),
+            lifecycle,
+            deposits,
+            requests,
+            live_dao.live_dao_cell_delta(),
+            summary.dao,
+        );
+    }
+    Ok(())
 }
 
 /// Correct fees for DAO withdrawal-completion (phase-2) txs on the live-sync
@@ -672,171 +694,6 @@ fn correct_dao_withdrawal_fees(
         tx_data.fee = fee;
     }
     Ok(())
-}
-
-/// Pre-compute DAO compensation for each withdraw-complete outpoint.
-/// This allows the activity builder to include compensation in activities
-/// without duplicating the DAO processing logic.
-///
-/// The `consumed_dao_map` key is the withdraw-request outpoint (tx_hash, output_index)
-/// being consumed in Phase 2. The value struct has fields for the original deposit outpoint,
-/// capacity_str, deposit_block, and status.
-/// Only status==1 entries are withdraw completes.
-fn pre_compute_dao_compensations(
-    store: &CkbadgerStore,
-    consumed_dao_map: &crate::sync::dao_helpers::DaoConsumedMap,
-) -> Result<HashMap<(Vec<u8>, i16), i64>> {
-    use crate::db::writer::dao::{calculate_dao_compensation_from_ar, extract_ar_from_dao};
-
-    // Filter to status==1 entries only
-    let withdraw_entries: Vec<_> = consumed_dao_map
-        .iter()
-        .filter(|(_, row)| row.status == 1)
-        .collect();
-
-    if withdraw_entries.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // For each withdraw-complete entry, look up the DaoDepositCacheEntry
-    // to get withdraw_request_block (needed for AR lookup).
-    // The deposit is keyed by (original_tx_hash, original_output_index).
-    let mut blocks_needed: HashSet<i64> = HashSet::new();
-    let mut entries_with_request_block: Vec<(
-        &(Vec<u8>, i16), // withdraw outpoint key (for result map)
-        i64,             // capacity
-        i64,             // occupied capacity
-        i64,             // deposit_block
-        i64,             // withdraw_request_block
-    )> = Vec::new();
-
-    for (withdraw_key, row) in &withdraw_entries {
-        let orig_tx_hash = &row.tx_hash;
-        let orig_output_index = row.output_index;
-        let capacity_str = &row.capacity_str;
-        let deposit_block = row.deposit_block;
-        let capacity: i64 = capacity_str.parse().map_err(|e| {
-            anyhow!(
-                "invalid DAO capacity string in compensation pre-compute: value='{}', error={}",
-                capacity_str,
-                e
-            )
-        })?;
-
-        // Look up the deposit entry to get withdraw_request_block
-        let outpoint_key = keys::encode_outpoint(orig_tx_hash, orig_output_index);
-        let (request_block, occupied_capacity) = if let Some(value) =
-            store.get_cf(store.cf_dao_deposits(), &outpoint_key)?
-        {
-            let entry: ckbadger_store::types::DaoDepositCacheEntry =
-                bincode::deserialize(&value).map_err(|e| {
-                    anyhow!(
-                        "failed to deserialize DAO deposit for compensation pre-compute: outpoint=0x{}:{}, error={}",
-                        hex::encode(orig_tx_hash),
-                        orig_output_index,
-                        e
-                    )
-                })?;
-            match (
-                entry.withdraw_request_block,
-                // RFC-0023 computes `counted_capacity` from the WITHDRAWING
-                // (phase-1 request) cell, not the original deposit cell.
-                entry.withdraw_request_occupied_capacity,
-            ) {
-                (Some(b), Some(request_occupied)) => (b, request_occupied),
-                (None, _) => bail!(
-                    "withdraw_request_block missing for status=1 deposit in compensation pre-compute: outpoint=0x{}:{}",
-                    hex::encode(orig_tx_hash),
-                    orig_output_index,
-                ),
-                (Some(b), None) => bail!(
-                    "withdraw_request_occupied_capacity missing for status=1 deposit in compensation pre-compute: outpoint=0x{}:{}, request_block={}",
-                    hex::encode(orig_tx_hash),
-                    orig_output_index,
-                    b,
-                ),
-            }
-        } else {
-            bail!(
-                "DAO deposit entry not found in store during compensation pre-compute: outpoint=0x{}:{}",
-                hex::encode(orig_tx_hash),
-                orig_output_index,
-            );
-        };
-
-        blocks_needed.insert(deposit_block);
-        blocks_needed.insert(request_block);
-        entries_with_request_block.push((
-            withdraw_key,
-            capacity,
-            occupied_capacity,
-            deposit_block,
-            request_block,
-        ));
-    }
-
-    // Batch-fetch DAO header fields for all needed blocks
-    let blocks_vec: Vec<i64> = blocks_needed.into_iter().collect();
-    let dao_fields = store.get_dao_fields_batch(&blocks_vec)?;
-
-    // Compute compensations
-    let mut compensations = HashMap::new();
-    for (withdraw_key, capacity, occupied_capacity, deposit_block, request_block) in
-        entries_with_request_block
-    {
-        let deposit_dao = dao_fields.get(&deposit_block).ok_or_else(|| {
-            anyhow!(
-                "DAO field missing for deposit block in compensation pre-compute: block={}, outpoint=0x{}:{}",
-                deposit_block,
-                hex::encode(&withdraw_key.0),
-                withdraw_key.1,
-            )
-        })?;
-        let withdraw_dao = dao_fields.get(&request_block).ok_or_else(|| {
-            anyhow!(
-                "DAO field missing for request block in compensation pre-compute: block={}, outpoint=0x{}:{}",
-                request_block,
-                hex::encode(&withdraw_key.0),
-                withdraw_key.1,
-            )
-        })?;
-        let ar_deposit = extract_ar_from_dao(deposit_dao).ok_or_else(|| {
-            anyhow!(
-                "failed to extract AR from deposit block DAO field in compensation pre-compute: block={}, outpoint=0x{}:{}",
-                deposit_block,
-                hex::encode(&withdraw_key.0),
-                withdraw_key.1,
-            )
-        })?;
-        let ar_withdraw = extract_ar_from_dao(withdraw_dao).ok_or_else(|| {
-            anyhow!(
-                "failed to extract AR from request block DAO field in compensation pre-compute: block={}, outpoint=0x{}:{}",
-                request_block,
-                hex::encode(&withdraw_key.0),
-                withdraw_key.1,
-            )
-        })?;
-        let compensation = calculate_dao_compensation_from_ar(
-            capacity,
-            occupied_capacity,
-            ar_deposit,
-            ar_withdraw,
-        )
-        .map_err(|e| {
-                anyhow!(
-                    "DAO compensation calculation failed in pre-compute: outpoint=0x{}:{}, capacity={}, ar_deposit={}, ar_withdraw={}, error={}",
-                    hex::encode(&withdraw_key.0),
-                    withdraw_key.1,
-                    capacity,
-                    ar_deposit,
-                    ar_withdraw,
-                    e,
-                )
-            })?;
-        compensations.insert(withdraw_key.clone(), compensation);
-    }
-
-    Ok(compensations)
 }
 
 fn apply_object_collection_activity_count_deltas_with_pending(
@@ -1568,7 +1425,6 @@ pub(super) fn parse_blocks_parallel(
                             )
                         })?;
                         let witnesses: Vec<String> = tx.witnesses.clone();
-                        let outputs_data: Vec<String> = tx.outputs_data.clone();
                         let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();
                         // Compute output-side semantic tags; input-side tags are
                         // OR-ed in later by write_parsed_batch after prefetch.
@@ -1621,7 +1477,6 @@ pub(super) fn parse_blocks_parallel(
                             inputs,
                             cells,
                             witnesses,
-                            outputs_data,
                             total_input_capacity: 0,
                             total_output_capacity,
                             fee: 0,
@@ -1860,42 +1715,48 @@ impl Indexer {
             }
         }
 
-        // DAO context resolution + phase-2 fee correction.
+        // DAO lifecycle resolution + phase-2 fee correction.
         //
         // This MUST run before `insert_transactions_batch` below stages
         // `TxIndexEntry`: the parser writes a placeholder fee for txs that
         // consume a withdraw-request outpoint (DAO compensation is unknown at
         // parse time), and this is the single point on the live path where
         // the real fee is computed (mirroring bulk_build::resolved_tx_fee).
-        // All reads go to committed store state: a consumed withdraw-request
-        // outpoint always references a request committed in an earlier batch
-        // (a same-block request+completion is impossible — the completion
-        // must reference the request block header as a header dep).
-        let consumed_dao_map = {
-            let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                let mut seen = HashSet::new();
-                all_input_outpoints
-                    .into_iter()
-                    .filter(|x| seen.insert(x.clone()))
-                    .collect()
-            };
-            if unique_outpoints.is_empty() {
-                HashMap::new()
-            } else {
-                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                    .iter()
-                    .map(|(h, i)| (h.as_slice(), *i))
-                    .collect();
-                self.writer
-                    .find_consumed_dao_deposits_batch(&outpoint_refs)?
-            }
-        };
-        // DAO withdraw-request outpoints for fee correction and activity
-        // classification (no per-input DB reads).
-        let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
-        // Pre-computed DAO compensations for fee correction and activities.
-        let dao_compensations =
-            pre_compute_dao_compensations(self.writer.store(), &consumed_dao_map)?;
+        //
+        // Every DAO transition of the batch is resolved here ONCE, in chain
+        // order, against committed state shadowed by the batch's own earlier
+        // transitions. A batch spans many blocks, so a withdraw request and
+        // the completion spending it can both be inside it (they only can
+        // never share a block). The fee correction, the activity views, the
+        // daily DAO deltas and the staged lifecycle rows all read this one
+        // resolution (POSTMORTEM DAO-032).
+        let batch_dao_ars: HashMap<i64, i64> = all_parsed_blocks
+            .iter()
+            .map(|parsed| {
+                Ok((
+                    parsed.number,
+                    extract_ar_i64_from_dao(&parsed.dao, parsed.number)?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        // A resolution failure is a deterministic property of the chain and
+        // the committed lifecycle: retrying the batch cannot change it.
+        let live_dao =
+            LiveDaoBatch::resolve(self.writer.store(), &all_tx_data, &batch_dao_ars, |key| {
+                input_cell_info
+                    .get(key)
+                    .or_else(|| batch_cell_infos.get(key))
+            })
+            .map_err(|source| {
+                PreCommitInvariantError::new(
+                    "DAO lifecycle",
+                    source.context(format!("live batch {}-{}", first_block, last_block)),
+                )
+            })?;
+        // DAO withdraw-request outpoints and their claimed compensation, for
+        // fee correction and activity classification (no per-input DB reads).
+        let dao_withdraw_outpoints = live_dao.withdraw_request_outpoints();
+        let dao_compensations = live_dao.compensations().clone();
         correct_dao_withdrawal_fees(
             &mut all_tx_data,
             &dao_withdraw_outpoints,
@@ -2064,10 +1925,6 @@ impl Indexer {
         let commit_phase_total_ms: f64;
         let tracker_state_bytes: usize;
         let mut batch_stats;
-        // Post-batch DAO lifecycle view of everything this batch stages, used to
-        // materialize completed-day snapshots exactly before the atomic commit.
-        let staged_dao_entries: HashMap<Vec<u8>, ckbadger_store::types::DaoDepositCacheEntry>;
-        let mut staged_dao_completions: HashMap<Vec<u8>, (i64, Vec<u8>)> = HashMap::new();
         let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
@@ -2260,258 +2117,12 @@ impl Indexer {
             })
         })?;
 
-        // Group A: DAO processing
-        {
-            // Build DAO field map from parsed blocks so that
-            // process_dao_withdrawals_batch can read AR for blocks in this
-            // batch (whose headers haven't been committed to the store yet).
-            let batch_dao_fields: HashMap<i64, Vec<u8>> = all_parsed_blocks
-                .iter()
-                .map(|p| (p.number, p.dao.to_vec()))
-                .collect();
-
-            let mut all_dao_deposits: Vec<(
-                crate::parser::ParsedDaoDeposit,
-                i64,
-                DateTime<Utc>,
-                i64,
-            )> = Vec::new();
-            let mut block_tx_idx = 0usize;
-            for parsed in all_parsed_blocks {
-                let tx_count_for_block =
-                    checked_tx_count(parsed.transactions_count, parsed.number)?;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                block_tx_idx += tx_count_for_block;
-                let ar = extract_ar_i64_from_dao(&parsed.dao, parsed.number)?;
-                for tx_data in tx_slice {
-                    let dao_deposits =
-                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells)?;
-                    for deposit in dao_deposits {
-                        all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
-                    }
-                }
-            }
-            if !all_dao_deposits.is_empty() {
-                self.writer
-                    .insert_dao_deposits_batch(&all_dao_deposits, &mut data_batch)?;
-            }
-
-            // `consumed_dao_map`, `dao_withdraw_outpoints`, and
-            // `dao_compensations` were resolved before the tx index was
-            // staged (see the phase-2 fee correction above).
-
-            // Build a same-batch deposit map for deposits created in this
-            // batch that may also be consumed within the same batch.
-            let mut same_batch_dao_deposits: crate::sync::dao_helpers::DaoConsumedMap =
-                HashMap::new();
-            // Post-batch DAO entries for deposits this batch creates or moves to
-            // phase 1. `process_dao_withdrawals_batch` keeps this in sync with
-            // what it stages into `data_batch`, so it doubles as the read-your-
-            // writes overlay for pre-commit daily snapshot materialization.
-            let mut pending_dao_entries: HashMap<
-                [u8; 34],
-                ckbadger_store::types::DaoDepositCacheEntry,
-            > = HashMap::new();
-            for (deposit, block_number, ts, ar) in &all_dao_deposits {
-                let deposit_output_index = checked_i32_to_i16(
-                    deposit.output_index,
-                    "DAO deposit output index while building same-batch map",
-                )
-                .map_err(|e| {
-                    anyhow!(
-                        "{}: deposit_tx_hash=0x{}, block={}",
-                        e,
-                        hex::encode(&deposit.tx_hash),
-                        block_number
-                    )
-                })?;
-                same_batch_dao_deposits.insert(
-                    (deposit.tx_hash.clone(), deposit_output_index),
-                    crate::sync::dao_helpers::DaoConsumedRow {
-                        tx_hash: deposit.tx_hash.clone(),
-                        output_index: deposit_output_index,
-                        capacity_str: deposit.capacity.to_string(),
-                        deposit_block: *block_number,
-                        status: 0, // active
-                        lock_script_hash: deposit.lock_script_hash.clone(),
-                    },
-                );
-                let outpoint_key =
-                    ckbadger_store::keys::encode_outpoint(&deposit.tx_hash, deposit_output_index);
-                pending_dao_entries.insert(
-                    outpoint_key,
-                    ckbadger_store::types::DaoDepositCacheEntry {
-                        capacity: deposit.capacity,
-                        occupied_capacity: deposit.occupied_capacity,
-                        deposit_block_number: *block_number,
-                        deposit_timestamp: ts.timestamp_millis(),
-                        lock_script_hash: deposit.lock_script_hash.clone(),
-                        deposit_ar: *ar,
-                        status: 0,
-                        withdraw_request_tx: None,
-                        withdraw_request_output_index: None,
-                        withdraw_request_block: None,
-                        withdraw_request_ar: None,
-                        withdraw_block: None,
-                        withdraw_tx: None,
-                        withdraw_request_occupied_capacity: None,
-                        withdraw_to_output_index: None,
-                        compensation: None,
-                    },
-                );
-            }
-
-            if !consumed_dao_map.is_empty() || !same_batch_dao_deposits.is_empty() {
-                let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
-                let mut block_tx_idx = 0usize;
-                for parsed in all_parsed_blocks {
-                    let tx_count_for_block =
-                        checked_tx_count(parsed.transactions_count, parsed.number)?;
-                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                    block_tx_idx += tx_count_for_block;
-                    for tx_data in tx_slice {
-                        if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                            continue;
-                        }
-                        let mut consumed_deposits: Vec<crate::sync::dao_helpers::DaoConsumedRow> =
-                            Vec::new();
-                        for input in &tx_data.inputs {
-                            let key = (
-                                input.previous_tx_hash.to_vec(),
-                                parsed_input_outpoint_index_i16(
-                                    input.previous_output_index,
-                                    "sync_indexer",
-                                )?,
-                            );
-                            if let Some(deposit_info) = consumed_dao_map
-                                .get(&key)
-                                .or_else(|| same_batch_dao_deposits.get(&key))
-                            {
-                                consumed_deposits.push(deposit_info.clone());
-                            }
-                        }
-                        if consumed_deposits.is_empty() {
-                            continue;
-                        }
-                        let tx_inputs: Vec<(Vec<u8>, i16)> = tx_data
-                            .inputs
-                            .iter()
-                            .map(|input| {
-                                let output_index =
-                                    i16::try_from(input.previous_output_index).map_err(|_| {
-                                        anyhow!(
-                                            "DAO processing input index exceeds i16 range: tx_hash=0x{}, previous_output_index={}",
-                                            hex::encode(tx_data.hash),
-                                            input.previous_output_index
-                                        )
-                                    })?;
-                                Ok((input.previous_tx_hash.to_vec(), output_index))
-                            })
-                            .collect::<Result<_>>()?;
-                        let mut new_dao_outputs: Vec<crate::db::writer::dao::NewDaoOutput> =
-                            Vec::new();
-                        let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> = Vec::new();
-                        for (idx, cell) in tx_data.cells.iter().enumerate() {
-                            let output_index = checked_usize_to_i16(
-                                idx,
-                                "DAO output index while processing grouped withdrawals",
-                            )
-                            .map_err(|e| {
-                                anyhow!(
-                                    "{}: tx_hash=0x{}, block={}",
-                                    e,
-                                    hex::encode(tx_data.hash),
-                                    parsed.number
-                                )
-                            })?;
-                            if let Some(ref type_code_hash) = cell.type_code_hash {
-                                if DaoParser::is_dao_code_hash(type_code_hash)
-                                    && cell.data_size == 8
-                                {
-                                    if let Some(data) = tx_data.outputs_data.get(idx) {
-                                        let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                        if let Some(deposit_block) =
-                                            DaoParser::parse_deposit_block_number(&data_bytes)
-                                        {
-                                            new_dao_outputs.push(
-                                                crate::db::writer::dao::NewDaoOutput {
-                                                    tx_hash: tx_data.hash.to_vec(),
-                                                    output_index,
-                                                    lock_script_hash: cell.lock_script_hash.clone(),
-                                                    capacity: cell.capacity,
-                                                    // RFC-0023 computes
-                                                    // compensation from the
-                                                    // withdrawing cell, so the
-                                                    // request cell's own
-                                                    // occupied capacity is what
-                                                    // phase-2 must use.
-                                                    occupied_capacity:
-                                                        occupied_capacity_shannons_i64(
-                                                            cell.lock_args.len(),
-                                                            cell.type_args
-                                                                .as_ref()
-                                                                .map(|args| args.len()),
-                                                            cell.data_size,
-                                                        ),
-                                                    deposit_block,
-                                                },
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    candidate_withdraw_to_outputs
-                                        .push((output_index, cell.lock_script_hash.clone()));
-                                }
-                            } else {
-                                candidate_withdraw_to_outputs
-                                    .push((output_index, cell.lock_script_hash.clone()));
-                            }
-                        }
-                        withdrawal_contexts.push(DaoWithdrawalContext {
-                            consumed_deposits,
-                            new_dao_outputs,
-                            tx_inputs,
-                            candidate_withdraw_to_outputs,
-                            block_number: parsed.number,
-                            consuming_tx_hash: tx_data.hash.to_vec(),
-                            timestamp: parsed.timestamp,
-                        });
-                    }
-                }
-                if !withdrawal_contexts.is_empty() {
-                    self.writer.process_dao_withdrawals_batch(
-                        &withdrawal_contexts,
-                        &mut data_batch,
-                        &mut pending_dao_entries,
-                        &batch_dao_fields,
-                    )?;
-                }
-
-                // Phase-2 completions are staged into `data_batch` but not into
-                // `pending_dao_entries`, so record them separately as
-                // (deposit outpoint -> completion block + tx). The store derives
-                // the completed entry — and therefore the claimed compensation —
-                // from the committed phase-1 entry through its own single
-                // frozen-request-AR path, so nothing is recomputed here.
-                for ctx in &withdrawal_contexts {
-                    for row in &ctx.consumed_deposits {
-                        if row.status != 1 {
-                            continue;
-                        }
-                        let outpoint_key = keys::encode_outpoint(&row.tx_hash, row.output_index);
-                        staged_dao_completions.insert(
-                            outpoint_key.to_vec(),
-                            (ctx.block_number, ctx.consuming_tx_hash.clone()),
-                        );
-                    }
-                }
-            }
-
-            staged_dao_entries = pending_dao_entries
-                .into_iter()
-                .map(|(outpoint_key, entry)| (outpoint_key.to_vec(), entry))
-                .collect();
-        }
+        // Group A: DAO lifecycle — stage exactly what `live_dao` resolved.
+        live_dao.stage(&mut data_batch);
+        // Post-batch DAO lifecycle view of everything this batch stages, used to
+        // materialize completed-day snapshots exactly before the atomic commit.
+        let staged_dao_entries = live_dao.staged_entries();
+        let staged_dao_completions = live_dao.staged_completions()?;
 
         // Group B: UDT processing
         {
@@ -3758,31 +3369,10 @@ impl Indexer {
                 )
             })?;
 
-        // Pre-build consumed DAO deposit map for delta computation
+        // The daily DAO deltas read the batch's one lifecycle resolution.
         let dao_code_hash_for_stats =
             crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let mut all_input_outpoints_for_dao: Vec<(Vec<u8>, i16)> = Vec::new();
-        for tx in all_tx_data.iter().filter(|tx| !tx.is_cellbase) {
-            for input in &tx.inputs {
-                all_input_outpoints_for_dao.push((
-                    input.previous_tx_hash.to_vec(),
-                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
-                ));
-            }
-        }
-        let consumed_dao_for_stats = if !all_input_outpoints_for_dao.is_empty() {
-            let unique: Vec<(Vec<u8>, i16)> = {
-                let mut seen = HashSet::new();
-                all_input_outpoints_for_dao
-                    .into_iter()
-                    .filter(|x| seen.insert(x.clone()))
-                    .collect()
-            };
-            let refs: Vec<(&[u8], i16)> = unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-            self.writer.find_consumed_dao_deposits_batch(&refs)?
-        } else {
-            HashMap::new()
-        };
+        let consumed_dao_for_stats = live_dao.consumed();
         let mut same_batch_dao_for_stats = DaoSameBatchMap::new();
         let mut active_dao_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut ever_deposited_by_lock: HashMap<Vec<u8>, bool> = HashMap::new();
@@ -4069,7 +3659,7 @@ impl Indexer {
                 tx_slice,
                 block_date,
                 &dao_code_hash_for_stats,
-                &consumed_dao_for_stats,
+                consumed_dao_for_stats,
                 &mut same_batch_dao_for_stats,
                 &input_cell_info,
                 &batch_cell_infos,
@@ -4170,6 +3760,14 @@ impl Indexer {
                     status.total_cells_created,
                     status.total_cells_consumed,
                 )?;
+                ensure_dao_lifecycle_matches_live_dao_cells(
+                    self.writer.store(),
+                    &live_dao,
+                    summary,
+                )
+                .map_err(|source| {
+                    PreCommitInvariantError::new("DAO lifecycle vs live DAO cells", source)
+                })?;
                 stats_batch
                     .put_live_cell_summary_snapshots(&live_cell_summary_snapshots)
                     .with_context(|| {
@@ -4846,6 +4444,7 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::keys;
     use ckbadger_store::LiveCellInfo;
     use std::sync::Arc;
 
@@ -4913,7 +4512,6 @@ mod tests {
             vec![],
             vec![plain.clone(), dao, unknown_typed],
             vec![],
-            vec![],
         );
         tx0.tx_index = 0;
         let mut tx1 = dummy_tx_data(
@@ -4925,7 +4523,6 @@ mod tests {
                 since: 0,
             }],
             vec![replacement_plain],
-            vec![],
             vec![],
         );
         tx1.tx_index = 1;
@@ -5203,7 +4800,6 @@ mod tests {
             }],
             vec![],
             vec![],
-            vec![],
         );
 
         let empty_cell_info = HashMap::new();
@@ -5245,7 +4841,6 @@ mod tests {
                 previous_output_index: 3,
                 since: 0,
             }],
-            vec![],
             vec![],
             vec![],
         );
@@ -5298,7 +4893,6 @@ mod tests {
                 previous_output_index: 1,
                 since: 0,
             }],
-            vec![],
             vec![],
             vec![],
         );
@@ -5355,7 +4949,6 @@ mod tests {
                 previous_output_index: 1,
                 since: 0,
             }],
-            vec![],
             vec![],
             vec![],
         );
@@ -5608,9 +5201,9 @@ mod tests {
 
     #[test]
     fn test_collect_committed_proposal_ids_uses_first_10_bytes_and_skips_cellbase() {
-        let tx1 = dummy_tx_data([0x11; 32], false, vec![], vec![], vec![], vec![]);
-        let tx2 = dummy_tx_data([0x22; 32], false, vec![], vec![], vec![], vec![]);
-        let tx3_cellbase = dummy_tx_data([0x33; 32], true, vec![], vec![], vec![], vec![]);
+        let tx1 = dummy_tx_data([0x11; 32], false, vec![], vec![], vec![]);
+        let tx2 = dummy_tx_data([0x22; 32], false, vec![], vec![], vec![]);
+        let tx3_cellbase = dummy_tx_data([0x33; 32], true, vec![], vec![], vec![]);
 
         let ids = collect_committed_proposal_ids(&[tx1, tx2, tx3_cellbase]);
 
@@ -5621,8 +5214,8 @@ mod tests {
 
     #[test]
     fn test_collect_committed_proposal_ids_deduplicates_identical_hashes() {
-        let tx_a = dummy_tx_data([0x44; 32], false, vec![], vec![], vec![], vec![]);
-        let tx_b = dummy_tx_data([0x44; 32], false, vec![], vec![], vec![], vec![]);
+        let tx_a = dummy_tx_data([0x44; 32], false, vec![], vec![], vec![]);
+        let tx_b = dummy_tx_data([0x44; 32], false, vec![], vec![], vec![]);
 
         let ids = collect_committed_proposal_ids(&[tx_a, tx_b]);
 
@@ -5681,7 +5274,6 @@ mod tests {
         inputs: Vec<crate::parser::transaction::ParsedInput>,
         cells: Vec<crate::parser::cell::ParsedCell>,
         witnesses: Vec<String>,
-        outputs_data: Vec<String>,
     ) -> TxData {
         let inputs_count =
             i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
@@ -5698,7 +5290,6 @@ mod tests {
 
             cells,
             witnesses,
-            outputs_data,
             total_input_capacity: 0,
             total_output_capacity: 0,
             fee: 0,
@@ -5722,7 +5313,7 @@ mod tests {
             since: 0,
         }];
         inputs.extend(extra_inputs);
-        let mut tx = dummy_tx_data([0xd3; 32], false, inputs, vec![], vec![], vec![]);
+        let mut tx = dummy_tx_data([0xd3; 32], false, inputs, vec![], vec![]);
         tx.total_input_capacity = total_input_capacity;
         tx.total_output_capacity = total_output_capacity;
         tx.fee = parser_fee;
@@ -7217,6 +6808,259 @@ mod tests {
                 expected_fee,
                 "phase-2 tx with extra plain inputs must have its fee recomputed with compensation"
             );
+        }
+
+        // ---- Phase-1 and phase-2 inside ONE live batch ----
+        //
+        // A live catch-up writes up to 5,000 blocks per batch. On 2026-10-23
+        // mainnet caught up 107,968 blocks in 24 such batches, and three
+        // deposits whose withdraw request and withdrawal completion landed in
+        // the same batch were left at phase 1 forever (completion blocks
+        // 20,709,591 / 20,731,017 / 20,805,024, each with its request
+        // 425-3,719 blocks earlier in the same batch). A request and its
+        // completion can never share a block (the completion header-deps the
+        // request block), but nothing stops them sharing a batch.
+
+        /// Block 103: the completion tx (0xd3) spends the request cell
+        /// `0xd2:0` into one plain output paying `expected_fee`.
+        fn completion_block(expected_fee: i64) -> BlockResponseWithCycles {
+            let output_capacity =
+                i64::try_from(DEPOSIT_CAPACITY).unwrap() + DAO_COMPENSATION - expected_fee;
+            let completion_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd3; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xd2; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{output_capacity:x}"),
+                    lock: lock_script(),
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            block(
+                103,
+                10_200_000_000_000_000,
+                vec![cellbase_tx(0xc3, 500_00000000), completion_tx],
+            )
+        }
+
+        fn stored_dao_entry(
+            store: &CkbadgerStore,
+            tx_hash: [u8; 32],
+            output_index: i16,
+        ) -> ckbadger_store::types::DaoDepositCacheEntry {
+            let key = keys::encode_outpoint(&tx_hash, output_index);
+            let raw = store
+                .get_cf(store.cf_dao_deposits(), &key)
+                .expect("dao_deposits read must not fail")
+                .expect("DAO deposit entry must exist");
+            bincode::deserialize(&raw).expect("decode DaoDepositCacheEntry")
+        }
+
+        fn live_dao_fixture_store() -> (Arc<CkbadgerStore>, Indexer) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            (store, indexer)
+        }
+
+        /// The incident's shape: the deposit is committed by an earlier batch,
+        /// then the withdraw request (block 102) and the withdrawal completion
+        /// (block 103) are written by one batch. The completion must move the
+        /// deposit to status 2 with its claimed compensation, and the
+        /// completion tx must carry its true fee.
+        #[tokio::test]
+        async fn test_live_batch_completes_withdrawal_requested_in_same_batch() {
+            let (store, indexer) = live_dao_fixture_store();
+            let mut setup = phase_setup_blocks();
+            let block_102 = setup.pop().unwrap();
+            for setup_block in setup {
+                write_live_block(&indexer, setup_block).await.unwrap();
+            }
+            let expected_fee: i64 = 527;
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![block_102, completion_block(expected_fee)],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            let entry = stored_dao_entry(&store, [0xd1; 32], 0);
+            assert_eq!(
+                entry.status, 2,
+                "a completion of a request written earlier in the same batch must complete the deposit: {entry:?}"
+            );
+            assert_eq!(entry.withdraw_request_block, Some(102));
+            assert_eq!(entry.withdraw_request_tx, Some(vec![0xd2; 32]));
+            assert_eq!(entry.withdraw_request_output_index, Some(0));
+            assert_eq!(entry.withdraw_block, Some(103));
+            assert_eq!(entry.withdraw_tx, Some(vec![0xd3; 32]));
+            assert_eq!(entry.compensation, Some(DAO_COMPENSATION));
+            assert_eq!(
+                stored_fee(&store, [0xd3; 32]),
+                expected_fee,
+                "the completion's fee must include the compensation of a same-batch request"
+            );
+            let latest = store
+                .get_latest_dao_statistics()
+                .unwrap()
+                .expect("DAO latest statistics are refreshed after the batch");
+            assert_eq!(latest.active_deposits, 0, "{latest:?}");
+            assert_eq!(latest.pending_withdrawal_capacity, 0, "{latest:?}");
+            assert_eq!(latest.total_compensation_paid, i128::from(DAO_COMPENSATION));
+            assert_eq!(latest.unclaimed_compensation, 0, "{latest:?}");
+        }
+
+        /// The store shape the 2026-10-23 incident left behind: the request
+        /// cell is spent (the cell layer saw the completion) while the
+        /// lifecycle still says phase 1. The next live batch must refuse to
+        /// commit on top of it, as a pre-commit invariant, naming both counts.
+        #[tokio::test]
+        async fn test_live_batch_refuses_to_commit_over_a_lost_dao_completion() {
+            let (store, indexer) = live_dao_fixture_store();
+            let mut blocks = phase_setup_blocks();
+            blocks.push(completion_block(527));
+            for single in blocks {
+                write_live_block(&indexer, single).await.unwrap();
+            }
+            assert_eq!(store.get_live_cell_summary().unwrap().unwrap().dao, 0);
+
+            // Put the deposit back at phase 1, the way the pre-fix writer
+            // left it.
+            let completed = stored_dao_entry(&store, [0xd1; 32], 0);
+            let lost = ckbadger_store::types::DaoDepositCacheEntry {
+                status: 1,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+                ..completed
+            };
+            let mut corrupt = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+            corrupt.put_dao_deposit(&keys::encode_outpoint(&[0xd1; 32], 0), &lost);
+            corrupt.commit().unwrap();
+
+            let err = write_live_block(
+                &indexer,
+                block(
+                    104,
+                    10_200_000_000_000_000,
+                    vec![cellbase_tx(0xc4, 500_00000000)],
+                ),
+            )
+            .await
+            .unwrap_err();
+            let invariant = err
+                .downcast_ref::<PreCommitInvariantError>()
+                .unwrap_or_else(|| panic!("expected a pre-commit invariant, got {err:#}"));
+            assert_eq!(invariant.component, "DAO lifecycle vs live DAO cells");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("at block 104"), "{msg}");
+            assert!(msg.contains("committed requests=1"), "{msg}");
+            assert!(msg.contains("live DAO-typed cells=0"), "{msg}");
+            assert_eq!(
+                store
+                    .get_live_cell_summary()
+                    .unwrap()
+                    .unwrap()
+                    .tip_block_number,
+                103,
+                "nothing of block 104 may commit"
+            );
+        }
+
+        /// Every DAO-derived row the live path writes, plus the tx rows whose
+        /// fee and activity depend on it, in key order.
+        fn dao_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+            let mut rows = Vec::new();
+            for (name, cf) in [
+                ("dao_deposits", store.cf_dao_deposits()),
+                ("dao_by_withdraw_tx", store.cf_dao_by_withdraw_tx()),
+                ("dao_by_block", store.cf(ckbadger_store::CF_DAO_BY_BLOCK)),
+                ("dao_by_lock_block", store.cf_dao_by_lock_block()),
+                ("dao_by_status_block", store.cf_dao_by_status_block()),
+                ("stats_dao", store.cf(ckbadger_store::CF_STATS_DAO)),
+                // The completion's fee and its DAO activity classification
+                // come from the same resolution.
+                ("tx_index", store.cf_tx_index()),
+                ("tx_actions", store.cf_tx_actions()),
+            ] {
+                for item in store.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+                    let (key, value) = item.expect("iterate DAO CF");
+                    rows.push((name, key.to_vec(), value.to_vec()));
+                }
+            }
+            rows
+        }
+
+        /// The class assertion: one batch over blocks 100-103 (deposit,
+        /// request AND completion inside it) must leave exactly the rows four
+        /// single-block batches leave. Batch boundaries are an artefact of
+        /// how fast the indexer caught up; no DAO fact may depend on them.
+        #[tokio::test]
+        async fn test_live_dao_rows_do_not_depend_on_batch_boundaries() {
+            // `tx_actions` carries participants, which a concurrently
+            // installed test detector would otherwise add to one store only.
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let expected_fee: i64 = 527;
+            let mut blocks = phase_setup_blocks();
+            blocks.push(completion_block(expected_fee));
+
+            let (unbatched, unbatched_indexer) = live_dao_fixture_store();
+            for single in blocks.clone() {
+                write_live_block(&unbatched_indexer, single).await.unwrap();
+            }
+            let (batched, batched_indexer) = live_dao_fixture_store();
+            write_live_blocks_with_entity_changes(
+                &batched_indexer,
+                blocks,
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(stored_dao_entry(&unbatched, [0xd1; 32], 0).status, 2);
+            let unbatched_rows = dao_rows(&unbatched);
+            let batched_rows = dao_rows(&batched);
+            for (left, right) in unbatched_rows.iter().zip(batched_rows.iter()) {
+                assert_eq!(
+                    left,
+                    right,
+                    "DAO row differs between per-block and one-batch writes: cf={} key=0x{}",
+                    left.0,
+                    hex::encode(&left.1)
+                );
+            }
+            assert_eq!(
+                unbatched_rows.len(),
+                batched_rows.len(),
+                "DAO row sets differ in size: per-block={:?} one-batch={:?}",
+                unbatched_rows
+                    .iter()
+                    .map(|(cf, key, _)| format!("{cf}:{}", hex::encode(key)))
+                    .collect::<Vec<_>>(),
+                batched_rows
+                    .iter()
+                    .map(|(cf, key, _)| format!("{cf}:{}", hex::encode(key)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(stored_fee(&batched, [0xd3; 32]), expected_fee);
+            assert_eq!(stored_fee(&unbatched, [0xd3; 32]), expected_fee);
         }
 
         // ---- Phase 1a: participant-derived addr_txs rows ----

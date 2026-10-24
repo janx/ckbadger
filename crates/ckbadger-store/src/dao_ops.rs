@@ -78,11 +78,13 @@ use crate::bytes_to_hex;
 
 /// Post-batch DAO deposit entries staged in an uncommitted batch, keyed by
 /// deposit outpoint. Covers new deposits and phase-1 withdraw requests, whose
-/// full post-batch entry the writer already materializes.
+/// full post-batch entry the writer already materializes — including, when the
+/// same batch also completes that request, the completed (status 2) entry.
 pub type StagedDaoEntries = HashMap<Vec<u8>, DaoDepositCacheEntry>;
 
-/// Phase-2 completions staged in an uncommitted batch, keyed by deposit
-/// outpoint, valued by `(withdraw_block, withdraw_tx_hash)`. Kept separate from
+/// Phase-2 completions, staged in an uncommitted batch, of requests committed
+/// by an EARLIER batch; keyed by deposit outpoint, valued by
+/// `(withdraw_block, withdraw_tx_hash)`. Kept separate from
 /// [`StagedDaoEntries`] so the caller never has to reconstruct the completed
 /// entry — and therefore never duplicates the compensation calculation.
 pub type StagedDaoCompletions = HashMap<Vec<u8>, (i64, Vec<u8>)>;
@@ -703,8 +705,13 @@ impl CkbadgerStore {
             Ok(())
         };
 
-        // The NervosDAO lock period puts at least 180 epochs between a withdraw
-        // request and its completion, so no deposit can appear in both overlays.
+        // A withdraw request and its completion CAN fall in one batch: the
+        // 180-epoch lock runs from the deposit, not from the request, so a
+        // request made late in its cycle completes within hours (mainnet:
+        // 425-3,719 blocks, POSTMORTEM DAO-032). The writer folds such a
+        // completion into the deposit's staged entry; `staged_completions`
+        // only ever carries completions of requests committed by an earlier
+        // batch, so a deposit in both overlays is a writer bug.
         for outpoint_key in staged_completions.keys() {
             if staged_entries.contains_key(outpoint_key) {
                 let (tx_hash, output_index) = keys::decode_outpoint(outpoint_key);
@@ -743,6 +750,38 @@ impl CkbadgerStore {
             accumulate(entry)?;
         }
         Ok(total)
+    }
+
+    /// Number of DAO lifecycle entries currently at `status`, counted from the
+    /// status index without loading the entries.
+    ///
+    /// Indexer-side: the live writer compares the status-0/1 count with the
+    /// cell layer's live DAO-cell count before every commit, so it must stay a
+    /// key-only walk.
+    pub fn count_dao_deposits_by_status(&self, status: i16) -> anyhow::Result<u64> {
+        let prefix = keys::encode_dao_by_status_prefix(status);
+        let mut count = 0u64;
+        for item in self.prefix_iterator_cf(self.cf_dao_by_status_block(), &prefix) {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate dao_by_status_block in count_dao_deposits_by_status: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            anyhow::ensure!(
+                key.len() == keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                "invalid dao_by_status_block key length: expected {}, got {}",
+                keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                key.len()
+            );
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("DAO status-{} entry count overflow", status))?;
+        }
+        Ok(count)
     }
 
     pub fn scan_dao_deposits_by_status<F>(&self, status: i16, mut visitor: F) -> anyhow::Result<()>
@@ -1264,6 +1303,56 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize dao deposit entry in scan_dao_deposits"));
+    }
+
+    #[test]
+    fn test_count_dao_deposits_by_status_follows_status_transitions() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let active = DaoDepositCacheEntry {
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+            ..lifecycle_entry()
+        };
+        let requested = DaoDepositCacheEntry {
+            status: 1,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+            ..lifecycle_entry()
+        };
+        let a = keys::encode_outpoint(&[0xA1; 32], 0);
+        let b = keys::encode_outpoint(&[0xA2; 32], 0);
+        let c = keys::encode_outpoint(&[0xA3; 32], 3);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(&a, &active);
+        batch.put_dao_deposit(&b, &active);
+        batch.put_dao_deposit(&c, &requested);
+        batch.commit().unwrap();
+        assert_eq!(store.count_dao_deposits_by_status(0).unwrap(), 2);
+        assert_eq!(store.count_dao_deposits_by_status(1).unwrap(), 1);
+        assert_eq!(store.count_dao_deposits_by_status(2).unwrap(), 0);
+
+        // A deposit moving 0 -> 1 -> 2 inside ONE batch leaves exactly one
+        // status row behind, under its final status.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(&a, &requested);
+        batch.put_dao_deposit(&a, &lifecycle_entry());
+        batch.put_dao_deposit(&c, &lifecycle_entry());
+        batch.commit().unwrap();
+        assert_eq!(store.count_dao_deposits_by_status(0).unwrap(), 1);
+        assert_eq!(store.count_dao_deposits_by_status(1).unwrap(), 0);
+        assert_eq!(store.count_dao_deposits_by_status(2).unwrap(), 2);
     }
 
     #[test]

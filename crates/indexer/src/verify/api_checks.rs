@@ -4139,16 +4139,19 @@ fn dao_outpoint_key(tx_hash: &str, output_index: i32) -> String {
     format!("{}:{}", tx_hash.to_lowercase(), output_index)
 }
 
-fn walk_dao_deposits(
+/// Walk `/dao/deposits` (one status, or every deposit) to its last page.
+///
+/// Generic over the row type so a check decodes exactly the fields it reads.
+pub(super) fn walk_dao_deposits<T: serde::de::DeserializeOwned>(
     ctx: &CheckContext,
     progress: &ProgressReporter,
     status: Option<i16>,
-) -> anyhow::Result<Vec<DaoDepositRecord>> {
+) -> anyhow::Result<Vec<T>> {
     let status_query = match status {
         Some(status) => format!("status={status}&"),
         None => String::new(),
     };
-    let mut rows: Vec<DaoDepositRecord> = Vec::new();
+    let mut rows: Vec<T> = Vec::new();
     let mut cursor: Option<String> = None;
 
     for _ in 0..DAO_DEPOSITS_MAX_PAGES {
@@ -4158,7 +4161,7 @@ fn walk_dao_deposits(
             ),
             None => format!("dao/deposits?{status_query}limit={DAO_DEPOSITS_PAGE_LIMIT}"),
         };
-        let page: CursorPage<DaoDepositRecord> = api_get(ctx, &path)?;
+        let page: CursorPage<T> = api_get(ctx, &path)?;
         progress.inc(page.data.len() as u64);
         rows.extend(page.data);
         match page.next_cursor {
@@ -4286,7 +4289,7 @@ impl Check for DaoStatusIndexMatchesDeposits {
         let tip_before: BlockResponse = api_get(ctx, &format!("blocks/{tip_height}"))?;
 
         progress.set_message("dao/deposits (all)");
-        let deposits = walk_dao_deposits(ctx, progress, None)?;
+        let deposits = walk_dao_deposits::<DaoDepositRecord>(ctx, progress, None)?;
 
         // The unfiltered listing is ordered by deposit block DESC.
         let newest_deposit_block = deposits
@@ -4320,7 +4323,7 @@ impl Check for DaoStatusIndexMatchesDeposits {
         let mut index_rows = 0u64;
         for status in [0i16, 1, 2] {
             progress.set_message(&format!("dao/deposits?status={status}"));
-            for record in walk_dao_deposits(ctx, progress, Some(status))? {
+            for record in walk_dao_deposits::<DaoDepositRecord>(ctx, progress, Some(status))? {
                 index_rows += 1;
                 let outpoint = dao_outpoint_key(&record.tx_hash, record.output_index);
                 let expected = dao_status_label(status);

@@ -92,7 +92,6 @@ pub(crate) struct TxData {
     pub(crate) inputs: Vec<crate::parser::transaction::ParsedInput>,
     pub(crate) cells: Vec<crate::parser::cell::ParsedCell>,
     pub(crate) witnesses: Vec<String>,
-    pub(crate) outputs_data: Vec<String>,
     pub(crate) total_input_capacity: i64,
     pub(crate) total_output_capacity: i64,
     pub(crate) fee: i64,

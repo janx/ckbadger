@@ -999,7 +999,7 @@ async fn qualify_and_collect(
 /// context, and building or dropping a runtime there panics ("Cannot drop a
 /// runtime in a context where blocking is not allowed"). A plain OS thread has
 /// no such context, so the runtime's whole lifetime stays off the caller's.
-fn run_on_dedicated_runtime<F, T>(future: F) -> anyhow::Result<T>
+pub(super) fn run_on_dedicated_runtime<F, T>(future: F) -> anyhow::Result<T>
 where
     F: std::future::Future<Output = anyhow::Result<T>> + Send,
     T: Send,

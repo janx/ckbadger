@@ -385,16 +385,6 @@ impl BulkReducer for DaoOwner {
             .iter()
             .map(|cell| DaoCellView::from_output(cell, ctx, tx))
             .collect::<Result<Vec<_>>>()?;
-        let request_outputs = dao_outputs
-            .iter()
-            .enumerate()
-            .filter_map(|(pos, output)| match output {
-                Some(output) if matches!(output.state, DaoCellState::WithdrawRequest { .. }) => {
-                    Some((pos, output))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         let candidate_withdraw_to_outputs = tx
             .cells
             .iter()
@@ -406,9 +396,7 @@ impl BulkReducer for DaoOwner {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut consumed_request_output_positions = HashSet::new();
-
-        for input in &tx.resolved_inputs {
+        for (input_index, input) in tx.resolved_inputs.iter().enumerate() {
             let Some(input_view) = DaoCellView::from_input(input, ctx, tx)? else {
                 continue;
             };
@@ -470,26 +458,41 @@ impl BulkReducer for DaoOwner {
                         );
                     }
 
-                    let (request_output_pos, request_output) = select_phase1_output_for_deposit(
-                        &request_outputs,
-                        &consumed_request_output_positions,
-                        entry.capacity,
-                        entry.deposit_block_number,
-                        &entry.lock_script_hash,
-                    )?
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "DAO phase-1 output not found in bulk reducer: block={}, tx=0x{}, tx_index={}, deposit_outpoint={}, capacity={}, deposit_block={}, lock_hash=0x{}",
+                    // RFC-0023: the withdraw request for the deposit at input
+                    // index `i` is the output at index `i`; its lock is free.
+                    let request_output = dao_outputs
+                        .get(input_index)
+                        .and_then(Option::as_ref)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "DAO deposit spent as input {} has no DAO output at index {} in bulk reducer: block={}, tx=0x{}, tx_index={}, deposit_outpoint={}",
+                                input_index,
+                                input_index,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash),
+                                tx.tx_index,
+                                format_outpoint(&origin_outpoint),
+                            )
+                        })?;
+                    match request_output.state {
+                        DaoCellState::WithdrawRequest {
+                            deposit_block_number,
+                        } if deposit_block_number == entry.deposit_block_number
+                            && request_output.capacity == entry.capacity => {}
+                        state => bail!(
+                            "DAO output {} is not the withdraw request of the deposit at input {} in bulk reducer: block={}, tx=0x{}, tx_index={}, deposit_outpoint={}, deposit_block={}, capacity={}, output_state={:?}, output_capacity={}",
+                            input_index,
+                            input_index,
                             tx.block_number,
                             hex::encode(tx.tx_hash),
                             tx.tx_index,
                             format_outpoint(&origin_outpoint),
-                            entry.capacity,
                             entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                        )
-                    })?;
-                    consumed_request_output_positions.insert(request_output_pos);
+                            entry.capacity,
+                            state,
+                            request_output.capacity,
+                        ),
+                    }
 
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
@@ -1414,57 +1417,6 @@ impl DaoCellView {
     }
 }
 
-fn select_phase1_output_for_deposit<'a>(
-    request_outputs: &'a [(usize, &'a DaoCellView)],
-    consumed_output_positions: &HashSet<usize>,
-    capacity: i64,
-    deposit_block_number: i64,
-    lock_script_hash: &[u8],
-) -> Result<Option<(usize, &'a DaoCellView)>> {
-    let deposit_block_u64 = u64::try_from(deposit_block_number).map_err(|_| {
-        anyhow!(
-            "invalid negative DAO deposit block number while matching phase-1 output in bulk reducer: {}",
-            deposit_block_number
-        )
-    })?;
-
-    let base_candidates = || {
-        request_outputs
-            .iter()
-            .filter_map(move |(pos, output)| match output.state {
-                DaoCellState::WithdrawRequest {
-                    deposit_block_number: output_deposit_block,
-                } => (output.capacity == capacity
-                    && u64::try_from(output_deposit_block).ok() == Some(deposit_block_u64)
-                    && !consumed_output_positions.contains(pos))
-                .then_some((*pos, *output)),
-                DaoCellState::Deposit => None,
-            })
-    };
-
-    // Prefer lock_script_hash match for disambiguation (multiple deposits with
-    // same capacity/deposit_block but different locks).  Fall back to
-    // (capacity, deposit_block) only — the CKB DAO type script does not
-    // enforce lock preservation, so a legitimate withdraw request may change
-    // the lock script.
-    //
-    // Known limitation: when multiple request outputs share the same
-    // (capacity, deposit_block) AND locks differ from the original deposits,
-    // the fallback min_by_key pairing is deterministic but arbitrary — it may
-    // mis-associate deposits with request outputs.  This requires a single tx
-    // to withdraw multiple identical-capacity deposits from the same block
-    // while also changing locks, which is rare in practice.
-    let with_lock = base_candidates()
-        .filter(|(_, output)| output.lock_hash.as_slice() == lock_script_hash)
-        .min_by_key(|(pos, output)| (output.outpoint.index, *pos));
-
-    if with_lock.is_some() {
-        return Ok(with_lock);
-    }
-
-    Ok(base_candidates().min_by_key(|(pos, output)| (output.outpoint.index, *pos)))
-}
-
 fn infer_request_output_index_from_inputs(
     inputs: &[ResolvedInputFacts],
     request_tx_hash: &[u8],
@@ -2022,6 +1974,166 @@ mod tests {
                 unclaimed: 0,
                 active_unmade: 0,
             }
+        );
+    }
+
+    /// RFC-0023 pairs the deposit at input index `i` with the withdraw
+    /// request at output index `i`, whatever its lock. Two same-block,
+    /// same-capacity deposits whose requests swap locks must keep their own
+    /// request outpoint and request occupied capacity.
+    #[test]
+    fn dao_owner_pairs_each_deposit_with_the_output_at_its_input_index() {
+        let interner = IdentityInterner::default();
+        let lock_a = interner.intern_bytes(vec![0xa1; 32]);
+        let lock_b = interner.intern_bytes(vec![0xb2; 32]);
+        let dao_code_hash_id =
+            interner.intern_bytes(hex::decode(&DAO_CODE_HASH[2..]).expect("dao code hash"));
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let mut owner = DaoOwner::default();
+
+        let dao_cell = |outpoint: OutPointKey,
+                        block: i64,
+                        lock: InternId,
+                        occupied: i64,
+                        state: DaoCellState| CellFacts {
+            outpoint,
+            created_at_block: block,
+            created_by_block_dao_ar: 10_000,
+            capacity: 120_00000000,
+            lock_script_hash_id: lock,
+            lock_code_hash_id: InternId::new(1),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(2),
+            type_script_hash_id: Some(InternId::new(3)),
+            type_code_hash_id: Some(dao_code_hash_id),
+            type_hash_type: Some(1),
+            type_args_id: Some(InternId::new(4)),
+            occupied_capacity: occupied,
+            data_size: 8,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Dao,
+            dao_state: Some(state),
+            protocol_facts: None,
+        };
+        let deposit_a = OutPointKey::new([0x31; 32], 0);
+        let deposit_b = OutPointKey::new([0x31; 32], 1);
+        let deposits = ResolvedTxFacts {
+            tx_hash: [0x31; 32],
+            block_number: 100,
+            block_hash: [0x04; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 10_000,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![
+                dao_cell(deposit_a, 100, lock_a, 102_00000000, DaoCellState::Deposit),
+                dao_cell(deposit_b, 100, lock_b, 102_00000000, DaoCellState::Deposit),
+            ]
+            .into(),
+        };
+        owner.apply_tx(&deposits, &ctx).expect("apply deposits");
+
+        let input = |outpoint: OutPointKey, lock: InternId| ResolvedInputFacts {
+            outpoint,
+            created_at_block: 100,
+            created_by_block_dao_ar: 10_000,
+            capacity: 120_00000000,
+            occupied_capacity: 102_00000000,
+            data_size: 8,
+            data_hash: None,
+            udt_amount: None,
+            lock_script_hash_id: lock,
+            lock_code_hash_id: InternId::new(1),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(2),
+            type_script_hash_id: Some(InternId::new(3)),
+            type_code_hash_id: Some(dao_code_hash_id),
+            type_hash_type: Some(1),
+            type_args_id: Some(InternId::new(4)),
+            semantic_tag: CellSemanticTag::Dao,
+            dao_state: Some(DaoCellState::Deposit),
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+        let request = DaoCellState::WithdrawRequest {
+            deposit_block_number: 100,
+        };
+        // Output 0 is A's request under B's lock (114 CKB occupied), output 1
+        // is B's request under A's lock (102 CKB).
+        let requests = ResolvedTxFacts {
+            tx_hash: [0x32; 32],
+            block_number: 200,
+            block_hash: [0x05; 32],
+            timestamp_ms: 1_700_000_000_001,
+            block_dao_ar: 12_000,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: vec![input(deposit_a, lock_a), input(deposit_b, lock_b)],
+            cells: vec![
+                dao_cell(
+                    OutPointKey::new([0x32; 32], 0),
+                    200,
+                    lock_b,
+                    114_00000000,
+                    request,
+                ),
+                dao_cell(
+                    OutPointKey::new([0x32; 32], 1),
+                    200,
+                    lock_a,
+                    102_00000000,
+                    request,
+                ),
+            ]
+            .into(),
+        };
+        owner
+            .apply_tx(&requests, &ctx)
+            .expect("apply withdraw requests");
+
+        let a = owner.deposits.get(&deposit_a).expect("deposit A");
+        assert_eq!(a.withdraw_request_output_index, Some(0), "{a:?}");
+        assert_eq!(a.withdraw_request_occupied_capacity, Some(114_00000000));
+        let b = owner.deposits.get(&deposit_b).expect("deposit B");
+        assert_eq!(b.withdraw_request_output_index, Some(1), "{b:?}");
+        assert_eq!(b.withdraw_request_occupied_capacity, Some(102_00000000));
+
+        // A request carrying another deposit block at the paired index is a
+        // transaction the DAO script rejects: the reducer stops on it.
+        let mut fresh = DaoOwner::default();
+        fresh.apply_tx(&deposits, &ctx).expect("apply deposits");
+        let mismatched = ResolvedTxFacts {
+            cells: vec![
+                dao_cell(
+                    OutPointKey::new([0x33; 32], 0),
+                    200,
+                    lock_a,
+                    102_00000000,
+                    DaoCellState::WithdrawRequest {
+                        deposit_block_number: 99,
+                    },
+                ),
+                dao_cell(
+                    OutPointKey::new([0x33; 32], 1),
+                    200,
+                    lock_b,
+                    102_00000000,
+                    request,
+                ),
+            ]
+            .into(),
+            tx_hash: [0x33; 32],
+            ..requests
+        };
+        let err = fresh.apply_tx(&mismatched, &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("is not the withdraw request of the deposit at input 0"),
+            "{err:#}"
         );
     }
 

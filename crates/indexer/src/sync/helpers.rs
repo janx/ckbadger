@@ -99,10 +99,6 @@ pub(crate) fn checked_usize_to_i16(value: usize, label: &str) -> Result<i16> {
     i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
 }
 
-pub(crate) fn checked_i32_to_i16(value: i32, label: &str) -> Result<i16> {
-    i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
-}
-
 pub(crate) fn checked_usize_to_i32(value: usize, label: &str) -> Result<i32> {
     i32::try_from(value).map_err(|_| anyhow!("{} exceeds i32 range: {}", label, value))
 }

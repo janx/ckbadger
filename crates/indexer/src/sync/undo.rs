@@ -369,7 +369,6 @@ mod tests {
         inputs: Vec<crate::parser::transaction::ParsedInput>,
         cells: Vec<crate::parser::cell::ParsedCell>,
         witnesses: Vec<String>,
-        outputs_data: Vec<String>,
     ) -> TxData {
         let inputs_count =
             i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
@@ -385,7 +384,6 @@ mod tests {
             inputs,
             cells,
             witnesses,
-            outputs_data,
             total_input_capacity: 0,
             total_output_capacity: 0,
             fee: 0,
@@ -570,7 +568,6 @@ mod tests {
             }],
             vec![dummy_dao_cell(100_00000000, true)],
             vec![],
-            vec![],
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -604,7 +601,6 @@ mod tests {
                 previous_output_index: -1,
                 since: 0,
             }],
-            vec![],
             vec![],
             vec![],
         );

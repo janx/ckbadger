@@ -135,7 +135,7 @@ pub struct CellOutput {
     pub type_: Option<Script>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Script {
     pub code_hash: String,
     pub hash_type: String,
