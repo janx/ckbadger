@@ -25,7 +25,7 @@ export function VitalsStrip() {
     <section
       aria-label="Chain vitals"
       data-testid="vitals-strip"
-      className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 md:gap-x-9 md:gap-y-2.5 md:py-3"
+      className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 font-mono md:gap-x-9 md:gap-y-2.5 md:py-3"
     >
       {stats ? <Vitals stats={stats} /> : <VitalsLoading />}
       {isConnected && <LiveStatus />}

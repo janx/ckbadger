@@ -170,7 +170,9 @@ export function Header() {
               </svg>
             )}
           </button>
-          {activeLabel && <span className="text-jade truncate text-[13px]">{activeLabel}</span>}
+          {activeLabel && (
+            <span className="text-jade truncate font-mono text-[13px]">{activeLabel}</span>
+          )}
         </div>
 
         <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
@@ -198,7 +200,7 @@ export function Header() {
               <Link
                 href="/"
                 onClick={() => setIsMenuOpen(false)}
-                className={`block rounded-md border px-3 py-2.5 text-[13px] transition ${
+                className={`block rounded-md border px-3 py-2.5 font-mono text-[13px] transition ${
                   pathname === '/'
                     ? 'border-jade/40 bg-jade/8 text-jade'
                     : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -211,7 +213,7 @@ export function Header() {
                 isDropdown(item) ? (
                   <div key={item.label} className="flex flex-col">
                     <span
-                      className={`block rounded-md border px-3 py-2.5 text-[13px] ${
+                      className={`block rounded-md border px-3 py-2.5 font-mono text-[13px] ${
                         isDropdownActive(item)
                           ? 'border-jade/40 bg-jade/8 text-jade'
                           : 'text-text border-transparent'
@@ -225,7 +227,7 @@ export function Header() {
                           key={child.href}
                           href={child.href}
                           onClick={() => setIsMenuOpen(false)}
-                          className={`block rounded-md px-3 py-2 text-xs transition ${
+                          className={`block rounded-md px-3 py-2 font-mono text-xs transition ${
                             isLinkActive(child.href)
                               ? 'text-jade bg-jade/8'
                               : 'text-text-dim hover:text-jade'
@@ -241,7 +243,7 @@ export function Header() {
                     key={item.href}
                     href={item.href}
                     onClick={() => setIsMenuOpen(false)}
-                    className={`block rounded-md border px-3 py-2.5 text-[13px] transition ${
+                    className={`block rounded-md border px-3 py-2.5 font-mono text-[13px] transition ${
                       isLinkActive(item.href)
                         ? 'border-jade/40 bg-jade/8 text-jade'
                         : 'text-text hover:text-jade hover:border-jade/20 border-transparent'

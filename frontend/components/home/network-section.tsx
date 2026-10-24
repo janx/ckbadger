@@ -185,9 +185,10 @@ function UncleRateFigure() {
 
 type TxRange = '24h' | '14d';
 
+// A no-break space keeps "24 h" / "14 d" together when the caption wraps.
 const TX_RANGES: Record<TxRange, { button: string; subtitle: string; series: string }> = {
-  '24h': { button: '24 h', subtitle: 'per hour, last 24 h', series: 'hourlyData' },
-  '14d': { button: '14 d', subtitle: 'per day, last 14 d', series: 'dailyData' },
+  '24h': { button: '24 h', subtitle: 'per hour, last 24\u00A0h', series: 'hourlyData' },
+  '14d': { button: '14 d', subtitle: 'per day, last 14\u00A0d', series: 'dailyData' },
 };
 
 interface TxView {
@@ -269,7 +270,7 @@ function TransactionsFigure() {
               aria-pressed={txRange === r}
               onClick={() => setTxRange(r)}
               className={cn(
-                'h-8 px-[9px] text-xs transition-colors',
+                'h-8 whitespace-nowrap px-[9px] text-xs transition-colors',
                 txRange === r
                   ? 'bg-base-border-subtle text-text-bright'
                   : 'text-text-dim hover:text-text bg-transparent'

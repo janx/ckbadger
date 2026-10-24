@@ -1,5 +1,5 @@
 /** A header nav link or dropdown trigger: sentence case, normal tracking, a tall hit area. */
-export const NAVBAR_LINK_CLASS = 'py-3 text-[13px] transition-colors';
+export const NAVBAR_LINK_CLASS = 'py-3 font-mono text-[13px] transition-colors';
 
 export const NAVBAR_LINK_DEFAULT_CLASS = 'text-text hover:text-jade';
 
@@ -15,7 +15,7 @@ export const NAVBAR_DROPDOWN_PANEL_CLASS =
   'border-base-border bg-base-surface min-w-[10rem] rounded-md border py-1 shadow-lg';
 
 export const NAVBAR_DROPDOWN_ITEM_CLASS =
-  'block w-full px-4 py-2 text-left text-[13px] transition-colors';
+  'block w-full px-4 py-2 text-left font-mono text-[13px] transition-colors';
 
 export const NAVBAR_DROPDOWN_ITEM_DEFAULT_CLASS =
   'text-text hover:text-jade hover:bg-base-elevated/50';

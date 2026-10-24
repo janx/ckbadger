@@ -104,6 +104,8 @@ describe('NetworkSection', () => {
       expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('731')
     );
     expect(fig).toHaveTextContent('per hour, last 24 h');
+    // "24 h" never breaks across caption lines.
+    expect(fig.textContent).toContain('last 24\u00A0h');
     const svg = within(fig).getByRole('img');
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(24);
