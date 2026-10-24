@@ -6,7 +6,7 @@ pub mod hash;
 pub mod http;
 pub mod params;
 pub mod script_resolution;
-pub mod stats_day;
+pub mod stats_bucket;
 pub mod supply;
 
 pub use address::{

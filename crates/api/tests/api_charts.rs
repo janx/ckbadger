@@ -105,10 +105,10 @@ async fn test_average_block_time_chart_excludes_the_in_progress_tip_day() {
     );
 }
 
-/// No daily row can be dated after the indexed tip block's day; meeting one is
-/// corruption, reported with the row and the tip day instead of being skipped.
+/// A row dated after the tip block's day is legal (a block may be dated before
+/// its parent): it is in progress and not charted — never a 500.
 #[tokio::test]
-async fn test_average_block_time_chart_fails_fast_on_a_row_after_the_tip_day() {
+async fn test_average_block_time_chart_treats_a_row_after_the_tip_day_as_in_progress() {
     let store = test_store();
     store
         .put_daily_stats(
@@ -125,11 +125,34 @@ async fn test_average_block_time_chart_fails_fast_on_a_row_after_the_tip_day() {
     let app = create_router(test_config(store)).await;
 
     let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"], serde_json::json!([]), "{json}");
+}
+
+/// Daily rows are written together with the blocks they aggregate, so rows in
+/// a store without any block are corruption, reported instead of charted.
+#[tokio::test]
+async fn test_average_block_time_chart_fails_fast_on_rows_without_any_block() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240115",
+            &DailyStats {
+                blocks_count: 1,
+                block_time_sum_ms: 10_000,
+                block_time_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
     let message = json["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("2024-01-17") && message.contains("2024-01-16"),
-        "error must name the row and the tip day: {json}"
+        message.contains("2024-01-15") && message.contains("no indexed block"),
+        "error must name the row and the missing blocks: {json}"
     );
 }
 
@@ -1018,4 +1041,118 @@ async fn test_uncle_rate_chart_fails_without_an_orphan_rate_target() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
     let message = json["message"].as_str().unwrap_or_default();
     assert!(message.contains("orphan_rate_target"), "{json}");
+}
+
+// ---------------------------------------------------------------------------
+// Complete days follow CKB's median time, not the tip block's date
+// ---------------------------------------------------------------------------
+
+fn seed_block_time_days(store: &CkbadgerStore, dates: &[&str]) {
+    for date in dates {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 10,
+                    block_time_sum_ms: 100_000,
+                    block_time_count: 10,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+}
+
+fn charted_dates(json: &serde_json::Value) -> Vec<String> {
+    json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| point["date"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Regression (STATS-014): CKB only bounds a timestamp by the median time of
+/// the 37 blocks before it, so the tip (23:59:58 on 10-23, UTC+8) may follow a
+/// parent dated 00:00:02 on 10-24. That is a legal chain, not corruption: the
+/// 10-24 row must not 500 the chart. The median time is the tip's 23:59:58,
+/// so 10-23 and 10-24 are both still in progress and 10-22 is the last
+/// complete day.
+#[tokio::test]
+async fn test_daily_chart_serves_a_tip_dated_before_its_parent_across_midnight() {
+    let store = test_store();
+    seed_block_time_days(&store, &["20261022", "20261023", "20261024"]);
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T15:59:50Z")), // 23:59:50 UTC+8, 10-23
+            (1, utc_ms("2026-10-23T16:00:02Z")), // 00:00:02 UTC+8, 10-24
+            (2, utc_ms("2026-10-23T15:59:58Z")), // tip: 23:59:58, 10-23
+        ],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(charted_dates(&json), vec!["2026-10-22"], "{json}");
+}
+
+/// The tip block's date is not the reference either way: a tip at 00:00:30 on
+/// 10-24 does not complete 10-23 while the median time (23:59:55) is still
+/// before midnight — a later block may yet be dated 10-23.
+#[tokio::test]
+async fn test_daily_chart_waits_for_the_median_time_to_pass_midnight() {
+    let store = test_store();
+    seed_block_time_days(&store, &["20261022", "20261023", "20261024"]);
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T15:59:50Z")), // 23:59:50 UTC+8, 10-23
+            (1, utc_ms("2026-10-23T15:59:55Z")), // 23:59:55 UTC+8, 10-23
+            (2, utc_ms("2026-10-23T16:00:30Z")), // tip: 00:00:30, 10-24
+        ],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(charted_dates(&json), vec!["2026-10-22"], "{json}");
+}
+
+/// Regression (STATS-014): transaction-count, cell-count and
+/// capacity-turnover-ratio charted the partial current day — they had no
+/// completeness rule at all. Every daily chart stops at the last day the
+/// median-time rule calls complete.
+#[tokio::test]
+async fn test_transaction_and_cell_daily_charts_exclude_in_progress_days() {
+    let store = test_store();
+    for date in ["20240115", "20240116"] {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 10,
+                    transactions_count: 50,
+                    total_all_cells: 10,
+                    total_live_cells: 8,
+                    total_dead_cells: 2,
+                    knowledge_size: Some(100_000_000_000),
+                    used_capacity_consumed: 1_000,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        "/charts/transaction-count",
+        "/charts/cell-count",
+        "/charts/capacity-turnover-ratio",
+    ] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        assert_eq!(charted_dates(&json), vec!["2024-01-15"], "{path}: {json}");
+    }
 }

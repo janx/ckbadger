@@ -16,7 +16,7 @@ use crate::response::{
     chart_response_has_data, default_limit, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
     ChartResponse, CursorPaginatedResponse,
 };
-use crate::utils::stats_day::{is_complete_iso_day, InProgressDay};
+use crate::utils::stats_bucket::{is_complete_iso_day, ChainTime};
 use crate::utils::{
     dao_supply, parse_hash32, script_to_address, shannon_to_ckb, shannon_to_ckb_signed,
     validate_block_number,
@@ -1030,6 +1030,24 @@ fn build_total_depositors_series(
         .collect())
 }
 
+/// The DAO daily snapshots together with the chain time that judges which of
+/// their days are complete, read in one blocking task under the request's
+/// pinned view.
+async fn load_dao_daily_snapshots(
+    state: &AppState,
+) -> Result<(Option<ChainTime>, Vec<ckbadger_store::DaoDailySnapshot>), ApiRouteError> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let chain = ChainTime::load(&store)?;
+        let rows = store
+            .list_dao_daily_snapshots()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok::<_, ApiRouteError>((chain, rows))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+}
+
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:dao-total-deposit";
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
@@ -1046,23 +1064,14 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         state.cache.delete(cache_key).await;
     }
 
-    let store = state.store.clone();
-    let (in_progress, snapshots) = tokio::task::spawn_blocking(move || {
-        let in_progress = InProgressDay::load(&store)?;
-        let rows = store
-            .list_dao_daily_snapshots()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok::<_, ApiRouteError>((in_progress, rows))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let (chain, snapshots) = load_dao_daily_snapshots(&state).await?;
     let depositors_series = build_total_depositors_series(&snapshots)?;
 
     // Complete days only: the tip block's snapshot is a running value, and
     // consumers derive daily changes from consecutive points.
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(snapshots.len());
     for s in &snapshots {
-        if !is_complete_iso_day(in_progress, "DAO daily snapshots", &s.date)? {
+        if !is_complete_iso_day(chain, "DAO daily snapshots", &s.date)? {
             continue;
         }
         data.push(ChartDataPoint {
@@ -1102,14 +1111,18 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         state.cache.delete(cache_key).await;
     }
 
-    let store = state.store.clone();
-    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (chain, snapshots) = load_dao_daily_snapshots(&state).await?;
+    // Deltas use every snapshot; only complete days are charted (they precede
+    // every in-progress day, so no charted delta spans one).
+    let mut data = Vec::with_capacity(snapshots.len());
+    for point in build_daily_deposit_series(&snapshots)? {
+        if is_complete_iso_day(chain, "DAO daily snapshots", &point.date)? {
+            data.push(point);
+        }
+    }
 
     let response = ChartResponse {
-        data: build_daily_deposit_series(&snapshots)?,
+        data,
         title: "Daily Deposit".to_string(),
         y_axis_label: "CKB".to_string(),
         y2_axis_label: Some("Count".to_string()),
@@ -1182,20 +1195,19 @@ async fn get_daily_depositors_chart(
         state.cache.delete(cache_key).await;
     }
 
-    let store = state.store.clone();
-    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (chain, snapshots) = load_dao_daily_snapshots(&state).await?;
 
-    let data: Vec<ChartDataPoint> = snapshots
-        .iter()
-        .map(|s| ChartDataPoint {
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(snapshots.len());
+    for s in &snapshots {
+        if !is_complete_iso_day(chain, "DAO daily snapshots", &s.date)? {
+            continue;
+        }
+        data.push(ChartDataPoint {
             date: s.date.clone(),
             value: s.daily_depositor_addresses.to_string(),
             value2: None,
-        })
-        .collect();
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -1222,15 +1234,14 @@ async fn get_circulation_ratio_chart(
         return ok(cached);
     }
 
-    let store = state.store.clone();
-    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (chain, snapshots) = load_dao_daily_snapshots(&state).await?;
 
     let burnt = state.genesis_baseline()?.burnt;
     let mut data = Vec::with_capacity(snapshots.len());
     for s in &snapshots {
+        if !is_complete_iso_day(chain, "DAO daily snapshots", &s.date)? {
+            continue;
+        }
         let Some(supply) = dao_supply(s, burnt).map_err(|e| ApiError::internal(e.to_string()))?
         else {
             return Err(ApiError::internal(format!(

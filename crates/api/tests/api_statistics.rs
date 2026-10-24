@@ -335,7 +335,8 @@ async fn test_tx_stats_reads_from_derived_store() {
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_block_header(
-        100,
+        // The only block: the whole median-time window.
+        0,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
             parent_hash: vec![0u8; 32],
@@ -1211,8 +1212,9 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         .unwrap()
         .timestamp_millis();
     let mut batch = StoreBatch::new(core_store.as_ref());
+    // The only block: the whole median-time window, at noon of the tip day.
     batch.put_block_header(
-        1,
+        0,
         &CachedBlockHeader {
             hash: vec![0x55; 32],
             parent_hash: vec![0x44; 32],
@@ -1314,11 +1316,16 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
         .unwrap()
         .timestamp_millis();
     let mut batch = StoreBatch::new(core_store.as_ref());
-    for (number, timestamp) in [
+    // Genesis, the first mined block, then a full 37-block median-time window
+    // ending at the tip (one second apart), so the median time sits on the tip
+    // day. With only three blocks the median would be 2020-05-22 and, by CKB's
+    // median-time rule, no later day could be complete.
+    let mut headers = vec![
         (0, 1_589_276_230_000), // testnet genesis: 2020-05-12 17:37:10 UTC+8
         (1, 1_590_137_711_584), // first mined block: 2020-05-22 16:55:11.584 UTC+8
-        (2, tip_timestamp),
-    ] {
+    ];
+    headers.extend((2..=38).map(|n| (n, tip_timestamp - (38 - n) * 1_000)));
+    for (number, timestamp) in headers {
         batch.put_block_header(
             number,
             &CachedBlockHeader {
@@ -1999,7 +2006,8 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_block_header(
-        100,
+        // The only block: the whole median-time window.
+        0,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
             parent_hash: vec![0u8; 32],
@@ -2077,30 +2085,9 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
     );
 }
 
-/// The `/statistics/tx-stats` contract the homepage draws against (see
-/// `TxStatsResponse`): `hourlyData` and `dailyData` are oldest first and their
-/// LAST element is the bucket holding the indexed tip block — in progress;
-/// every earlier element is complete; `currentHour`/`currentDay` are the last
-/// elements' counts. Hourly labels are UTC hours, daily buckets UTC+8 days.
-#[tokio::test]
-async fn test_tx_stats_last_buckets_are_the_in_progress_ones_holding_the_tip() {
-    let store = test_store();
-    // 2026-10-23T16:30Z — UTC hour 16:00, UTC+8 stats day 2026-10-24.
-    let tip_ms = chrono::DateTime::parse_from_rfc3339("2026-10-23T16:30:00Z")
-        .unwrap()
-        .timestamp_millis();
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_block_header(500, &recent_block_header(500, tip_ms));
-    batch.commit().unwrap();
-
-    for (start, txs) in [
-        ("2026-10-23T14:00:00Z", 720),
-        ("2026-10-23T15:00:00Z", 700),
-        ("2026-10-23T16:00:00Z", 5),
-    ] {
-        let hour = chrono::DateTime::parse_from_rfc3339(start)
-            .unwrap()
-            .timestamp();
+fn seed_tx_stats_buckets(store: &CkbadgerStore, hours: &[(&str, i32)], days: &[(&str, i32)]) {
+    for &(start, txs) in hours {
+        let hour = utc_ms(start) / 1000;
         store
             .put_hourly_stats(
                 &chrono::DateTime::from_timestamp(hour, 0)
@@ -2116,7 +2103,7 @@ async fn test_tx_stats_last_buckets_are_the_in_progress_ones_holding_the_tip() {
             )
             .unwrap();
     }
-    for (date, txs) in [("20261022", 16_000), ("20261023", 17_000), ("20261024", 40)] {
+    for &(date, txs) in days {
         store
             .put_daily_stats(
                 date,
@@ -2128,6 +2115,34 @@ async fn test_tx_stats_last_buckets_are_the_in_progress_ones_holding_the_tip() {
             )
             .unwrap();
     }
+}
+
+/// The `/statistics/tx-stats` contract (see `TxStatsResponse`): every bucket
+/// says whether it is `complete`, by CKB's median-time rule — never by its
+/// position. Regression (STATS-014): the tip (14:59:58Z) follows a parent
+/// dated 15:00:02Z, which is legal; the 15:00 bucket used to 500 the endpoint
+/// as "after the tip". The median time is the tip's 14:59:58, so the 14:00
+/// and 15:00 hours and the 10-23 day (UTC+8) are all still in progress.
+#[tokio::test]
+async fn test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour() {
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T14:59:50Z")),
+            (1, utc_ms("2026-10-23T15:00:02Z")),
+            (2, utc_ms("2026-10-23T14:59:58Z")),
+        ],
+    );
+    seed_tx_stats_buckets(
+        &store,
+        &[
+            ("2026-10-23T13:00:00Z", 710),
+            ("2026-10-23T14:00:00Z", 720),
+            ("2026-10-23T15:00:00Z", 2),
+        ],
+        &[("20261022", 16_000), ("20261023", 17_000)],
+    );
     let app = create_router(test_config(store)).await;
 
     let (status, json) = get_json(&app, "/statistics/tx-stats").await;
@@ -2135,17 +2150,62 @@ async fn test_tx_stats_last_buckets_are_the_in_progress_ones_holding_the_tip() {
     assert_eq!(
         json,
         serde_json::json!({
-            "currentHour": 5,
-            "currentDay": 40,
+            "currentHour": 2,
+            "currentDay": 17000,
             "hourlyData": [
-                { "label": "14:00", "value": 720 },
-                { "label": "15:00", "value": 700 },
-                { "label": "16:00", "value": 5 }
+                { "label": "13:00", "value": 710, "complete": true },
+                { "label": "14:00", "value": 720, "complete": false },
+                { "label": "15:00", "value": 2, "complete": false }
             ],
             "dailyData": [
-                { "label": "10/22", "value": 16000 },
-                { "label": "10/23", "value": 17000 },
-                { "label": "10/24", "value": 40 }
+                { "label": "10/22", "value": 16000, "complete": true },
+                { "label": "10/23", "value": 17000, "complete": false }
+            ]
+        })
+    );
+}
+
+/// The same across midnight UTC+8: the tip (23:59:58 on 10-23) follows a
+/// parent dated 00:00:02 on 10-24, so the newest hour and day buckets are not
+/// the tip's, and both of the newest days are in progress.
+#[tokio::test]
+async fn test_tx_stats_marks_buckets_complete_by_median_time_across_midnight() {
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-23T15:59:50Z")),
+            (1, utc_ms("2026-10-23T16:00:02Z")),
+            (2, utc_ms("2026-10-23T15:59:58Z")),
+        ],
+    );
+    seed_tx_stats_buckets(
+        &store,
+        &[
+            ("2026-10-23T14:00:00Z", 720),
+            ("2026-10-23T15:00:00Z", 700),
+            ("2026-10-23T16:00:00Z", 3),
+        ],
+        &[("20261022", 16_000), ("20261023", 17_000), ("20261024", 3)],
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/tx-stats").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "currentHour": 3,
+            "currentDay": 3,
+            "hourlyData": [
+                { "label": "14:00", "value": 720, "complete": true },
+                { "label": "15:00", "value": 700, "complete": false },
+                { "label": "16:00", "value": 3, "complete": false }
+            ],
+            "dailyData": [
+                { "label": "10/22", "value": 16000, "complete": true },
+                { "label": "10/23", "value": 17000, "complete": false },
+                { "label": "10/24", "value": 3, "complete": false }
             ]
         })
     );
@@ -2550,7 +2610,15 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
             )
             .unwrap();
     }
-    seed_tip_block_on_utc8_day(&store, 4, "2020-05-23");
+    // Blocks 1..=4 on 2020-05-23; the window with genesis has its median there,
+    // so 2020-05-22 is complete. (The tip helper would overwrite block 0.)
+    let tip_ms = utc_ms("2020-05-23T04:00:00Z");
+    seed_block_headers_at(
+        &store,
+        &(1..=4)
+            .map(|n| (n, tip_ms - (4 - n) * 1_000))
+            .collect::<Vec<_>>(),
+    );
 
     let config = test_config(store);
     let app = create_router(config).await;

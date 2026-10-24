@@ -443,6 +443,43 @@ async fn test_total_deposit_chart_excludes_the_in_progress_tip_day() {
     );
 }
 
+/// Regression (STATS-014): the daily-deposit, daily-depositors and
+/// circulation-ratio charts charted the partial current day. They follow the
+/// same median-time rule as total-deposit now.
+#[tokio::test]
+async fn test_dao_daily_charts_exclude_in_progress_days() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    for (date, cumulative, deposits) in [
+        ("2024-01-15", 100_00000000, 1),
+        ("2024-01-16", 300_00000000, 3),
+    ] {
+        let mut snapshot = total_deposit_snapshot(date, cumulative, deposits);
+        snapshot.new_deposits = deposits;
+        snapshot.daily_depositor_addresses = deposits;
+        snapshot.total_issuance = 3_400_000_000_000_000_000;
+        put_total_deposit_snapshot(&store, &snapshot);
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        "/dao/charts/daily-deposit",
+        "/dao/charts/daily-depositors",
+        "/dao/charts/circulation-ratio",
+    ] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        let dates: Vec<&str> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| point["date"].as_str().unwrap())
+            .collect();
+        assert_eq!(dates, vec!["2024-01-15"], "{path}: {json}");
+    }
+}
+
 #[tokio::test]
 async fn test_dao_deposits_cursor_pagination_descending() {
     let store = test_store();
@@ -1082,6 +1119,8 @@ async fn test_daily_deposit_chart_includes_first_snapshot_day() {
     let store = test_store();
     seed_dao_daily_snapshot(&store, "2019-11-16", 3_715_755_618_324_833, 33);
     seed_dao_daily_snapshot(&store, "2019-11-17", 3_815_755_618_324_833, 77);
+    // The indexed tip is on the next day, so both snapshot days are complete.
+    seed_tip_block_on_utc8_day(&store, 1_300, "2019-11-18");
 
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/dao/charts/daily-deposit").await;

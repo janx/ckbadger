@@ -3470,13 +3470,12 @@ dropped nothing. The wall-clock rule was wrong on its own terms too: an indexer 
 chain (catching up after a restart) still has the tip block's day only partly indexed after
 midnight, and that day was charted as complete.
 
-**Fix**: one definition, `crates/api/src/utils/stats_day.rs`: the in-progress day is the UTC+8
-`block_date` of the indexed tip block — the same function the writers key daily rows with. Every
-earlier day is complete; a row dated after the tip day, or any row in a store without blocks, is an
-error naming the series, the row and the tip day; a non-canonical date key is an error. All nine
-daily handlers above use it, and `current_ckb_date_key` is gone. `/statistics/tx-stats` keeps its
-in-progress buckets by contract (see its doc comment). The DAO card's daily deltas only gain: their
-last bar is now a complete day.
+**Fix** (ab5932e4, superseded by STATS-014): one API helper, `utils/stats_day.rs`, that took the
+UTC+8 `block_date` of the indexed tip block as the in-progress day, treated every earlier day as
+complete, and treated a row dated after the tip day as corruption. The nine handlers named above
+used it and `current_ckb_date_key` was deleted. The commit and this entry first said "every daily
+chart"; that was not true — transaction-count, cell-count, capacity-turnover-ratio and three DAO
+charts still had no rule (STATS-014). The tip-day rule itself was also wrong: see STATS-014.
 
 **Why the tests missed it**: no fixture seeded a tip block next to its daily rows, so "the last row
 is today" was the only shape any test knew, and the three violators had no test that put a tip day
@@ -3484,14 +3483,70 @@ in the data at all. Regressions: `test_average_block_time_chart_excludes_the_in_
 `test_total_deposit_chart_excludes_the_in_progress_tip_day`,
 `test_daily_activities_exclude_the_in_progress_tip_day`,
 `test_knowledge_size_chart_excludes_a_lagging_tip_day`,
-`test_knowledge_composition_chart_excludes_a_lagging_tip_day`,
-`test_average_block_time_chart_fails_fast_on_a_row_after_the_tip_day`.
+`test_knowledge_composition_chart_excludes_a_lagging_tip_day`.
 
 **Lesson**: A rule every chart must follow needs one function every chart calls; copies drift
 into different rules, and an endpoint written later copies none of them. "Complete" is a fact
 about the indexed chain, not the clock.
 
-**Files**: `crates/api/src/utils/stats_day.rs`, `crates/api/src/routes/{statistics,dao}.rs`,
+**Files**: `crates/api/src/utils/stats_day.rs` (now `stats_bucket.rs`),
+`crates/api/src/routes/{statistics,dao}.rs`, `crates/api/tests/{api_charts,api_dao,api_statistics}.rs`,
+`crates/api/tests/common/mod.rs`
+
+---
+
+### STATS-014: A legal backward timestamp served as corruption, and two definitions of "complete"
+
+**Date**: 2026-10-24
+
+**Symptom**: Found in review, not yet seen live. Take a tip block dated 23:59:58 (UTC+8) on day D
+whose parent is dated 00:00:02 on D+1. Every daily chart and `/statistics/tx-stats` would answer
+500 ("a row … after the indexed tip block's day … no block can be dated after the tip") until a
+later-dated block arrived. A reviewer scanned ~900k mainnet headers and found no backward step, but
+the chain allows one. Separately, six daily charts — `/charts/transaction-count`,
+`/charts/cell-count`, `/charts/capacity-turnover-ratio`, `/dao/charts/daily-deposit`,
+`/daily-depositors` and `/circulation-ratio` — still charted the partial current day, because
+STATS-013 never reached them.
+
+**Root Cause**: STATS-013 assumed "the tip is the newest-dated block". CKB only requires a block's
+timestamp to exceed the median time of the 37 blocks before it. A block may therefore be dated
+before its parent (`reorg_ops.rs` already relied on this for DAO snapshots). The tip-day rule
+called that legal state corruption. It also called a day complete too early: a tip at 00:00:30
+does not stop the next block from being dated 23:59:59 the day before while the median time is
+still before midnight. Meanwhile the bulk indexer already sealed activity buckets on the
+median-time watermark (`bulk_build/mod.rs`), so the API and the indexer held two different
+definitions of "complete".
+
+**Fix**: one definition for both crates, `ckbadger_common::stats_bucket`: a bucket (an hour or a
+UTC+8 day) is complete when its end is at or below the median time of the newest 37 indexed blocks
+(`median_time_ms`, `is_bucket_complete`).
+
+- The bulk sealer calls it unchanged (44dea317, a move).
+- The API reads the window once per request (`utils::stats_bucket::ChainTime`, which fails on a gap
+  in the window) and judges every daily handler with it: the nine of STATS-013 plus the six above.
+- A row dated after the tip's day is in progress, not an error. Rows in a store without blocks, a
+  tip hour or day with no bucket, and malformed keys stay errors.
+- `/statistics/tx-stats` drops the positional "the last bucket is in progress" contract: each point
+  carries `complete: bool`, because more than one trailing bucket can be in progress.
+- The inflation chart's cache is keyed by the last complete day.
+- `total-supply` and `secondary-issuance` still include the current day on purpose (verify S16).
+
+**Why the tests missed it**: every fixture had monotonic timestamps and a lone tip header, so "tip
+day = newest day" held in all of them; one test even pinned the 500. Regressions:
+`test_daily_chart_serves_a_tip_dated_before_its_parent_across_midnight`,
+`test_daily_chart_waits_for_the_median_time_to_pass_midnight`,
+`test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour`,
+`test_tx_stats_marks_buckets_complete_by_median_time_across_midnight`,
+`test_average_block_time_chart_treats_a_row_after_the_tip_day_as_in_progress`,
+`test_transaction_and_cell_daily_charts_exclude_in_progress_days`,
+`test_dao_daily_charts_exclude_in_progress_days`.
+
+**Lesson**: Derive "can this still change?" from the consensus rule that bounds it, not from the
+usual order of the data. Before adding a definition, look for one that already exists — here the
+indexer had the right one. A claim like "every chart" needs a grep, not memory.
+
+**Files**: `crates/common/src/stats_bucket.rs`, `crates/indexer/src/sync/bulk_build/mod.rs`,
+`crates/api/src/utils/stats_bucket.rs`, `crates/api/src/routes/{statistics,dao}.rs`,
 `crates/api/tests/{api_charts,api_dao,api_statistics}.rs`, `crates/api/tests/common/mod.rs`
 
 ---
