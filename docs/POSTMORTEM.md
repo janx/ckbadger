@@ -3683,4 +3683,42 @@ place at the boundary, not remembered per field.
 
 ---
 
-_Last updated: 2026-10-24_
+### API-021: One optional field, two meanings, and an invented zero
+
+**Date**: 2026-10-25
+
+**Symptom**: Found in review. `SporeResponse.ownedCapacity`/`ownedKnowledge` was one
+`Option<String>` with two meanings. The spore lists never computed it and always sent null; the
+detail always computed it. The frontend could not tell "not computed" from "unknown" and failed
+on a null detail.
+
+**Root Cause**: `latest_capacity_from_chart` built the whole capacity-history chart and read its
+last point back from strings. It answered `("0", "0")` for an empty history, whatever the spore's
+state, and parsed the strings with `.unwrap_or(0)`, so an empty or malformed history became an
+owned capacity of zero.
+
+**Fix**: lists serve `SporeResponse` without the two fields. `/spore/objects/{id}` serves
+`SporeDetailResponse`, the same fields plus required exact `ownedCapacity` and `ownedKnowledge`
+strings. `spore_owned_capacity` sums the daily deltas through `accumulate_owned_capacity`, the
+chart's own per-step rule, so no string is parsed.
+
+- A live spore must come out positive.
+- A melted spore must come out at exactly 0. A spore created and melted within one UTC+8 day has
+  no rows at all, because zero-net day rows are not stored, and that is its exact state.
+- Anything else, including a live spore with no history, is a 500 naming the spore.
+
+**Why the tests missed it**: the only detail test used a live spore with history, so neither the
+empty case nor the list's null was exercised. Regressions:
+`test_spore_lists_omit_owned_capacity_and_the_detail_requires_it`,
+`test_live_spore_without_capacity_history_is_an_error`,
+`test_melted_spore_without_capacity_history_owns_zero`,
+`test_melted_spore_with_a_capacity_remainder_is_an_error`.
+
+**Lesson**: An `Option` in a response must mean one thing. "Not computed on this route" is a
+different type, not a null.
+
+**Files**: `crates/api/src/routes/spore.rs`, `crates/api/tests/api_spore.rs`
+
+---
+
+_Last updated: 2026-10-25_

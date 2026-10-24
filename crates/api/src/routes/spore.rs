@@ -24,8 +24,8 @@ use crate::response::{
 };
 use crate::utils::params::parse_optional_block_id_cursor;
 use crate::utils::{
-    apply_owned_capacity_delta, date_keys_inclusive, parse_block_tx_cursor, parse_chart_date_range,
-    parse_hash32,
+    accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
+    parse_block_tx_cursor, parse_chart_date_range, parse_hash32,
 };
 use crate::warmup::{CachedAssetEntry, SporeCache};
 use crate::AppState;
@@ -242,9 +242,20 @@ pub struct SporeResponse {
     pub owner_address: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
-    pub owned_capacity: Option<String>,
-    pub owned_knowledge: Option<String>,
     pub media_profile: Option<SporeMediaProfileResponse>,
+}
+
+/// `/spore/objects/{id}`: a spore plus the exact capacity its cell owns,
+/// always computed (lists carry [`SporeResponse`] alone).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeDetailResponse {
+    #[serde(flatten)]
+    pub spore: SporeResponse,
+    /// Shannons the spore's cell holds; `"0"` once melted.
+    pub owned_capacity: String,
+    /// The occupied part of `owned_capacity` (common knowledge), in shannons.
+    pub owned_knowledge: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -300,12 +311,7 @@ pub struct SporeDobDecodeResponse {
 }
 
 /// Convert an ObjectEntry from the store into a SporeResponse.
-fn spore_to_response(
-    spore_id: &[u8],
-    entry: &ckbadger_store::ObjectEntry,
-    owned_capacity: Option<i128>,
-    owned_knowledge: Option<i128>,
-) -> SporeResponse {
+fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::ObjectEntry) -> SporeResponse {
     let (content_type, content_size, media_profile) = match &entry.extra {
         ckbadger_store::ObjectExtra::Spore {
             content_type,
@@ -350,8 +356,6 @@ fn spore_to_response(
         owner_address: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
-        owned_capacity: owned_capacity.map(|v| v.to_string()),
-        owned_knowledge: owned_knowledge.map(|v| v.to_string()),
         media_profile,
     }
 }
@@ -359,13 +363,6 @@ fn spore_to_response(
 fn format_yyyymmdd_for_chart(date: u32) -> String {
     let s = format!("{date:08}");
     format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8])
-}
-
-fn build_capacity_history_chart(
-    deltas: Vec<(u32, i128, i128)>,
-    title: String,
-) -> anyhow::Result<StackedAreaChartResponse> {
-    build_capacity_history_chart_with_initial(deltas, title, 0, 0, None, None)
 }
 
 fn build_capacity_history_chart_with_initial(
@@ -474,22 +471,38 @@ fn build_capacity_history_chart_with_initial(
     })
 }
 
-fn latest_capacity_from_chart(
-    chart: &StackedAreaChartResponse,
-) -> (Option<String>, Option<String>) {
-    if let Some(last) = chart.data.last() {
-        let used = last.values.get("used").cloned();
-        let unused = last.values.get("unused").cloned();
-        let capacity = match (&used, &unused) {
-            (Some(o), Some(u)) => {
-                let total = o.parse::<i128>().unwrap_or(0) + u.parse::<i128>().unwrap_or(0);
-                Some(total.to_string())
-            }
-            _ => None,
-        };
-        return (capacity, used);
+/// The exact capacity (and its occupied part) a spore's cell owns: the running
+/// sum of its daily deltas through `accumulate_owned_capacity`, the per-step
+/// rule its capacity-history chart applies too.
+///
+/// A live spore's deltas sum to its live cell's capacity, which is positive. A
+/// melted spore's sum to zero; one created and melted within one UTC+8 day has
+/// no rows at all, because zero-net day rows are not stored, and that is
+/// exactly 0 as well. Any other combination is corruption, reported with the
+/// spore.
+fn spore_owned_capacity(
+    spore_id: &[u8],
+    is_live: bool,
+    mut deltas: Vec<(u32, ckbadger_store::SporeDailyDelta)>,
+) -> Result<(i128, i128), ApiRouteError> {
+    let spore = format!("0x{}", hex::encode(spore_id));
+    deltas.sort_by_key(|(date, _)| *date);
+    let rows = deltas.len();
+    let (capacity, knowledge) = accumulate_owned_capacity(
+        deltas
+            .into_iter()
+            .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
+    )
+    .map_err(|e| ApiError::internal(format!("spore {spore} capacity history: {e}")))?;
+    match (is_live, capacity, knowledge) {
+        (true, capacity, _) if capacity > 0 => Ok((capacity, knowledge)),
+        (false, 0, 0) => Ok((0, 0)),
+        _ => Err(ApiError::internal(format!(
+            "spore {spore} (live={is_live}) has {rows} capacity history rows summing to \
+             capacity={capacity}, knowledge={knowledge}: a live spore owns a positive \
+             capacity, a melted one none"
+        ))),
     }
-    (Some("0".to_string()), Some("0".to_string()))
 }
 
 fn format_ratio_4(numerator: i64, denominator: i64) -> String {
@@ -954,7 +967,7 @@ async fn get_spores_by_cluster(
 
     let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
@@ -1105,7 +1118,7 @@ async fn list_spores(
 
     let spores: Vec<SporeResponse> = page
         .iter()
-        .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
@@ -1118,7 +1131,7 @@ async fn list_spores(
 async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
-) -> ApiResult<SporeResponse> {
+) -> ApiResult<SporeDetailResponse> {
     let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
@@ -1135,24 +1148,13 @@ async fn get_spore(
                 .store
                 .list_spore_daily_deltas(&id)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
-            let chart = build_capacity_history_chart(
-                daily
-                    .into_iter()
-                    .map(|(date, delta)| {
-                        (
-                            date,
-                            delta.owned_capacity_delta,
-                            delta.owned_knowledge_delta,
-                        )
-                    })
-                    .collect(),
-                "Spore Capacity History".to_string(),
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-            let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
-            let cap = owned_capacity.and_then(|v| v.parse::<i128>().ok());
-            let occ = owned_knowledge.and_then(|v| v.parse::<i128>().ok());
-            ok(spore_to_response(&id, &entry, cap, occ))
+            let (owned_capacity, owned_knowledge) =
+                spore_owned_capacity(&id, entry.is_live, daily)?;
+            ok(SporeDetailResponse {
+                spore: spore_to_response(&id, &entry),
+                owned_capacity: owned_capacity.to_string(),
+                owned_knowledge: owned_knowledge.to_string(),
+            })
         }
         None => Err(ApiError::not_found("Spore not found")),
     }
@@ -1746,7 +1748,7 @@ async fn get_spores_by_owner(
 
     let spores: Vec<SporeResponse> = page
         .iter()
-        .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
