@@ -429,6 +429,22 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity History');
     });
 
+    it('keeps a fiber channel delayEpoch as the exact decimal string the API sends', async () => {
+      // A since-encoded relative epoch: its flag bits put it far above 2^53.
+      const delayEpoch = '11529496521045180422';
+      server.use(
+        http.get('/api/:network/v1/fiber/channels/:id', () =>
+          HttpResponse.json({ channelId: '0xchan', delayEpoch, timeline: [] })
+        )
+      );
+
+      const channel = await api.getFiberChannel('0xchan');
+
+      expectTypeOf(channel.delayEpoch).toEqualTypeOf<string | null>();
+      expect(channel.delayEpoch).toBe(delayEpoch);
+      expect(BigInt(channel.delayEpoch!)).toBe(BigInt('11529496521045180422'));
+    });
+
     it('normalizes fiber stats from the backend response shape', async () => {
       server.use(
         http.get('/api/:network/v1/fiber/stats', () => {

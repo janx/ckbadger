@@ -2095,8 +2095,12 @@ interface FiberChannel {
   closeTimestamp: string | null;
   closeTxHash: string | null;
   commitmentTxHash: string | null;
-  /** Revocation delay from the commitment lock args; null unless force-closed. */
-  delayEpoch: number | null;
+  /**
+   * Revocation delay from the commitment lock args, `since`-encoded, as an exact u64 decimal
+   * string (its relative-epoch flag bits put it above 2^53); null unless force-closed. Read it
+   * with BigInt, never Number.
+   */
+  delayEpoch: string | null;
   settlementBlock: number | null;
   settlementTimestamp: string | null;
   settlementTxHash: string | null;
