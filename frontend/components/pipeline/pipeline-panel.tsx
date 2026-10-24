@@ -600,7 +600,6 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
           {scene.next && (
             <NextCard
               next={scene.next}
-              highlighted={false}
               dim={dimAnchor === null || dimAnchor === scene.next.number ? 'false' : 'true'}
             />
           )}

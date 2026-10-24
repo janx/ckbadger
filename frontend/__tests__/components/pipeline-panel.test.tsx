@@ -102,6 +102,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** A hover arriving from outside the canvas (the Latest Blocks / Latest Transactions rows). */
+const hoverStoreSet = (h: { block: number | null; tx: string | null; window: number | null }) =>
+  act(() => usePipelineHoverStore.getState().setHover(h));
+
 async function renderPanel(snapshot: PipelineSnapshot = buildPipelineSnapshot()) {
   server.use(http.get('/api/:network/v1/pipeline', () => HttpResponse.json(snapshot)));
   render(<PipelinePanel />);
@@ -344,6 +348,13 @@ describe('PipelinePanel static render', () => {
     const nextBox = next.querySelector('[data-box]') as SVGRectElement;
     expect(nextBox).toHaveAttribute('stroke-dasharray', '3 2');
     expect(nextBox.style.getPropertyValue('stroke')).toBe(tok('jade'));
+    // One look whatever is hovered: half-filled, its dashed outline at 0.6.
+    expect(nextBox).toHaveAttribute('fill-opacity', '0.5');
+    expect(nextBox).toHaveAttribute('stroke-opacity', '0.6');
+    hoverStoreSet({ block: T + 1, tx: null, window: T + 1 });
+    expect(nextBox).toHaveAttribute('fill-opacity', '0.5');
+    expect(nextBox).toHaveAttribute('stroke-opacity', '0.6');
+    hoverStoreSet({ block: null, tx: null, window: null });
     expect(next.querySelectorAll('[data-ghost="tx"]')).toHaveLength(6);
     for (const g of next.querySelectorAll('[data-ghost="tx"]')) {
       expect(g.tagName).toBe('rect');

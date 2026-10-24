@@ -27,12 +27,11 @@ export function NextColumn({ available }: NextColumnProps) {
 
 interface NextCardProps {
   next: SceneNext;
-  highlighted: boolean;
   dim: DimLevel;
 }
 
 /** The predicted next block: dashed, because none of it is real yet. */
-export function NextCard({ next, highlighted, dim }: NextCardProps) {
+export function NextCard({ next, dim }: NextCardProps) {
   return (
     <g data-next transform={`translate(${next.x},0)`} className="cursor-pointer">
       <g data-dim={dim}>
@@ -46,8 +45,8 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
           strokeWidth={1}
           strokeDasharray="3 2"
           vectorEffect="non-scaling-stroke"
-          fillOpacity={highlighted ? 0.9 : 0.5}
-          strokeOpacity={highlighted ? 1 : 0.6}
+          fillOpacity={0.5}
+          strokeOpacity={0.6}
           style={{ fill: tok('elevated'), stroke: tok('jade') }}
         />
         <text x={G.padX} y={G.chainY + 3.5} className={T11C}>
