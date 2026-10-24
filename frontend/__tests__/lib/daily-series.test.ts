@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chartNumber, dailyDeltas, dayLabel, splitInProgress } from '@/lib/daily-series';
+import { chartNumber, dailyDeltas, dayLabel, splitByCompleteness } from '@/lib/daily-series';
 
 describe('dayLabel', () => {
   it('labels ISO and compact days as MM/DD', () => {
@@ -60,27 +60,48 @@ describe('dailyDeltas', () => {
   });
 });
 
-describe('splitInProgress', () => {
-  it('treats the last tx-stats bucket as the one in progress, whatever its label', () => {
-    const hourly = [
-      { label: '09:00', value: 731 },
-      { label: '10:00', value: 726 },
-      { label: '11:00', value: 326 },
-    ];
-    expect(splitInProgress(hourly, 'hourlyData')).toEqual({
+describe('splitByCompleteness', () => {
+  const b = (label: string, value: number, complete: boolean) => ({ label, value, complete });
+
+  it('splits on the complete flags, never on position', () => {
+    const hourly = [b('08:00', 650, true), b('09:00', 731, true), b('10:00', 726, false)];
+    expect(splitByCompleteness(hourly, 'hourlyData')).toEqual({
       complete: hourly.slice(0, 2),
-      inProgress: hourly[2],
+      inProgress: hourly.slice(2),
     });
   });
 
-  it('has no complete bucket when only the current one exists', () => {
-    const only = [{ label: '10/24', value: 14122 }];
-    expect(splitInProgress(only, 'dailyData')).toEqual({ complete: [], inProgress: only[0] });
+  it('keeps more than one trailing bucket in progress (the previous hour, for the first minutes)', () => {
+    const hourly = [b('08:00', 650, true), b('09:00', 731, false), b('10:00', 12, false)];
+    expect(splitByCompleteness(hourly, 'hourlyData')).toEqual({
+      complete: hourly.slice(0, 1),
+      inProgress: hourly.slice(1),
+    });
   });
 
-  it('throws on an empty series', () => {
-    expect(() => splitInProgress([], 'hourlyData')).toThrow(
-      'hourlyData has no buckets, not even the one in progress'
+  it('allows an empty series: before any block, or before a fresh build has its stats', () => {
+    expect(splitByCompleteness([], 'dailyData')).toEqual({ complete: [], inProgress: [] });
+  });
+
+  it('allows a series of only in-progress buckets', () => {
+    const only = [b('10/24', 14122, false)];
+    expect(splitByCompleteness(only, 'dailyData')).toEqual({ complete: [], inProgress: only });
+  });
+
+  it('fails fast when a complete bucket follows an in-progress one', () => {
+    expect(() =>
+      splitByCompleteness(
+        [b('08:00', 1, false), b('09:00', 2, true), b('10:00', 3, false)],
+        'hourlyData'
+      )
+    ).toThrow('hourlyData: complete bucket 09:00 follows in-progress bucket 08:00');
+  });
+
+  it('fails fast when the newest bucket is marked complete', () => {
+    expect(() =>
+      splitByCompleteness([b('10/23', 1, true), b('10/24', 2, true)], 'dailyData')
+    ).toThrow(
+      'dailyData: the newest bucket 10/24 is marked complete; the newest bucket is always in progress'
     );
   });
 });

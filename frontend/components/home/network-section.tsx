@@ -17,7 +17,7 @@ import {
   viewOf,
 } from '@/components/home/section';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
-import { chartNumber, dayLabel, splitInProgress } from '@/lib/daily-series';
+import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
 import { formatPercentShort, hashRateUnit, orphanRateTargetPercent } from '@/lib/network-metrics';
 import { cn } from '@/lib/utils';
 
@@ -199,20 +199,22 @@ interface TxView {
   max: number;
 }
 
-function txView(buckets: TxStatsDataPoint[], series: string): TxView {
+/** The bars of a tx-stats series, from its `complete` flags; null for an empty series. */
+function txView(buckets: TxStatsDataPoint[], series: string): TxView | null {
   buckets.forEach((b) => {
     if (!Number.isInteger(b.value) || b.value < 0) {
       throw new Error(`${series} bucket ${b.label} has ${b.value} transactions`);
     }
   });
-  const { complete, inProgress } = splitInProgress(buckets, series);
+  const { complete, inProgress } = splitByCompleteness(buckets, series);
+  if (complete.length === 0 && inProgress.length === 0) return null;
   const bars: Bar[] = [
     ...complete.map((b, i) => ({
       label: b.label,
       value: b.value,
       state: i === complete.length - 1 ? ('highlight' as const) : ('complete' as const),
     })),
-    { label: inProgress.label, value: inProgress.value, state: 'inProgress' },
+    ...inProgress.map((b) => ({ label: b.label, value: b.value, state: 'inProgress' as const })),
   ];
   const values = complete.map((b) => b.value);
   return {
@@ -246,9 +248,15 @@ function TransactionsFigure() {
   const n = (x: number) => x.toLocaleString('en-US');
   const ariaLabel = (view: TxView) => {
     const last = view.last ? n(view.last.value) : 'none';
+    const open = view.bars.filter((b) => b.state === 'inProgress').length;
+    const unit = txRange === '24h' ? 'hour' : 'day';
+    const hollow =
+      open === 1
+        ? `the current ${unit} drawn hollow`
+        : `the ${open} ${unit}s still in progress drawn hollow`;
     return txRange === '24h'
-      ? `Transactions per hour over the last 24 hours, ${n(view.min)} to ${n(view.max)} per hour, ${last} in the last full hour, the current hour drawn hollow`
-      : `Transactions per day, ${view.bars[0].label} to ${view.bars[view.bars.length - 1].label}, ${n(view.min)} to ${n(view.max)} per day, ${last} on the last full day, the current day drawn hollow`;
+      ? `Transactions per hour over the last 24 hours, ${n(view.min)} to ${n(view.max)} per hour, ${last} in the last full hour, ${hollow}`
+      : `Transactions per day, ${view.bars[0].label} to ${view.bars[view.bars.length - 1].label}, ${n(view.min)} to ${n(view.max)} per day, ${last} on the last full day, ${hollow}`;
   };
   return (
     <ChartFigure

@@ -1,6 +1,6 @@
 /**
  * Series helpers for the homepage charts: day labels, chart numbers, day-over-day changes of a
- * cumulative CKB series, and the in-progress last bucket of `/statistics/tx-stats`.
+ * cumulative CKB series, and the complete / in-progress buckets of `/statistics/tx-stats`.
  */
 import type { ChartDataPoint } from '@/lib/api';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
@@ -63,22 +63,38 @@ export function dailyDeltas(points: ChartDataPoint[], days: number): DailyDelta[
   return out;
 }
 
-export interface InProgressSplit<T> {
-  /** Every bucket that is over, oldest first. */
+export interface CompletenessSplit<T> {
+  /** The buckets that are over, oldest first. */
   complete: T[];
-  /** The last bucket: the hour or day still in progress. */
-  inProgress: T;
+  /** The trailing buckets still in progress — usually one, two in the first minutes of a new one. */
+  inProgress: T[];
 }
 
 /**
- * Split a `/statistics/tx-stats` series into its complete buckets and the in-progress one. The
- * endpoint's contract is that the LAST bucket of `hourlyData` and of `dailyData` is the hour / day
- * still in progress (it also reports it as `currentHour` / `currentDay`); the split never guesses
- * from labels. An empty series has no current bucket, which the contract does not allow.
+ * Split a `/statistics/tx-stats` series by its `complete` flags. The endpoint's contract: complete
+ * buckets come first, then the in-progress ones, and the newest bucket is always in progress (more
+ * than one can be, while a new hour or day is younger than the median time of the last 37 blocks).
+ * An empty series is allowed — before any block, or before a fresh build has its stats. A series
+ * that breaks the order is an API contract violation and throws.
  */
-export function splitInProgress<T>(buckets: T[], series: string): InProgressSplit<T> {
-  if (buckets.length === 0) {
-    throw new Error(`${series} has no buckets, not even the one in progress`);
+export function splitByCompleteness<T extends { label: string; complete: boolean }>(
+  buckets: T[],
+  series: string
+): CompletenessSplit<T> {
+  if (buckets.length === 0) return { complete: [], inProgress: [] };
+  const firstOpen = buckets.findIndex((b) => !b.complete);
+  if (firstOpen === -1) {
+    const newest = buckets[buckets.length - 1];
+    throw new Error(
+      `${series}: the newest bucket ${newest.label} is marked complete; the newest bucket is always in progress`
+    );
   }
-  return { complete: buckets.slice(0, -1), inProgress: buckets[buckets.length - 1] };
+  const inProgress = buckets.slice(firstOpen);
+  const late = inProgress.find((b) => b.complete);
+  if (late) {
+    throw new Error(
+      `${series}: complete bucket ${late.label} follows in-progress bucket ${buckets[firstOpen].label}`
+    );
+  }
+  return { complete: buckets.slice(0, firstOpen), inProgress };
 }

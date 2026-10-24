@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
-import { uncleRateChart } from '@/__tests__/msw/fixtures/home';
+import { txStats, uncleRateChart } from '@/__tests__/msw/fixtures/home';
 import { NetworkSection } from '@/components/home/network-section';
 
 const API = '/api/:network/v1';
@@ -156,6 +156,58 @@ describe('NetworkSection', () => {
     );
     fireEvent.pointerLeave(svg);
     expect(svg).toHaveAccessibleName(/15,710 on the last full day, the current day drawn hollow/);
+  });
+
+  it('draws every in-progress bucket hollow and heads with the newest complete one', async () => {
+    // The first minutes of an hour: the previous hour is still in progress too.
+    const hourlyData = txStats.hourlyData.map((bucket, i, all) => ({
+      ...bucket,
+      complete: i < all.length - 2,
+    }));
+    server.use(
+      http.get(`${API}/statistics/tx-stats`, () => HttpResponse.json({ ...txStats, hourlyData }))
+    );
+    render(<NetworkSection />);
+    const fig = figure('home-transactions');
+    // 22 complete buckets: the newest complete one is index 21.
+    await waitFor(() =>
+      expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent(
+        hourlyData[21].value.toLocaleString('en-US')
+      )
+    );
+    const bars = within(fig).getByRole('img').querySelectorAll('[data-bar]');
+    expect(bars[21]).toHaveAttribute('data-bar', 'highlight');
+    expect(bars[22]).toHaveAttribute('data-bar', 'inProgress');
+    expect(bars[23]).toHaveAttribute('data-bar', 'inProgress');
+    expect(within(fig).getByRole('img')).toHaveAccessibleName(
+      /the 2 hours still in progress drawn hollow$/
+    );
+    fireEvent.pointerMove(within(fig).getByRole('img'), { clientX: 258 }); // bar 22, centre ≈ 257.1
+    expect(screen.getByTestId('home-transactions-subtitle')).toHaveTextContent(
+      `${hourlyData[22].label} · in progress`
+    );
+  });
+
+  it('shows an empty state for an empty series, which the contract allows', async () => {
+    server.use(
+      http.get(`${API}/statistics/tx-stats`, () =>
+        HttpResponse.json({ currentHour: 0, currentDay: 0, hourlyData: [], dailyData: [] })
+      )
+    );
+    render(<NetworkSection />);
+    const fig = figure('home-transactions');
+    expect(await within(fig).findByText('No transactions yet')).toBeInTheDocument();
+    expect(within(fig).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('fails fast when the buckets break the completeness order', async () => {
+    const hourlyData = txStats.hourlyData.map((bucket, i) => ({ ...bucket, complete: i !== 3 }));
+    server.use(
+      http.get(`${API}/statistics/tx-stats`, () => HttpResponse.json({ ...txStats, hourlyData }))
+    );
+    render(<NetworkSection />);
+    const alert = await within(figure('home-transactions')).findByRole('alert');
+    expect(alert).toHaveTextContent(/complete bucket .* follows in-progress bucket/);
   });
 
   it('turns a failed fetch into an error state', async () => {

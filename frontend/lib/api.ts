@@ -1441,12 +1441,16 @@ interface UncleRateChartResponse extends ChartResponse {
 interface TxStatsDataPoint {
   label: string;
   value: number;
+  /** No later block can be dated inside this bucket (CKB's median time of the last 37 blocks). */
+  complete: boolean;
 }
 
 /**
- * `/statistics/tx-stats`. The LAST bucket of `hourlyData` is the hour still in progress and the
- * LAST bucket of `dailyData` the day still in progress (`currentHour` / `currentDay` are their
- * counts so far); every earlier bucket is complete.
+ * `/statistics/tx-stats`, oldest first. Every bucket says whether it is `complete`: complete ones
+ * come first, then the in-progress ones; the newest is always in progress and, in the first minutes
+ * of a new hour or day, the previous one still is too. `hourlyData` is UTC hours (`HH:00`),
+ * `dailyData` UTC+8 days (`MM/DD`). Hours and days without blocks have no bucket, so a series can
+ * be short or empty (then `currentHour` / `currentDay` are 0).
  */
 interface TxStatsResponse {
   currentHour: number;

@@ -133,8 +133,17 @@ const DAILY = [
 export const txStats: TxStatsResponse = {
   currentHour: 326,
   currentDay: 14122,
-  hourlyData: HOURS.map((label, i) => ({ label, value: HOURLY[i] })),
-  dailyData: DAILY_LABELS.map((label, i) => ({ label, value: DAILY[i] })),
+  // The newest bucket of each series is in progress; every earlier one is complete.
+  hourlyData: HOURS.map((label, i) => ({
+    label,
+    value: HOURLY[i],
+    complete: i < HOURS.length - 1,
+  })),
+  dailyData: DAILY_LABELS.map((label, i) => ({
+    label,
+    value: DAILY[i],
+    complete: i < DAILY_LABELS.length - 1,
+  })),
 };
 
 export const daoStatistics: DaoStatistics = {
