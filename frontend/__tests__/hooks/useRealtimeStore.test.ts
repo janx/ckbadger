@@ -86,12 +86,17 @@ describe('useRealtimeStore', () => {
         } as never,
       });
 
+      useRealtimeStore.setState({ socketHeld: true });
+
       reset();
 
       const state = useRealtimeStore.getState();
       expect(state.isConnected).toBe(false);
       expect(state.latestBlock).toBeNull();
       expect(state.latestTx).toBeNull();
+      // Whether the page holds the socket is the subscriber count's business, not the data reset's.
+      expect(state.socketHeld).toBe(true);
+      useRealtimeStore.setState({ socketHeld: false });
     });
   });
 

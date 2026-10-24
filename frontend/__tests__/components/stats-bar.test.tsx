@@ -55,7 +55,7 @@ function stats(overrides: Partial<NetworkStats> = {}): NetworkStats {
 describe('VitalsStrip', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useRealtimeStore.setState({ isConnected: false });
+    useRealtimeStore.setState({ isConnected: false, socketHeld: false });
   });
   afterEach(() => act(() => useRealtimeStore.getState().reset()));
 
@@ -100,7 +100,25 @@ describe('VitalsStrip', () => {
     expect(screen.queryByTestId('vitals-epoch-progress')).not.toBeInTheDocument();
   });
 
-  it('leads with the realtime dot, labelled Live only while the connection is up', async () => {
+  it('renders no live dot on a page that never opens the realtime socket', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+
+    expect(screen.queryByTestId('vitals-live')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Not live')).not.toBeInTheDocument();
+    // An empty box of the dot's size keeps the strip aligned with the homepage's.
+    const spacer = screen.getByTestId('vitals-live-spacer');
+    expect(spacer).toHaveAttribute('aria-hidden', 'true');
+    expect(spacer).toBeEmptyDOMElement();
+    expect(spacer.nextElementSibling).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
+  });
+
+  it('leads with the realtime dot on the page holding the socket, labelled Live only while connected', async () => {
+    // The homepage: useRealtimeData is mounted, so the socket is held.
+    useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });

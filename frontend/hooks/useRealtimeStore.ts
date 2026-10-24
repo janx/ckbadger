@@ -50,6 +50,12 @@ interface WebSocketMessage {
 
 interface RealtimeState {
   isConnected: boolean;
+  /**
+   * Whether the current page holds the realtime socket (mounts useRealtimeData), whatever the
+   * socket's state. Pages without it never connect by design. Set only by useRealtimeData, from
+   * the same subscriber count that opens and closes the socket; reset() leaves it alone.
+   */
+  socketHeld: boolean;
   latestBlock: Block | null;
   latestTx: Transaction | null;
   setConnected: (connected: boolean) => void;
@@ -60,6 +66,7 @@ interface RealtimeState {
 
 export const useRealtimeStore = create<RealtimeState>((set) => ({
   isConnected: false,
+  socketHeld: false,
   latestBlock: null,
   latestTx: null,
   setConnected: (connected) => set({ isConnected: connected }),
@@ -248,6 +255,7 @@ export function useRealtimeData() {
 
   useEffect(() => {
     wsSubscribers++;
+    useRealtimeStore.setState({ socketHeld: true });
     handlerRef.current = handleMessage;
     messageHandlers.add(handleMessage);
     connectWebSocket(network);
@@ -259,6 +267,7 @@ export function useRealtimeData() {
       }
       if (wsSubscribers === 0) {
         disconnectWebSocket();
+        useRealtimeStore.setState({ socketHeld: false });
       }
     };
   }, [handleMessage, network]);

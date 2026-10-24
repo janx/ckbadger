@@ -91,6 +91,19 @@ describe('useRealtimeData network scoping', () => {
     delete window.__CKBADGER_RUNTIME_CONFIG__;
   });
 
+  it('marks the socket as held while a page mounts it, across a network switch, until unmount', async () => {
+    const user = userEvent.setup();
+    expect(useRealtimeStore.getState().socketHeld).toBe(false);
+    const { unmount } = renderHarness();
+    expect(useRealtimeStore.getState().socketHeld).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'go-testnet' }));
+    expect(useRealtimeStore.getState().socketHeld).toBe(true);
+
+    unmount();
+    expect(useRealtimeStore.getState().socketHeld).toBe(false);
+  });
+
   it('opens the active network socket and reconnects to the new network on switch', async () => {
     const user = userEvent.setup();
     renderHarness();

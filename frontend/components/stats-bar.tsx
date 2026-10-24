@@ -57,11 +57,22 @@ function Vital({ label, href, children }: { label: string; href?: string; childr
   );
 }
 
-/** The realtime dot and the item it leads, kept together so the dot never wraps alone. */
+const DOT_BOX = 'h-[7px] w-[7px] shrink-0 self-center rounded-full';
+
+/**
+ * The realtime dot and the item it leads, kept together so the dot never wraps alone. A page that
+ * does not hold the realtime socket gets an empty box of the same size instead: no "Not live" for
+ * a connection it never makes, and the strip lines up the same on every page.
+ */
 function Lead({ connected, children }: { connected: boolean; children: ReactNode }) {
+  const held = useRealtimeStore((s) => s.socketHeld);
   return (
     <div className="flex items-baseline gap-2">
-      <LiveDot connected={connected} />
+      {held ? (
+        <LiveDot connected={connected} />
+      ) : (
+        <span aria-hidden="true" data-testid="vitals-live-spacer" className={DOT_BOX} />
+      )}
       {children}
     </div>
   );
@@ -166,8 +177,8 @@ function VitalsLoading({ connected }: { connected: boolean }) {
 }
 
 /**
- * Whether the realtime socket is up: a jade dot when it is, a dim one when it is not. The word is
- * its accessible name and tooltip; the dot is always there, so the strip never shifts on connect.
+ * Whether the page's realtime socket is up: a jade dot when it is, a dim one while it is not yet or
+ * no longer connected. The word is its accessible name and tooltip.
  */
 function LiveDot({ connected }: { connected: boolean }) {
   return (
@@ -179,7 +190,7 @@ function LiveDot({ connected }: { connected: boolean }) {
       title={
         connected ? 'Live: realtime updates connected' : 'Not live: realtime updates not connected'
       }
-      className={`h-[7px] w-[7px] shrink-0 self-center rounded-full ${connected ? 'bg-jade' : 'bg-base-border'}`}
+      className={`${DOT_BOX} ${connected ? 'bg-jade' : 'bg-base-border'}`}
     />
   );
 }
