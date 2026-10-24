@@ -53,7 +53,13 @@ export function RankedBars({
         {rows.map((row) => {
           const body = (
             <>
-              <span className="text-text truncate" title={row.label}>
+              <span
+                className={cn(
+                  'text-text truncate transition-colors',
+                  row.href && 'group-hover:text-text-bright group-focus-visible:text-text-bright'
+                )}
+                title={row.label}
+              >
                 {row.label}
               </span>
               <span className="bg-base-border-subtle flex h-1.5 rounded-[3px]">
@@ -71,7 +77,13 @@ export function RankedBars({
           return (
             <li key={row.key} data-rank-row={row.key}>
               {row.href ? (
-                <Link href={row.href} className={cn(grid, 'hover:bg-base-elevated/40 rounded')}>
+                <Link
+                  href={row.href}
+                  className={cn(
+                    grid,
+                    'hover:bg-base-elevated/60 focus-visible:bg-base-elevated/60 group -mx-1 rounded px-1 outline-none transition-colors'
+                  )}
+                >
                   {body}
                 </Link>
               ) : (

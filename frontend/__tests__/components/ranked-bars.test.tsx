@@ -38,6 +38,28 @@ describe('RankedBars', () => {
     expect(dao).toHaveTextContent('DAO0.1%');
   });
 
+  it('gives a linked row a hover state: the row lifts and its label brightens', () => {
+    render(
+      <RankedBars
+        title="By type"
+        rows={[
+          { key: 'script', label: 'Script call', share: 0.814, href: '/x' },
+          { key: 'dao', label: 'DAO', share: 0.0011 },
+        ]}
+      />
+    );
+    const row = screen.getByRole('link', { name: /Script call/ });
+    expect(row).toHaveClass(
+      'group',
+      'hover:bg-base-elevated/60',
+      'focus-visible:bg-base-elevated/60'
+    );
+    expect(screen.getByText('Script call')).toHaveClass('group-hover:text-text-bright');
+    // A row with nowhere to go gets no hover state.
+    const dao = document.querySelector('[data-rank-row="dao"] > div') as HTMLElement;
+    expect(dao.className).not.toContain('hover:');
+  });
+
   it('gives long script names a flexible, truncating column', () => {
     render(
       <RankedBars
