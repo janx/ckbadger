@@ -169,7 +169,7 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
-    expect(within(row).getByText('fiber · Channel Close')).toBeInTheDocument();
+    expect(within(row).getByText('Fiber · Channel Close')).toBeInTheDocument();
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
       'channel 0x0d3870bb...6e26:0 · 750.00000000 CKB'
     );

@@ -14,6 +14,7 @@ import { classifyActivity } from '@/lib/activity-classify';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
+import { protocolDisplayName } from '@/lib/protocol-names';
 import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
 import { ParticipantRefView } from '@/components/participant-ref';
 import type {
@@ -153,7 +154,9 @@ export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quie
 
 export function LockCallBadge({ lc }: { lc: ActivityLockCall }) {
   const name =
-    (lc.decoded?.protocol as string) || lc.scriptName?.trim() || lc.lockCodeHash.slice(0, 10);
+    (typeof lc.decoded?.protocol === 'string' ? protocolDisplayName(lc.decoded.protocol) : null) ||
+    lc.scriptName?.trim() ||
+    lc.lockCodeHash.slice(0, 10);
 
   return (
     <span className="text-text-dim bg-base-elevated/80 rounded px-1 py-0.5 font-mono text-[9px] uppercase">
@@ -374,12 +377,12 @@ function getFiberActionLabel(action: string): string {
   return FIBER_ACTION_LABELS[action] ?? formatProtocolAction(action);
 }
 
-/** The label of a protocol action (`DAO Deposit`, `fiber · Channel Open`, `utxoswap · swap`). */
+/** The label of a protocol action (`DAO Deposit`, `Fiber · Channel Open`, `UTXOSwap · swap`). */
 export function protocolActionLabel(pa: ActivityProtocolAction): string {
   if (pa.protocol === 'dao') return daoActionLabel(pa.action);
   const actionLabel =
     pa.protocol === 'fiber' ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
-  return `${pa.protocol} \u00B7 ${actionLabel}`;
+  return `${protocolDisplayName(pa.protocol)} \u00B7 ${actionLabel}`;
 }
 
 function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {

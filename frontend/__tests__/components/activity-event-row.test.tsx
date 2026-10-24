@@ -4,6 +4,7 @@ import {
   ActivityEventGroup,
   ExactCkb,
   ItemDeltaFact,
+  LockCallBadge,
   LockCallExpr,
   ParticipantLine,
   ProtocolActionNote,
@@ -533,7 +534,7 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
           protocolActions: [{ protocol: 'fiber', action: 'channel_close', metadata: {} }],
         })
       )
-    ).toBe('fiber \u00B7 Channel Close');
+    ).toBe('Fiber \u00B7 Channel Close');
   });
 
   it('falls to the item layer, then calls, then CKB', () => {
@@ -551,6 +552,42 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
     expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
     expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');
     expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Coinbase');
+  });
+});
+
+describe('protocol display names', () => {
+  it('name the protocol in every label and badge, not its raw id', () => {
+    render(
+      <>
+        <ActivityEventGroup
+          activity={makeActivity({
+            protocolActions: [{ protocol: 'rgbpp', action: 'leap_to_ckb', metadata: {} }],
+            lockCalls: [
+              {
+                lockCodeHash: '0xutx',
+                lockHashType: 'type',
+                lockArgs: '0x01',
+                scriptHash: '0xu',
+                decoded: { protocol: 'utxoswap' },
+              },
+            ],
+          })}
+          formatTimeAgo={mockFormatTimeAgo}
+        />
+        <LockCallBadge
+          lc={{
+            lockCodeHash: '0xutx',
+            lockHashType: 'type',
+            lockArgs: '0x01',
+            scriptHash: '0xu',
+            decoded: { protocol: 'utxoswap' },
+          }}
+        />
+      </>
+    );
+    expect(screen.getAllByText(/RGB\+\+ · leap to ckb/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/rgbpp ·/)).not.toBeInTheDocument();
+    expect(screen.getByText('UTXOSwap')).toBeInTheDocument();
   });
 });
 
