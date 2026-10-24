@@ -3581,6 +3581,16 @@ until phase 2, and their occupied part is in `U` like any live cell's. `free` al
 block rewards and fees of the last 11 blocks: they are issued in `C` but not yet paid into a
 cell. No re-sync; the indexer's startup refresh writes the new layout.
 
+Review found the first version answered 500 after every reorg until the refresh landed:
+rollback deletes the headers above the fork point but keeps the aggregate row (API-006), and the
+endpoint read C, S and U from the header of the row's block. The row now stores its block's C, S and
+U itself (`tip_total_issuance`, `tip_secondary_pool`, `tip_occupied_capacity`), so the endpoint reads
+one row. In that window it serves the pre-rollback split, labelled with the block it describes.
+Rewriting the row inside the rollback commit instead was not done: the DAO refresh reads committed
+lifecycle state in the indexer, while the rollback is one store-crate `WriteBatch`, so it would mean
+recomputing the aggregate from uncommitted writes. Regression:
+`test_ckbytes_allocation_answers_right_after_a_rollback` (a real `rollback_to_block`).
+
 **Why the tests missed it**: nothing compared the bar's parts with the whole. Regressions:
 `test_refresh_dao_statistics_sums_free_capacity_of_live_dao_cells`,
 `test_ckbytes_allocation_partitions_circulation_at_one_block`,

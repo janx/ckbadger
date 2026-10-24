@@ -1525,8 +1525,10 @@ fn knowledge_size_from_u(
 ///   occupied part is inside `knowledge`, so it is not a part of the split.
 ///
 /// The block (`block_number`) is the one the indexer computed the DAO
-/// aggregate at; C, S and U come from that block's header, so the three parts
-/// always sum to the circulation they split. A negative `free` is an error.
+/// aggregate at; C, S and U are stored in that same aggregate row, so the
+/// three parts always sum to the circulation they split — also in the window
+/// after a rollback, before the indexer refreshes the row, when it describes
+/// the pre-rollback tip it names. A negative `free` is an error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CkbytesAllocationResponse {
@@ -1542,17 +1544,10 @@ async fn get_ckbytes_allocation(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<CkbytesAllocationResponse> {
     let store = state.store.clone();
-    let (latest, header) = tokio::task::spawn_blocking(move || {
-        let latest = store.get_latest_dao_statistics()?;
-        let header = match &latest {
-            Some(latest) => store.get_block_header(latest.tip_block_number)?,
-            None => None,
-        };
-        anyhow::Ok((latest, header))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let latest = tokio::task::spawn_blocking(move || store.get_latest_dao_statistics())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     let Some(latest) = latest else {
         return Err(super::dao::dao_singleton_missing(
             &state,
@@ -1561,17 +1556,14 @@ async fn get_ckbytes_allocation(
     };
     let block = latest.tip_block_number;
     let at = format!("block {block}");
-    let header = header.ok_or_else(|| {
-        ApiError::internal(format!(
-            "dao_latest_stats was computed at {at}, which has no stored header"
-        ))
-    })?;
-    let (c, s, u) = ckbadger_common::dao::extract_dao_csu(&header.dao).ok_or_else(|| {
-        ApiError::internal(format!(
-            "invalid DAO field at {at}: dao_len={}",
-            header.dao.len()
-        ))
-    })?;
+    // C, S and U come from the aggregate row itself, computed together with
+    // its DAO figures: after a rollback the row still describes its block
+    // (until the indexer refreshes it) although that header is gone.
+    let (c, s, u) = (
+        latest.tip_total_issuance,
+        latest.tip_secondary_pool,
+        latest.tip_occupied_capacity,
+    );
     let baseline = state.genesis_baseline()?;
     let circulating = protocol_circulating(c, s, baseline.burnt, &at)
         .map_err(|e| ApiError::internal(e.to_string()))?;
