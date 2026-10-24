@@ -352,14 +352,24 @@ describe('ActivitiesStreamExplorer', () => {
         makeActivity({
           txHash: '0xbad0000000000000000000000000000000000000000000000000000000000001',
           protocolActions: [
-            { protocol: 'dao', action: 'withdraw_complete', metadata: { capacity: '1' } },
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'withdraw_complete',
+              metadata: { capacity: '1' },
+            },
           ],
           participants: [makeParticipant({ ckbDelta: '100000000' })],
         }),
         makeActivity({
           txHash: '0x9000000000000000000000000000000000000000000000000000000000000002',
           protocolActions: [
-            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'deposit',
+              metadata: { capacity: '10200000000' },
+            },
           ],
           participants: [makeParticipant({ ckbDelta: '-10200000000' })],
         }),

@@ -32,7 +32,12 @@ describe('classifyActivity', () => {
     const result = classifyActivity(
       makeActivity({
         protocolActions: [
-          { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: { capacity: '10200000000' },
+          },
         ],
       })
     );
@@ -45,6 +50,7 @@ describe('classifyActivity', () => {
         protocolActions: [
           {
             protocol: 'dao',
+            protocolName: 'Nervos DAO',
             action: 'withdraw_request',
             metadata: { capacity: '10200000000', depositBlock: '100' },
           },
@@ -60,6 +66,7 @@ describe('classifyActivity', () => {
         protocolActions: [
           {
             protocol: 'dao',
+            protocolName: 'Nervos DAO',
             action: 'withdraw_complete',
             metadata: { capacity: '10200000000', compensation: '42000000' },
           },
@@ -180,7 +187,12 @@ describe('classifyActivity', () => {
     const result = classifyActivity(
       makeActivity({
         protocolActions: [
-          { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: { capacity: '10200000000' },
+          },
         ],
         participants: [
           {
@@ -236,13 +248,19 @@ describe('classifyActivity', () => {
     const result = classifyActivity(
       makeActivity({
         protocolActions: [
-          { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: { capacity: '10200000000' },
+          },
         ],
       })
     );
     expect(result.displayType).toBe('daoDeposit');
     expect(result.primaryProtocolAction).toEqual({
       protocol: 'dao',
+      protocolName: 'Nervos DAO',
       action: 'deposit',
       metadata: { capacity: '10200000000' },
     });
@@ -299,7 +317,12 @@ describe('classifyActivity', () => {
     const result = classifyActivity(
       makeActivity({
         protocolActions: [
-          { protocol: 'rgbpp', action: 'leap_to_ckb', metadata: { btcTxid: 'abc123' } },
+          {
+            protocol: 'rgbpp',
+            protocolName: 'RGB++',
+            action: 'leap_to_ckb',
+            metadata: { btcTxid: 'abc123' },
+          },
         ],
       })
     );
@@ -311,7 +334,9 @@ describe('classifyActivity', () => {
   it('protocol action takes priority over item deltas', () => {
     const result = classifyActivity(
       makeActivity({
-        protocolActions: [{ protocol: 'rgbpp', action: 'transfer', metadata: {} }],
+        protocolActions: [
+          { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
+        ],
         participants: [
           {
             address: 'ckb1qtest',

@@ -14,7 +14,6 @@ import { classifyActivity } from '@/lib/activity-classify';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
-import { protocolDisplayName } from '@/lib/protocol-names';
 import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
 import { ParticipantRefView } from '@/components/participant-ref';
 import type {
@@ -145,23 +144,6 @@ export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quie
       args={truncateHash(lc.lockArgs, 6, 4)}
       quiet={quiet}
     />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// LockCallBadge — compact pill label
-// ---------------------------------------------------------------------------
-
-export function LockCallBadge({ lc }: { lc: ActivityLockCall }) {
-  const name =
-    (typeof lc.decoded?.protocol === 'string' ? protocolDisplayName(lc.decoded.protocol) : null) ||
-    lc.scriptName?.trim() ||
-    lc.lockCodeHash.slice(0, 10);
-
-  return (
-    <span className="text-text-dim bg-base-elevated/80 rounded px-1 py-0.5 font-mono text-[9px] uppercase">
-      {name}
-    </span>
   );
 }
 
@@ -384,7 +366,7 @@ export function protocolActionLabel(pa: ActivityProtocolAction): string {
   if (pa.protocol === 'dao') return daoActionLabel(pa.action);
   const actionLabel =
     pa.protocol === 'fiber' ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
-  return `${protocolDisplayName(pa.protocol)} \u00B7 ${actionLabel}`;
+  return `${pa.protocolName} \u00B7 ${actionLabel}`;
 }
 
 /** An activity part that cannot be read, said in its row with the tx it belongs to. */

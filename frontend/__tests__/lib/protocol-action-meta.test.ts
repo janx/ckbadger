@@ -4,6 +4,7 @@ import type { ActivityProtocolAction } from '@/lib/api';
 
 const pa = (metadata: ActivityProtocolAction['metadata']): ActivityProtocolAction => ({
   protocol: 'dao',
+  protocolName: 'Nervos DAO',
   action: 'withdraw_complete',
   metadata,
 });
@@ -25,6 +26,7 @@ describe('protocolActionMeta', () => {
   it('reads the string facts as they are and absent keys as null', () => {
     const meta = protocolActionMeta({
       protocol: 'fiber',
+      protocolName: 'Fiber',
       action: 'channel_close',
       metadata: { channelOutpoint: '0xabc:0' },
     });
@@ -56,15 +58,21 @@ describe('protocolActionMeta', () => {
 
 describe('protocolActionMeta — the facts each DAO step must carry', () => {
   it('requires the capacity of a deposit', () => {
-    expect(() => protocolActionMeta({ protocol: 'dao', action: 'deposit', metadata: {} })).toThrow(
-      'dao:deposit metadata.capacity is missing'
-    );
+    expect(() =>
+      protocolActionMeta({
+        protocol: 'dao',
+        protocolName: 'Nervos DAO',
+        action: 'deposit',
+        metadata: {},
+      })
+    ).toThrow('dao:deposit metadata.capacity is missing');
   });
 
   it('requires the capacity and deposit block of a withdraw request', () => {
     expect(() =>
       protocolActionMeta({
         protocol: 'dao',
+        protocolName: 'Nervos DAO',
         action: 'withdraw_request',
         metadata: { capacity: '1' },
       })
@@ -75,6 +83,7 @@ describe('protocolActionMeta — the facts each DAO step must carry', () => {
     expect(() =>
       protocolActionMeta({
         protocol: 'dao',
+        protocolName: 'Nervos DAO',
         action: 'withdraw_complete',
         metadata: { capacity: '1' },
       })
@@ -83,7 +92,12 @@ describe('protocolActionMeta — the facts each DAO step must carry', () => {
 
   it('asks nothing of a protocol whose metadata is optional', () => {
     expect(
-      protocolActionMeta({ protocol: 'utxoswap', action: 'swap', metadata: {} }).capacity
+      protocolActionMeta({
+        protocol: 'utxoswap',
+        protocolName: 'UTXOSwap',
+        action: 'swap',
+        metadata: {},
+      }).capacity
     ).toBeNull();
   });
 });

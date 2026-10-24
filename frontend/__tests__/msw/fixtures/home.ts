@@ -298,7 +298,12 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
       ...base,
       typeCalls: [],
       protocolActions: [
-        { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '10200000000' },
+        },
       ],
       participants: [
         { ...base.participants[0], ckbDelta: '-10200001000' },
@@ -354,6 +359,7 @@ export const feedSamples = {
     protocolActions: [
       {
         protocol: 'dao',
+        protocolName: 'Nervos DAO',
         action: 'withdraw_request',
         metadata: { capacity: '2605000000000', depositBlock: '19695550' },
       },
@@ -368,6 +374,7 @@ export const feedSamples = {
     protocolActions: [
       {
         protocol: 'fiber',
+        protocolName: 'Fiber',
         action: 'channel_close',
         metadata: {
           channelOutpoint: `0x0d3870bb${'00'.repeat(26)}6e26:0`,

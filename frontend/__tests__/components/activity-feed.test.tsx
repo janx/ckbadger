@@ -142,7 +142,12 @@ describe('ActivityFeed', () => {
     const broken = {
       ...feedSamples.daoWithdrawRequest,
       protocolActions: [
-        { protocol: 'dao', action: 'withdraw_request', metadata: { capacity: '1' } },
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'withdraw_request',
+          metadata: { capacity: '1' },
+        },
       ],
     };
     server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([broken])));

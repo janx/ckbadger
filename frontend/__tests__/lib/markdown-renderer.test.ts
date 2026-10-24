@@ -161,7 +161,12 @@ describe('renderMarkdownPage', () => {
           typeCalls: [],
           lockCalls: [],
           protocolActions: [
-            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10000000000' } },
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'deposit',
+              metadata: { capacity: '10000000000' },
+            },
           ],
           participants: [
             {
@@ -228,6 +233,7 @@ describe('renderMarkdownPage', () => {
           protocolActions: [
             {
               protocol: 'dao',
+              protocolName: 'Nervos DAO',
               action: 'withdraw_request',
               metadata: { capacity: '9007199254740993', depositBlock: '19695550' },
             },
@@ -288,7 +294,9 @@ describe('renderMarkdownPage', () => {
           isCellbase: false,
           typeCalls: [],
           lockCalls: [],
-          protocolActions: [{ protocol: 'utxoswap', action: 'swap', metadata: {} }],
+          protocolActions: [
+            { protocol: 'utxoswap', protocolName: 'UTXOSwap', action: 'swap', metadata: {} },
+          ],
           participants: [],
         },
       ],
@@ -343,7 +351,12 @@ describe('renderMarkdownPage', () => {
           typeCalls: [],
           lockCalls: [],
           protocolActions: [
-            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10000000000' } },
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'deposit',
+              metadata: { capacity: '10000000000' },
+            },
           ],
           participants: [
             {

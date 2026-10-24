@@ -682,7 +682,10 @@ interface ActivityLockCall {
 type ExactJson = string | boolean | null | ExactJson[] | { [key: string]: ExactJson };
 
 interface ActivityProtocolAction {
+  /** Machine id (`dao`, `fiber`, …): compare and key by this, never show it. */
   protocol: string;
+  /** The protocol's display name from the backend registry (`Fiber`, `RGB++`, …). */
+  protocolName: string;
   action: string;
   metadata: Record<string, ExactJson>;
 }

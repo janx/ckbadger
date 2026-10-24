@@ -4,7 +4,6 @@ import {
   ActivityEventGroup,
   ExactCkb,
   ItemDeltaFact,
-  LockCallBadge,
   LockCallExpr,
   ParticipantLine,
   ProtocolActionNote,
@@ -78,7 +77,12 @@ describe('ActivityEventGroup', () => {
         activity={makeActivity({
           ckbDelta: '-10200000000',
           protocolActions: [
-            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'deposit',
+              metadata: { capacity: '10200000000' },
+            },
           ],
         })}
         formatTimeAgo={mockFormatTimeAgo}
@@ -231,6 +235,7 @@ describe('ActivityEventGroup', () => {
           protocolActions: [
             {
               protocol: 'dao',
+              protocolName: 'Nervos DAO',
               action: 'withdraw_complete',
               metadata: { capacity: '20000000000', compensation: '500000000' },
             },
@@ -248,7 +253,9 @@ describe('ActivityEventGroup', () => {
       <ActivityEventGroup
         activity={makeActivity({
           txHash: '0xfeed000000000000000000000000000000000000000000000000000000000001',
-          protocolActions: [{ protocol: 'dao', action: 'deposit', metadata: {} }],
+          protocolActions: [
+            { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata: {} },
+          ],
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
@@ -268,6 +275,7 @@ describe('ActivityEventGroup', () => {
           protocolActions: [
             {
               protocol: 'dao',
+              protocolName: 'Nervos DAO',
               action: 'withdraw_complete',
               metadata: { capacity: '20000000000', compensation: '0' },
             },
@@ -511,7 +519,9 @@ const bitTypeCalls = [
 describe('global tx events — one classification for the full rows and the feed', () => {
   it('orders protocol actions, type calls, then lock calls a protocol does not explain', () => {
     const activity = makeGlobal({
-      protocolActions: [{ protocol: 'utxoswap', action: 'swap', metadata: {} }],
+      protocolActions: [
+        { protocol: 'utxoswap', protocolName: 'UTXOSwap', action: 'swap', metadata: {} },
+      ],
       typeCalls: [bitTypeCalls[0]],
       lockCalls: [
         {
@@ -542,14 +552,23 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
     expect(
       activityHeadline(
         makeGlobal({
-          protocolActions: [{ protocol: 'dao', action: 'withdraw_request', metadata: {} }],
+          protocolActions: [
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action: 'withdraw_request',
+              metadata: {},
+            },
+          ],
         })
       )
     ).toBe('DAO Withdraw Request');
     expect(
       activityHeadline(
         makeGlobal({
-          protocolActions: [{ protocol: 'fiber', action: 'channel_close', metadata: {} }],
+          protocolActions: [
+            { protocol: 'fiber', protocolName: 'Fiber', action: 'channel_close', metadata: {} },
+          ],
         })
       )
     ).toBe('Fiber \u00B7 Channel Close');
@@ -574,38 +593,46 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
 });
 
 describe('protocol display names', () => {
-  it('name the protocol in every label and badge, not its raw id', () => {
+  it('name the protocol by the protocolName the API sends with the action, not its raw id', () => {
     render(
-      <>
-        <ActivityEventGroup
-          activity={makeActivity({
-            protocolActions: [{ protocol: 'rgbpp', action: 'leap_to_ckb', metadata: {} }],
-            lockCalls: [
-              {
-                lockCodeHash: '0xutx',
-                lockHashType: 'type',
-                lockArgs: '0x01',
-                scriptHash: '0xu',
-                decoded: { protocol: 'utxoswap' },
-              },
-            ],
-          })}
-          formatTimeAgo={mockFormatTimeAgo}
-        />
-        <LockCallBadge
-          lc={{
-            lockCodeHash: '0xutx',
-            lockHashType: 'type',
-            lockArgs: '0x01',
-            scriptHash: '0xu',
-            decoded: { protocol: 'utxoswap' },
-          }}
-        />
-      </>
+      <ActivityEventGroup
+        activity={makeActivity({
+          protocolActions: [
+            {
+              protocol: 'newproto',
+              protocolName: 'New Proto',
+              action: 'leap_to_ckb',
+              metadata: {},
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
     );
-    expect(screen.getAllByText(/RGB\+\+ · leap to ckb/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/rgbpp ·/)).not.toBeInTheDocument();
-    expect(screen.getByText('UTXOSwap')).toBeInTheDocument();
+    expect(screen.getAllByText(/New Proto · leap to ckb/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/newproto ·/)).not.toBeInTheDocument();
+  });
+
+  it('show a lock call by its script name, never by the protocol it decodes to', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          lockCalls: [
+            {
+              lockCodeHash: '0xutx',
+              lockHashType: 'type',
+              lockArgs: '0x01',
+              scriptHash: '0xu',
+              scriptName: 'UTXOSwap Intent',
+              decoded: { protocol: 'utxoswap' },
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/UTXOSwap Intent/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^UTXOSwap$/)).not.toBeInTheDocument();
   });
 });
 
@@ -710,6 +737,7 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       <ProtocolActionNote
         pa={{
           protocol: 'dao',
+          protocolName: 'Nervos DAO',
           action: 'withdraw_request',
           metadata: { capacity: '2605000000000', depositBlock: '19695550' },
         }}
@@ -723,6 +751,7 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       <ProtocolActionNote
         pa={{
           protocol: 'fiber',
+          protocolName: 'Fiber',
           action: 'channel_close',
           metadata: {
             channelOutpoint: '0x0d3870bb00000000000000000000000000000000000000000000000000006e26:0',
@@ -739,6 +768,7 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       <ProtocolActionNote
         pa={{
           protocol: 'dao',
+          protocolName: 'Nervos DAO',
           action: 'withdraw_complete',
           metadata: { capacity: '9007199254740993', compensation: '12345678901234567' },
         }}
@@ -751,7 +781,9 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
 
   it('renders nothing for an action without metadata', () => {
     const { container } = render(
-      <ProtocolActionNote pa={{ protocol: 'utxoswap', action: 'swap', metadata: {} }} />
+      <ProtocolActionNote
+        pa={{ protocol: 'utxoswap', protocolName: 'UTXOSwap', action: 'swap', metadata: {} }}
+      />
     );
     expect(container).toBeEmptyDOMElement();
   });
