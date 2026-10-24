@@ -1,6 +1,7 @@
 'use client';
 
 import Link from '@/components/ui/link';
+import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { TerminalPanel, TerminalPanelContent, TerminalRow } from '@/components/ui/terminal-panel';
 import { buildGlobalTxEvents, ParticipantLine } from '@/components/activity-event-row';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
@@ -615,7 +616,8 @@ export function ActivitiesStreamExplorer() {
           <div
             data-testid="activities-stream-sticky-stack"
             className={cn(
-              'border-jade/10 sticky top-[5.25rem] z-30 border-x',
+              'border-jade/10 sticky z-30 border-x',
+              BELOW_STICKY_HEADER,
               hasPending && 'shadow-[0_10px_24px_rgba(0,0,0,0.28)]'
             )}
           >

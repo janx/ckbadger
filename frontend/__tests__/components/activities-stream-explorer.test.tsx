@@ -4,6 +4,7 @@ import { ActivitiesStreamExplorer } from '@/components/activities-stream-explore
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -343,6 +344,20 @@ describe('ActivitiesStreamExplorer', () => {
       });
     });
     expect(screen.queryByText('No activities yet')).not.toBeInTheDocument();
+  });
+
+  it('sticks its toolbar right below the site header, at the height the header publishes', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<ActivitiesStreamExplorer />);
+    const stack = await screen.findByTestId('activities-stream-sticky-stack');
+    expect(stack).toHaveClass('sticky', BELOW_STICKY_HEADER);
+    // Not the old 56 px row + 28 px stats bar.
+    expect(stack.className).not.toContain('5.25rem');
   });
 
   it('buffers new head activities behind a sticky banner when the reader is away from top', async () => {

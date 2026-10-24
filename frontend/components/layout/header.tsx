@@ -2,11 +2,12 @@
 
 import Link from '@/components/ui/link';
 import { usePathname } from '@/src/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
 import { LOGO_NOTCH_CLASS, LOGO_STRIP_NOTCH_CLASS } from '@/components/layout/logo-geometry';
+import { useStickyHeaderHeight } from '@/components/layout/sticky-header';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 import {
   NAVBAR_DROPDOWN_ITEM_ACTIVE_CLASS,
@@ -54,6 +55,10 @@ const navItems: NavItem[] = [
 
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  useStickyHeaderHeight(wrapperRef, headerRef, stripRef);
   const pathname = usePathname();
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const isDropdownActive = (item: NavDropdown) =>
@@ -76,8 +81,11 @@ export function Header() {
   // block). Below md the wrapper is display: contents, so only the header row sticks — to the page —
   // and the strip scrolls away with the content.
   return (
-    <div className="contents md:sticky md:top-0 md:z-40 md:mb-4 md:block">
-      <header className="border-base-border-subtle bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto">
+    <div ref={wrapperRef} className="contents md:sticky md:top-0 md:z-40 md:mb-4 md:block">
+      <header
+        ref={headerRef}
+        className="border-base-border-subtle bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"
+      >
         <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 px-4 md:gap-8 lg:min-h-[60px]">
           <Logo />
           <div data-testid="header-logo-notch" aria-hidden="true" className={LOGO_NOTCH_CLASS} />
@@ -253,7 +261,7 @@ export function Header() {
 
         <CommandPalette />
       </header>
-      <div className="border-base-border-subtle mb-4 border-b bg-[#0a0c12] md:mb-0">
+      <div ref={stripRef} className="border-base-border-subtle mb-4 border-b bg-[#0a0c12] md:mb-0">
         <div className="container mx-auto flex px-4">
           <div
             data-testid="vitals-logo-notch"

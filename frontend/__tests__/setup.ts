@@ -25,6 +25,17 @@ if (typeof globalThis.IntersectionObserver === 'undefined') {
   } as unknown as typeof globalThis.IntersectionObserver;
 }
 
+// jsdom does not implement ResizeObserver either; a stub that never reports. Tests that need a
+// measured size stub their own (see __tests__/utils/chart-width.ts).
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    constructor(_cb: ResizeObserverCallback) {}
+    disconnect() {}
+    observe() {}
+    unobserve() {}
+  } as unknown as typeof globalThis.ResizeObserver;
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
