@@ -117,7 +117,13 @@ function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells
  * The selected version's owned capacity: the bar, "no live cells" only when its usage says
  * exactly 0, or the reason its usage cannot be shown.
  */
-function SelectedVersionUsage({ usage }: { usage: VersionUsage | null }) {
+function SelectedVersionUsage({
+  usage,
+  codeHash,
+}: {
+  usage: VersionUsage | null;
+  codeHash: string | undefined;
+}) {
   if (usage === null) return null;
   if (usage.state !== 'ready') {
     return (
@@ -145,6 +151,7 @@ function SelectedVersionUsage({ usage }: { usage: VersionUsage | null }) {
   return (
     <div data-testid="selected-version-usage" data-state="ready">
       <CapacityUtilization
+        subject={`version ${codeHash}`}
         totalCapacity={usage.ownedCapacitySum}
         commonKnowledgeSize={usage.ownedKnowledgeSum}
         totalLabel="Owned Capacity"
@@ -2035,7 +2042,10 @@ export default function ScriptDetailPage({
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
                 <div className="border-base-border border-b px-4 py-4">
-                  <SelectedVersionUsage usage={selectedVersionUsageState} />
+                  <SelectedVersionUsage
+                    usage={selectedVersionUsageState}
+                    codeHash={selectedVersion.codeHash}
+                  />
                 </div>
                 <div className="border-base-border border-b px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">

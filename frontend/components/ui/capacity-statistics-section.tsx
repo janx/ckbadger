@@ -66,6 +66,7 @@ function CapacityUtilizationOrState({
   }
   return (
     <CapacityUtilization
+      subject={subject}
       totalCapacity={totalCapacity}
       commonKnowledgeSize={commonKnowledgeSize}
       totalLabel={totalCapacityLabel}

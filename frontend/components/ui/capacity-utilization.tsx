@@ -1,10 +1,15 @@
 'use client';
 
 import { useState } from 'react';
+import { formatPercent, parseShannons } from '@/lib/ckb-decimal';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 interface CapacityUtilizationProps {
+  /** What the capacity belongs to, e.g. `spore 0x…` — named in any error. */
+  subject: string;
+  /** Shannons; must be a positive integer. */
   totalCapacity: string;
+  /** Shannons; an integer in [0, totalCapacity]. */
   commonKnowledgeSize: string;
   totalLabel?: string;
   className?: string;
@@ -12,33 +17,49 @@ interface CapacityUtilizationProps {
 
 type HoverTarget = 'used' | 'free' | null;
 
-function parseBigInt(value: string): bigint | null {
-  try {
-    return BigInt(value);
-  } catch {
-    return null;
-  }
+interface CapacitySplit {
+  total: bigint;
+  used: bigint;
+}
+
+/** The split the bar draws, or throws naming the value that breaks it — never a clamp. */
+function readCapacitySplit(totalCapacity: string, commonKnowledgeSize: string): CapacitySplit {
+  const total = parseShannons(totalCapacity, 'totalCapacity');
+  const used = parseShannons(commonKnowledgeSize, 'commonKnowledgeSize');
+  if (total <= BigInt(0)) throw new Error(`total capacity ${total} is not positive`);
+  if (used < BigInt(0)) throw new Error(`common knowledge ${used} is negative`);
+  if (used > total) throw new Error(`common knowledge ${used} exceeds total capacity ${total}`);
+  return { total, used };
 }
 
 export function CapacityUtilization({
+  subject,
   totalCapacity,
   commonKnowledgeSize,
   totalLabel = 'Total Capacity',
   className,
 }: CapacityUtilizationProps) {
   const [hover, setHover] = useState<HoverTarget>(null);
-  const zero = BigInt(0);
-  const ratioScale = BigInt(10000);
 
-  const total = parseBigInt(totalCapacity);
-  const usedRaw = parseBigInt(commonKnowledgeSize);
-  if (total == null || usedRaw == null || total <= zero) {
-    return null;
+  let split: CapacitySplit;
+  try {
+    split = readCapacitySplit(totalCapacity, commonKnowledgeSize);
+  } catch (error) {
+    return (
+      <div
+        role="alert"
+        data-testid="capacity-utilization-error"
+        className={`text-rouge font-mono text-xs ${className ?? ''}`}
+      >
+        {totalLabel} of {subject}: {error instanceof Error ? error.message : String(error)}
+      </div>
+    );
   }
-
-  const used = usedRaw < zero ? zero : usedRaw > total ? total : usedRaw;
+  const { total, used } = split;
   const unused = total - used;
-  const ratio = Number((used * ratioScale) / total) / 100;
+  const share = formatPercent(used, total, 1);
+  // Bar width only (display geometry); the printed share is the exact string.
+  const ratio = Number(share);
 
   const gold = '#f2c55c';
   const glow = `0 0 8px ${gold}aa, 0 0 2px ${gold}`;
@@ -91,7 +112,7 @@ export function CapacityUtilization({
           onMouseLeave={() => setHover(null)}
         >
           Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
-          <span className={`text-text-dim ml-1.5`}>({ratio.toFixed(1)}% share)</span>
+          <span className={`text-text-dim ml-1.5`}>({share}% share)</span>
         </span>
         <span
           className={`cursor-default font-mono text-xs transition-opacity duration-200 ${hover === 'used' ? 'opacity-25' : ''} text-gold`}

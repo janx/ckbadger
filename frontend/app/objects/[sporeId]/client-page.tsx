@@ -1043,6 +1043,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </div>
             ) : (
               <CapacityUtilization
+                subject={`spore ${spore.sporeId}`}
                 totalCapacity={spore.ownedCapacity}
                 commonKnowledgeSize={spore.ownedKnowledge}
                 totalLabel="Owned Capacity"

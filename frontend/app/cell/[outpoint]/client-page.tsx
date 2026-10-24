@@ -489,6 +489,7 @@ export default function CellDetailPage() {
                   </div>
                 ) : (
                   <CapacityUtilization
+                    subject={`cell ${cell.txHash}:${cell.outputIndex}`}
                     totalCapacity={capacityView.totalCapacity.toString()}
                     commonKnowledgeSize={capacityView.used.toString()}
                     totalLabel="Owned Capacity"
