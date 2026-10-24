@@ -427,7 +427,10 @@ interface SignedBarChartProps {
   ariaLabel: string;
 }
 
-/** Up bars jade, down bars red, on a symmetric axis; a bar beyond the cap is clipped and labelled. */
+/**
+ * Up bars jade, down bars red, on a symmetric axis; a bar beyond the cap is clipped and labelled,
+ * and the aria-label names the clipped days.
+ */
 export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
   if (points.length === 0) throw new Error('SignedBarChart needs at least one bar');
   const cap = signedAxisCap(points.map((p) => p.value));
@@ -439,8 +442,15 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
   const zero = (TOP + BOTTOM) / 2;
   const half = PLOT_H / 2;
   const yOf = (v: number) => zero - (v / cap) * half;
+  const clipped = bars.flatMap((b, i) =>
+    b.clipped ? [`${formatCompactSigned(b.value)} on ${points[i].label}`] : []
+  );
+  const label =
+    clipped.length === 0
+      ? ariaLabel
+      : `${ariaLabel}; beyond the ±${formatTick(cap, capStep)} axis, drawn clipped: ${clipped.join(', ')}`;
   return (
-    <ChartCanvas ariaLabel={ariaLabel}>
+    <ChartCanvas ariaLabel={label}>
       {(width) => {
         const right = width - RIGHT_PAD;
         const n = points.length;

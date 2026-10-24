@@ -43,6 +43,15 @@ export function formatSignedCkbInteger(shannons: bigint): string {
   return whole > 0 ? `+${groupThousands(whole)}` : `${MINUS}${groupThousands(-whole)}`;
 }
 
+/** Exact CKB with an explicit sign and all 8 decimals: `+168,366.47983386`, `−2,578,825.48689593`. */
+export function formatSignedCkbExact(shannons: bigint): string {
+  const abs = shannons < BigInt(0) ? -shannons : shannons;
+  const whole = groupThousands(abs / SHANNONS_PER_CKB);
+  const frac = (abs % SHANNONS_PER_CKB).toString().padStart(8, '0');
+  const sign = shannons > BigInt(0) ? '+' : shannons < BigInt(0) ? MINUS : '';
+  return `${sign}${whole}.${frac}`;
+}
+
 /** A signed count: `+12`, `−3`, `0`. */
 export function formatSignedCount(n: number): string {
   if (!Number.isInteger(n)) throw new Error(`formatSignedCount: ${n} is not an integer`);

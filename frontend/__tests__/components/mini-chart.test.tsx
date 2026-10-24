@@ -100,7 +100,9 @@ describe('mini charts', () => {
       exact: `${value} CKB`,
     }));
     render(<SignedBarChart points={changes} ariaLabel="Knowledge size change" />);
-    const svg = screen.getByRole('img', { name: 'Knowledge size change' });
+    const svg = screen.getByRole('img', {
+      name: `Knowledge size change; beyond the ±2M axis, drawn clipped: ${MINUS}8.94M on 10/20`,
+    });
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['2M', '0', `${MINUS}2M`]);
 
     const clipped = svg.querySelectorAll('[data-clipped="true"]');

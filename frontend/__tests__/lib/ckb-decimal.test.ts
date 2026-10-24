@@ -3,6 +3,7 @@ import { MINUS } from '@/lib/chart-ticks';
 import {
   formatDecimalBytes,
   formatPercent,
+  formatSignedCkbExact,
   formatSignedCkbInteger,
   formatSignedCount,
   parseCkbDecimal,
@@ -46,6 +47,15 @@ describe('formatSignedCkbInteger', () => {
     expect(formatSignedCkbInteger(BigInt('-257882548689593'))).toBe(`${MINUS}2,578,825`);
     expect(formatSignedCkbInteger(BigInt(0))).toBe('0');
     expect(formatSignedCkbInteger(BigInt(5))).toBe('+0');
+  });
+});
+
+describe('formatSignedCkbExact', () => {
+  it('prints every shannon with an explicit sign', () => {
+    expect(formatSignedCkbExact(BigInt('16836647983386'))).toBe('+168,366.47983386');
+    expect(formatSignedCkbExact(BigInt('-257882548689593'))).toBe(`${MINUS}2,578,825.48689593`);
+    expect(formatSignedCkbExact(BigInt(0))).toBe('0.00000000');
+    expect(formatSignedCkbExact(BigInt(1))).toBe('+0.00000001');
   });
 });
 
