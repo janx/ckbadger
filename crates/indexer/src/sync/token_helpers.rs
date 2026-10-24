@@ -1080,7 +1080,6 @@ mod tests {
         inputs: Vec<crate::parser::transaction::ParsedInput>,
         cells: Vec<crate::parser::cell::ParsedCell>,
         witnesses: Vec<String>,
-        outputs_data: Vec<String>,
     ) -> TxData {
         let inputs_count =
             i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
@@ -1096,7 +1095,6 @@ mod tests {
             inputs,
             cells,
             witnesses,
-            outputs_data,
             total_input_capacity: 0,
             total_output_capacity: 0,
             fee: 0,
@@ -1264,7 +1262,7 @@ mod tests {
             data: info_cell_data,
         };
 
-        let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell], vec![], vec![]);
+        let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell], vec![]);
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(observations.get(token_type_hash.as_slice()), Some(&1_000));
     }
@@ -1284,7 +1282,6 @@ mod tests {
             false,
             vec![],
             vec![unique_cell, xudt_cell],
-            vec![],
             vec![],
         );
 
@@ -1316,7 +1313,6 @@ mod tests {
             vec![],
             vec![unique_cell, xudt_cell],
             vec![witness_hex],
-            vec![],
         );
 
         let observations = collect_token_max_supply_observations(&[tx]);
@@ -1349,7 +1345,6 @@ mod tests {
                 dummy_xudt_cell(token_type_hash, type_args.clone()),
             ],
             vec![format!("0x{}", hex::encode(mismatched_witness))],
-            vec![],
         );
 
         let tx_without_witness = dummy_tx_data(
@@ -1360,7 +1355,6 @@ mod tests {
                 dummy_unique_token_info_cell(unique_type_args, total_supply),
                 dummy_xudt_cell(token_type_hash, type_args),
             ],
-            vec![],
             vec![],
         );
 
@@ -1392,7 +1386,6 @@ mod tests {
                 vec![0x99; 32],
             )],
             vec![],
-            vec![],
         );
 
         let cache = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
@@ -1422,7 +1415,6 @@ mod tests {
                 <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
                 vec![0x98; 32],
             )],
-            vec![],
             vec![],
         );
 
@@ -1503,7 +1495,6 @@ mod tests {
             vec![],
             vec![unique_cell, xudt_cell],
             vec![],
-            vec![],
         );
 
         let infos = collect_token_onchain_info(&[tx], &HashMap::new());
@@ -1520,7 +1511,7 @@ mod tests {
         let token_type_hash = [0x92; 32];
         let type_args = vec![0x01; 36]; // just owner_lock_hash + flags, no extensions
         let xudt_cell = dummy_xudt_cell(token_type_hash, type_args);
-        let tx = dummy_tx_data([0xF1; 32], false, vec![], vec![xudt_cell], vec![], vec![]);
+        let tx = dummy_tx_data([0xF1; 32], false, vec![], vec![xudt_cell], vec![]);
 
         let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         assert!(infos.is_empty());
@@ -1593,7 +1584,6 @@ mod tests {
             vec![],
             vec![unique_cell, xudt_cell],
             vec![],
-            vec![],
         );
 
         let infos = collect_token_onchain_info(&[tx], &HashMap::new());
@@ -1619,7 +1609,6 @@ mod tests {
             vec![],
             vec![dummy_xudt_cell(token_type_hash, vec![0x09; 32])],
             vec![],
-            vec![],
         );
         let tx2 = dummy_tx_data(
             [0xD2; 32],
@@ -1637,7 +1626,6 @@ mod tests {
                 ),
                 dummy_xudt_cell(token_type_hash, vec![0x09; 32]),
             ],
-            vec![],
             vec![],
         );
 
@@ -1671,7 +1659,6 @@ mod tests {
                 ),
                 dummy_xudt_cell(token_type_hash, vec![0x0C; 32]),
             ],
-            vec![],
             vec![],
         );
 
@@ -1707,7 +1694,6 @@ mod tests {
                 dummy_xudt_cell(token_b, vec![0x0B; 32]),
             ],
             vec![],
-            vec![],
         );
 
         let infos = collect_token_onchain_info(&[tx], &HashMap::new());
@@ -1734,7 +1720,6 @@ mod tests {
                 dummy_xudt_cell(token_type_hash, ext_type_args.clone()),
             ],
             vec![],
-            vec![],
         );
 
         let mut other_info = Vec::new();
@@ -1755,7 +1740,6 @@ mod tests {
                 ),
                 dummy_xudt_cell(token_type_hash, ext_type_args),
             ],
-            vec![],
             vec![],
         );
 
