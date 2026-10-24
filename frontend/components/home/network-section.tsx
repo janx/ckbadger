@@ -185,10 +185,10 @@ function UncleRateFigure() {
 
 type TxRange = '24h' | '14d';
 
-// A no-break space keeps "24 h" / "14 d" together when the caption wraps.
+// The toggle names the range, so the sub-label names only the bucket.
 const TX_RANGES: Record<TxRange, { button: string; subtitle: string; series: string }> = {
-  '24h': { button: '24 h', subtitle: 'per hour, last 24\u00A0h', series: 'hourlyData' },
-  '14d': { button: '14 d', subtitle: 'per day, last 14\u00A0d', series: 'dailyData' },
+  '24h': { button: '24 h', subtitle: 'per hour', series: 'hourlyData' },
+  '14d': { button: '14 d', subtitle: 'per day', series: 'dailyData' },
 };
 
 interface TxView {

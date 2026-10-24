@@ -103,9 +103,9 @@ describe('NetworkSection', () => {
     await waitFor(() =>
       expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('731')
     );
-    expect(fig).toHaveTextContent('per hour, last 24 h');
-    // "24 h" never breaks across caption lines.
-    expect(fig.textContent).toContain('last 24\u00A0h');
+    // The toggle names the range; the sub-label names only the bucket.
+    expect(within(fig).getByText('per hour')).toBeInTheDocument();
+    expect(fig).not.toHaveTextContent(/last 24/);
     const svg = within(fig).getByRole('img');
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(24);
@@ -133,7 +133,8 @@ describe('NetworkSection', () => {
       'false'
     );
     expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('15,710');
-    expect(fig).toHaveTextContent('per day, last 14 d');
+    expect(within(fig).getByText('per day')).toBeInTheDocument();
+    expect(fig).not.toHaveTextContent(/last 14/);
     const svg = within(fig).getByRole('img');
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(14);
