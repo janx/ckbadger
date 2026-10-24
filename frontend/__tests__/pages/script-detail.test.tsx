@@ -557,6 +557,75 @@ describe('ScriptDetailPage', () => {
     expect(screen.getByText('No deployments found for this version')).toBeInTheDocument();
   });
 
+  it('shows version usage as an error, not as no cells, when the usage request fails', async () => {
+    setViewportWidth(900);
+    vi.mocked(api.getScriptUsage).mockRejectedValue(new Error('usage endpoint 503'));
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const row = await screen.findByTestId(`version-row-${sharedVersionCodeHash}`);
+    const cells = within(row).getAllByTestId('version-usage');
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) {
+      expect(cell).toHaveAttribute('data-state', 'failed');
+      expect(cell).toHaveAttribute('role', 'alert');
+      expect(cell).toHaveAttribute(
+        'title',
+        'The usage of SECP256K1_BLAKE160 failed to load: usage endpoint 503'
+      );
+      expect(cell).not.toHaveTextContent('-');
+    }
+  });
+
+  it('shows a version the usage response leaves out as an error, not as zero cells', async () => {
+    setViewportWidth(900);
+    vi.mocked(api.getScriptUsage).mockResolvedValue({
+      ...mockUsage,
+      byDeployment: mockUsage.byDeployment.filter((d) => d.codeHash !== legacyVersionCodeHash),
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const legacy = await screen.findByTestId(`version-row-${legacyVersionCodeHash}`);
+    await waitFor(() =>
+      expect(within(legacy).getAllByTestId('version-usage')[0]).toHaveAttribute(
+        'data-state',
+        'missing'
+      )
+    );
+    expect(within(legacy).getAllByRole('alert')[0]).toHaveAttribute(
+      'title',
+      `The usage of SECP256K1_BLAKE160 has no entry for version ${legacyVersionCodeHash}`
+    );
+    // The version the usage covers still reads.
+    const shared = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
+    expect(within(shared).getAllByTestId('version-usage')[0]).toHaveTextContent('7');
+  });
+
+  it('shows a genesis burn cell without its virtual size as an error, not as 0 CKB', async () => {
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
+      data: [
+        {
+          txHash: '0x7777777777777777777777777777777777777777777777777777777777777777',
+          outputIndex: 0,
+          capacity: '840000000000000000',
+          lockScriptHash: '0xburn',
+          dataSize: 0,
+          createdAtBlock: 0,
+          cellType: 'genesis_special_burn',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const alert = await screen.findByTestId('burn-cell-virtual-size-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveAttribute(
+      'title',
+      'Genesis burn cell 0x7777777777777777777777777777777777777777777777777777777777777777:0 has no virtualCommonKnowledgeSize'
+    );
+    expect(screen.queryByTitle(/Virtual common knowledge size: 0/)).toBeNull();
+  });
+
   it('derives the genesis special burn tooltip from the API value', async () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
       data: [

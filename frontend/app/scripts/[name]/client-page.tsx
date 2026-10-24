@@ -29,7 +29,7 @@ import {
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
-import { formatCapacity, formatCkbCompact } from '@/lib/utils';
+import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
 import type { KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 
 interface SelectedVersion {
@@ -60,6 +60,57 @@ interface VersionUsageStats {
   liveCellsCount: number;
   ownedCapacitySum: string;
   ownedKnowledgeSum: string;
+}
+
+/**
+ * A version's usage: its counts, or why there are none to show — the usage request failed, or
+ * its response left this version out. Neither reads as "0 cells, 0 CKB".
+ */
+type VersionUsage =
+  | { state: 'ready'; liveCellsCount: number; ownedCapacitySum: string }
+  | { state: 'failed' | 'missing'; message: string };
+
+/** The cells or capacity a version's cells use — or, explicitly, why they cannot be shown. */
+function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells' | 'capacity' }) {
+  if (usage.state !== 'ready') {
+    return (
+      <span
+        data-testid="version-usage"
+        data-state={usage.state}
+        role="alert"
+        title={usage.message}
+        className="text-rouge"
+      >
+        unavailable
+      </span>
+    );
+  }
+  // A version with no live cells reads '-' (a real zero, not a missing value).
+  if (field === 'cells') {
+    const count = usage.liveCellsCount;
+    return (
+      <span
+        data-testid="version-usage"
+        data-state="ready"
+        title={count > 0 ? `Total: ${formatNumber(count)}` : undefined}
+      >
+        {count > 0 ? formatNumber(count) : '-'}
+      </span>
+    );
+  }
+  if (usage.ownedCapacitySum === '0') {
+    return (
+      <span data-testid="version-usage" data-state="ready">
+        -
+      </span>
+    );
+  }
+  const compact = formatCkbCompact(usage.ownedCapacitySum);
+  return (
+    <span data-testid="version-usage" data-state="ready" title={`${compact.full} CKB`}>
+      {compact.value} CKB
+    </span>
+  );
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
@@ -301,7 +352,11 @@ export default function ScriptDetailPage({
     },
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const { data: usage, isLoading: isUsageLoading } = useQuery({
+  const {
+    data: usage,
+    isLoading: isUsageLoading,
+    error: usageError,
+  } = useQuery({
     queryKey: ['script-usage', name],
     queryFn: () => {
       if (!name) throw new Error('script name is required');
@@ -930,9 +985,6 @@ export default function ScriptDetailPage({
     );
   }
   const scriptInfo = isCodeHashMode ? (deployments?.[0] ?? null) : namedScriptDetail;
-  const formatNumber = (num: number) => {
-    return new Intl.NumberFormat().format(num);
-  };
   const inferredScriptKind = versionUsageEntries.find((d) => d.scriptKind)?.scriptKind;
   const isKnownScript = hasKnownScriptName(scriptInfo?.name);
   const pageTitle = isKnownScript ? (scriptInfo?.name ?? 'Unlabeled Script') : 'Unlabeled Script';
@@ -956,6 +1008,24 @@ export default function ScriptDetailPage({
       .filter((cell): cell is NonNullable<typeof cell> => cell != null)
       .map((cell) => [`${cell.txHash}:${cell.outputIndex}`, cell])
   );
+  // Usage lists every family version (by_deployment) with its counts; the page waits for it
+  // before rendering. A failed request, or a version the response leaves out (a contract
+  // violation), is shown as such — never as "0 cells, 0 CKB".
+  const versionUsageOf = (stats: VersionUsageStats | undefined, codeHash: string): VersionUsage => {
+    if (!isCodeHashMode && usage === undefined) {
+      const reason = usageError ? `failed to load: ${usageError.message}` : 'has not loaded';
+      return { state: 'failed', message: `The usage of ${name} ${reason}` };
+    }
+    if (!stats) {
+      const source = isCodeHashMode ? 'The code-hash lookup' : `The usage of ${name}`;
+      return { state: 'missing', message: `${source} has no entry for version ${codeHash}` };
+    }
+    return {
+      state: 'ready',
+      liveCellsCount: stats.liveCellsCount,
+      ownedCapacitySum: stats.ownedCapacitySum,
+    };
+  };
   const versionRows = versionGroups.map((group) => {
     const stats = usageByCodeHash.get(group.codeHash);
     const firstDeployment =
@@ -1002,8 +1072,7 @@ export default function ScriptDetailPage({
         ? deploymentCellsByOutpoint.get(firstDeploymentOutpointKey)
         : undefined,
       deploymentsCount: group.deployments.length,
-      liveCellsCount: stats?.liveCellsCount ?? 0,
-      ownedCapacitySum: stats?.ownedCapacitySum ?? '0',
+      usage: versionUsageOf(stats, group.codeHash),
       scriptKind:
         (stats?.scriptKind as 'lock' | 'type' | undefined) ??
         (group.scriptKind as 'lock' | 'type' | undefined),
@@ -1402,7 +1471,6 @@ export default function ScriptDetailPage({
               <div data-testid="script-versions-compact">
                 {versionRows.map((versionRow) => {
                   const selected = isSelected(versionRow);
-                  const compactCapacity = formatCkbCompact(versionRow.ownedCapacitySum);
 
                   return (
                     <TerminalRow
@@ -1443,9 +1511,7 @@ export default function ScriptDetailPage({
                               Cells using it
                             </div>
                             <div className="text-text pt-1 font-mono tabular-nums">
-                              {versionRow.liveCellsCount > 0
-                                ? formatNumber(versionRow.liveCellsCount)
-                                : '-'}
+                              <VersionUsageCell usage={versionRow.usage} field="cells" />
                             </div>
                           </div>
                           <div className="text-right">
@@ -1453,9 +1519,7 @@ export default function ScriptDetailPage({
                               Capacity using it
                             </div>
                             <div className="text-text pt-1 font-mono tabular-nums">
-                              {versionRow.ownedCapacitySum !== '0'
-                                ? `${compactCapacity.value} CKB`
-                                : '-'}
+                              <VersionUsageCell usage={versionRow.usage} field="capacity" />
                             </div>
                           </div>
                         </div>
@@ -1504,7 +1568,6 @@ export default function ScriptDetailPage({
                 </div>
                 {versionRows.map((versionRow) => {
                   const selected = isSelected(versionRow);
-                  const compactCapacity = formatCkbCompact(versionRow.ownedCapacitySum);
 
                   return (
                     <TerminalRow
@@ -1525,22 +1588,10 @@ export default function ScriptDetailPage({
                           {formatNumber(versionRow.deploymentsCount)}
                         </div>
                         <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                          {versionRow.liveCellsCount > 0 ? (
-                            <span title={`Total: ${formatNumber(versionRow.liveCellsCount)}`}>
-                              {formatNumber(versionRow.liveCellsCount)}
-                            </span>
-                          ) : (
-                            '-'
-                          )}
+                          <VersionUsageCell usage={versionRow.usage} field="cells" />
                         </div>
                         <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                          {versionRow.ownedCapacitySum !== '0' ? (
-                            <span title={`${compactCapacity.full} CKB`}>
-                              {compactCapacity.value} CKB
-                            </span>
-                          ) : (
-                            '-'
-                          )}
+                          <VersionUsageCell usage={versionRow.usage} field="capacity" />
                         </div>
                       </div>
                     </TerminalRow>
@@ -1576,7 +1627,6 @@ export default function ScriptDetailPage({
                 </div>
                 {versionRows.map((versionRow) => {
                   const selected = isSelected(versionRow);
-                  const compactCapacity = formatCkbCompact(versionRow.ownedCapacitySum);
 
                   return (
                     <React.Fragment key={versionRow.codeHash}>
@@ -1599,22 +1649,10 @@ export default function ScriptDetailPage({
                             {formatNumber(versionRow.deploymentsCount)}
                           </div>
                           <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                            {versionRow.liveCellsCount > 0 ? (
-                              <span title={`Total: ${formatNumber(versionRow.liveCellsCount)}`}>
-                                {formatNumber(versionRow.liveCellsCount)}
-                              </span>
-                            ) : (
-                              '-'
-                            )}
+                            <VersionUsageCell usage={versionRow.usage} field="cells" />
                           </div>
                           <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                            {versionRow.ownedCapacitySum !== '0' ? (
-                              <span title={`${compactCapacity.full} CKB`}>
-                                {compactCapacity.value} CKB
-                              </span>
-                            ) : (
-                              '-'
-                            )}
+                            <VersionUsageCell usage={versionRow.usage} field="capacity" />
                           </div>
                         </div>
                       </TerminalRow>
@@ -2020,14 +2058,26 @@ export default function ScriptDetailPage({
                           </div>
                           <div className="text-text-dim w-24 shrink-0 text-right font-mono">
                             {cell.cellType === 'genesis_special_burn' ? (
-                              <span
-                                className="border-base-border cursor-help border-b border-dashed"
-                                title={`Virtual common knowledge size: ${formatCapacity(
-                                  cell.virtualCommonKnowledgeSize || '0'
-                                )}`}
-                              >
-                                <Capacity value={cell.virtualCommonKnowledgeSize || '0'} />
-                              </span>
+                              // The API sets virtualCommonKnowledgeSize exactly on this cell type.
+                              cell.virtualCommonKnowledgeSize === undefined ? (
+                                <span
+                                  role="alert"
+                                  data-testid="burn-cell-virtual-size-error"
+                                  title={`Genesis burn cell ${cell.txHash}:${cell.outputIndex} has no virtualCommonKnowledgeSize`}
+                                  className="text-rouge"
+                                >
+                                  unavailable
+                                </span>
+                              ) : (
+                                <span
+                                  className="border-base-border cursor-help border-b border-dashed"
+                                  title={`Virtual common knowledge size: ${formatCapacity(
+                                    cell.virtualCommonKnowledgeSize
+                                  )}`}
+                                >
+                                  <Capacity value={cell.virtualCommonKnowledgeSize} />
+                                </span>
+                              )
                             ) : (
                               <>{cell.dataSize.toLocaleString()} bytes</>
                             )}
