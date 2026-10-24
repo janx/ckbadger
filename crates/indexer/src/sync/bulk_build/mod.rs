@@ -9,6 +9,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use anyhow::Result;
 use anyhow::{anyhow, bail, Context};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
+// The median-time watermark and bucket ends are the workspace's one
+// definition of a complete stats bucket, shared with the API's daily charts
+// and transaction stats.
+use ckbadger_common::stats_bucket::{
+    bucket_end_from_utc8_key, bucket_end_ms, is_bucket_complete, median_time_ms, DAY_MS, HOUR_MS,
+    MEDIAN_TIME_BLOCK_COUNT,
+};
 use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
@@ -1404,16 +1411,10 @@ impl ActivityStatsAccumulator {
         if let Some(watermark) = self.sealed_through_ms {
             for actions in tx_actions_list {
                 for (kind, end_ms) in [
-                    (
-                        "hourly",
-                        activity_bucket_end_ms(actions.timestamp, ACTIVITY_HOUR_MS)?,
-                    ),
-                    (
-                        "daily",
-                        activity_bucket_end_ms(actions.timestamp, ACTIVITY_DAY_MS)?,
-                    ),
+                    ("hourly", bucket_end_ms(actions.timestamp, HOUR_MS)?),
+                    ("daily", bucket_end_ms(actions.timestamp, DAY_MS)?),
                 ] {
-                    if end_ms <= watermark {
+                    if is_bucket_complete(end_ms, watermark) {
                         bail!(
                             "already sealed activity bucket received a late action: kind={} block={} tx_index={} timestamp_ms={} bucket_end_ms={} mtp_watermark_ms={}",
                             kind,
@@ -1454,11 +1455,11 @@ impl ActivityStatsAccumulator {
         let mut next_watermark = self.sealed_through_ms;
         for block in blocks {
             self.mtp_timestamps_ms.push_back(block.timestamp_ms);
-            if self.mtp_timestamps_ms.len() > CKB_MEDIAN_TIME_BLOCK_COUNT {
+            if self.mtp_timestamps_ms.len() > MEDIAN_TIME_BLOCK_COUNT {
                 self.mtp_timestamps_ms.pop_front();
             }
             let timestamps = self.mtp_timestamps_ms.make_contiguous();
-            let median = ckb_median_time_ms(timestamps)?;
+            let median = median_time_ms(timestamps)?;
             if let Some(previous) = next_watermark {
                 if median < previous {
                     bail!(
@@ -1618,98 +1619,6 @@ impl ActivityStatsAccumulator {
     }
 }
 
-const CKB_MEDIAN_TIME_BLOCK_COUNT: usize = 37;
-const ACTIVITY_HOUR_MS: i64 = 60 * 60 * 1_000;
-const ACTIVITY_DAY_MS: i64 = 24 * ACTIVITY_HOUR_MS;
-const CKB_UTC8_OFFSET_MS: i64 = ckbadger_common::CKB_UTC8_OFFSET as i64 * 1_000;
-
-fn ckb_median_time_ms(timestamps: &[i64]) -> Result<i64> {
-    if timestamps.is_empty() {
-        bail!("cannot calculate CKB median time from an empty timestamp window");
-    }
-    if timestamps.len() > CKB_MEDIAN_TIME_BLOCK_COUNT {
-        bail!(
-            "CKB median-time window exceeds consensus limit: len={} max={}",
-            timestamps.len(),
-            CKB_MEDIAN_TIME_BLOCK_COUNT
-        );
-    }
-    // Consensus fixes the window at at most 37 headers, so keep the working
-    // set on the stack. This preserves the exact upper-median rule without a
-    // heap allocation for every block in a full-chain replay.
-    let mut ordered = [0i64; CKB_MEDIAN_TIME_BLOCK_COUNT];
-    ordered[..timestamps.len()].copy_from_slice(timestamps);
-    let middle = timestamps.len() / 2;
-    let (_, median, _) = ordered[..timestamps.len()].select_nth_unstable(middle);
-    Ok(*median)
-}
-
-fn activity_bucket_end_ms(timestamp_ms: i64, bucket_ms: i64) -> Result<i64> {
-    let shifted = timestamp_ms
-        .checked_add(CKB_UTC8_OFFSET_MS)
-        .ok_or_else(|| {
-            anyhow!(
-                "activity bucket timestamp overflow while applying UTC+8 offset: timestamp_ms={}",
-                timestamp_ms
-            )
-        })?;
-    let next_bucket = shifted
-        .div_euclid(bucket_ms)
-        .checked_add(1)
-        .ok_or_else(|| {
-            anyhow!(
-                "activity bucket index overflow: timestamp_ms={}",
-                timestamp_ms
-            )
-        })?;
-    next_bucket
-        .checked_mul(bucket_ms)
-        .and_then(|end| end.checked_sub(CKB_UTC8_OFFSET_MS))
-        .ok_or_else(|| {
-            anyhow!(
-                "activity bucket end overflow: timestamp_ms={} bucket_ms={}",
-                timestamp_ms,
-                bucket_ms
-            )
-        })
-}
-
-fn activity_bucket_end_from_key(bucket: &str, hourly: bool) -> Result<i64> {
-    let local_start_ms = if hourly {
-        if bucket.len() != 10 {
-            bail!(
-                "invalid hourly activity bucket length: bucket={} len={} expected=10",
-                bucket,
-                bucket.len()
-            );
-        }
-        let date = chrono::NaiveDate::parse_from_str(&bucket[..8], "%Y%m%d")
-            .map_err(|err| anyhow!("invalid hourly activity bucket date {}: {}", bucket, err))?;
-        let hour = bucket[8..]
-            .parse::<u32>()
-            .map_err(|err| anyhow!("invalid hourly activity bucket hour {}: {}", bucket, err))?;
-        date.and_hms_opt(hour, 0, 0)
-            .ok_or_else(|| anyhow!("invalid hour in hourly activity bucket {}", bucket))?
-            .and_utc()
-            .timestamp_millis()
-    } else {
-        chrono::NaiveDate::parse_from_str(bucket, "%Y%m%d")
-            .map_err(|err| anyhow!("invalid daily activity bucket {}: {}", bucket, err))?
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| anyhow!("invalid midnight for daily activity bucket {}", bucket))?
-            .and_utc()
-            .timestamp_millis()
-    };
-    local_start_ms
-        .checked_add(if hourly {
-            ACTIVITY_HOUR_MS
-        } else {
-            ACTIVITY_DAY_MS
-        })
-        .and_then(|end| end.checked_sub(CKB_UTC8_OFFSET_MS))
-        .ok_or_else(|| anyhow!("activity bucket end overflow for key={}", bucket))
-}
-
 fn drain_activity_bucket_rows(
     stats_by_bucket: &mut FxHashMap<String, DailyActivityStats>,
     addrs_by_bucket: &mut FxHashMap<String, FxHashSet<[u8; 32]>>,
@@ -1728,13 +1637,11 @@ fn drain_activity_bucket_rows(
 
     let mut sealed_buckets = stats_by_bucket
         .keys()
-        .filter_map(
-            |bucket| match activity_bucket_end_from_key(bucket, hourly) {
-                Ok(end_ms) if end_ms <= watermark_ms => Some(Ok(bucket.clone())),
-                Ok(_) => None,
-                Err(err) => Some(Err(err)),
-            },
-        )
+        .filter_map(|bucket| match bucket_end_from_utc8_key(bucket, hourly) {
+            Ok(end_ms) if is_bucket_complete(end_ms, watermark_ms) => Some(Ok(bucket.clone())),
+            Ok(_) => None,
+            Err(err) => Some(Err(err)),
+        })
         .collect::<Result<Vec<_>>>()?;
     sealed_buckets.sort();
 
@@ -8060,12 +7967,6 @@ mod tests {
         assert_eq!(daily.coinbase_count, 1);
         assert_eq!(daily.transfer_count, 0);
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
-    }
-
-    #[test]
-    fn ckb_median_time_uses_the_upper_value_for_an_even_window() {
-        assert_eq!(ckb_median_time_ms(&[10, 20]).unwrap(), 20);
-        assert_eq!(ckb_median_time_ms(&[30, 10, 20]).unwrap(), 20);
     }
 
     #[test]
