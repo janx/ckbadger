@@ -54,13 +54,13 @@ fn dao_cache_entry_to_row(
     }
 }
 
-/// A DAO cell created by the consuming transaction — a candidate phase-1
-/// withdraw-request output for one of the deposits consumed in the same tx.
+/// A DAO cell created by the consuming transaction with a deposit block
+/// number in its data: the phase-1 withdraw request of the deposit spent at
+/// the same index (RFC-0023). Its lock is free and plays no part in pairing.
 #[derive(Debug, Clone)]
 pub struct NewDaoOutput {
     pub tx_hash: Vec<u8>,
     pub output_index: i16,
-    pub lock_script_hash: Vec<u8>,
     pub capacity: i64,
     /// Exact occupied capacity of this withdraw-request cell.
     ///
@@ -119,8 +119,10 @@ pub(crate) struct LiveDaoBatch {
 
 /// The outputs of one transaction as the DAO lifecycle sees them.
 struct DaoTxOutputs {
-    /// DAO cells with a deposit block number: phase-1 request candidates.
-    requests: Vec<NewDaoOutput>,
+    /// Per output index: the DAO cell carrying a deposit block number there,
+    /// if any. RFC-0023 puts the withdraw request for the deposit at input
+    /// index `i` at output index `i`, so this is indexed, never searched.
+    requests: Vec<Option<NewDaoOutput>>,
     /// Non-DAO outputs, as `(output_index, lock_hash)`: withdraw-to candidates.
     withdraw_to_candidates: Vec<(i16, Vec<u8>)>,
 }
@@ -289,9 +291,8 @@ impl LiveDaoBatch {
             .get(&tx.block_number)
             .ok_or_else(|| anyhow!("missing DAO AR for live batch block {}", tx.block_number))?;
         let outputs = dao_tx_outputs(tx)?;
-        let mut used_request_outputs: HashSet<usize> = HashSet::new();
 
-        for input in &tx.inputs {
+        for (input_index, input) in tx.inputs.iter().enumerate() {
             let output_index = i16::try_from(input.previous_output_index).map_err(|_| {
                 anyhow!(
                     "DAO input index exceeds i16 range: previous_output_index={}",
@@ -322,11 +323,11 @@ impl LiveDaoBatch {
                 (Some(entry), None) => self.apply_withdraw_request(
                     tx,
                     block_ar,
+                    input_index,
                     outpoint,
                     outpoint_key,
                     entry,
                     &outputs,
-                    &mut used_request_outputs,
                 )?,
                 (None, Some(deposit_key)) => self.apply_withdraw_completion(
                     store,
@@ -386,18 +387,19 @@ impl LiveDaoBatch {
         Ok(())
     }
 
-    /// Phase 1: the deposit `deposit_outpoint` is consumed and its withdraw
-    /// request created by `tx`.
+    /// Phase 1: the deposit `deposit_outpoint`, spent as input
+    /// `input_index` of `tx`, becomes the withdraw request at output
+    /// `input_index` (RFC-0023; the request's lock is free).
     #[allow(clippy::too_many_arguments)]
     fn apply_withdraw_request(
         &mut self,
         tx: &TxData,
         block_ar: i64,
+        input_index: usize,
         deposit_outpoint: (Vec<u8>, i16),
         deposit_key: [u8; 34],
         mut entry: DaoDepositCacheEntry,
         outputs: &DaoTxOutputs,
-        used_request_outputs: &mut HashSet<usize>,
     ) -> Result<()> {
         if entry.status != 0 {
             bail!(
@@ -407,24 +409,35 @@ impl LiveDaoBatch {
                 entry.status
             );
         }
-        let (pos, request_output) = select_phase1_output_for_deposit(
-            &outputs.requests,
-            used_request_outputs,
-            entry.capacity,
-            entry.deposit_block_number,
-            &entry.lock_script_hash,
-        )?
-        .ok_or_else(|| {
-            anyhow!(
-                "DAO phase-1 output not found for consumed deposit: deposit=0x{}:{}, capacity={}, deposit_block={}, lock_hash=0x{}",
+        let request_output = outputs
+            .requests
+            .get(input_index)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                anyhow!(
+                    "DAO deposit spent as input {} has no withdraw request at output {}: deposit=0x{}:{}, deposit_block={}",
+                    input_index,
+                    input_index,
+                    hex::encode(&deposit_outpoint.0),
+                    deposit_outpoint.1,
+                    entry.deposit_block_number,
+                )
+            })?;
+        if request_output.capacity != entry.capacity
+            || i64::try_from(request_output.deposit_block).ok() != Some(entry.deposit_block_number)
+        {
+            bail!(
+                "withdraw request at output {} is not the request of the deposit at input {}: deposit=0x{}:{} (capacity={}, deposit_block={}), request capacity={}, request deposit_block={}",
+                input_index,
+                input_index,
                 hex::encode(&deposit_outpoint.0),
                 deposit_outpoint.1,
                 entry.capacity,
                 entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-            )
-        })?;
-        used_request_outputs.insert(pos);
+                request_output.capacity,
+                request_output.deposit_block,
+            );
+        }
 
         self.consumed.insert(
             deposit_outpoint.clone(),
@@ -554,7 +567,7 @@ impl LiveDaoBatch {
 }
 
 fn dao_tx_outputs(tx: &TxData) -> Result<DaoTxOutputs> {
-    let mut requests = Vec::new();
+    let mut requests = Vec::with_capacity(tx.cells.len());
     let mut withdraw_to_candidates = Vec::new();
     for (idx, cell) in tx.cells.iter().enumerate() {
         let output_index = i16::try_from(idx)
@@ -565,32 +578,33 @@ fn dao_tx_outputs(tx: &TxData) -> Result<DaoTxOutputs> {
             .is_some_and(DaoParser::is_dao_code_hash);
         if !is_dao || cell.data_size != 8 {
             withdraw_to_candidates.push((output_index, cell.lock_script_hash.clone()));
+            requests.push(None);
             continue;
         }
-        if let Some(deposit_block) = DaoParser::parse_deposit_block_number(&cell.data) {
-            let data_size = usize::try_from(cell.data_size).map_err(|_| {
-                anyhow!(
-                    "negative DAO cell data size: output_index={}, data_size={}",
-                    idx,
-                    cell.data_size
-                )
-            })?;
-            requests.push(NewDaoOutput {
-                tx_hash: tx.hash.to_vec(),
-                output_index,
-                lock_script_hash: cell.lock_script_hash.clone(),
-                capacity: cell.capacity,
-                // RFC-0023 computes compensation from the withdrawing cell, so
-                // the request cell's own occupied capacity is what phase-2
-                // must use.
-                occupied_capacity: ckbadger_common::dao::occupied_capacity_shannons(
-                    data_size,
-                    cell.lock_args.len(),
-                    cell.type_args.as_ref().map(Vec::len),
-                )?,
-                deposit_block,
-            });
-        }
+        let Some(deposit_block) = DaoParser::parse_deposit_block_number(&cell.data) else {
+            requests.push(None);
+            continue;
+        };
+        let data_size = usize::try_from(cell.data_size).map_err(|_| {
+            anyhow!(
+                "negative DAO cell data size: output_index={}, data_size={}",
+                idx,
+                cell.data_size
+            )
+        })?;
+        requests.push(Some(NewDaoOutput {
+            tx_hash: tx.hash.to_vec(),
+            output_index,
+            capacity: cell.capacity,
+            // RFC-0023 computes compensation from the withdrawing cell, so the
+            // request cell's own occupied capacity is what phase-2 must use.
+            occupied_capacity: ckbadger_common::dao::occupied_capacity_shannons(
+                data_size,
+                cell.lock_args.len(),
+                cell.type_args.as_ref().map(Vec::len),
+            )?,
+            deposit_block,
+        }));
     }
     Ok(DaoTxOutputs {
         requests,
@@ -623,55 +637,6 @@ fn infer_withdraw_to_output_index_from_outputs(
     }
 
     None
-}
-
-fn select_phase1_output_for_deposit<'a>(
-    new_dao_outputs: &'a [NewDaoOutput],
-    consumed_output_indices: &HashSet<usize>,
-    capacity: i64,
-    deposit_block_number: i64,
-    lock_script_hash: &[u8],
-) -> Result<Option<(usize, &'a NewDaoOutput)>> {
-    let deposit_block_u64 = u64::try_from(deposit_block_number).map_err(|_| {
-        anyhow!(
-            "invalid negative DAO deposit block number while matching phase-1 output: {}",
-            deposit_block_number
-        )
-    })?;
-
-    let base_candidates = || {
-        new_dao_outputs
-            .iter()
-            .enumerate()
-            .filter(move |(pos, out)| {
-                out.capacity == capacity
-                    && out.deposit_block == deposit_block_u64
-                    && !consumed_output_indices.contains(pos)
-            })
-    };
-
-    // Prefer lock_script_hash match for disambiguation (multiple deposits with
-    // same capacity/deposit_block but different locks).  Fall back to
-    // (capacity, deposit_block) only — the CKB DAO type script does not
-    // enforce lock preservation, so a legitimate withdraw request may change
-    // the lock script.
-    //
-    // Known limitation: when multiple request outputs share the same
-    // (capacity, deposit_block) AND locks differ from the original deposits,
-    // the fallback min_by_key pairing is deterministic but arbitrary — it may
-    // mis-associate deposits with request outputs.  This requires a single tx
-    // to withdraw multiple identical-capacity deposits from the same block
-    // while also changing locks, which is rare in practice.
-    let with_lock = base_candidates()
-        .filter(|(_, out)| out.lock_script_hash.as_slice() == lock_script_hash)
-        // Use output index as a deterministic tie-breaker when exact metadata repeats.
-        .min_by_key(|(pos, out)| (out.output_index, *pos));
-
-    if with_lock.is_some() {
-        return Ok(with_lock);
-    }
-
-    Ok(base_candidates().min_by_key(|(pos, out)| (out.output_index, *pos)))
 }
 
 impl BatchWriter {
@@ -1368,46 +1333,94 @@ mod tests {
         assert!(format!("{err:#}").contains("missing DAO AR"), "{err:#}");
     }
 
+    /// RFC-0023: the withdraw request for the deposit at input index `i` is
+    /// the output at index `i`; its lock is free. Two same-block,
+    /// same-capacity deposits whose requests swap locks must still pair by
+    /// position — any other pairing hands each deposit the other's request
+    /// outpoint and request occupied capacity, so the completion of one
+    /// would complete the other at the wrong compensation.
     #[test]
-    fn test_live_dao_batch_phase1_matches_same_capacity_outputs_deterministically() {
+    fn test_live_dao_batch_pairs_each_deposit_with_the_output_at_its_input_index() {
         let mut fx = Fixture::new();
-        fx.commit_cell(DEPOSIT, &deposit_cell(DEPOSIT_CAPACITY, &LOCK), 101);
-        fx.commit_entry(DEPOSIT, &active_entry(101));
+        let lock_a = [0xa1u8; 32];
+        let lock_b = [0xb2u8; 32];
+        let deposit_a = ([0xd1; 32], 0i16);
+        let deposit_b = ([0xd1; 32], 1i16);
+        fx.commit_cell(deposit_a, &deposit_cell(DEPOSIT_CAPACITY, &lock_a), 101);
+        fx.commit_cell(deposit_b, &deposit_cell(DEPOSIT_CAPACITY, &lock_b), 101);
+        fx.commit_entry(
+            deposit_a,
+            &DaoDepositCacheEntry {
+                lock_script_hash: lock_a.to_vec(),
+                ..active_entry(101)
+            },
+        );
+        fx.commit_entry(
+            deposit_b,
+            &DaoDepositCacheEntry {
+                lock_script_hash: lock_b.to_vec(),
+                ..active_entry(101)
+            },
+        );
 
+        // Output 0 is A's request, but under B's lock with 32-byte args
+        // (114 CKB occupied); output 1 is B's request under A's lock (102).
+        let mut request_for_a = request_cell(DEPOSIT_CAPACITY, &lock_b, 101);
+        request_for_a.lock_args = vec![0x02; 32];
+        let request_for_b = request_cell(DEPOSIT_CAPACITY, &lock_a, 101);
         let request = tx(
             0xd2,
             102,
-            &[(DEPOSIT.0, 0)],
-            vec![
-                request_cell(DEPOSIT_CAPACITY, &LOCK, 101),
-                request_cell(DEPOSIT_CAPACITY, &LOCK, 101),
-            ],
+            &[(deposit_a.0, 0), (deposit_b.0, 1)],
+            vec![request_for_a, request_for_b],
         );
         let resolved = fx.resolve(&[request], &ars(&[(102, AR_REQUEST)])).unwrap();
         let staged = resolved.staged_entries();
-        let entry = &staged[&keys::encode_outpoint(&DEPOSIT.0, DEPOSIT.1).to_vec()];
-        assert_eq!(entry.withdraw_request_output_index, Some(0));
+
+        let a = &staged[&keys::encode_outpoint(&deposit_a.0, deposit_a.1).to_vec()];
+        assert_eq!(a.withdraw_request_output_index, Some(0), "{a:?}");
+        assert_eq!(a.withdraw_request_occupied_capacity, Some(114_00000000));
+        let b = &staged[&keys::encode_outpoint(&deposit_b.0, deposit_b.1).to_vec()];
+        assert_eq!(b.withdraw_request_output_index, Some(1), "{b:?}");
+        assert_eq!(b.withdraw_request_occupied_capacity, Some(102_00000000));
     }
 
+    /// The output at the deposit's input index must be that deposit's
+    /// withdraw request: DAO-typed, the same capacity, the deposit's own
+    /// block in its data. Anything else is a transaction the DAO script
+    /// rejects, so it stops the batch instead of being paired elsewhere.
     #[test]
-    fn test_live_dao_batch_phase1_uses_deposit_block_to_disambiguate_outputs() {
+    fn test_live_dao_batch_phase1_rejects_an_output_that_is_not_the_deposits_request() {
         let mut fx = Fixture::new();
         fx.commit_cell(DEPOSIT, &deposit_cell(DEPOSIT_CAPACITY, &LOCK), 101);
         fx.commit_entry(DEPOSIT, &active_entry(101));
+        let resolve = |cells: Vec<ParsedCell>| {
+            fx.resolve(
+                &[tx(0xd2, 102, &[(DEPOSIT.0, 0)], cells)],
+                &ars(&[(102, AR_REQUEST)]),
+            )
+        };
 
-        let request = tx(
-            0xd2,
-            102,
-            &[(DEPOSIT.0, 0)],
-            vec![
-                request_cell(DEPOSIT_CAPACITY, &LOCK, 99),
-                request_cell(DEPOSIT_CAPACITY, &LOCK, 101),
-            ],
+        // The right request exists, but at output 1, not output 0.
+        let err = resolve(vec![
+            request_cell(DEPOSIT_CAPACITY, &LOCK, 99),
+            request_cell(DEPOSIT_CAPACITY, &LOCK, 101),
+        ])
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("is not the request of the deposit at input 0"),
+            "{err:#}"
         );
-        let resolved = fx.resolve(&[request], &ars(&[(102, AR_REQUEST)])).unwrap();
-        let staged = resolved.staged_entries();
-        let entry = &staged[&keys::encode_outpoint(&DEPOSIT.0, DEPOSIT.1).to_vec()];
-        assert_eq!(entry.withdraw_request_output_index, Some(1));
+        let err = resolve(vec![request_cell(DEPOSIT_CAPACITY - 1, &LOCK, 101)]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("is not the request of the deposit at input 0"),
+            "{err:#}"
+        );
+        let err = resolve(vec![plain_cell(DEPOSIT_CAPACITY, &LOCK)]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("has no withdraw request at output 0"),
+            "{err:#}"
+        );
     }
 
     #[test]
