@@ -6,13 +6,13 @@ import { CKBytesCard } from '@/components/ckbytes-card';
 import { HomeCharts } from '@/components/home-charts';
 import { MiniStatsCards } from '@/components/mini-stats-cards';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
-import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
 import { DaoOverview } from '@/components/dao-overview';
 import { KnowledgeSizeTrend } from '@/components/home-layer2';
 import { LatestActivities } from '@/components/latest-activities';
 import { ActivityCard, ActivityBarChartCard } from '@/components/activity-card';
 import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
+import { PipelinePanel } from '@/components/pipeline/pipeline-panel';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
@@ -104,11 +104,9 @@ export function HomeContent({ initialData }: HomeContentProps) {
         </div>
       </div>
 
-      {/* Row 6: Transaction Pipeline. A plain block sibling of the container rows spans the page
-          width on its own; sizing it in viewport units (w-screen, 50vw margins) overflows by the
-          vertical scrollbar width and adds a horizontal scrollbar. */}
-      <div className="mt-4">
-        <PipelinePreview initialBlocks={initialData.blocks} />
+      {/* Row 6: Transaction Pipeline */}
+      <div className="container mx-auto mt-4 px-4">
+        <PipelinePanel />
       </div>
 
       {/* Row 7: Latest Blocks & Transactions */}

@@ -7698,10 +7698,8 @@ mod tests {
                 raw.len().is_multiple_of(32),
                 "addr set row must be whole hashes"
             );
-            let set: std::collections::HashSet<[u8; 32]> = raw
-                .chunks_exact(32)
-                .map(|c| <[u8; 32]>::try_from(c).unwrap())
-                .collect();
+            let set: std::collections::HashSet<[u8; 32]> =
+                raw.as_chunks::<32>().0.iter().copied().collect();
             let mut expected = std::collections::HashSet::new();
             expected.insert(<[u8; 32]>::try_from(lock_a.as_slice()).unwrap());
             expected.insert(<[u8; 32]>::try_from(lock_b.as_slice()).unwrap());

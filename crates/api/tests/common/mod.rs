@@ -11,6 +11,7 @@ pub use wiremock::matchers::{body_partial_json, method};
 pub use wiremock::{Mock, MockServer, ResponseTemplate};
 
 pub use ckbadger_api::cache::{CacheBackend, InMemoryCache};
+pub use ckbadger_api::consensus::{ConsensusCell, ConsensusParams};
 pub use ckbadger_api::cycles::CyclesClient;
 pub use ckbadger_api::routes::api_routes;
 pub use ckbadger_api::utils::address::compute_script_hash;
@@ -34,6 +35,36 @@ pub use ckbadger_store::types::{
     SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActions, TxIndexEntry, TypeCallEntry,
 };
 pub use ckbadger_store::CkbadgerStore;
+
+/// The `result` object of a mainnet `get_consensus` response (fixture shared
+/// with the `consensus` unit tests).
+pub fn mainnet_get_consensus_result() -> serde_json::Value {
+    serde_json::from_str(include_str!("../fixtures/mainnet_get_consensus.json"))
+        .expect("mainnet get_consensus fixture is valid JSON")
+}
+
+/// Mainnet consensus parameters, parsed by the production parser from the
+/// fixture. Test configs hand them to the API up front — test wiring, so no
+/// test depends on a live node; production reads them from `get_consensus`.
+pub fn mainnet_consensus() -> ConsensusParams {
+    ConsensusParams::from_get_consensus(&mainnet_get_consensus_result())
+        .expect("mainnet get_consensus fixture parses")
+}
+
+/// The node's `get_consensus`, answering with `result`.
+pub async fn mount_consensus_rpc(server: &MockServer, result: serde_json::Value) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_consensus" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": result
+        })))
+        .mount(server)
+        .await;
+}
 
 pub fn test_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
@@ -112,6 +143,7 @@ pub fn test_config_with_ckb_db_path(
         crawler_enabled: false,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
+        consensus: Some(mainnet_consensus()),
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
         slow_request_threshold_ms: 100,
@@ -155,10 +187,15 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         cache: CacheBackend::new(),
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        consensus: Arc::new(match config.consensus {
+            Some(params) => ConsensusCell::preloaded(params),
+            None => ConsensusCell::new(),
+        }),
         cycles_client: CyclesClient::disabled(),
         ckb_store: None,
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache: InMemoryCache::new(),
+        pipeline_pays: Arc::new(ckbadger_api::routes::PipelinePaysCache::new()),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
         dob_decode_dir: config.dob_decode_dir,
@@ -299,6 +336,100 @@ pub async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     (status, json)
+}
+
+/// Every event `ckbadger_api` logs on this thread while the capture lives, as
+/// the API's plain-text log lines (no ANSI), every level.
+///
+/// `#[tokio::test]` runs the router, its layers and every spawned request task
+/// on the test's own thread, so the HTTP request log lands here; events
+/// emitted on `spawn_blocking` threads do not.
+///
+/// One process-wide subscriber (installed by the first capture) formats every
+/// `ckbadger_api` event and hands it to the emitting thread's capture, if any.
+/// A per-thread default subscriber is not enough: a callsite another test's
+/// thread registered first, under no subscriber, stays disabled for it.
+pub struct LogCapture {
+    buffer: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+thread_local! {
+    static THREAD_LOG_CAPTURE: std::cell::RefCell<Option<Arc<std::sync::Mutex<Vec<u8>>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+static LOG_CAPTURE_SUBSCRIBER: std::sync::Once = std::sync::Once::new();
+
+/// Writes a formatted event to the emitting thread's capture; drops it on a
+/// thread that captures nothing.
+struct ThreadLogCaptureWriter;
+
+impl std::io::Write for ThreadLogCaptureWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        THREAD_LOG_CAPTURE.with(|capture| {
+            if let Some(buffer) = capture.borrow().as_ref() {
+                buffer
+                    .lock()
+                    .expect("log capture poisoned")
+                    .extend_from_slice(bytes);
+            }
+        });
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogCapture {
+    pub fn start() -> Self {
+        LOG_CAPTURE_SUBSCRIBER.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new("ckbadger_api=trace"))
+                .with_ansi(false)
+                .with_writer(|| ThreadLogCaptureWriter)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("LogCapture installs the only global subscriber of an API test binary");
+        });
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+        THREAD_LOG_CAPTURE.with(|capture| {
+            let previous = capture.borrow_mut().replace(buffer.clone());
+            assert!(previous.is_none(), "one LogCapture per thread at a time");
+        });
+        Self { buffer }
+    }
+
+    /// The captured lines containing every one of `needles`.
+    pub fn lines_with(&self, needles: &[&str]) -> Vec<String> {
+        let bytes = self.buffer.lock().expect("log capture poisoned");
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter(|line| needles.iter().all(|needle| line.contains(needle)))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The `name=<integer>` field of `line`.
+    pub fn field(line: &str, name: &str) -> u64 {
+        let key = format!(" {name}=");
+        let start = line
+            .find(&key)
+            .unwrap_or_else(|| panic!("no {name} field in log line: {line}"))
+            + key.len();
+        line[start..]
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|digits| digits.parse().ok())
+            .unwrap_or_else(|| panic!("{name} is not an integer in log line: {line}"))
+    }
+}
+
+impl Drop for LogCapture {
+    fn drop(&mut self) {
+        THREAD_LOG_CAPTURE.with(|capture| capture.borrow_mut().take());
+    }
 }
 
 pub fn compute_blake2b_data_hash(data: &[u8]) -> Vec<u8> {
@@ -535,9 +666,138 @@ pub async fn mount_header_rpc(server: &MockServer, number: u64, hash: &str, ar: 
     }
 }
 
-/// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
-/// these pending transactions (`(tx_hash, time_added_to_pool_hex)`).
-pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
+/// A `get_block_economic_state.miner_reward`, shannons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MockMinerReward {
+    pub primary: u64,
+    pub secondary: u64,
+    pub committed: u64,
+    pub proposal: u64,
+}
+
+impl MockMinerReward {
+    pub const fn total(&self) -> u64 {
+        self.primary + self.secondary + self.committed + self.proposal
+    }
+}
+
+/// The `miner_reward` every [`mount_block_economic_state_rpc`] answer carries,
+/// at mainnet magnitudes: 532.72450532 CKB primary issuance, a 102.28311644 CKB
+/// secondary share, and the miner/proposer split of one 2,057,612-shannon fee
+/// (committed = fee − ⌊0.4 · fee⌋).
+pub const MOCK_MINER_REWARD: MockMinerReward = MockMinerReward {
+    primary: 53_272_450_532,
+    secondary: 10_228_311_644,
+    committed: 1_234_568,
+    proposal: 89_012,
+};
+
+/// `primary + secondary + committed + proposal` of [`MOCK_MINER_REWARD`].
+pub const BLOCK_ECONOMIC_STATE_REWARD_TOTAL: u64 = MOCK_MINER_REWARD.total();
+
+/// The node's `get_block_economic_state`: each `(block_hash, finalized_at)`
+/// pair answers for exactly that block hash (any other hash gets wiremock's
+/// 404, which the API must treat as an error).
+pub async fn mount_block_economic_state_rpc(server: &MockServer, pairs: &[(&str, &str)]) {
+    mount_block_economic_state_rpc_with(
+        server,
+        pairs,
+        MOCK_MINER_REWARD,
+        std::time::Duration::ZERO,
+    )
+    .await;
+}
+
+/// [`mount_block_economic_state_rpc`], each answer sent after `delay`.
+pub async fn mount_block_economic_state_rpc_delayed(
+    server: &MockServer,
+    pairs: &[(&str, &str)],
+    delay: std::time::Duration,
+) {
+    mount_block_economic_state_rpc_with(server, pairs, MOCK_MINER_REWARD, delay).await;
+}
+
+/// [`mount_block_economic_state_rpc`] answering `reward` after `delay`.
+pub async fn mount_block_economic_state_rpc_with(
+    server: &MockServer,
+    pairs: &[(&str, &str)],
+    reward: MockMinerReward,
+    delay: std::time::Duration,
+) {
+    let hex = |shannons: u64| format!("0x{shannons:x}");
+    for (block_hash, finalized_at) in pairs {
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "method": "get_block_economic_state",
+                "params": [block_hash]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "finalized_at": finalized_at,
+                            // The whole secondary issuance; the miner gets a share.
+                            "issuance": {
+                                "primary": hex(reward.primary),
+                                "secondary": hex(reward.secondary * 3)
+                            },
+                            "miner_reward": {
+                                "primary": hex(reward.primary),
+                                "secondary": hex(reward.secondary),
+                                "committed": hex(reward.committed),
+                                "proposal": hex(reward.proposal)
+                            },
+                            "txs_fee": hex(2_057_612)
+                        }
+                    }))
+                    .set_delay(delay),
+            )
+            .mount(server)
+            .await;
+    }
+}
+
+/// The node's `get_block_economic_state` for blocks it has not finalized yet:
+/// `result: null`, for any block hash.
+pub async fn mount_block_economic_state_not_finalized(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_block_economic_state" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        })))
+        .mount(server)
+        .await;
+}
+
+/// One verbose `get_raw_tx_pool` entry, as the node reports it.
+#[derive(Debug, Clone)]
+pub struct PoolRpcTx {
+    pub hash: String,
+    /// The node's entry size (serialized size in block: molecule + 4).
+    pub size: u64,
+    pub fee: u64,
+    pub cycles: u64,
+    /// `timestamp`: when the node accepted it into its pool, ms.
+    pub timestamp_ms: u64,
+}
+
+/// The node's tx pool at a tip: `tx_pool_info` plus verbose `get_raw_tx_pool`.
+#[derive(Debug, Clone)]
+pub struct PoolRpc {
+    pub tip_number: u64,
+    pub tip_hash: String,
+    pub pending: Vec<PoolRpcTx>,
+    pub proposed: Vec<PoolRpcTx>,
+}
+
+/// Mount `pool` as the node's `tx_pool_info` and verbose `get_raw_tx_pool`.
+pub async fn mount_tx_pool_rpc_at(server: &MockServer, pool: &PoolRpc) {
     Mock::given(method("POST"))
         .and(body_partial_json(
             serde_json::json!({ "method": "tx_pool_info" }),
@@ -546,34 +806,35 @@ pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
             "jsonrpc": "2.0",
             "id": 1,
             "result": {
-                "tip_hash": format!("0x{}", "77".repeat(32)),
-                "tip_number": "0x3e8",
+                "tip_hash": pool.tip_hash,
+                "tip_number": format!("0x{:x}", pool.tip_number),
                 "last_txs_updated_at": "0x1",
-                "pending": format!("0x{:x}", pending.len()),
-                "proposed": "0x0",
+                "pending": format!("0x{:x}", pool.pending.len()),
+                "proposed": format!("0x{:x}", pool.proposed.len()),
                 "orphan": "0x0"
             }
         })))
         .mount(server)
         .await;
 
-    let entries: serde_json::Map<String, serde_json::Value> = pending
-        .iter()
-        .map(|(hash, timestamp)| {
-            (
-                hash.to_string(),
-                serde_json::json!({
-                    "cycles": "0x5208",
-                    "size": "0x1f4",
-                    "fee": "0x174",
-                    "ancestors_count": "0x0",
-                    "ancestors_size": "0x1f4",
-                    "ancestors_cycles": "0x5208",
-                    "timestamp": timestamp
-                }),
-            )
-        })
-        .collect();
+    let entries = |txs: &[PoolRpcTx]| -> serde_json::Map<String, serde_json::Value> {
+        txs.iter()
+            .map(|tx| {
+                (
+                    tx.hash.clone(),
+                    serde_json::json!({
+                        "cycles": format!("0x{:x}", tx.cycles),
+                        "size": format!("0x{:x}", tx.size),
+                        "fee": format!("0x{:x}", tx.fee),
+                        "ancestors_count": "0x0",
+                        "ancestors_size": format!("0x{:x}", tx.size),
+                        "ancestors_cycles": format!("0x{:x}", tx.cycles),
+                        "timestamp": format!("0x{:x}", tx.timestamp_ms)
+                    }),
+                )
+            })
+            .collect()
+    };
     Mock::given(method("POST"))
         .and(body_partial_json(
             serde_json::json!({ "method": "get_raw_tx_pool" }),
@@ -581,10 +842,38 @@ pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "result": { "pending": entries, "proposed": {} }
+            "result": { "pending": entries(&pool.pending), "proposed": entries(&pool.proposed) }
         })))
         .mount(server)
         .await;
+}
+
+/// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
+/// these pending transactions (`(tx_hash, time_added_to_pool_hex)`), at the
+/// fixed tip `0x3e8` / `0x77…77`, each entry 500 bytes, fee 0x174, 0x5208
+/// cycles.
+pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
+    let pending = pending
+        .iter()
+        .map(|(hash, timestamp)| PoolRpcTx {
+            hash: hash.to_string(),
+            size: 0x1f4,
+            fee: 0x174,
+            cycles: 0x5208,
+            timestamp_ms: u64::from_str_radix(timestamp.trim_start_matches("0x"), 16)
+                .expect("fixture pool timestamp is hex"),
+        })
+        .collect();
+    mount_tx_pool_rpc_at(
+        server,
+        &PoolRpc {
+            tip_number: 0x3e8,
+            tip_hash: format!("0x{}", "77".repeat(32)),
+            pending,
+            proposed: vec![],
+        },
+    )
+    .await;
 }
 
 /// Run ONE tx-pool mirror round against the node at `rpc_url`, publishing into

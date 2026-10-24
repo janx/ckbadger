@@ -204,7 +204,7 @@ impl PrefetchChannelHandle {
                         )
                     })?;
                     retained_block_bytes
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                             current.checked_add(chunk_bytes)
                         })
                         .map_err(|current| {

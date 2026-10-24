@@ -10,6 +10,7 @@ mod hardforks;
 mod heavy_pages;
 mod identities;
 mod mempool;
+mod pipeline;
 mod scripts;
 mod search;
 mod spore;
@@ -55,6 +56,9 @@ pub fn register_all() -> Registry {
         reg.add(entry);
     }
     for entry in mempool::entries() {
+        reg.add(entry);
+    }
+    for entry in pipeline::entries() {
         reg.add(entry);
     }
     for entry in scripts::entries() {
@@ -111,6 +115,14 @@ mod tests {
             top_lock_hashes: vec![LOCK_HASH.to_string()],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn pipeline_snapshot_resolves_without_discovered_params() {
+        assert_eq!(
+            resolve("/pipeline", &DiscoveredParams::default()).as_deref(),
+            Some(format!("{BASE}/pipeline").as_str())
+        );
     }
 
     #[test]

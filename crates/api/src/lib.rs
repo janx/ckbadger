@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod consensus;
 pub mod cycles;
 pub mod embedded_frontend;
 pub mod entry;
@@ -6,6 +7,7 @@ mod frontend_formats;
 pub mod frontend_proxy;
 pub mod middleware;
 pub mod pool;
+pub mod request_log;
 pub mod response;
 pub mod routes;
 pub mod utils;
@@ -28,12 +30,15 @@ use tracing::Level;
 
 use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
+use consensus::{ConsensusCell, ConsensusParams};
 use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
 use pool::PoolMirror;
 use response::{ApiError, ApiRouteError};
 use warmup::SporeCache;
 use ws::WsManager;
+
+pub use request_log::RequestWait;
 
 #[derive(Debug)]
 pub struct CleanupPathGuard {
@@ -75,6 +80,9 @@ pub struct AppState {
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
+    /// The chain's consensus parameters (proposal window, block limits), read
+    /// from the node's `get_consensus` on first use. Use [`AppState::consensus`].
+    pub consensus: Arc<ConsensusCell>,
     pub cycles_client: Arc<CyclesClient>,
     /// Direct read-only access to the resolved CKB RocksDB path.
     pub ckb_store: Option<Arc<CkbChainReader>>,
@@ -82,6 +90,8 @@ pub struct AppState {
     pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
     /// In-memory cache for assets/tokens/object data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
+    /// `/pipeline`'s verified cellbase payments, bounded, by paying block hash.
+    pub pipeline_pays: Arc<routes::PipelinePaysCache>,
     /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
     pub asset_cache_warmup_error: Arc<RwLock<Option<String>>>,
     /// Background task status for observability (API-side tasks only).
@@ -179,6 +189,17 @@ impl AppState {
         }
     }
 
+    /// The chain's consensus parameters, the API's one source for the NC-Max
+    /// proposal window and the block limits. Loaded once from the node's
+    /// `get_consensus`; when the node cannot answer the request fails — no
+    /// hardcoded value stands in (a testnet or devnet chain may differ).
+    pub async fn consensus(&self) -> Result<&ConsensusParams, ApiRouteError> {
+        self.consensus
+            .get_or_load(&self.ckb_rpc_url)
+            .await
+            .map_err(|e| ApiError::internal(format!("consensus parameters unavailable: {e}")))
+    }
+
     /// The genesis economic baseline (issuance / burnt / virtual-occupied),
     /// derived once at block 0 and persisted by the indexer. Read-only from the
     /// secondary domain store. Fails fast if the indexer has not derived it yet
@@ -208,6 +229,10 @@ pub struct AppConfig {
     pub crawler_enabled: bool,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
+    /// Consensus parameters the caller already holds — test fixtures hand the
+    /// API a chain's parameters this way. Production passes `None`: the API
+    /// reads them from the node's `get_consensus` on first use.
+    pub consensus: Option<ConsensusParams>,
     pub rate_limit_per_second: Option<u32>,
     pub rate_limit_burst: Option<u32>,
     pub slow_request_threshold_ms: u64,
@@ -306,10 +331,15 @@ pub async fn create_router(config: AppConfig) -> Router {
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        consensus: Arc::new(match config.consensus {
+            Some(params) => ConsensusCell::preloaded(params),
+            None => ConsensusCell::new(),
+        }),
         cycles_client,
         ckb_store,
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache,
+        pipeline_pays: Arc::new(routes::PipelinePaysCache::new()),
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
         background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),
         dob_decode_dir: config.dob_decode_dir,
@@ -435,6 +465,8 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let slow_threshold = std::time::Duration::from_millis(config.slow_request_threshold_ms);
 
+    // The span every request's log lines carry; `request_log::log_request`
+    // (just inside it) writes the one line per finished request.
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|request: &axum::http::Request<_>| {
             tracing::info_span!(
@@ -444,50 +476,7 @@ pub async fn create_router(config: AppConfig) -> Router {
                 query = request.uri().query().unwrap_or(""),
             )
         })
-        .on_response(
-            move |response: &axum::http::Response<_>,
-                  latency: std::time::Duration,
-                  span: &tracing::Span| {
-                let status = response.status().as_u16();
-                let latency_ms = latency.as_millis() as u64;
-                let size = response
-                    .headers()
-                    .get(axum::http::header::CONTENT_LENGTH)
-                    .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
-                    .and_then(|v: &str| v.parse::<u64>().ok())
-                    .unwrap_or(0);
-                let is_polling = response
-                    .extensions()
-                    .get::<PollingRequestMarker>()
-                    .is_some();
-
-                if latency >= slow_threshold {
-                    tracing::warn!(
-                        parent: span,
-                        status,
-                        latency_ms,
-                        size,
-                        "slow request"
-                    );
-                } else if is_polling {
-                    tracing::debug!(
-                        parent: span,
-                        status,
-                        latency_ms,
-                        size,
-                        "completed"
-                    );
-                } else {
-                    tracing::info!(
-                        parent: span,
-                        status,
-                        latency_ms,
-                        size,
-                        "completed"
-                    );
-                }
-            },
-        )
+        .on_response(())
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
     Router::new()
@@ -499,7 +488,10 @@ pub async fn create_router(config: AppConfig) -> Router {
         .layer(rate_limit_layer)
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(axum::middleware::from_fn(mark_polling_request))
+        .layer(axum::middleware::from_fn_with_state(
+            slow_threshold,
+            request_log::log_request,
+        ))
         .layer(trace_layer)
         .with_state(state)
 }
@@ -528,9 +520,13 @@ impl RequestReadView {
     /// Stop pinning the view for the rest of this request.
     ///
     /// Only for handlers whose contract is to observe the *next* view — the
-    /// cycles long-poll waits for the indexer to write a result, so it must let
-    /// catch-up run. Everything read after this call may come from a newer
-    /// view than what was read before it.
+    /// cycles long-poll waits for the indexer to write a result, and
+    /// `/pipeline` waits for the store to reach the node's pool tip, so both
+    /// must let catch-up run. Everything read after this call may come from a
+    /// newer view than what was read before it; a handler that still needs
+    /// one coherent view pins its own (`/pipeline` pins one per attempt).
+    /// Such a handler sleeps through [`RequestWait`], so the request log does
+    /// not count its wait as slowness.
     pub fn release(&self) {
         let _ = self.0.lock().expect("request read view poisoned").take();
     }
@@ -548,39 +544,6 @@ pub async fn pin_read_view(
     request.extensions_mut().insert(view.clone());
     let response = next.run(request).await;
     drop(view);
-    response
-}
-
-/// Marker inserted into response extensions for high-frequency polling endpoints.
-/// TraceLayer's `on_response` checks for this to log at DEBUG instead of INFO.
-#[derive(Clone)]
-struct PollingRequestMarker;
-
-/// Paths frequently polled by the frontend (5-10s intervals) that generate
-/// excessive log volume at INFO level. Logged at DEBUG instead.
-const POLLING_PATHS: &[&str] = &[
-    "/api/v1/statistics/network",
-    "/api/v1/statistics/recent-blocks",
-    "/api/v1/activities/latest",
-    "/api/v1/mempool/info",
-    "/api/v1/mempool/transactions",
-    "/api/v1/mempool/blocks",
-    "/api/v1/mempool/pending-proposals",
-];
-
-fn is_polling_path(path: &str) -> bool {
-    POLLING_PATHS.contains(&path)
-}
-
-async fn mark_polling_request(
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let polling = is_polling_path(request.uri().path());
-    let mut response = next.run(request).await;
-    if polling {
-        response.extensions_mut().insert(PollingRequestMarker);
-    }
     response
 }
 
@@ -675,22 +638,5 @@ mod tests {
         // Verify the module-level routes() function returns a valid router.
         // This exercises the route merging logic in routes::api_routes().
         let _router: Router<Arc<AppState>> = routes::api_routes();
-    }
-
-    #[test]
-    fn test_polling_path_detection() {
-        assert!(is_polling_path("/api/v1/statistics/network"));
-        assert!(is_polling_path("/api/v1/activities/latest"));
-        assert!(is_polling_path("/api/v1/mempool/info"));
-        assert!(is_polling_path("/api/v1/mempool/transactions"));
-        assert!(is_polling_path("/api/v1/mempool/blocks"));
-        assert!(is_polling_path("/api/v1/mempool/pending-proposals"));
-        assert!(is_polling_path("/api/v1/statistics/recent-blocks"));
-
-        assert!(!is_polling_path("/api/v1/blocks"));
-        assert!(!is_polling_path("/api/v1/blocks/12345"));
-        assert!(!is_polling_path("/api/v1/transactions/0xabc"));
-        assert!(!is_polling_path("/api/v1/search"));
-        assert!(!is_polling_path("/api/v1/statistics/tx-stats"));
     }
 }

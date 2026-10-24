@@ -57,7 +57,12 @@ async fn test_get_block_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    // The detail asks the node for the block's reward; this fixture block is
+    // not finalized there.
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    config.ckb_rpc_url = server.uri();
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks/8775638")
@@ -366,4 +371,274 @@ async fn test_block_proposals_resolve_commitments_via_shared_window() {
         proposals[2]["committedBlockNumber"],
         serde_json::Value::Null
     );
+}
+
+// ---------------------------------------------------------------------------
+// /blocks/{id}/proposals must serve the block's WHOLE proposal zone — its own
+// proposals plus those of the uncles it embeds, exactly what CKB consensus
+// (`BlockView::union_proposal_ids`) and `/graph/proposals` count — and must
+// fail fast instead of answering `[]` when it cannot read the zone.
+// ---------------------------------------------------------------------------
+
+fn build_block_with_uncle(
+    number: u64,
+    proposals: &[ckb_types::packed::ProposalShortId],
+    uncle_number: u64,
+    uncle_proposals: &[ckb_types::packed::ProposalShortId],
+) -> ckb_types::core::BlockView {
+    use ckb_types::prelude::*;
+    let epoch = ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800);
+    let mut uncle = ckb_types::core::BlockBuilder::default()
+        .number(uncle_number.pack())
+        .epoch(epoch.pack());
+    for id in uncle_proposals {
+        uncle = uncle.proposal(id.clone());
+    }
+    let mut builder = ckb_types::core::BlockBuilder::default()
+        .number(number.pack())
+        .epoch(epoch.pack())
+        .uncle(uncle.build().as_uncle());
+    for id in proposals {
+        builder = builder.proposal(id.clone());
+    }
+    builder.build()
+}
+
+fn seed_proposer_header(store: &Arc<CkbadgerStore>, number: i64, hash: &[u8]) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        number,
+        &CachedBlockHeader {
+            hash: hash.to_vec(),
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 0,
+            uncles_count: 1,
+            proposals_count: 1,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+}
+
+#[tokio::test]
+async fn test_block_proposals_include_uncle_proposals() {
+    use ckb_types::prelude::*;
+
+    let txs = proposal_fixture_txs(2);
+    let (tx_own, tx_uncle) = (&txs[0], &txs[1]);
+    let uncle_unknown = ckb_types::packed::ProposalShortId::new([0x6B; 10]);
+
+    let proposer = build_block_with_uncle(
+        440,
+        &[tx_own.proposal_short_id()],
+        439,
+        &[tx_uncle.proposal_short_id(), uncle_unknown],
+    );
+    let uncle_hash: [u8; 32] = proposer.uncles().get(0).unwrap().hash().unpack();
+    let commit = build_proposal_block(443, &[], &[tx_own.clone(), tx_uncle.clone()]);
+
+    let store = test_store();
+    let proposer_hash: [u8; 32] = proposer.hash().unpack();
+    seed_proposer_header(&store, 440, &proposer_hash);
+
+    let chain = seed_ckb_chain(&[proposer, commit]);
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/440/proposals").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let proposals = json.as_array().expect("proposals array");
+    assert_eq!(
+        proposals.len(),
+        3,
+        "the zone is the block's own proposal plus the uncle's two, got {json}"
+    );
+
+    assert_eq!(proposals[0]["proposalIndex"], 0);
+    assert_eq!(proposals[0]["uncle"], serde_json::Value::Null);
+    assert_eq!(proposals[0]["committedBlockNumber"], 443);
+
+    let uncle =
+        serde_json::json!({ "number": 439, "hash": format!("0x{}", hex::encode(uncle_hash)) });
+    assert_eq!(proposals[1]["proposalIndex"], 1);
+    assert_eq!(
+        proposals[1]["proposalId"],
+        format!("0x{}", hex::encode(tx_uncle.proposal_short_id().as_slice()))
+    );
+    assert_eq!(proposals[1]["uncle"], uncle);
+    let tx_uncle_hash: [u8; 32] = tx_uncle.hash().unpack();
+    assert_eq!(
+        proposals[1]["committedTxHash"],
+        format!("0x{}", hex::encode(tx_uncle_hash))
+    );
+    assert_eq!(proposals[1]["committedBlockNumber"], 443);
+
+    assert_eq!(proposals[2]["proposalIndex"], 2);
+    assert_eq!(proposals[2]["uncle"], uncle);
+    assert_eq!(proposals[2]["committedTxHash"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_block_proposals_fail_without_chain_reader() {
+    let store = test_store();
+    seed_proposer_header(&store, 440, &[0x44; 32]);
+    // `test_app_state` opens no CKB node reader.
+    let app = create_router_without_warmup(test_config(store));
+
+    let (status, json) = get_json(&app, "/blocks/440/proposals").await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "without the node DB the proposals are unknown, not empty, got {json}"
+    );
+    assert!(
+        json["message"].as_str().unwrap().contains("ckb_db_path"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn test_block_proposals_fail_when_node_lacks_block() {
+    let store = test_store();
+    seed_proposer_header(&store, 440, &[0x44; 32]);
+    // An (empty) node DB is opened, but it does not hold block 440.
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/blocks/440/proposals").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("440"), "{message}");
+    assert!(
+        message.contains(&format!("0x{}", hex::encode([0x44u8; 32]))),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn test_block_proposals_unknown_block_is_not_found() {
+    let app = create_router(test_config(test_store())).await;
+    let (status, json) = get_json(&app, "/blocks/440/proposals").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "got {json}");
+}
+
+// ---------------------------------------------------------------------------
+// The block detail's mining reward used to swallow every failure into
+// `miningRewardTxHash: null`: a malformed `finalized_at`
+// (`hex::decode(..).ok()?`), a wrong-length one (`return None`), no node
+// reader (`ckb_store?`), a finalizing block missing from the node DB. A node
+// answer the API cannot use is an error, not a missing field. `null` remains
+// the honest answer only when the node reports the block not finalized yet.
+// ---------------------------------------------------------------------------
+
+/// A block whose cellbase (index 0) pays an earlier block's reward.
+fn build_finalizing_block(number: u64) -> ckb_types::core::BlockView {
+    use ckb_types::prelude::*;
+    let cellbase = ckb_types::core::TransactionBuilder::default()
+        .input(ckb_types::packed::CellInput::new_cellbase_input(number))
+        .output(ckb_types::packed::CellOutput::new_builder().build())
+        .output_data(ckb_types::bytes::Bytes::new().pack())
+        .build();
+    build_proposal_block(number, &[], &[cellbase])
+}
+
+#[tokio::test]
+async fn test_mining_reward_names_the_finalizing_cellbase() {
+    use ckb_types::prelude::*;
+
+    let finalizing = build_finalizing_block(511);
+    let finalizing_hash: [u8; 32] = finalizing.hash().unpack();
+    let cellbase_hash: [u8; 32] = finalizing.transactions()[0].hash().unpack();
+
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let chain = seed_ckb_chain(&[finalizing]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_rpc(
+        &server,
+        &[(
+            &format!("0x{}", hex::encode([0x50u8; 32])),
+            &format!("0x{}", hex::encode(finalizing_hash)),
+        )],
+    )
+    .await;
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    // primary + secondary + committed + proposal of the fixture reward.
+    assert_eq!(
+        json["miningReward"],
+        BLOCK_ECONOMIC_STATE_REWARD_TOTAL.to_string()
+    );
+    assert_eq!(
+        json["miningRewardTxHash"],
+        format!("0x{}", hex::encode(cellbase_hash))
+    );
+}
+
+#[tokio::test]
+async fn test_mining_reward_bad_finalized_at_is_error() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let server = MockServer::start().await;
+    // A 2-byte `finalized_at` names no block.
+    mount_block_economic_state_rpc(
+        &server,
+        &[(&format!("0x{}", hex::encode([0x50u8; 32])), "0x1234")],
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "an unusable node answer must not become `miningRewardTxHash: null`, got {json}"
+    );
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("finalized_at"), "{message}");
+    assert!(message.contains("0x1234"), "{message}");
+}
+
+#[tokio::test]
+async fn test_mining_reward_finalizing_block_missing_from_node_is_error() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let server = MockServer::start().await;
+    let finalized_at = format!("0x{}", hex::encode([0x51u8; 32]));
+    mount_block_economic_state_rpc(
+        &server,
+        &[(&format!("0x{}", hex::encode([0x50u8; 32])), &finalized_at)],
+    )
+    .await;
+    // The (empty) node DB does not hold the finalizing block.
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains(&finalized_at), "{message}");
 }

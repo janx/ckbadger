@@ -113,7 +113,7 @@ impl BlockBufferHandle {
             let chunk_bytes = u64::try_from(chunk_bytes)
                 .map_err(|_| anyhow!("prefetch chunk bytes exceed u64: bytes={chunk_bytes}"))?;
             remote_block_bytes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                     current.checked_sub(chunk_bytes)
                 })
                 .map_err(|current| {

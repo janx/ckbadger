@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 
 // API calls are now same-origin and network-scoped (`/api/<network>/v1/*`), served by the
 // Rust proxy in production. A relative handler base with a `:network` path param matches the
@@ -7,6 +8,8 @@ import { http, HttpResponse } from 'msw';
 const API_BASE = '/api/:network/v1';
 
 export const handlers = [
+  http.get(`${API_BASE}/pipeline`, () => HttpResponse.json(pipelineSnapshot)),
+
   http.get(`${API_BASE}/blocks`, ({ request }) => {
     const url = new URL(request.url);
     const limit = parseInt(url.searchParams.get('limit') || '20');

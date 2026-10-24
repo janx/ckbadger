@@ -5,11 +5,11 @@ use axum::{
 };
 use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
-use crate::routes::proposal_window::{resolve_committed_txs, PROPOSAL_W_CLOSE, PROPOSAL_W_FAR};
+use crate::routes::proposal_window::{block_proposal_zone, resolve_committed_txs, ZoneProposal};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{parse_hash32, parse_output_index, validate_block_number};
 use crate::AppState;
@@ -566,58 +566,6 @@ pub struct ProposalCommitmentWindow {
     pub latest_commit_block: i64,
 }
 
-/// One entry of a block's proposal zone: the short id, plus the uncle that
-/// carried it when it did not come from the block's own `proposals()`.
-struct ZoneProposal {
-    short_id: Vec<u8>,
-    /// `(uncle block number, uncle block hash)`; `None` for a direct proposal.
-    uncle: Option<(i64, Vec<u8>)>,
-}
-
-/// The whole proposal zone CKB consensus attributes to `block`: its own
-/// `proposals()` plus the proposal zones of the uncles it embeds.
-///
-/// A proposal borne by an uncle belongs to the main-chain block that embeds
-/// the uncle — that is the block whose commitment window the proposal opens —
-/// which is the same rule `/transactions/{hash}/lifecycle` applies. Ignoring
-/// uncle zones dropped those proposals from the graph entirely and undercounted
-/// `totalProposals`.
-///
-/// The block's own zone wins over its uncles' when both carry an id, and an id
-/// listed by two embedded uncles is one proposal, attributed to the first uncle
-/// in embedding order. The uncle data already travels inside the block, so this
-/// costs no extra I/O.
-fn block_proposal_zone(block: &ckb_types::core::BlockView) -> Vec<ZoneProposal> {
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut zone = Vec::new();
-
-    for proposal_id in block.data().proposals().into_iter() {
-        let short_id = proposal_id.raw_data().to_vec();
-        if seen.insert(short_id.clone()) {
-            zone.push(ZoneProposal {
-                short_id,
-                uncle: None,
-            });
-        }
-    }
-
-    for uncle in block.uncles() {
-        let uncle_number = uncle.number() as i64;
-        let uncle_hash = uncle.hash().raw_data().to_vec();
-        for proposal_id in uncle.data().proposals().into_iter() {
-            let short_id = proposal_id.raw_data().to_vec();
-            if seen.insert(short_id.clone()) {
-                zone.push(ZoneProposal {
-                    short_id,
-                    uncle: Some((uncle_number, uncle_hash.clone())),
-                });
-            }
-        }
-    }
-
-    zone
-}
-
 #[instrument(skip(state), level = "debug")]
 async fn get_proposal_graph(
     State(state): State<Arc<AppState>>,
@@ -633,9 +581,11 @@ async fn get_proposal_graph(
 
     let block_hash = block_header.hash;
 
-    // NC-Max: w_close=2, w_far=10 (proposals can commit 2-10 blocks later)
-    let earliest_commit = block_number + PROPOSAL_W_CLOSE;
-    let latest_commit = block_number + PROPOSAL_W_FAR;
+    // NC-Max: a proposal commits `closest ..= farthest` blocks later, per the
+    // chain's consensus window.
+    let window = state.consensus().await?.tx_proposal_window;
+    let earliest_commit = block_number + window.closest();
+    let latest_commit = block_number + window.farthest();
 
     // Get the block's full proposal zone (own + embedded uncles') from CKB store
     let proposals: Vec<ZoneProposal> = if let Some(ref ckb_store) = state.ckb_store {
@@ -674,7 +624,7 @@ async fn get_proposal_graph(
     // short id is the first 10 bytes of the tx hash.
     let short_ids: Vec<Vec<u8>> = proposals.iter().map(|p| p.short_id.clone()).collect();
     let commitments: Vec<Option<(Vec<u8>, i64)>> = match state.ckb_store {
-        Some(ref ckb_store) => resolve_committed_txs(ckb_store, block_number, &short_ids),
+        Some(ref ckb_store) => resolve_committed_txs(ckb_store, window, block_number, &short_ids),
         // Without the reader `proposals` is already empty; keep the shape.
         None => vec![None; short_ids.len()],
     };
@@ -703,10 +653,10 @@ async fn get_proposal_graph(
                     // Names the embedded uncle when the id came from its
                     // proposal zone rather than the source block's own.
                     // `null` for a directly proposed id.
-                    "proposedInUncle": proposal.uncle.as_ref().map(|(number, hash)| {
+                    "proposedInUncle": proposal.uncle.as_ref().map(|uncle| {
                         serde_json::json!({
-                            "blockNumber": number,
-                            "blockHash": format!("0x{}", hex::encode(hash)),
+                            "blockNumber": uncle.number,
+                            "blockHash": format!("0x{}", hex::encode(uncle.hash)),
                         })
                     }),
                 }),
@@ -765,8 +715,8 @@ async fn get_proposal_graph(
             total_proposals: proposals_count,
             committed_count,
             commitment_window: ProposalCommitmentWindow {
-                close: PROPOSAL_W_CLOSE,
-                far: PROPOSAL_W_FAR,
+                close: window.closest(),
+                far: window.farthest(),
                 earliest_commit_block: earliest_commit,
                 latest_commit_block: latest_commit,
             },

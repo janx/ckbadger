@@ -12,6 +12,7 @@ pub(crate) mod hardforks;
 mod identities;
 mod mempool;
 mod network;
+mod pipeline;
 mod proposal_window;
 mod scripts;
 mod search;
@@ -28,6 +29,9 @@ use axum::Router;
 use std::sync::Arc;
 
 use crate::AppState;
+
+/// Public so tests can hold `/pipeline` to its own bound.
+pub use pipeline::{PipelinePaysCache, PIPELINE_TIP_WAIT};
 
 pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -47,6 +51,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(spore::routes())
         .merge(mempool::routes())
         .merge(network::routes())
+        .merge(pipeline::routes())
         .merge(scripts::routes())
         .merge(forks::routes())
         .merge(verify::routes())

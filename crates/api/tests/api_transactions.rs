@@ -1314,3 +1314,130 @@ async fn test_pending_transaction_detail_decodes_dotcell_records_from_witness() 
         records[0]
     );
 }
+
+/// A transaction the store has indexed whose cycles are not computed yet: the
+/// row the cycles long-poll waits on.
+fn seed_tx_awaiting_cycles(store: &Arc<CkbadgerStore>, tx_hash: &[u8; 32], cycles: Option<i64>) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        321,
+        &CachedBlockHeader {
+            hash: vec![0x44; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_123_456,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 2,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(tx_hash, 321, 1);
+    batch.put_tx_index(
+        321,
+        1,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_123_456,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1234,
+            tx_size: 222,
+            cycles,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+}
+
+/// The cycles long-poll waits on purpose for the indexer's cycles worker to
+/// write the result; that wait is not a slow request.
+#[tokio::test]
+async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
+    // The threshold, and how long the worker takes to answer after the handler
+    // has enqueued: the request lasts at least that long in wall time. What
+    // the handler does besides sleeping is the host's to decide; it only has
+    // to stay under the threshold.
+    const SLOW_MS: u64 = 1_500;
+    let store = test_store();
+    let tx_hash = [0x5A; 32];
+    let hash_hex = format!("0x{}", hex::encode(tx_hash));
+    seed_tx_awaiting_cycles(&store, &tx_hash, None);
+    let cycles_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(store.clone());
+    config.cycles_request_dir = Some(cycles_dir.path().to_path_buf());
+    config.slow_request_threshold_ms = SLOW_MS;
+    let app = create_router(config).await;
+    let logs = LogCapture::start();
+
+    let uri = format!("/api/v1/transactions/{hash_hex}/calculate-cycles");
+    let request = {
+        let app = app.clone();
+        let uri = uri.clone();
+        tokio::spawn(async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            (status, json)
+        })
+    };
+
+    // The handler has asked the cycles worker; the worker answers a whole
+    // threshold later.
+    let request_file = cycles_dir.path().join(format!("tx_{hash_hex}"));
+    let started = std::time::Instant::now();
+    while !request_file.exists() {
+        assert!(
+            // A hang guard, not a latency bound: generous for a loaded host.
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the handler never enqueued the cycles request"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(SLOW_MS)).await;
+    seed_tx_awaiting_cycles(&store, &tx_hash, Some(777));
+
+    let (status, json) = request.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["status"], "done", "{json}");
+    assert_eq!(json["cycles"], 777);
+
+    let path = format!("path=\"{uri}\"");
+    assert!(
+        logs.lines_with(&[&path, "slow request"]).is_empty(),
+        "the long-poll wait was logged as a slow request: {:#?}",
+        logs.lines_with(&[&path])
+    );
+    let completed = logs.lines_with(&[&path, "completed"]);
+    assert_eq!(completed.len(), 1, "{completed:#?}");
+    let latency_ms = LogCapture::field(&completed[0], "latency_ms");
+    let waited_ms = LogCapture::field(&completed[0], "waited_ms");
+    // In wall time the request reached the threshold (it enqueued before the
+    // test's sleep and answered `done` only after the worker wrote) ...
+    assert!(
+        latency_ms >= SLOW_MS,
+        "the request outlasted the threshold: {}",
+        completed[0]
+    );
+    // ... and part of it was the deliberate wait.
+    assert!(
+        waited_ms > 0 && waited_ms <= latency_ms,
+        "the log reports the wait within the latency: {}",
+        completed[0]
+    );
+}

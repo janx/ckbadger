@@ -25,9 +25,11 @@
 //! - Pinned: one HTTP request in `ckbadger-api` (a middleware holds the guard
 //!   for the handler's lifetime), so a response can never mix two views.
 //! - Deliberately not pinned: handlers that wait for the indexer to write new
-//!   data (cycles long-poll) — they release the pin before waiting, because
-//!   their whole purpose is to observe the *next* view. Pinning them would
-//!   block the catch-up they are waiting for.
+//!   data (cycles long-poll, `/pipeline`'s wait for the node's pool tip) — they
+//!   release the pin before waiting, because their whole purpose is to observe
+//!   the *next* view. Pinning them would block the catch-up they are waiting
+//!   for. `/pipeline` then pins one fresh view per attempt and builds its
+//!   snapshot under the last one, holding none while it sleeps.
 //! - Deliberately not pinned: background full-store scans (asset/address/script
 //!   cache warmup) and the WebSocket broadcasters. They interleave external I/O
 //!   and minutes-long scans with store reads; pinning them would freeze

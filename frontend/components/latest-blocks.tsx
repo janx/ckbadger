@@ -13,6 +13,7 @@ import {
   TerminalRow,
 } from '@/components/ui/terminal-panel';
 import { HexDisplay } from '@/components/ui/hex-display';
+import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 
 interface LatestBlocksProps {
   isRealtime?: boolean;
@@ -26,6 +27,10 @@ export function LatestBlocks({
   compact = false,
 }: LatestBlocksProps) {
   const [newBlockNumber, setNewBlockNumber] = useState<number | null>(null);
+  // Cross-highlight with the transaction pipeline: hovering a row anchors its window here.
+  const hoverBlock = usePipelineHoverStore((s) => s.hoverBlock);
+  const setHover = usePipelineHoverStore((s) => s.setHover);
+  const clearHover = usePipelineHoverStore((s) => s.clearHover);
   const prevBlocksRef = useRef<number[]>([]);
 
   const { data: blocks, isLoading } = useQuery({
@@ -97,9 +102,16 @@ export function LatestBlocks({
           : blocks?.data?.slice(0, compact ? 4 : 8).map((block) => (
               <TerminalRow
                 key={block.number}
+                data-block-row={block.number}
+                data-highlighted={hoverBlock === block.number}
+                onPointerEnter={() =>
+                  setHover({ block: block.number, tx: null, window: block.number })
+                }
+                onPointerLeave={clearHover}
                 className={cn(
                   'transition-all duration-500',
-                  newBlockNumber === block.number && 'bg-jade/10 shadow-glow-jade'
+                  newBlockNumber === block.number && 'bg-jade/10 shadow-glow-jade',
+                  hoverBlock === block.number && 'bg-base-elevated/70'
                 )}
               >
                 <div className="flex items-center justify-between gap-4">

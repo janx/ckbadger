@@ -1,5 +1,7 @@
+mod bounded;
 mod mem_cache;
 
+pub use bounded::BoundedCache;
 pub use mem_cache::InMemoryCache;
 
 use ckbadger_store::CkbadgerStore;

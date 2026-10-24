@@ -1815,6 +1815,171 @@ interface BlockProposal {
   proposalId: string;
   committedTxHash: string | null;
   committedBlockNumber: number | null;
+  /** The uncle that carried this proposal; null for the block's own proposals. */
+  uncle: { number: number; hash: string } | null;
+}
+
+/**
+ * `GET /pipeline` — one snapshot of the homepage transaction pipeline. Every chain fact here
+ * (proposal states, `proposedIn`, cellbase payee, pool stages, the next-block prediction) is
+ * derived once on the backend from the same proposal zones; the frontend only lays it out.
+ */
+type PipelineStatus = 'ok' | 'poolTipMismatch';
+
+interface PipelineConsensus {
+  proposalWindowClosest: number;
+  proposalWindowFarthest: number;
+  maxBlockBytes: number;
+  maxBlockCycles: number;
+  maxBlockProposals: number;
+}
+
+interface PipelineBlockRef {
+  number: number;
+  hash: string;
+}
+
+type PipelineProposalState = 'early' | 'waiting' | 'committed' | 'expired';
+
+interface PipelineProposal {
+  /** `0x` + 10 bytes. */
+  shortId: string;
+  /** Index into `PipelineBlock.uncles`; null = the block's own proposal. */
+  uncleIndex: number | null;
+  state: PipelineProposalState;
+  /** The committed tx, or the matching pool tx; null when neither is known. */
+  txHash: string | null;
+  committedBlock: number | null;
+}
+
+interface PipelineProposedIn {
+  block: number;
+  uncleIndex: number | null;
+}
+
+type PipelineCyclesStatus = 'done' | 'pending' | 'failed';
+
+interface PipelineTx {
+  hash: string;
+  size: number;
+  fee: string;
+  /** Shannons per KB. */
+  feeRate: string;
+  cycles: number | null;
+  cyclesStatus: PipelineCyclesStatus;
+  /** The earliest proposal inside the commit window [c − farthest, c − closest]. */
+  proposedIn: PipelineProposedIn;
+}
+
+/**
+ * The reward of the block a cellbase pays, as the node's `get_block_economic_state(target)
+ * .miner_reward` reports it: exact shannons, as decimal strings.
+ */
+interface PipelineCellbaseReward {
+  /** Primary issuance: the target's whole primary block reward. */
+  primary: string;
+  /** The miner's share of the target's secondary issuance. */
+  secondary: string;
+  /** The fees of the transactions the target committed, less the proposers' share. */
+  committed: string;
+  /** The proposers' share of the fees of the transactions the target proposed first. */
+  proposal: string;
+  /** primary + secondary + committed + proposal. */
+  total: string;
+  /**
+   * False only when `total` cannot cover the occupied capacity of its own reward cell: CKB then
+   * creates no cellbase output and the reward is not issued. Otherwise the cellbase's one output
+   * holds exactly `total`.
+   */
+  paid: boolean;
+}
+
+/** The block a cellbase pays (`finalized_at` names the cellbase's block) and its reward. */
+interface PipelineCellbasePays extends PipelineBlockRef {
+  reward: PipelineCellbaseReward;
+}
+
+interface PipelineCellbase {
+  hash: string;
+  size: number;
+  /**
+   * Null exactly for blocks at height `proposalWindowFarthest + 1` or below (1–11 on mainnet): their
+   * target would be genesis or earlier, so they pay no reward and their cellbase has no output.
+   */
+  pays: PipelineCellbasePays | null;
+}
+
+interface PipelineBlock {
+  number: number;
+  hash: string;
+  parentHash: string;
+  timestamp: string;
+  /** Includes the cellbase. */
+  txCount: number;
+  /** Σ serialized size in block (raw + 4), cellbase included. */
+  bytes: number;
+  cycles: number | null;
+  cyclesPending: boolean;
+  /** Zone order: the block's own proposals first, then the uncles'. */
+  proposals: PipelineProposal[];
+  uncles: PipelineBlockRef[];
+  /** Non-cellbase txs by bytes, descending; capped by the backend. */
+  txs: PipelineTx[];
+  /** txCount − 1 − txs.length. */
+  omittedTxs: number;
+  cellbase: PipelineCellbase;
+}
+
+interface PipelinePoolTx {
+  hash: string;
+  size: number;
+  fee: string;
+  feeRate: string;
+  cycles: number;
+  /** Milliseconds since the epoch. */
+  arrivedAt: number;
+  /** Non-null only in `proposed`. */
+  proposedIn: PipelineProposedIn | null;
+}
+
+interface PipelinePool {
+  pending: PipelinePoolTx[];
+  proposed: PipelinePoolTx[];
+  /** Totals before truncation. */
+  pendingTotal: number;
+  proposedTotal: number;
+}
+
+interface PipelineNextTx {
+  hash: string;
+  /** Serialized size in block (raw + 4). */
+  size: number;
+}
+
+/** Predicted next block, cellbase excluded. */
+interface PipelineNext {
+  /** Predicted txs by size, descending (like `PipelineBlock.txs`); capped by the backend. */
+  txs: PipelineNextTx[];
+  /** Predicted count − txs.length. */
+  omittedTxs: number;
+  bytes: number;
+  cycles: number;
+  proposals: number;
+}
+
+interface PipelineSnapshot {
+  status: PipelineStatus;
+  consensus: PipelineConsensus;
+  /** ckbadger sync tip (store). */
+  tip: PipelineBlockRef;
+  /** Node tx pool tip. */
+  poolTip: PipelineBlockRef;
+  /** Newest → older. */
+  blocks: PipelineBlock[];
+  /** null when status != 'ok'. */
+  pool: PipelinePool | null;
+  /** null when status != 'ok'. */
+  next: PipelineNext | null;
 }
 
 type CyclesCalculationStatus = 'done' | 'calculating' | 'queued' | 'failed' | 'notFound';
@@ -2016,6 +2181,23 @@ export type {
   PendingProposalsResponse,
   BlockFeeStats,
   BlockProposal,
+  PipelineStatus,
+  PipelineConsensus,
+  PipelineBlockRef,
+  PipelineProposalState,
+  PipelineProposal,
+  PipelineProposedIn,
+  PipelineCyclesStatus,
+  PipelineTx,
+  PipelineCellbaseReward,
+  PipelineCellbasePays,
+  PipelineCellbase,
+  PipelineBlock,
+  PipelinePoolTx,
+  PipelinePool,
+  PipelineNextTx,
+  PipelineNext,
+  PipelineSnapshot,
   KnownScript,
   ScriptObservedReferenceApi as ScriptObservedReference,
   ScriptVersionDeploymentApi as ScriptVersionDeployment,
@@ -3111,6 +3293,10 @@ export const api = {
 
   getPendingProposals: (): Promise<PendingProposalsResponse> => {
     return fetchApi('/mempool/pending-proposals');
+  },
+
+  getPipeline: (): Promise<PipelineSnapshot> => {
+    return fetchApi('/pipeline');
   },
 
   getScripts: (params: ScriptQueryParams = {}): Promise<CursorPaginatedResponse<KnownScript>> => {

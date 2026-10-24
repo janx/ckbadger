@@ -65,6 +65,9 @@ pub struct LocalPeerSnapshot {
     pub sessions: Vec<DirectSessionSnapshot>,
 }
 
+// `#[async_trait]` marks each boxed-future method `#[must_use]`, which clippy
+// (1.99) flags as redundant on a type that is already `#[must_use]`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait LocalPeerObserver: Send + Sync {
     async fn observe(&self) -> anyhow::Result<LocalPeerSnapshot>;

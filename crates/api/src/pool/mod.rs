@@ -19,7 +19,7 @@ pub mod snapshot;
 pub mod source;
 
 #[cfg(test)]
-mod fake;
+pub(crate) mod fake;
 #[cfg(test)]
 mod tests;
 

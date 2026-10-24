@@ -46,10 +46,8 @@ pub fn decode_activity_addr_set(
         );
     }
     let mut set = std::collections::HashSet::with_capacity(raw.len() / 32);
-    for chunk in raw.chunks_exact(32) {
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(chunk);
-        set.insert(hash);
+    for hash in raw.as_chunks::<32>().0 {
+        set.insert(*hash);
     }
     Ok(set)
 }

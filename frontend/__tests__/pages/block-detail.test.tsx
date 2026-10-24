@@ -214,6 +214,86 @@ describe('BlockDetailPage', () => {
     });
   });
 
+  it('tags proposals carried by an uncle with the uncle height', async () => {
+    const uncleHash = `0x${'ee'.repeat(32)}`;
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 2 });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([
+      {
+        proposalIndex: 0,
+        proposalId: '0x00112233445566778899',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: null,
+      },
+      {
+        proposalIndex: 1,
+        proposalId: '0xaabbccddeeff00112233',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: { number: 8_775_637, hash: uncleHash },
+      },
+    ]);
+
+    render(<BlockDetailPage />);
+    fireEvent.click(await screen.findByText('Proposals (2)'));
+
+    const uncleRow = (await screen.findByText('0xaabbccddeeff00112233')).closest(
+      '[data-testid="block-proposal-row"]'
+    ) as HTMLElement;
+    expect(uncleRow).toHaveTextContent('uncle #8,775,637');
+    const ownRow = screen
+      .getByText('0x00112233445566778899')
+      .closest('[data-testid="block-proposal-row"]') as HTMLElement;
+    expect(ownRow).not.toHaveTextContent(/uncle/);
+  });
+
+  it('lists uncle-carried proposals of a block with no proposals of its own', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 0, unclesCount: 1 });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([
+      {
+        proposalIndex: 0,
+        proposalId: '0xaabbccddeeff00112233',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: { number: 8_775_637, hash: `0x${'ee'.repeat(32)}` },
+      },
+    ]);
+
+    render(<BlockDetailPage />);
+    fireEvent.click(await screen.findByText('Proposals (0)'));
+
+    const row = (await screen.findByText('0xaabbccddeeff00112233')).closest(
+      '[data-testid="block-proposal-row"]'
+    ) as HTMLElement;
+    expect(row).toHaveTextContent('uncle #8,775,637');
+    expect(screen.queryByText('No proposals in this block')).not.toBeInTheDocument();
+  });
+
+  it('says there are no proposals when the block and its uncles proposed nothing', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 0, unclesCount: 1 });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([]);
+
+    render(<BlockDetailPage />);
+    fireEvent.click(await screen.findByText('Proposals (0)'));
+
+    expect(await screen.findByText('No proposals in this block')).toBeInTheDocument();
+    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+  });
+
+  it('shows an error row instead of loading forever when the proposals request fails', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 3 });
+    vi.mocked(api.getBlockProposals).mockRejectedValue(
+      new Error('proposals need ckb_db_path to read the node database')
+    );
+
+    render(<BlockDetailPage />);
+    fireEvent.click(await screen.findByText('Proposals (3)'));
+
+    const row = await screen.findByTestId('block-proposals-error');
+    expect(row).toHaveTextContent('ckb_db_path');
+    expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
+  });
+
   it('loads block transactions by resolved block number when route id is hash', async () => {
     paramsIdRef.current = BLOCK_HASH;
 

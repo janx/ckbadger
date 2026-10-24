@@ -4,25 +4,29 @@ use axum::{
     Extension, Router,
 };
 use ckb_store_reader::RpcTransactionView;
-use ckb_types::packed;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
-use tokio::time::{sleep, Instant};
+use tokio::time::Instant;
 
 use crate::cache::InMemoryCache;
+use crate::consensus::ProposalWindow;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::identities::{dotcell_record_response, DotCellRecordResponse};
+use crate::routes::proposal_window::{
+    block_proposal_zone, earliest_proposal_in_window, ZoneProposal,
+};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
 };
-use crate::{AppState, RequestReadView};
+use crate::{AppState, RequestReadView, RequestWait};
+use std::convert::Infallible;
 use tracing::instrument;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -75,10 +79,15 @@ pub(crate) fn tx_serialized_size_in_block(molecule_size: i32) -> i32 {
 /// serves as `txSize`. Single definition for every fee rate the API returns
 /// (transaction detail, pending detail, block fee-stats).
 pub(crate) fn tx_fee_rate(fee: u128, size_in_block: i32) -> String {
+    tx_fee_rate_value(fee, size_in_block).to_string()
+}
+
+/// [`tx_fee_rate`] as a number, for callers that order by it.
+pub(crate) fn tx_fee_rate_value(fee: u128, size_in_block: i32) -> u128 {
     let denominator = u128::try_from(size_in_block).unwrap_or_else(|_| {
         panic!("fee-rate call sites guard size_in_block > 0, got {size_in_block}")
     });
-    (fee * 1000 / denominator).to_string()
+    fee * 1000 / denominator
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -124,14 +133,33 @@ pub struct TransactionResponse {
     pub timestamp: String,
 }
 
+/// Where a committed transaction's cycles stand, from the store's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TxCyclesStatus {
+    Done,
+    Pending,
+    /// The replay failed (`-1`); it will not be retried on its own.
+    Failed,
+}
+
+/// The single reading of a stored `cycles` value.
+pub(crate) fn tx_cycles_status(cycles: Option<i64>) -> TxCyclesStatus {
+    match cycles {
+        Some(c) if c > 0 => TxCyclesStatus::Done,
+        Some(-1) => TxCyclesStatus::Failed,
+        _ => TxCyclesStatus::Pending,
+    }
+}
+
 fn derive_cycles_status(cycles: Option<i64>, is_cellbase: bool) -> Option<String> {
     if is_cellbase {
         return None;
     }
-    match cycles {
-        Some(c) if c > 0 => None,
-        Some(-1) => Some("failed".to_string()),
-        _ => Some("pending".to_string()),
+    match tx_cycles_status(cycles) {
+        TxCyclesStatus::Done => None,
+        TxCyclesStatus::Failed => Some("failed".to_string()),
+        TxCyclesStatus::Pending => Some("pending".to_string()),
     }
 }
 
@@ -1779,6 +1807,7 @@ async fn trigger_cycles_calculation(
     // Optional so the handler still works in routers built without the
     // read-view middleware (unit tests mounting `routes()` directly).
     read_view: Option<Extension<RequestReadView>>,
+    wait: RequestWait,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
@@ -1829,12 +1858,13 @@ async fn trigger_cycles_calculation(
             // view: it waits for the indexer to write the cycles result, which
             // only becomes visible after a catch-up. Keeping the request's pin
             // would block that catch-up and guarantee a timeout, so release it
-            // before waiting. Everything read above was pinned.
+            // before waiting. Everything read above was pinned. The wait itself
+            // goes through `wait`, so the request log does not call it slow.
             if let Some(Extension(view)) = read_view {
                 view.release();
             }
 
-            ok(wait_cycles_result(&state, &hash, &hash_bytes).await?)
+            ok(wait_cycles_result(&state, &hash, &hash_bytes, &wait).await?)
         }
     }
 }
@@ -1857,6 +1887,7 @@ async fn wait_cycles_result(
     state: &Arc<AppState>,
     hash: &str,
     hash_bytes: &[u8],
+    wait: &RequestWait,
 ) -> Result<CyclesStatusResponse, ApiRouteError> {
     let deadline = Instant::now() + state.cycles_client.wait_timeout();
 
@@ -1913,7 +1944,7 @@ async fn wait_cycles_result(
             });
         }
 
-        sleep(state.cycles_client.poll_interval()).await;
+        wait.sleep(state.cycles_client.poll_interval()).await;
     }
 }
 
@@ -2047,9 +2078,12 @@ pub struct CommitmentWindow {
     pub far: i64,
 }
 
-impl Default for CommitmentWindow {
-    fn default() -> Self {
-        Self { close: 2, far: 10 }
+impl From<ProposalWindow> for CommitmentWindow {
+    fn from(window: ProposalWindow) -> Self {
+        Self {
+            close: window.closest(),
+            far: window.farthest(),
+        }
     }
 }
 
@@ -2059,6 +2093,7 @@ async fn get_transaction_lifecycle(
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionLifecycleResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
+    let window = state.consensus().await?.tx_proposal_window;
 
     let short_hash = if hash_bytes.len() >= 10 {
         hash_bytes[..10].to_vec()
@@ -2097,7 +2132,7 @@ async fn get_transaction_lifecycle(
                 proposed_in_uncle: None,
                 committed_in: None,
                 commitment_distance: None,
-                commitment_window: CommitmentWindow::default(),
+                commitment_window: CommitmentWindow::from(window),
                 is_cellbase: false,
                 confirmations: None,
             });
@@ -2157,72 +2192,56 @@ async fn get_transaction_lifecycle(
                 timestamp: commit_ts_str,
             }),
             commitment_distance: None,
-            commitment_window: CommitmentWindow::default(),
+            commitment_window: CommitmentWindow::from(window),
             is_cellbase: true,
             confirmations: Some(compute_confirmations(commit_block_number)),
         });
     }
 
     // Look for proposal block in CKB node's RocksDB
-    // A tx committed in block C must be proposed in block P where: C - 10 <= P <= C - 2
+    // A tx committed in block C must be proposed in block P where:
+    // C - farthest <= P <= C - closest (blocks below genesis do not exist).
     let proposed_in = if let Some(ref ckb_store) = state.ckb_store {
         let store_c = state.store.clone();
         let ckb_store_c = ckb_store.clone();
         let short_hash_c = short_hash.clone();
         tokio::task::spawn_blocking(move || -> Option<ProposalWindowHit> {
-            if commit_block_number < 2 {
-                return None;
-            }
-            let start = if commit_block_number > 10 {
-                commit_block_number - 10
-            } else {
-                0
-            };
-            let end = commit_block_number - 2;
-            if start > end {
-                return None;
-            }
-            for bn in start..=end {
+            // CKB consensus counts the proposal zones of the uncles a block
+            // embeds, so a tx can legitimately be proposed only inside an
+            // uncle; the shared zone puts the block's own proposals first, so
+            // they own the attribution when both carry the short id.
+            let mut headers = std::collections::HashMap::new();
+            let zone_of = |bn: i64| -> Result<Option<Vec<ZoneProposal>>, Infallible> {
                 let Ok(Some(header)) = store_c.get_block_header(bn) else {
-                    continue;
+                    return Ok(None);
                 };
                 if header.hash.len() != 32 {
-                    continue;
+                    return Ok(None);
                 }
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&header.hash);
                 let Some(block) = ckb_store_c.get_block(&hash) else {
-                    continue;
+                    return Ok(None);
                 };
-                let contains_short_id = |proposals: packed::ProposalShortIdVec| {
-                    proposals
-                        .into_iter()
-                        .any(|id| id.raw_data().to_vec() == short_hash_c)
-                };
-                // The block's own proposal zone owns the attribution when both it and
-                // one of its uncles carry the short id.
-                if contains_short_id(block.data().proposals()) {
-                    return Some(ProposalWindowHit {
-                        block_number: bn,
-                        block_hash: header.hash.clone(),
-                        timestamp: header.timestamp,
-                        uncle: None,
-                    });
-                }
-                // CKB consensus counts the proposal zones of the uncles a block
-                // embeds, so a tx can legitimately be proposed only inside an uncle.
-                for uncle in block.uncles() {
-                    if contains_short_id(uncle.data().proposals()) {
-                        return Some(ProposalWindowHit {
-                            block_number: bn,
-                            block_hash: header.hash.clone(),
-                            timestamp: header.timestamp,
-                            uncle: Some((uncle.number() as i64, uncle.hash().raw_data().to_vec())),
-                        });
-                    }
-                }
-            }
-            None
+                headers.insert(bn, (header.hash, header.timestamp));
+                Ok(Some(block_proposal_zone(&block)))
+            };
+            let hit = match earliest_proposal_in_window(
+                window,
+                commit_block_number,
+                &short_hash_c,
+                zone_of,
+            ) {
+                Ok(hit) => hit?,
+                Err(never) => match never {},
+            };
+            let (block_hash, timestamp) = headers.remove(&hit.block_number)?;
+            Some(ProposalWindowHit {
+                block_number: hit.block_number,
+                block_hash,
+                timestamp,
+                uncle: hit.uncle.map(|uncle| (uncle.number, uncle.hash.to_vec())),
+            })
         })
         .await
         .unwrap_or(None)
@@ -2264,7 +2283,7 @@ async fn get_transaction_lifecycle(
             timestamp: commit_ts_str,
         }),
         commitment_distance,
-        commitment_window: CommitmentWindow::default(),
+        commitment_window: CommitmentWindow::from(window),
         is_cellbase: false,
         confirmations: Some(compute_confirmations(commit_block_number)),
     })
@@ -2530,10 +2549,10 @@ mod tests {
     }
 
     #[test]
-    fn test_commitment_window_default() {
-        let window = CommitmentWindow::default();
-        assert_eq!(window.close, 2);
-        assert_eq!(window.far, 10);
+    fn test_commitment_window_from_consensus_window() {
+        let window = CommitmentWindow::from(ProposalWindow::new(3, 12).unwrap());
+        assert_eq!(window.close, 3);
+        assert_eq!(window.far, 12);
     }
 
     #[test]

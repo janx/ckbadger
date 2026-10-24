@@ -235,6 +235,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         crawler_enabled: config.crawler_enabled,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        consensus: None,
         rate_limit_per_second: Some(config.rate_limit),
         rate_limit_burst: Some(config.rate_limit_burst),
         slow_request_threshold_ms: config.slow_request_threshold_ms,

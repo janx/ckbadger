@@ -10,8 +10,8 @@ vi.mock('@/components/home-charts', () => ({
 }));
 vi.mock('@/components/mini-stats-cards', () => ({ MiniStatsCards: () => null }));
 vi.mock('@/components/chain-wave/epoch-progress', () => ({ EpochProgress: () => null }));
-vi.mock('@/components/chain-wave/pipeline-preview', () => ({
-  PipelinePreview: () => <div data-testid="pipeline-preview" />,
+vi.mock('@/components/pipeline/pipeline-panel', () => ({
+  PipelinePanel: () => <div data-testid="pipeline-panel" />,
 }));
 vi.mock('@/components/dao-overview', () => ({ DaoOverview: () => null }));
 vi.mock('@/components/home-layer2', () => ({ KnowledgeSizeTrend: () => null }));
@@ -69,12 +69,18 @@ describe('HomeContent layout', () => {
     }
   });
 
-  it('renders the transaction pipeline as a full-width sibling of the container rows', () => {
+  it('renders the transaction pipeline in the same page container as the other rows', () => {
     const main = renderHome();
-    const pipeline = screen.getByTestId('pipeline-preview');
+    const pipeline = screen.getByTestId('pipeline-panel');
+    const wrapper = pipeline.closest('.container');
 
-    expect(main).toContainElement(pipeline);
-    expect(pipeline.closest('.container')).toBeNull();
+    expect(wrapper).not.toBeNull();
+    expect(main).toContainElement(wrapper as HTMLElement);
+    expect(wrapper).toHaveClass('mx-auto');
+    expect(wrapper).toHaveClass('px-4');
+    // Its own row, not squeezed into the row above or below it.
+    expect(wrapper).not.toContainElement(screen.getByTestId('home-charts'));
+    expect(wrapper).not.toContainElement(screen.getByTestId('latest-blocks'));
     expect(viewportSizedClasses(main)).toEqual([]);
   });
 });
