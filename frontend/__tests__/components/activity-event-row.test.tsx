@@ -242,6 +242,26 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/compensation/).length).toBeGreaterThan(0);
   });
 
+  it('states a zero compensation as an amount, not a stray 0', () => {
+    const { container } = render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          protocolActions: [
+            {
+              protocol: 'dao',
+              action: 'withdraw_complete',
+              metadata: { capacity: '20000000000', compensation: '0' },
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText('+0.00000000 CKB compensation').length).toBeGreaterThan(0);
+    // A bigint 0n in JSX would print a bare "0" next to the amount.
+    expect(container.innerHTML).not.toMatch(/>0</);
+  });
+
   it('renders identity sub-row', () => {
     render(
       <ActivityEventGroup
@@ -636,7 +656,7 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
         pa={{
           protocol: 'dao',
           action: 'withdraw_request',
-          metadata: { capacity: 2605000000000, depositBlock: 19695550 },
+          metadata: { capacity: '2605000000000', depositBlock: '19695550' },
         }}
       />
     );
@@ -657,6 +677,21 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       />
     );
     expect(document.body).toHaveTextContent('channel 0x0d3870bb...6e26:0 · 750.00000000 CKB');
+  });
+
+  it('reads an amount past 2^53 exactly', () => {
+    render(
+      <ProtocolActionNote
+        pa={{
+          protocol: 'dao',
+          action: 'withdraw_complete',
+          metadata: { capacity: '9007199254740993', compensation: '12345678901234567' },
+        }}
+      />
+    );
+    expect(document.body).toHaveTextContent(
+      '90,071,992.54740993 CKB · +123,456,789.01234567 CKB compensation'
+    );
   });
 
   it('renders nothing for an action without metadata', () => {

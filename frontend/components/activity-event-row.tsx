@@ -13,6 +13,7 @@ import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { classifyActivity } from '@/lib/activity-classify';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
+import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
 import { ParticipantRefView } from '@/components/participant-ref';
 import type {
@@ -260,34 +261,6 @@ function daoActionLabel(action: string): string {
   }
 }
 
-/** The facts a protocol action's metadata carries, read once for every renderer. */
-export interface ProtocolActionMeta {
-  /** Shannons, as the indexer wrote them (a JSON number or a decimal string). */
-  capacity: string | null;
-  compensation: string | null;
-  depositBlock: number | null;
-  channelOutpoint: string | null;
-  btcTxid: string | null;
-}
-
-function metaString(pa: ActivityProtocolAction, key: string): string | null {
-  const v = pa.metadata?.[key];
-  if (v === undefined || v === null) return null;
-  if (typeof v === 'number' || typeof v === 'string') return String(v);
-  throw new Error(`${pa.protocol}:${pa.action} metadata.${key} is ${JSON.stringify(v)}`);
-}
-
-export function protocolActionMeta(pa: ActivityProtocolAction): ProtocolActionMeta {
-  const depositBlock = metaString(pa, 'depositBlock');
-  return {
-    capacity: metaString(pa, 'capacity'),
-    compensation: metaString(pa, 'compensation'),
-    depositBlock: depositBlock === null ? null : Number(depositBlock),
-    channelOutpoint: metaString(pa, 'channelOutpoint'),
-    btcTxid: metaString(pa, 'btcTxid'),
-  };
-}
-
 function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
   const { capacity, compensation } = protocolActionMeta(pa);
   const label = daoActionLabel(pa.action);
@@ -302,7 +275,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
         ),
         value: (
           <span className="text-positive font-mono text-xs tabular-nums">
-            +{capacity ? formatCkbAmount(capacity).full : '0'} CKB locked
+            +{capacity === null ? '0' : formatCkbAmount(capacity).full} CKB locked
           </span>
         ),
       };
@@ -315,7 +288,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
         ),
         value: (
           <span className="text-gold font-mono text-xs tabular-nums">
-            {capacity ? formatCkbAmount(capacity).full : '0'} CKB
+            {capacity === null ? '0' : formatCkbAmount(capacity).full} CKB
           </span>
         ),
       };
@@ -329,9 +302,9 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
         value: (
           <div className="flex flex-col items-end gap-0.5">
             <span className="text-positive font-mono text-xs tabular-nums">
-              +{capacity ? formatCkbAmount(capacity).full : '0'} CKB
+              +{capacity === null ? '0' : formatCkbAmount(capacity).full} CKB
             </span>
-            {compensation && (
+            {compensation !== null && (
               <span className="text-positive font-mono text-[10px] tabular-nums">
                 +{formatCkbAmount(compensation).full} CKB compensation
               </span>
@@ -346,11 +319,12 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
             {'\u25C6'} {label}
           </span>
         ),
-        value: capacity ? (
-          <span className="text-gold font-mono text-xs tabular-nums">
-            {formatCkbAmount(capacity).full} CKB
-          </span>
-        ) : null,
+        value:
+          capacity !== null ? (
+            <span className="text-gold font-mono text-xs tabular-nums">
+              {formatCkbAmount(capacity).full} CKB
+            </span>
+          ) : null,
       };
   }
 }
@@ -426,7 +400,7 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
     ),
     value: btcTxid ? (
       <span className="text-text-dim font-mono text-xs">btc:{truncateHash(btcTxid, 8, 6)}</span>
-    ) : isFiber && capacity ? (
+    ) : isFiber && capacity !== null ? (
       <span className="text-text-dim font-mono text-xs">{formatCkbAmount(capacity).full} CKB</span>
     ) : null,
   };
@@ -857,10 +831,10 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
     const [hash, index] = meta.channelOutpoint.split(':');
     parts.push(`channel ${truncateHash(hash, 10, 4)}${index === undefined ? '' : `:${index}`}`);
   }
-  if (meta.capacity) {
+  if (meta.capacity !== null) {
     parts.push(
       <>
-        <ExactCkb shannons={BigInt(meta.capacity)} signed={false} tone="plain" />
+        <ExactCkb shannons={meta.capacity} signed={false} tone="plain" />
         {pa.protocol === 'dao' && pa.action === 'deposit' ? ' locked' : ''}
       </>
     );
@@ -868,10 +842,10 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
   if (meta.depositBlock !== null) {
     parts.push(`deposited at #${meta.depositBlock.toLocaleString('en-US')}`);
   }
-  if (meta.compensation) {
+  if (meta.compensation !== null) {
     parts.push(
       <>
-        +<ExactCkb shannons={BigInt(meta.compensation)} signed={false} tone="plain" /> compensation
+        +<ExactCkb shannons={meta.compensation} signed={false} tone="plain" /> compensation
       </>
     );
   }

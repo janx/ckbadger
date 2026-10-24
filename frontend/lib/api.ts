@@ -670,13 +670,21 @@ interface ActivityLockCall {
   lockArgs: string;
   scriptHash: string;
   scriptName?: string;
-  decoded?: Record<string, unknown>;
+  /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
+  decoded?: Record<string, ExactJson>;
 }
+
+/**
+ * Free-form JSON the API passes through (protocol-action metadata, decoded lock args): every
+ * integer is an exact decimal string, because a JSON number above 2^53 would be rounded by the
+ * browser. Read integers from it with BigInt, never Number().
+ */
+type ExactJson = string | boolean | null | ExactJson[] | { [key: string]: ExactJson };
 
 interface ActivityProtocolAction {
   protocol: string;
   action: string;
-  metadata: Record<string, unknown>;
+  metadata: Record<string, ExactJson>;
 }
 
 /** Tag bitmask constants for activity classification. */
@@ -2189,6 +2197,7 @@ export type {
   ChartDataPoint,
   ChartResponse,
   CkbytesAllocation,
+  ExactJson,
   UncleRateChartResponse,
   TxStatsDataPoint,
   TxStatsResponse,

@@ -26,6 +26,7 @@ import {
   type TransactionLifecycle,
 } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
 import { resolveBuildVersion } from '@/lib/runtime-config';
@@ -247,13 +248,11 @@ function renderActivityDetail(activity: GlobalActivity): string {
   if (classified.primaryProtocolAction) {
     const pa = classified.primaryProtocolAction;
     if (pa.protocol === 'dao') {
-      const capacity = pa.metadata?.capacity as string | undefined;
-      const compensation = pa.metadata?.compensation as string | undefined;
-      const depositBlock = pa.metadata?.depositBlock as number | undefined;
+      const { capacity, compensation, depositBlock } = protocolActionMeta(pa);
       let detail = `dao:${pa.action}`;
-      if (capacity) detail += ` capacity=${capacity}`;
-      if (depositBlock) detail += ` depositBlock=${depositBlock}`;
-      if (compensation) detail += ` compensation=${compensation}`;
+      if (capacity !== null) detail += ` capacity=${capacity}`;
+      if (depositBlock !== null) detail += ` depositBlock=${depositBlock}`;
+      if (compensation !== null) detail += ` compensation=${compensation}`;
       return detail;
     }
     return `${pa.protocol}:${pa.action}`;

@@ -355,7 +355,7 @@ export const feedSamples = {
       {
         protocol: 'dao',
         action: 'withdraw_request',
-        metadata: { capacity: 2605000000000, depositBlock: 19695550 },
+        metadata: { capacity: '2605000000000', depositBlock: '19695550' },
       },
     ],
     participants: [

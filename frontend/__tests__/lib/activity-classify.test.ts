@@ -46,7 +46,7 @@ describe('classifyActivity', () => {
           {
             protocol: 'dao',
             action: 'withdraw_request',
-            metadata: { capacity: '10200000000', depositBlock: 100 },
+            metadata: { capacity: '10200000000', depositBlock: '100' },
           },
         ],
       })

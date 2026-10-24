@@ -198,6 +198,69 @@ describe('renderMarkdownPage', () => {
     });
   });
 
+  it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 0,
+      daoDepositCount: 0,
+      daoWithdrawRequestCount: 1,
+      daoWithdrawCompleteCount: 0,
+      tokenCount: 0,
+      objectCount: 0,
+      identityCount: 0,
+      scriptCallCount: 0,
+      unknownCount: 0,
+      coinbaseCount: 0,
+      uniqueAddressCount: 1,
+      totalCkbMoved: '0',
+      scriptCounts: [],
+      hoursCovered: 24,
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: `0x${'b'.repeat(64)}`,
+          blockNumber: 20_000_000,
+          txIndex: 1,
+          timestamp: '1700000000',
+          isCellbase: false,
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [
+            {
+              protocol: 'dao',
+              action: 'withdraw_request',
+              metadata: { capacity: '9007199254740993', depositBlock: '19695550' },
+            },
+          ],
+          participants: [
+            {
+              address: 'ckt1qyq9sampleaddress0000000000000000000000000',
+              ckbDelta: '0',
+              usedDelta: '0',
+              itemDeltas: [],
+              tags: 8,
+            },
+          ],
+        },
+      ],
+      total: 1,
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain(
+      'dao:withdraw_request capacity=9007199254740993 depositBlock=19695550'
+    );
+  });
+
   it('names a lock party without an address by its lock hash in the activities table', async () => {
     // A Lock participant whose lock script the store does not know encodes to
     // no address; the API sends its lock hash instead.
