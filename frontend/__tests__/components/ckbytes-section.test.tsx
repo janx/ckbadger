@@ -166,7 +166,7 @@ describe('CkbytesSection', () => {
     fireEvent.pointerMove(svg, { clientX: 268 });
     const headline = screen.getByTestId('home-dao-change-headline');
     expect(headline).toHaveTextContent('+168,366.47983386');
-    expect(within(headline).getByText('.47983386')).toHaveClass('text-text-dim');
+    expect(within(headline).getByText('.47983386')).toHaveClass('text-text-dim', 'text-[10px]');
     expect(screen.getByTestId('home-dao-change-subtitle')).toHaveTextContent('10/23');
     fireEvent.pointerLeave(svg);
     expect(headline).toHaveTextContent(/^\+168,366$/);

@@ -141,6 +141,21 @@ describe('ChartFigure', () => {
     expect(screen.getByText('No data yet')).toBeInTheDocument();
   });
 
+  it('keeps the title on one line, so a wide readout never makes the caption taller', () => {
+    render(
+      <ChartFigure
+        title="DAO deposits"
+        href="/charts/total-deposit"
+        subtitle="daily change, CKB"
+        headline="+28,116,216"
+        body={{ state: 'empty', message: 'No data yet' }}
+      />
+    );
+    const title = screen.getByRole('link', { name: 'DAO deposits' });
+    expect(title).toHaveClass('truncate', 'max-w-full');
+    expect(title.closest('figcaption')).toHaveClass('gap-2');
+  });
+
   it('shows an error state as an alert', () => {
     render(
       <ChartFigure

@@ -326,7 +326,7 @@ function exactSignedReadout(delta: bigint): ReadoutValue {
     value: (
       <>
         {text.slice(0, dot)}
-        <span className="text-text-dim text-xs">{text.slice(dot)}</span>
+        <span className="text-text-dim text-[10px]">{text.slice(dot)}</span>
       </>
     ),
     text: `${text} CKB`,

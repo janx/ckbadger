@@ -106,17 +106,17 @@ export function ChartFigure({
   const tid = (part: string) => (testId ? `${testId}-${part}` : undefined);
   return (
     <figure data-testid={testId} className={cn('m-0 flex min-w-0 flex-col gap-1.5', className)}>
-      <figcaption className="flex items-end justify-between gap-3">
+      <figcaption className="flex items-end justify-between gap-2">
         <span className="flex min-w-0 flex-col">
           {href ? (
             <Link
               href={href}
-              className="text-text-bright hover:text-jade w-fit text-[13px] transition-colors"
+              className="text-text-bright hover:text-jade block w-fit max-w-full truncate text-[13px] transition-colors"
             >
               {title}
             </Link>
           ) : (
-            <span className="text-text-bright text-[13px]">{title}</span>
+            <span className="text-text-bright block max-w-full truncate text-[13px]">{title}</span>
           )}
           <span data-testid={tid('subtitle')} className="text-text-dim text-xs">
             {readout ? readout.label : subtitle}
