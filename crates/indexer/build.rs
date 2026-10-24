@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -152,6 +152,15 @@ impl ScriptNetworkMetadata {
     }
 }
 
+/// One `docs/metadata/protocols.toml` entry: a protocol id the indexer emits
+/// in activity protocol actions.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProtocolMetadata {
+    name: String,
+    scripts: Vec<String>,
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("OUT_DIR").unwrap();
@@ -214,6 +223,40 @@ fn main() {
         script_json,
     )
     .expect("failed to write bundled_script_labels.json");
+
+    // --- Protocol display names ---
+    // Each protocol must name a display name and the registry scripts it is
+    // detected from; a script slug that does not exist fails the build.
+    let protocols_path = metadata_dir.join("protocols.toml");
+    println!("cargo:rerun-if-changed={}", protocols_path.display());
+    let protocols_content = fs::read_to_string(&protocols_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", protocols_path.display(), e));
+    let protocols: BTreeMap<String, ProtocolMetadata> = toml::from_str(&protocols_content)
+        .unwrap_or_else(|e| panic!("failed to parse {}: {}", protocols_path.display(), e));
+    let script_slugs: HashSet<&str> = script_entries
+        .iter()
+        .filter_map(|script| script.metadata_slug.as_deref())
+        .collect();
+    let mut protocol_names: BTreeMap<String, String> = BTreeMap::new();
+    for (id, protocol) in protocols {
+        if id.trim().is_empty() || protocol.name.trim().is_empty() {
+            panic!("protocols.toml: protocol `{id}` needs a non-empty id and name");
+        }
+        if protocol.scripts.is_empty() {
+            panic!("protocols.toml: protocol `{id}` lists no registry scripts");
+        }
+        for slug in &protocol.scripts {
+            if !script_slugs.contains(slug.as_str()) {
+                panic!("protocols.toml: protocol `{id}` lists unknown script `{slug}`");
+            }
+        }
+        protocol_names.insert(id, protocol.name);
+    }
+    fs::write(
+        Path::new(&out_dir).join("bundled_protocol_names.json"),
+        serde_json::to_string(&protocol_names).expect("failed to serialize protocol names"),
+    )
+    .expect("failed to write bundled_protocol_names.json");
 
     // --- UDT-compatible script code_hashes ---
     // Extract code_hashes from scripts with category "udt", excluding the 3

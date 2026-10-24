@@ -115,6 +115,23 @@ fn slug_to_protocol(slug: &str) -> Option<ProtocolScript> {
     })
 }
 
+/// Display names of the protocols the indexer emits in activity protocol
+/// actions, keyed by protocol id — `docs/metadata/protocols.toml`, validated
+/// and bundled by `build.rs`.
+static PROTOCOL_NAMES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    serde_json::from_slice(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/bundled_protocol_names.json"
+    )))
+    .expect("bundled protocol names JSON is invalid — build.rs bug")
+});
+
+/// The display name of protocol `id`, `None` when the bundled registry has no
+/// entry for it.
+pub fn protocol_display_name(id: &str) -> Option<&'static str> {
+    PROTOCOL_NAMES.get(id).map(String::as_str)
+}
+
 pub struct ProtocolRegistry {
     pub(crate) by_code_hash: HashMap<Vec<u8>, ProtocolScript>,
 }

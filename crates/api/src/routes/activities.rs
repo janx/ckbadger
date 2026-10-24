@@ -26,6 +26,7 @@ use crate::utils::address::{
 use crate::utils::exact_json::integers_as_strings;
 use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
+use ckbadger_indexer::parser::registry::protocol_display_name;
 
 /// A party's address, from wherever its lock script is known.
 ///
@@ -225,6 +226,9 @@ pub struct LockCallResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ProtocolActionResponse {
     pub protocol: String,
+    /// The protocol's display name from the bundled registry
+    /// (`docs/metadata/protocols.toml`), the one name every client shows.
+    pub protocol_name: String,
     pub action: String,
     /// Protocol-specific JSON; every integer in it is an exact decimal
     /// string (`utils::exact_json`).
@@ -594,9 +598,17 @@ fn convert_protocol_action(
         )
     })?;
 
+    let protocol_name = protocol_display_name(&action.protocol).ok_or_else(|| {
+        anyhow::anyhow!(
+            "protocol action {}/{} has no display name in docs/metadata/protocols.toml",
+            action.protocol,
+            action.action
+        )
+    })?;
     let context = format!("{}/{} protocol metadata", action.protocol, action.action);
     Ok(ProtocolActionResponse {
         protocol: action.protocol.clone(),
+        protocol_name: protocol_name.to_string(),
         action: action.action.clone(),
         metadata: integers_as_strings(metadata, &context).map_err(anyhow::Error::msg)?,
     })
