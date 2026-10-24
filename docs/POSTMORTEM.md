@@ -3604,8 +3604,11 @@ and `knowledge = U − virtual_occupied` from the header of the block that aggre
 at. So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
 negative `free` is a 500. Phase-1 cells are in the segment: they remain DAO-typed and locked
 until phase 2, and their occupied part is in `U` like any live cell's. `free` also holds the
-block rewards and fees of the last 11 blocks: they are issued in `C` but not yet paid into a
-cell. No re-sync; the indexer's startup refresh writes the new layout.
+capacity that is in no cell yet. `C − burnt − S` exceeds the live cells' capacity by the block
+rewards not yet paid out: the primary and the miner's secondary issuance of the last 11 blocks,
+paid by the cellbase 11 blocks later. It also exceeds it by the transaction fees in flight: fees
+are not issuance, but capacity already removed from inputs and not yet paid back to miners by a
+cellbase. No re-sync; the indexer's startup refresh writes the new layout.
 
 Review found the first version answered 500 after every reorg until the refresh landed:
 rollback deletes the headers above the fork point but keeps the aggregate row (API-006), and the

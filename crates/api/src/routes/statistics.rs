@@ -1521,9 +1521,12 @@ fn knowledge_size_from_u(
 /// - `dao_free` = Σ (capacity − exact occupied capacity) over the live
 ///   NervosDAO cells: phase-0 deposits and phase-1 withdraw-request cells.
 /// - `free` = `circulating − knowledge − dao_free`: the free capacity of every
-///   other live cell except the burn cell, plus the block rewards and fees
-///   already issued in `C` but not yet paid into a cell (a block's reward is
-///   paid by the cellbase 11 blocks later).
+///   other live cell except the burn cell, plus the capacity that is in no
+///   cell yet. `C − burnt − S` exceeds the live cells' capacity by the block
+///   rewards not yet paid out — the primary and the miner's secondary
+///   issuance of the last 11 blocks, which the cellbase pays 11 blocks later —
+///   and by the transaction fees in flight: not issuance, but capacity removed
+///   from inputs and not yet paid back to miners by a cellbase.
 /// - `dao_capacity`: Σ capacity of the same live DAO cells, for context; its
 ///   occupied part is inside `knowledge`, so it is not a part of the split.
 ///
