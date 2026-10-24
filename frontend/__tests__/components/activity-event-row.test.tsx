@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '../utils/test-utils';
 import {
   ActivityEventGroup,
+  ExactCkb,
+  ItemDeltaFact,
+  LockCallExpr,
   ParticipantLine,
-  TxEventSummary,
+  ProtocolActionNote,
+  TypeCallExpr,
+  activityHeadline,
   buildGlobalTxEvents,
   globalTxEvents,
-  summarizeTxEvents,
 } from '@/components/activity-event-row';
+import { MINUS } from '@/lib/chart-ticks';
 import type { Activity, GlobalActivity } from '@/lib/api';
 
 // Spread the overrides rather than `??`-ing each field: a pool row's
@@ -464,7 +469,7 @@ const bitTypeCalls = [
   },
 ];
 
-describe('global tx events — one classification for full rows and the compact summary', () => {
+describe('global tx events — one classification for the full rows and the feed', () => {
   it('orders protocol actions, type calls, then lock calls a protocol does not explain', () => {
     const activity = makeGlobal({
       protocolActions: [{ protocol: 'utxoswap', action: 'swap', metadata: {} }],
@@ -490,41 +495,169 @@ describe('global tx events — one classification for full rows and the compact 
     expect(globalTxEvents(activity).map((e) => e.kind)).toEqual(['protocol', 'type', 'lock']);
     // The full rows render exactly those events.
     expect(buildGlobalTxEvents(activity)).toHaveLength(3);
-    expect(summarizeTxEvents(globalTxEvents(activity), false)).toEqual([
-      { count: null, names: ['utxoswap \u00B7 swap'] },
-      { count: '1 type call', names: ['.bit Time Index State'] },
-      { count: '1 lock call', names: ['Omnilock'] },
-    ]);
+  });
+});
+
+describe('activityHeadline — the Layer-3 narrative from the classifier', () => {
+  it('names protocol actions with their existing labels', () => {
+    expect(
+      activityHeadline(
+        makeGlobal({
+          protocolActions: [{ protocol: 'dao', action: 'withdraw_request', metadata: {} }],
+        })
+      )
+    ).toBe('DAO Withdraw Request');
+    expect(
+      activityHeadline(
+        makeGlobal({
+          protocolActions: [{ protocol: 'fiber', action: 'channel_close', metadata: {} }],
+        })
+      )
+    ).toBe('fiber \u00B7 Channel Close');
   });
 
-  it('counts type calls and lists the distinct script names', () => {
-    const activity = makeGlobal({
-      typeCalls: [...bitTypeCalls, { ...bitTypeCalls[1], scriptHash: '0xh3' }],
-    });
-    expect(summarizeTxEvents(globalTxEvents(activity), false)).toEqual([
-      { count: '3 type calls', names: ['.bit Time Index State', '.bit Time Info'] },
-    ]);
+  it('falls to the item layer, then calls, then CKB', () => {
+    const party = {
+      address: 'ckb1qx',
+      lockHash: '0xaa',
+      lockHashPrefix: null,
+      roles: [],
+      ckbDelta: '0',
+      usedDelta: '0',
+      itemDeltas: [{ kind: 'object' as const, objectId: '0x51', delta: 1 }],
+      tags: 2,
+    };
+    expect(activityHeadline(makeGlobal({ participants: [party] }))).toBe('Object transfer');
+    expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
+    expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');
+    expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Coinbase');
+  });
+});
+
+describe('quiet call expressions', () => {
+  it('keep the args, with the name as an ink link and the args dim — no gold', () => {
+    render(
+      <>
+        <TypeCallExpr sc={bitTypeCalls[0]} quiet />
+        <LockCallExpr
+          quiet
+          lc={{
+            lockCodeHash: '0xnervape',
+            lockHashType: 'type',
+            lockArgs: '0x0131da00000000000000000000000000005d74',
+            scriptHash: '0xn',
+            scriptName: 'Nervape Shadow Lock',
+          }}
+        />
+      </>
+    );
+    const name = screen.getByRole('link', { name: '.bit Time Index State' });
+    expect(name).toHaveClass('text-text');
+    expect(name.className).not.toContain('gold');
+    expect(screen.getByText('0x00')).toHaveClass('text-text-dim');
+    expect(screen.getByRole('link', { name: 'Nervape Shadow Lock' })).toHaveAttribute(
+      'href',
+      '/mainnet/scripts/Nervape%20Shadow%20Lock'
+    );
+    expect(screen.getByText('0x0131...5d74')).toHaveClass('text-text-dim');
+  });
+});
+
+describe('ExactCkb', () => {
+  it('keeps all 8 decimals, ghosting the trailing zeros, coloured by sign', () => {
+    const { container } = render(
+      <>
+        <ExactCkb shannons={BigInt(-30000)} />
+        <ExactCkb shannons={BigInt('75000000000')} />
+        <ExactCkb shannons={BigInt(0)} />
+      </>
+    );
+    const [fee, whole, zero] = [...container.querySelectorAll('[data-ckb-amount]')];
+    expect(fee).toHaveTextContent(`${MINUS}0.00030000 CKB`);
+    expect(fee).toHaveClass('text-negative');
+    expect(fee.querySelector('[data-ghost]')).toHaveTextContent(/^0000$/);
+    expect(whole).toHaveTextContent('+750.00000000 CKB');
+    expect(whole).toHaveClass('text-positive');
+    expect(whole.querySelector('[data-ghost]')).toHaveTextContent(/^\.00000000$/);
+    expect(zero).toHaveTextContent(/^0\.00000000 CKB$/);
+    expect(zero).toHaveClass('text-text');
+  });
+});
+
+describe('ItemDeltaFact', () => {
+  it('states a token change exactly with its sign and symbol', () => {
+    render(
+      <ItemDeltaFact
+        item={{
+          kind: 'token',
+          typeScriptHash: '0xseal',
+          delta: '-3658346853885',
+          symbol: 'Seal',
+          decimals: 8,
+        }}
+      />
+    );
+    expect(screen.getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })).toHaveAttribute(
+      'href',
+      '/mainnet/tokens/0xseal'
+    );
   });
 
-  it('labels DAO steps as their rows do', () => {
-    const activity = makeGlobal({
-      protocolActions: [{ protocol: 'dao', action: 'withdraw_request', metadata: {} }],
-    });
-    expect(summarizeTxEvents(globalTxEvents(activity), false)).toEqual([
-      { count: null, names: ['DAO Withdraw Request'] },
-    ]);
+  it('states an object or identity as arrived or departed', () => {
+    render(
+      <>
+        <ItemDeltaFact
+          item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }}
+        />
+        <ItemDeltaFact
+          item={{
+            kind: 'identity',
+            standard: 'dotbit',
+            identityId: '0xabc0000000000000000def',
+            delta: 1,
+          }}
+        />
+      </>
+    );
+    expect(screen.getByText(/object/)).toHaveTextContent('object 0x51c75a...0096f2 departed');
+    expect(screen.getByText(/\.bit/)).toHaveTextContent('.bit 0xabc000...000def arrived');
+  });
+});
+
+describe('ProtocolActionNote — the action metadata in one quiet line', () => {
+  it('reads a DAO withdraw request: amount and the deposit block', () => {
+    render(
+      <ProtocolActionNote
+        pa={{
+          protocol: 'dao',
+          action: 'withdraw_request',
+          metadata: { capacity: 2605000000000, depositBlock: 19695550 },
+        }}
+      />
+    );
+    expect(document.body).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
   });
 
-  it('reads a tx without events as its CKB movement', () => {
-    expect(summarizeTxEvents([], false)).toEqual([{ count: null, names: ['CKB Transfer'] }]);
-    expect(summarizeTxEvents([], true)).toEqual([{ count: null, names: ['Coinbase'] }]);
+  it('reads a Fiber close: the channel and its capacity', () => {
+    render(
+      <ProtocolActionNote
+        pa={{
+          protocol: 'fiber',
+          action: 'channel_close',
+          metadata: {
+            channelOutpoint: '0x0d3870bb00000000000000000000000000000000000000000000000000006e26:0',
+            capacity: '75000000000',
+          },
+        }}
+      />
+    );
+    expect(document.body).toHaveTextContent('channel 0x0d3870bb...6e26:0 · 750.00000000 CKB');
   });
 
-  it('renders the summary as one line: dim count, then the names', () => {
-    render(<TxEventSummary activity={makeGlobal({ typeCalls: bitTypeCalls })} />);
-    const summary = screen.getByTestId('tx-event-summary');
-    expect(summary).toHaveTextContent('2 type calls .bit Time Index State \u00B7 .bit Time Info');
-    expect(screen.getByText(/2 type calls/)).toHaveClass('text-text-dim');
-    expect(summary).toHaveClass('truncate');
+  it('renders nothing for an action without metadata', () => {
+    const { container } = render(
+      <ProtocolActionNote pa={{ protocol: 'utxoswap', action: 'swap', metadata: {} }} />
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });

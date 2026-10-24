@@ -299,3 +299,147 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
   if (i === 2) return { ...base, typeCalls: [] };
   return base;
 });
+
+/** A party of a feed sample: a full address, deltas in shannons. */
+function party(
+  tail: string,
+  ckbDelta: string,
+  usedDelta: string,
+  itemDeltas: GlobalActivity['participants'][number]['itemDeltas'] = []
+): GlobalActivity['participants'][number] {
+  return {
+    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
+    lockHash: `0x${tail.padStart(64, '0')}`,
+    lockHashPrefix: null,
+    roles: [],
+    ckbDelta,
+    usedDelta,
+    itemDeltas,
+    tags: itemDeltas.length > 0 ? 2 : 0,
+  };
+}
+
+const CKB = (whole: string) => `${whole}00000000`;
+
+function sample(
+  n: number,
+  overrides: Partial<GlobalActivity> & Pick<GlobalActivity, 'participants'>
+): GlobalActivity {
+  return {
+    txHash: `0x${String(n).padStart(2, '0')}${'cd'.repeat(30)}${String(n).padStart(2, '0')}`,
+    blockNumber: 20_818_733 - n,
+    txIndex: 1,
+    timestamp: String(Date.now() - (n + 1) * 60_000),
+    isCellbase: false,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    ...overrides,
+  };
+}
+
+/** Real shapes from the FE-7 mockup: DAO, Fiber, object, token, and an 8-party transaction. */
+export const feedSamples = {
+  daoWithdrawRequest: sample(1, {
+    protocolActions: [
+      {
+        protocol: 'dao',
+        action: 'withdraw_request',
+        metadata: { capacity: 2605000000000, depositBlock: 19695550 },
+      },
+    ],
+    participants: [
+      party('fxdtl8', '0', '0'),
+      party('r4p74p', '41232486750', CKB('61')),
+      party('hxw6h7', '-41232488212', `-${CKB('61')}`),
+    ],
+  }),
+  fiberClose: sample(2, {
+    protocolActions: [
+      {
+        protocol: 'fiber',
+        action: 'channel_close',
+        metadata: {
+          channelOutpoint: `0x0d3870bb${'00'.repeat(26)}6e26:0`,
+          capacity: '75000000000',
+        },
+      },
+    ],
+    participants: [
+      party('hspqyz', '25000000006', CKB('61')),
+      party('f24nwy', `-${CKB('750')}`, `-${CKB('61')}`),
+      party('kdeakp', '49999999456', CKB('61')),
+    ],
+  }),
+  objectTransfer: sample(3, {
+    typeCalls: [
+      {
+        typeCodeHash: '0xckbfs',
+        typeHashType: 'type',
+        typeArgs: `0xcd6ecb${'00'.repeat(14)}2500`,
+        scriptHash: '0xs1',
+        scriptName: 'CKBFS',
+      },
+    ],
+    lockCalls: [
+      {
+        lockCodeHash: '0xnervape',
+        lockHashType: 'type',
+        lockArgs: `0x0131da${'00'.repeat(14)}5d74`,
+        scriptHash: '0xl1',
+        scriptName: 'Nervape Shadow Lock',
+      },
+    ],
+    participants: [
+      party('cjk9lz', '-52800064119', `-${CKB('502')}`, [
+        { kind: 'object', objectId: `0x51c75a${'00'.repeat(26)}96f2`, delta: -1 },
+      ]),
+      party('shp3hr', CKB('320'), CKB('320'), [
+        { kind: 'object', objectId: `0x51c75a${'00'.repeat(26)}96f2`, delta: 1 },
+      ]),
+      party('204m4g', CKB('208'), CKB('208')),
+    ],
+  }),
+  tokenTransfer: sample(4, {
+    lockCalls: [
+      {
+        lockCodeHash: `0xab0ede${'00'.repeat(25)}e09f`,
+        lockHashType: 'type',
+        lockArgs: `0x4b0000${'00'.repeat(14)}838e`,
+        scriptHash: `0x43b2924e${'00'.repeat(26)}895d`,
+      },
+    ],
+    participants: [
+      party('3fzxu7', CKB('215'), CKB('214'), [
+        {
+          kind: 'token',
+          typeScriptHash: '0xseal',
+          delta: '3658346853885',
+          symbol: 'Seal',
+          decimals: 8,
+        },
+      ]),
+      party('j3pkeh', '-21500008888', `-${CKB('369')}`, [
+        {
+          kind: 'token',
+          typeScriptHash: '0xseal',
+          delta: '-3658346853885',
+          symbol: 'Seal',
+          decimals: 8,
+        },
+      ]),
+    ].map((p) => ({ ...p, tags: 1 })),
+  }),
+  eightParties: sample(5, {
+    participants: [
+      party('p1', `-${CKB('100')}`, '0'),
+      party('p2', CKB('900'), '0'),
+      party('p3', '0', '0'),
+      party('p4', `-${CKB('700')}`, '0'),
+      party('p5', CKB('300'), '0'),
+      party('p6', `-${CKB('500')}`, '0'),
+      party('p7', CKB('200'), '0'),
+      party('p8', `-${CKB('50')}`, '0'),
+    ],
+  }),
+};

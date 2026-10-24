@@ -22,13 +22,13 @@ describe('ParticipantRefView', () => {
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
 
-  it('draws a compact address in jade, or in the neutral ink when muted', () => {
+  it('draws a compact address in jade, or in the plain ink when quiet', () => {
     const { unmount } = render(<ParticipantRefView participant={makeRef({ address })} compact />);
     expect(screen.getByRole('link')).toHaveClass('text-jade/80');
     unmount();
-    render(<ParticipantRefView participant={makeRef({ address })} compact muted />);
+    render(<ParticipantRefView participant={makeRef({ address })} compact quiet />);
     const link = screen.getByRole('link');
-    expect(link).toHaveClass('text-text-dim');
+    expect(link).toHaveClass('text-text');
     expect(link).not.toHaveClass('text-jade/80');
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
   });

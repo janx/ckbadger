@@ -10,6 +10,9 @@ import {
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
+import { classifyActivity } from '@/lib/activity-classify';
+import { MINUS } from '@/lib/chart-ticks';
+import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
 import { ParticipantRefView } from '@/components/participant-ref';
 import type {
@@ -76,28 +79,50 @@ export function CkbDelta({ delta }: { delta: string }) {
 // TypeCallExpr — script name link with args
 // ---------------------------------------------------------------------------
 
-export function TypeCallExpr({ sc }: { sc: ActivityTypeCall }) {
-  const fnName = formatScriptRef(sc);
-  const args = truncateHash(sc.typeArgs, 6, 4);
-
+/** A call's name and args; `quiet` draws the name as an ink link and the args dim (no gold). */
+function CallExpr({
+  name,
+  href,
+  args,
+  quiet,
+}: {
+  name: string;
+  href: string;
+  args: string;
+  quiet: boolean;
+}) {
   return (
     <>
       <Link
-        href={getScriptDetailHref({
-          name: sc.scriptName,
-          codeHash: sc.typeCodeHash,
-          hashType: sc.typeHashType,
-          scriptKind: 'type',
-        })}
-        className="text-gold hover:text-gold/80 transition-colors"
+        href={href}
+        className={cn(
+          'transition-colors',
+          quiet ? 'text-text hover:text-jade' : 'text-gold hover:text-gold/80'
+        )}
         onClick={(e) => e.stopPropagation()}
       >
-        {fnName}
+        {name}
       </Link>
       <span className="text-text-dim">(</span>
-      <span className="text-aqua/70">{args}</span>
+      <span className={quiet ? 'text-text-dim' : 'text-aqua/70'}>{args}</span>
       <span className="text-text-dim">)</span>
     </>
+  );
+}
+
+export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quiet?: boolean }) {
+  return (
+    <CallExpr
+      name={formatScriptRef(sc)}
+      href={getScriptDetailHref({
+        name: sc.scriptName,
+        codeHash: sc.typeCodeHash,
+        hashType: sc.typeHashType,
+        scriptKind: 'type',
+      })}
+      args={truncateHash(sc.typeArgs, 6, 4)}
+      quiet={quiet}
+    />
   );
 }
 
@@ -105,28 +130,19 @@ export function TypeCallExpr({ sc }: { sc: ActivityTypeCall }) {
 // LockCallExpr — lock script name link with args
 // ---------------------------------------------------------------------------
 
-export function LockCallExpr({ lc }: { lc: ActivityLockCall }) {
-  const fnName = formatScriptRef({ scriptHash: lc.scriptHash, scriptName: lc.scriptName });
-  const args = truncateHash(lc.lockArgs, 6, 4);
-
+export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quiet?: boolean }) {
   return (
-    <>
-      <Link
-        href={getScriptDetailHref({
-          name: lc.scriptName,
-          codeHash: lc.lockCodeHash,
-          hashType: lc.lockHashType,
-          scriptKind: 'lock',
-        })}
-        className="text-gold hover:text-gold/80 transition-colors"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {fnName}
-      </Link>
-      <span className="text-text-dim">(</span>
-      <span className="text-aqua/70">{args}</span>
-      <span className="text-text-dim">)</span>
-    </>
+    <CallExpr
+      name={formatScriptRef({ scriptHash: lc.scriptHash, scriptName: lc.scriptName })}
+      href={getScriptDetailHref({
+        name: lc.scriptName,
+        codeHash: lc.lockCodeHash,
+        hashType: lc.lockHashType,
+        scriptKind: 'lock',
+      })}
+      args={truncateHash(lc.lockArgs, 6, 4)}
+      quiet={quiet}
+    />
   );
 }
 
@@ -244,9 +260,36 @@ function daoActionLabel(action: string): string {
   }
 }
 
+/** The facts a protocol action's metadata carries, read once for every renderer. */
+export interface ProtocolActionMeta {
+  /** Shannons, as the indexer wrote them (a JSON number or a decimal string). */
+  capacity: string | null;
+  compensation: string | null;
+  depositBlock: number | null;
+  channelOutpoint: string | null;
+  btcTxid: string | null;
+}
+
+function metaString(pa: ActivityProtocolAction, key: string): string | null {
+  const v = pa.metadata?.[key];
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'number' || typeof v === 'string') return String(v);
+  throw new Error(`${pa.protocol}:${pa.action} metadata.${key} is ${JSON.stringify(v)}`);
+}
+
+export function protocolActionMeta(pa: ActivityProtocolAction): ProtocolActionMeta {
+  const depositBlock = metaString(pa, 'depositBlock');
+  return {
+    capacity: metaString(pa, 'capacity'),
+    compensation: metaString(pa, 'compensation'),
+    depositBlock: depositBlock === null ? null : Number(depositBlock),
+    channelOutpoint: metaString(pa, 'channelOutpoint'),
+    btcTxid: metaString(pa, 'btcTxid'),
+  };
+}
+
 function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
-  const capacity = pa.metadata?.capacity as string | undefined;
-  const compensation = pa.metadata?.compensation as string | undefined;
+  const { capacity, compensation } = protocolActionMeta(pa);
   const label = daoActionLabel(pa.action);
 
   switch (pa.action) {
@@ -373,8 +416,7 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
 
   const isFiber = pa.protocol === 'fiber';
   const label = protocolActionLabel(pa);
-  const btcTxid = pa.metadata?.btcTxid as string | undefined;
-  const capacity = pa.metadata?.capacity as string | undefined;
+  const { btcTxid, capacity } = protocolActionMeta(pa);
 
   return {
     badge: (
@@ -630,19 +672,12 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
 }
 
 /** Single participant line: party + CKB delta + item deltas (L1 + L2). */
-export function ParticipantLine({
-  participant,
-  muted = false,
-}: {
-  participant: ParticipantInfo;
-  /** Draw the party in the neutral ink (see ParticipantRefView). */
-  muted?: boolean;
-}) {
+export function ParticipantLine({ participant }: { participant: ParticipantInfo }) {
   const showCkb = participant.ckbDelta !== '0';
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <ParticipantRefView participant={participant} compact muted={muted} />
+      <ParticipantRefView participant={participant} compact />
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
         {showCkb && <CkbDelta delta={participant.ckbDelta} />}
         {participant.itemDeltas.map((item, i) => (
@@ -696,71 +731,166 @@ export function buildGlobalTxEvents(activity: GlobalActivity): EventParts[] {
   );
 }
 
-/** One run of the compact summary: an optional dim count (`2 type calls`) and the names. */
-export interface TxSummaryGroup {
-  count: string | null;
-  names: string[];
-}
-
-function plural(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+/**
+ * The Layer-3 narrative of a global activity, as the feed heads it: the classifier picks the
+ * highest non-empty layer, and the existing labels name it.
+ */
+export function activityHeadline(activity: GlobalActivity): string {
+  const c = classifyActivity(activity);
+  switch (c.displayType) {
+    case 'daoDeposit':
+    case 'daoWithdrawRequest':
+    case 'daoWithdrawComplete':
+    case 'protocolAction':
+      return protocolActionLabel(c.primaryProtocolAction as ActivityProtocolAction);
+    case 'token':
+      return 'Token transfer';
+    case 'object':
+      return 'Object transfer';
+    case 'identity':
+      return 'Identity transfer';
+    case 'typeCall':
+      return 'Script call';
+    case 'ckbTransfer':
+      return ckbEventLabel(activity.isCellbase, true);
+  }
 }
 
 /**
- * The one-line summary of a tx's events for a compact feed row: its protocol actions by name, then
- * `N type calls` and `N lock calls` with the distinct script names. A tx without events reads as
- * its CKB movement (`CKB Transfer`, or `Coinbase` for a cellbase), as the full rows label it.
+ * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
+ * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign.
  */
-export function summarizeTxEvents(events: TxEvent[], isCellbase: boolean): TxSummaryGroup[] {
-  const protocols = events.flatMap((e) => (e.kind === 'protocol' ? [e.action] : []));
-  const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
-  const locks = events.flatMap((e) => (e.kind === 'lock' ? [e.call] : []));
-  const groups: TxSummaryGroup[] = [];
-  if (protocols.length > 0) {
-    groups.push({ count: null, names: protocols.map(protocolActionLabel) });
-  }
-  if (types.length > 0) {
-    groups.push({
-      count: plural(types.length, 'type call'),
-      names: [...new Set(types.map((sc) => formatScriptRef(sc)))],
-    });
-  }
-  if (locks.length > 0) {
-    groups.push({
-      count: plural(locks.length, 'lock call'),
-      names: [
-        ...new Set(
-          locks.map((lc) =>
-            formatScriptRef({ scriptHash: lc.scriptHash, scriptName: lc.scriptName })
-          )
-        ),
-      ],
-    });
-  }
-  if (groups.length === 0) {
-    groups.push({ count: null, names: [ckbEventLabel(isCellbase, true)] });
-  }
-  return groups;
-}
-
-/** The compact summary of a global activity, as one line of text (truncated by its container). */
-export function TxEventSummary({
-  activity,
-  className,
+export function ExactCkb({
+  shannons,
+  signed = true,
+  tone = 'sign',
 }: {
-  activity: GlobalActivity;
-  className?: string;
+  shannons: bigint;
+  signed?: boolean;
+  tone?: 'sign' | 'plain';
 }) {
-  const groups = summarizeTxEvents(globalTxEvents(activity), activity.isCellbase);
+  const parts = splitCkbAmount(shannons);
+  const color =
+    tone === 'plain'
+      ? 'text-text'
+      : parts.sign === '+'
+        ? 'text-positive'
+        : parts.sign === MINUS
+          ? 'text-negative'
+          : 'text-text';
   return (
-    <span data-testid="tx-event-summary" className={cn('min-w-0 truncate', className)}>
-      {groups.map((g, i) => (
-        <Fragment key={i}>
-          {i > 0 && <span className="text-text-dim">{' \u00B7 '}</span>}
-          {g.count && <span className="text-text-dim">{`${g.count}  `}</span>}
-          <span className="text-text">{g.names.join(' \u00B7 ')}</span>
-        </Fragment>
-      ))}
+    <span data-ckb-amount className={cn('whitespace-nowrap tabular-nums', color)}>
+      {signed ? parts.sign : ''}
+      {parts.integer}
+      <span className="opacity-[0.78]">{parts.fraction}</span>
+      <span data-ghost className="text-text-ghost">
+        {parts.ghost}
+      </span>
+      <span className="text-text-dim text-[11px]"> CKB</span>
     </span>
   );
+}
+
+/** A participant's Layer-2 change as a fact: `±amount SYMBOL`, or `<id> arrived / departed`. */
+export function ItemDeltaFact({ item }: { item: ItemDelta }) {
+  switch (item.kind) {
+    case 'token': {
+      const delta = BigInt(item.delta);
+      const sign = delta > BigInt(0) ? '+' : delta < BigInt(0) ? MINUS : '';
+      const abs = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
+      const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
+      return (
+        <Link
+          href={getTokenDetailHref(item.typeScriptHash)}
+          className="text-text-bright hover:text-jade tabular-nums transition-colors"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {sign}
+          {formatTokenBalanceWithRawMarker(abs, item.decimals ?? null)} {label}
+        </Link>
+      );
+    }
+    case 'object':
+      return (
+        <span className="text-text-bright">
+          {'object '}
+          <Link
+            href={getObjectDetailHref(item.objectId)}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {truncateHash(item.objectId, 8, 6)}
+          </Link>
+          {item.delta > 0 ? ' arrived' : ' departed'}
+        </span>
+      );
+    case 'identity':
+      return (
+        <span className="text-text-bright">
+          {`${formatStandard(item.standard)} `}
+          <Link
+            href={getIdentityItemDetailHref(item.standard, item.identityId)}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {truncateHash(item.identityId, 8, 6)}
+          </Link>
+          {item.delta > 0 ? ' arrived' : ' departed'}
+        </span>
+      );
+  }
+}
+
+/**
+ * What a protocol action's metadata says, as quiet parts of one line: DAO amounts and the deposit
+ * block, a Fiber channel and its capacity, an RGB++ BTC txid. Empty when the action carries none.
+ */
+export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
+  const meta = protocolActionMeta(pa);
+  const parts: React.ReactNode[] = [];
+  if (meta.channelOutpoint) {
+    // `0x<funding tx hash>:<index>`: shorten the hash, keep the index whole.
+    const [hash, index] = meta.channelOutpoint.split(':');
+    parts.push(`channel ${truncateHash(hash, 10, 4)}${index === undefined ? '' : `:${index}`}`);
+  }
+  if (meta.capacity) {
+    parts.push(
+      <>
+        <ExactCkb shannons={BigInt(meta.capacity)} signed={false} tone="plain" />
+        {pa.protocol === 'dao' && pa.action === 'deposit' ? ' locked' : ''}
+      </>
+    );
+  }
+  if (meta.depositBlock !== null) {
+    parts.push(`deposited at #${meta.depositBlock.toLocaleString('en-US')}`);
+  }
+  if (meta.compensation) {
+    parts.push(
+      <>
+        +<ExactCkb shannons={BigInt(meta.compensation)} signed={false} tone="plain" /> compensation
+      </>
+    );
+  }
+  if (meta.btcTxid) parts.push(`btc ${truncateHash(meta.btcTxid, 8, 6)}`);
+  return parts;
+}
+
+/** Parts joined with a dim middle dot. */
+export function DotJoined({ parts }: { parts: React.ReactNode[] }) {
+  return (
+    <>
+      {parts.map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span className="text-text-dim">{' \u00B7 '}</span>}
+          {part}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+/** A protocol action's metadata as one quiet line, or nothing when it carries none. */
+export function ProtocolActionNote({ pa }: { pa: ActivityProtocolAction }) {
+  const parts = protocolActionNoteParts(pa);
+  return parts.length === 0 ? null : <DotJoined parts={parts} />;
 }
