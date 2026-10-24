@@ -734,7 +734,7 @@ async fn get_address_dao_summary(
 /// startup window is the explicit `initializing` state; absence at a synced tip
 /// is an invariant violation and must say so, with the tip it was observed at,
 /// instead of being papered over with an empty default.
-fn dao_singleton_missing(state: &AppState, singleton: &str) -> ApiRouteError {
+pub(crate) fn dao_singleton_missing(state: &AppState, singleton: &str) -> ApiRouteError {
     match state.store.get_sync_tip_block() {
         Err(e) => ApiError::internal(format!(
             "failed to load sync tip block while reporting missing {}: {}",

@@ -22,7 +22,7 @@ use crate::response::{
 use crate::utils::stats_bucket::{is_complete_day_key, parse_day_key, ChainTime};
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
-    script_to_address,
+    protocol_circulating, script_to_address,
 };
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
@@ -42,6 +42,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/statistics/network", get(get_network_stats))
         .route("/statistics/tx-stats", get(get_tx_stats))
         .route("/statistics/recent-blocks", get(get_recent_blocks))
+        .route(
+            "/statistics/ckbytes-allocation",
+            get(get_ckbytes_allocation),
+        )
         .route(
             "/charts/transaction-count",
             get(get_transaction_count_chart),
@@ -1485,14 +1489,119 @@ fn common_knowledge_size(
     snapshot: &ckbadger_store::DaoDailySnapshot,
     virtual_occupied: i128,
 ) -> Result<i128, ApiRouteError> {
-    let knowledge_size = snapshot.occupied_capacity - virtual_occupied;
+    knowledge_size_from_u(snapshot.occupied_capacity, virtual_occupied, &snapshot.date)
+}
+
+/// [`common_knowledge_size`] from a DAO `U` read anywhere; `at` names the
+/// snapshot date or block in the error.
+fn knowledge_size_from_u(
+    occupied_capacity: i128,
+    virtual_occupied: i128,
+    at: &str,
+) -> Result<i128, ApiRouteError> {
+    let knowledge_size = occupied_capacity - virtual_occupied;
     if knowledge_size < 0 {
         return Err(ApiError::internal(format!(
             "negative common knowledge size on {}: occupied_capacity(U)={}, genesis virtual_occupied={}",
-            snapshot.date, snapshot.occupied_capacity, virtual_occupied
+            at, occupied_capacity, virtual_occupied
         )));
     }
     Ok(knowledge_size)
+}
+
+/// `/statistics/ckbytes-allocation`: circulation split into three exact,
+/// non-overlapping parts, every one read at the same block.
+///
+/// - `circulating` = `C − genesis burnt − S`, the protocol circulation.
+/// - `knowledge` = `U − genesis virtual_occupied`: the occupied capacity of
+///   every live cell except the genesis burn cell — DAO cells included.
+/// - `dao_free` = Σ (capacity − exact occupied capacity) over the live
+///   NervosDAO cells: phase-0 deposits and phase-1 withdraw-request cells.
+/// - `free` = `circulating − knowledge − dao_free`: the free capacity of every
+///   other live cell except the burn cell, plus the block rewards and fees
+///   already issued in `C` but not yet paid into a cell (a block's reward is
+///   paid by the cellbase 11 blocks later).
+/// - `dao_capacity`: Σ capacity of the same live DAO cells, for context; its
+///   occupied part is inside `knowledge`, so it is not a part of the split.
+///
+/// The block (`block_number`) is the one the indexer computed the DAO
+/// aggregate at; C, S and U come from that block's header, so the three parts
+/// always sum to the circulation they split. A negative `free` is an error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CkbytesAllocationResponse {
+    pub block_number: i64,
+    pub circulating: String,
+    pub knowledge: String,
+    pub dao_free: String,
+    pub free: String,
+    pub dao_capacity: String,
+}
+
+async fn get_ckbytes_allocation(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<CkbytesAllocationResponse> {
+    let store = state.store.clone();
+    let (latest, header) = tokio::task::spawn_blocking(move || {
+        let latest = store.get_latest_dao_statistics()?;
+        let header = match &latest {
+            Some(latest) => store.get_block_header(latest.tip_block_number)?,
+            None => None,
+        };
+        anyhow::Ok((latest, header))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let Some(latest) = latest else {
+        return Err(super::dao::dao_singleton_missing(
+            &state,
+            "dao_latest_stats",
+        ));
+    };
+    let block = latest.tip_block_number;
+    let at = format!("block {block}");
+    let header = header.ok_or_else(|| {
+        ApiError::internal(format!(
+            "dao_latest_stats was computed at {at}, which has no stored header"
+        ))
+    })?;
+    let (c, s, u) = ckbadger_common::dao::extract_dao_csu(&header.dao).ok_or_else(|| {
+        ApiError::internal(format!(
+            "invalid DAO field at {at}: dao_len={}",
+            header.dao.len()
+        ))
+    })?;
+    let baseline = state.genesis_baseline()?;
+    let circulating = protocol_circulating(c, s, baseline.burnt, &at)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let knowledge = knowledge_size_from_u(u, baseline.virtual_occupied, &at)?;
+    let dao_free = latest.dao_free_capacity;
+    if dao_free < 0 || dao_free > latest.dao_capacity {
+        return Err(ApiError::internal(format!(
+            "DAO free capacity outside [0, DAO capacity] at {at}: dao_free={dao_free}, dao_capacity={}",
+            latest.dao_capacity
+        )));
+    }
+    let free = circulating
+        .checked_sub(knowledge)
+        .and_then(|rest| rest.checked_sub(dao_free))
+        .filter(|free| *free >= 0)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "knowledge and DAO free capacity exceed circulation at {at}: \
+                 circulating={circulating}, knowledge={knowledge}, dao_free={dao_free}"
+            ))
+        })?;
+
+    ok(CkbytesAllocationResponse {
+        block_number: block,
+        circulating: circulating.to_string(),
+        knowledge: knowledge.to_string(),
+        dao_free: dao_free.to_string(),
+        free: free.to_string(),
+        dao_capacity: latest.dao_capacity.to_string(),
+    })
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {

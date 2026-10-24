@@ -25,6 +25,36 @@ pub fn dao_treasury(snapshot: &DaoDailySnapshot) -> Result<i128> {
         .with_context(|| format!("in dao_daily_snapshots for {}", snapshot.date))
 }
 
+/// Protocol circulation, `C − genesis_burnt − S` (`docs/DAO_CALCULATIONS.md`):
+/// issued capacity that is neither the genesis burn nor secondary issuance
+/// still held unissued in `S`. A negative result is an error with operands.
+/// `at` names the snapshot date or block in error messages.
+pub fn protocol_circulating(
+    total_issuance: i128,
+    secondary_pool: i128,
+    genesis_burnt: i128,
+    at: &str,
+) -> Result<i128> {
+    let circulating = total_issuance
+        .checked_sub(genesis_burnt)
+        .and_then(|value| value.checked_sub(secondary_pool))
+        .with_context(|| {
+            format!(
+                "circulating supply arithmetic overflow for {}: total_issuance={}, genesis_burnt={}, secondary_pool={}",
+                at, total_issuance, genesis_burnt, secondary_pool
+            )
+        })?;
+    ensure!(
+        circulating >= 0,
+        "negative circulating supply for {}: total_issuance={}, genesis_burnt={}, secondary_pool={}",
+        at,
+        total_issuance,
+        genesis_burnt,
+        secondary_pool
+    );
+    Ok(circulating)
+}
+
 /// Derive all user-facing supply components from the canonical DAO fields.
 ///
 /// A zero `total_issuance` denotes an old/missing snapshot field. Every other
@@ -60,27 +90,12 @@ pub fn dao_supply(snapshot: &DaoDailySnapshot, genesis_burnt: i128) -> Result<Op
             snapshot.date, genesis_burnt, treasury
         )
     })?;
-    let circulating = snapshot
-        .total_issuance
-        .checked_sub(genesis_burnt)
-        .and_then(|value| value.checked_sub(snapshot.secondary_pool))
-        .with_context(|| {
-            format!(
-                "circulating supply arithmetic overflow for {}: total_issuance={}, genesis_burnt={}, secondary_pool={}",
-                snapshot.date,
-                snapshot.total_issuance,
-                genesis_burnt,
-                snapshot.secondary_pool
-            )
-        })?;
-    ensure!(
-        circulating >= 0,
-        "negative circulating supply for {}: total_issuance={}, genesis_burnt={}, secondary_pool={}",
-        snapshot.date,
+    let circulating = protocol_circulating(
         snapshot.total_issuance,
+        snapshot.secondary_pool,
         genesis_burnt,
-        snapshot.secondary_pool
-    );
+        &snapshot.date,
+    )?;
 
     let liquid = circulating
         .checked_sub(snapshot.total_deposited)

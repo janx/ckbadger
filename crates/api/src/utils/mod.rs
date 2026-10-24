@@ -36,4 +36,4 @@ pub use script_resolution::{
     resolve_code_hash_for_hash_type, resolve_script_by_hash, resolve_script_form_by_hash,
     CurrentScriptVersionResolution, VersionCodeCell,
 };
-pub use supply::{dao_supply, dao_treasury, DaoSupply};
+pub use supply::{dao_supply, dao_treasury, protocol_circulating, DaoSupply};

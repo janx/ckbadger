@@ -3551,4 +3551,48 @@ indexer had the right one. A claim like "every chart" needs a grep, not memory.
 
 ---
 
+### STATS-015: The CKBytes bar counted the DAO cells' occupied capacity twice
+
+**Date**: 2026-10-24
+
+**Symptom**: The homepage bar split circulation into Knowledge, Nervos DAO and Free, but its parts
+summed to more than 100%. Measured against the node at block 20,820,367: 22,375 live DAO cells
+occupy 2,285,438 CKB. That amount was inside Knowledge and inside the DAO segment, so Free was
+understated by the same amount.
+
+**Root Cause**: Knowledge is `U − virtual_occupied`, the occupied capacity of every live cell —
+DAO cells included. The DAO segment used `totalDeposited`, the full capacity of phase-0 deposits.
+No figure for the DAO cells' free capacity existed, so the frontend subtracted two overlapping
+quantities from circulation.
+
+**Fix**: the indexer's tip-scoped DAO aggregate (`DaoLatestStatistics`, domain store, rewritten
+on every batch commit, every rollback and at startup) now carries:
+
+- `dao_capacity`: the capacity of every live DAO cell;
+- `dao_free_capacity`: Σ(capacity − exact occupied) over those cells, using the request cell's own
+  occupied capacity for phase-1 cells.
+
+It is computed in the existing per-commit scan, and a phase-1 entry without its request occupied
+capacity is an error. `GET /statistics/ckbytes-allocation` reads `circulating = C − burnt − S`
+and `knowledge = U − virtual_occupied` from the header of the block that aggregate was computed
+at. So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
+negative `free` is a 500. Phase-1 cells are in the segment: they remain DAO-typed and locked
+until phase 2, and their occupied part is in `U` like any live cell's. `free` also holds the
+block rewards and fees of the last 11 blocks: they are issued in `C` but not yet paid into a
+cell. No re-sync; the indexer's startup refresh writes the new layout.
+
+**Why the tests missed it**: nothing compared the bar's parts with the whole. Regressions:
+`test_refresh_dao_statistics_sums_free_capacity_of_live_dao_cells`,
+`test_ckbytes_allocation_partitions_circulation_at_one_block`,
+`test_ckbytes_allocation_fails_fast_when_the_parts_exceed_circulation`.
+
+**Lesson**: Before stacking quantities into a bar, write each one as a sum over cells. Two
+quantities that both sum over the same cells cannot sit side by side.
+
+**Files**: `crates/ckbadger-store/src/types.rs`, `crates/indexer/src/db/writer/statistics.rs`,
+`crates/api/src/routes/statistics.rs`, `crates/api/src/utils/supply.rs`,
+`crates/api/tests/api_statistics.rs`
+
+---
+
 _Last updated: 2026-10-24_

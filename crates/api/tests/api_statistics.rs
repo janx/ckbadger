@@ -2855,3 +2855,156 @@ async fn test_forks_recent_surfaces_persisted_shallow_reorg() {
         "a shallow reorg must not be reported as a deep fork"
     );
 }
+
+// ---------------------------------------------------------------------------
+// CKBytes allocation: circulation split into exact, non-overlapping parts
+// ---------------------------------------------------------------------------
+
+fn dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {
+    let mut dao = vec![0u8; 32];
+    dao[0..8].copy_from_slice(&c.to_le_bytes());
+    dao[16..24].copy_from_slice(&s.to_le_bytes());
+    dao[24..32].copy_from_slice(&u.to_le_bytes());
+    dao
+}
+
+fn seed_dao_latest(
+    store: &CkbadgerStore,
+    tip_block_number: i64,
+    dao_capacity: i128,
+    dao_free: i128,
+) {
+    let latest = ckbadger_store::DaoLatestStatistics {
+        tip_block_number,
+        total_deposited: dao_capacity,
+        total_depositors: 1,
+        active_deposits: 1,
+        total_compensation_paid: 0,
+        unclaimed_compensation: 0,
+        average_deposit_days: "1 days".to_string(),
+        estimated_apc: "2.00".to_string(),
+        mining_reward: 0,
+        deposit_compensation: 0,
+        burnt: 0,
+        pending_withdrawal_capacity: 0,
+        dao_capacity,
+        dao_free_capacity: dao_free,
+    };
+    store
+        .put_stats_key(
+            &ckbadger_store::keys::encode_stats_key(
+                ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+                b"latest",
+            ),
+            &bincode::serialize(&latest).unwrap(),
+        )
+        .unwrap();
+}
+
+/// Seed blocks 10 and 11 (the sync tip) with different DAO fields; block 10
+/// carries mainnet-shaped C, S and U.
+fn seed_allocation_headers(store: &Arc<CkbadgerStore>) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut header = recent_block_header(10, 1_700_000_000_000);
+    header.dao = dao_field(
+        4_790_000_000_000_000_000,
+        30_000_000_000_000_000,
+        519_967_746_700_000_000,
+    );
+    batch.put_block_header(10, &header);
+    let mut later = recent_block_header(11, 1_700_000_010_000);
+    later.dao = dao_field(
+        4_790_000_001_000_000_000,
+        30_000_000_100_000_000,
+        519_967_746_800_000_000,
+    );
+    batch.put_block_header(11, &later);
+    batch.commit().unwrap();
+}
+
+/// BE-4: the homepage CKBytes bar must partition circulation exactly.
+/// Knowledge (`U − virtual_occupied`) already holds every live cell's occupied
+/// capacity — the DAO cells' included — so the DAO part is the DAO cells'
+/// FREE capacity, and Free is the rest. Every term is read at ONE block: the
+/// block the indexer computed the DAO aggregate at (10 here, while the tip is
+/// already 11), so the three parts always sum to the circulation they split.
+#[tokio::test]
+async fn test_ckbytes_allocation_partitions_circulation_at_one_block() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_allocation_headers(&store);
+    // 22,378 live DAO cells of 102 CKB occupied each.
+    seed_dao_latest(
+        &store,
+        10,
+        812_889_561_643_799_700,
+        812_889_561_643_799_700 - 22_378 * 102_00000000,
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "blockNumber": 10,
+            // C − genesis burnt − S
+            "circulating": "3920000000000000000",
+            // U − genesis virtual_occupied
+            "knowledge": "15967746700000000",
+            "daoFree": "812661306043799700",
+            // circulating − knowledge − daoFree
+            "free": "3091370947256200300",
+            "daoCapacity": "812889561643799700"
+        })
+    );
+}
+
+/// The parts can never exceed the whole: a DAO free capacity larger than
+/// what circulation leaves after Knowledge is corruption, not a zero Free.
+#[tokio::test]
+async fn test_ckbytes_allocation_fails_fast_when_the_parts_exceed_circulation() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_allocation_headers(&store);
+    seed_dao_latest(
+        &store,
+        10,
+        4_000_000_000_000_000_000,
+        3_910_000_000_000_000_000,
+    );
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("block 10")
+            && message.contains("3920000000000000000")
+            && message.contains("3910000000000000000"),
+        "error must name the block and the terms: {json}"
+    );
+}
+
+/// The DAO aggregate is indexer-written: absent before the first block it is
+/// `initializing`; absent at a synced tip it is a 500 (API-006 semantics).
+#[tokio::test]
+async fn test_ckbytes_allocation_needs_the_dao_aggregate() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let app = create_router(test_config(store.clone())).await;
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+
+    seed_allocation_headers(&store);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dao_latest_stats"),
+        "{json}"
+    );
+}
