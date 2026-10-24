@@ -105,11 +105,31 @@ describe('Header', () => {
     const notch = screen.getByTestId('header-logo-notch');
     expect(notch).toHaveAttribute('aria-hidden', 'true');
     expect(notch.className).toContain('clamp(96px,11vw,157px)');
-    // A 52 px row on phones lets the 96 px badge hang across the border as the 157 px one does.
-    expect(notch.parentElement).toHaveClass('min-h-[52px]', 'md:min-h-[60px]');
+    // The badge is at its 96 px minimum up to lg; a 52 px row there lets it hang across the border
+    // as the larger badge does across the 60 px desktop row.
+    expect(notch.parentElement).toHaveClass('min-h-[52px]', 'lg:min-h-[60px]');
+    expect(notch.parentElement).not.toHaveClass('md:min-h-[60px]');
     // The nav starts right of the notch.
     expect(notch.nextElementSibling).toBe(screen.getByRole('navigation', { name: 'Main' }));
     expect(screen.getByTestId('vitals-logo-notch').className).toContain('md:block');
+  });
+
+  it('keeps only the header row sticky on phones and the row plus the vitals strip from md up', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+
+    const banner = screen.getByRole('banner');
+    const strip = screen.getByTestId('vitals-strip');
+    // Phones: the row is the sticky element; the strip is outside it and scrolls away.
+    expect(banner).toHaveClass('sticky', 'top-0', 'md:static');
+    expect(banner).not.toContainElement(strip);
+    // md and up: one sticky block holds both. Below md it is display: contents, so the row sticks
+    // to the page, not to this wrapper.
+    const wrapper = banner.parentElement as HTMLElement;
+    expect(wrapper).toHaveClass('contents', 'md:sticky', 'md:top-0', 'md:block');
+    expect(wrapper).toContainElement(strip);
+    // The badge is in the sticky row in both layouts.
+    expect(banner).toContainElement(screen.getByTestId('logo'));
   });
 
   it('labels the nav in sentence case with normal tracking', () => {
