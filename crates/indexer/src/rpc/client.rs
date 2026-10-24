@@ -326,6 +326,51 @@ struct RawIndexerTxPage {
     last_cursor: String,
 }
 
+/// One live cell as the node indexer lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerCell {
+    pub tx_hash: String,
+    pub index: u32,
+    pub capacity: u64,
+    pub type_script: Option<Script>,
+    pub output_data: Vec<u8>,
+    /// Block that created the cell.
+    pub block_number: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexerCellPage {
+    pub objects: Vec<IndexerCell>,
+    pub last_cursor: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerOutPoint {
+    tx_hash: String,
+    index: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerCellOutput {
+    capacity: String,
+    #[serde(rename = "type")]
+    type_script: Option<Script>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerCell {
+    out_point: RawIndexerOutPoint,
+    output: RawIndexerCellOutput,
+    output_data: Option<String>,
+    block_number: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerCellPage {
+    objects: Vec<RawIndexerCell>,
+    last_cursor: String,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct NodeInfo {
     pub version: String,
@@ -384,6 +429,56 @@ impl CkbRpcClient {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(IndexerTxPage {
+            objects,
+            last_cursor: raw.last_cursor,
+        })
+    }
+
+    /// One page of the node indexer's LIVE cells for `search_key`, with data.
+    ///
+    /// `after` is the previous page's `last_cursor`; `None` starts the walk.
+    /// A cell without `output_data` is an error: the query always asks for
+    /// data, so a missing field is a response the caller cannot classify.
+    pub async fn get_cells(
+        &self,
+        search_key: &IndexerSearchKey,
+        order: &str,
+        limit: u32,
+        after: Option<&str>,
+    ) -> Result<IndexerCellPage> {
+        let raw: RawIndexerCellPage = self
+            .call(
+                "get_cells",
+                (
+                    search_key,
+                    order,
+                    format!("0x{limit:x}"),
+                    after.map(str::to_owned),
+                ),
+            )
+            .await?;
+        let objects = raw
+            .objects
+            .into_iter()
+            .map(|cell| {
+                let output_data = cell.output_data.ok_or_else(|| {
+                    anyhow!(
+                        "get_cells returned no output_data for {}:{}",
+                        cell.out_point.tx_hash,
+                        cell.out_point.index
+                    )
+                })?;
+                Ok(IndexerCell {
+                    index: parse_indexer_hex_u32(&cell.out_point.index, "out_point.index")?,
+                    tx_hash: cell.out_point.tx_hash,
+                    capacity: parse_hex_u64(&cell.output.capacity)?,
+                    type_script: cell.output.type_script,
+                    output_data: parse_hex_to_bytes(&output_data),
+                    block_number: parse_hex_u64(&cell.block_number)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(IndexerCellPage {
             objects,
             last_cursor: raw.last_cursor,
         })
@@ -506,6 +601,73 @@ mod tests {
             },
             Some((0, 101)),
         )
+    }
+
+    #[tokio::test]
+    async fn get_cells_types_live_cells_with_their_data_and_block() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "get_cells",
+                "params": [
+                    {
+                        "script": {"code_hash": "0xcc", "hash_type": "type", "args": "0x"},
+                        "script_type": "type",
+                        "script_search_mode": "exact"
+                    },
+                    "asc",
+                    "0x3e8",
+                    null
+                ]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0","id":1,
+                "result": {
+                    "objects": [{
+                        "block_number": "0x40",
+                        "out_point": {"index": "0x2", "tx_hash": "0xdd"},
+                        "output": {
+                            "capacity": "0x47e5e9f0c",
+                            "lock": {"args": "0x", "code_hash": "0xee", "hash_type": "type"},
+                            "type": {"args": "0x", "code_hash": "0xcc", "hash_type": "type"}
+                        },
+                        "output_data": "0x0100000000000000",
+                        "tx_index": "0x4"
+                    }],
+                    "last_cursor": "0xcursor"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let key = IndexerSearchKey::exact_type(
+            Script {
+                code_hash: "0xcc".to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            },
+            None,
+        );
+        let page = CkbRpcClient::new(server.uri())
+            .get_cells(&key, "asc", 1000, None)
+            .await
+            .unwrap();
+        assert_eq!(page.last_cursor, "0xcursor");
+        assert_eq!(
+            page.objects,
+            vec![IndexerCell {
+                tx_hash: "0xdd".to_string(),
+                index: 2,
+                capacity: 0x47e5e9f0c,
+                type_script: Some(Script {
+                    code_hash: "0xcc".to_string(),
+                    hash_type: "type".to_string(),
+                    args: "0x".to_string(),
+                }),
+                output_data: 1u64.to_le_bytes().to_vec(),
+                block_number: 0x40,
+            }]
+        );
     }
 
     #[tokio::test]

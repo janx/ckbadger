@@ -5,6 +5,7 @@
 
 pub mod api_checks;
 pub mod checks;
+pub mod dao_cells;
 pub mod entity_history;
 pub mod explorer;
 pub mod manifest;
@@ -174,6 +175,7 @@ fn all_checks() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = Vec::new();
     checks.extend(api_checks::api_checks());
     checks.push(Box::new(entity_history::EntityCapacityHistoryMatchesChain));
+    checks.push(Box::new(dao_cells::DaoLiveCellsMatchNode));
     checks.extend(explorer::explorer_checks());
     checks
 }
