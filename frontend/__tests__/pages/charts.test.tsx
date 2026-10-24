@@ -239,7 +239,10 @@ describe('ChartsPage', () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getHashRateChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getDifficultyChart).mockResolvedValue(mockChartResponse);
-    vi.mocked(api.getUncleRateChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getUncleRateChart).mockResolvedValue({
+      ...mockChartResponse,
+      orphanRateTarget: { numerator: 1, denominator: 40 },
+    });
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue(
       mockMinerDistributionResponse
     );

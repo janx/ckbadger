@@ -1430,11 +1430,24 @@ interface ChartResponse {
   y2AxisLabel?: string;
 }
 
+/**
+ * `/charts/uncle-rate`: the daily uncle rate plus the NC-Max orphan-rate target it is measured
+ * against, a consensus parameter (`orphan_rate_target` of the node's `get_consensus`).
+ */
+interface UncleRateChartResponse extends ChartResponse {
+  orphanRateTarget: { numerator: number; denominator: number };
+}
+
 interface TxStatsDataPoint {
   label: string;
   value: number;
 }
 
+/**
+ * `/statistics/tx-stats`. The LAST bucket of `hourlyData` is the hour still in progress and the
+ * LAST bucket of `dailyData` the day still in progress (`currentHour` / `currentDay` are their
+ * counts so far); every earlier bucket is complete.
+ */
 interface TxStatsResponse {
   currentHour: number;
   currentDay: number;
@@ -2155,6 +2168,7 @@ export type {
   MnftItemActivity,
   ChartDataPoint,
   ChartResponse,
+  UncleRateChartResponse,
   TxStatsDataPoint,
   TxStatsResponse,
   RecentBlockItem,
@@ -3249,7 +3263,7 @@ export const api = {
     return fetchApi('/charts/difficulty');
   },
 
-  getUncleRateChart: (): Promise<ChartResponse> => {
+  getUncleRateChart: (): Promise<UncleRateChartResponse> => {
     return fetchApi('/charts/uncle-rate');
   },
 
