@@ -3416,4 +3416,113 @@ against its documented default selection before calling a budget sufficient.
 
 ---
 
-_Last updated: 2026-09-25_
+## Category: NervosDAO
+
+### DAO-032: A completion whose request was written earlier in the same live batch was dropped
+
+**Date**: 2026-10-25 (fix 73a9b930, verify S31 8adf8c5c)
+
+**Symptom**: Three Nervos DAO deposits stayed at phase 1 although the node had spent their
+withdraw-request cells in ordinary phase-2 transactions:
+
+| Deposit         | Request block | Completion tx | Completion block | Live batch            |
+| --------------- | ------------- | ------------- | ---------------- | --------------------- |
+| `0x2048d010…:0` | 20,708,166    | `0x11e7d788…` | 20,709,591       | 20,707,314–20,710,903 |
+| `0x795a0f65…:0` | 20,730,592    | `0xe764d894…` | 20,731,017       | 20,730,213–20,735,212 |
+| `0x20add078…:0` | 20,801,305    | `0x23a6302f…` | 20,805,024       | 20,800,213–20,805,212 |
+
+`/dao/statistics` counted them: `activeDeposits` 22,378 against 22,375 live DAO cells and
+`pendingWithdrawalCapacity` 15,870,540,476,690 shannons (158,705.40 CKB) above the chain, with
+their frozen compensation still in `unclaimedCompensation`. The three completion txs were stored
+with the parser's `fee = 0` placeholder. The cell layer had seen the spends: the live-cell
+summary's DAO class was right (22,374 against the lifecycle's 22,377 at block 20,821,645).
+
+**Root Cause**: The indexer restarted on 2026-10-23 107,968 blocks behind and caught up through
+the live path in 24 batches of 2,000–5,000 blocks. A request and its completion never share a
+block — the completion header-deps the request block — and that was the only case the live writer
+considered (`sync/batch.rs`: "a consumed withdraw-request outpoint always references a request
+committed in an earlier batch"). Every DAO input was resolved against committed state only:
+`find_consumed_dao_deposits_batch` (twice: lifecycle and daily stats) and
+`pre_compute_dao_compensations`. The one same-batch overlay held deposit outpoints, never request
+outpoints. A completion spending a request created earlier in the same batch matched nothing and
+was skipped without an error, by four consumers at once: the lifecycle row (status stayed 1), the
+fee correction (placeholder kept), the activity views (no DAO-withdraw classification or
+compensation) and the daily DAO deltas (withdrawal and protocol-capacity decrement missed). The
+store's pre-commit overlay justified the same assumption with a false premise ("at least 180
+epochs between a withdraw request and its completion" — the lock runs from the deposit; these
+three completed 425–3,719 blocks after their requests).
+
+Ruled out: reorgs (the first after the restart was at 20,809,237, after the catch-up ended),
+the bulk↔live boundary (bulk ended at 20,552,613), and `dao_by_withdraw_tx` keying (every
+completion whose request was committed by an earlier batch — 124 live, 272 bulk-era — was
+recorded; every one whose request shared its batch — exactly these three — was lost).
+
+**Fix**: `LiveDaoBatch` (`db/writer/dao.rs`) resolves a live batch's DAO lifecycle once, in chain
+order, inputs before outputs, against the committed store shadowed by the batch's own transitions
+— the way the bulk reducer resolves against its in-memory state. A DAO-typed input that resolves
+to no lifecycle entry is a `PreCommitInvariantError`. The fee correction, activity views, daily
+DAO deltas, snapshot overlays and staged rows all read that one resolution; the claimed amount
+comes from `dao_frozen_request_compensation` alone. Before every live commit the post-batch
+count of status-0/1 entries must equal the live-cell summary's DAO class, so a lost or duplicated
+transition stops the batch that would commit it.
+
+**Why the tests missed it**: every live DAO test wrote one block per batch. The class assertion
+is "one batch equals the same blocks written one by one":
+`test_live_dao_rows_do_not_depend_on_batch_boundaries` compares the DAO CFs, `stats_dao`,
+`tx_index` and `tx_actions` byte for byte (red before the fix), beside
+`test_live_batch_completes_withdrawal_requested_in_same_batch` (the incident's shape) and
+`test_live_batch_refuses_to_commit_over_a_lost_dao_completion` (the invariant on the store the
+incident left).
+
+**Detection**: `dao_live_cells_match_node` (verify S31) compares every live DAO cell on the node
+with the lifecycle at one block, plus the statistics and live-cell summary. On the incident store
+it reports exactly the three requests and both statistics excesses.
+
+**Re-sync required**: Yes. The fix corrects the domain-store write path (`dao_deposits`, its
+secondary indexes, `stats_dao`, `tx_index`, `tx_actions`); rows already written stay wrong, and the
+new pre-commit invariant refuses to extend a store that carries them. Purge the chain stores and
+re-sync from genesis. The append-only store is untouched.
+
+**Lesson**: Batch boundaries are an artefact of how fast the indexer caught up. Any per-block
+argument ("these two events cannot share a block") says nothing about a batch, and any lookup
+that reads only committed state inside a multi-block batch needs the batch's own writes. Test it
+the one way that catches the class: batched equals unbatched.
+
+**Files**: `crates/indexer/src/db/writer/dao.rs`, `crates/indexer/src/sync/batch.rs`,
+`crates/ckbadger-store/src/dao_ops.rs`, `crates/indexer/src/verify/dao_cells.rs`
+
+---
+
+### DAO-033: Deposits paired with withdraw requests by a capacity/lock heuristic
+
+**Date**: 2026-10-25 (fix bc52b9a6)
+
+**Symptom**: Latent. Both the live writer and the bulk DAO reducer paired each phase-1 deposit
+input with a request output by `(capacity, deposit block)`, preferring a matching lock, and
+carried a "known limitation" comment. Two same-block, same-capacity deposits withdrawn in one
+transaction with swapped request locks were each given the other's request outpoint and request
+occupied capacity, so the completion of one would complete the other — at the other's
+compensation if their lock sizes differed. Mainnet as indexed on 2026-10-25 has 7 phase-1
+transactions with such a group and none is mis-paired.
+
+**Root Cause**: RFC-0023 and the DAO script pair by position: "for a deposit cell at input index
+`i`, a withdrawing cell MUST be created at output index `i`" (`dao.c`
+`validate_withdrawing_cell(index, …)` loads `CKB_SOURCE_OUTPUT` at the absolute input index).
+The bulk sequencer already used that rule for request ARs; the two reducers did not.
+
+**Fix**: Both pair the deposit at input `i` with output `i` and fail if that output is not its
+withdraw request (DAO cell, same capacity, its own deposit block in the data). The request's lock
+is free and plays no part.
+
+**Tests**: `test_live_dao_batch_pairs_each_deposit_with_the_output_at_its_input_index` and
+`dao_owner_pairs_each_deposit_with_the_output_at_its_input_index` (red before the fix), plus
+rejection tests for an output that is not the paired request.
+
+**Re-sync required**: Covered by DAO-032's. No currently indexed mainnet deposit changes.
+
+**Files**: `crates/indexer/src/db/writer/dao.rs`,
+`crates/indexer/src/sync/bulk_build/owners/dao.rs`
+
+---
+
+_Last updated: 2026-10-25_

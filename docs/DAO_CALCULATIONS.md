@@ -184,6 +184,27 @@ a protocol-wide constant for cells using different lock scripts — the observed
 divergent shape on mainnet is a 33-byte-args lock at deposit withdrawing into a
 standard 20-byte-args secp lock, a 13 CKB difference.
 
+### Which request belongs to which deposit
+
+RFC-0023 pairs by position: for a deposit cell spent as input `i`, the
+withdrawing cell is output `i` of the same transaction, with the same capacity
+and the deposit's block number as its 8-byte data (`dao.c` loads the output at
+the absolute input index). The request's lock is free. Live sync and bulk build
+both pair this way and fail when output `i` is not that deposit's request; they
+never search the outputs by capacity or lock (POSTMORTEM DAO-033).
+
+### One resolution per live batch
+
+A live catch-up batch spans up to 5,000 blocks, so a deposit, its request and
+its completion can all fall inside one batch (only never inside one block).
+The live writer resolves every DAO input of a batch once, in chain order,
+against the committed lifecycle shadowed by the batch's own earlier
+transitions, and every consumer — the phase-2 fee, activities, daily deltas,
+snapshot overlays and stored rows — reads that one resolution. Before each
+commit the post-batch number of status-0/1 entries must equal the live-cell
+summary's DAO class: every live DAO cell is exactly one deposit or one request
+(POSTMORTEM DAO-032).
+
 ### Lifecycle aggregation
 
 At observation block `B`, each deposit contributes through exactly one state:
