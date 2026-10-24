@@ -1019,6 +1019,14 @@ async fn test_miner_distribution_reads_from_derived_store() {
             },
         )
         .unwrap();
+    // The indexed tip is today, so its last complete day is yesterday.
+    seed_tip_block_on_utc8_day(
+        &core_store,
+        50,
+        &(latest_complete_date + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string(),
+    );
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -1053,6 +1061,37 @@ async fn test_miner_distribution_reads_from_derived_store() {
         .as_str()
         .unwrap()
         .starts_with("ckb1"));
+}
+
+/// Regression (STATS-014, review B): the miner distribution's "last 7 complete
+/// days" came from the wall clock. An indexer that lags the chain (here by
+/// years) then reported an empty window of days it has not indexed, while
+/// its own complete days went unshown. The window ends at the chain's last
+/// complete day by the median-time rule.
+#[tokio::test]
+async fn test_miner_distribution_window_ends_at_the_chain_s_last_complete_day() {
+    let store = test_store();
+    for (date, blocks) in [("20240115", 10), ("20240108", 90)] {
+        store
+            .put_miner_stats(
+                date,
+                &[0x66; 32],
+                &MinerStats {
+                    miner_lock_hash: vec![0x66; 32],
+                    blocks_count: blocks,
+                    last_block_number: 1,
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 50, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/miner-address-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["fromDate"], "2024-01-09", "{json}");
+    assert_eq!(json["toDate"], "2024-01-15", "{json}");
+    assert_eq!(json["totalBlocks"], 10, "{json}");
 }
 
 #[tokio::test]

@@ -1475,6 +1475,9 @@ pub(super) fn load_latest_dao_daily_snapshot(
         .context("failed to get latest dao daily snapshot while building cumulative snapshot")
 }
 
+/// The batch's DAO snapshot dates treated as complete: every date but the
+/// newest. Correct only while timestamps do not step back across midnight
+/// (CKB permits that; see POSTMORTEM STATS-014 for the open defect).
 fn completed_dao_snapshot_boundaries(stats: &BatchStats) -> Result<Vec<DaoSnapshotBoundary>> {
     let mut dates = stats.dao_snapshot_dates.iter().copied().collect::<Vec<_>>();
     dates.sort_unstable();
@@ -4619,8 +4622,13 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.cum_treasury)
                     .unwrap_or(0);
-                // Every date this batch wrote except the last is complete: no
-                // later block can land on it.
+                // Every date this batch wrote except the last is treated as
+                // complete. That holds only while block timestamps never step
+                // back across midnight; CKB allows it (a block need only be
+                // dated after the median time of the 37 before it), and then a
+                // later block can still land on such a date. This writer does
+                // not use `ckbadger_common::stats_bucket` yet — POSTMORTEM
+                // STATS-014 records the open defect and why.
                 let completed_boundaries: HashMap<NaiveDate, i64> =
                     completed_dao_snapshot_boundaries(stats)?
                         .into_iter()
@@ -4791,8 +4799,9 @@ impl Indexer {
                         protocol_deposited: Some(running_protocol_deposited),
                     };
 
-                    // A completed day never changes again, so it must not be
-                    // persisted with carried-forward placeholders and corrected
+                    // A completed day must not change again (see the caveat on
+                    // `completed_boundaries` above for backward timestamps), so
+                    // it must not be persisted with carried-forward placeholders and corrected
                     // afterwards: a crash in that window froze the day at the
                     // preceding batch's cumulative values (DAO-026). Evaluate it
                     // here — at its own final block and AR, against this batch's

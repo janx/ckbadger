@@ -3517,7 +3517,7 @@ still before midnight. Meanwhile the bulk indexer already sealed activity bucket
 median-time watermark (`bulk_build/mod.rs`), so the API and the indexer held two different
 definitions of "complete".
 
-**Fix**: one definition for both crates, `ckbadger_common::stats_bucket`: a bucket (an hour or a
+**Fix**: one definition for the API and the bulk sealer, `ckbadger_common::stats_bucket`: a bucket (an hour or a
 UTC+8 day) is complete when its end is at or below the median time of the newest 37 indexed blocks
 (`median_time_ms`, `is_bucket_complete`).
 
@@ -3530,6 +3530,26 @@ UTC+8 day) is complete when its end is at or below the median time of the newest
   carries `complete: bool`, because more than one trailing bucket can be in progress.
 - The inflation chart's cache is keyed by the last complete day.
 - `total-supply` and `secondary-issuance` still include the current day on purpose (verify S16).
+- Review B: `/charts/miner-address-distribution` decided its "last 7 complete days" by the wall
+  clock; it now ends at `ChainTime::last_complete_day()`.
+
+**Not routed, open defect (review B)**: the live DAO daily-snapshot writer (`sync/batch.rs`,
+`completed_dao_snapshot_boundaries`) still treats every date in a batch except the newest as
+complete. That is correct only while timestamps never step back across midnight, and it is wrong
+when one does. Take block N dated D following block N−1 dated D+1:
+
+- **Separate batches:** the batch holding N starts its running totals from the newest stored
+  snapshot (D+1), rewrites D's snapshot from D+1's totals plus N's deltas, and N's DAO deltas never
+  reach D+1 or any later day. Bulk build sums deltas by date at finalize, so the two paths diverge.
+- **Same batch:** D is finalized at block N. N's C/S/U and lifecycle state include block N−1, while
+  D's running totals exclude it.
+
+Swapping the predicate for the median-time rule alone would make things worse: a day that
+completes in a later batch with no block of its own would keep carried-forward placeholders (the
+DAO-026 class). The real decision is what a day's snapshot means when its blocks interleave with
+the next day's, applied identically in the live, bulk and rollback-recompute paths, with a re-sync.
+That is left for a decision. The comments that claimed "no later block can land on it" now state
+the assumption.
 
 **Why the tests missed it**: every fixture had monotonic timestamps and a lone tip header, so "tip
 day = newest day" held in all of them; one test even pinned the 500. Regressions:

@@ -3132,9 +3132,17 @@ fn build_miner_distribution_response(
 async fn get_miner_address_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MinerDistributionResponse> {
-    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
-        .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
-    let to_date = Utc::now().with_timezone(&utc8).date_naive() - chrono::Duration::days(1);
+    // The window ends at the chain's last complete day by the median-time
+    // rule (`utils::stats_bucket`), not the wall clock: a lagging indexer has
+    // not indexed "yesterday" yet, and its own complete days must still show.
+    let store = state.store.clone();
+    let chain = tokio::task::spawn_blocking(move || ChainTime::load(&store))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??
+        .ok_or_else(|| {
+            ApiError::initializing("no indexed block yet: no complete day to report miners for")
+        })?;
+    let to_date = chain.last_complete_day()?;
     let from_date = to_date - chrono::Duration::days(MINER_DISTRIBUTION_WINDOW_DAYS - 1);
     let from_key = from_date.format("%Y%m%d").to_string();
     let to_key = to_date.format("%Y%m%d").to_string();
