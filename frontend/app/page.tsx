@@ -14,19 +14,11 @@ export default function Home() {
     refetchInterval: 10000,
   });
 
-  const initialData = {
-    stats: stats ?? null,
-    blocks: [],
-    transactions: [],
-    blockTimeChart: null,
-    hashRateChart: null,
-  };
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
       {stats && stats.deepForkStatus && <DeepForkAlert status={stats.deepForkStatus} />}
-      <HomeContent initialData={initialData} />
+      <HomeContent />
     </div>
   );
 }

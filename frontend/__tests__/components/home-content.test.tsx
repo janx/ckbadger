@@ -3,44 +3,35 @@ import { render, screen } from '@/__tests__/utils/test-utils';
 import { HomeContent } from '@/components/home-content';
 import { api } from '@/lib/api';
 
-vi.mock('@/components/stats-cards', () => ({ SyncBanner: () => null }));
-vi.mock('@/components/ckbytes-card', () => ({ CKBytesCard: () => null }));
-vi.mock('@/components/home-charts', () => ({
-  HomeCharts: () => <div data-testid="home-charts" />,
+const realtime = vi.hoisted(() => ({ calls: 0 }));
+
+vi.mock('@/components/stats-cards', () => ({
+  SyncBanner: () => <div data-testid="sync-banner" />,
 }));
-vi.mock('@/components/mini-stats-cards', () => ({ MiniStatsCards: () => null }));
-vi.mock('@/components/chain-wave/epoch-progress', () => ({ EpochProgress: () => null }));
 vi.mock('@/components/pipeline/pipeline-panel', () => ({
   PipelinePanel: () => <div data-testid="pipeline-panel" />,
 }));
-vi.mock('@/components/dao-overview', () => ({ DaoOverview: () => null }));
-vi.mock('@/components/home-layer2', () => ({ KnowledgeSizeTrend: () => null }));
-vi.mock('@/components/latest-activities', () => ({ LatestActivities: () => null }));
-vi.mock('@/components/activity-card', () => ({
-  ActivityCard: () => null,
-  ActivityBarChartCard: () => null,
+vi.mock('@/components/home/network-section', () => ({
+  NetworkSection: () => <div data-testid="network-section" />,
 }));
-vi.mock('@/components/latest-blocks', () => ({
-  LatestBlocks: () => <div data-testid="latest-blocks" />,
+vi.mock('@/components/home/ckbytes-section', () => ({
+  CkbytesSection: () => <div data-testid="ckbytes-section" />,
 }));
-vi.mock('@/components/latest-transactions', () => ({ LatestTransactions: () => null }));
+vi.mock('@/components/home/activity-section', () => ({
+  ActivitySection: () => <div data-testid="activity-section" />,
+}));
 vi.mock('@/hooks/useRealtimeStore', () => ({
-  useRealtimeData: () => ({ isConnected: false }),
+  useRealtimeData: () => {
+    realtime.calls++;
+    return { isConnected: true, latestBlock: null, latestTx: null };
+  },
 }));
 
-function renderHome(): HTMLElement {
-  vi.spyOn(api, 'getNetworkStats').mockImplementation(() => new Promise(() => {}));
-  render(
-    <HomeContent
-      initialData={{
-        stats: null,
-        blocks: [],
-        transactions: [],
-        blockTimeChart: null,
-        hashRateChart: null,
-      }}
-    />
+function renderHome(stats: Awaited<ReturnType<typeof api.getNetworkStats>> | null = null) {
+  vi.spyOn(api, 'getNetworkStats').mockImplementation(() =>
+    stats ? Promise.resolve(stats) : new Promise(() => {})
   );
+  render(<HomeContent />);
   return screen.getByRole('main');
 }
 
@@ -57,30 +48,33 @@ describe('HomeContent layout', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the constrained rows inside the site-wide container used by the header and footer', () => {
+  it('stacks the pipeline, Network, CKBytes and Activity, in that order, 52 px apart', () => {
     const main = renderHome();
-
-    for (const testId of ['home-charts', 'latest-blocks']) {
-      const wrapper = screen.getByTestId(testId).closest('.container');
-      expect(wrapper).not.toBeNull();
-      expect(main).toContainElement(wrapper as HTMLElement);
-      expect(wrapper).toHaveClass('mx-auto');
-      expect(wrapper).toHaveClass('px-4');
-    }
+    const column = screen.getByTestId('pipeline-panel').parentElement as HTMLElement;
+    expect(main).toContainElement(column);
+    expect(column).toHaveClass('container', 'mx-auto', 'px-4', 'flex-col', 'gap-[52px]');
+    expect([...column.children].map((c) => c.getAttribute('data-testid'))).toEqual([
+      'pipeline-panel',
+      'network-section',
+      'ckbytes-section',
+      'activity-section',
+    ]);
+    expect(viewportSizedClasses(main)).toEqual([]);
   });
 
-  it('renders the transaction pipeline in the same page container as the other rows', () => {
-    const main = renderHome();
-    const pipeline = screen.getByTestId('pipeline-panel');
-    const wrapper = pipeline.closest('.container');
+  it('puts the sync banner first once the stats are in', async () => {
+    renderHome({ syncStatus: { isSyncing: true } } as Awaited<
+      ReturnType<typeof api.getNetworkStats>
+    >);
+    const banner = await screen.findByTestId('sync-banner');
+    expect(banner.parentElement?.firstElementChild).toBe(banner);
+  });
 
-    expect(wrapper).not.toBeNull();
-    expect(main).toContainElement(wrapper as HTMLElement);
-    expect(wrapper).toHaveClass('mx-auto');
-    expect(wrapper).toHaveClass('px-4');
-    // Its own row, not squeezed into the row above or below it.
-    expect(wrapper).not.toContainElement(screen.getByTestId('home-charts'));
-    expect(wrapper).not.toContainElement(screen.getByTestId('latest-blocks'));
-    expect(viewportSizedClasses(main)).toEqual([]);
+  it('keeps the realtime connection on the homepage, without a floating LIVE pill', () => {
+    realtime.calls = 0;
+    const main = renderHome();
+    expect(realtime.calls).toBeGreaterThan(0);
+    expect(main.querySelector('.fixed')).toBeNull();
+    expect(screen.queryByText(/^Live$/i)).not.toBeInTheDocument();
   });
 });
