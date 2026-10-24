@@ -19,7 +19,7 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
-use crate::utils::stats_day::{is_complete_day_key, InProgressDay};
+use crate::utils::stats_day::{is_complete_day_key, parse_day_key, InProgressDay};
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
     script_to_address,
@@ -218,110 +218,22 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         return ok(cached);
     }
 
-    // Get the latest block header to determine reference time
     let store = state.store.clone();
-    let latest_header = tokio::task::spawn_blocking(move || store.get_sync_tip_block())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (tip, hourly_stats, daily_stats) = tokio::task::spawn_blocking(move || {
+        let tip = store.get_sync_tip_block()?;
+        let hourly = store.list_hourly_stats_with_keys()?;
+        let daily = store.list_daily_stats_with_dates()?;
+        anyhow::Ok((tip, hourly, daily))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let reference_time = latest_header
-        .as_ref()
-        .and_then(|(_, h)| DateTime::from_timestamp_millis(h.timestamp))
-        .unwrap_or_else(Utc::now);
-    let reference_ts = reference_time.timestamp() * 1000; // ms
-
-    // Get hourly stats (last 24 hours)
-    let store = state.store.clone();
-    let hourly_stats = tokio::task::spawn_blocking(move || store.list_hourly_stats_with_keys())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let cutoff_24h = reference_ts - 24 * 3600 * 1000;
-
-    // Filter hourly stats to last 24 hours
-    let mut recent_hourly: Vec<(String, ckbadger_store::HourlyStats)> = hourly_stats
-        .into_iter()
-        .filter(|(_, h)| h.hour * 1000 > cutoff_24h && h.hour * 1000 <= reference_ts)
-        .collect();
-    recent_hourly.sort_by_key(|item| std::cmp::Reverse(item.1.hour)); // desc
-    recent_hourly.truncate(24);
-
-    // Get daily stats (last 14 days)
-    let store = state.store.clone();
-    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let reference_date = ckbadger_common::block_date(reference_time);
-    let cutoff_date = reference_date - chrono::Duration::days(14);
-
-    let mut recent_daily: Vec<(String, ckbadger_store::DailyStats)> = daily_stats
-        .into_iter()
-        .filter(|(date_str, _)| {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y%m%d") {
-                date > cutoff_date && date <= reference_date
-            } else {
-                false
-            }
-        })
-        .collect();
-    recent_daily.sort_by(|a, b| b.0.cmp(&a.0)); // desc
-    recent_daily.truncate(14);
-
-    let txs_this_hour: i64 = recent_hourly
-        .first()
-        .map(|(_, h)| h.transactions_count as i64)
-        .unwrap_or(0);
-    // currentDay reports the natural (UTC+8) day so far — the same daily
-    // bucket series that dailyData charts. The rolling window-normalized
-    // per-day RATE lives in /statistics/network (transactionsPerDay); this
-    // endpoint deliberately does not introduce a third semantic. An absent
-    // bucket means no transactions have landed today yet (legitimate empty
-    // state right after the UTC+8 midnight, not a masked invariant).
-    let reference_date_str = reference_date.format("%Y%m%d").to_string();
-    let txs_today: i64 = recent_daily
-        .iter()
-        .find(|(date_str, _)| *date_str == reference_date_str)
-        .map(|(_, s)| s.transactions_count as i64)
-        .unwrap_or(0);
-
-    let hourly_data: Vec<TxStatsDataPoint> = recent_hourly
-        .into_iter()
-        .rev()
-        .map(|(_, h)| {
-            let dt = DateTime::from_timestamp(h.hour, 0).unwrap_or_default();
-            TxStatsDataPoint {
-                label: dt.format("%H:00").to_string(),
-                value: h.transactions_count as i64,
-            }
-        })
-        .collect();
-
-    let daily_data: Vec<TxStatsDataPoint> = recent_daily
-        .into_iter()
-        .rev()
-        .map(|(date_str, stats)| {
-            let label = if let Ok(date) = chrono::NaiveDate::parse_from_str(&date_str, "%Y%m%d") {
-                date.format("%m/%d").to_string()
-            } else {
-                date_str
-            };
-            TxStatsDataPoint {
-                label,
-                value: stats.transactions_count as i64,
-            }
-        })
-        .collect();
-
-    let response = TxStatsResponse {
-        current_hour: txs_this_hour,
-        current_day: txs_today,
-        hourly_data,
-        daily_data,
-    };
+    let response = build_tx_stats_response(
+        tip.map(|(number, header)| (number, header.timestamp)),
+        hourly_stats,
+        daily_stats,
+    )?;
 
     state
         .cache
@@ -575,6 +487,119 @@ fn format_difficulty(difficulty: u64) -> String {
     }
 }
 
+/// Hourly buckets in `/statistics/tx-stats`: the ones starting within the 24 h
+/// that end at the indexed tip block.
+const TX_STATS_HOURS: i64 = 24;
+/// Daily buckets in `/statistics/tx-stats`: the tip block's day and the 13
+/// days before it.
+const TX_STATS_DAYS: i64 = 14;
+const SECS_PER_HOUR: i64 = 3600;
+
+/// Build `/statistics/tx-stats` around the indexed tip block `(number,
+/// timestamp_ms)`. See [`TxStatsResponse`] for the contract; every way the
+/// rows could break it is an error naming the tip and the offending bucket.
+fn build_tx_stats_response(
+    tip: Option<(i64, i64)>,
+    hourly_stats: Vec<(String, ckbadger_store::HourlyStats)>,
+    daily_stats: Vec<(String, ckbadger_store::DailyStats)>,
+) -> Result<TxStatsResponse, ApiRouteError> {
+    let Some((tip_number, tip_timestamp_ms)) = tip else {
+        if hourly_stats.is_empty() && daily_stats.is_empty() {
+            return Ok(TxStatsResponse {
+                current_hour: 0,
+                current_day: 0,
+                hourly_data: Vec::new(),
+                daily_data: Vec::new(),
+            });
+        }
+        return Err(ApiError::internal(format!(
+            "transaction stats hold {} hourly and {} daily rows, but the store has no indexed block",
+            hourly_stats.len(),
+            daily_stats.len()
+        )));
+    };
+
+    // Hourly: chain-level buckets, each carrying its UTC hour start in seconds.
+    let tip_secs = tip_timestamp_ms.div_euclid(1000);
+    let mut hourly = Vec::new();
+    for (key, stats) in hourly_stats {
+        if stats.hour > tip_secs {
+            return Err(ApiError::internal(format!(
+                "hourly stats bucket {key} starts at {} s, after the indexed tip block {tip_number} \
+                 ({tip_secs} s); no block can be dated after the tip",
+                stats.hour
+            )));
+        }
+        if stats.hour > tip_secs - TX_STATS_HOURS * SECS_PER_HOUR {
+            hourly.push(stats);
+        }
+    }
+    hourly.sort_by_key(|stats| std::cmp::Reverse(stats.hour));
+    if let Some(newest) = hourly.first() {
+        if tip_secs >= newest.hour + SECS_PER_HOUR {
+            return Err(ApiError::internal(format!(
+                "hourly stats have no bucket containing the indexed tip block {tip_number} \
+                 ({tip_secs} s); the newest bucket starts at {} s",
+                newest.hour
+            )));
+        }
+    }
+
+    // Daily: UTC+8 stats days; the tip block's day is the in-progress one.
+    let tip_day = InProgressDay::of_block(tip_number, tip_timestamp_ms)?;
+    let first_day = tip_day.date() - chrono::Duration::days(TX_STATS_DAYS - 1);
+    let mut daily = Vec::new();
+    for (key, stats) in daily_stats {
+        let date = parse_day_key("daily stats", &key)?;
+        // Rejects a row dated after the tip block's day.
+        tip_day.classify("daily stats", date)?;
+        if date >= first_day {
+            daily.push((date, stats));
+        }
+    }
+    daily.sort_by_key(|(date, _)| std::cmp::Reverse(*date));
+    if let Some((newest, _)) = daily.first() {
+        if *newest != tip_day.date() {
+            return Err(ApiError::internal(format!(
+                "daily stats have no row for the day of the indexed tip block {tip_number} ({}); \
+                 the newest row is {newest}",
+                tip_day.date()
+            )));
+        }
+    }
+
+    let mut hourly_data = Vec::with_capacity(hourly.len());
+    for stats in hourly.iter().rev() {
+        let start = DateTime::from_timestamp(stats.hour, 0).ok_or_else(|| {
+            ApiError::internal(format!(
+                "hourly stats bucket start out of range: {} s",
+                stats.hour
+            ))
+        })?;
+        hourly_data.push(TxStatsDataPoint {
+            label: start.format("%H:00").to_string(),
+            value: i64::from(stats.transactions_count),
+        });
+    }
+    let daily_data: Vec<TxStatsDataPoint> = daily
+        .iter()
+        .rev()
+        .map(|(date, stats)| TxStatsDataPoint {
+            label: date.format("%m/%d").to_string(),
+            value: i64::from(stats.transactions_count),
+        })
+        .collect();
+
+    // A store with blocks but no materialized stats yet (a fresh bulk build
+    // writes them at finalize) has empty series and zero counts.
+    Ok(TxStatsResponse {
+        current_hour: hourly_data.last().map_or(0, |point| point.value),
+        current_day: daily_data.last().map_or(0, |point| point.value),
+        hourly_data,
+        daily_data,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxStatsDataPoint {
@@ -582,6 +607,29 @@ pub struct TxStatsDataPoint {
     pub value: i64,
 }
 
+/// `/statistics/tx-stats`: transaction counts per hour and per day, each
+/// series ending with the bucket that is still in progress.
+///
+/// The homepage draws the in-progress bucket apart from the complete ones, so
+/// the position is the contract — consumers must not infer it from labels:
+///
+/// - `hourly_data`: chain-level hourly buckets whose start lies within the
+///   24 h ending at the indexed tip block, oldest first, labelled with their
+///   UTC start hour (`HH:00`). The LAST element is the bucket containing the
+///   tip block — in progress. Every earlier element is a complete hour.
+/// - `daily_data`: UTC+8 daily buckets of the 14 days ending with the tip
+///   block's day, oldest first, labelled `MM/DD`. The LAST element is the tip
+///   block's day — in progress ([`crate::utils::stats_day`]). Every earlier
+///   element is a complete day.
+/// - `current_hour` / `current_day`: the counts of those two last elements —
+///   the natural hour and day so far, not the rolling per-day rate that
+///   `/statistics/network` serves as `transactionsPerDay`.
+///
+/// Hours and days without blocks have no bucket, so a series can be shorter
+/// than 24 / 14 — or empty, before any block or before a fresh bulk build has
+/// materialized its stats — and an empty series reports a zero count. The
+/// endpoint fails rather than serve a series whose last bucket is not the tip
+/// block's.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxStatsResponse {
@@ -4867,6 +4915,158 @@ mod tests {
             old_formula > got * 1.15,
             "old formula ({old_formula}) must overstate the window-work rate ({got}) by ~19%"
         );
+    }
+
+    fn utc_secs(rfc3339: &str) -> i64 {
+        DateTime::parse_from_rfc3339(rfc3339).unwrap().timestamp()
+    }
+
+    fn tx_hour(rfc3339: &str, txs: i32) -> (String, ckbadger_store::HourlyStats) {
+        let hour = utc_secs(rfc3339);
+        (
+            DateTime::from_timestamp(hour, 0)
+                .unwrap()
+                .format("%Y%m%d%H")
+                .to_string(),
+            ckbadger_store::HourlyStats {
+                hour,
+                blocks_count: 1,
+                transactions_count: txs,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn tx_day(key: &str, txs: i32) -> (String, ckbadger_store::DailyStats) {
+        (
+            key.to_string(),
+            ckbadger_store::DailyStats {
+                blocks_count: 1,
+                transactions_count: txs,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// 2026-10-23T16:30Z: hour bucket 16:00 UTC, stats day 2026-10-24 (UTC+8).
+    fn tx_stats_tip() -> Option<(i64, i64)> {
+        Some((20_819_353, utc_secs("2026-10-23T16:30:00Z") * 1000))
+    }
+
+    fn tx_stats_error(
+        hourly: Vec<(String, ckbadger_store::HourlyStats)>,
+        daily: Vec<(String, ckbadger_store::DailyStats)>,
+    ) -> String {
+        build_tx_stats_response(tx_stats_tip(), hourly, daily)
+            .unwrap_err()
+            .1
+             .0
+            .message
+            .clone()
+    }
+
+    /// The contract the homepage draws against: each series is oldest first and
+    /// ends with the bucket holding the indexed tip block — the in-progress one
+    /// — and `currentHour` / `currentDay` are those last buckets' counts.
+    #[test]
+    fn test_tx_stats_series_end_with_the_buckets_holding_the_tip_block() {
+        let hourly = vec![
+            // Starts exactly 24.5 h before the tip: outside the window.
+            tx_hour("2026-10-22T16:00:00Z", 1),
+            tx_hour("2026-10-22T17:00:00Z", 690),
+            tx_hour("2026-10-23T14:00:00Z", 720),
+            tx_hour("2026-10-23T16:00:00Z", 5),
+            tx_hour("2026-10-23T15:00:00Z", 700),
+        ];
+        let daily = vec![
+            tx_day("20261010", 1),
+            tx_day("20261011", 16_000),
+            tx_day("20261024", 40),
+            tx_day("20261023", 17_000),
+        ];
+        let response = build_tx_stats_response(tx_stats_tip(), hourly, daily).unwrap();
+
+        let hours: Vec<(&str, i64)> = response
+            .hourly_data
+            .iter()
+            .map(|p| (p.label.as_str(), p.value))
+            .collect();
+        assert_eq!(
+            hours,
+            vec![("17:00", 690), ("14:00", 720), ("15:00", 700), ("16:00", 5)],
+            "oldest first, last = the UTC hour holding the tip"
+        );
+        assert_eq!(response.current_hour, 5);
+
+        let days: Vec<(&str, i64)> = response
+            .daily_data
+            .iter()
+            .map(|p| (p.label.as_str(), p.value))
+            .collect();
+        assert_eq!(
+            days,
+            vec![("10/11", 16_000), ("10/23", 17_000), ("10/24", 40)],
+            "14 days ending with the tip's UTC+8 day, which is the last"
+        );
+        assert_eq!(response.current_day, 40);
+    }
+
+    #[test]
+    fn test_tx_stats_fails_when_no_bucket_holds_the_tip_block() {
+        let err = tx_stats_error(
+            vec![tx_hour("2026-10-23T15:00:00Z", 700)],
+            vec![tx_day("20261024", 40)],
+        );
+        assert!(
+            err.contains("no bucket containing the indexed tip block 20819353"),
+            "{err}"
+        );
+
+        let err = tx_stats_error(
+            vec![tx_hour("2026-10-23T16:00:00Z", 5)],
+            vec![tx_day("20261023", 17_000)],
+        );
+        assert!(
+            err.contains("no row for the day of the indexed tip block")
+                && err.contains("2026-10-24")
+                && err.contains("2026-10-23"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_tx_stats_rejects_buckets_after_the_tip_block() {
+        let err = tx_stats_error(
+            vec![
+                tx_hour("2026-10-23T16:00:00Z", 5),
+                tx_hour("2026-10-23T17:00:00Z", 1),
+            ],
+            vec![tx_day("20261024", 40)],
+        );
+        assert!(err.contains("2026102317") && err.contains("after"), "{err}");
+
+        let err = tx_stats_error(
+            vec![tx_hour("2026-10-23T16:00:00Z", 5)],
+            vec![tx_day("20261024", 40), tx_day("20261025", 1)],
+        );
+        assert!(err.contains("2026-10-25") && err.contains("after"), "{err}");
+
+        let err = tx_stats_error(
+            vec![tx_hour("2026-10-23T16:00:00Z", 5)],
+            vec![tx_day("2026-10-24", 40)],
+        );
+        assert!(err.contains("malformed"), "{err}");
+    }
+
+    #[test]
+    fn test_tx_stats_without_blocks_is_empty_and_rows_without_blocks_fail() {
+        let response = build_tx_stats_response(None, Vec::new(), Vec::new()).unwrap();
+        assert_eq!((response.current_hour, response.current_day), (0, 0));
+        assert!(response.hourly_data.is_empty() && response.daily_data.is_empty());
+
+        let err =
+            build_tx_stats_response(None, Vec::new(), vec![tx_day("20261024", 40)]).unwrap_err();
+        assert!(err.1 .0.message.contains("no indexed block"));
     }
 
     #[test]

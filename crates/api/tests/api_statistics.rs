@@ -2077,6 +2077,80 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
     );
 }
 
+/// The `/statistics/tx-stats` contract the homepage draws against (see
+/// `TxStatsResponse`): `hourlyData` and `dailyData` are oldest first and their
+/// LAST element is the bucket holding the indexed tip block — in progress;
+/// every earlier element is complete; `currentHour`/`currentDay` are the last
+/// elements' counts. Hourly labels are UTC hours, daily buckets UTC+8 days.
+#[tokio::test]
+async fn test_tx_stats_last_buckets_are_the_in_progress_ones_holding_the_tip() {
+    let store = test_store();
+    // 2026-10-23T16:30Z — UTC hour 16:00, UTC+8 stats day 2026-10-24.
+    let tip_ms = chrono::DateTime::parse_from_rfc3339("2026-10-23T16:30:00Z")
+        .unwrap()
+        .timestamp_millis();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(500, &recent_block_header(500, tip_ms));
+    batch.commit().unwrap();
+
+    for (start, txs) in [
+        ("2026-10-23T14:00:00Z", 720),
+        ("2026-10-23T15:00:00Z", 700),
+        ("2026-10-23T16:00:00Z", 5),
+    ] {
+        let hour = chrono::DateTime::parse_from_rfc3339(start)
+            .unwrap()
+            .timestamp();
+        store
+            .put_hourly_stats(
+                &chrono::DateTime::from_timestamp(hour, 0)
+                    .unwrap()
+                    .format("%Y%m%d%H")
+                    .to_string(),
+                &HourlyStats {
+                    hour,
+                    blocks_count: 1,
+                    transactions_count: txs,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    for (date, txs) in [("20261022", 16_000), ("20261023", 17_000), ("20261024", 40)] {
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 1,
+                    transactions_count: txs,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/tx-stats").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "currentHour": 5,
+            "currentDay": 40,
+            "hourlyData": [
+                { "label": "14:00", "value": 720 },
+                { "label": "15:00", "value": 700 },
+                { "label": "16:00", "value": 5 }
+            ],
+            "dailyData": [
+                { "label": "10/22", "value": 16000 },
+                { "label": "10/23", "value": 17000 },
+                { "label": "10/24", "value": 40 }
+            ]
+        })
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Daily charts stop at the day before the indexed tip block's day (STATS-013)
 // ---------------------------------------------------------------------------
