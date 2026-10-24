@@ -67,7 +67,7 @@ interface VersionUsageStats {
  * its response left this version out. Neither reads as "0 cells, 0 CKB".
  */
 type VersionUsage =
-  | { state: 'ready'; liveCellsCount: number; ownedCapacitySum: string }
+  | { state: 'ready'; liveCellsCount: number; ownedCapacitySum: string; ownedKnowledgeSum: string }
   | { state: 'failed' | 'missing'; message: string };
 
 /** The cells or capacity a version's cells use — or, explicitly, why they cannot be shown. */
@@ -113,6 +113,46 @@ function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells
   );
 }
 
+/**
+ * The selected version's owned capacity: the bar, "no live cells" only when its usage says
+ * exactly 0, or the reason its usage cannot be shown.
+ */
+function SelectedVersionUsage({ usage }: { usage: VersionUsage | null }) {
+  if (usage === null) return null;
+  if (usage.state !== 'ready') {
+    return (
+      <div
+        data-testid="selected-version-usage"
+        data-state={usage.state}
+        role="alert"
+        className="text-rouge py-2 text-center font-mono text-xs"
+      >
+        {usage.message}
+      </div>
+    );
+  }
+  if (usage.ownedCapacitySum === '0' && usage.ownedKnowledgeSum === '0') {
+    return (
+      <div
+        data-testid="selected-version-usage"
+        data-state="none-live"
+        className="text-text-dim py-2 text-center text-xs"
+      >
+        No live cells currently use this version.
+      </div>
+    );
+  }
+  return (
+    <div data-testid="selected-version-usage" data-state="ready">
+      <CapacityUtilization
+        totalCapacity={usage.ownedCapacitySum}
+        commonKnowledgeSize={usage.ownedKnowledgeSum}
+        totalLabel="Owned Capacity"
+      />
+    </div>
+  );
+}
+
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 const ALL_ZERO_HASH = `0x${'0'.repeat(64)}`;
 const MOBILE_BREAKPOINT = 768;
@@ -147,15 +187,6 @@ function deploymentOutpointKey(
   }
 
   return `${txHash}:${outputIndex}`;
-}
-
-function isPositiveBigInt(value: string | null | undefined): boolean {
-  if (!value) return false;
-  try {
-    return BigInt(value) > BigInt(0);
-  } catch {
-    return false;
-  }
 }
 
 function compareCellsByCreatedAt(
@@ -806,13 +837,39 @@ export default function ScriptDetailPage({
   const selectedVersionUsage = selectedVersion
     ? usageByCodeHash.get(selectedVersion.codeHash)
     : undefined;
+  // Usage lists every family version (by_deployment) with its counts; the page waits for it
+  // before rendering. A failed request, or a version the response leaves out (a contract
+  // violation), is shown as such — never as "0 cells, 0 CKB".
+  const versionUsageOf = (stats: VersionUsageStats | undefined, codeHash: string): VersionUsage => {
+    if (!isCodeHashMode && usage === undefined) {
+      const reason = usageError ? `failed to load: ${usageError.message}` : 'has not loaded';
+      return { state: 'failed', message: `The usage of ${name} ${reason}` };
+    }
+    if (!stats) {
+      const source = isCodeHashMode ? 'The code-hash lookup' : `The usage of ${name}`;
+      return { state: 'missing', message: `${source} has no entry for version ${codeHash}` };
+    }
+    return {
+      state: 'ready',
+      liveCellsCount: stats.liveCellsCount,
+      ownedCapacitySum: stats.ownedCapacitySum,
+      ownedKnowledgeSum: stats.ownedKnowledgeSum,
+    };
+  };
+  const selectedVersionUsageState = selectedVersion
+    ? versionUsageOf(selectedVersionUsage, selectedVersion.codeHash)
+    : null;
+  // The cell list's total comes from the usage; without it the list states no total.
+  const selectedVersionLiveCellsCount =
+    selectedVersionUsageState?.state === 'ready'
+      ? selectedVersionUsageState.liveCellsCount
+      : undefined;
   const selectedVersionHMul = computeHMulValue(
     selectedVersionUsage?.ownedCapacitySum,
     selectedVersionUsage?.ownedKnowledgeSum
   );
   const selectedVersionHMulLabel = formatHMulValue(selectedVersionHMul) ?? '-';
   const selectedVersionCellsData = useMemo(() => {
-    const total = selectedVersionUsage?.liveCellsCount ?? 0;
     const merged = new Map<
       string,
       {
@@ -885,7 +942,7 @@ export default function ScriptDetailPage({
 
     return {
       data: pageEntries.map((entry) => entry.cell),
-      total,
+      total: selectedVersionLiveCellsCount,
       hasMore,
       nextCursor:
         hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
@@ -894,7 +951,7 @@ export default function ScriptDetailPage({
   }, [
     selectedScriptKindForChart,
     selectedVersionCellsQueries,
-    selectedVersionUsage?.liveCellsCount,
+    selectedVersionLiveCellsCount,
     versionCellsCursorState,
     versionUsageReferences,
   ]);
@@ -1008,24 +1065,6 @@ export default function ScriptDetailPage({
       .filter((cell): cell is NonNullable<typeof cell> => cell != null)
       .map((cell) => [`${cell.txHash}:${cell.outputIndex}`, cell])
   );
-  // Usage lists every family version (by_deployment) with its counts; the page waits for it
-  // before rendering. A failed request, or a version the response leaves out (a contract
-  // violation), is shown as such — never as "0 cells, 0 CKB".
-  const versionUsageOf = (stats: VersionUsageStats | undefined, codeHash: string): VersionUsage => {
-    if (!isCodeHashMode && usage === undefined) {
-      const reason = usageError ? `failed to load: ${usageError.message}` : 'has not loaded';
-      return { state: 'failed', message: `The usage of ${name} ${reason}` };
-    }
-    if (!stats) {
-      const source = isCodeHashMode ? 'The code-hash lookup' : `The usage of ${name}`;
-      return { state: 'missing', message: `${source} has no entry for version ${codeHash}` };
-    }
-    return {
-      state: 'ready',
-      liveCellsCount: stats.liveCellsCount,
-      ownedCapacitySum: stats.ownedCapacitySum,
-    };
-  };
   const versionRows = versionGroups.map((group) => {
     const stats = usageByCodeHash.get(group.codeHash);
     const firstDeployment =
@@ -1996,18 +2035,7 @@ export default function ScriptDetailPage({
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
                 <div className="border-base-border border-b px-4 py-4">
-                  {selectedVersionUsage &&
-                  isPositiveBigInt(selectedVersionUsage.ownedCapacitySum) ? (
-                    <CapacityUtilization
-                      totalCapacity={selectedVersionUsage.ownedCapacitySum}
-                      commonKnowledgeSize={selectedVersionUsage.ownedKnowledgeSum}
-                      totalLabel="Owned Capacity"
-                    />
-                  ) : (
-                    <div className="text-text-dim py-2 text-center text-xs">
-                      No live cells currently use this version.
-                    </div>
-                  )}
+                  <SelectedVersionUsage usage={selectedVersionUsageState} />
                 </div>
                 <div className="border-base-border border-b px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">

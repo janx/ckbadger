@@ -598,6 +598,59 @@ describe('ScriptDetailPage', () => {
     expect(within(shared).getAllByTestId('version-usage')[0]).toHaveTextContent('7');
   });
 
+  it('shows the selected version usage and its live cell total from the usage response', async () => {
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const panel = await screen.findByTestId('selected-version-usage');
+    expect(panel).toHaveAttribute('data-state', 'ready');
+    expect(within(panel).getByText('Owned Capacity')).toBeInTheDocument();
+    await waitFor(() => expect(document.body.textContent).toMatch(/of 7\s*cells/));
+  });
+
+  it('says the selected version has no live cells only when its usage says 0', async () => {
+    vi.mocked(api.getScriptUsage).mockResolvedValue({
+      ...mockUsage,
+      byDeployment: mockUsage.byDeployment.map((d) =>
+        d.codeHash === sharedVersionCodeHash
+          ? { ...d, liveCellsCount: 0, ownedCapacitySum: '0', ownedKnowledgeSum: '0' }
+          : d
+      ),
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    // The page opens on a version with live cells; pick the empty one.
+    fireEvent.click(await screen.findByTestId(`version-row-${sharedVersionCodeHash}`));
+    const panel = await screen.findByTestId('selected-version-usage');
+    expect(panel).toHaveAttribute('data-state', 'none-live');
+    expect(panel).toHaveTextContent('No live cells currently use this version.');
+  });
+
+  it('shows a failed usage request as an error in the selected version, with no cell total', async () => {
+    vi.mocked(api.getScriptUsage).mockRejectedValue(new Error('usage endpoint 503'));
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const panel = await screen.findByTestId('selected-version-usage');
+    expect(panel).toHaveAttribute('data-state', 'failed');
+    expect(panel).toHaveAttribute('role', 'alert');
+    expect(panel).toHaveTextContent(
+      'The usage of SECP256K1_BLAKE160 failed to load: usage endpoint 503'
+    );
+    expect(panel).not.toHaveTextContent('No live cells');
+    await screen.findByText('Live cells currently using the selected version.');
+    expect(document.body.textContent).not.toMatch(/of 0\s*cells/);
+  });
+
+  it('shows a selected version the usage response leaves out as an error', async () => {
+    vi.mocked(api.getScriptUsage).mockResolvedValue({
+      ...mockUsage,
+      byDeployment: mockUsage.byDeployment.filter((d) => d.codeHash !== sharedVersionCodeHash),
+    });
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    fireEvent.click(await screen.findByTestId(`version-row-${sharedVersionCodeHash}`));
+    const panel = await screen.findByTestId('selected-version-usage');
+    expect(panel).toHaveAttribute('data-state', 'missing');
+    expect(panel).toHaveTextContent(
+      `The usage of SECP256K1_BLAKE160 has no entry for version ${sharedVersionCodeHash}`
+    );
+  });
+
   it('shows a genesis burn cell without its virtual size as an error, not as 0 CKB', async () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
       data: [
