@@ -106,6 +106,8 @@ function connectWebSocket(network: string) {
   }
   reconnectAttempts = 0;
   wsNetwork = network;
+  // A new socket is not live until it opens, whatever an earlier one left behind.
+  useRealtimeStore.getState().setConnected(false);
 
   const wsUrl = wsUrlFor(network);
 
@@ -166,6 +168,8 @@ function disconnectWebSocket() {
     wsInstance = null;
   }
   wsNetwork = null;
+  // The detached onclose will never report it, so report it here.
+  useRealtimeStore.getState().setConnected(false);
 }
 
 export function useRealtimeData() {

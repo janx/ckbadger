@@ -104,6 +104,31 @@ describe('useRealtimeData network scoping', () => {
     expect(useRealtimeStore.getState().socketHeld).toBe(false);
   });
 
+  it('is not connected after the page lets go of the socket, nor after it comes back until it opens', async () => {
+    const first = renderHarness();
+    act(() => {
+      instances[0].readyState = MockWebSocket.OPEN;
+      instances[0].onopen?.();
+    });
+    expect(useRealtimeStore.getState().isConnected).toBe(true);
+
+    // Leaving the homepage: the socket is closed with its onclose detached.
+    first.unmount();
+    expect(useRealtimeStore.getState().isConnected).toBe(false);
+
+    // Back on the homepage: held again at once, but not live until the new socket opens.
+    useRealtimeStore.setState({ isConnected: true }); // a stale flag must not survive a new connect
+    renderHarness();
+    expect(useRealtimeStore.getState().socketHeld).toBe(true);
+    expect(useRealtimeStore.getState().isConnected).toBe(false);
+    const latest = instances[instances.length - 1];
+    act(() => {
+      latest.readyState = MockWebSocket.OPEN;
+      latest.onopen?.();
+    });
+    expect(useRealtimeStore.getState().isConnected).toBe(true);
+  });
+
   it('opens the active network socket and reconnects to the new network on switch', async () => {
     const user = userEvent.setup();
     renderHarness();
