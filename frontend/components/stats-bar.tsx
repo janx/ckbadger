@@ -13,7 +13,7 @@ import { parseEpoch, type EpochInfo } from '@/lib/epoch';
  * desktop. It replaces the homepage's old hero numbers, epoch card and floating LIVE pill.
  */
 export function VitalsStrip() {
-  const { data: stats } = useQuery({
+  const { data: stats, error } = useQuery({
     queryKey: ['network-stats'],
     queryFn: () => api.getNetworkStats(),
     staleTime: 0,
@@ -27,7 +27,9 @@ export function VitalsStrip() {
       data-testid="vitals-strip"
       className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 font-mono md:gap-x-6 md:gap-y-2.5 md:py-3"
     >
-      {stats ? (
+      {error ? (
+        <VitalsError connected={isConnected} message={error.message} />
+      ) : stats ? (
         <Vitals stats={stats} connected={isConnected} />
       ) : (
         <VitalsLoading connected={isConnected} />
@@ -145,6 +147,20 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
       </span>
       <span className={LABEL}>≈ {estimatedLeft} left</span>
     </Link>
+  );
+}
+
+/**
+ * A failed /statistics/network, said plainly: no stale or placeholder numbers. Like the homepage
+ * figures, an error wins over data until a fetch succeeds again.
+ */
+function VitalsError({ connected, message }: { connected: boolean; message: string }) {
+  return (
+    <Lead connected={connected}>
+      <span role="alert" data-testid="vitals-error" className="text-rouge text-xs">
+        {`Chain vitals unavailable: ${message}`}
+      </span>
+    </Lead>
   );
 }
 

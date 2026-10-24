@@ -151,6 +151,16 @@ describe('VitalsStrip', () => {
     expect(bar).toHaveClass('md:w-14');
   });
 
+  it('shows an explicit error, not endless skeletons, when the stats fail to load', async () => {
+    vi.mocked(api.getNetworkStats).mockRejectedValue(new Error('HTTP 502'));
+    render(<VitalsStrip />);
+    const strip = screen.getByRole('region', { name: 'Chain vitals' });
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Chain vitals unavailable: HTTP 502');
+    expect(alert).toHaveClass('text-rouge');
+    expect(strip.querySelector('.animate-pulse')).toBeNull();
+  });
+
   it('keeps the labels in place while the stats load', () => {
     vi.mocked(api.getNetworkStats).mockImplementation(() => new Promise(() => {}));
     render(<VitalsStrip />);
