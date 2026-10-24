@@ -491,7 +491,10 @@ a primary, which every multi-CF read path already assumes:
 - The API pins one read view per HTTP request (innermost middleware), so a response can never mix
   two views.
 - Deliberately **not** pinned: handlers that wait for the indexer to write new data (the cycles
-  long-poll releases its pin before waiting — its contract is to observe the _next_ view), plus
+  long-poll releases its pin before waiting — its contract is to observe the _next_ view;
+  `/pipeline` releases it before waiting, at most 3 s, for the store to reach the node's pool tip,
+  pins a fresh view for each attempt, and builds the snapshot under the attempt that ended the
+  wait), plus
   background full-store scans (cache warmup) and WebSocket broadcasters, which interleave external
   I/O with minutes-long scans and accept drift rather than freeze catch-up.
 - Both sides are bounded: a read scope arriving after a catch-up queues yields to it for 100ms and

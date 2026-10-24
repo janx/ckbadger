@@ -39,7 +39,8 @@ A RocksDB secondary has no snapshots, so a reader's view changes only when catch
 `crates/ckbadger-store/src/read_view.rs` makes catch-up exclusive with pinned read scopes, and the
 API pins one view per request: any new read path that resolves an index row and then loads the row
 it points at is coherent by default, and a handler that waits for the indexer to write new data
-(long-poll) must release its pin first. See
+(the cycles long-poll; `/pipeline` waiting for the store to reach the node's pool tip) must release
+its pin first. See
 [docs/STORE_SCHEMA.md](STORE_SCHEMA.md#read-consistency-secondary-readers).
 
 ## Module Map
