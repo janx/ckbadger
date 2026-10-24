@@ -243,6 +243,31 @@ describe('SporeDetailPage', () => {
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();
   });
 
+  it('shows a spore detail without owned capacity as an error, not as a zero bar', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      ownedCapacity: null,
+      ownedKnowledge: null,
+    });
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    const alert = await screen.findByTestId('spore-owned-capacity-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent(
+      `Owned capacity unavailable: the detail for spore ${mockSpore.sporeId} has no ownedCapacity, ownedKnowledge`
+    );
+  });
+
+  it('shows owned capacity from the spore detail', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    expect(await screen.findByText('Owned Capacity')).toBeInTheDocument();
+    expect(screen.queryByTestId('spore-owned-capacity-error')).toBeNull();
+  });
+
   it('wraps a long content type so it does not overflow the overview cards', async () => {
     const longContentType = 'image/png;ipfs=QmafNETq4kKGHTuhaZPvfxfe9vY24NgMUmxC6xYkVUGaK8';
     vi.mocked(api.getSporeObject).mockResolvedValue({

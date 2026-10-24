@@ -68,6 +68,9 @@ const mockSpores = {
       ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
       isLive: true,
       createdAtBlock: 1000001,
+      // List items carry no owned capacity (the API sends null).
+      ownedCapacity: null,
+      ownedKnowledge: null,
     },
     {
       sporeId: '0x5555555555555555555555555555555555555555555555555555555555555555',
@@ -80,6 +83,9 @@ const mockSpores = {
       ownerAddress: undefined,
       isLive: true,
       createdAtBlock: 1000002,
+      // List items carry no owned capacity (the API sends null).
+      ownedCapacity: null,
+      ownedKnowledge: null,
     },
   ],
   total: 2,

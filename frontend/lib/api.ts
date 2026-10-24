@@ -1149,8 +1149,10 @@ interface SporeNft {
   ownerAddress?: string;
   isLive: boolean;
   createdAtBlock: number;
-  ownedCapacity?: string | null;
-  ownedKnowledge?: string | null;
+  /** Shannons the spore's cell owns; set on the detail (`/spores/{id}`), null on list items. */
+  ownedCapacity: string | null;
+  /** Shannons of that capacity the cell occupies; set on the detail, null on list items. */
+  ownedKnowledge: string | null;
   mediaProfile?: {
     tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     sources: Array<{
