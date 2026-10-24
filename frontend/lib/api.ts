@@ -1154,10 +1154,6 @@ interface SporeNft {
   ownerAddress?: string;
   isLive: boolean;
   createdAtBlock: number;
-  /** Shannons the spore's cell owns; set on the detail (`/spores/{id}`), null on list items. */
-  ownedCapacity: string | null;
-  /** Shannons of that capacity the cell occupies; set on the detail, null on list items. */
-  ownedKnowledge: string | null;
   mediaProfile?: {
     tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     sources: Array<{
@@ -1173,6 +1169,14 @@ interface SporeNft {
     }>;
     issues: string[];
   } | null;
+}
+
+/** `/spore/objects/{id}`: a spore plus the exact capacity its cell owns (lists carry neither). */
+interface SporeDetail extends SporeNft {
+  /** Shannons the spore's cell holds; `"0"` once melted. */
+  ownedCapacity: string;
+  /** The occupied part of `ownedCapacity` (common knowledge), in shannons. */
+  ownedKnowledge: string;
 }
 
 interface DobTrait {
@@ -2184,6 +2188,7 @@ export type {
   DaoCalculatorResult,
   SporeCluster,
   SporeNft,
+  SporeDetail,
   ObjectCollection,
   CollectionItem,
   CollectionHolder,
@@ -2965,7 +2970,7 @@ export const api = {
     return fetchApi(`/spore/objects?${query}`);
   },
 
-  getSporeObject: (sporeId: string): Promise<SporeNft> => {
+  getSporeObject: (sporeId: string): Promise<SporeDetail> => {
     return fetchApi(`/spore/objects/${sporeId}`);
   },
 

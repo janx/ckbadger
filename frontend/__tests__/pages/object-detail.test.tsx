@@ -243,19 +243,18 @@ describe('SporeDetailPage', () => {
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();
   });
 
-  it('shows a spore detail without owned capacity as an error, not as a zero bar', async () => {
+  it('shows an owned capacity the bar cannot read as an error naming the spore', async () => {
     vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
-      ownedCapacity: null,
-      ownedKnowledge: null,
+      ownedCapacity: '1.5',
     });
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
-    const alert = await screen.findByTestId('spore-owned-capacity-error');
+    const alert = await screen.findByTestId('capacity-utilization-error');
     expect(alert).toHaveAttribute('role', 'alert');
     expect(alert).toHaveTextContent(
-      `Owned capacity unavailable: the detail for spore ${mockSpore.sporeId} has no ownedCapacity, ownedKnowledge`
+      `Owned Capacity of spore ${mockSpore.sporeId}: totalCapacity "1.5" is not an integer shannon amount`
     );
   });
 

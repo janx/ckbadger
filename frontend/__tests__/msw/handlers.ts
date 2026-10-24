@@ -465,7 +465,7 @@ export const handlers = [
       isLive: true,
       createdAtBlock: 100000,
       ownedCapacity: '14500000000',
-      ownedKnowledge: null,
+      ownedKnowledge: '14300000000',
       mediaProfile: {
         tier: 'pure_ckb',
         sources: [],

@@ -1018,23 +1018,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </div>
             </div>
 
-            {/* Owned Capacity bar — the spore detail always carries both amounts (only list
-                items leave them null), so an absent one is an error, never a 0. */}
-            {spore.ownedCapacity === null || spore.ownedKnowledge === null ? (
-              <div
-                role="alert"
-                data-testid="spore-owned-capacity-error"
-                className="text-rouge mt-4 font-mono text-xs"
-              >
-                Owned capacity unavailable: the detail for spore {spore.sporeId} has no{' '}
-                {[
-                  spore.ownedCapacity === null ? 'ownedCapacity' : null,
-                  spore.ownedKnowledge === null ? 'ownedKnowledge' : null,
-                ]
-                  .filter((field) => field !== null)
-                  .join(', ')}
-              </div>
-            ) : !spore.isLive && spore.ownedCapacity === '0' && spore.ownedKnowledge === '0' ? (
+            {/* Owned Capacity bar: the detail always carries both amounts (the bar validates
+                them); a melted spore owns exactly 0, said in words. */}
+            {!spore.isLive && spore.ownedCapacity === '0' && spore.ownedKnowledge === '0' ? (
               <div
                 data-testid="spore-owned-capacity-none"
                 className="text-text-dim mt-4 font-mono text-xs"

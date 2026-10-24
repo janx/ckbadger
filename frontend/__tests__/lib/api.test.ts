@@ -429,6 +429,31 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity History');
     });
 
+    it('types the spore detail owned capacity as required and list items without it', async () => {
+      server.use(
+        http.get('/api/:network/v1/spore/objects/:id', () =>
+          HttpResponse.json({
+            sporeId: '0xspore',
+            isLive: true,
+            ownedCapacity: '16000000000',
+            ownedKnowledge: '15800000000',
+          })
+        )
+      );
+
+      const spore = await api.getSporeObject('0xspore');
+
+      expectTypeOf(spore.ownedCapacity).toEqualTypeOf<string>();
+      expectTypeOf(spore.ownedKnowledge).toEqualTypeOf<string>();
+      expect(spore.ownedCapacity).toBe('16000000000');
+      expectTypeOf<
+        Awaited<ReturnType<typeof api.getSporeObjects>>['data'][number]
+      >().not.toHaveProperty('ownedCapacity');
+      expectTypeOf<
+        Awaited<ReturnType<typeof api.getSporesByCluster>>['data'][number]
+      >().not.toHaveProperty('ownedKnowledge');
+    });
+
     it('keeps a fiber channel delayEpoch as the exact decimal string the API sends', async () => {
       // A since-encoded relative epoch: its flag bits put it far above 2^53.
       const delayEpoch = '11529496521045180422';
