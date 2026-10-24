@@ -190,16 +190,6 @@ export function useRealtimeData() {
         const blockData = message.data as Block;
         setLatestBlock(blockData);
 
-        queryClient.setQueryData(['latest-blocks'], (old: { data: Block[] } | undefined) => {
-          const existingData = old?.data ?? [];
-          const merged = [blockData, ...existingData.filter((b) => b.number !== blockData.number)];
-          merged.sort((a, b) => b.number - a.number);
-          return {
-            ...old,
-            data: merged.slice(0, 10),
-          };
-        });
-
         // Only what this block itself states. `avgBlockTime` and
         // `estimatedEpochTime` are rolling window averages owned by
         // /statistics/network — overwriting them here replaced that average

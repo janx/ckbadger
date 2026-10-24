@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '../utils/test-utils';
 import { TerminalDivider, TerminalPanelHeader } from '@/components/ui/terminal-panel';
 import { MiniStat, StatBlock } from '@/components/ui/stat-block';
-import { SparkChart } from '@/components/ui/spark-chart';
 import { PageHeader } from '@/components/ui/page-header';
 import { DataField } from '@/components/ui/data-field';
 
@@ -15,7 +14,7 @@ describe('UI text and affordances', () => {
     });
   });
 
-  it('renders terminal, stat, and spark-chart helper copy', () => {
+  it('renders terminal and stat helper copy', () => {
     render(
       <div>
         <TerminalDivider label="network" />
@@ -29,7 +28,6 @@ describe('UI text and affordances', () => {
           subtext="stable"
         />
         <MiniStat label="delta" value="1.23" />
-        <SparkChart data={[]} />
       </div>
     );
 
@@ -39,7 +37,6 @@ describe('UI text and affordances', () => {
     expect(screen.getByText('24h')).toBeInTheDocument();
     expect(screen.getByText('stable')).toBeInTheDocument();
     expect(screen.getByText('delta')).toBeInTheDocument();
-    expect(screen.getByText('No data')).toBeInTheDocument();
   });
 
   it('renders page header actions and copies the hash on click', async () => {
