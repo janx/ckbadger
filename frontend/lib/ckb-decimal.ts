@@ -88,3 +88,31 @@ export function formatDecimalBytes(bytes: bigint): string {
   }
   return `${bytes} B`;
 }
+
+export interface CkbAmountParts {
+  /** `+`, `−` (U+2212) or `` for zero. */
+  sign: string;
+  /** Whole CKB with thousands separators. */
+  integer: string;
+  /** `.` and the decimals up to the last non-zero one, or `` when there are none. */
+  fraction: string;
+  /** The trailing zeros of the 8 decimals (with the `.` when no decimal is significant). */
+  ghost: string;
+}
+
+/**
+ * Exact CKB split for display: every amount keeps all 8 decimals (so right-aligned amounts line
+ * up on the decimal point), with the trailing zeros apart so they can be drawn ghosted.
+ */
+export function splitCkbAmount(shannons: bigint): CkbAmountParts {
+  const zero = BigInt(0);
+  const abs = shannons < zero ? -shannons : shannons;
+  const decimals = (abs % SHANNONS_PER_CKB).toString().padStart(8, '0');
+  const significant = decimals.replace(/0+$/, '');
+  return {
+    sign: shannons > zero ? '+' : shannons < zero ? MINUS : '',
+    integer: groupThousands(abs / SHANNONS_PER_CKB),
+    fraction: significant === '' ? '' : `.${significant}`,
+    ghost: significant === '' ? `.${decimals}` : decimals.slice(significant.length),
+  };
+}

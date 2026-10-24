@@ -8,6 +8,7 @@ import {
   formatSignedCount,
   parseCkbDecimal,
   parseShannons,
+  splitCkbAmount,
 } from '@/lib/ckb-decimal';
 
 describe('parseCkbDecimal', () => {
@@ -89,5 +90,50 @@ describe('formatDecimalBytes', () => {
     expect(formatDecimalBytes(BigInt(151_134_245))).toBe('151.1 MB');
     expect(formatDecimalBytes(BigInt(41_590_000_000))).toBe('41.6 GB');
     expect(formatDecimalBytes(BigInt(999))).toBe('999 B');
+  });
+});
+
+describe('splitCkbAmount', () => {
+  it('splits exact CKB into sign, integer, significant decimals and ghosted trailing zeros', () => {
+    expect(splitCkbAmount(BigInt(-30000))).toEqual({
+      sign: MINUS,
+      integer: '0',
+      fraction: '.0003',
+      ghost: '0000',
+    });
+    expect(splitCkbAmount(BigInt('41232486750'))).toEqual({
+      sign: '+',
+      integer: '412',
+      fraction: '.3248675',
+      ghost: '0',
+    });
+    expect(splitCkbAmount(BigInt('-75000000000'))).toEqual({
+      sign: MINUS,
+      integer: '750',
+      fraction: '',
+      ghost: '.00000000',
+    });
+    expect(splitCkbAmount(BigInt('193912572831'))).toEqual({
+      sign: '+',
+      integer: '1,939',
+      fraction: '.12572831',
+      ghost: '',
+    });
+  });
+
+  it('gives zero no sign, all eight decimals ghosted', () => {
+    expect(splitCkbAmount(BigInt(0))).toEqual({
+      sign: '',
+      integer: '0',
+      fraction: '',
+      ghost: '.00000000',
+    });
+  });
+
+  it('always keeps 8 decimals in total, so right-aligned amounts line up', () => {
+    for (const s of ['1', '-123456789', '100000000', '-1234567890123456']) {
+      const p = splitCkbAmount(BigInt(s));
+      expect((p.fraction + p.ghost).length).toBe(9);
+    }
   });
 });
