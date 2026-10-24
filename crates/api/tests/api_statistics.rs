@@ -2238,9 +2238,10 @@ async fn test_network_stats_fails_fast_when_knowledge_size_is_negative() {
 /// UTC+8, so its 598 blocks were mined in 67_712_964 ms, not 86_400_000 ms.
 /// The stored `DailyStats.block_time_sum_ms` is that exact span (it sums every
 /// `ts(b) − ts(b−1)` gap for blocks on the day), so the hash rate is
-/// `Σdifficulty / block_time_sum_ms` = 73_466_099_633.87 H/ms — matching the
-/// node and the official explorer. The full-day divisor returned
-/// 57_576_474_071 (−21.6%).
+/// `Σdifficulty / (block_time_sum_ms / 1000)` = 73_466_099_633_870 H/s — the
+/// official explorer's 73_466_099_633.87, which it serves in H/ms. The
+/// full-day divisor understated it by 21.6%, and the millisecond divisor
+/// served H/ms under an H/s label (STATS-012).
 ///
 /// `DailyStats` is the only place inter-block time is stored; `DailyBlockStats`
 /// supplies the difficulty and block count that form the numerator.
@@ -2310,7 +2311,7 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
         1,
         "the incomplete latest day is excluded: {json}"
     );
-    assert_eq!(data[0]["value"], "73466099634");
+    assert_eq!(data[0]["value"], "73466099633870");
 }
 
 /// Regression: testnet's genesis day contains only block 0. Block 1 was mined
@@ -2373,7 +2374,8 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
         json["data"],
         serde_json::json!([{
             "date": "2020-05-22",
-            "value": "100",
+            // 2 blocks of difficulty 1_000_000 over a 20 s span.
+            "value": "100000",
             "value2": null
         }]),
         "the undefined genesis day must be absent without hiding later exact points: {json}"

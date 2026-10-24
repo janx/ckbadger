@@ -2994,8 +2994,9 @@ async fn get_miner_address_distribution_chart(
     ok(response)
 }
 
-/// Exact daily network hash rate in hashes per millisecond: the day's total
-/// mined work divided by the time actually spent mining it.
+/// Exact daily network hash rate in hashes per second (H/s, the unit of
+/// `/statistics/network` `hashRate`): the day's total mined work divided by the
+/// time actually spent mining it.
 ///
 /// * numerator — `avg_difficulty × block_count` is the day's exact difficulty
 ///   sum (the indexer stores the sum divided by the count).
@@ -3005,7 +3006,11 @@ async fn get_miner_address_distribution_chart(
 ///   `ts(last block of day) − ts(last block of previous day)`: the day's real
 ///   mined span. Only block 0 contributes no gap, which is why mainnet's
 ///   genesis day spans 67_712_964 ms (the chain started 05:09:50 UTC+8) and
-///   not 86_400_000.
+///   not 86_400_000. The span is stored in milliseconds and converted to
+///   seconds here; dividing by the millisecond count served H/ms, 1000× too
+///   low under an H/s label (POSTMORTEM STATS-012). H/ms is the official
+///   explorer's API unit for `avg_hash_rate` (9.18e13 for 2026-10-23, a
+///   93 PH/s day); verify's X3 converts it before comparing.
 ///
 /// Assuming a full calendar day understated the genesis day by 21.6% and every
 /// later day by the difference between its real span and 86_400_000 ms.
@@ -3052,7 +3057,8 @@ fn calculate_daily_hash_rate(
         )));
     }
     let difficulty_sum = block_stats.avg_difficulty * block_stats.block_count as f64;
-    Ok(Some(difficulty_sum / day_stats.block_time_sum_ms as f64))
+    let mined_span_secs = day_stats.block_time_sum_ms as f64 / 1000.0;
+    Ok(Some(difficulty_sum / mined_span_secs))
 }
 
 fn snapshot_secondary_cumulative(
@@ -4643,11 +4649,13 @@ mod tests {
         }
     }
 
+    /// Regression (STATS-012): the chart is labelled and read as H/s, the unit
+    /// of `/statistics/network` `hashRate`. Dividing the day's work by its span
+    /// in milliseconds served H/ms — 1000× too low (91.75 T for a 93 PH/s day).
     #[test]
-    fn test_calculate_daily_hash_rate_uses_milliseconds() {
-        // 8,640 blocks whose gaps sum to a full day (10s average):
-        // hash_rate = Σdifficulty / block_time_sum_ms
-        //           = 1_000_000 × 8_640 / 86_400_000 = 100 H/ms
+    fn test_calculate_daily_hash_rate_is_hashes_per_second() {
+        // 8,640 blocks of difficulty 1,000,000 mined over exactly one day:
+        // 8_640_000_000 hashes / 86_400 s = 100_000 H/s.
         let hash_rate = calculate_daily_hash_rate(
             "20240115",
             &daily_block_stats(1_000_000.0, 8_640),
@@ -4656,13 +4664,14 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(hash_rate, 100.0);
+        assert_eq!(hash_rate, 100_000.0);
     }
 
     /// Regression: mainnet's genesis day is partial — 598 blocks mined in
-    /// 67_712_964 ms because the chain started 05:09:50 UTC+8. The node and the
-    /// official explorer both report 73_466_099_633.87 H/ms; the full-day
-    /// divisor reported 57_576_474_071 (−21.6%).
+    /// 67_712_964 ms because the chain started 05:09:50 UTC+8. The official
+    /// explorer stores 73_466_099_633.87 H/ms (its storage unit) for that day,
+    /// i.e. 73_466_099_633_870 H/s; the full-day divisor understated it by
+    /// 21.6%.
     #[test]
     fn test_calculate_daily_hash_rate_matches_node_on_partial_genesis_day() {
         let hash_rate = calculate_daily_hash_rate(
@@ -4673,7 +4682,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(format!("{hash_rate:.2}"), "73466099633.87");
+        assert_eq!(format!("{hash_rate:.0}"), "73466099633870");
     }
 
     #[test]

@@ -3416,4 +3416,41 @@ against its documented default selection before calling a budget sufficient.
 
 ---
 
-_Last updated: 2026-09-25_
+## Category: Statistics & Charts
+
+### STATS-012: The daily hash-rate chart served H/ms under an H/s label
+
+**Date**: 2026-10-24
+
+**Symptom**: `/charts/hash-rate` gave `91751013574721` for 2026-10-23 — 91.8 T — while
+`/statistics/network` reported 93.91 PH/s and the tip difficulty (850 P) over the ~8.4 s block
+time is ~100 PH/s. Every point of the chart was 1000× low; the homepage and `/charts` pages
+labelled it "Hash Rate (H/s)".
+
+**Root Cause**: `calculate_daily_hash_rate` (`crates/api/src/routes/statistics.rs`) returned
+`difficulty_sum / block_time_sum_ms` — hashes per millisecond, the official explorer's API unit
+for `avg_hash_rate` (9.18e13 for the same day). The unit was chosen deliberately in March 2026
+("match CKB explorer convention") so verify's X3 could compare raw numbers; the 07-28 audit
+moved `/statistics/network` to true H/s and left the chart behind, so the two hash rates on one
+page differed by 1000×. A unit test named `..._uses_milliseconds` enshrined the H/ms value.
+
+**Fix**: divide the day's work by its mined span in seconds — the same form as the window
+estimator `estimate_hash_rate_from_window`. Verify's X3 now converts the explorer's H/ms with a
+named constant before comparing, and reports an unparseable value instead of reading it as 0.
+No consumer compensated for the old unit: the frontend charts plot the value as H/s.
+
+**Why the tests missed it**: the unit tests pinned H/ms (`100 H/ms`, `73_466_099_633.87`), and X3
+compared like with like on the explorer's unit, so every check agreed with the wrong label.
+Regressions: `test_calculate_daily_hash_rate_is_hashes_per_second`,
+`hash_rate_check_compares_our_h_per_s_with_explorer_h_per_ms`.
+
+**Lesson**: Matching an external system's numbers is not the same as matching its unit. Convert
+at the comparison boundary (verify), never in the served value, and pin the unit in the test
+name.
+
+**Files**: `crates/api/src/routes/statistics.rs`, `crates/api/tests/api_statistics.rs`,
+`crates/indexer/src/verify/explorer.rs`
+
+---
+
+_Last updated: 2026-10-24_
