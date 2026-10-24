@@ -1359,7 +1359,11 @@ fn seed_tx_awaiting_cycles(store: &Arc<CkbadgerStore>, tx_hash: &[u8; 32], cycle
 /// write the result; that wait is not a slow request.
 #[tokio::test]
 async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
-    const SLOW_MS: u64 = 1_000;
+    // The threshold, and how long the worker takes to answer after the handler
+    // has enqueued: the request lasts at least that long in wall time. What
+    // the handler does besides sleeping is the host's to decide; it only has
+    // to stay under the threshold.
+    const SLOW_MS: u64 = 1_500;
     let store = test_store();
     let tx_hash = [0x5A; 32];
     let hash_hex = format!("0x{}", hex::encode(tx_hash));
@@ -1393,18 +1397,19 @@ async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
         })
     };
 
-    // The handler has asked the cycles worker; the worker answers well past
-    // the slow-request threshold.
+    // The handler has asked the cycles worker; the worker answers a whole
+    // threshold later.
     let request_file = cycles_dir.path().join(format!("tx_{hash_hex}"));
     let started = std::time::Instant::now();
     while !request_file.exists() {
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
+            // A hang guard, not a latency bound: generous for a loaded host.
+            started.elapsed() < std::time::Duration::from_secs(30),
             "the handler never enqueued the cycles request"
         );
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
-    tokio::time::sleep(std::time::Duration::from_millis(SLOW_MS + 500)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(SLOW_MS)).await;
     seed_tx_awaiting_cycles(&store, &tx_hash, Some(777));
 
     let (status, json) = request.await.unwrap();
@@ -1420,11 +1425,19 @@ async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
     );
     let completed = logs.lines_with(&[&path, "completed"]);
     assert_eq!(completed.len(), 1, "{completed:#?}");
+    let latency_ms = LogCapture::field(&completed[0], "latency_ms");
     let waited_ms = LogCapture::field(&completed[0], "waited_ms");
+    // In wall time the request reached the threshold (it enqueued before the
+    // test's sleep and answered `done` only after the worker wrote) ...
     assert!(
-        waited_ms >= SLOW_MS + 500,
-        "the log reports the wait: {}",
+        latency_ms >= SLOW_MS,
+        "the request outlasted the threshold: {}",
         completed[0]
     );
-    assert!(LogCapture::field(&completed[0], "latency_ms") >= waited_ms);
+    // ... and part of it was the deliberate wait.
+    assert!(
+        waited_ms > 0 && waited_ms <= latency_ms,
+        "the log reports the wait within the latency: {}",
+        completed[0]
+    );
 }

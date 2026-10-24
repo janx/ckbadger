@@ -1772,12 +1772,19 @@ async fn tx_pool_info_calls(server: &MockServer) -> usize {
         .count()
 }
 
+/// How long [`first_pool_tip_read`] gives a request to make its first node
+/// call before calling it hung. Not a latency bound: a gated request first
+/// queues for its [`REQUESTS`] permit, and the one exclusive holder waits for
+/// every request in flight to finish — the request-log tests' run for seconds
+/// on purpose, longer on a loaded host — then holds the gate itself.
+const FIRST_POOL_READ_BOUND: Duration = Duration::from_secs(30);
+
 /// Wait (bounded) until the handler has read the node's pool tip at least once.
 async fn first_pool_tip_read(server: &MockServer) {
     let started = std::time::Instant::now();
     while tx_pool_info_calls(server).await == 0 {
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < FIRST_POOL_READ_BOUND,
             "the request never read the node's pool tip"
         );
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -1962,9 +1969,20 @@ async fn test_pipeline_holds_no_read_view_while_it_waits() {
 // Request log: the tip wait is not slowness
 // ---------------------------------------------------------------------------
 
-/// The slow-request threshold the request-log tests run under: well above
-/// what building a fixture snapshot costs, well below the waits they stage.
-const SLOW_MS: u64 = 1_000;
+/// The slow-request threshold the request-log tests run under.
+///
+/// What a request does outside its sleeps is the test host's to decide (a
+/// fixture snapshot costs milliseconds, ~0.7 s at load average 200), so no
+/// assertion depends on it. It only has to stay under this threshold where a
+/// test claims "not slow".
+const SLOW_MS: u64 = 1_500;
+
+/// How long the request-log tests keep the store one block behind the node
+/// after the handler's first pool read. The handler cannot answer `ok` before
+/// the store reaches the node, so the request lasts at least this long in wall
+/// time: the threshold, whatever the host's load. Well inside
+/// [`PIPELINE_TIP_WAIT`], so the wait ends at the tip, not at its deadline.
+const STAGED_WAIT: Duration = Duration::from_millis(SLOW_MS);
 
 /// The `http_request` span field naming this endpoint in a log line.
 const PIPELINE_LOG_PATH: &str = "path=\"/api/v1/pipeline\"";
@@ -1989,12 +2007,13 @@ async fn test_pipeline_tip_wait_is_not_a_slow_request() {
     .await;
     let logs = LogCapture::start();
 
+    assert!(STAGED_WAIT < PIPELINE_TIP_WAIT);
     let app = fixture.app.clone();
     let request = tokio::spawn(async move { get_json(&app, "/pipeline").await });
     // The handler waits for the store (13) to reach the node (14); the indexer
-    // writes block 14 well past the slow-request threshold.
+    // writes block 14 a whole threshold after the handler's first read.
     first_pool_tip_read(&fixture.server).await;
-    tokio::time::sleep(Duration::from_millis(SLOW_MS + 500)).await;
+    tokio::time::sleep(STAGED_WAIT).await;
     index_block(&fixture.store, &chain, 14);
     let (status, json) = request.await.unwrap();
     assert_eq!(status, StatusCode::OK, "got {json}");
@@ -2010,17 +2029,25 @@ async fn test_pipeline_tip_wait_is_not_a_slow_request() {
     assert_eq!(completed.len(), 1, "{completed:#?}");
     let latency_ms = LogCapture::field(&completed[0], "latency_ms");
     let waited_ms = LogCapture::field(&completed[0], "waited_ms");
+    // In wall time the request reached the threshold (it began before the
+    // first read and ended after block 14 was indexed) ...
     assert!(
-        waited_ms >= SLOW_MS + 500,
-        "the log reports the wait: {}",
+        latency_ms >= SLOW_MS,
+        "the request outlasted the threshold: {}",
         completed[0]
     );
-    assert!(latency_ms >= waited_ms, "{}", completed[0]);
+    // ... and part of it was the deliberate wait: the first attempt saw the
+    // store at 13, so the handler slept at least once.
+    assert!(
+        waited_ms > 0 && waited_ms <= latency_ms,
+        "the log reports the wait within the latency: {}",
+        completed[0]
+    );
 }
 
 /// Waiting does not hide slowness: a request whose own work (here the node's
 /// `get_block_economic_state`, after the wait) passes the threshold is still
-/// a slow request, though its wait alone is past the threshold too.
+/// a slow request, though it also waited on purpose.
 #[tokio::test]
 async fn test_pipeline_slow_work_is_a_slow_request_although_it_also_waited() {
     let chain = FixtureChain::build(14, BTreeMap::new());
@@ -2037,7 +2064,8 @@ async fn test_pipeline_slow_work_is_a_slow_request_although_it_also_waited() {
     )
     .await;
     // Three reward targets (blocks 12, 13, 14 pay 1, 2, 3), each answered
-    // slowly: together half a second past the threshold.
+    // slowly, one after another once the wait is over: together half the
+    // threshold past it, however fast the rest of the request is.
     let per_call = Duration::from_millis(SLOW_MS / 2);
     for x in 12..=chain.tip() {
         mount_block_economic_state_rpc_delayed(
@@ -2052,7 +2080,7 @@ async fn test_pipeline_slow_work_is_a_slow_request_although_it_also_waited() {
     let app = fixture.app.clone();
     let request = tokio::spawn(async move { get_json(&app, "/pipeline").await });
     first_pool_tip_read(&fixture.server).await;
-    tokio::time::sleep(Duration::from_millis(SLOW_MS + 500)).await;
+    tokio::time::sleep(STAGED_WAIT).await;
     index_block(&fixture.store, &chain, 14);
     let (status, json) = request.await.unwrap();
     assert_eq!(status, StatusCode::OK, "got {json}");
@@ -2065,10 +2093,22 @@ async fn test_pipeline_slow_work_is_a_slow_request_although_it_also_waited() {
         "slow work after the wait must be reported: {:#?}",
         logs.lines_with(&[PIPELINE_LOG_PATH])
     );
+    let latency_ms = LogCapture::field(&slow[0], "latency_ms");
+    let waited_ms = LogCapture::field(&slow[0], "waited_ms");
+    let slow_calls_ms = 3 * per_call.as_millis() as u64;
     assert!(
-        LogCapture::field(&slow[0], "latency_ms")
-            >= SLOW_MS + 500 + 3 * per_call.as_millis() as u64,
-        "{}",
+        latency_ms >= SLOW_MS + slow_calls_ms,
+        "the staged wait, then the three slow calls: {}",
+        slow[0]
+    );
+    // It did wait (its first attempt saw the store at 13), and what it did
+    // besides waiting includes the three slow calls.
+    assert!(waited_ms > 0, "the log reports the wait: {}", slow[0]);
+    assert!(
+        latency_ms
+            .checked_sub(waited_ms)
+            .is_some_and(|work_ms| work_ms >= slow_calls_ms),
+        "the slow calls are work, not wait: {}",
         slow[0]
     );
 }
