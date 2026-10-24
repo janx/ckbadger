@@ -423,18 +423,16 @@ export function chainTail(
 export interface RewardLink {
   /** From the paying cellbase up into the lane, along it, and down into the paid one if shown. */
   d: string;
-  /** The length of `d` with its bends taken as corners (at least the drawn length). */
-  len: number;
   /** The open dotted end when the paid cellbase is off screen; '' when the link drops into it. */
   tail: string;
 }
 
 /**
- * The reward link of the cellbase at `a`. It rises into the lane above the cards (the window's
- * lane: the ruler steps back while a link is shown) and runs right. With the paid block's cellbase
- * on screen at `b` it drops into it. Without (`b` null: the paid block is past the right edge) it
- * runs on to where the chain's own tail starts and ends there in the same open dotted tail, one
- * lane up; it never drops anywhere. The static render and the motion layer both draw this.
+ * The reward link of a hovered cellbase at `a`. It rises into the lane above the cards (the
+ * window's lane: the ruler steps back while a link is shown) and runs right. With the paid block's
+ * cellbase on screen at `b` it drops into it. Without (`b` null: the paid block is past the right
+ * edge) it runs on to where the chain's own tail starts and ends there in the same open dotted
+ * tail, one lane up; it never drops anywhere.
  */
 export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink {
   const top = G.winY;
@@ -444,7 +442,6 @@ export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLi
     const dir = Math.sign(b.X - a.X) || 1;
     return {
       d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + dir * r)} ${top}H${f(b.X - dir * r)}Q${f(b.X)} ${top} ${f(b.X)} ${top + r}V${f(b.Y)}`,
-      len: Math.abs(b.X - a.X) + a.Y + b.Y - 2 * top,
       tail: '',
     };
   }
@@ -455,7 +452,6 @@ export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLi
   }
   return {
     d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + r)} ${top}H${f(tail.x0)}`,
-    len: tail.x0 - a.X + a.Y - top,
     tail: `M${f(tail.x0)} ${top}H${f(tail.x1)}`,
   };
 }

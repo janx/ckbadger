@@ -10,7 +10,6 @@ import {
   type MotionNode,
 } from '@/lib/pipeline/motion';
 import { STAGE_BASE } from '@/lib/pipeline/encoding';
-import { rewardLink } from '@/lib/pipeline/layout';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -214,60 +213,6 @@ describe('Animator under fake timers and rAF', () => {
     expect(ring.isConnected).toBe(false);
   });
 
-  it('calls a reward arc home once 40 % of its 2.2 s life has drawn the line', () => {
-    const a = new Animator(browserClock, false);
-    const onArrive = vi.fn();
-    a.rewardArc(
-      layer,
-      () => rewardLink({ X: 0, Y: 120 }, { X: 300, Y: 120 }, { x0: 400, x1: 500 }),
-      100,
-      onArrive
-    );
-    vi.advanceTimersByTime(100 + 0.4 * 2200 - 20);
-    expect(onArrive).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(40);
-    expect(onArrive).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(2200);
-    expect(onArrive).toHaveBeenCalledTimes(1);
-    expect(layer.querySelector('path')).toBeNull();
-  });
-
-  it('draws an off-screen reward link to its open dotted tail, shown once the line is there', () => {
-    const a = new Animator(browserClock, false);
-    const geom = rewardLink({ X: 390.5, Y: 76.5 }, null, { x0: 1235, x1: 1242 });
-    a.rewardArc(layer, () => geom, 0, vi.fn());
-    const line = layer.querySelector('[data-reward="line"]') as SVGPathElement;
-    const tail = layer.querySelector('[data-reward="tail"]') as SVGPathElement;
-    vi.advanceTimersByTime(0.2 * 2200);
-    expect(line).toHaveAttribute('d', geom.d);
-    expect(tail).toHaveAttribute('d', geom.tail);
-    // Dotted like the chain's tail, and not there before the line has reached it.
-    expect(tail).toHaveAttribute('stroke-dasharray', '1 3');
-    expect(Number(tail.getAttribute('opacity'))).toBe(0);
-    const drawn = Number(line.getAttribute('stroke-dasharray')?.split(' ')[0]);
-    expect(drawn).toBeGreaterThan(0);
-    expect(drawn).toBeLessThan(geom.len);
-    vi.advanceTimersByTime(0.3 * 2200);
-    expect(line.getAttribute('stroke-dasharray')).toBe(
-      `${geom.len.toFixed(1)} ${geom.len.toFixed(1)}`
-    );
-    expect(Number(tail.getAttribute('opacity'))).toBeGreaterThan(0.9);
-    // Gone with the end of its 2.2 s life (frames run every 16 ms).
-    vi.advanceTimersByTime(0.5 * 2200 + 20);
-    expect(line.isConnected).toBe(false);
-    expect(tail.isConnected).toBe(false);
-  });
-
-  it('draws no tail for a reward link that drops into the paid cellbase', () => {
-    const a = new Animator(browserClock, false);
-    const geom = rewardLink({ X: 0, Y: 120 }, { X: 300, Y: 120 }, { x0: 400, x1: 500 });
-    a.rewardArc(layer, () => geom, 0, vi.fn());
-    vi.advanceTimersByTime(0.6 * 2200);
-    const tail = layer.querySelector('[data-reward="tail"]') as SVGPathElement;
-    expect(layer.querySelector('[data-reward="line"]')).toHaveAttribute('d', geom.d);
-    expect(Number(tail.getAttribute('opacity'))).toBe(0);
-  });
-
   it('runs a scheduled callback at its time', () => {
     const a = new Animator(browserClock, false);
     const fn = vi.fn();
@@ -287,10 +232,7 @@ describe('Animator under fake timers and rAF', () => {
     expect(onEnd).toHaveBeenCalledTimes(1);
     expect(onEnd.mock.calls[0][0]).toBe(n);
     expect(onEnd.mock.calls[0][1]).toBe(true);
-    const arrive = vi.fn();
     a.ripple(layer, 0, 0, 8, 'red');
-    a.rewardArc(layer, () => null, 0, arrive);
-    expect(arrive).toHaveBeenCalledTimes(1);
     const fn = vi.fn();
     a.after(1000, fn);
     expect(fn).toHaveBeenCalledTimes(1);

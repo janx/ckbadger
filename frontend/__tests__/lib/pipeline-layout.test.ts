@@ -671,7 +671,6 @@ describe('rewardLink: a cellbase to the block it pays', () => {
     // Up into the lane at winY (16), a 5 px bend, along the lane, a 5 px bend, down into it.
     expect(rewardLink(a, b, tail)).toEqual({
       d: 'M390.5 76.5V21Q390.5 16 395.5 16H1584.5Q1589.5 16 1589.5 21V76.5',
-      len: 1589.5 - 390.5 + 76.5 + 76.5 - 2 * 16,
       tail: '',
     });
   });
@@ -681,7 +680,6 @@ describe('rewardLink: a cellbase to the block it pays', () => {
     expect(link.d).toBe('M390.5 76.5V21Q390.5 16 395.5 16H1235.0');
     // It never drops anywhere: the last command stays in the lane.
     expect(link.d).not.toMatch(/H[\d.]+Q|V[\d.]+$/);
-    expect(link.len).toBe(1235 - 390.5 + 76.5 - 16);
     // The open end: the span of the chain line's own off-screen tail, one lane up.
     expect(link.tail).toBe(`M1235.0 ${G.winY}H1242.0`);
   });

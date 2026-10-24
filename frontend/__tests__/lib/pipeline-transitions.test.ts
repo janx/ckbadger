@@ -228,7 +228,7 @@ describe('diffSnapshots', () => {
     ]);
   });
 
-  it('reports tip + 1 as a mined block with its contact time and payee', () => {
+  it('reports tip + 1 as a mined block with its contact time', () => {
     const t = diffSnapshots(
       snap(chain(100), {
         pending: ['a'],
@@ -248,20 +248,8 @@ describe('diffSnapshots', () => {
     expect(SETTLE_AFTER_CONTACT).toBe(560);
     expect(t.settleAt).toBe(contact + SETTLE_AFTER_CONTACT);
     expect(ofKind(t.events, 'mined')).toEqual([
-      {
-        kind: 'mined',
-        block: bh(101),
-        number: 101,
-        cellbase: `${bh(101)}-cb`,
-        contact,
-        payee: { number: 90, hash: bh(90), cellbase: `${bh(90)}-cb` },
-      },
+      { kind: 'mined', block: bh(101), number: 101, contact },
     ]);
-  });
-
-  it('has no payee when the paid block is not on screen', () => {
-    const t = diffSnapshots(snap(chain(100, 5)), snap(chain(101, 5)));
-    expect(ofKind(t.events, 'mined')[0].payee).toBeNull();
   });
 
   it('only settles when several blocks arrive at once (catching up)', () => {
