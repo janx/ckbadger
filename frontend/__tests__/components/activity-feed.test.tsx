@@ -54,6 +54,8 @@ describe('ActivityFeed', () => {
     const transactions = within(tabs).getByRole('button', { name: 'Transactions' });
     expect(activity).toHaveAttribute('aria-pressed', 'true');
     expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11', 'whitespace-nowrap');
+    // 14 px tabs on a phone so both tabs and View all fit one line.
+    expect(activity).toHaveClass('text-sm', 'sm:text-[15px]');
     expect(transactions).toHaveClass('whitespace-nowrap');
     expect(screen.getByRole('link', { name: 'View all →' })).toHaveClass('whitespace-nowrap');
     expect(transactions).toHaveAttribute('aria-pressed', 'false');
@@ -113,9 +115,10 @@ describe('ActivityFeed', () => {
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('DAO Withdraw Request')).toBeInTheDocument();
-    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      '26,050.00000000 CKB · deposited at #19,695,550'
-    );
+    const note = row.querySelector('[data-role="detail"]') as HTMLElement;
+    expect(note).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
+    // Detail lines are plain ink, quieter than the headline.
+    expect(note).toHaveClass('text-text');
     // Paid first, received next, the zero last.
     const parties = [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
     expect(parties).toEqual([
@@ -187,8 +190,8 @@ describe('ActivityFeed', () => {
     expect(within(row).getByText('Object transfer')).toBeInTheDocument();
     const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
     expect(details).toEqual(['typeCKBFS(0xcd6e...2500)', 'lockNervape Shadow Lock(0x0131...5d74)']);
-    expect(row).toHaveTextContent('object 0x51c75a...0096f2 departed');
-    expect(row).toHaveTextContent('object 0x51c75a...0096f2 arrived');
+    expect(row).toHaveTextContent('object 0x51c75a...96f2 departed');
+    expect(row).toHaveTextContent('object 0x51c75a...96f2 arrived');
     // A party with no item change is still listed.
     expect(row.querySelectorAll('[data-party]')).toHaveLength(3);
   });

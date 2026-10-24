@@ -619,8 +619,13 @@ describe('ItemDeltaFact', () => {
         />
       </>
     );
-    expect(screen.getByText(/object/)).toHaveTextContent('object 0x51c75a...0096f2 departed');
-    expect(screen.getByText(/\.bit/)).toHaveTextContent('.bit 0xabc000...000def arrived');
+    // "object <id>" is one unbreakable run; only the verb may wrap onto the next line.
+    const run = screen.getByText(/^object/);
+    expect(run).toHaveClass('whitespace-nowrap');
+    expect(run.parentElement).toHaveTextContent('object 0x51c75a...96f2 departed');
+    expect(screen.getByText(/^\.bit/).parentElement).toHaveTextContent(
+      '.bit 0xabc000...0def arrived'
+    );
   });
 });
 

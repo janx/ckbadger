@@ -64,7 +64,7 @@ export function ActivityFeed() {
               aria-pressed={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                '-mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 text-[15px] transition-colors',
+                '-mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 text-sm transition-colors sm:text-[15px]',
                 tab === t.id
                   ? 'border-jade text-text-bright font-medium'
                   : 'text-text-dim hover:text-text border-transparent'
@@ -198,7 +198,7 @@ function RowHead({
 /** A detail line under the headline, indented: a short dim label column, then the text. */
 function DetailLine({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div data-role="detail" className="flex items-baseline gap-2 pl-3.5 text-xs">
+    <div data-role="detail" className="text-text flex items-baseline gap-2 pl-3.5 text-xs">
       <span className="text-text-dim w-[30px] shrink-0 text-[11px]">{label}</span>
       <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
     </div>

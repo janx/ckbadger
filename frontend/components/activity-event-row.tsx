@@ -813,28 +813,32 @@ export function ItemDeltaFact({ item }: { item: ItemDelta }) {
     case 'object':
       return (
         <span className="text-text-bright">
-          {'object '}
-          <Link
-            href={getObjectDetailHref(item.objectId)}
-            className="hover:text-jade transition-colors"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {truncateHash(item.objectId, 8, 6)}
-          </Link>
+          <span className="whitespace-nowrap">
+            {'object '}
+            <Link
+              href={getObjectDetailHref(item.objectId)}
+              className="hover:text-jade transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {truncateHash(item.objectId, 8, 4)}
+            </Link>
+          </span>
           {item.delta > 0 ? ' arrived' : ' departed'}
         </span>
       );
     case 'identity':
       return (
         <span className="text-text-bright">
-          {`${formatStandard(item.standard)} `}
-          <Link
-            href={getIdentityItemDetailHref(item.standard, item.identityId)}
-            className="hover:text-jade transition-colors"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {truncateHash(item.identityId, 8, 6)}
-          </Link>
+          <span className="whitespace-nowrap">
+            {`${formatStandard(item.standard)} `}
+            <Link
+              href={getIdentityItemDetailHref(item.standard, item.identityId)}
+              className="hover:text-jade transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {truncateHash(item.identityId, 8, 4)}
+            </Link>
+          </span>
           {item.delta > 0 ? ' arrived' : ' departed'}
         </span>
       );
