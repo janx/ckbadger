@@ -213,27 +213,6 @@ describe('Animator under fake timers and rAF', () => {
     expect(ring.isConnected).toBe(false);
   });
 
-  it('calls a reward arc home once 40 % of its 2.2 s life has drawn the line', () => {
-    const a = new Animator(browserClock, false);
-    const onArrive = vi.fn();
-    a.rewardArc(
-      layer,
-      () => [
-        { X: 0, Y: 120 },
-        { X: 300, Y: 120 },
-      ],
-      100,
-      onArrive
-    );
-    vi.advanceTimersByTime(100 + 0.4 * 2200 - 20);
-    expect(onArrive).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(40);
-    expect(onArrive).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(2200);
-    expect(onArrive).toHaveBeenCalledTimes(1);
-    expect(layer.querySelector('path')).toBeNull();
-  });
-
   it('runs a scheduled callback at its time', () => {
     const a = new Animator(browserClock, false);
     const fn = vi.fn();
@@ -253,10 +232,7 @@ describe('Animator under fake timers and rAF', () => {
     expect(onEnd).toHaveBeenCalledTimes(1);
     expect(onEnd.mock.calls[0][0]).toBe(n);
     expect(onEnd.mock.calls[0][1]).toBe(true);
-    const arrive = vi.fn();
     a.ripple(layer, 0, 0, 8, 'red');
-    a.rewardArc(layer, () => null, 0, arrive);
-    expect(arrive).toHaveBeenCalledTimes(1);
     const fn = vi.fn();
     a.after(1000, fn);
     expect(fn).toHaveBeenCalledTimes(1);

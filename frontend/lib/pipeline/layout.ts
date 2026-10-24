@@ -64,7 +64,10 @@ const CHAIN_BASE = {
   gap: 20,
   /** NEXT stands alone between the pool and the chain: the gaps on both of its sides are wider. */
   frontierGap: 44,
-  minBlocks: 8,
+  /** The narrowest canvas: below it the panel scrolls instead of laying out a narrower row. */
+  minViewW: 760,
+  /** Kept free between the last chain card and the right edge of the view. */
+  marginR: 10,
   maxBlocks: 24,
 } as const;
 
@@ -73,6 +76,15 @@ const CARD_W = CHAIN_BASE.cardCols * U - 1 + 2 * CHAIN_BASE.padX;
 const PITCH = CARD_W + CHAIN_BASE.gap;
 
 const NEXT_X = CHAIN_BASE.x0 + PITCH + CARD_W + CHAIN_BASE.frontierGap;
+const CHAIN_X0 = NEXT_X + CARD_W + CHAIN_BASE.frontierGap;
+
+/**
+ * How many whole chain cards fit a view `viewW` px wide: card k ends at chainX0 + k·pitch + cardW,
+ * which must stay `marginR` clear of the right edge.
+ */
+function wholeCards(viewW: number): number {
+  return Math.floor((viewW - CHAIN_BASE.marginR - CHAIN_X0 + CHAIN_BASE.gap) / PITCH);
+}
 
 /**
  * One row, one tx lifetime, left to right: mempool (pending) ⇢ proposed ⇢ NEXT ⇢ the tip → older
@@ -86,7 +98,9 @@ export const G = {
   mempoolX: CHAIN_BASE.x0,
   proposedX: CHAIN_BASE.x0 + PITCH,
   nextX: NEXT_X,
-  chainX0: NEXT_X + CARD_W + CHAIN_BASE.frontierGap,
+  chainX0: CHAIN_X0,
+  /** The fewest chain blocks ever shown: the ones that fit the narrowest canvas. */
+  minBlocks: wholeCards(CHAIN_BASE.minViewW),
 } as const;
 
 /** An uncle travels inside the block that includes it: its header and proposals, never its txs. */
@@ -205,26 +219,26 @@ export interface ChainSlot {
 }
 
 /**
- * x positions of `count` cards, newest first. At least `minBlocks` cards, at most `maxBlocks`,
- * otherwise cut at the view width. A landing block (just mined, still being settled) sits at the
- * NEXT position.
+ * x positions of `count` cards, newest first: as many whole chain cards as fit the view (never a
+ * card cut by its edge), at most `maxBlocks`. The view is never narrower than `minViewW` (the panel
+ * scrolls below it), so at least `minBlocks` fit. A landing block (just mined, still being
+ * settled) sits at the NEXT position.
  */
 export function chainLayout(count: number, viewW: number, landing: boolean): ChainSlot[] {
+  if (viewW < G.minViewW) {
+    throw new Error(`pipeline: a ${viewW} px view is narrower than the ${G.minViewW} px canvas`);
+  }
   const out: ChainSlot[] = [];
   const w = G.cardW;
-  let x: number = G.chainX0;
-  let n = 0;
   let i0 = 0;
   if (landing) {
     if (!count) throw new Error('pipeline: a landing layout needs the landing block');
     out.push({ index: 0, x: G.nextX, w, slot: 'landing' });
     i0 = 1;
   }
-  for (let i = i0; i < count; i++) {
-    if (n >= G.maxBlocks || (n >= G.minBlocks && x + w > viewW - 10)) break;
-    out.push({ index: i, x, w, slot: 'chain' });
-    x += w + G.gap;
-    n++;
+  const fit = Math.min(G.maxBlocks, wholeCards(viewW));
+  for (let n = 0; n < fit && i0 + n < count; n++) {
+    out.push({ index: i0 + n, x: G.chainX0 + n * PITCH, w, slot: 'chain' });
   }
   return out;
 }
@@ -382,6 +396,66 @@ export function windowLabel(H: number, windowTip: number, w: WindowParams): stri
   return `${whose} commit txs proposed in these ${n} blocks`;
 }
 
+export interface Point {
+  X: number;
+  Y: number;
+}
+
+/** The chain's off-screen tail: dotted from `x0` to `x1`. */
+export interface ChainTail {
+  x0: number;
+  x1: number;
+}
+
+/**
+ * Where the chain runs on past the last card on screen: from just after that card to 4 px before
+ * the view edge. The chain line and an off-screen reward link both end in this one span.
+ */
+export function chainTail(
+  cards: readonly { x: number; w: number }[],
+  viewW: number
+): ChainTail | null {
+  if (!cards.length) return null;
+  const last = cards.reduce((a, b) => (b.x > a.x ? b : a));
+  return { x0: last.x + last.w + 2, x1: viewW - 4 };
+}
+
+export interface RewardLink {
+  /** From the paying cellbase up into the lane, along it, and down into the paid one if shown. */
+  d: string;
+  /** The open dotted end when the paid cellbase is off screen; '' when the link drops into it. */
+  tail: string;
+}
+
+/**
+ * The reward link of a hovered cellbase at `a`. It rises into the lane above the cards (the
+ * window's lane: the ruler steps back while a link is shown) and runs right. With the paid block's
+ * cellbase on screen at `b` it drops into it. Without (`b` null: the paid block is past the right
+ * edge) it runs on to where the chain's own tail starts and ends there in the same open dotted
+ * tail, one lane up; it never drops anywhere.
+ */
+export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink {
+  const top = G.winY;
+  const r = 5;
+  const f = (v: number) => v.toFixed(1);
+  if (b) {
+    const dir = Math.sign(b.X - a.X) || 1;
+    return {
+      d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + dir * r)} ${top}H${f(b.X - dir * r)}Q${f(b.X)} ${top} ${f(b.X)} ${top + r}V${f(b.Y)}`,
+      tail: '',
+    };
+  }
+  if (tail.x0 < a.X + r) {
+    throw new Error(
+      `pipeline: a reward link from x ${a.X} cannot end in a tail at ${tail.x0}, before its bend into the lane`
+    );
+  }
+  return {
+    d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + r)} ${top}H${f(tail.x0)}`,
+    tail: `M${f(tail.x0)} ${top}H${f(tail.x1)}`,
+  };
+}
+
 export interface ChainSlotState extends RulerSlot {
   hash: string;
   parentHash: string;
@@ -431,12 +505,12 @@ export function chainPaths(
     else if (a.solid < 0.5) pend += seg;
     else solid += seg;
   }
-  const last = list[list.length - 1];
+  const tail = chainTail(list, viewW);
   return {
     solid,
     pend,
     win,
-    tail: last ? `M${f(last.x + last.w + 2)} ${y}L${viewW - 4} ${y}` : '',
+    tail: tail ? `M${f(tail.x0)} ${y}L${tail.x1} ${y}` : '',
   };
 }
 
@@ -806,6 +880,45 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
 }
 
 /**
+ * Where the reward link of `card`'s cellbase ends: the card of the block it pays when that block
+ * is on screen, 'off' when it is older than every card on screen (past the right edge), null when
+ * the cellbase pays no block yet. A paid block that should be on screen but is not, or that is on
+ * screen under another number or hash, contradicts the snapshot and throws.
+ */
+export function rewardTarget(
+  cards: readonly SceneCard[],
+  card: SceneCard
+): SceneCard | 'off' | null {
+  const b = card.block;
+  const pays = b.cellbase.pays;
+  if (!pays) return null;
+  const at = `pipeline: cellbase of #${b.number} pays`;
+  if (pays.number >= b.number) {
+    throw new Error(`${at} #${pays.number}, which is not an earlier block`);
+  }
+  const byHash = cards.find((k) => k.id === pays.hash);
+  const byNumber = cards.find((k) => k.block.number === pays.number);
+  if (byHash && byHash !== byNumber) {
+    throw new Error(
+      `${at} ${pays.hash} as #${pays.number}, but that block is #${byHash.block.number}`
+    );
+  }
+  if (byNumber && byNumber !== byHash) {
+    throw new Error(
+      `${at} ${pays.hash} as #${pays.number}, but #${pays.number} on screen is ${byNumber.id}`
+    );
+  }
+  if (byNumber) return byNumber;
+  const oldest = Math.min(...cards.map((k) => k.block.number));
+  if (pays.number >= oldest) {
+    throw new Error(
+      `${at} #${pays.number}, which should be on screen (down to #${oldest}) but is not`
+    );
+  }
+  return 'off';
+}
+
+/**
  * Lay out one snapshot. Every chain fact comes from the snapshot; this only places it. Contract
  * violations the layout depends on throw with context instead of being drawn around.
  */
@@ -871,6 +984,8 @@ export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase
   const geoms = s.blocks.map(cardGeom);
   const slots = chainLayout(geoms.length, viewW, phase === 'landing');
   const cards = slots.map((slot) => sceneCard(geoms[slot.index], slot.x, slot.slot));
+  // Every reward link a hover can draw ends where the snapshot says: checked here, once.
+  for (const c of cards) rewardTarget(cards, c);
   const next = phase === 'settled' && s.next ? sceneNext(s, s.next) : null;
   return {
     viewW,

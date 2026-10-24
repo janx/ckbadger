@@ -50,16 +50,33 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 /** The width the stubbed ResizeObserver reports; a test may change it before rendering. */
 let viewW = VIEW_W;
 
+/** The observers the canvas is using, so a test can resize the view. */
+const observers = new Set<ResizeObserverStub>();
+
 class ResizeObserverStub {
   constructor(private readonly cb: ResizeObserverCallback) {}
   observe() {
+    observers.add(this);
+    this.report();
+  }
+  report() {
     this.cb(
       [{ contentRect: { width: viewW } } as ResizeObserverEntry],
       this as unknown as ResizeObserver
     );
   }
   unobserve() {}
-  disconnect() {}
+  disconnect() {
+    observers.delete(this);
+  }
+}
+
+/** The page is resized: every live observer reports the new width. */
+function resizeTo(width: number) {
+  viewW = width;
+  act(() => {
+    for (const o of observers) o.report();
+  });
 }
 
 function stubMatchMedia(reduced: boolean) {
@@ -76,6 +93,7 @@ function stubMatchMedia(reduced: boolean) {
 
 beforeEach(() => {
   viewW = VIEW_W;
+  observers.clear();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   stubMatchMedia(false);
 });
@@ -83,6 +101,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+/** A hover arriving from outside the canvas (the Latest Blocks / Latest Transactions rows). */
+const hoverStoreSet = (h: { block: number | null; tx: string | null; window: number | null }) =>
+  act(() => usePipelineHoverStore.getState().setHover(h));
 
 async function renderPanel(snapshot: PipelineSnapshot = buildPipelineSnapshot()) {
   server.use(http.get('/api/:network/v1/pipeline', () => HttpResponse.json(snapshot)));
@@ -326,6 +348,13 @@ describe('PipelinePanel static render', () => {
     const nextBox = next.querySelector('[data-box]') as SVGRectElement;
     expect(nextBox).toHaveAttribute('stroke-dasharray', '3 2');
     expect(nextBox.style.getPropertyValue('stroke')).toBe(tok('jade'));
+    // One look whatever is hovered: half-filled, its dashed outline at 0.6.
+    expect(nextBox).toHaveAttribute('fill-opacity', '0.5');
+    expect(nextBox).toHaveAttribute('stroke-opacity', '0.6');
+    hoverStoreSet({ block: T + 1, tx: null, window: T + 1 });
+    expect(nextBox).toHaveAttribute('fill-opacity', '0.5');
+    expect(nextBox).toHaveAttribute('stroke-opacity', '0.6');
+    hoverStoreSet({ block: null, tx: null, window: null });
     expect(next.querySelectorAll('[data-ghost="tx"]')).toHaveLength(6);
     for (const g of next.querySelectorAll('[data-ghost="tx"]')) {
       expect(g.tagName).toBe('rect');
@@ -676,6 +705,67 @@ describe('PipelineCanvas motion', () => {
     expect(exitLayer.querySelectorAll('g').length).toBe(0);
   });
 
+  it('retires and brings back whole blocks as the view is resized between wide and narrow', () => {
+    viewW = 1000;
+    const { getByTestId } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    const cardsLayer = svg.querySelector('[data-layer="cards"]') as SVGGElement;
+    const exitLayer = svg.querySelector('[data-layer="exit"]') as SVGGElement;
+    const shown = () =>
+      [...cardsLayer.querySelectorAll('[data-card]')].map((el) =>
+        Number(el.getAttribute('data-number'))
+      );
+    const cardX = (el: Element) =>
+      Number(/translate\(([\d.]+),/.exec(el.getAttribute('transform') ?? '')?.[1]);
+    // NEXT's window is drawn (hovered from outside the canvas) the whole time.
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T + 1 }));
+    /** At rest at `width`: only whole blocks, and the chain, marks and label drawn for them. */
+    const expectRow = (width: number) => {
+      const scene = buildScene(s1, width, 'settled');
+      expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${G.H}`);
+      expect(shown()).toEqual(scene.cards.map((c) => c.block.number));
+      for (const el of cardsLayer.querySelectorAll('[data-card]')) {
+        expect(cardX(el) + G.cardW).toBeLessThanOrEqual(width - G.marginR);
+      }
+      expect(exitLayer.childElementCount).toBe(0);
+      const last = scene.cards[scene.cards.length - 1];
+      const y = G.chainY + 0.5;
+      expect(path(svg, 'tail')).toHaveAttribute(
+        'd',
+        `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
+      );
+      const text = windowLabel(T + 1, T, s1.consensus);
+      const ruler = windowRuler(rulerSlots(scene), T + 1, s1.consensus, width, text);
+      expect(svg.querySelector('[data-window-marks]')).toHaveAttribute('d', windowMarksPath(ruler));
+      // The window of NEXT runs past the last block at every one of these widths: gold tail.
+      expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('gold'));
+      expectLabelClear(svg, width);
+    };
+    expectRow(1000);
+    expect(shown()).toHaveLength(5);
+
+    // Narrower: the two blocks that no longer fit whole retire through the exit layer.
+    resizeTo(760);
+    expect(shown()).toHaveLength(3);
+    expect(exitLayer.querySelectorAll('g').length).toBeGreaterThanOrEqual(2);
+    for (let ms = 0; ms < 700; ms += 16) {
+      at(16);
+      expectLabelClear(svg, 760);
+    }
+    expectRow(760);
+
+    // Wider again: the blocks that fit now fade in from nothing.
+    resizeTo(CONTAINER_VIEW_W);
+    expect(shown()).toHaveLength(8);
+    expect(card(svg, T - 5)).toHaveAttribute('opacity', '0.000');
+    for (let ms = 0; ms < 400; ms += 16) {
+      at(16);
+      expectLabelClear(svg, CONTAINER_VIEW_W);
+    }
+    expect(card(svg, T - 5)).toHaveAttribute('opacity', '1.000');
+    expectRow(CONTAINER_VIEW_W);
+  });
+
   it('keeps the landing cellbase invisible until it is born at contact', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
@@ -746,6 +836,44 @@ describe('PipelineCanvas motion', () => {
       at(16);
       expectLabelClear(svg, CONTAINER_VIEW_W);
     }
+    expect(svg.querySelector(`[data-card="${newHash}"]`)).toHaveAttribute('data-slot', 'chain');
+  });
+
+  it.each([
+    { width: CONTAINER_VIEW_W, where: 'past the right edge' },
+    { width: 2000, where: 'on screen' },
+  ])('draws no reward link when a block lands, the paid block $where', ({ width }) => {
+    viewW = width;
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    const fx = svg.querySelector('[data-layer="fx"]') as SVGGElement;
+    // The landing block's cellbase pays tip − 10: on screen at 2000 px, past the edge at 1246.
+    const pays = s2.blocks[0].cellbase.pays;
+    expect(pays?.number).toBe(T - 10);
+    const shown = buildScene(s2, width, 'landing').cards.some((c) => c.block.number === T - 10);
+    expect(shown).toBe(width === 2000);
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const payee = card(svg, T - 10);
+    let ripples = 0;
+    // Through the landing beat, the move into the chain and well past where a link would fade.
+    for (let ms = 0; ms < t.settleAt + 3000; ms += 16) {
+      at(16);
+      // Only ripples play in the effects layer: no line, no tail, nothing in the reward lane.
+      expect([...fx.children].map((el) => el.tagName).filter((tag) => tag !== 'circle')).toEqual(
+        []
+      );
+      expect(svg.querySelector('[data-hover="reward"]')).toBeNull();
+      ripples += fx.querySelectorAll('circle').length;
+      // And none of them on the paid cellbase.
+      if (payee?.isConnected) {
+        const x = Number(/translate\(([\d.]+),/.exec(payee.getAttribute('transform') ?? '')?.[1]);
+        for (const r of fx.querySelectorAll('circle')) {
+          expect(Math.abs(Number(r.getAttribute('cx')) - (x + G.padX + 4.5))).toBeGreaterThan(1);
+        }
+      }
+    }
+    // The landing itself still plays.
+    expect(ripples).toBeGreaterThan(0);
     expect(svg.querySelector(`[data-card="${newHash}"]`)).toHaveAttribute('data-slot', 'chain');
   });
 
@@ -1014,6 +1142,66 @@ describe('PipelinePanel interactions', () => {
     }
   );
 
+  it.each([
+    { width: 760, blocks: 3 },
+    { width: 1000, blocks: 5 },
+    { width: CONTAINER_VIEW_W, blocks: 8 },
+  ])(
+    'shows $blocks whole blocks at $width px, its tail after the last one, every window label in view',
+    async ({ width, blocks }) => {
+      viewW = width;
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        width,
+        height: G.H,
+        right: width,
+        bottom: G.H,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const svg = await renderPanel(snapshot);
+      const fit = buildScene(snapshot, width, 'settled');
+      expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${G.H}`);
+      expect(svg.querySelectorAll('[data-card]')).toHaveLength(blocks);
+      expect(fit.cards.map((c) => c.block.number)).toEqual(
+        Array.from({ length: blocks }, (_, i) => T - i)
+      );
+      for (const c of fit.cards) {
+        expect(card(svg, c.block.number)).toHaveAttribute(
+          'transform',
+          `translate(${c.x.toFixed(2)},0.00)`
+        );
+        expect(c.x + c.w).toBeLessThanOrEqual(width - G.marginR);
+      }
+      const last = fit.cards[blocks - 1];
+      const y = G.chainY + 0.5;
+      expect(path(svg, 'tail')).toHaveAttribute(
+        'd',
+        `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
+      );
+      // NEXT, then every block: its window's label stays in view and off its ticks, or, when its
+      // near end is past the last block, no window is drawn at all.
+      hoverNext(svg);
+      expectLabelClear(svg, width);
+      for (const c of fit.cards) {
+        const n = c.block.number;
+        fireEvent.pointerMove(card(svg, n).querySelector('[data-box]') as Element, {
+          clientX: c.x + c.w / 2,
+          clientY: G.cardTop + 5,
+        });
+        expect(tooltip()).toHaveTextContent(`Block #${fmt(n)}`);
+        if (n - snapshot.consensus.proposalWindowClosest < last.block.number) {
+          expect(svg.querySelector('[data-window-label]')).toBeNull();
+          expect(svg.querySelector('[data-ruler-ticks]')).toHaveAttribute('d', 'M0 0');
+        } else {
+          expectLabelClear(svg, width);
+        }
+      }
+    }
+  );
+
   it('turns the dotted tail gold while the drawn window runs off the screen', async () => {
     const svg = await renderPanel(snapshot);
     expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
@@ -1046,15 +1234,26 @@ describe('PipelinePanel interactions', () => {
       toJSON: () => ({}),
     } as DOMRect);
     const svg = await renderPanel(snapshot);
-    const c = buildScene(snapshot, wide, 'settled').cards.find((k) => k.block.number === T - 2);
+    const wideScene = buildScene(snapshot, wide, 'settled');
+    const c = wideScene.cards.find((k) => k.block.number === T - 2);
+    const payee = wideScene.cards.find((k) => k.block.number === T - 13);
     const cb = c?.squares[0];
+    const pb = payee?.squares[0];
     if (!c || !cb || cb.kind !== 'cellbase') throw new Error('no cellbase for T−2');
+    if (!payee || !pb || pb.kind !== 'cellbase') throw new Error('no cellbase for T−13');
     fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
     const reward = svg.querySelector('[data-hover="reward"]') as SVGPathElement;
     expect(reward).not.toBeNull();
-    // It runs in the lane above the cards, where the hovered window would be drawn.
-    expect(reward.getAttribute('d')).toContain(`H`);
-    expect(reward.getAttribute('d')).toMatch(new RegExp(`Q[\\d.]+ ${G.winY} `));
+    // It runs in the lane above the cards, where the hovered window would be drawn, and drops
+    // into the cellbase it pays: unchanged by the off-screen rule.
+    const a = { X: c.x + cb.x + cb.s / 2, Y: cb.y + cb.s / 2 };
+    const b = { X: payee.x + pb.x + pb.s / 2, Y: pb.y + pb.s / 2 };
+    const f = (v: number) => v.toFixed(1);
+    expect(reward).toHaveAttribute(
+      'd',
+      `M${f(a.X)} ${f(a.Y)}V${G.winY + 5}Q${f(a.X)} ${G.winY} ${f(a.X + 5)} ${G.winY}H${f(b.X - 5)}Q${f(b.X)} ${G.winY} ${f(b.X)} ${G.winY + 5}V${f(b.Y)}`
+    );
+    expect(svg.querySelector('[data-hover="reward-tail"]')).toBeNull();
     // No caption on the canvas, and no window in the lane meanwhile.
     expect(svg.querySelector('[data-chain-sub]')).toBeNull();
     expect(svg.querySelector('[data-ruler-ticks]')).toBeNull();
@@ -1063,11 +1262,149 @@ describe('PipelinePanel interactions', () => {
     expect(tooltip()).toHaveTextContent(`pays reward of#${fmt(T - 13)}`);
   });
 
-  it('draws no reward link when the block a cellbase pays is not on screen', async () => {
+  it('runs the reward link off the right edge in an open dotted tail when the paid block is not on screen', async () => {
+    // The 1280 px container shows tip … tip − 7: the block the tip's cellbase pays (tip − 11) is
+    // past the right edge.
+    viewW = CONTAINER_VIEW_W;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: CONTAINER_VIEW_W,
+      height: G.H,
+      right: CONTAINER_VIEW_W,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
     const svg = await renderPanel(snapshot);
-    fireEvent.pointerMove(svg, squareCentre(T, snapshot.blocks[0].cellbase.hash));
+    const fit = buildScene(snapshot, CONTAINER_VIEW_W, 'settled');
+    expect(fit.cards).toHaveLength(8);
+    const c = fit.cards[0];
+    const last = fit.cards[fit.cards.length - 1];
+    const cb = c.squares[0];
+    expect(cb.kind).toBe('cellbase');
+    fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
     expect(tooltip()).toHaveTextContent(`pays reward of#${fmt(T - 11)}`);
+    const reward = svg.querySelector('[data-hover="reward"]') as SVGPathElement;
+    expect(reward).not.toBeNull();
+    // Up from the cellbase into the lane, then right to where the chain's own tail starts; it
+    // never drops anywhere.
+    const tailX0 = last.x + last.w + 2;
+    const f = (v: number) => v.toFixed(1);
+    const ax = c.x + cb.x + cb.s / 2;
+    expect(reward).toHaveAttribute(
+      'd',
+      `M${f(ax)} ${f(cb.y + cb.s / 2)}V${G.winY + 5}Q${f(ax)} ${G.winY} ${f(ax + 5)} ${G.winY}H${f(tailX0)}`
+    );
+    // The open end: dotted like the chain's tail and over the same span, one lane up.
+    const tail = svg.querySelector('[data-hover="reward-tail"]') as SVGPathElement;
+    expect(tail).toHaveAttribute('d', `M${f(tailX0)} ${G.winY}H${f(CONTAINER_VIEW_W - 4)}`);
+    expect(tail).toHaveAttribute(
+      'stroke-dasharray',
+      path(svg, 'tail').getAttribute('stroke-dasharray')
+    );
+    expect(path(svg, 'tail').getAttribute('d')).toBe(
+      `M${f(tailX0)} ${G.chainY + 0.5}L${CONTAINER_VIEW_W - 4} ${G.chainY + 0.5}`
+    );
+    // Both leave with the hover.
+    fireEvent.pointerLeave(svg);
     expect(svg.querySelector('[data-hover="reward"]')).toBeNull();
+    expect(svg.querySelector('[data-hover="reward-tail"]')).toBeNull();
+  });
+
+  it('ends the off-screen reward link at the chain tail of the narrowest view too', async () => {
+    // 760 px holds tip … tip − 2: the tail starts just past tip − 2 and the link stops there.
+    viewW = G.minViewW;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: G.minViewW,
+      height: G.H,
+      right: G.minViewW,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const svg = await renderPanel(snapshot);
+    const fit = buildScene(snapshot, G.minViewW, 'settled');
+    expect(fit.cards).toHaveLength(3);
+    const last = fit.cards[2];
+    for (const c of fit.cards) {
+      const cb = c.squares[0];
+      fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
+      expect(tooltip()).toHaveTextContent(`pays reward of#${fmt(c.block.number - 11)}`);
+      const ax = (c.x + cb.x + cb.s / 2).toFixed(1);
+      const x0 = (last.x + last.w + 2).toFixed(1);
+      expect(svg.querySelector('[data-hover="reward"]')).toHaveAttribute(
+        'd',
+        `M${ax} ${(cb.y + cb.s / 2).toFixed(1)}V${G.winY + 5}Q${ax} ${G.winY} ${(c.x + cb.x + cb.s / 2 + 5).toFixed(1)} ${G.winY}H${x0}`
+      );
+      expect(svg.querySelector('[data-hover="reward-tail"]')).toHaveAttribute(
+        'd',
+        `M${x0} ${G.winY}H${(G.minViewW - 4).toFixed(1)}`
+      );
+    }
+  });
+
+  it('draws the hover reward link of a block that has just landed, with no landing link', () => {
+    // Reduced motion: the landed block joins the chain at once, so it can be hovered right away.
+    stubMatchMedia(true);
+    viewW = CONTAINER_VIEW_W;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: CONTAINER_VIEW_W,
+      height: G.H,
+      right: CONTAINER_VIEW_W,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const s2 = mineNext(snapshot, { commit: [poolTxHash('w0')], propose: [] });
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={snapshot} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    expect(svg.querySelector('[data-layer="fx"]')?.childElementCount).toBe(0);
+    expect(svg.querySelector('[data-hover="reward"]')).toBeNull();
+    const fit = buildScene(s2, CONTAINER_VIEW_W, 'settled');
+    const c = fit.cards[0];
+    expect(c.block.number).toBe(T + 1);
+    const cb = c.squares[0];
+    fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
+    // It pays tip − 10, past the edge: the link runs off it, as for any other cellbase.
+    const last = fit.cards[fit.cards.length - 1];
+    expect(svg.querySelector('[data-hover="reward"]')?.getAttribute('d')).toMatch(
+      new RegExp(`H${(last.x + last.w + 2).toFixed(1)}$`)
+    );
+    expect(svg.querySelector('[data-hover="reward-tail"]')).not.toBeNull();
+    expect(svg.querySelector('[data-layer="fx"]')?.childElementCount).toBe(0);
+  });
+
+  it('steps the hovered window back while a reward link holds its lane', async () => {
+    // Hovered from the Latest Blocks row while the pointer is on a cellbase: both want the lane.
+    viewW = CONTAINER_VIEW_W;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: CONTAINER_VIEW_W,
+      height: G.H,
+      right: CONTAINER_VIEW_W,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const svg = await renderPanel(snapshot);
+    const c = buildScene(snapshot, CONTAINER_VIEW_W, 'settled').cards[0];
+    const cb = c.squares[0];
+    fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
+    act(() => usePipelineHoverStore.getState().setHover({ block: T, tx: null, window: T }));
+    expect(svg.querySelector('[data-hover="reward"]')).not.toBeNull();
+    expect(svg.querySelector('[data-ruler-ticks]')).toHaveAttribute('opacity', '0.15');
+    expect(svg.querySelector('[data-window-label]')).toHaveAttribute('opacity', '0.15');
   });
 
   it('pins a tx on click and lets Escape unpin it', async () => {

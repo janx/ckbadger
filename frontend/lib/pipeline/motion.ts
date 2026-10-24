@@ -10,7 +10,6 @@ import {
   type SquareStyle,
 } from '@/lib/pipeline/encoding';
 import {
-  G,
   chainPaths,
   rulerPath,
   windowLabel,
@@ -24,10 +23,10 @@ import {
 import type { Transition, TransitionEvent } from '@/lib/pipeline/transitions';
 
 /**
- * The pipeline animator, ported from the prototype's `go` / `stepNode` / `exitNode` / `ripple` /
- * `rewardArc`. It writes SVG attributes directly from one requestAnimationFrame loop that only runs
- * while something moves; React never re-renders per frame. With reduced motion every call jumps
- * straight to its final state.
+ * The pipeline animator, ported from the prototype's `go` / `stepNode` / `exitNode` / `ripple`. It
+ * writes SVG attributes directly from one requestAnimationFrame loop that only runs while something
+ * moves; React never re-renders per frame. With reduced motion every call jumps straight to its
+ * final state.
  */
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -147,36 +146,15 @@ export interface GoOptions {
 
 export type ExitKind = 'hide' | 'retire' | 'drop' | 'orphan';
 
-export interface Point {
-  X: number;
-  Y: number;
-}
-
+/** A ripple in flight. */
 interface Fx {
-  kind: 'ripple' | 'arc';
   el: SVGElement;
   t0: number;
   dur: number;
   r: number;
-  ends: (() => [Point, Point] | null) | null;
-  onArrive: (() => void) | null;
-  arrived: boolean;
 }
 
 const NS = 'http://www.w3.org/2000/svg';
-
-/** The reward link rises from one cellbase, runs above the card row and drops into the other. */
-export function arcPath(a: Point, b: Point): { d: string; len: number } {
-  // The window's lane: the ruler steps back while a reward link is shown.
-  const top = G.winY;
-  const r = 5;
-  const dir = Math.sign(b.X - a.X) || 1;
-  const f = (v: number) => v.toFixed(1);
-  return {
-    d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + dir * r)} ${top}H${f(b.X - dir * r)}Q${f(b.X)} ${top} ${f(b.X)} ${top + r}V${f(b.Y)}`,
-    len: Math.abs(b.X - a.X) + a.Y + b.Y - 2 * top,
-  };
-}
 
 /** Paints a square node (rect, or the cellbase diamond) from its values and look. */
 export function paintSquareNode(n: MotionNode): void {
@@ -362,47 +340,7 @@ export class Animator {
     el.setAttribute('opacity', '0');
     el.style.setProperty('stroke', color);
     layer.appendChild(el);
-    this.fx.push({
-      kind: 'ripple',
-      el,
-      t0: this.clock.now() + delay,
-      dur: 480,
-      r,
-      ends: null,
-      onArrive: null,
-      arrived: false,
-    });
-    this.kick();
-  }
-
-  /** The reward link from a new cellbase to the cellbase whose block it pays, drawn once. */
-  rewardArc(
-    layer: SVGElement,
-    ends: () => [Point, Point] | null,
-    delay: number,
-    onArrive: () => void
-  ): void {
-    if (this.reduced) {
-      onArrive();
-      return;
-    }
-    const el = document.createElementNS(NS, 'path');
-    el.setAttribute('fill', 'none');
-    el.setAttribute('stroke-width', '1.2');
-    el.setAttribute('vector-effect', 'non-scaling-stroke');
-    el.setAttribute('opacity', '0');
-    el.style.setProperty('stroke', tok('jade'));
-    layer.appendChild(el);
-    this.fx.push({
-      kind: 'arc',
-      el,
-      t0: this.clock.now() + delay,
-      dur: 2200,
-      r: 0,
-      ends,
-      onArrive,
-      arrived: false,
-    });
+    this.fx.push({ el, t0: this.clock.now() + delay, dur: 480, r });
     this.kick();
   }
 
@@ -443,10 +381,7 @@ export class Animator {
       }
       const fx = this.fx;
       this.fx = [];
-      for (const f of fx) {
-        f.el.remove();
-        if (f.onArrive && !f.arrived) f.onArrive();
-      }
+      for (const f of fx) f.el.remove();
       const timers = this.timers.sort((a, b) => a.t - b.t);
       this.timers = [];
       for (const t of timers) t.fn();
@@ -541,32 +476,10 @@ export class Animator {
       if (life < 0) return true;
       if (life >= 1) {
         f.el.remove();
-        if (f.onArrive && !f.arrived) f.onArrive();
         return false;
       }
-      if (f.kind === 'ripple') {
-        f.el.setAttribute('r', (f.r * (0.2 + 0.8 * (1 - Math.pow(1 - life, 3)))).toFixed(2));
-        f.el.setAttribute('opacity', (Math.sin(Math.PI * life) * 0.9).toFixed(3));
-        return true;
-      }
-      const ends = (f.ends as () => [Point, Point] | null)();
-      if (!ends) {
-        f.el.remove();
-        if (f.onArrive && !f.arrived) f.onArrive();
-        return false;
-      }
-      const ap = arcPath(ends[0], ends[1]);
-      f.el.setAttribute('d', ap.d);
-      const draw = clamp01(life / 0.4);
-      f.el.setAttribute(
-        'stroke-dasharray',
-        `${(ap.len * E.lob(draw)).toFixed(1)} ${ap.len.toFixed(1)}`
-      );
-      f.el.setAttribute('opacity', (1 - smoothstep(0.6, 1, life)).toFixed(3));
-      if (draw >= 1 && !f.arrived) {
-        f.arrived = true;
-        (f.onArrive as () => void)();
-      }
+      f.el.setAttribute('r', (f.r * (0.2 + 0.8 * (1 - Math.pow(1 - life, 3)))).toFixed(2));
+      f.el.setAttribute('opacity', (Math.sin(Math.PI * life) * 0.9).toFixed(3));
       return true;
     });
   }
@@ -973,35 +886,7 @@ export class SceneMotion {
       });
     }
 
-    // ---- The reward link: the new cellbase pays the block its finalized_at names ----
-    if (mined?.payee && !boot) {
-      const from = mined.cellbase;
-      const to = mined.payee.cellbase;
-      this.animator.rewardArc(
-        fx,
-        () => {
-          const a = this.centre(from);
-          const b = this.centre(to);
-          return a && b ? [a, b] : null;
-        },
-        tr.contact + 500,
-        () => {
-          const b = this.centre(to);
-          if (b) this.animator.ripple(fx, b.X, b.Y, 12, tok('jade'));
-        }
-      );
-    }
     this.paintChain();
-  }
-
-  /** Absolute centre of a square that is on screen now. */
-  centre(id: string): Point | null {
-    const rec = this.squares.get(id);
-    if (!rec || rec.node.exiting) return null;
-    const card = rec.container === 'pool' ? null : this.cards.get(rec.container);
-    if (rec.container !== 'pool' && !card) return null;
-    const cx = card ? card.node.v.X : 0;
-    return { X: cx + rec.node.v.X + rec.node.v.s / 2, Y: rec.node.v.Y + rec.node.v.s / 2 };
   }
 
   private paintCard(n: MotionNode): void {

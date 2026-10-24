@@ -20,16 +20,19 @@ import { usePipelineSnapshot } from '@/hooks/usePipelineSnapshot';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import type { PipelineSnapshot } from '@/lib/api';
-import { arcPath, type MotionCtx, type MotionView } from '@/lib/pipeline/motion';
+import type { MotionCtx, MotionView } from '@/lib/pipeline/motion';
 import { diffSnapshots, type Transition } from '@/lib/pipeline/transitions';
 import { STAGE_BASE, mixColor, tok } from '@/lib/pipeline/encoding';
 import {
   G,
   buildScene,
   chainPaths,
+  chainTail,
   inWindow,
   pick,
   pickTargets,
+  rewardLink,
+  rewardTarget,
   windowLabel,
   windowRuler,
   type ChainSlotState,
@@ -66,11 +69,10 @@ import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/win
 const SVG_LABEL =
   'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase';
 
-const MIN_VIEW_W = 760;
-
 /**
  * Width available to the SVG, measured before the canvas mounts (null until then), so the first
- * frame is already laid out for the real width. The SVG is drawn 1:1 and only scrolls below 760 px.
+ * frame is already laid out for the real width. The SVG is drawn 1:1 and only scrolls below
+ * `G.minViewW`.
  */
 function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null {
   const [width, setWidth] = useState<number | null>(null);
@@ -163,7 +165,7 @@ function advance(view: ViewState | null, snapshot: PipelineSnapshot, reduced: bo
 export function PipelineCanvas({ snapshot }: CanvasProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const measured = useMeasuredWidth(wrapRef);
-  const viewW = measured === null ? null : Math.max(MIN_VIEW_W, measured);
+  const viewW = measured === null ? null : Math.max(G.minViewW, measured);
   const reduced = usePrefersReducedMotion();
   const [view, setView] = useState<ViewState>(() => advance(null, snapshot, reduced));
   if (view.snapshot !== snapshot) {
@@ -402,16 +404,23 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const ghost = hoverTx ? (ghostOfTx.get(hoverTx) ?? null) : null;
   const onIds = useMemo(() => new Set(hovered && hoverTx ? [hoverTx] : []), [hovered, hoverTx]);
 
-  // The reward link of a hovered cellbase, to the cellbase of the block it pays.
+  // The reward link of a hovered cellbase, to the cellbase of the block it pays: dropping into it
+  // when that block is on screen, else running off the right edge.
   const arc = (() => {
     if (arcBlock === null) return null;
+    // The hovered block may have left the screen with a newer snapshot.
     const c = byNumber.get(arcBlock);
-    const pays = c?.block.cellbase.pays;
-    const payee = pays ? scene.cards.find((k) => k.id === pays.hash) : undefined;
-    if (!c || !pays || !payee) return null;
-    const a = squares.get(c.block.cellbase.hash) as AbsSquare;
-    const b = squares.get(payee.block.cellbase.hash) as AbsSquare;
-    return { from: c.block.number, to: pays.number, d: arcPath(centreOf(a), centreOf(b)).d };
+    if (!c) return null;
+    const target = rewardTarget(scene.cards, c);
+    if (target === null) return null;
+    const cellbase = (k: typeof c) => {
+      const q = squares.get(k.block.cellbase.hash);
+      if (!q) throw new Error(`pipeline: the cellbase of #${k.block.number} is not drawn`);
+      return centreOf(q);
+    };
+    const tail = chainTail(chainSlots, scene.viewW);
+    if (!tail) throw new Error(`pipeline: #${c.block.number} is on screen but the chain is not`);
+    return rewardLink(cellbase(c), target === 'off' ? null : cellbase(target), tail);
   })();
 
   const place = () => {
@@ -566,9 +575,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
         attrs={
           {
             'data-testid': 'pipeline-svg',
-            className: `pipeline-svg block w-full min-w-[760px] select-none font-mono tabular-nums${focus ? ' is-focus' : ''}`,
-            // The canvas is drawn 1:1: its CSS height is the viewBox height.
-            style: cursor ? { height: G.H, cursor } : { height: G.H },
+            className: `pipeline-svg block w-full select-none font-mono tabular-nums${focus ? ' is-focus' : ''}`,
+            // The canvas is drawn 1:1: its CSS height is the viewBox height, and it is never
+            // narrower than the layout's narrowest view (the panel scrolls below that).
+            style: cursor
+              ? { height: G.H, minWidth: G.minViewW, cursor }
+              : { height: G.H, minWidth: G.minViewW },
             viewBox: `0 0 ${scene.viewW} ${G.H}`,
             role: 'img',
             'aria-label': SVG_LABEL,
@@ -588,7 +600,6 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
           {scene.next && (
             <NextCard
               next={scene.next}
-              highlighted={false}
               dim={dimAnchor === null || dimAnchor === scene.next.number ? 'false' : 'true'}
             />
           )}
@@ -619,6 +630,18 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
               strokeWidth={1}
               strokeOpacity={0.8}
               strokeDasharray="2 3"
+              vectorEffect="non-scaling-stroke"
+              style={{ stroke: tok('jade') }}
+            />
+          )}
+          {arc?.tail && (
+            <path
+              data-hover="reward-tail"
+              d={arc.tail}
+              fill="none"
+              strokeWidth={1}
+              strokeOpacity={0.8}
+              strokeDasharray="1 3"
               vectorEffect="non-scaling-stroke"
               style={{ stroke: tok('jade') }}
             />

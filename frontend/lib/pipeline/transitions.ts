@@ -35,14 +35,7 @@ export type TransitionEvent =
   | { kind: 'retire'; block: string; number: number; at: number }
   | { kind: 'orphan'; block: string; number: number; at: number }
   | { kind: 'enter'; block: string; number: number; at: number }
-  | {
-      kind: 'mined';
-      block: string;
-      number: number;
-      cellbase: string;
-      contact: number;
-      payee: { number: number; hash: string; cellbase: string } | null;
-    }
+  | { kind: 'mined'; block: string; number: number; contact: number }
   | { kind: 'settle' }
   | {
       kind: 'resolve';
@@ -228,24 +221,7 @@ export function diffSnapshots(prev: PipelineSnapshot | null, next: PipelineSnaps
   events.push(...cardEvents);
 
   if (mode === 'mined') {
-    const pays = newest.cellbase.pays;
-    const payeeBlock = pays ? nextByHash.get(pays.hash) : undefined;
-    if (pays && payeeBlock && payeeBlock.number !== pays.number) {
-      throw new Error(
-        `pipeline: cellbase of #${newest.number} pays ${pays.hash} as #${pays.number}, but that block is #${payeeBlock.number}`
-      );
-    }
-    events.push({
-      kind: 'mined',
-      block: newest.hash,
-      number: newest.number,
-      cellbase: newest.cellbase.hash,
-      contact,
-      payee:
-        pays && payeeBlock
-          ? { number: pays.number, hash: pays.hash, cellbase: payeeBlock.cellbase.hash }
-          : null,
-    });
+    events.push({ kind: 'mined', block: newest.hash, number: newest.number, contact });
   }
 
   return { mode, events, contact, settleAt };
