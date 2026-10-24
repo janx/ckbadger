@@ -243,6 +243,24 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/compensation/).length).toBeGreaterThan(0);
   });
 
+  it('shows an unreadable DAO step as an error naming the tx, never as +0 CKB', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          txHash: '0xfeed000000000000000000000000000000000000000000000000000000000001',
+          protocolActions: [{ protocol: 'dao', action: 'deposit', metadata: {} }],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts[0]).toHaveTextContent(
+      'Cannot read tx 0xfeed000000000000000000000000000000000000000000000000000000000001: dao:deposit metadata.capacity is missing'
+    );
+    expect(screen.queryByText(/\+0 CKB/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/DAO Deposit/)).not.toBeInTheDocument();
+  });
+
   it('states a zero compensation as an amount, not a stray 0', () => {
     const { container } = render(
       <ActivityEventGroup

@@ -261,6 +261,57 @@ describe('renderMarkdownPage', () => {
     );
   });
 
+  it('writes "-" for an activity with no party, not an invented 0 CKB or an empty address', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 0,
+      daoDepositCount: 0,
+      daoWithdrawRequestCount: 0,
+      daoWithdrawCompleteCount: 0,
+      tokenCount: 0,
+      objectCount: 0,
+      identityCount: 0,
+      scriptCallCount: 1,
+      unknownCount: 0,
+      coinbaseCount: 0,
+      uniqueAddressCount: 0,
+      totalCkbMoved: '0',
+      scriptCounts: [],
+      hoursCovered: 24,
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: `0x${'c'.repeat(64)}`,
+          blockNumber: 7,
+          txIndex: 1,
+          timestamp: '1700000000',
+          isCellbase: false,
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [{ protocol: 'utxoswap', action: 'swap', metadata: {} }],
+          participants: [],
+        },
+      ],
+      total: 1,
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+
+    const row = result.body.split('\n').find((line) => line.includes('0xcccccccc'));
+    expect(row).toBeDefined();
+    const cells = (row as string).split('|').map((c) => c.trim());
+    // | timestamp | address | txHash | blockNumber | kind | ckbDelta | detail |
+    expect(cells[2]).toBe('-');
+    expect(cells[6]).toBe('-');
+  });
+
   it('names a lock party without an address by its lock hash in the activities table', async () => {
     // A Lock participant whose lock script the store does not know encodes to
     // no address; the API sends its lock hash instead.

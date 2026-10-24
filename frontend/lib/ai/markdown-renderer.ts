@@ -290,11 +290,18 @@ function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
     // The most specific identity the API gave: an address, else the lock hash
     // of a lock that encodes to no address, else a protocol-named prefix.
     const party = activity.participants[0];
-    const addr = party?.address ?? party?.lockHash ?? party?.lockHashPrefix ?? '';
-    const ckbDelta = activity.participants[0]?.ckbDelta ?? '0';
+    // No party: say so ("-", as every absent cell here), never an empty address or 0 CKB.
+    const addr = party ? (party.address ?? party.lockHash ?? party.lockHashPrefix) : null;
+    if (party && addr === null) {
+      throw new MarkdownRenderError(
+        500,
+        `tx ${activity.txHash}: a participant has no address, lock hash or lock-hash prefix`
+      );
+    }
+    const ckbDelta = party ? party.ckbDelta : '-';
     return [
       activity.timestamp,
-      hashShort(addr),
+      addr === null ? '-' : hashShort(addr),
       hashShort(activity.txHash),
       activity.blockNumber,
       classified.displayType,

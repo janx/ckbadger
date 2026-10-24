@@ -265,6 +265,8 @@ function daoActionLabel(action: string): string {
 }
 
 function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
+  // protocolActionMeta throws when a deposit / withdraw step lacks its capacity (or a completed
+  // withdraw its compensation), so below those are present; nothing is ever shown as 0 instead.
   const { capacity, compensation } = protocolActionMeta(pa);
   const label = daoActionLabel(pa.action);
 
@@ -278,7 +280,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
         ),
         value: (
           <span className="text-positive font-mono text-xs tabular-nums">
-            +{capacity === null ? '0' : formatCkbAmount(capacity).full} CKB locked
+            +{formatCkbAmount(capacity as bigint).full} CKB locked
           </span>
         ),
       };
@@ -291,7 +293,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
         ),
         value: (
           <span className="text-gold font-mono text-xs tabular-nums">
-            {capacity === null ? '0' : formatCkbAmount(capacity).full} CKB
+            {formatCkbAmount(capacity as bigint).full} CKB
           </span>
         ),
       };
@@ -305,7 +307,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
         value: (
           <div className="flex flex-col items-end gap-0.5">
             <span className="text-positive font-mono text-xs tabular-nums">
-              +{capacity === null ? '0' : formatCkbAmount(capacity).full} CKB
+              +{formatCkbAmount(capacity as bigint).full} CKB
             </span>
             {compensation !== null && (
               <span className="text-positive font-mono text-[10px] tabular-nums">
@@ -383,6 +385,29 @@ export function protocolActionLabel(pa: ActivityProtocolAction): string {
   const actionLabel =
     pa.protocol === 'fiber' ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
   return `${protocolDisplayName(pa.protocol)} \u00B7 ${actionLabel}`;
+}
+
+/** An activity part that cannot be read, said in its row with the tx it belongs to. */
+export function ActivityReadError({ txHash, error }: { txHash: string; error: unknown }) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    <span
+      role="alert"
+      data-testid="activity-read-error"
+      className="text-rouge block whitespace-normal break-all font-mono text-xs"
+    >
+      {`Cannot read tx ${txHash}: ${message}`}
+    </span>
+  );
+}
+
+/** A protocol action's row parts, or — when its metadata cannot be read — an error in their place. */
+function readProtocolActionEventParts(pa: ActivityProtocolAction, txHash: string): EventParts {
+  try {
+    return getProtocolActionEventParts(pa);
+  } catch (e) {
+    return { badge: <ActivityReadError txHash={txHash} error={e} />, value: null };
+  }
 }
 
 function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
@@ -464,7 +489,7 @@ export function ActivityEventGroup({
   const events: EventParts[] = [];
 
   activity.protocolActions.forEach((pa) => {
-    events.push(getProtocolActionEventParts(pa));
+    events.push(readProtocolActionEventParts(pa, activity.txHash));
   });
   activity.itemDeltas.forEach((item) => {
     events.push(getItemDeltaEventParts(item));
@@ -701,7 +726,7 @@ export function globalTxEvents(activity: GlobalActivity): TxEvent[] {
 export function buildGlobalTxEvents(activity: GlobalActivity): EventParts[] {
   return globalTxEvents(activity).map((e) =>
     e.kind === 'protocol'
-      ? getProtocolActionEventParts(e.action)
+      ? readProtocolActionEventParts(e.action, activity.txHash)
       : e.kind === 'type'
         ? getTypeEventParts(e.call)
         : getLockEventParts(e.call)

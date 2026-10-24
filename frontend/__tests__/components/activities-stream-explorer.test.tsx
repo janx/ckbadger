@@ -346,6 +346,38 @@ describe('ActivitiesStreamExplorer', () => {
     expect(screen.queryByText('No activities yet')).not.toBeInTheDocument();
   });
 
+  it('shows an unreadable DAO step as an error in its row, naming the tx, and keeps the others', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        makeActivity({
+          txHash: '0xbad0000000000000000000000000000000000000000000000000000000000001',
+          protocolActions: [
+            { protocol: 'dao', action: 'withdraw_complete', metadata: { capacity: '1' } },
+          ],
+          participants: [makeParticipant({ ckbDelta: '100000000' })],
+        }),
+        makeActivity({
+          txHash: '0x9000000000000000000000000000000000000000000000000000000000000002',
+          protocolActions: [
+            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+          ],
+          participants: [makeParticipant({ ckbDelta: '-10200000000' })],
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<ActivitiesStreamExplorer />);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Cannot read tx 0xbad0000000000000000000000000000000000000000000000000000000000001: dao:withdraw_complete metadata.compensation is missing'
+    );
+    // The other row still reads.
+    expect(screen.getByText(/DAO Deposit/)).toBeInTheDocument();
+    expect(screen.getByText(/\+102\.00000000 CKB locked/)).toBeInTheDocument();
+  });
+
   it('sticks its toolbar right below the site header, at the height the header publishes', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],

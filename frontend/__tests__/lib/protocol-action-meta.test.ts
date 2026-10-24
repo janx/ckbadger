@@ -53,3 +53,37 @@ describe('protocolActionMeta', () => {
     );
   });
 });
+
+describe('protocolActionMeta — the facts each DAO step must carry', () => {
+  it('requires the capacity of a deposit', () => {
+    expect(() => protocolActionMeta({ protocol: 'dao', action: 'deposit', metadata: {} })).toThrow(
+      'dao:deposit metadata.capacity is missing'
+    );
+  });
+
+  it('requires the capacity and deposit block of a withdraw request', () => {
+    expect(() =>
+      protocolActionMeta({
+        protocol: 'dao',
+        action: 'withdraw_request',
+        metadata: { capacity: '1' },
+      })
+    ).toThrow('dao:withdraw_request metadata.depositBlock is missing');
+  });
+
+  it('requires the capacity and compensation of a completed withdraw', () => {
+    expect(() =>
+      protocolActionMeta({
+        protocol: 'dao',
+        action: 'withdraw_complete',
+        metadata: { capacity: '1' },
+      })
+    ).toThrow('dao:withdraw_complete metadata.compensation is missing');
+  });
+
+  it('asks nothing of a protocol whose metadata is optional', () => {
+    expect(
+      protocolActionMeta({ protocol: 'utxoswap', action: 'swap', metadata: {} }).capacity
+    ).toBeNull();
+  });
+});

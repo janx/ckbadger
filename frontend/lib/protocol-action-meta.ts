@@ -40,13 +40,32 @@ function stringOf(pa: ActivityProtocolAction, key: string): string | null {
   return v;
 }
 
-/** The facts a protocol action's metadata carries, read once for every renderer. */
+/**
+ * What each DAO step's metadata always carries (the indexer writes it with the action). A step
+ * without one of them cannot be read: there is no amount to show, and none may be invented.
+ */
+const DAO_REQUIRED: Record<string, (keyof ProtocolActionMeta)[]> = {
+  deposit: ['capacity'],
+  withdraw_request: ['capacity', 'depositBlock'],
+  withdraw_complete: ['capacity', 'compensation'],
+};
+
+/**
+ * The facts a protocol action's metadata carries, read once for every renderer. A malformed value,
+ * or a missing one a DAO step must carry, throws: the caller shows that action as unreadable.
+ */
 export function protocolActionMeta(pa: ActivityProtocolAction): ProtocolActionMeta {
-  return {
+  const meta: ProtocolActionMeta = {
     capacity: integerOf(pa, 'capacity'),
     compensation: integerOf(pa, 'compensation'),
     depositBlock: integerOf(pa, 'depositBlock'),
     channelOutpoint: stringOf(pa, 'channelOutpoint'),
     btcTxid: stringOf(pa, 'btcTxid'),
   };
+  if (pa.protocol === 'dao') {
+    for (const key of DAO_REQUIRED[pa.action] ?? []) {
+      if (meta[key] === null) throw new Error(`${where(pa, key)} is missing`);
+    }
+  }
+  return meta;
 }

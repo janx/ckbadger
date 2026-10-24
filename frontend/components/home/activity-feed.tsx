@@ -4,6 +4,7 @@ import { Fragment, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import {
+  ActivityReadError,
   DotJoined,
   ExactCkb,
   ItemDeltaFact,
@@ -218,7 +219,17 @@ function ActivityDetails({ activity }: { activity: GlobalActivity }) {
   const lines: ReactNode[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
-    const parts = protocolActionNoteParts(e.action);
+    let parts: ReactNode[];
+    try {
+      parts = protocolActionNoteParts(e.action);
+    } catch (error) {
+      lines.push(
+        <DetailLine key={`p${i}`} label="">
+          <ActivityReadError txHash={activity.txHash} error={error} />
+        </DetailLine>
+      );
+      return;
+    }
     const named = e.action === primary ? parts : [protocolActionLabel(e.action), ...parts];
     if (named.length > 0) {
       lines.push(

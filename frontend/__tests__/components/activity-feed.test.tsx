@@ -138,6 +138,24 @@ describe('ActivityFeed', () => {
     expect(row).not.toHaveTextContent('+1 more');
   });
 
+  it('shows an unreadable DAO step as an error in its row, naming the tx', async () => {
+    const broken = {
+      ...feedSamples.daoWithdrawRequest,
+      protocolActions: [
+        { protocol: 'dao', action: 'withdraw_request', metadata: { capacity: '1' } },
+      ],
+    };
+    server.use(http.get(`${API}/activities/latest`, () => HttpResponse.json([broken])));
+    render(<ActivityFeed />);
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    const row = rows()[0] as HTMLElement;
+    expect(within(row).getByRole('alert')).toHaveTextContent(
+      `Cannot read tx ${broken.txHash}: dao:withdraw_request metadata.depositBlock is missing`
+    );
+    // The parties are still facts and still shown.
+    expect(row.querySelectorAll('[data-party]')).toHaveLength(3);
+  });
+
   it('ghosts trailing zeros and right-aligns every amount in one column, so decimals line up', async () => {
     server.use(
       http.get(`${API}/activities/latest`, () => HttpResponse.json([feedSamples.fiberClose]))
