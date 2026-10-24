@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
+import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -22,17 +23,10 @@ vi.mock('@/components/layout/header', () => ({
 describe('DaoPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The full /dao/statistics contract (every field is required by DaoStatisticsResponse).
     vi.mocked(api.getDaoStatistics).mockResolvedValue({
-      totalDepositedCkb: '1000',
-      totalDepositors: 1,
-      averageDepositDays: '10',
-      estimatedApc: '3.2',
-      miningRewardCkb: '600',
-      depositCompensationCkb: '300',
-      burntCkb: '100',
-      totalCompensationPaidCkb: '100',
-      unclaimedCompensationCkb: '50',
-    } as any);
+      ...daoStatistics,
+    });
     vi.mocked(api.getDaoDeposits).mockResolvedValue({
       data: [
         {
@@ -168,5 +162,49 @@ describe('DaoPage', () => {
           )
       ).toBe(true);
     });
+  });
+});
+
+describe('DaoPage issuance and compensation breakdowns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getDaoDeposits).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+    vi.mocked(api.lookupScripts).mockResolvedValue({} as any);
+  });
+
+  it('prints every part exactly from its shannons, with exact shares', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({
+      ...daoStatistics,
+    });
+    render(<DaoPage />);
+    const issuance = await screen.findByTestId('dao-secondary-issuance');
+    // mining 96304962619313853, compensation 159838862391653367, burnt 674731136445379763 shannons
+    await waitFor(() => expect(issuance).toHaveTextContent('Mining Reward963,049,626.19313853'));
+    expect(issuance).toHaveTextContent('Deposit Compensation1,598,388,623.91653367');
+    expect(issuance).toHaveTextContent('Burnt6,747,311,364.45379763');
+    expect(issuance.querySelector('[data-part="mining"]')).toHaveAttribute('data-percent', '10.3');
+    const compensation = screen.getByTestId('dao-compensation');
+    expect(compensation).toHaveTextContent('Claimed760,797,612.35165103');
+    expect(compensation).toHaveTextContent('Unclaimed837,591,011.56488264');
+  });
+
+  it('shows a missing amount as an error, never as 0', async () => {
+    const { miningReward: _gone, ...broken } = daoStatistics;
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({
+      ...broken,
+    } as any);
+    render(<DaoPage />);
+    const issuance = await screen.findByTestId('dao-secondary-issuance');
+    expect(await within(issuance).findByRole('alert')).toHaveTextContent(
+      'miningReward "undefined" is not an integer shannon amount'
+    );
+    // The compensation breakdown does not depend on it and still reads.
+    expect(screen.getByTestId('dao-compensation')).toHaveTextContent('Claimed760,797,612.35165103');
   });
 });

@@ -15,7 +15,8 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, DaoDeposit, DaoTopDepositor, ScriptLookupResponse } from '@/lib/api';
+import { api, DaoDeposit, DaoStatistics, DaoTopDepositor, ScriptLookupResponse } from '@/lib/api';
+import { compensationParts, secondaryIssuanceParts, type BreakdownPart } from '@/lib/dao-breakdown';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
   formatTimeAgo,
@@ -55,6 +56,105 @@ function ScriptLabel({
         {name}
       </Badge>
     </Link>
+  );
+}
+
+const BREAKDOWN_COLORS: Record<string, string> = {
+  mining: '#8ce00a',
+  deposit: '#ffb900',
+  burnt: '#6b6860',
+  claimed: '#8ce00a',
+  unclaimed: '#ffb900',
+};
+
+/**
+ * One exact breakdown (secondary issuance or compensation): a pie for the proportions and a legend
+ * with every amount to the shannon. A missing or malformed amount is an error, never a 0 slice.
+ */
+function DaoBreakdown({
+  title,
+  testId,
+  stats,
+  read,
+}: {
+  title: string;
+  testId: string;
+  stats: DaoStatistics | undefined;
+  read: (stats: DaoStatistics) => BreakdownPart[];
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  let parts: BreakdownPart[] = [];
+  let error: string | null = null;
+  if (stats) {
+    try {
+      parts = read(stats);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+  return (
+    <div data-testid={testId}>
+      <div className="text-text-dim mb-4 font-mono text-xs uppercase tracking-wider">{title}</div>
+      {error ? (
+        <div role="alert" className="text-rouge font-mono text-xs">
+          {error}
+        </div>
+      ) : (
+        <div className="flex items-center justify-center gap-6">
+          <InteractivePieChart
+            data={parts.map((p) => ({
+              label: p.label,
+              value: p.geometry,
+              color: BREAKDOWN_COLORS[p.key],
+              percent: p.percent,
+            }))}
+            size={120}
+            hoveredIndex={hover}
+            onHover={setHover}
+          />
+          <div className="space-y-3">
+            {parts.map((part, idx) => {
+              const amount = formatCkbAmount(part.shannons);
+              return (
+                <div
+                  key={part.key}
+                  data-part={part.key}
+                  data-percent={part.percent}
+                  className="flex cursor-pointer items-center gap-2"
+                  onMouseEnter={() => setHover(idx)}
+                  onMouseLeave={() => setHover(null)}
+                >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full transition-transform duration-150"
+                    style={{
+                      backgroundColor: BREAKDOWN_COLORS[part.key],
+                      transform: hover === idx ? 'scale(1.3)' : 'scale(1)',
+                    }}
+                  />
+                  <div className="min-w-0">
+                    <div
+                      className={`text-xs transition-colors duration-150 ${hover === idx ? 'text-text-bright' : 'text-text-dim'}`}
+                    >
+                      {part.label}
+                    </div>
+                    <div
+                      className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${hover === idx ? 'text-text-bright' : 'text-text'}`}
+                    >
+                      {amount.integer}
+                      <span
+                        className={`text-[0.85em] ${hover === idx ? 'text-text' : 'text-text-dim'}`}
+                      >
+                        .{amount.decimal}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -145,8 +245,6 @@ export default function DaoPage() {
   const depositsPagination = useCursorPagination();
   const [status, setStatus] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<'deposits' | 'depositors'>('deposits');
-  const [secondaryHover, setSecondaryHover] = useState<number | null>(null);
-  const [compensationHover, setCompensationHover] = useState<number | null>(null);
 
   const { data: stats } = useQuery({
     queryKey: ['dao-statistics'],
@@ -185,57 +283,6 @@ export default function DaoPage() {
     queryFn: () => api.getDaoTopDepositors(),
     enabled: activeTab === 'depositors',
   });
-
-  const getSecondaryIssuanceData = () => {
-    if (!stats) return [];
-    const mining = parseFloat(stats.miningRewardCkb) || 0;
-    const deposit = parseFloat(stats.depositCompensationCkb) || 0;
-    const burnt = parseFloat(stats.burntCkb) || 0;
-    const total = mining + deposit + burnt;
-    if (total === 0) return [];
-    return [
-      {
-        label: 'Mining Reward',
-        value: mining,
-        color: '#8ce00a',
-        percent: ((mining / total) * 100).toFixed(1),
-      },
-      {
-        label: 'Deposit Compensation',
-        value: deposit,
-        color: '#ffb900',
-        percent: ((deposit / total) * 100).toFixed(1),
-      },
-      {
-        label: 'Burnt',
-        value: burnt,
-        color: '#6b6860',
-        percent: ((burnt / total) * 100).toFixed(1),
-      },
-    ];
-  };
-
-  const getCompensationData = () => {
-    if (!stats) return [];
-    const claimed = parseFloat(stats.totalCompensationPaidCkb) || 0;
-    const unclaimed = parseFloat(stats.unclaimedCompensationCkb) || 0;
-    const total = claimed + unclaimed;
-    if (total === 0) return [];
-    return [
-      {
-        label: 'Claimed',
-        value: claimed,
-        color: '#8ce00a',
-        percent: ((claimed / total) * 100).toFixed(1),
-      },
-      {
-        label: 'Unclaimed',
-        value: unclaimed,
-        color: '#ffb900',
-        percent: ((unclaimed / total) * 100).toFixed(1),
-      },
-    ];
-  };
 
   const filterOptions = [
     { label: 'Active Deposits', value: 0 },
@@ -429,116 +476,19 @@ export default function DaoPage() {
         <TerminalPanel className="mb-4">
           <TerminalPanelContent>
             <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="text-text-dim mb-4 font-mono text-xs uppercase tracking-wider">
-                  Secondary Issuance
-                </div>
-                <div className="flex items-center justify-center gap-6">
-                  <InteractivePieChart
-                    data={getSecondaryIssuanceData()}
-                    size={120}
-                    hoveredIndex={secondaryHover}
-                    onHover={setSecondaryHover}
-                  />
-                  <div className="space-y-3">
-                    {getSecondaryIssuanceData().map((item, idx) => (
-                      <div
-                        key={item.label}
-                        className="flex cursor-pointer items-center gap-2"
-                        onMouseEnter={() => setSecondaryHover(idx)}
-                        onMouseLeave={() => setSecondaryHover(null)}
-                      >
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-full transition-transform duration-150"
-                          style={{
-                            backgroundColor: item.color,
-                            transform: secondaryHover === idx ? 'scale(1.3)' : 'scale(1)',
-                          }}
-                        />
-                        <div className="min-w-0">
-                          <div
-                            className={`text-xs transition-colors duration-150 ${secondaryHover === idx ? 'text-text-bright' : 'text-text-dim'}`}
-                          >
-                            {item.label}
-                          </div>
-                          <div
-                            className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${secondaryHover === idx ? 'text-text-bright' : 'text-text'}`}
-                          >
-                            {(() => {
-                              const f = formatCkbValue(item.value);
-                              return (
-                                <>
-                                  {f.integer}
-                                  <span
-                                    className={`text-[0.85em] ${secondaryHover === idx ? 'text-text' : 'text-text-dim'}`}
-                                  >
-                                    .{f.decimal}
-                                  </span>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
+              <DaoBreakdown
+                title="Secondary Issuance"
+                testId="dao-secondary-issuance"
+                stats={stats}
+                read={secondaryIssuanceParts}
+              />
               <div className="border-base-border border-t pt-4 md:border-l md:border-t-0 md:pl-8 md:pt-0">
-                <div className="text-text-dim mb-4 font-mono text-xs uppercase tracking-wider">
-                  Compensation
-                </div>
-                <div className="flex items-center justify-center gap-6">
-                  <InteractivePieChart
-                    data={getCompensationData()}
-                    size={120}
-                    hoveredIndex={compensationHover}
-                    onHover={setCompensationHover}
-                  />
-                  <div className="space-y-3">
-                    {getCompensationData().map((item, idx) => (
-                      <div
-                        key={item.label}
-                        className="flex cursor-pointer items-center gap-2"
-                        onMouseEnter={() => setCompensationHover(idx)}
-                        onMouseLeave={() => setCompensationHover(null)}
-                      >
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-full transition-transform duration-150"
-                          style={{
-                            backgroundColor: item.color,
-                            transform: compensationHover === idx ? 'scale(1.3)' : 'scale(1)',
-                          }}
-                        />
-                        <div className="min-w-0">
-                          <div
-                            className={`text-xs transition-colors duration-150 ${compensationHover === idx ? 'text-text-bright' : 'text-text-dim'}`}
-                          >
-                            {item.label}
-                          </div>
-                          <div
-                            className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${compensationHover === idx ? 'text-text-bright' : 'text-text'}`}
-                          >
-                            {(() => {
-                              const f = formatCkbValue(item.value);
-                              return (
-                                <>
-                                  {f.integer}
-                                  <span
-                                    className={`text-[0.85em] ${compensationHover === idx ? 'text-text' : 'text-text-dim'}`}
-                                  >
-                                    .{f.decimal}
-                                  </span>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <DaoBreakdown
+                  title="Compensation"
+                  testId="dao-compensation"
+                  stats={stats}
+                  read={compensationParts}
+                />
               </div>
             </div>
           </TerminalPanelContent>
