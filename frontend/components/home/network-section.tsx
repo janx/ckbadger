@@ -90,7 +90,7 @@ function BlockTimeFigure() {
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
-          formatValue={(n) => `${s(n)} s`}
+          formatValue={s}
           ariaLabel={`Average block time per day, ${range(view)}, between ${s(view.min)} and ${s(view.max)} seconds, ${s(view.last.value)} s on ${view.last.label}`}
         />
       ))}
@@ -133,7 +133,7 @@ function HashRateFigure() {
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
-          formatValue={(n) => `${s(n)} ${view.unit}`}
+          formatValue={s}
           ariaLabel={`Hash rate per day, ${range(view)}, between ${s(view.min)} and ${s(view.max)} ${view.unit}, ${s(view.last.value)} ${view.unit} on ${view.last.label}`}
         />
       ))}

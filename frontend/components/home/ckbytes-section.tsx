@@ -3,7 +3,12 @@
 import { useMemo, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { ChartFigure, SignedBarChart, type SignedPoint } from '@/components/home/mini-chart';
+import {
+  ChartFigure,
+  SignedBarChart,
+  type ReadoutValue,
+  type SignedPoint,
+} from '@/components/home/mini-chart';
 import {
   SECTION_HEADING_CLASS,
   SMALL_MULTIPLES_CLASS,
@@ -227,6 +232,21 @@ interface ChangeView {
   max: number;
 }
 
+/** An exact signed change for the caption: whole CKB bright, the 8 decimals dim. */
+function exactSignedReadout(delta: bigint): ReadoutValue {
+  const text = formatSignedCkbExact(delta);
+  const dot = text.indexOf('.');
+  return {
+    value: (
+      <>
+        {text.slice(0, dot)}
+        <span className="text-text-dim text-xs">{text.slice(dot)}</span>
+      </>
+    ),
+    text: `${text} CKB`,
+  };
+}
+
 /** The last 30 days' changes of a cumulative CKB chart, exact; geometry in float CKB. */
 export function changeView(chart: ChartResponse): ChangeView | null {
   const deltas = dailyDeltas(chart.data, CHANGE_DAYS);
@@ -234,7 +254,7 @@ export function changeView(chart: ChartResponse): ChangeView | null {
   const points = deltas.map((d) => ({
     label: dayLabel(d.date),
     value: shannonsToCkbNumber(d.delta),
-    exact: `${formatSignedCkbExact(d.delta)} CKB`,
+    readout: exactSignedReadout(d.delta),
   }));
   const values = points.map((p) => p.value);
   const last = deltas[deltas.length - 1];

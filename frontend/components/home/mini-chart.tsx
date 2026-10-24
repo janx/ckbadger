@@ -1,6 +1,16 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
@@ -15,7 +25,9 @@ import { cn } from '@/lib/utils';
 /**
  * The homepage small multiples: one figure frame (caption + headline + chart) and three SVG chart
  * kinds — a line, bars from zero, and signed bars around zero. They share one geometry, one
- * colour set (one data hue), and draw 1:1 so their 10 px axis text never scales.
+ * colour set (one data hue), draw 1:1 so their 10 px axis text never scales, and share one hover:
+ * the pointer (or a tap, or ←/→ on the focused chart) picks the nearest bucket, a thin guide marks
+ * it, the other marks step back, and the caption's headline and sub-label read it out.
  */
 
 export const CHART_H = 104;
@@ -26,6 +38,8 @@ const RIGHT_PAD = 8;
 const TICK_X = 28;
 const X_LABEL_Y = 101;
 const PLOT_H = BOTTOM - TOP;
+/** Marks other than the hovered one step back to this opacity. */
+const DIMMED = 0.35;
 
 const C = {
   grid: '#1d2233',
@@ -36,6 +50,23 @@ const C = {
   down: '#e8555a',
   background: '#0c0e15',
 } as const;
+
+// ---------------------------------------------------------------------------
+// Readout: what the hovered bucket shows in the caption
+// ---------------------------------------------------------------------------
+
+/** A bucket's value for the caption (`value`, may carry dim decimals) and its plain text. */
+export interface ReadoutValue {
+  value: ReactNode;
+  text: string;
+}
+
+interface Readout extends ReadoutValue {
+  /** The bucket's date or hour, shown in place of the sub-label. */
+  label: string;
+}
+
+const ReadoutContext = createContext<(r: Readout | null) => void>(() => {});
 
 // ---------------------------------------------------------------------------
 // Figure frame
@@ -71,6 +102,8 @@ export function ChartFigure({
   className,
   testId,
 }: ChartFigureProps) {
+  const [readout, setReadout] = useState<Readout | null>(null);
+  const tid = (part: string) => (testId ? `${testId}-${part}` : undefined);
   return (
     <figure data-testid={testId} className={cn('m-0 flex min-w-0 flex-col gap-1.5', className)}>
       <figcaption className="flex items-end justify-between gap-3">
@@ -85,21 +118,28 @@ export function ChartFigure({
           ) : (
             <span className="text-text-bright text-[13px]">{title}</span>
           )}
-          <span className="text-text-dim text-xs">{subtitle}</span>
+          <span data-testid={tid('subtitle')} className="text-text-dim text-xs">
+            {readout ? readout.label : subtitle}
+          </span>
         </span>
         <span className="flex shrink-0 items-center gap-2.5">
-          {headline !== undefined && (
+          {(readout || headline !== undefined) && (
             <span
-              data-testid={testId ? `${testId}-headline` : undefined}
+              data-testid={tid('headline')}
               className="text-text-bright text-lg font-medium tabular-nums leading-tight"
             >
-              {headline}
+              {readout ? readout.value : headline}
             </span>
           )}
           {controls}
         </span>
       </figcaption>
-      <FigureBody body={body} />
+      <span data-testid={tid('readout')} aria-live="polite" className="sr-only">
+        {readout ? `${readout.label}: ${readout.text}` : ''}
+      </span>
+      <ReadoutContext.Provider value={setReadout}>
+        <FigureBody body={body} />
+      </ReadoutContext.Provider>
     </figure>
   );
 }
@@ -136,34 +176,135 @@ function FigureBody({ body }: { body: ChartBody }) {
 }
 
 // ---------------------------------------------------------------------------
-// Shared geometry
+// Shared canvas: geometry, hover, touch, keyboard
 // ---------------------------------------------------------------------------
 
-function ChartCanvas({
-  ariaLabel,
-  children,
-}: {
+interface CanvasProps {
   ariaLabel: string;
-  children: (width: number) => ReactNode;
-}) {
+  /** Each bucket's x centre for a given width; the pointer snaps to the nearest. */
+  xsFor: (width: number) => number[];
+  readoutOf: (index: number) => Readout;
+  /** Changes whenever the data does, so a held bucket's readout follows a refetch. */
+  signature: string;
+  children: (width: number, hovered: number | null) => ReactNode;
+}
+
+function nearest(xs: number[], x: number): number {
+  let best = 0;
+  for (let i = 1; i < xs.length; i++) {
+    if (Math.abs(xs[i] - x) < Math.abs(xs[best] - x)) best = i;
+  }
+  return best;
+}
+
+function ChartCanvas({ ariaLabel, xsFor, readoutOf, signature, children }: CanvasProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  const svgRef = useRef<SVGSVGElement>(null);
+  const report = useContext(ReadoutContext);
+  const [hovered, setHovered] = useState<number | null>(null);
+  // Handlers read the latest state through refs: a pointerdown and the focus it causes arrive in
+  // one task, before a re-render.
+  const hoveredRef = useRef<number | null>(null);
+  const byTouch = useRef(false);
+  const xs = width === null ? [] : xsFor(width);
+  const latest = useRef({ xs, readoutOf, report });
+  latest.current = { xs, readoutOf, report };
+
+  const select = useCallback((i: number | null) => {
+    const { xs: cur, readoutOf: read, report: send } = latest.current;
+    const next = i === null || cur.length === 0 ? null : Math.max(0, Math.min(cur.length - 1, i));
+    hoveredRef.current = next;
+    setHovered(next);
+    send(next === null ? null : read(next));
+  }, []);
+
+  // New data under a held bucket: re-read it (or let go when the bucket is gone).
+  useEffect(() => {
+    const i = hoveredRef.current;
+    if (i === null) return;
+    if (i >= latest.current.xs.length) select(null);
+    else latest.current.report(latest.current.readoutOf(i));
+  }, [signature, select]);
+
+  // The caption must not keep a readout for a chart that is gone.
+  useEffect(() => () => latest.current.report(null), []);
+
+  // A tapped bucket stays until the next tap outside the chart.
+  useEffect(() => {
+    if (hovered === null || !byTouch.current) return;
+    const away = (e: Event) => {
+      if (!svgRef.current?.contains(e.target as Node)) select(null);
+    };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [hovered, select]);
+
+  const pick = (e: ReactPointerEvent<SVGSVGElement>) => {
+    byTouch.current = e.pointerType === 'touch';
+    const left = (svgRef.current as SVGSVGElement).getBoundingClientRect().left;
+    select(nearest(latest.current.xs, e.clientX - left));
+  };
+  const onKeyDown = (e: ReactKeyboardEvent<SVGSVGElement>) => {
+    const last = latest.current.xs.length - 1;
+    const h = hoveredRef.current;
+    const moves: Record<string, number | null> = {
+      ArrowLeft: h === null ? last : h - 1,
+      ArrowRight: h === null ? last : h + 1,
+      Home: 0,
+      End: last,
+      Escape: null,
+    };
+    if (!(e.key in moves)) return;
+    e.preventDefault();
+    byTouch.current = false;
+    select(moves[e.key]);
+  };
+
+  const shown = hovered !== null && hovered < xs.length ? hovered : null;
   return (
     <div ref={ref} className="w-full" style={{ height: CHART_H }}>
       {width !== null && (
         <svg
+          ref={svgRef}
           role="img"
           aria-label={ariaLabel}
+          tabIndex={0}
           width={width}
           height={CHART_H}
           viewBox={`0 0 ${width} ${CHART_H}`}
-          className="block overflow-visible font-mono tabular-nums"
+          className="focus-visible:ring-base-border block touch-pan-y overflow-visible rounded-sm font-mono tabular-nums outline-none focus-visible:ring-1"
+          onPointerMove={pick}
+          onPointerDown={pick}
+          onPointerLeave={(e) => {
+            if (e.pointerType !== 'touch') select(null);
+          }}
+          onFocus={() => {
+            if (hoveredRef.current === null) select(latest.current.xs.length - 1);
+          }}
+          onBlur={() => select(null)}
+          onKeyDown={onKeyDown}
         >
-          {children(width)}
+          {shown !== null && (
+            <line
+              data-role="guide"
+              x1={f1(xs[shown])}
+              x2={f1(xs[shown])}
+              y1={TOP}
+              y2={BOTTOM}
+              stroke={C.tick}
+              strokeOpacity={0.6}
+            />
+          )}
+          {children(width, shown)}
         </svg>
       )}
     </div>
   );
 }
+
+/** Opacity of bucket `i` while `hovered` is: full when it is the one (or none is), else dimmed. */
+const bucketOpacity = (i: number, hovered: number | null) =>
+  hovered === null || hovered === i ? 1 : DIMMED;
 
 const f1 = (n: number) => n.toFixed(1);
 
@@ -219,6 +360,18 @@ function YAxisLabels({ ticks }: { ticks: YTick[] }) {
   );
 }
 
+/** Slot geometry shared by both bar kinds: `n` equal slots, bars `fill` of a slot wide. */
+function slots(width: number, n: number, fill: number) {
+  const right = width - RIGHT_PAD;
+  const slot = (right - LEFT) / n;
+  const bw = slot * fill;
+  const bx = (i: number) => LEFT + slot * i + (slot - bw) / 2;
+  return { right, bw, bx, centre: (i: number) => bx(i) + bw / 2 };
+}
+
+const signatureOf = (items: { label: string; value: number }[]) =>
+  items.map((p) => `${p.label}=${p.value}`).join('|');
+
 // ---------------------------------------------------------------------------
 // Line
 // ---------------------------------------------------------------------------
@@ -233,7 +386,15 @@ interface LineChartProps {
   ariaLabel: string;
   /** A dashed reference line (a consensus target); its value is placed on a tick. */
   reference?: number;
+  /** A value as the caption shows it. */
   formatValue: (v: number) => string;
+}
+
+function lineXs(width: number, n: number): number[] {
+  const right = width - RIGHT_PAD;
+  return Array.from({ length: n }, (_, i) =>
+    n === 1 ? right : LEFT + (i * (right - LEFT)) / (n - 1)
+  );
 }
 
 export function LineChart({ points, ariaLabel, reference, formatValue }: LineChartProps) {
@@ -244,12 +405,20 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
   const ticks = niceTicks(lo, hi, 4, reference ?? 0);
   const domain: [number, number] = [ticks.values[0], ticks.values[ticks.values.length - 1]];
   const y = yScale(domain);
+  const n = points.length;
   return (
-    <ChartCanvas ariaLabel={ariaLabel}>
-      {(width) => {
+    <ChartCanvas
+      ariaLabel={ariaLabel}
+      xsFor={(w) => lineXs(w, n)}
+      readoutOf={(i) => {
+        const text = formatValue(points[i].value);
+        return { value: text, text, label: points[i].label };
+      }}
+      signature={signatureOf(points)}
+    >
+      {(width, hovered) => {
         const right = width - RIGHT_PAD;
-        const n = points.length;
-        const x = (i: number) => (n === 1 ? right : LEFT + (i * (right - LEFT)) / (n - 1));
+        const xs = lineXs(width, n);
         const mid = Math.floor((n - 1) / 2);
         const isRef = (v: number) => reference !== undefined && Math.abs(v - reference) < 1e-9;
         const last = points[n - 1];
@@ -281,20 +450,35 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
             />
             <polyline
               data-role="series"
-              points={points.map((p, i) => `${f1(x(i))},${f1(y(p.value))}`).join(' ')}
+              points={points.map((p, i) => `${f1(xs[i])},${f1(y(p.value))}`).join(' ')}
               fill="none"
               stroke={C.data}
               strokeWidth={1.5}
               strokeLinejoin="round"
             />
-            <circle data-role="last" cx={f1(x(n - 1))} cy={f1(y(last.value))} r={2.6} fill={C.data}>
-              <title>{`${last.label}: ${formatValue(last.value)}`}</title>
-            </circle>
+            <circle
+              data-role="last"
+              cx={f1(xs[n - 1])}
+              cy={f1(y(last.value))}
+              r={2.6}
+              fill={C.data}
+            />
+            {hovered !== null && (
+              <circle
+                data-role="hover-dot"
+                cx={f1(xs[hovered])}
+                cy={f1(y(points[hovered].value))}
+                r={3.8}
+                fill={C.data}
+                stroke={C.background}
+                strokeWidth={1.5}
+              />
+            )}
             <XAxisLabels
               labels={xLabels(
                 points.map((p) => p.label),
                 mid,
-                x(mid),
+                xs[mid],
                 right
               )}
             />
@@ -321,8 +505,11 @@ export interface Bar {
 interface BarChartProps {
   bars: Bar[];
   ariaLabel: string;
+  /** A value as the caption shows it. */
   formatValue: (v: number) => string;
 }
+
+const BAR_FILL = 0.72;
 
 export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
   if (bars.length === 0) throw new Error('BarChart needs at least one bar');
@@ -335,14 +522,27 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
   const ticks = niceTicks(0, Math.max(...bars.map((b) => b.value)), 3);
   const domain: [number, number] = [0, ticks.values[ticks.values.length - 1]];
   const y = yScale(domain);
+  const n = bars.length;
   return (
-    <ChartCanvas ariaLabel={ariaLabel}>
-      {(width) => {
-        const right = width - RIGHT_PAD;
-        const n = bars.length;
-        const slot = (right - LEFT) / n;
-        const bw = slot * 0.72;
-        const bx = (i: number) => LEFT + slot * i + (slot - bw) / 2;
+    <ChartCanvas
+      ariaLabel={ariaLabel}
+      xsFor={(w) => {
+        const g = slots(w, n, BAR_FILL);
+        return bars.map((_, i) => g.centre(i));
+      }}
+      readoutOf={(i) => {
+        const b = bars[i];
+        const text = formatValue(b.value);
+        return {
+          value: text,
+          text,
+          label: b.state === 'inProgress' ? `${b.label} · in progress` : b.label,
+        };
+      }}
+      signature={signatureOf(bars)}
+    >
+      {(width, hovered) => {
+        const { right, bw, bx, centre } = slots(width, n, BAR_FILL);
         const mid = Math.floor(n / 2);
         return (
           <>
@@ -360,46 +560,46 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
             />
             {bars.map((b, i) => {
               const top = y(b.value);
-              const title = <title>{`${b.label}: ${formatValue(b.value)}`}</title>;
-              if (b.state === 'inProgress') {
-                return (
-                  <rect
-                    key={i}
-                    data-bar={b.state}
-                    x={f1(bx(i) + 0.5)}
-                    y={f1(Math.min(top, BOTTOM - 1) + 0.5)}
-                    width={f1(Math.max(bw - 1, 1))}
-                    height={f1(Math.max(BOTTOM - top - 1, 0.5))}
-                    fill={C.data}
-                    fillOpacity={0.1}
-                    stroke={C.data}
-                    strokeOpacity={0.7}
-                    strokeDasharray="2 1.5"
-                  >
-                    {title}
-                  </rect>
-                );
-              }
+              const on = hovered === i;
               return (
-                <rect
+                <g
                   key={i}
-                  data-bar={b.state}
-                  x={f1(bx(i))}
-                  y={f1(top)}
-                  width={f1(bw)}
-                  height={f1(BOTTOM - top)}
-                  fill={C.data}
-                  fillOpacity={b.state === 'highlight' ? 1 : 0.45}
+                  data-bucket={i}
+                  data-hovered={on || undefined}
+                  opacity={bucketOpacity(i, hovered)}
                 >
-                  {title}
-                </rect>
+                  {b.state === 'inProgress' ? (
+                    <rect
+                      data-bar={b.state}
+                      x={f1(bx(i) + 0.5)}
+                      y={f1(Math.min(top, BOTTOM - 1) + 0.5)}
+                      width={f1(Math.max(bw - 1, 1))}
+                      height={f1(Math.max(BOTTOM - top - 1, 0.5))}
+                      fill={C.data}
+                      fillOpacity={on ? 0.25 : 0.1}
+                      stroke={C.data}
+                      strokeOpacity={on ? 1 : 0.7}
+                      strokeDasharray="2 1.5"
+                    />
+                  ) : (
+                    <rect
+                      data-bar={b.state}
+                      x={f1(bx(i))}
+                      y={f1(top)}
+                      width={f1(bw)}
+                      height={f1(BOTTOM - top)}
+                      fill={C.data}
+                      fillOpacity={on || b.state === 'highlight' ? 1 : 0.45}
+                    />
+                  )}
+                </g>
               );
             })}
             <XAxisLabels
               labels={xLabels(
                 bars.map((b) => b.label),
                 mid,
-                bx(mid) + bw / 2,
+                centre(mid),
                 right
               )}
             />
@@ -418,14 +618,16 @@ export interface SignedPoint {
   label: string;
   /** The change, in display units (CKB) — geometry only. */
   value: number;
-  /** The exact change, for the bar's tooltip. */
-  exact: string;
+  /** The exact change, as the caption reads it out. */
+  readout: ReadoutValue;
 }
 
 interface SignedBarChartProps {
   points: SignedPoint[];
   ariaLabel: string;
 }
+
+const SIGNED_FILL = 0.7;
 
 /**
  * Up bars jade, down bars red, on a symmetric axis; a bar beyond the cap is clipped and labelled,
@@ -449,14 +651,19 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
     clipped.length === 0
       ? ariaLabel
       : `${ariaLabel}; beyond the ±${formatTick(cap, capStep)} axis, drawn clipped: ${clipped.join(', ')}`;
+  const n = points.length;
   return (
-    <ChartCanvas ariaLabel={label}>
-      {(width) => {
-        const right = width - RIGHT_PAD;
-        const n = points.length;
-        const slot = (right - LEFT) / n;
-        const bw = slot * 0.7;
-        const bx = (i: number) => LEFT + slot * i + (slot - bw) / 2;
+    <ChartCanvas
+      ariaLabel={label}
+      xsFor={(w) => {
+        const g = slots(w, n, SIGNED_FILL);
+        return points.map((_, i) => g.centre(i));
+      }}
+      readoutOf={(i) => ({ ...points[i].readout, label: points[i].label })}
+      signature={signatureOf(points)}
+    >
+      {(width, hovered) => {
+        const { right, bw, bx, centre } = slots(width, n, SIGNED_FILL);
         const mid = Math.floor(n / 2);
         return (
           <>
@@ -479,18 +686,24 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
               const end = yOf(b.drawn);
               const x0 = bx(i);
               const color = up ? C.data : C.down;
+              const on = hovered === i;
               return (
-                <g key={i} data-bar={up ? 'up' : 'down'} data-clipped={b.clipped || undefined}>
+                <g
+                  key={i}
+                  data-bucket={i}
+                  data-hovered={on || undefined}
+                  data-bar={up ? 'up' : 'down'}
+                  data-clipped={b.clipped || undefined}
+                  opacity={bucketOpacity(i, hovered)}
+                >
                   <rect
                     x={f1(x0)}
                     y={f1(Math.min(zero, end))}
                     width={f1(bw)}
                     height={f1(Math.abs(end - zero))}
                     fill={color}
-                    fillOpacity={0.75}
-                  >
-                    <title>{`${points[i].label}: ${points[i].exact}`}</title>
-                  </rect>
+                    fillOpacity={on ? 1 : 0.75}
+                  />
                   {b.clipped && (
                     <ClipMark
                       x0={x0}
@@ -508,7 +721,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
               labels={xLabels(
                 points.map((p) => p.label),
                 mid,
-                bx(mid) + bw / 2,
+                centre(mid),
                 right
               )}
             />

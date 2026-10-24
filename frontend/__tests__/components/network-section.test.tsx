@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
-import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
-import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
+import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
 import { uncleRateChart } from '@/__tests__/msw/fixtures/home';
 import { NetworkSection } from '@/components/home/network-section';
@@ -14,7 +14,10 @@ function figure(testId: string) {
 }
 
 describe('NetworkSection', () => {
-  beforeEach(() => stubChartWidth(280));
+  beforeEach(() => {
+    stubChartWidth(280);
+    stubPointerEvents();
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -110,7 +113,14 @@ describe('NetworkSection', () => {
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(24);
     expect(bars[23]).toHaveAttribute('data-bar', 'inProgress');
-    expect(bars[23]).toHaveTextContent('11:00: 326');
+    // Hovering the current hour reads its count so far in the caption (centre at x ≈ 267).
+    fireEvent.pointerMove(svg, { clientX: 268 });
+    expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('326');
+    expect(screen.getByTestId('home-transactions-subtitle')).toHaveTextContent(
+      '11:00 · in progress'
+    );
+    fireEvent.pointerLeave(svg);
+    expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('731');
     expect(bars[22]).toHaveAttribute('data-bar', 'highlight');
     expect(fig).not.toHaveTextContent(/TXs Last 24 Hours/i);
   });
@@ -139,7 +149,12 @@ describe('NetworkSection', () => {
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(14);
     expect(bars[13]).toHaveAttribute('data-bar', 'inProgress');
-    expect(bars[13]).toHaveTextContent('10/24: 14,122');
+    fireEvent.pointerMove(svg, { clientX: 264 }); // the current day, centre at x ≈ 263.5
+    expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('14,122');
+    expect(screen.getByTestId('home-transactions-subtitle')).toHaveTextContent(
+      '10/24 · in progress'
+    );
+    fireEvent.pointerLeave(svg);
     expect(svg).toHaveAccessibleName(/15,710 on the last full day, the current day drawn hollow/);
   });
 

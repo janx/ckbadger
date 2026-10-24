@@ -29,3 +29,18 @@ export function stubChartWidth(width = 280): void {
     toJSON: () => ({}),
   } as DOMRect);
 }
+
+/**
+ * jsdom has no PointerEvent, so `fireEvent.pointerMove(el, { clientX, pointerType })` would deliver
+ * a bare Event with neither. A MouseEvent subclass carrying `pointerType` is enough for React.
+ */
+export function stubPointerEvents(): void {
+  class PointerEventStub extends MouseEvent {
+    readonly pointerType: string;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerType = init.pointerType ?? 'mouse';
+    }
+  }
+  vi.stubGlobal('PointerEvent', PointerEventStub);
+}

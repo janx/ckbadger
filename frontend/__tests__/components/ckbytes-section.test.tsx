@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
-import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
+import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import { CkbytesSection, allocationOf } from '@/components/home/ckbytes-section';
@@ -58,7 +58,10 @@ function serveStats(stats: NetworkStats) {
 }
 
 describe('CkbytesSection', () => {
-  beforeEach(() => stubChartWidth(280));
+  beforeEach(() => {
+    stubChartWidth(280);
+    stubPointerEvents();
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -159,9 +162,15 @@ describe('CkbytesSection', () => {
       expect(screen.getByTestId('home-dao-change-headline')).toHaveTextContent('+168,366')
     );
     const svg = within(fig).getByRole('img');
-    // The exact change is the last bar's tooltip.
-    const bars = svg.querySelectorAll('[data-bar] rect');
-    expect(bars[bars.length - 1]).toHaveTextContent('10/23: +168,366.47983386 CKB');
+    // Hovering the last bar (centre at x ≈ 268) reads its exact change, decimals dim.
+    fireEvent.pointerMove(svg, { clientX: 268 });
+    const headline = screen.getByTestId('home-dao-change-headline');
+    expect(headline).toHaveTextContent('+168,366.47983386');
+    expect(within(headline).getByText('.47983386')).toHaveClass('text-text-dim');
+    expect(screen.getByTestId('home-dao-change-subtitle')).toHaveTextContent('10/23');
+    fireEvent.pointerLeave(svg);
+    expect(headline).toHaveTextContent(/^\+168,366$/);
+    expect(screen.getByTestId('home-dao-change-subtitle')).toHaveTextContent('daily change, CKB');
     expect(svg.querySelector('[data-clipped="true"]')).toHaveTextContent('+28.12M');
   });
 

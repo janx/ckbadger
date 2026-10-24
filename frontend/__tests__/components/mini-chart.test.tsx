@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@/__tests__/utils/test-utils';
-import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { act, fireEvent, render, screen } from '@/__tests__/utils/test-utils';
+import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import {
   BarChart,
   ChartFigure,
@@ -41,7 +41,8 @@ describe('mini charts', () => {
     ]);
     const last = svg.querySelector('[data-role="last"]') as SVGCircleElement;
     expect(last.getAttribute('cx')).toBe('272.0');
-    expect(last).toHaveTextContent('10/23: 9.57 s');
+    // No native tooltip: the caption is the readout (see "mini chart hover").
+    expect(svg.querySelector('title')).toBeNull();
   });
 
   it('puts a reference value on a tick, emphasised, with a dashed line', () => {
@@ -97,7 +98,7 @@ describe('mini charts', () => {
     const changes = [0.3e6, 0.25e6, -8.94e6, -1.51e6, 0.4e6, 0.083e6].map((value, i) => ({
       label: `10/${18 + i}`,
       value,
-      exact: `${value} CKB`,
+      readout: { value: `${value} CKB`, text: `${value} CKB` },
     }));
     render(<SignedBarChart points={changes} ariaLabel="Knowledge size change" />);
     const svg = screen.getByRole('img', {
@@ -149,5 +150,168 @@ describe('ChartFigure', () => {
       />
     );
     expect(screen.getByRole('alert')).toHaveTextContent('no orphanRateTarget');
+  });
+});
+
+describe('mini chart hover', () => {
+  beforeEach(() => {
+    stubChartWidth(280);
+    stubPointerEvents();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // Plot x runs 34..272; three bars have centres at about 73.7, 153 and 232.3.
+  const bars: Bar[] = [
+    { label: '09:00', value: 610, state: 'complete' },
+    { label: '10:00', value: 731, state: 'highlight' },
+    { label: '11:00', value: 326, state: 'inProgress' },
+  ];
+  const n = (v: number) => v.toLocaleString('en-US');
+
+  function renderBars() {
+    render(
+      <ChartFigure
+        testId="fig"
+        title="Transactions"
+        subtitle="per hour"
+        headline="731"
+        body={{
+          state: 'ready',
+          chart: <BarChart bars={bars} formatValue={n} ariaLabel="Transactions" />,
+        }}
+      />
+    );
+    return screen.getByRole('img', { name: 'Transactions' });
+  }
+
+  const headline = () => screen.getByTestId('fig-headline');
+  const subtitle = () => screen.getByTestId('fig-subtitle');
+
+  it('snaps the pointer to the nearest bar, dims the rest and reads it out in the caption', () => {
+    const svg = renderBars();
+    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 73.7 than 153
+    expect(headline()).toHaveTextContent('610');
+    expect(subtitle()).toHaveTextContent('09:00');
+    const groups = svg.querySelectorAll('[data-bucket]');
+    expect(groups[0]).toHaveAttribute('data-hovered', 'true');
+    expect(groups[0]).toHaveAttribute('opacity', '1');
+    expect(groups[1]).toHaveAttribute('opacity', '0.35');
+    expect(svg.querySelector('[data-bar="complete"]')).toHaveAttribute('fill-opacity', '1');
+    const guide = svg.querySelector('[data-role="guide"]') as SVGLineElement;
+    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(73.7, 0);
+    expect(guide).toHaveAttribute('stroke', '#7c849c');
+
+    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 153
+    expect(headline()).toHaveTextContent('731');
+    expect(subtitle()).toHaveTextContent('10:00');
+  });
+
+  it('reads out the in-progress bucket too, marked as such', () => {
+    const svg = renderBars();
+    fireEvent.pointerMove(svg, { clientX: 260 });
+    expect(headline()).toHaveTextContent('326');
+    expect(subtitle()).toHaveTextContent('11:00 · in progress');
+  });
+
+  it('reverts the caption when the pointer leaves', () => {
+    const svg = renderBars();
+    fireEvent.pointerMove(svg, { clientX: 100 });
+    fireEvent.pointerLeave(svg);
+    expect(headline()).toHaveTextContent('731');
+    expect(subtitle()).toHaveTextContent('per hour');
+    expect(svg.querySelector('[data-role="guide"]')).toBeNull();
+    expect(svg.querySelector('[data-hovered="true"]')).toBeNull();
+  });
+
+  it('keeps a tapped bucket on touch until the next tap elsewhere', () => {
+    const svg = renderBars();
+    fireEvent.pointerDown(svg, { clientX: 100, pointerType: 'touch' });
+    fireEvent.pointerLeave(svg, { pointerType: 'touch' });
+    expect(headline()).toHaveTextContent('610');
+    act(() => {
+      fireEvent.pointerDown(document.body, { pointerType: 'touch' });
+    });
+    expect(headline()).toHaveTextContent('731');
+  });
+
+  it('is focusable: focus reads the last bucket, arrows move, Escape and blur revert', () => {
+    const svg = renderBars();
+    expect(svg).toHaveAttribute('tabindex', '0');
+    fireEvent.focus(svg);
+    expect(headline()).toHaveTextContent('326');
+    fireEvent.keyDown(svg, { key: 'ArrowLeft' });
+    expect(headline()).toHaveTextContent('731');
+    expect(screen.getByTestId('fig-readout')).toHaveTextContent('10:00: 731');
+    expect(screen.getByTestId('fig-readout')).toHaveAttribute('aria-live', 'polite');
+    fireEvent.keyDown(svg, { key: 'Home' });
+    expect(headline()).toHaveTextContent('610');
+    fireEvent.keyDown(svg, { key: 'ArrowLeft' });
+    expect(headline()).toHaveTextContent('610');
+    fireEvent.keyDown(svg, { key: 'Escape' });
+    expect(headline()).toHaveTextContent('731');
+    fireEvent.keyDown(svg, { key: 'End' });
+    expect(headline()).toHaveTextContent('326');
+    fireEvent.blur(svg);
+    expect(headline()).toHaveTextContent('731');
+  });
+
+  it('enlarges the hovered point of a line', () => {
+    const points = [9.1, 8.6, 8.8, 10.9, 9.57].map((value, i) => ({
+      label: `10/${19 + i}`,
+      value,
+    }));
+    render(
+      <ChartFigure
+        testId="fig"
+        title="Block time"
+        subtitle="daily average, s"
+        headline="9.57"
+        body={{
+          state: 'ready',
+          chart: (
+            <LineChart points={points} formatValue={(v) => v.toFixed(2)} ariaLabel="Block time" />
+          ),
+        }}
+      />
+    );
+    const svg = screen.getByRole('img', { name: 'Block time' });
+    fireEvent.pointerMove(svg, { clientX: 215 }); // point 3 at x 212.5
+    expect(headline()).toHaveTextContent('10.90');
+    expect(subtitle()).toHaveTextContent('10/22');
+    const dot = svg.querySelector('[data-role="hover-dot"]') as SVGCircleElement;
+    expect(dot.getAttribute('cx')).toBe('212.5');
+    expect(Number(dot.getAttribute('r'))).toBeGreaterThan(2.6);
+  });
+
+  it('reads a clipped outlier exactly, not as its clipped bar', () => {
+    const points = [0.3e6, -8.94e6, -1.51e6, 0.4e6].map((value, i) => ({
+      label: `10/${18 + i}`,
+      value,
+      readout: { value: `${value} exact`, text: `${value} exact` },
+    }));
+    render(
+      <ChartFigure
+        testId="fig"
+        title="Knowledge size"
+        subtitle="daily change, CKB"
+        headline="+400,000"
+        body={{ state: 'ready', chart: <SignedBarChart points={points} ariaLabel="Knowledge" /> }}
+      />
+    );
+    const svg = screen.getByRole('img', { name: /^Knowledge/ });
+    fireEvent.pointerMove(svg, { clientX: 125 }); // bar 1 centre at about 123
+    expect(svg.querySelector('[data-hovered="true"]')).toHaveAttribute('data-clipped', 'true');
+    expect(headline()).toHaveTextContent('-8940000 exact');
+    expect(subtitle()).toHaveTextContent('10/19');
+  });
+
+  it('draws nothing extra and needs no figure when used on its own', () => {
+    render(<BarChart bars={bars} formatValue={n} ariaLabel="Alone" />);
+    const svg = screen.getByRole('img', { name: 'Alone' });
+    fireEvent.pointerMove(svg, { clientX: 100 });
+    expect(svg.querySelector('[data-role="guide"]')).not.toBeNull();
   });
 });
