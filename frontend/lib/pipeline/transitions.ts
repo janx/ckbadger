@@ -71,7 +71,11 @@ export function contactTime(commits: number, proposals: number): number {
   );
 }
 
-export const SETTLE_AFTER_CONTACT = 380;
+/**
+ * The landing beat: the block solidifies (contact + 340), its cellbase is born (+ 520) and the
+ * ripples fade (+ 480) at the NEXT position before it moves on into the chain.
+ */
+export const SETTLE_AFTER_CONTACT = 560;
 
 type TxPlace =
   | { stage: 'pending' }

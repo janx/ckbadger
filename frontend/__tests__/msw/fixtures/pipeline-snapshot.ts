@@ -5,6 +5,7 @@ import type {
   PipelineSnapshot,
   PipelineTx,
 } from '@/lib/api';
+import { BLOCK_FIELD_CAPACITY } from '@/lib/pipeline/layout';
 
 /**
  * A `GET /pipeline` snapshot that is internally consistent under mainnet consensus
@@ -19,6 +20,11 @@ export const FIXTURE_NOW = Date.UTC(2026, 9, 23, 8, 0, 0);
 const T = FIXTURE_TIP;
 const BLOCKS = 24;
 const CELLBASE_SIZE = 336;
+/**
+ * The backend lists at most this many txs per block (crates/api/src/routes/pipeline.rs): a block
+ * field less the cell its cellbase takes. The rest are counted as `omittedTxs`.
+ */
+const LISTED_TXS_PER_BLOCK = BLOCK_FIELD_CAPACITY - 1;
 
 // The counter sits in the first 10 bytes so proposal short ids never collide.
 const hex64 = (prefix: string, n: number) =>
@@ -120,8 +126,8 @@ export function buildPipelineSnapshot(): PipelineSnapshot {
   commit(T - 1, 0, T - 4);
   commit(T - 1, 1, T - 4);
   commit(T - 2, 0, T - 5);
-  // Block T−5 is full: 299 commits, all proposed in T−7 → 125 listed (the backend cap: a 9 × 14
-  // field less the cellbase), 174 omitted.
+  // Block T−5 is full: 299 commits, all proposed in T−7 → LISTED_TXS_PER_BLOCK listed, the rest
+  // omitted.
   for (let i = 0; i < 299; i++) commit(T - 5, i, T - 7, { size: 330 + (i % 7) * 40 });
   // A commit of the uncle-carried proposal path: T−6 carried an uncle whose proposal T−4 commits.
   at(T - 6).uncles.push({ number: T - 7, hash: uncleHash(T - 7) });
@@ -194,7 +200,7 @@ export function buildPipelineSnapshot(): PipelineSnapshot {
     const pendingCycles = txs.some((t) => t.cycles === null);
     b.cycles = pendingCycles ? null : txs.reduce((s, t) => s + (t.cycles as number), 0);
     b.cyclesPending = pendingCycles;
-    b.txs = txs.slice(0, 125);
+    b.txs = txs.slice(0, LISTED_TXS_PER_BLOCK);
     b.omittedTxs = txs.length - b.txs.length;
     // Zone order: the block's own proposals first, then each uncle's.
     b.proposals.sort((a, c) => (a.uncleIndex ?? -1) - (c.uncleIndex ?? -1));

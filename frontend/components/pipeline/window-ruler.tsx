@@ -1,7 +1,7 @@
 'use client';
 
 import { tok } from '@/lib/pipeline/encoding';
-import { G, type RulerGeom } from '@/lib/pipeline/layout';
+import { G, rulerPath, windowMarksPath, type RulerGeom } from '@/lib/pipeline/layout';
 import { T10C, T10G } from '@/components/pipeline/svg-text';
 
 interface WindowRulerProps {
@@ -12,11 +12,30 @@ interface WindowRulerProps {
   faded: boolean;
 }
 
-/** Two ticks at the ends of the proposal window and one word of label; the rest is in the hover. */
-export function WindowTicks({ ruler, faded }: Omit<WindowRulerProps, 'emphasis'>) {
-  const d = ruler.ticks
-    .map((x) => `M${x.toFixed(1)} ${G.cardTop - 12}V${G.cardTop + G.headH}`)
-    .join('');
+/** The window at rest: a short gold mark across the chain line at each end in view. */
+export function WindowMarks({ ruler }: { ruler: RulerGeom }) {
+  return (
+    <path
+      data-window-marks
+      d={windowMarksPath(ruler) || 'M0 0'}
+      fill="none"
+      strokeWidth={1.5}
+      strokeOpacity={0.9}
+      strokeLinecap="round"
+      vectorEffect="non-scaling-stroke"
+      pointerEvents="none"
+      style={{ stroke: tok('gold') }}
+    />
+  );
+}
+
+/** The hovered window: two ticks and the dimension line between them; the rest is in the hover. */
+export function WindowTicks({
+  ruler,
+  faded,
+  label,
+}: Omit<WindowRulerProps, 'emphasis'> & { label: string }) {
+  const d = rulerPath(ruler, label);
   return (
     <path
       data-ruler-ticks
@@ -32,18 +51,20 @@ export function WindowTicks({ ruler, faded }: Omit<WindowRulerProps, 'emphasis'>
   );
 }
 
-export function WindowLabel({ ruler, emphasis, faded }: WindowRulerProps) {
+/** The window's one line of text, centred in the break of its dimension line. */
+export function WindowLabel({ ruler, emphasis, faded, text }: WindowRulerProps & { text: string }) {
   if (ruler.labelX === null) return null;
   return (
     <text
       data-window-label
       x={ruler.labelX.toFixed(1)}
-      y={G.cardTop - 4}
+      y={G.winY + 3.5}
+      textAnchor="middle"
       opacity={faded ? 0.15 : 1}
       pointerEvents="none"
       className={emphasis ? T10C : T10G}
     >
-      proposal window
+      {text}
     </text>
   );
 }

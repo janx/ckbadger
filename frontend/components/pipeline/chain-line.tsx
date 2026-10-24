@@ -13,7 +13,11 @@ interface ChainLineProps {
 
 const d = (p: string) => p || 'M0 0';
 
-/** The chain through the card headers; each gap carries an arrow to the parent. */
+/**
+ * The chain through the card headers: a plain line, no arrowheads (the age fade gives it its
+ * direction). Dashed before the tip, solid after it; inside the proposal window the links are gold,
+ * so the window reads at rest without a label.
+ */
 export function ChainLine({ paths, tailOpen, windowEmphasis }: ChainLineProps) {
   const common = { fill: 'none', vectorEffect: 'non-scaling-stroke' as const, strokeWidth: 1 };
   return (
@@ -23,15 +27,6 @@ export function ChainLine({ paths, tailOpen, windowEmphasis }: ChainLineProps) {
         d={d(paths.solid)}
         {...common}
         strokeOpacity={0.55}
-        style={{ stroke: tok('jade') }}
-      />
-      <path
-        data-path="arrows"
-        d={d(paths.arrows)}
-        {...common}
-        strokeOpacity={0.85}
-        strokeLinecap="round"
-        strokeLinejoin="round"
         style={{ stroke: tok('jade') }}
       />
       <path
@@ -46,16 +41,8 @@ export function ChainLine({ paths, tailOpen, windowEmphasis }: ChainLineProps) {
         data-path="win"
         d={d(paths.win)}
         {...common}
-        strokeOpacity={0.9}
+        strokeOpacity={0.85}
         strokeWidth={windowEmphasis ? 2 : 1.5}
-        style={{ stroke: tok('gold') }}
-      />
-      <path
-        data-path="winArrows"
-        d={d(paths.winArrows)}
-        {...common}
-        strokeLinecap="round"
-        strokeLinejoin="round"
         style={{ stroke: tok('gold') }}
       />
       <path
@@ -64,7 +51,7 @@ export function ChainLine({ paths, tailOpen, windowEmphasis }: ChainLineProps) {
         {...common}
         strokeDasharray="1 3"
         strokeOpacity={tailOpen ? 0.7 : 0.25}
-        style={{ stroke: tailOpen ? tok('gold') : tok('jade') }}
+        style={{ stroke: tok(tailOpen ? 'gold' : 'jade') }}
       />
     </g>
   );

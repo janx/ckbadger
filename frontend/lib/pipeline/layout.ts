@@ -1,12 +1,13 @@
 /**
- * Geometry of the transaction pipeline, ported from the approved prototype
- * (docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html). The geometry now
- * deliberately differs from that file: the panel sits in the page container like the other homepage
- * rows, so the grid is 8 px instead of 7, every card is a fixed 9 columns wide instead of growing
- * with its content, and the pool and NEXT columns are narrower. All functions are pure.
+ * Geometry of the transaction pipeline. It started as a port of the approved prototype
+ * (docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html) and now deliberately
+ * differs from it: the panel sits in the page container like the other homepage rows, so the canvas
+ * is one 132 px row holding one tx lifetime, left to right (mempool well ⇢ proposed well ⇢ NEXT ⇢
+ * the tip → older blocks), and every card is one fixed size (8 columns × 98 px) instead of growing
+ * with its content. All functions are pure.
  *
- * An 8 px grid: a tx is an n×n square of cells (area ∝ bytes), a proposal is a 5 px chip. Cards are
- * top-aligned; the chain runs through the card headers.
+ * A 10 px grid: a tx is an n×n square of cells (area ∝ bytes), a proposal is a 6 px dot on an 8 px
+ * pitch. Cards are top-aligned; the chain runs through the card headers.
  */
 
 import type {
@@ -28,67 +29,81 @@ import {
   type TxLook,
 } from '@/lib/pipeline/encoding';
 
-export const U = 8;
+export const U = 10;
 
 const CHAIN_BASE = {
-  H: 240,
-  cardTop: 54,
-  headH: 18,
-  chainY: 63,
-  padX: 5,
-  propTop: 76,
-  propRows: 3,
-  chip: 5,
-  chipP: 6,
-  sepY: 97,
-  fieldTop: 102,
+  H: 132,
   /**
-   * Every card (a block, NEXT, the landing block) is this many columns wide whatever it holds; what
-   * does not fit is counted as "+N" (proposal chips, txs) instead of widening the card.
+   * One lane above the cards, empty until hovered: the proposal window's bracket and the reward
+   * link both run here.
    */
-  cardCols: 9,
-  fieldRows: 14,
+  winY: 16,
+  cardTop: 28,
+  headH: 18,
+  chainY: 37,
+  padX: 5,
+  propTop: 50,
+  /** Two rows of proposal dots: `chip` px dots on a `chipP` px pitch. */
+  propRows: 2,
+  chip: 6,
+  chipP: 8,
+  /** The bottom of the proposal rows: the baseline of their "+N". */
+  sepY: 68,
+  fieldTop: 72,
+  /**
+   * Every card (the two pool wells, NEXT, a block) is this many columns wide whatever it holds;
+   * what does not fit is counted as "+N" (dots at the end of their rows, txs in the header).
+   */
+  cardCols: 8,
+  fieldRows: 5,
   padB: 5,
-  memX0: 14,
-  memCols: 10,
-  pendLblY: 48,
-  pendTop: 56,
-  pendRows: 8,
-  propLblY: 128,
-  propPoolTop: 136,
-  propPoolRows: 12,
-  divX: 103,
-  nextX: 110,
-  gap: 12,
-  minBlocks: 11,
+  /** A pool well's body: tx squares from under its header row to its bottom. */
+  poolTop: 50,
+  poolRows: 7,
+  x0: 6,
+  gap: 20,
+  /** NEXT stands alone between the pool and the chain: the gaps on both of its sides are wider. */
+  frontierGap: 44,
+  minBlocks: 8,
   maxBlocks: 24,
 } as const;
 
 /** Card width in px: `cardCols` cells and the padding on both sides. */
 const CARD_W = CHAIN_BASE.cardCols * U - 1 + 2 * CHAIN_BASE.padX;
+const PITCH = CARD_W + CHAIN_BASE.gap;
 
+const NEXT_X = CHAIN_BASE.x0 + PITCH + CARD_W + CHAIN_BASE.frontierGap;
+
+/**
+ * One row, one tx lifetime, left to right: mempool (pending) ⇢ proposed ⇢ NEXT ⇢ the tip → older
+ * blocks. Every card is the same size. NEXT stands alone between the pool and the chain: the
+ * `frontierGap` on both of its sides and the change of material mark that boundary, so there is no
+ * band or background behind it.
+ */
 export const G = {
   ...CHAIN_BASE,
   cardW: CARD_W,
-  // The chain starts one gap past NEXT; NEXT never changes width, so it never moves the chain.
-  chainX0: CHAIN_BASE.nextX + CARD_W + CHAIN_BASE.gap,
+  mempoolX: CHAIN_BASE.x0,
+  proposedX: CHAIN_BASE.x0 + PITCH,
+  nextX: NEXT_X,
+  chainX0: NEXT_X + CARD_W + CHAIN_BASE.frontierGap,
 } as const;
 
 /** An uncle travels inside the block that includes it: its header and proposals, never its txs. */
-export const UNC = { top: 4, head: 11, gap: 3, padB: 3, chipRows: 2 } as const;
+export const UNC = { top: 4, head: 11, gap: 3, padB: 3, chipRows: 1 } as const;
 
 /**
  * Grid capacities in 1×1 cells. The backend truncates the pool lists and a block's tx list to these
- * (crates/api/src/routes/pipeline.rs cross-references them): pending 10 × 8 = 80, proposed
- * 10 × 12 = 120, block field 9 × 14 = 126.
+ * (crates/api/src/routes/pipeline.rs cross-references them): each pool well's body is 8 × 7 = 56,
+ * a block field 8 × 5 = 40, of which the cellbase takes the first cell (so 39 listed txs).
  */
-export const POOL_PENDING_CAPACITY = G.memCols * G.pendRows;
-export const POOL_PROPOSED_CAPACITY = G.memCols * G.propPoolRows;
+export const POOL_PENDING_CAPACITY = G.cardCols * G.poolRows;
+export const POOL_PROPOSED_CAPACITY = G.cardCols * G.poolRows;
 export const BLOCK_FIELD_CAPACITY = G.cardCols * G.fieldRows;
 
-/** Proposal chips per row of a card's proposal area. */
+/** Proposal dots per row of a card's proposal area. */
 export const CHIPS_PER_ROW = Math.floor((G.cardCols * U) / G.chipP);
-/** Proposal chips per row inside an uncle mini-card, inset 3 px on both sides. */
+/** Proposal dots per row inside an uncle mini-card, inset 3 px on both sides. */
 export const UNCLE_CHIPS_PER_ROW = Math.floor((G.cardCols * U - 1 - 6) / G.chipP);
 
 export function uncleBoxH(nProposals: number): number {
@@ -103,9 +118,9 @@ export function unclesH(counts: readonly number[]): number {
 }
 
 /**
- * How many of `total` chips to draw in `cap` slots. When they do not fit, the last row gives up one
- * slot per glyph of the "+N" label drawn at its end (a 10 px mono glyph is ~6 px, one chip pitch),
- * so the label never covers a chip.
+ * How many of `total` dots to draw in `cap` slots. When they do not fit, the last row gives up one
+ * slot per glyph of the "+N" label drawn at its end (a 10 px mono glyph is 6 px, under one 8 px
+ * pitch), so the label never covers a dot.
  */
 export function chipSlots(total: number, cap: number): { shown: number; overflow: number } {
   if (total <= cap) return { shown: total, overflow: 0 };
@@ -116,11 +131,12 @@ export function chipSlots(total: number, cap: number): { shown: number; overflow
   throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
 }
 
-/** A quiet block still reads as a block: its tx field is at least this many rows tall. */
-const MIN_FIELD_ROWS = 3;
-
-export const cardH = (rows: number, extra = 0) =>
-  G.fieldTop + extra + Math.max(MIN_FIELD_ROWS, rows) * U - 1 + G.padB - G.cardTop;
+/**
+ * Every card is one fixed height: the header, the proposal rows and a `fieldRows`-tall tx field. An
+ * uncle mini-card takes its rows out of the field, so a card never grows; txs that do not fit are
+ * counted as "+N".
+ */
+export const CARD_H = G.fieldTop + G.fieldRows * U - 1 + G.padB - G.cardTop;
 
 export interface PackItem {
   id: string;
@@ -137,7 +153,6 @@ export interface PackPos {
 export interface PackResult {
   pos: PackPos[];
   hidden: number;
-  rows: number;
 }
 
 /** First-fit grid packing in reading order: later small squares fill the holes. */
@@ -150,7 +165,6 @@ export function pack2D(
   const occ: Uint8Array[] = [];
   const pos: PackPos[] = [];
   let hidden = 0;
-  let rows = reserveFirst ? 1 : 0;
   if (reserveFirst) {
     occ[0] = new Uint8Array(cols);
     occ[0][0] = 1;
@@ -174,13 +188,12 @@ export function pack2D(
           for (let i = c; i < c + n; i++) occ[j][i] = 1;
         }
         pos.push({ id: t.id, c, r, n });
-        rows = Math.max(rows, r + n);
         done = true;
       }
     }
     if (!done) hidden++;
   }
-  return { pos, hidden, rows };
+  return { pos, hidden };
 }
 
 export interface ChainSlot {
@@ -282,13 +295,48 @@ export function windowRuler(
   const last = mined.length ? mined.reduce((a, b) => (b.x > a.x ? b : a)) : null;
   return {
     ticks,
-    labelX: xn === null ? null : xn + 3,
+    // The label sits in the middle of the dimension line between the two ticks.
+    labelX: xn === null ? null : (xn + (xf ?? viewW)) / 2,
     hit:
       xn === null
         ? null
         : { x0: hc ? hc.x : xn, x1: q ? q.x + q.w : (xf ?? viewW), xn, xf: xf ?? viewW },
     tailOpen: !!last && inWindow(last.number, H, w) && !far,
   };
+}
+
+/**
+ * The window as a dimension line: two ticks dropping onto the header row, joined by a line at
+ * `winY` that the label sits on. One path, shared by the static render and the motion layer.
+ */
+export function rulerPath(r: RulerGeom, label: string): string {
+  const f = (v: number) => v.toFixed(1);
+  const ticks = r.ticks.map((x) => `M${f(x)} ${G.winY - 5}V${G.cardTop + G.headH}`).join('');
+  if (!r.hit || r.labelX === null) return ticks;
+  const half = labelWidth(label) / 2 + 6;
+  const { xn, xf } = r.hit;
+  // The line breaks around the label; a label wider than the span leaves only the ticks.
+  if (r.labelX - half <= xn || r.labelX + half >= xf) return ticks;
+  return `${ticks}M${f(xn)} ${G.winY}H${f(r.labelX - half)}M${f(r.labelX + half)} ${G.winY}H${f(xf)}`;
+}
+
+/**
+ * The window at rest: a short gold mark across the chain line at each end in view. Hovered, the
+ * same ticks rise to the dimension line (`rulerPath`).
+ */
+export function windowMarksPath(r: RulerGeom): string {
+  return r.ticks.map((x) => `M${x.toFixed(1)} ${G.chainY - 4.5}V${G.chainY + 5.5}`).join('');
+}
+
+/** Width of a 10 px JetBrains Mono label: every glyph advances 0.6 em. */
+export function labelWidth(text: string): number {
+  return text.length * 6;
+}
+
+/** The window's one line of text: whose window it is, and what the ticks bound. */
+export function windowLabel(anchor: number, isNext: boolean, w: WindowParams): string {
+  const n = w.proposalWindowFarthest - w.proposalWindowClosest + 1;
+  return `${isNext ? 'next block can' : `${tail4(anchor)} could`} commit txs proposed in these ${n} blocks`;
 }
 
 export interface ChainSlotState extends RulerSlot {
@@ -299,17 +347,19 @@ export interface ChainSlotState extends RulerSlot {
 }
 
 export interface ChainPaths {
+  /** Links between settled blocks. */
   solid: string;
-  arrows: string;
+  /** Dashed: NEXT ⇢ the tip, and links from a block that is still landing. */
   pend: string;
+  /** Links between two blocks inside the window of H: gold. */
   win: string;
-  winArrows: string;
+  /** Dotted, from the last card to the view edge. */
   tail: string;
 }
 
 /**
- * The chain through the card headers, newest (left) to older (right); each gap carries an arrow to
- * the parent. A link is drawn only where the newer card's parentHash is the older card's hash, so
+ * The chain through the card headers, newest (left) to older (right): plain segments, no
+ * arrowheads. A link is drawn only where the newer card's parentHash is the older card's hash, so
  * uncles and reorgs break the line honestly. Inside the window of H the line is gold.
  */
 export function chainPaths(
@@ -323,10 +373,8 @@ export function chainPaths(
   const y = G.chainY + 0.5;
   const f = (v: number) => v.toFixed(1);
   let solid = '';
-  let arrows = '';
   let pend = '';
   let win = '';
-  let winArrows = '';
   if (next && list.length) pend = `M${f(next.x + next.w + 2)} ${y}L${f(list[0].x - 2)} ${y}`;
   for (let i = 0; i + 1 < list.length; i++) {
     const a = list[i];
@@ -336,23 +384,15 @@ export function chainPaths(
     const x1 = b.x - 2;
     if (x1 - x0 < 6) continue;
     const seg = `M${f(x0)} ${y}L${f(x1)} ${y}`;
-    const arrow = `M${f(x1 - 4)} ${y - 3}L${f(x1)} ${y}L${f(x1 - 4)} ${y + 3}`;
-    if (a.mined && b.mined && inWindow(a.number, H, w) && inWindow(b.number, H, w)) {
-      win += seg;
-      winArrows += arrow;
-      continue;
-    }
-    if (a.solid < 0.5) pend += seg;
+    if (a.mined && b.mined && inWindow(a.number, H, w) && inWindow(b.number, H, w)) win += seg;
+    else if (a.solid < 0.5) pend += seg;
     else solid += seg;
-    arrows += arrow;
   }
   const last = list[list.length - 1];
   return {
     solid,
-    arrows,
     pend,
     win,
-    winArrows,
     tail: last ? `M${f(last.x + last.w + 2)} ${y}L${viewW - 4} ${y}` : '',
   };
 }
@@ -460,7 +500,7 @@ export interface SceneCard {
   w: number;
   h: number;
   chips: SceneChip[];
-  /** Own proposals that do not fit the three chip rows. */
+  /** Own proposals that do not fit the two rows of dots. */
   chipOverflow: number;
   uncles: SceneUncle[];
   squares: SceneSquare[];
@@ -488,14 +528,12 @@ export interface SceneNext {
   chipOverflow: number;
   /** Predicted txs not drawn: field overflow plus the ones the backend omitted. */
   hidden: number;
-  /** All predicted txs (drawn or not). */
-  predicted: number;
 }
 
 export interface ScenePoolGrid {
   squares: SceneSquare[];
+  /** The stage's total in the node's pool (listed or not): the well shows it on its header row. */
   total: number;
-  hidden: number;
 }
 
 export interface Scene {
@@ -544,8 +582,8 @@ const square = (
 function poolGrid(
   txs: readonly PipelinePoolTx[],
   total: number,
-  top: number,
-  rows: number,
+  x0: number,
+  cols: number,
   lookOf: (t: PipelinePoolTx) => TxLook
 ): ScenePoolGrid {
   if (total < txs.length) {
@@ -554,8 +592,8 @@ function poolGrid(
   const byHash = new Map(txs.map((t) => [t.hash, t]));
   const p = pack2D(
     txs.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
-    G.memCols,
-    rows,
+    cols,
+    G.poolRows,
     false
   );
   return {
@@ -564,14 +602,13 @@ function poolGrid(
         q.id,
         'tx',
         lookOf(byHash.get(q.id) as PipelinePoolTx),
-        G.memX0 + q.c * U,
-        top + q.r * U,
+        x0 + q.c * U,
+        G.poolTop + q.r * U,
         q.n * U - 1,
         'pool'
       )
     ),
     total,
-    hidden: p.hidden + (total - txs.length),
   };
 }
 
@@ -677,7 +714,7 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     slot,
     x,
     w: G.cardW,
-    h: cardH(g.pack.rows, g.uExtra),
+    h: CARD_H,
     chips,
     chipOverflow: own.overflow,
     uncles,
@@ -707,7 +744,7 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
     number: s.tip.number + 1,
     x: G.nextX,
     w: G.cardW,
-    h: cardH(fp.rows),
+    h: CARD_H,
     next,
     ghosts: [
       { id: null, x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
@@ -722,7 +759,6 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
     ghostChips,
     chipOverflow: slots.overflow,
     hidden: fp.hidden + next.omittedTxs,
-    predicted: next.txs.length + next.omittedTxs,
   };
 }
 
@@ -749,17 +785,19 @@ export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase
       .slice()
       .sort(
         (a, b) =>
-          (b.proposedIn as PipelineProposedIn).block - (a.proposedIn as PipelineProposedIn).block ||
+          (a.proposedIn as PipelineProposedIn).block - (b.proposedIn as PipelineProposedIn).block ||
           a.arrivedAt - b.arrivedAt
       );
     for (const t of pending) {
       if (t.proposedIn !== null) throw new Error(`pipeline: pending tx ${t.hash} has a proposedIn`);
     }
-    pool = {
-      pending: poolGrid(pending, p.pendingTotal, G.pendTop, G.pendRows, (t) =>
-        txLook({ stage: 'pending', cycles: t.cycles, tooEarly: false })
-      ),
-      proposed: poolGrid(proposed, p.proposedTotal, G.propPoolTop, G.propPoolRows, (t) => {
+    // Two pool wells before NEXT: pending, then proposed (oldest proposal first, next to NEXT).
+    const proposedGrid = poolGrid(
+      proposed,
+      p.proposedTotal,
+      G.proposedX + G.padX,
+      G.cardCols,
+      (t) => {
         const at = t.proposedIn;
         if (!at) throw new Error(`pipeline: proposed tx ${t.hash} has no proposedIn`);
         const blk = byNumber.get(at.block);
@@ -777,7 +815,13 @@ export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase
           cycles: t.cycles,
           tooEarly: proposal.state === 'early',
         });
-      }),
+      }
+    );
+    pool = {
+      proposed: proposedGrid,
+      pending: poolGrid(pending, p.pendingTotal, G.mempoolX + G.padX, G.cardCols, (t) =>
+        txLook({ stage: 'pending', cycles: t.cycles, tooEarly: false })
+      ),
     };
   }
 

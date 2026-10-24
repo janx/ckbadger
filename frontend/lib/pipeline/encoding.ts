@@ -3,8 +3,8 @@ import type { PipelineProposalState } from '@/lib/api';
 /**
  * Visual encodings of the transaction pipeline (ported from the approved prototype,
  * docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html):
- * - square area = bytes (n×n cells, n ∈ 1…4);
- * - lightness = cycles, four steps of the stage hue;
+ * - a tx is a square, area = bytes (n×n cells, n ∈ 1…4); a proposal short id is a dot;
+ * - lightness = cycles: four steps of the stage hue mixed toward white;
  * - hollow = proposed but too early to commit; dashed = cycles unknown; predicted = dashed.
  *
  * Colours are CSS custom properties (`--pipeline-*`, app/globals.css) mixed with `color-mix`, so
@@ -36,8 +36,8 @@ export function shadeStep(cycles: number): ShadeStep {
   return g < 0.15 ? 0 : g < 0.4 ? 1 : g < 0.7 ? 2 : 3;
 }
 
-/** Share of the stage hue mixed over the surface at each cycles step. */
-export const STEP_I = [0.42, 0.62, 0.82, 1.0] as const;
+/** Share of white mixed into the stage hue at each cycles step: more cycles, lighter. */
+export const STEP_W = [0, 0.18, 0.36, 0.54] as const;
 
 export interface TxLookInput {
   stage: SquareStage;
@@ -93,6 +93,25 @@ export function mixColor(a: string, b: string, t: number): string {
   return `color-mix(in srgb, ${b} ${pct(t)}, ${a})`;
 }
 
+/**
+ * The three materials of the canvas: a pool is a well (recessed below the surface, no stroke), a
+ * mined block a tile (the elevated surface with a trace of jade, no outline at rest), and NEXT the
+ * only dashed outline (`GHOST`, predicted).
+ */
+export const WELL_FILL = mixColor(tok('surface'), 'black', 0.22);
+export const TILE_FILL = mixColor(tok('elevated'), tok('jade'), 0.07);
+
+/** How many blocks behind the tip the age fade bottoms out. */
+const AGE_STEPS = 7;
+
+/** Opacity of a block `age` places behind the tip: 1 at the tip, 0.4 from tip−7 on. */
+export function ageOpacity(age: number): number {
+  if (!Number.isInteger(age) || age < 0) {
+    throw new Error(`pipeline: a block age is a count of blocks behind the tip, got ${age}`);
+  }
+  return 1 - (0.6 * Math.min(age, AGE_STEPS)) / AGE_STEPS;
+}
+
 export const STAGE_BASE: Record<SquareStage, string> = {
   pending: tok('pending'),
   proposed: tok('proposed'),
@@ -111,7 +130,7 @@ export interface SquarePaint {
 export function paintFromBase(base: string, style: SquareStyle, step: ShadeStep): SquarePaint {
   if (style === 'solid') {
     return {
-      fill: mixColor(tok('surface'), base, STEP_I[step]),
+      fill: mixColor(base, 'white', STEP_W[step]),
       fillOpacity: null,
       stroke: null,
       strokeDasharray: null,
@@ -138,12 +157,12 @@ export interface ChipPaint {
   stroke: string | null;
 }
 
-/** Proposal chip = the fate of one proposal short id. */
+/** Proposal dot = the fate of one proposal short id, in the stage colours the tx squares use. */
 export const CHIP_PAINT: Record<PipelineProposalState, ChipPaint> = {
   early: { fill: tok('proposed'), fillOpacity: 0.12, stroke: tok('gold') },
   waiting: { fill: mixColor(tok('proposed'), 'white', 0.12), fillOpacity: 1, stroke: null },
   committed: {
-    fill: mixColor(tok('surface'), tok('committed'), 0.5),
+    fill: mixColor(tok('surface'), tok('committed'), 0.85),
     fillOpacity: 1,
     stroke: null,
   },
@@ -156,7 +175,7 @@ export function chipPaint(state: PipelineProposalState): ChipPaint {
   return paint;
 }
 
-/** Predicted (NEXT) marks: dashed jade outlines, never filled. */
+/** Predicted (NEXT) marks: dashed jade squares and hollow gold dots, never solid. */
 export const GHOST = {
   square: {
     fill: tok('jade'),

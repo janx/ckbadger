@@ -7,6 +7,7 @@ import {
   FIXTURE_TIP,
   blockHash,
   buildPipelineSnapshot,
+  cellbaseHash,
   committedTxHash,
   mineNext,
   poolTxHash,
@@ -14,19 +15,45 @@ import {
 } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import type { PipelineSnapshot } from '@/lib/api';
 import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
-import { chipPaint } from '@/lib/pipeline/encoding';
-import { G, buildScene, windowRuler, type Scene } from '@/lib/pipeline/layout';
+import {
+  TILE_FILL,
+  WELL_FILL,
+  ageOpacity,
+  chipPaint,
+  diamondPath,
+  tok,
+} from '@/lib/pipeline/encoding';
+import {
+  BLOCK_FIELD_CAPACITY,
+  CARD_H,
+  G,
+  buildScene,
+  inWindow,
+  rulerPath,
+  tail4,
+  windowLabel,
+  windowMarksPath,
+  windowRuler,
+  type RulerSlot,
+  type Scene,
+} from '@/lib/pipeline/layout';
+import { FRESH_MS } from '@/lib/pipeline/motion';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
 
 const VIEW_W = 1600;
+/** The page container is 1280 px wide; the canvas inside its padding is 1246 px. */
+const CONTAINER_VIEW_W = 1246;
 const T = FIXTURE_TIP;
+const fmt = (n: number) => n.toLocaleString('en-US');
+/** The width the stubbed ResizeObserver reports; a test may change it before rendering. */
+let viewW = VIEW_W;
 
 class ResizeObserverStub {
   constructor(private readonly cb: ResizeObserverCallback) {}
   observe() {
     this.cb(
-      [{ contentRect: { width: VIEW_W } } as ResizeObserverEntry],
+      [{ contentRect: { width: viewW } } as ResizeObserverEntry],
       this as unknown as ResizeObserver
     );
   }
@@ -47,6 +74,7 @@ function stubMatchMedia(reduced: boolean) {
 }
 
 beforeEach(() => {
+  viewW = VIEW_W;
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   stubMatchMedia(false);
 });
@@ -63,6 +91,22 @@ async function renderPanel(snapshot: PipelineSnapshot = buildPipelineSnapshot())
 
 const card = (svg: Element, n: number) =>
   svg.querySelector(`[data-card="${blockHash(n)}"]`) as SVGGElement;
+const tile = (svg: Element, n: number) => card(svg, n).querySelector('[data-box]') as SVGElement;
+const path = (svg: Element, name: string) =>
+  svg.querySelector(`[data-path="${name}"]`) as SVGPathElement;
+
+/** The ruler slots of a scene: NEXT (when shown), then the chain. */
+const rulerSlots = (scene: Scene): RulerSlot[] => [
+  ...(scene.next
+    ? [{ number: scene.next.number, x: scene.next.x, w: scene.next.w, mined: false }]
+    : []),
+  ...scene.cards.map((c) => ({ number: c.block.number, x: c.x, w: c.w, mined: true })),
+];
+
+/** A path made only of horizontal segments on the chain line (or the empty placeholder). */
+const CHAIN_Y = String(G.chainY + 0.5);
+const isPlainLine = (d: string | null) =>
+  d === 'M0 0' || new RegExp(`^(M[\\d.]+ ${CHAIN_Y}L[\\d.]+ ${CHAIN_Y})+$`).test(d ?? '');
 
 describe('PipelinePanel static render', () => {
   it('draws one card per visible block, newest first', async () => {
@@ -76,7 +120,8 @@ describe('PipelinePanel static render', () => {
     expect(numbers).toEqual([...numbers].sort((a, b) => b - a));
   });
 
-  it('draws every proposal as a chip in its state', async () => {
+  it('draws every proposal as a dot in its state', async () => {
+    viewW = 2000; // wide enough to show T−12 and its expired proposals
     const svg = await renderPanel();
     const states = (n: number) =>
       [...card(svg, n).querySelectorAll('[data-chip]')].map((c) => c.getAttribute('data-state'));
@@ -84,13 +129,17 @@ describe('PipelinePanel static render', () => {
     expect(states(T - 1)).toEqual(['waiting', 'waiting', 'waiting', 'waiting']);
     expect(states(T - 3).sort()).toEqual(['committed', 'committed', 'waiting']);
     expect(states(T - 12)).toContain('expired');
-    // T−7 proposed all 299 txs of T−5. The fixed card holds three rows of 12 chips (9 columns of
-    // 8 px at a 6 px pitch); "+267" at the end of the last row gives up one slot per glyph.
-    expect(states(T - 7)).toHaveLength(36 - 4);
-    expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent('+267');
+    // A proposal short id is a dot, never a square.
+    const dots = [...svg.querySelectorAll('[data-chip]')];
+    expect(dots.length).toBeGreaterThan(0);
+    expect(new Set(dots.map((d) => d.tagName))).toEqual(new Set(['circle']));
+    // T−7 proposed all 299 txs of T−5. The fixed card holds two rows of 10 dots (8 columns of
+    // 10 px at an 8 px pitch); "+283" at the end of the last row gives up one slot per glyph.
+    expect(states(T - 7)).toHaveLength(20 - 4);
+    expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent('+283');
   });
 
-  it('draws an uncle as a dashed mini-card labelled "uncle" inside the fixed-width card', async () => {
+  it('draws an uncle as an inset mini-card labelled "uncle", without an outline', async () => {
     const svg = await renderPanel();
     const host = card(svg, T - 1);
     const uncle = host.querySelector('[data-uncle="0"]') as SVGGElement;
@@ -98,9 +147,11 @@ describe('PipelinePanel static render', () => {
     // Just the word: the uncle's number is in its tooltip.
     expect([...uncle.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
     const box = uncle.querySelector('rect') as SVGRectElement;
-    expect(box).toHaveAttribute('stroke-dasharray', '2 2');
+    expect(box).not.toHaveAttribute('stroke-dasharray');
+    expect(box.style.getPropertyValue('stroke')).toBe('');
+    expect(box.style.getPropertyValue('fill')).toBe(tok('surface'));
     const hostW = Number(host.querySelector('[data-box]')?.getAttribute('width')) + 1;
-    expect(hostW).toBe(81);
+    expect(hostW).toBe(89);
     expect(Number(box.getAttribute('x'))).toBe(G.padX);
     expect(Number(box.getAttribute('x')) + Number(box.getAttribute('width'))).toBe(hostW - G.padX);
     expect(host.querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
@@ -112,12 +163,34 @@ describe('PipelinePanel static render', () => {
     const svg = await renderPanel();
     const full = card(svg, T - 5);
     const squares = full.querySelectorAll('[data-sq]');
-    // 9 × 14 cells hold the cellbase and all 125 listed txs; the other 174 were omitted by the
+    // 8 × 5 cells hold the cellbase and all 39 listed txs; the other 260 were omitted by the
     // backend, which never lists more than a card can draw.
-    expect(squares).toHaveLength(126);
+    expect(squares).toHaveLength(BLOCK_FIELD_CAPACITY);
     expect(squares[0]).toHaveAttribute('data-stage', 'cellbase');
-    expect(full.querySelector('[data-hidden]')).toHaveTextContent('+174');
-    expect(full.querySelector('[data-count]')).toHaveTextContent('300 tx');
+    const count = full.querySelector('[data-count]') as SVGTextElement;
+    expect(count.textContent).toBe('+260');
+    // Right-aligned on the header row.
+    expect(count).toHaveAttribute('text-anchor', 'end');
+    expect(Number(count.getAttribute('x'))).toBe(G.cardW - G.padX);
+    expect(Number(count.getAttribute('y'))).toBe(G.chainY + 3.5);
+  });
+
+  it('shows only the number in a block header, and "+N" only when txs are hidden', async () => {
+    const svg = await renderPanel();
+    const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
+    expect(scene.cards.some((c) => c.hidden > 0)).toBe(true);
+    expect(scene.cards.some((c) => c.hidden === 0)).toBe(true);
+    for (const c of scene.cards) {
+      const el = card(svg, c.block.number);
+      const header = [...el.querySelectorAll(':scope > [data-age] > [data-dim] > text')].map(
+        (t) => t.textContent
+      );
+      expect(header).toEqual(
+        c.hidden > 0 ? [tail4(c.block.number), `+${c.hidden}`] : [tail4(c.block.number)]
+      );
+    }
+    // No "N tx" count anywhere on the canvas.
+    expect(svg.textContent).not.toMatch(/\d tx\b/);
   });
 
   it('draws no "none" text in an empty proposal row, on a block card or on NEXT', async () => {
@@ -150,26 +223,103 @@ describe('PipelinePanel static render', () => {
     expect(sq).toHaveAttribute('stroke-dasharray', '2 1.5');
   });
 
+  it('draws a mined block as a solid tile, without an outline at rest', async () => {
+    const svg = await renderPanel();
+    for (const n of [T, T - 5, T - 10]) {
+      const box = tile(svg, n);
+      expect(box.style.getPropertyValue('fill')).toBe(TILE_FILL);
+      expect(box).toHaveAttribute('stroke-opacity', '0');
+      expect(box).toHaveAttribute('fill-opacity', '1');
+      expect(box).not.toHaveAttribute('stroke-dasharray');
+    }
+  });
+
+  it('fades older blocks on an inner group: 1 at the tip, 0.4 from tip − 7 on', async () => {
+    const svg = await renderPanel();
+    const cards = [...svg.querySelectorAll('[data-card]')] as SVGGElement[];
+    expect(cards.length).toBeGreaterThan(8);
+    cards.forEach((c, i) => {
+      const age = c.querySelector(':scope > [data-age]') as SVGGElement;
+      expect(age).toHaveAttribute('data-age', String(i));
+      expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);
+      // The outer group's opacity attribute belongs to the motion layer (fade in / retire).
+      expect(c.getAttribute('opacity')).toBe('1.000');
+    });
+    expect(Number((cards[0].querySelector('[data-age]') as SVGGElement).style.opacity)).toBe(1);
+    expect(Number((cards[7].querySelector('[data-age]') as SVGGElement).style.opacity)).toBeCloseTo(
+      0.4,
+      6
+    );
+  });
+
+  it('draws the pool as two wells: no stroke, the stage name in its colour and its total', async () => {
+    const svg = await renderPanel();
+    const wells = [
+      { id: 'pending', title: 'mempool', tone: 'fill-aqua', total: '5' },
+      { id: 'proposed', title: 'proposed', tone: 'fill-gold', total: '9' },
+    ];
+    for (const w of wells) {
+      const well = svg.querySelector(`[data-pool-card="${w.id}"]`) as SVGGElement;
+      const tray = well.querySelector('[data-tray]') as SVGPathElement;
+      expect(tray).toHaveAttribute('stroke', 'none');
+      expect(tray.style.getPropertyValue('fill')).toBe(WELL_FILL);
+      expect(within(well as unknown as HTMLElement).getByText(w.title)).toHaveClass(w.tone);
+      expect(well.querySelector('[data-count]')?.textContent).toBe(w.total);
+    }
+    // mempool ⇢ proposed ⇢ NEXT: dashed links through the header row.
+    expect(svg.querySelectorAll('[data-flow]')).toHaveLength(2);
+  });
+
   it('splits the pool into pending and proposed, hollow while too early to commit', async () => {
     const svg = await renderPanel();
     const pending = svg.querySelector('[data-pool-grid="pending"]') as SVGGElement;
     const proposed = svg.querySelector('[data-pool-grid="proposed"]') as SVGGElement;
+    expect(pending.closest('[data-pool-card="pending"]')).not.toBeNull();
+    expect(proposed.closest('[data-pool-card="proposed"]')).not.toBeNull();
     expect(pending.querySelectorAll('[data-sq]')).toHaveLength(5);
     expect(proposed.querySelectorAll('[data-sq]')).toHaveLength(9);
     expect(proposed.querySelectorAll('[data-style="hollow"]')).toHaveLength(3);
-    expect(within(svg as unknown as HTMLElement).getByText('pending · 5')).toBeInTheDocument();
-    expect(within(svg as unknown as HTMLElement).getByText('proposed · 9')).toBeInTheDocument();
   });
 
-  it('draws the predicted next block dashed, with ghost txs and ghost chips', async () => {
+  it('shows the pool totals in the wells even when the backend truncated the lists', async () => {
+    const s = buildPipelineSnapshot();
+    const pool = s.pool as NonNullable<PipelineSnapshot['pool']>;
+    const svg = await renderPanel({
+      ...s,
+      pool: { ...pool, pendingTotal: 1234, proposedTotal: 5678 },
+    });
+    const total = (id: string) =>
+      svg.querySelector(`[data-pool-card="${id}"] [data-count]`)?.textContent;
+    expect(total('pending')).toBe('1,234');
+    expect(total('proposed')).toBe('5,678');
+  });
+
+  it('draws NEXT as the only dashed outline, with dashed squares and hollow dots', async () => {
     const svg = await renderPanel();
     const next = svg.querySelector('[data-next]') as SVGGElement;
-    expect(next.querySelector('[data-box]')).toHaveAttribute('stroke-dasharray', '3 2');
+    const nextBox = next.querySelector('[data-box]') as SVGRectElement;
+    expect(nextBox).toHaveAttribute('stroke-dasharray', '3 2');
+    expect(nextBox.style.getPropertyValue('stroke')).toBe(tok('jade'));
     expect(next.querySelectorAll('[data-ghost="tx"]')).toHaveLength(6);
+    for (const g of next.querySelectorAll('[data-ghost="tx"]')) {
+      expect(g.tagName).toBe('rect');
+      expect(g).toHaveAttribute('stroke-dasharray', '2 1.5');
+    }
     expect(next.querySelectorAll('[data-ghost="cellbase"]')).toHaveLength(1);
-    expect(next.querySelectorAll('[data-ghost-chip]')).toHaveLength(5);
-    expect(next.querySelector('[data-count]')).toHaveTextContent('~7 tx');
+    const dots = [...next.querySelectorAll('[data-ghost-chip]')];
+    expect(dots).toHaveLength(5);
+    for (const d of dots) {
+      expect(d.tagName).toBe('circle');
+      expect(d).toHaveAttribute('fill', 'none');
+      expect((d as SVGElement).style.getPropertyValue('stroke')).toBe(tok('gold'));
+    }
+    // Nothing is hidden, so the header shows only the number.
+    expect(next.querySelector('[data-count]')).toBeNull();
     expect(next.querySelectorAll('[data-sq]')).toHaveLength(0);
+    // Tiles, wells and uncle mini-cards have no dashed outline.
+    const outlines = [...svg.querySelectorAll('[data-box], [data-tray], [data-uncle] > rect')];
+    expect(outlines.length).toBeGreaterThan(10);
+    expect(outlines.filter((el) => el.hasAttribute('stroke-dasharray'))).toEqual([nextBox]);
   });
 
   it('counts the predicted txs the backend omitted as +N on the NEXT card', async () => {
@@ -178,24 +328,64 @@ describe('PipelinePanel static render', () => {
     const svg = await renderPanel({ ...s, next: { ...next, omittedTxs: 40 } });
     const card = svg.querySelector('[data-next]') as SVGGElement;
     expect(card.querySelectorAll('[data-ghost="tx"]')).toHaveLength(next.txs.length);
-    expect(card.querySelector('[data-hidden]')).toHaveTextContent('+40');
-    expect(card.querySelector('[data-count]')).toHaveTextContent(`~${next.txs.length + 40 + 1} tx`);
-    expect(screen.getByTestId('pipeline-stats')).toHaveTextContent(
-      `Next~${next.txs.length + 40 + 1} tx`
-    );
+    const count = card.querySelector('[data-count]') as SVGTextElement;
+    expect(count.textContent).toBe('+40');
+    expect(count).toHaveAttribute('text-anchor', 'end');
+    expect(Number(count.getAttribute('y'))).toBe(G.chainY + 3.5);
+    expect(screen.getByTestId('pipeline-stats')).not.toHaveTextContent('Next');
   });
 
-  it('writes "proposal window" exactly once on the canvas and no idle subtitles', async () => {
-    const svg = (await renderPanel()) as unknown as HTMLElement;
-    expect(within(svg).getAllByText('proposal window')).toHaveLength(1);
-    // The ruler: two ticks, around the heights NEXT may pack proposals from.
-    const ticks = svg.querySelector('[data-ruler-ticks]')?.getAttribute('d') ?? '';
-    expect(ticks.match(/M/g)).toHaveLength(2);
-    // Zone titles only: no subtitles under them and no row labels beside NEXT.
-    for (const word of ['Mempool', 'Next', 'Chain']) {
-      expect(within(svg).getByText(word)).toBeInTheDocument();
+  it('draws the window at rest as gold links and marks only: no label, ticks or gold numbers', async () => {
+    const s = buildPipelineSnapshot();
+    const svg = await renderPanel(s);
+    expect(svg.querySelector('[data-window-label]')).toBeNull();
+    expect(svg.querySelector('[data-ruler-ticks]')).toBeNull();
+    const scene = buildScene(s, VIEW_W, 'settled');
+    const ruler = windowRuler(rulerSlots(scene), T + 1, s.consensus, VIEW_W);
+    expect(ruler.ticks).toHaveLength(2);
+    const marks = svg.querySelector('[data-window-marks]') as SVGPathElement;
+    expect(marks).toHaveAttribute('d', windowMarksPath(ruler));
+    expect(marks.style.getPropertyValue('stroke')).toBe(tok('gold'));
+    // The window of NEXT is T−9 … T−1: the eight links between them are gold, 1.5 px.
+    const win = path(svg, 'win');
+    expect(win.getAttribute('d')?.match(/M/g)).toHaveLength(8);
+    expect(win.style.getPropertyValue('stroke')).toBe(tok('gold'));
+    expect(win).toHaveAttribute('stroke-width', '1.5');
+    for (const el of svg.querySelectorAll('[data-block-number]')) {
+      expect(el).not.toHaveClass('fill-gold');
     }
+  });
+
+  it('draws the chain as a plain line, no arrowheads: dashed before the tip, solid after', async () => {
+    const svg = await renderPanel();
+    const chain = svg.querySelector('[data-chain]') as SVGGElement;
+    expect([...chain.querySelectorAll('path')].map((p) => p.getAttribute('data-path'))).toEqual([
+      'solid',
+      'pend',
+      'win',
+      'tail',
+    ]);
+    for (const p of [...chain.querySelectorAll('path'), ...svg.querySelectorAll('[data-flow]')]) {
+      expect(isPlainLine(p.getAttribute('d'))).toBe(true);
+    }
+    // mempool ⇢ proposed ⇢ NEXT ⇢ tip is dashed; the mined chain is solid.
+    for (const el of [...svg.querySelectorAll('[data-flow]'), path(svg, 'pend')]) {
+      expect(el).toHaveAttribute('stroke-dasharray', '3 3');
+    }
+    expect(path(svg, 'pend').getAttribute('d')).not.toBe('M0 0');
+    expect(path(svg, 'solid')).not.toHaveAttribute('stroke-dasharray');
+    // The window of NEXT ends on screen, so the dotted tail is quiet jade.
+    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
+    expect(path(svg, 'tail')).toHaveAttribute('stroke-opacity', '0.25');
+  });
+
+  it('writes no zone titles, subtitles or window text on the canvas at rest', async () => {
+    const svg = (await renderPanel()) as unknown as HTMLElement;
     for (const gone of [
+      'Mempool',
+      'Next',
+      'Chain',
+      'proposal window',
       'newest → older',
       'transaction pool',
       'being assembled',
@@ -208,13 +398,18 @@ describe('PipelinePanel static render', () => {
       expect(within(svg).queryByText(gone)).toBeNull();
     }
     expect(svg.querySelector('[data-chain-sub]')).toBeNull();
+    expect(svg.querySelector('[data-next-column]')).toBeNull();
   });
 
-  it('keys the canvas in one legend line: the stages, then cellbase, cycles and unknown', async () => {
+  it('keys the canvas in one legend line: the shapes, the stages, then cellbase, cycles, unknown', async () => {
     await renderPanel();
     const legend = screen.getByTestId('pipeline-legend');
-    // The empty entry is the divider between the stage colours and the rest.
-    expect([...legend.children].map((el) => el.textContent)).toEqual([
+    const keys = [...legend.children];
+    // The empty entries are the dividers between the shapes, the stage colours and the rest.
+    expect(keys.map((el) => el.textContent)).toEqual([
+      'tx',
+      'proposal',
+      '',
       'pending',
       'proposed',
       'too early',
@@ -225,6 +420,18 @@ describe('PipelinePanel static render', () => {
       'cycles',
       'unknown',
     ]);
+    // ■ tx, ● proposal; the stage swatches are shape-neutral bars (both shapes use them).
+    expect(keys[0].querySelector('rect')).not.toBeNull();
+    expect(keys[0].querySelector('circle')).toBeNull();
+    expect(keys[1].querySelector('circle')).not.toBeNull();
+    for (const k of keys.slice(3, 8)) {
+      const bar = k.querySelector('rect') as SVGRectElement;
+      expect([bar.getAttribute('width'), bar.getAttribute('height')]).toEqual(['10', '4']);
+    }
+    // "too early" is the hollow one.
+    expect((keys[5].querySelector('rect') as SVGRectElement).style.getPropertyValue('stroke')).toBe(
+      tok('gold')
+    );
     // No usage hint under the canvas while nothing is pinned.
     expect(screen.queryByTestId('pipeline-selection')).toBeNull();
     expect(screen.getByTestId('pipeline-panel')).not.toHaveTextContent(/hover a/i);
@@ -238,13 +445,11 @@ describe('PipelinePanel static render', () => {
     expect(title).toMatch(/Hover a tx or a proposal.*click a tx to pin it/);
   });
 
-  it('shows the header stats from the snapshot', async () => {
+  it('keeps only the tip in the header stats: the pool counts are on the canvas', async () => {
     await renderPanel();
     const stats = screen.getByTestId('pipeline-stats');
-    expect(stats).toHaveTextContent('Mempool5');
-    expect(stats).toHaveTextContent('Proposed9');
-    expect(stats).toHaveTextContent('Next~7 tx');
-    expect(stats).toHaveTextContent(`Tip#${T.toLocaleString('en-US')}`);
+    expect(stats).toHaveTextContent(`Tip#${fmt(T)}`);
+    for (const gone of ['Mempool', 'Proposed', 'Next']) expect(stats).not.toHaveTextContent(gone);
   });
 
   it('keeps drawing the chain when the pool tip differs from the synced tip', async () => {
@@ -257,12 +462,19 @@ describe('PipelinePanel static render', () => {
       next: null,
     };
     const svg = await renderPanel(mismatch);
-    expect(svg.querySelector('[data-pool-status]')).toHaveTextContent('pool ≠ synced tip');
+    const status = svg.querySelector('[data-pool-status]') as SVGTextElement;
+    expect(status).toHaveTextContent(/unavailable$/);
+    expect(status.querySelector('title')).toHaveTextContent(
+      `The node's tx pool is at #${fmt(T + 1)}`
+    );
+    expect(status.querySelector('title')).toHaveTextContent(`ckbadger has synced #${fmt(T)}`);
     expect(svg.querySelectorAll('[data-pool-grid]')).toHaveLength(0);
+    for (const id of ['pending', 'proposed']) {
+      expect(svg.querySelector(`[data-pool-card="${id}"] [data-count]`)?.textContent).toBe('—');
+    }
     expect(svg.querySelector('[data-next]')).toBeNull();
-    expect(svg.querySelector('[data-next-column]')?.textContent).toBe('Nextunavailable');
+    expect(svg.querySelector('[data-next-column]')?.textContent).toBe('unavailable');
     expect(svg.querySelectorAll('[data-card]').length).toBeGreaterThanOrEqual(G.minBlocks);
-    expect(screen.getByTestId('pipeline-stats')).toHaveTextContent('Mempool—');
   });
 
   it('shows an error row when the snapshot request fails', async () => {
@@ -308,6 +520,7 @@ describe('PipelineCanvas motion', () => {
   const newHash = blockHash(T + 1);
 
   beforeEach(() => {
+    usePipelineHoverStore.getState().clear();
     vi.useFakeTimers({
       toFake: [
         'setTimeout',
@@ -321,12 +534,15 @@ describe('PipelineCanvas motion', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    usePipelineHoverStore.getState().clear();
   });
 
   const at = (ms: number) =>
     act(() => {
       vi.advanceTimersByTime(ms);
     });
+  const landingBox = (svg: Element) =>
+    svg.querySelector(`[data-card="${newHash}"] [data-box]`) as SVGRectElement;
 
   it('boots without animating and measures before drawing', () => {
     const { getByTestId } = renderPlain(<PipelineCanvas snapshot={s1} />);
@@ -370,6 +586,49 @@ describe('PipelineCanvas motion', () => {
     );
   });
 
+  it('turns the dashed outline into a solid tile, then lets a fresh outline decay over 2.4 s', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    // Settled tiles, as the motion layer paints them: no outline, a full fill.
+    expect(tile(svg, T)).toHaveAttribute('stroke-opacity', '0');
+    expect(tile(svg, T)).toHaveAttribute('fill-opacity', '1');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const box = landingBox(svg);
+    // Not solid yet: stroke 0.6 · (1 − solid), fill 0.35 + 0.65 · solid, dashed.
+    expect(box).toHaveAttribute('stroke-opacity', '0.6');
+    expect(box).toHaveAttribute('fill-opacity', '0.35');
+    expect(box).toHaveAttribute('stroke-dasharray', '3 2');
+    // Contact: the fresh outline comes on while the block solidifies; the sum is capped at 1.
+    at(t.contact + 20);
+    expect(box).toHaveAttribute('stroke-opacity', '1');
+    // Solid (contact + 340): the outline is the fresh one alone, fading.
+    at(400);
+    expect(box).not.toHaveAttribute('stroke-dasharray');
+    expect(box).toHaveAttribute('fill-opacity', '1');
+    const fading = Number(box.getAttribute('stroke-opacity'));
+    expect(fading).toBeGreaterThan(0);
+    expect(fading).toBeLessThan(0.6);
+    expect(FRESH_MS).toBe(2400);
+    at(FRESH_MS);
+    expect(box).toHaveAttribute('stroke-opacity', '0');
+    expect(box).toHaveAttribute('fill-opacity', '1');
+  });
+
+  it('outlines a highlighted tile while the motion layer is painting it', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    at(t.contact + 100);
+    // Hovered (here from the Latest Blocks row) while it is still landing and fresh.
+    act(() => usePipelineHoverStore.getState().setHover({ block: T + 1, tx: null, window: null }));
+    at(40);
+    expect(landingBox(svg)).toHaveAttribute('stroke-opacity', '0.7');
+    expect(landingBox(svg)).toHaveAttribute('fill-opacity', '1');
+    act(() => usePipelineHoverStore.getState().clearHover());
+    at(FRESH_MS + 800);
+    expect(landingBox(svg)).toHaveAttribute('stroke-opacity', '0');
+  });
+
   it('retires the block that leaves the screen through the exit layer', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
@@ -385,13 +644,71 @@ describe('PipelineCanvas motion', () => {
     expect(exitLayer.querySelectorAll('g').length).toBe(0);
   });
 
-  it('resolves a proposal chip when its commit lands, not before', () => {
+  it('keeps the landing cellbase invisible until it is born at contact', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const cb = svg.querySelector(`[data-sq="${cellbaseHash(T + 1)}"]`) as SVGPathElement;
+    expect(cb).toHaveAttribute('opacity', '0.000');
+    at(t.contact - 20);
+    expect(cb).toHaveAttribute('opacity', '0.000');
+    at(20 + 540);
+    expect(cb).toHaveAttribute('opacity', '1.000');
+  });
+
+  it('completes the landing beat at the NEXT position before the block joins the chain', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    at(t.settleAt - 10);
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    expect(landing).toHaveAttribute('data-slot', 'landing');
+    expect(landing.getAttribute('transform')).toBe(`translate(${G.nextX.toFixed(2)},0.00)`);
+    // Solid, its cellbase at full size, the ripples of the landing gone.
+    expect(landingBox(svg)).not.toHaveAttribute('stroke-dasharray');
+    expect(landingBox(svg)).toHaveAttribute('fill-opacity', '1');
+    const q = buildScene(s2, VIEW_W, 'landing').cards[0].squares[0];
+    expect(q.kind).toBe('cellbase');
+    expect(landing.querySelector(`[data-sq="${q.id}"]`)).toHaveAttribute(
+      'd',
+      diamondPath(q.x, q.y, q.s)
+    );
+    expect(svg.querySelector('[data-layer="fx"] circle')).toBeNull();
+    at(20);
+    expect(svg.querySelector(`[data-card="${newHash}"]`)).toHaveAttribute('data-slot', 'chain');
+  });
+
+  it.each([
+    { width: CONTAINER_VIEW_W, colour: 'gold', opacity: '0.7' },
+    { width: VIEW_W, colour: 'jade', opacity: '0.25' },
+  ] as const)(
+    'repaints the dotted tail $colour from the moving cards at a $width px view',
+    ({ width, colour, opacity }) => {
+      // At 1246 px the window of NEXT runs past the last block on screen; at 1600 it ends on it.
+      viewW = width;
+      const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+      const svg = getByTestId('pipeline-svg');
+      const tail = path(svg, 'tail');
+      expect(tail.style.getPropertyValue('stroke')).toBe(tok(colour));
+      expect(tail).toHaveAttribute('stroke-opacity', opacity);
+      // Spoil what React drew: only the motion layer can repaint it now (React sees no change).
+      tail.style.setProperty('stroke', 'red');
+      tail.setAttribute('stroke-opacity', '0');
+      rerender(<PipelineCanvas snapshot={s2} />);
+      at(100);
+      expect(tail.style.getPropertyValue('stroke')).toBe(tok(colour));
+      expect(tail).toHaveAttribute('stroke-opacity', opacity);
+    }
+  );
+
+  it('resolves a proposal dot when its commit lands, not before', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
     rerender(<PipelineCanvas snapshot={s2} />);
     const chip = svg.querySelector(
       `[data-card="${blockHash(T - 1)}"] [data-chip="${shortIdOf(w0)}|"]`
-    ) as SVGRectElement;
+    ) as SVGCircleElement;
+    expect(chip.tagName).toBe('circle');
     expect(chip).toHaveAttribute('data-state', 'committed');
     expect(chip.style.getPropertyValue('fill')).toBe(chipPaint('waiting').fill);
     at(t.contact + 20);
@@ -465,7 +782,13 @@ describe('PipelinePanel interactions', () => {
 
   const tooltip = () => screen.getByTestId('pipeline-tooltip');
   const dimOfCard = (svg: Element, n: number) =>
-    card(svg, n).querySelector(':scope > [data-dim]')?.getAttribute('data-dim');
+    card(svg, n).querySelector(':scope > [data-age] > [data-dim]')?.getAttribute('data-dim');
+  /** Hover NEXT's header row (no tx or proposal under the pointer). */
+  const hoverNext = (svg: Element) =>
+    fireEvent.pointerMove(svg.querySelector('[data-next] [data-box]') as Element, {
+      clientX: G.nextX + 60,
+      clientY: G.cardTop + 4,
+    });
 
   it('rings the proposal of a hovered committed tx, links them in gold and steps the rest back', async () => {
     const svg = await renderPanel(snapshot);
@@ -473,16 +796,16 @@ describe('PipelinePanel interactions', () => {
     fireEvent.pointerMove(svg, squareCentre(T, id));
 
     expect(tooltip()).toHaveTextContent('committed in');
-    expect(tooltip()).toHaveTextContent(`#${T.toLocaleString('en-US')}`);
-    expect(tooltip()).toHaveTextContent(`#${(T - 2).toLocaleString('en-US')} (2 blocks earlier)`);
+    expect(tooltip()).toHaveTextContent(`#${fmt(T)}`);
+    expect(tooltip()).toHaveTextContent(`#${fmt(T - 2)} (2 blocks earlier)`);
     expect(svg).toHaveClass('is-focus');
     expect(svg.querySelector(`[data-sq="${id}"]`)).toHaveClass('is-on');
-    const ring = svg.querySelector('[data-hover="chip-ring"]') as SVGRectElement;
+    // The proposal is a dot, so its ring is a circle around it.
+    const ring = svg.querySelector('[data-hover="chip-ring"]') as SVGCircleElement;
+    expect(ring.tagName).toBe('circle');
     const chip = chipCentre(T - 2, `${shortIdOf(id)}|`);
-    expect(Number(ring.getAttribute('x')) + Number(ring.getAttribute('width')) / 2).toBeCloseTo(
-      chip.clientX,
-      1
-    );
+    expect(Number(ring.getAttribute('cx'))).toBeCloseTo(chip.clientX, 1);
+    expect(Number(ring.getAttribute('cy'))).toBeCloseTo(chip.clientY, 1);
     expect(svg.querySelector('[data-hover="link"]')).toHaveAttribute('stroke-dasharray', '2 2');
     // The window now belongs to the block that committed it.
     expect(dimOfCard(svg, T)).toBe('false');
@@ -495,13 +818,11 @@ describe('PipelinePanel interactions', () => {
     });
   });
 
-  it('names the uncle that carried a hovered proposal chip', async () => {
+  it('names the uncle that carried a hovered proposal dot', async () => {
     const svg = await renderPanel(snapshot);
     fireEvent.pointerMove(svg, chipCentre(T - 1, `${shortIdOf(poolTxHash('u0'))}|0`));
     expect(tooltip()).toHaveTextContent('Proposal');
-    expect(tooltip()).toHaveTextContent(
-      new RegExp(`carried by\\s*uncle #${(T - 2).toLocaleString('en-US')}`)
-    );
+    expect(tooltip()).toHaveTextContent(new RegExp(`carried by\\s*uncle #${fmt(T - 2)}`));
     expect(tooltip()).toHaveTextContent('in the pool, proposed');
   });
 
@@ -513,27 +834,19 @@ describe('PipelinePanel interactions', () => {
     fireEvent.pointerMove(box, { clientX: c.x + G.padX + 30, clientY: u.y + 4 });
     expect(tooltip()).toHaveTextContent('not on the chain');
     // The mini-card only says "uncle"; its number is here.
-    expect(tooltip()).toHaveTextContent(`height#${(T - 2).toLocaleString('en-US')}`);
-    expect(tooltip()).toHaveTextContent(`included by#${(T - 1).toLocaleString('en-US')}`);
+    expect(tooltip()).toHaveTextContent(`height#${fmt(T - 2)}`);
+    expect(tooltip()).toHaveTextContent(`included by#${fmt(T - 1)}`);
     expect(usePipelineHoverStore.getState()).toMatchObject({
       hoverBlock: T - 1,
       windowBlock: null,
     });
     expect(dimOfCard(svg, T - 3)).toBe('false');
+    expect(svg.querySelector('[data-window-label]')).toBeNull();
   });
 
   it('explains the window lane with a help cursor and steps back pool txs outside it', async () => {
     const svg = await renderPanel(snapshot);
-    const slots = [
-      {
-        number: T + 1,
-        x: (scene.next as NonNullable<Scene['next']>).x,
-        w: (scene.next as NonNullable<Scene['next']>).w,
-        mined: false,
-      },
-      ...scene.cards.map((c) => ({ number: c.block.number, x: c.x, w: c.w, mined: true })),
-    ];
-    const ruler = windowRuler(slots, T + 1, snapshot.consensus, VIEW_W);
+    const ruler = windowRuler(rulerSlots(scene), T + 1, snapshot.consensus, VIEW_W);
     fireEvent.pointerMove(svg, {
       clientX: (ruler.ticks[0] as number) + 10,
       clientY: G.cardTop - 8,
@@ -546,6 +859,47 @@ describe('PipelinePanel interactions', () => {
     expect(dimOf('w0')).toBe('false');
     expect(dimOf('e0')).toBe('true');
     expect(dimOf('q0')).toBe('true');
+    // The hovered lane draws the window in full and thickens its gold links.
+    expect(svg.querySelector('[data-ruler-ticks]')).not.toBeNull();
+    expect(path(svg, 'win')).toHaveAttribute('stroke-width', '2');
+  });
+
+  it('draws the window of NEXT in full while NEXT is hovered: ticks, line, label, gold numbers', async () => {
+    const svg = await renderPanel(snapshot);
+    hoverNext(svg);
+    expect(tooltip()).toHaveTextContent(`Next #${fmt(T + 1)}`);
+    const text = windowLabel(T + 1, true, snapshot.consensus);
+    expect(text).toBe('next block can commit txs proposed in these 9 blocks');
+    expect(svg.querySelector('[data-window-label]')?.textContent).toBe(text);
+    const ruler = windowRuler(rulerSlots(scene), T + 1, snapshot.consensus, VIEW_W);
+    const ticks = svg.querySelector('[data-ruler-ticks]') as SVGPathElement;
+    // One path for the static render and the motion layer.
+    expect(ticks).toHaveAttribute('d', rulerPath(ruler, text));
+    // Two ticks and the dimension line between them, broken around the label.
+    expect(ticks.getAttribute('d')?.match(/V/g)).toHaveLength(2);
+    expect(ticks.getAttribute('d')?.match(/H/g)).toHaveLength(2);
+    for (const c of scene.cards) {
+      const n = c.block.number;
+      const number = card(svg, n).querySelector('[data-block-number]');
+      const inside = inWindow(n, T + 1, snapshot.consensus);
+      if (inside) expect(number).toHaveClass('fill-gold');
+      else expect(number).not.toHaveClass('fill-gold');
+      expect(dimOfCard(svg, n)).toBe(inside ? 'false' : 'true');
+    }
+    expect(svg.querySelector('[data-next] > [data-dim]')).toHaveAttribute('data-dim', 'false');
+  });
+
+  it("draws NEXT's window while the proposed well is hovered: it holds exactly those proposals", async () => {
+    const svg = await renderPanel(snapshot);
+    const tray = svg.querySelector('[data-pool-card="proposed"] [data-tray]') as Element;
+    fireEvent.pointerMove(tray, { clientX: G.proposedX + 45, clientY: G.cardTop + CARD_H - 8 });
+    expect(tooltip()).toHaveTextContent('Proposal window');
+    expect(tooltip()).toHaveTextContent(`next block#${fmt(T + 1)}`);
+    expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
+      windowLabel(T + 1, true, snapshot.consensus)
+    );
+    expect(card(svg, T - 1).querySelector('[data-block-number]')).toHaveClass('fill-gold');
+    expect(card(svg, T).querySelector('[data-block-number]')).not.toHaveClass('fill-gold');
   });
 
   it('anchors the window on a hovered block and steps back the blocks outside it', async () => {
@@ -553,27 +907,76 @@ describe('PipelinePanel interactions', () => {
     const c = cardOf(T - 3);
     const box = card(svg, T - 3).querySelector('[data-box]') as SVGRectElement;
     fireEvent.pointerMove(box, { clientX: c.x + c.w / 2, clientY: G.cardTop + 5 });
-    expect(tooltip()).toHaveTextContent(`Block #${(T - 3).toLocaleString('en-US')}`);
-    expect(box).toHaveAttribute('stroke-opacity', '1');
+    expect(tooltip()).toHaveTextContent(`Block #${fmt(T - 3)}`);
+    // The hovered tile gets its outline.
+    expect(box).toHaveAttribute('stroke-opacity', '0.7');
     expect(dimOfCard(svg, T - 3)).toBe('false');
     expect(dimOfCard(svg, T - 5)).toBe('false');
     expect(dimOfCard(svg, T)).toBe('true');
     expect(dimOfCard(svg, T - 2)).toBe('true');
+    expect(svg.querySelector('[data-window-label]')?.textContent).toBe(
+      `${tail4(T - 3)} could commit txs proposed in these 9 blocks`
+    );
     expect(svg.querySelector(`[data-sq="${poolTxHash('q0')}"]`)?.parentElement).toHaveAttribute(
       'data-dim',
       'soft'
     );
   });
 
-  it('draws the reward link of a hovered cellbase and says what it pays', async () => {
+  it('turns the dotted tail gold while the drawn window runs off the screen', async () => {
+    const svg = await renderPanel(snapshot);
+    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
+    // The window of T−3 is T−13 … T−5; the screen ends at T−10, inside it.
+    const c = cardOf(T - 3);
+    fireEvent.pointerMove(card(svg, T - 3).querySelector('[data-box]') as Element, {
+      clientX: c.x + c.w / 2,
+      clientY: G.cardTop + 5,
+    });
+    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('gold'));
+    expect(path(svg, 'tail')).toHaveAttribute('stroke-opacity', '0.7');
+    fireEvent.pointerLeave(svg);
+    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
+    expect(path(svg, 'tail')).toHaveAttribute('stroke-opacity', '0.25');
+  });
+
+  it('draws the reward link of a hovered cellbase and says what it pays in the tooltip', async () => {
+    // A cellbase pays the block 11 behind it: both ends are on screen only in a wide view.
+    const wide = 2000;
+    viewW = wide;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: wide,
+      height: G.H,
+      right: wide,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const svg = await renderPanel(snapshot);
+    const c = buildScene(snapshot, wide, 'settled').cards.find((k) => k.block.number === T - 2);
+    const cb = c?.squares[0];
+    if (!c || !cb || cb.kind !== 'cellbase') throw new Error('no cellbase for T−2');
+    fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
+    const reward = svg.querySelector('[data-hover="reward"]') as SVGPathElement;
+    expect(reward).not.toBeNull();
+    // It runs in the lane above the cards, where the hovered window would be drawn.
+    expect(reward.getAttribute('d')).toContain(`H`);
+    expect(reward.getAttribute('d')).toMatch(new RegExp(`Q[\\d.]+ ${G.winY} `));
+    // No caption on the canvas, and no window in the lane meanwhile.
+    expect(svg.querySelector('[data-chain-sub]')).toBeNull();
+    expect(svg.querySelector('[data-ruler-ticks]')).toBeNull();
+    expect(svg.querySelector('[data-window-label]')).toBeNull();
+    expect(tooltip()).toHaveTextContent('Cellbase');
+    expect(tooltip()).toHaveTextContent(`pays reward of#${fmt(T - 13)}`);
+  });
+
+  it('draws no reward link when the block a cellbase pays is not on screen', async () => {
     const svg = await renderPanel(snapshot);
     fireEvent.pointerMove(svg, squareCentre(T, snapshot.blocks[0].cellbase.hash));
-    expect(svg.querySelector('[data-hover="reward"]')).not.toBeNull();
-    expect(svg.querySelector('[data-chain-sub]')).toHaveTextContent(
-      `the cellbase of …${String(T).slice(-4)} pays the reward of …${String(T - 11).slice(-4)}, 11 blocks back`
-    );
-    expect(svg.querySelector('[data-ruler-ticks]')).toHaveAttribute('opacity', '0.15');
-    expect(tooltip()).toHaveTextContent('Cellbase');
+    expect(tooltip()).toHaveTextContent(`pays reward of#${fmt(T - 11)}`);
+    expect(svg.querySelector('[data-hover="reward"]')).toBeNull();
   });
 
   it('pins a tx on click and lets Escape unpin it', async () => {
@@ -626,7 +1029,7 @@ describe('PipelinePanel interactions', () => {
   it('follows hovers coming from the Latest Blocks and Latest Transactions rows', async () => {
     const svg = await renderPanel(snapshot);
     act(() => usePipelineHoverStore.getState().setHover({ block: T - 3, tx: null, window: T - 3 }));
-    expect(card(svg, T - 3).querySelector('[data-box]')).toHaveAttribute('stroke-opacity', '1');
+    expect(card(svg, T - 3).querySelector('[data-box]')).toHaveAttribute('stroke-opacity', '0.7');
     expect(dimOfCard(svg, T)).toBe('true');
     const id = committedTxHash(T, 1);
     act(() => usePipelineHoverStore.getState().setHover({ block: T, tx: id, window: T }));
@@ -634,6 +1037,7 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-hover="ring"]')).not.toBeNull();
     act(() => usePipelineHoverStore.getState().clearHover());
     expect(svg).not.toHaveClass('is-focus');
+    expect(card(svg, T - 3).querySelector('[data-box]')).toHaveAttribute('stroke-opacity', '0');
   });
 
   const ghostCentre = (hash: string) => {
@@ -658,7 +1062,7 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-hover="ring"]')).not.toBeNull();
     expect(svg.querySelector('[data-hover="ghost-ring"]')).not.toBeNull();
     expect(tooltip()).toHaveTextContent('predicted');
-    expect(tooltip()).toHaveTextContent(`#${(T + 1).toLocaleString('en-US')}`);
+    expect(tooltip()).toHaveTextContent(`#${fmt(T + 1)}`);
     // Clicking the ghost pins the pool tx it predicts.
     fireEvent.click(svg, ghostCentre(id));
     expect(usePipelineHoverStore.getState().pinned).toBe(id);

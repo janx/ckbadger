@@ -6,7 +6,12 @@ import type {
   PipelineProposalState,
   PipelineSnapshot,
 } from '@/lib/api';
-import { contactTime, diffSnapshots, type TransitionEvent } from '@/lib/pipeline/transitions';
+import {
+  SETTLE_AFTER_CONTACT,
+  contactTime,
+  diffSnapshots,
+  type TransitionEvent,
+} from '@/lib/pipeline/transitions';
 
 const bh = (n: number, fork = '') => `0xb${fork}${n}`;
 
@@ -239,7 +244,9 @@ describe('diffSnapshots', () => {
     const contact = contactTime(2, 1);
     expect(contact).toBe(Math.max(40 + 16 + 720, 120 + 0 + 560));
     expect(t.contact).toBe(contact);
-    expect(t.settleAt).toBe(contact + 380);
+    // The landing beat: 560 ms at the NEXT position after contact before the block moves on.
+    expect(SETTLE_AFTER_CONTACT).toBe(560);
+    expect(t.settleAt).toBe(contact + SETTLE_AFTER_CONTACT);
     expect(ofKind(t.events, 'mined')).toEqual([
       {
         kind: 'mined',

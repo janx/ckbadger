@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHIP_PAINT,
-  STEP_I,
+  GHOST,
+  STEP_W,
+  TILE_FILL,
+  WELL_FILL,
+  ageOpacity,
   chipPaint,
   cyclesGlow,
   paintSquare,
@@ -50,8 +54,8 @@ describe('cycles → four lightness steps', () => {
     expect(cyclesGlow(1e12)).toBe(1);
   });
 
-  it('keeps the lightness steps of the prototype', () => {
-    expect(STEP_I).toEqual([0.42, 0.62, 0.82, 1.0]);
+  it('mixes this much white into the stage hue at each step: more cycles, lighter', () => {
+    expect(STEP_W).toEqual([0, 0.18, 0.36, 0.54]);
   });
 });
 
@@ -79,13 +83,16 @@ describe('txLook: one encoding per concept', () => {
     expect(paint.stroke).toContain('var(--pipeline-proposed)');
   });
 
-  it('fills solid squares by mixing the stage hue over the surface at the step lightness', () => {
+  it('fills a solid square with the stage colour, mixed toward white by its cycles step', () => {
+    // Step 0 is the stage colour itself.
+    expect(paintSquare('pending', 'solid', 0).fill).toBe('var(--pipeline-pending)');
     const paint = paintSquare('pending', 'solid', 2);
-    expect(paint.fill).toBe(
-      'color-mix(in srgb, var(--pipeline-pending) 82%, var(--pipeline-surface))'
-    );
+    expect(paint.fill).toBe('color-mix(in srgb, white 36%, var(--pipeline-pending))');
     expect(paint.stroke).toBeNull();
     expect(paint.fillOpacity).toBeNull();
+    expect(paintSquare('committed', 'solid', 3).fill).toBe(
+      'color-mix(in srgb, white 54%, var(--pipeline-committed))'
+    );
   });
 
   it('never uses cycles shade for the cellbase', () => {
@@ -101,8 +108,8 @@ describe('txLook: one encoding per concept', () => {
   });
 });
 
-describe('proposal chip states', () => {
-  it('draws early as hollow gold, waiting as solid gold, committed as dim jade, expired grey', () => {
+describe('proposal dot states', () => {
+  it('draws early as hollow gold, waiting as solid gold, committed as jade, expired grey', () => {
     expect(chipPaint('early')).toEqual({
       fill: 'var(--pipeline-proposed)',
       fillOpacity: 0.12,
@@ -111,8 +118,45 @@ describe('proposal chip states', () => {
     expect(chipPaint('waiting').fillOpacity).toBe(1);
     expect(chipPaint('waiting').stroke).toBeNull();
     expect(chipPaint('waiting').fill).toContain('var(--pipeline-proposed)');
-    expect(chipPaint('committed').fill).toContain('var(--pipeline-committed)');
+    // 85 % committed over the surface: a dot reads in the same colour as a committed square.
+    expect(chipPaint('committed').fill).toBe(
+      'color-mix(in srgb, var(--pipeline-committed) 85%, var(--pipeline-surface))'
+    );
     expect(chipPaint('expired').fill).toContain('var(--pipeline-ink-dim)');
     expect(Object.keys(CHIP_PAINT).sort()).toEqual(['committed', 'early', 'expired', 'waiting']);
+  });
+});
+
+describe('materials: well, tile and the predicted NEXT', () => {
+  it('sinks a pool well below the surface and lifts a block tile above it with a trace of jade', () => {
+    expect(WELL_FILL).toBe('color-mix(in srgb, black 22%, var(--pipeline-surface))');
+    expect(TILE_FILL).toBe('color-mix(in srgb, var(--pipeline-jade) 7%, var(--pipeline-elevated))');
+  });
+
+  it('marks predicted txs with dashed jade outlines and predicted proposals in gold', () => {
+    expect(GHOST.square.stroke).toBe('var(--pipeline-jade)');
+    expect(GHOST.square.dash).toBe('2 1.5');
+    expect(GHOST.chip.stroke).toBe('var(--pipeline-gold)');
+  });
+});
+
+describe('ageOpacity: older blocks step back', () => {
+  it('is 1 at the tip and falls evenly to 0.4 at tip − 7', () => {
+    expect(ageOpacity(0)).toBe(1);
+    expect(ageOpacity(7)).toBeCloseTo(0.4, 10);
+    const steps = [0, 1, 2, 3, 4, 5, 6, 7].map(ageOpacity);
+    for (let i = 1; i < steps.length; i++) {
+      expect(steps[i - 1] - steps[i]).toBeCloseTo(0.6 / 7, 10);
+    }
+  });
+
+  it('stays at 0.4 beyond tip − 7', () => {
+    expect(ageOpacity(8)).toBeCloseTo(0.4, 10);
+    expect(ageOpacity(23)).toBeCloseTo(0.4, 10);
+  });
+
+  it('rejects an age that is not a count of blocks', () => {
+    expect(() => ageOpacity(-1)).toThrow(/age/);
+    expect(() => ageOpacity(1.5)).toThrow(/age/);
   });
 });
