@@ -536,6 +536,13 @@ pub struct DaoLatestStatistics {
     /// The occupied part is already inside the DAO header's `U`, so this is
     /// the DAO share of circulation that `U` does not count.
     pub dao_free_capacity: i128,
+    /// DAO header `C`, `S` and `U` of `tip_block_number`, so readers that
+    /// combine them with the figures above need no header: a rollback deletes
+    /// the headers above the fork point but keeps this row until the next
+    /// refresh, and the row must stay self-consistent in that window.
+    pub tip_total_issuance: i128,
+    pub tip_secondary_pool: i128,
+    pub tip_occupied_capacity: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

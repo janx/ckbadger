@@ -545,7 +545,7 @@ pub(crate) fn protocol_actions_for(transitions: &[DotCellTransition]) -> Vec<Pro
                 EditRecords | Touch => {}
                 RingRoot | RingLink => unreachable!("filtered out by action_name"),
             }
-            Some(ProtocolAction::new("dotcell", action, meta))
+            Some(ProtocolAction::new(PROTOCOL, action, meta))
         })
         .collect()
 }
@@ -730,7 +730,14 @@ impl DotCellDetector {
     }
 }
 
+/// The protocol id of this detector's actions (`docs/metadata/protocols.toml`).
+const PROTOCOL: &str = "dotcell";
+
 impl ProtocolDetector for DotCellDetector {
+    fn protocol(&self) -> &'static str {
+        PROTOCOL
+    }
+
     fn might_apply_batch(
         &self,
         _lock_code_hashes: &HashSet<[u8; 32]>,

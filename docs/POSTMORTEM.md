@@ -3517,7 +3517,7 @@ still before midnight. Meanwhile the bulk indexer already sealed activity bucket
 median-time watermark (`bulk_build/mod.rs`), so the API and the indexer held two different
 definitions of "complete".
 
-**Fix**: one definition for both crates, `ckbadger_common::stats_bucket`: a bucket (an hour or a
+**Fix**: one definition for the API and the bulk sealer, `ckbadger_common::stats_bucket`: a bucket (an hour or a
 UTC+8 day) is complete when its end is at or below the median time of the newest 37 indexed blocks
 (`median_time_ms`, `is_bucket_complete`).
 
@@ -3530,6 +3530,32 @@ UTC+8 day) is complete when its end is at or below the median time of the newest
   carries `complete: bool`, because more than one trailing bucket can be in progress.
 - The inflation chart's cache is keyed by the last complete day.
 - `total-supply` and `secondary-issuance` still include the current day on purpose (verify S16).
+- Review B: `/charts/miner-address-distribution` decided its "last 7 complete days" by the wall
+  clock; it now ends at `ChainTime::last_complete_day()`.
+- Review C: the median time is monotone only along one chain — a rollback lowers it to the fork
+  point's, so a complete day can reopen. Daily chart caches (and the 10 s tx-stats cache) were
+  keyed by name alone and could keep serving a reopened day as complete for their TTL. They are now
+  keyed by the last complete day (tx-stats: the last complete hour), so a reopen or a midnight
+  rollover replaces them at once. Regression:
+  `test_daily_chart_cache_drops_a_day_that_a_rollback_reopened` (a real `rollback_to_block`).
+
+**Not routed, open defect (review B)**: the live DAO daily-snapshot writer (`sync/batch.rs`,
+`completed_dao_snapshot_boundaries`) still treats every date in a batch except the newest as
+complete. That is correct only while timestamps never step back across midnight, and it is wrong
+when one does. Take block N dated D following block N−1 dated D+1:
+
+- **Separate batches:** the batch holding N starts its running totals from the newest stored
+  snapshot (D+1), rewrites D's snapshot from D+1's totals plus N's deltas, and N's DAO deltas never
+  reach D+1 or any later day. Bulk build sums deltas by date at finalize, so the two paths diverge.
+- **Same batch:** D is finalized at block N. N's C/S/U and lifecycle state include block N−1, while
+  D's running totals exclude it.
+
+Swapping the predicate for the median-time rule alone would make things worse: a day that
+completes in a later batch with no block of its own would keep carried-forward placeholders (the
+DAO-026 class). The real decision is what a day's snapshot means when its blocks interleave with
+the next day's, applied identically in the live, bulk and rollback-recompute paths, with a re-sync.
+That is left for a decision. The comments that claimed "no later block can land on it" now state
+the assumption.
 
 **Why the tests missed it**: every fixture had monotonic timestamps and a lone tip header, so "tip
 day = newest day" held in all of them; one test even pinned the 500. Regressions:
@@ -3574,12 +3600,25 @@ on every batch commit, every rollback and at startup) now carries:
 
 It is computed in the existing per-commit scan, and a phase-1 entry without its request occupied
 capacity is an error. `GET /statistics/ckbytes-allocation` reads `circulating = C − burnt − S`
-and `knowledge = U − virtual_occupied` from the header of the block that aggregate was computed
-at. So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
+and `knowledge = U − virtual_occupied` from the C, S and U of the block that aggregate was
+computed at, stored in the same row (see the review note below). So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
 negative `free` is a 500. Phase-1 cells are in the segment: they remain DAO-typed and locked
 until phase 2, and their occupied part is in `U` like any live cell's. `free` also holds the
-block rewards and fees of the last 11 blocks: they are issued in `C` but not yet paid into a
-cell. No re-sync; the indexer's startup refresh writes the new layout.
+capacity that is in no cell yet. `C − burnt − S` exceeds the live cells' capacity by the block
+rewards not yet paid out: the primary and the miner's secondary issuance of the last 11 blocks,
+paid by the cellbase 11 blocks later. It also exceeds it by the transaction fees in flight: fees
+are not issuance, but capacity already removed from inputs and not yet paid back to miners by a
+cellbase. No re-sync; the indexer's startup refresh writes the new layout.
+
+Review found the first version answered 500 after every reorg until the refresh landed:
+rollback deletes the headers above the fork point but keeps the aggregate row (API-006), and the
+endpoint read C, S and U from the header of the row's block. The row now stores its block's C, S and
+U itself (`tip_total_issuance`, `tip_secondary_pool`, `tip_occupied_capacity`), so the endpoint reads
+one row. In that window it serves the pre-rollback split, labelled with the block it describes.
+Rewriting the row inside the rollback commit instead was not done: the DAO refresh reads committed
+lifecycle state in the indexer, while the rollback is one store-crate `WriteBatch`, so it would mean
+recomputing the aggregate from uncommitted writes. Regression:
+`test_ckbytes_allocation_answers_right_after_a_rollback` (a real `rollback_to_block`).
 
 **Why the tests missed it**: nothing compared the bar's parts with the whole. Regressions:
 `test_refresh_dao_statistics_sums_free_capacity_of_live_dao_cells`,
@@ -3622,18 +3661,64 @@ A non-integer number is an error naming its JSON path. Stored metadata is unchan
 This covers `/addresses/{addr}/activities`, `/activities`, `/activities/latest` and the WebSocket
 activity broadcast.
 
+The same value also reached a typed field, which this first fix missed: `FiberChannelResponse.delay_epoch`
+(`/fiber/channels`, `/fiber/channels/{id}`, `/addresses/{addr}/fiber/channels`) was a `u64`
+JSON number. It is a decimal string now. An audit of the typed responses the homepage reads
+(network stats, tx-stats, charts, DAO statistics, CKBytes allocation, daily and 24 h activity
+stats, transactions, `/pipeline`) found no other integer that can exceed 2^53. Those responses
+carry amounts as strings, and their integers are counts, block numbers, millisecond timestamps,
+or sizes and cycles bounded by consensus.
+
 **Why the tests missed it**: the loss happens in the JavaScript parser. Every Rust assertion
 compared serde_json numbers, which are exact. One test even pinned `vaultCount: 2` as a number.
-Regression: `test_activity_free_form_json_carries_integers_as_exact_strings` (2^53 + 1 shannons
-and a flagged `since`).
+Regressions: `test_activity_free_form_json_carries_integers_as_exact_strings` (2^53 + 1 shannons
+and a flagged `since`), `test_fiber_channel_delay_epoch_is_an_exact_decimal_string`.
 
 **Lesson**: A JSON contract read by JavaScript has two number types: safe integers and everything
 else. Any integer that comes from chain data must be a string, and that should be enforced in one
 place at the boundary, not remembered per field.
 
-**Files**: `crates/api/src/utils/exact_json.rs`, `crates/api/src/routes/activities.rs`,
-`crates/api/tests/api_activities.rs`
+**Files**: `crates/api/src/utils/exact_json.rs`, `crates/api/src/routes/{activities,fiber}.rs`,
+`crates/api/tests/{api_activities,api_fiber}.rs`
 
 ---
 
-_Last updated: 2026-10-24_
+### API-021: One optional field, two meanings, and an invented zero
+
+**Date**: 2026-10-25
+
+**Symptom**: Found in review. `SporeResponse.ownedCapacity`/`ownedKnowledge` was one
+`Option<String>` with two meanings. The spore lists never computed it and always sent null; the
+detail always computed it. The frontend could not tell "not computed" from "unknown" and failed
+on a null detail.
+
+**Root Cause**: `latest_capacity_from_chart` built the whole capacity-history chart and read its
+last point back from strings. It answered `("0", "0")` for an empty history, whatever the spore's
+state, and parsed the strings with `.unwrap_or(0)`, so an empty or malformed history became an
+owned capacity of zero.
+
+**Fix**: lists serve `SporeResponse` without the two fields. `/spore/objects/{id}` serves
+`SporeDetailResponse`, the same fields plus required exact `ownedCapacity` and `ownedKnowledge`
+strings. `spore_owned_capacity` sums the daily deltas through `accumulate_owned_capacity`, the
+chart's own per-step rule, so no string is parsed.
+
+- A live spore must come out positive.
+- A melted spore must come out at exactly 0. A spore created and melted within one UTC+8 day has
+  no rows at all, because zero-net day rows are not stored, and that is its exact state.
+- Anything else, including a live spore with no history, is a 500 naming the spore.
+
+**Why the tests missed it**: the only detail test used a live spore with history, so neither the
+empty case nor the list's null was exercised. Regressions:
+`test_spore_lists_omit_owned_capacity_and_the_detail_requires_it`,
+`test_live_spore_without_capacity_history_is_an_error`,
+`test_melted_spore_without_capacity_history_owns_zero`,
+`test_melted_spore_with_a_capacity_remainder_is_an_error`.
+
+**Lesson**: An `Option` in a response must mean one thing. "Not computed on this route" is a
+different type, not a null.
+
+**Files**: `crates/api/src/routes/spore.rs`, `crates/api/tests/api_spore.rs`
+
+---
+
+_Last updated: 2026-10-25_

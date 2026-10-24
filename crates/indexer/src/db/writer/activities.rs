@@ -204,8 +204,18 @@ pub struct TxView<'a> {
     pub outputs: Vec<OutputCellView<'a>>,
 }
 
+/// The protocol id of the DAO actions the activity builder emits itself (DAO
+/// lifecycle comes from cell accounting, not a detector) — the key of its
+/// `docs/metadata/protocols.toml` entry.
+pub const DAO_PROTOCOL: &str = "dao";
+
 /// Detects protocol-level actions by analyzing cross-layer signals.
 pub trait ProtocolDetector: Send + Sync {
+    /// The protocol id this detector reports its actions under — the key of
+    /// its `docs/metadata/protocols.toml` entry, where its display name lives.
+    /// Every action `detect` returns must carry it.
+    fn protocol(&self) -> &'static str;
+
     /// Batch-level pre-filter: returns false if no code_hash in the entire batch
     /// matches this detector. Called once per batch (not per TX).
     /// Default implementation returns true (opt-in optimization).
@@ -365,6 +375,10 @@ pub(crate) mod test_detectors {
     }
 
     impl ProtocolDetector for NamingDetector {
+        fn protocol(&self) -> &'static str {
+            "test"
+        }
+
         fn might_apply(&self, tx: &TxView<'_>) -> bool {
             !tx.is_cellbase
         }
@@ -821,7 +835,7 @@ fn build_tx_actions<'a>(
 
         for capacity in &accum.dao_deposits {
             all_protocol_actions.push(ProtocolAction::new(
-                "dao",
+                DAO_PROTOCOL,
                 "deposit",
                 serde_json::json!({
                     "capacity": *capacity,
@@ -832,7 +846,7 @@ fn build_tx_actions<'a>(
 
         for (capacity, deposit_block) in &accum.dao_withdraw_requests {
             all_protocol_actions.push(ProtocolAction::new(
-                "dao",
+                DAO_PROTOCOL,
                 "withdraw_request",
                 serde_json::json!({
                     "capacity": *capacity,
@@ -844,7 +858,7 @@ fn build_tx_actions<'a>(
 
         for (capacity, compensation) in &accum.dao_withdraw_completes {
             all_protocol_actions.push(ProtocolAction::new(
-                "dao",
+                DAO_PROTOCOL,
                 "withdraw_complete",
                 serde_json::json!({
                     "capacity": *capacity,
@@ -898,6 +912,18 @@ fn build_tx_actions<'a>(
                 &owner_type_calls,
                 &owner_lock_calls,
             )?;
+            if let Some(foreign) = detector_actions
+                .iter()
+                .find(|action| action.protocol != detector.protocol())
+            {
+                bail!(
+                    "protocol detector `{}` emitted an action under protocol `{}` (action `{}`): tx=0x{}",
+                    detector.protocol(),
+                    foreign.protocol,
+                    foreign.action,
+                    hex::encode(tx.tx_hash)
+                );
+            }
             if detector.emits_tx_level_actions() {
                 detector_protocol_actions.extend(detector_actions);
             } else {
@@ -2339,6 +2365,80 @@ mod tests {
         }
     }
 
+    /// Every protocol id the activity builder can emit — each production
+    /// detector's and the builder's own DAO id — has a display name in the
+    /// bundled registry (`docs/metadata/protocols.toml`), so the API never
+    /// meets an emitted id it cannot name.
+    #[test]
+    fn test_every_emitted_protocol_has_a_registry_display_name() {
+        for is_mainnet in [true, false] {
+            for detector in production_detectors(is_mainnet) {
+                assert!(
+                    crate::parser::registry::protocol_display_name(detector.protocol()).is_some(),
+                    "protocol `{}` (mainnet={is_mainnet}) has no entry in docs/metadata/protocols.toml",
+                    detector.protocol()
+                );
+            }
+        }
+        assert_eq!(
+            crate::parser::registry::protocol_display_name(DAO_PROTOCOL),
+            Some("Nervos DAO")
+        );
+        assert_eq!(
+            crate::parser::registry::protocol_display_name("unlisted"),
+            None
+        );
+    }
+
+    /// A detector's actions carry its declared protocol id; one emitted under
+    /// another id would escape the registry check above, so it halts the
+    /// batch.
+    #[test]
+    fn test_detector_emitting_a_foreign_protocol_id_is_an_error() {
+        struct MislabelledDetector;
+        impl ProtocolDetector for MislabelledDetector {
+            fn protocol(&self) -> &'static str {
+                "fiber"
+            }
+            fn might_apply(&self, _tx: &TxView<'_>) -> bool {
+                true
+            }
+            fn detect(
+                &self,
+                _tx: &TxView<'_>,
+                _owner_lock_hash: &[u8],
+                _accum: &OwnerAccum<'_>,
+                _item_deltas: &[ItemDelta],
+                _type_calls: &[TypeCallEntry],
+                _lock_calls: &[LockCallEntry],
+            ) -> anyhow::Result<Vec<ProtocolAction>> {
+                Ok(vec![ProtocolAction::new(
+                    "fibre",
+                    "channel_open",
+                    serde_json::json!({}),
+                )])
+            }
+        }
+
+        let outputs = [make_output(0xBB, 100_00000000, None, None, None, vec![])];
+        let input = make_input(0xAA, 300_00000000, 61_00000000);
+        let tx = TxView {
+            tx_hash: &[0x54; 32],
+            block_hash: &[0xD5; 32],
+            tx_index: 1,
+            block_number: 3001,
+            timestamp: 1_700_400_000,
+            is_cellbase: false,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(MislabelledDetector)];
+        let err = build_tx_actions_for_block(&[tx], &detectors)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`fiber`") && err.contains("`fibre`"), "{err}");
+    }
+
     #[test]
     fn test_detector_actions_dedup_across_owners_still_collapses() {
         // Regression guard for the DAO-dedup fix above: detector-derived
@@ -2350,6 +2450,10 @@ mod tests {
         struct ConstantActionDetector;
 
         impl ProtocolDetector for ConstantActionDetector {
+            fn protocol(&self) -> &'static str {
+                "mock"
+            }
+
             fn might_apply(&self, _tx: &TxView<'_>) -> bool {
                 true
             }

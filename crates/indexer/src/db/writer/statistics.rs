@@ -1241,6 +1241,14 @@ impl BatchWriter {
             )
         })?;
         let tip_timestamp = header.timestamp;
+        let (tip_total_issuance, tip_secondary_pool, tip_occupied_capacity) =
+            ckbadger_common::dao::extract_dao_csu(&header.dao).ok_or_else(|| {
+                anyhow!(
+                    "invalid DAO field in sync tip block while refreshing latest dao statistics: block_number={}, dao_len={}",
+                    tip_block_number,
+                    header.dao.len()
+                )
+            })?;
         let tip_s = extract_s_from_dao(&header.dao).ok_or_else(|| {
             anyhow!(
                 "invalid DAO S field in sync tip block while refreshing latest dao statistics: block_number={}, dao_len={}",
@@ -1397,6 +1405,9 @@ impl BatchWriter {
             pending_withdrawal_capacity,
             dao_capacity,
             dao_free_capacity,
+            tip_total_issuance,
+            tip_secondary_pool,
+            tip_occupied_capacity,
         };
 
         // Batch all DAO stats writes atomically
@@ -2182,12 +2193,19 @@ mod tests {
         }
     }
 
+    const DAO_FREE_FIXTURE_C: u64 = 4_790_000_000_000_000_000;
+    const DAO_FREE_FIXTURE_S: u64 = 30_000_000_000_000_000;
+    const DAO_FREE_FIXTURE_U: u64 = 519_967_746_700_000_000;
+
     /// Seed a tip (block 100, AR 2) plus the block-80 request header and the
     /// tip-day DAO snapshot the refresh requires, then the given entries.
     fn seed_dao_free_fixture(store: &Arc<CkbadgerStore>, entries: &[DaoDepositCacheEntry]) {
         let header = |hash: u8, timestamp: i64| {
             let mut dao = vec![0u8; 32];
+            dao[0..8].copy_from_slice(&DAO_FREE_FIXTURE_C.to_le_bytes());
             dao[8..16].copy_from_slice(&2u64.to_le_bytes());
+            dao[16..24].copy_from_slice(&DAO_FREE_FIXTURE_S.to_le_bytes());
+            dao[24..32].copy_from_slice(&DAO_FREE_FIXTURE_U.to_le_bytes());
             CachedBlockHeader {
                 hash: vec![hash; 32],
                 parent_hash: vec![0u8; 32],
@@ -2266,6 +2284,21 @@ mod tests {
         assert_eq!(latest.dao_free_capacity, 296_00000000);
         // Every live DAO cell's capacity, both phases.
         assert_eq!(latest.dao_capacity, 500_00000000);
+        // The tip header's C, S and U travel with the row, so a reader can
+        // combine them with the DAO figures without the (possibly rolled
+        // back) header.
+        assert_eq!(
+            (
+                latest.tip_total_issuance,
+                latest.tip_secondary_pool,
+                latest.tip_occupied_capacity
+            ),
+            (
+                i128::from(DAO_FREE_FIXTURE_C),
+                i128::from(DAO_FREE_FIXTURE_S),
+                i128::from(DAO_FREE_FIXTURE_U)
+            )
+        );
     }
 
     /// A phase-1 entry without its request cell's occupied capacity cannot be

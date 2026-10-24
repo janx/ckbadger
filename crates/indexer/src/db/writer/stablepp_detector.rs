@@ -247,7 +247,14 @@ impl StableppDetector {
     }
 }
 
+/// The protocol id of this detector's actions (`docs/metadata/protocols.toml`).
+const PROTOCOL: &str = "stablepp";
+
 impl ProtocolDetector for StableppDetector {
+    fn protocol(&self) -> &'static str {
+        PROTOCOL
+    }
+
     fn might_apply_batch(
         &self,
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
@@ -294,7 +301,7 @@ impl ProtocolDetector for StableppDetector {
             "supplyDirection": facts.supply_direction().as_str(),
         });
 
-        Ok(vec![ProtocolAction::new("stablepp", action, metadata)])
+        Ok(vec![ProtocolAction::new(PROTOCOL, action, metadata)])
     }
 }
 #[cfg(test)]

@@ -74,6 +74,9 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         pending_withdrawal_capacity: 5_00000000,
         dao_capacity: 128_00000000,
         dao_free_capacity: 26_00000000,
+        tip_total_issuance: 0,
+        tip_secondary_pool: 0,
+        tip_occupied_capacity: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -179,6 +182,9 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         pending_withdrawal_capacity: 0,
         dao_capacity: 0,
         dao_free_capacity: 0,
+        tip_total_issuance: 0,
+        tip_secondary_pool: 0,
+        tip_occupied_capacity: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -286,6 +292,9 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
         pending_withdrawal_capacity: 0,
         dao_capacity: 0,
         dao_free_capacity: 0,
+        tip_total_issuance: 0,
+        tip_secondary_pool: 0,
+        tip_occupied_capacity: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,

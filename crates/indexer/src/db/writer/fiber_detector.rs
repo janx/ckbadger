@@ -457,7 +457,14 @@ fn encode_channel_outpoint(tx_hash: &[u8], output_index: u32) -> anyhow::Result<
     ))
 }
 
+/// The protocol id of this detector's actions (`docs/metadata/protocols.toml`).
+const PROTOCOL: &str = "fiber";
+
 impl ProtocolDetector for FiberDetector {
+    fn protocol(&self) -> &'static str {
+        PROTOCOL
+    }
+
     fn might_apply_batch(
         &self,
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
@@ -514,7 +521,7 @@ impl ProtocolDetector for FiberDetector {
             FiberEvent::CommitmentRevocation => "commitment_revocation",
         };
 
-        Ok(vec![ProtocolAction::new("fiber", action, metadata)])
+        Ok(vec![ProtocolAction::new(PROTOCOL, action, metadata)])
     }
 }
 

@@ -1019,6 +1019,14 @@ async fn test_miner_distribution_reads_from_derived_store() {
             },
         )
         .unwrap();
+    // The indexed tip is today, so its last complete day is yesterday.
+    seed_tip_block_on_utc8_day(
+        &core_store,
+        50,
+        &(latest_complete_date + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string(),
+    );
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -1053,6 +1061,37 @@ async fn test_miner_distribution_reads_from_derived_store() {
         .as_str()
         .unwrap()
         .starts_with("ckb1"));
+}
+
+/// Regression (STATS-014, review B): the miner distribution's "last 7 complete
+/// days" came from the wall clock. An indexer that lags the chain (here by
+/// years) then reported an empty window of days it has not indexed, while
+/// its own complete days went unshown. The window ends at the chain's last
+/// complete day by the median-time rule.
+#[tokio::test]
+async fn test_miner_distribution_window_ends_at_the_chain_s_last_complete_day() {
+    let store = test_store();
+    for (date, blocks) in [("20240115", 10), ("20240108", 90)] {
+        store
+            .put_miner_stats(
+                date,
+                &[0x66; 32],
+                &MinerStats {
+                    miner_lock_hash: vec![0x66; 32],
+                    blocks_count: blocks,
+                    last_block_number: 1,
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 50, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/miner-address-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["fromDate"], "2024-01-09", "{json}");
+    assert_eq!(json["toDate"], "2024-01-15", "{json}");
+    assert_eq!(json["totalBlocks"], 10, "{json}");
 }
 
 #[tokio::test]
@@ -2868,12 +2907,31 @@ fn dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {
     dao
 }
 
+/// DAO header C, S and U of the allocation fixture's blocks 10 and 11.
+const BLOCK_10_CSU: (i128, i128, i128) = (
+    4_790_000_000_000_000_000,
+    30_000_000_000_000_000,
+    519_967_746_700_000_000,
+);
+const BLOCK_11_CSU: (i128, i128, i128) = (
+    4_790_000_001_000_000_000,
+    30_000_000_100_000_000,
+    519_967_746_800_000_000,
+);
+
+/// The DAO aggregate as the indexer writes it at `tip_block_number` (10 or
+/// 11), carrying that block's C, S and U.
 fn seed_dao_latest(
     store: &CkbadgerStore,
     tip_block_number: i64,
     dao_capacity: i128,
     dao_free: i128,
 ) {
+    let (tip_total_issuance, tip_secondary_pool, tip_occupied_capacity) = match tip_block_number {
+        10 => BLOCK_10_CSU,
+        11 => BLOCK_11_CSU,
+        other => panic!("no C/S/U fixture for block {other}"),
+    };
     let latest = ckbadger_store::DaoLatestStatistics {
         tip_block_number,
         total_deposited: dao_capacity,
@@ -2889,6 +2947,9 @@ fn seed_dao_latest(
         pending_withdrawal_capacity: 0,
         dao_capacity,
         dao_free_capacity: dao_free,
+        tip_total_issuance,
+        tip_secondary_pool,
+        tip_occupied_capacity,
     };
     store
         .put_stats_key(
@@ -3007,4 +3068,29 @@ async fn test_ckbytes_allocation_needs_the_dao_aggregate() {
             .contains("dao_latest_stats"),
         "{json}"
     );
+}
+
+/// Regression (STATS-015, review A): rollback deletes the headers above the
+/// fork point but deliberately keeps the DAO aggregate row until the indexer
+/// refreshes it (API-006). The allocation read C, S and U from the header of
+/// the aggregate's block, so after every reorg it answered 500 ("no stored
+/// header") until the refresh landed. It must answer from the aggregate alone:
+/// the pre-rollback split, labelled with the block it describes.
+#[tokio::test]
+async fn test_ckbytes_allocation_answers_right_after_a_rollback() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_allocation_headers(&store);
+    // The aggregate was computed at block 11, the tip before the reorg.
+    seed_dao_latest(&store, 11, 812_889_561_643_799_700, 812_661_306_043_799_700);
+    store.rollback_to_block(10).unwrap();
+    assert!(store.get_block_header(11).unwrap().is_none());
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/statistics/ckbytes-allocation").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["blockNumber"], 11, "{json}");
+    // Block 11's C − burnt − S and U − virtual_occupied.
+    assert_eq!(json["circulating"], "3920000000900000000", "{json}");
+    assert_eq!(json["knowledge"], "15967746800000000", "{json}");
 }

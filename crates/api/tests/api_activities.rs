@@ -80,6 +80,16 @@ async fn address_activities_json(
     lock_hash: &[u8],
     actions: &ckbadger_store::types::TxActions,
 ) -> serde_json::Value {
+    let (status, json) = address_activities_response(lock_hash, actions).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    json
+}
+
+/// [`address_activities_json`] without the status assertion.
+async fn address_activities_response(
+    lock_hash: &[u8],
+    actions: &ckbadger_store::types::TxActions,
+) -> (StatusCode, serde_json::Value) {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let mut batch = StoreBatch::new(core_store.as_ref());
@@ -141,9 +151,9 @@ async fn address_activities_json(
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&body).unwrap()
+    (status, serde_json::from_slice(&body).unwrap())
 }
 
 #[tokio::test]
@@ -176,6 +186,70 @@ async fn test_address_activities_returns_protocol_metadata() {
     assert_eq!(
         json["data"][0]["protocolActions"][0]["metadata"]["vaultCount"],
         "2"
+    );
+}
+
+/// Each protocol action carries its display name from the bundled registry
+/// (`docs/metadata/protocols.toml`), so no client keeps its own copy of the
+/// table. DAO actions come from the activity builder, not a detector, and are
+/// named from the same source.
+#[tokio::test]
+async fn test_activity_protocol_actions_carry_registry_display_names() {
+    let lock_hash = vec![0x24; 32];
+    let mut actions = make_test_tx_actions(&lock_hash, &[0xaa; 32], &[0xbb; 32], 88, 1, 100, 0);
+    actions.protocol_actions = vec![
+        ProtocolAction::new("fiber", "channel_open", serde_json::json!({})),
+        ProtocolAction::new("dao", "deposit", serde_json::json!({})),
+        ProtocolAction::new("rgbpp", "transfer", serde_json::json!({})),
+        ProtocolAction::new("stablepp", "deposit", serde_json::json!({})),
+        ProtocolAction::new("utxoswap", "swap_submitted", serde_json::json!({})),
+        ProtocolAction::new("dotcell", "register", serde_json::json!({})),
+    ];
+
+    let json = address_activities_json(&lock_hash, &actions).await;
+    let names: Vec<(&str, &str)> = json["data"][0]["protocolActions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["protocol"].as_str().unwrap(),
+                a["protocolName"].as_str().unwrap_or("<missing>"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("fiber", "Fiber"),
+            ("dao", "Nervos DAO"),
+            ("rgbpp", "RGB++"),
+            ("stablepp", "Stable++"),
+            ("utxoswap", "UTXOSwap"),
+            ("dotcell", ".cell"),
+        ],
+        "{json}"
+    );
+}
+
+/// A protocol id with no registry entry is an invariant violation — the
+/// response fails naming it rather than showing the raw id.
+#[tokio::test]
+async fn test_activity_protocol_action_without_a_registry_name_is_an_error() {
+    let lock_hash = vec![0x24; 32];
+    let mut actions = make_test_tx_actions(&lock_hash, &[0xaa; 32], &[0xbb; 32], 88, 1, 100, 0);
+    actions.protocol_actions = vec![ProtocolAction::new(
+        "unlisted",
+        "transfer",
+        serde_json::json!({}),
+    )];
+
+    let (status, json) = address_activities_response(&lock_hash, &actions).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("unlisted") && message.contains("protocols.toml"),
+        "{json}"
     );
 }
 

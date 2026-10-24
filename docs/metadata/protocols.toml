@@ -1,0 +1,32 @@
+# Protocols whose actions the indexer reports in an activity's
+# `protocol_actions`, keyed by the protocol id it emits there.
+#
+# `name` is the one display name every client shows for that protocol; the
+# API serves it as `protocolName` with each action. `scripts` lists the
+# registry scripts (`scripts/<slug>.toml`) the protocol is detected from; the
+# build fails if one does not exist. An emitted protocol id missing here is an
+# error in the API, never a raw id on screen.
+
+[dao]
+name = "Nervos DAO"
+scripts = ["nervos-dao"]
+
+[fiber]
+name = "Fiber"
+scripts = ["fiber-funding-lock", "fiber-commitment-lock"]
+
+[rgbpp]
+name = "RGB++"
+scripts = ["rgb", "btc-time-lock"]
+
+[stablepp]
+name = "Stable++"
+scripts = ["stable-asset", "stable-pool", "stable-intent-lock", "stable-vault-lock"]
+
+[utxoswap]
+name = "UTXOSwap"
+scripts = ["utxoswap-intent-lock"]
+
+[dotcell]
+name = ".cell"
+scripts = ["dotcell-account", "dotcell-account-lock", "dotcell-sale-lock", "dotcell-price"]

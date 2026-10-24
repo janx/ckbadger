@@ -42,7 +42,10 @@ pub struct FiberChannelResponse {
     pub close_block: Option<i64>,
     pub close_timestamp: Option<String>,
     pub commitment_tx_hash: Option<String>,
-    pub delay_epoch: Option<u64>,
+    /// The commitment lock's `since`-encoded delay as an exact decimal string:
+    /// its relative-epoch flag bits put it above 2^53, where a JSON number is
+    /// rounded by every browser.
+    pub delay_epoch: Option<String>,
     pub settlement_tx_hash: Option<String>,
     pub settlement_block: Option<i64>,
     pub settlement_timestamp: Option<String>,
@@ -147,7 +150,7 @@ fn build_channel_response(
         close_block: ch.close_block,
         close_timestamp: ch.close_timestamp.map(|t| t.to_string()),
         commitment_tx_hash: ch.commitment_tx_hash.as_ref().map(|h| format_hex(h)),
-        delay_epoch: ch.delay_epoch,
+        delay_epoch: ch.delay_epoch.map(|delay| delay.to_string()),
         settlement_tx_hash: ch.settlement_tx_hash.as_ref().map(|h| format_hex(h)),
         settlement_block: ch.settlement_block,
         settlement_timestamp: ch.settlement_timestamp.map(|t| t.to_string()),

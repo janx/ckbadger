@@ -1174,3 +1174,133 @@ async fn test_get_spore_returns_not_found_for_cluster_entry() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+fn plain_spore_entry(is_live: bool) -> ObjectEntry {
+    ObjectEntry {
+        standard: ObjectStandard::Spore,
+        collection_id: None,
+        token_id: None,
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live,
+        created_at_block: 321,
+        created_at_tx: vec![0xBB; 32],
+        extra: ObjectExtra::Spore {
+            content_type: "image/png".to_string(),
+            content_length: 1024,
+            media_profile: SporeMediaProfile::default(),
+        },
+    }
+}
+
+/// Review E: `ownedCapacity`/`ownedKnowledge` were one `Option` meaning two
+/// things — never computed (every list sent null) and always computed (the
+/// detail). Lists no longer carry the fields; the detail carries them as
+/// required exact strings.
+#[tokio::test]
+async fn test_spore_lists_omit_owned_capacity_and_the_detail_requires_it() {
+    let store = test_store();
+    let spore_id = [0x78u8; 32];
+    store
+        .put_spore_direct(&spore_id, &plain_spore_entry(true))
+        .unwrap();
+    store
+        .put_spore_daily_delta(
+            &spore_id,
+            20240115,
+            &SporeDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 61,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, list) = get_json(&app, "/spore/objects").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let item = &list["data"][0];
+    assert_eq!(
+        item["sporeId"],
+        format!("0x{}", hex::encode(spore_id)),
+        "{list}"
+    );
+    assert!(item.get("ownedCapacity").is_none(), "{list}");
+    assert!(item.get("ownedKnowledge").is_none(), "{list}");
+
+    let (status, detail) =
+        get_json(&app, &format!("/spore/objects/0x{}", hex::encode(spore_id))).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["ownedCapacity"], "100", "{detail}");
+    assert_eq!(detail["ownedKnowledge"], "61", "{detail}");
+}
+
+/// A live spore's deltas sum to its live cell's capacity, so it always has a
+/// non-zero history row; none at all is corruption, not a zero.
+#[tokio::test]
+async fn test_live_spore_without_capacity_history_is_an_error() {
+    let store = test_store();
+    let spore_id = [0x79u8; 32];
+    store
+        .put_spore_direct(&spore_id, &plain_spore_entry(true))
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) =
+        get_json(&app, &format!("/spore/objects/0x{}", hex::encode(spore_id))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(message.contains(&hex::encode(spore_id)), "{json}");
+}
+
+/// A spore created and melted within one UTC+8 day nets to zero that day, and
+/// zero-net day rows are not stored: no history is that spore's exact state.
+/// It owns 0, said explicitly.
+#[tokio::test]
+async fn test_melted_spore_without_capacity_history_owns_zero() {
+    let store = test_store();
+    let spore_id = [0x7au8; 32];
+    store
+        .put_spore_direct(&spore_id, &plain_spore_entry(false))
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) =
+        get_json(&app, &format!("/spore/objects/0x{}", hex::encode(spore_id))).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["ownedCapacity"], "0", "{json}");
+    assert_eq!(json["ownedKnowledge"], "0", "{json}");
+}
+
+/// A melted spore's cell is gone, so its deltas must net to zero; a remainder
+/// is corruption reported with the spore, not served as owned capacity.
+#[tokio::test]
+async fn test_melted_spore_with_a_capacity_remainder_is_an_error() {
+    let store = test_store();
+    let spore_id = [0x7bu8; 32];
+    store
+        .put_spore_direct(&spore_id, &plain_spore_entry(false))
+        .unwrap();
+    store
+        .put_spore_daily_delta(
+            &spore_id,
+            20240115,
+            &SporeDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 61,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) =
+        get_json(&app, &format!("/spore/objects/0x{}", hex::encode(spore_id))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&hex::encode(spore_id)),
+        "{json}"
+    );
+}

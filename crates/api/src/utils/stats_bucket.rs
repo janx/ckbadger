@@ -17,6 +17,7 @@ use ckbadger_common::stats_bucket::{
     MEDIAN_TIME_BLOCK_COUNT,
 };
 use ckbadger_store::CkbadgerStore;
+use std::sync::Arc;
 
 use crate::response::{ApiError, ApiRouteError};
 
@@ -109,6 +110,13 @@ impl ChainTime {
         })
     }
 
+    /// Start (UTC seconds) of the newest complete hour: the hour before the
+    /// one the median time falls in.
+    pub fn last_complete_hour_start_secs(&self) -> i64 {
+        let median_secs = self.median_time_ms.div_euclid(1000);
+        median_secs - median_secs.rem_euclid(3600) - 3600
+    }
+
     /// Whether the UTC+8 day `date` is complete.
     pub fn is_day_complete(&self, date: NaiveDate) -> Result<bool, ApiRouteError> {
         let end = utc8_day_end_ms(date).map_err(|e| ApiError::internal(e.to_string()))?;
@@ -124,6 +132,34 @@ impl ChainTime {
             bucket_end_ms(start_ms, HOUR_MS).map_err(|e| ApiError::internal(e.to_string()))?;
         Ok(is_bucket_complete(end, self.median_time_ms))
     }
+}
+
+/// Cache key of a response built from complete days only: `base` plus the
+/// chain's last complete day. The median time moves back on a reorg (a
+/// rollback lowers it to the fork point's) as well as forward at midnight, so
+/// a cached value is only valid while the last complete day it was built for
+/// still is; keying by it replaces the value the moment that changes.
+pub fn complete_days_cache_key(
+    base: &str,
+    chain: Option<ChainTime>,
+) -> Result<String, ApiRouteError> {
+    Ok(match chain {
+        Some(chain) => format!(
+            "{base}:complete-through:{}",
+            chain.last_complete_day()?.format("%Y%m%d")
+        ),
+        None => format!("{base}:complete-through:none"),
+    })
+}
+
+/// [`ChainTime::load`] off the async runtime.
+pub async fn load_chain_time(
+    store: &Arc<CkbadgerStore>,
+) -> Result<Option<ChainTime>, ApiRouteError> {
+    let store = store.clone();
+    tokio::task::spawn_blocking(move || ChainTime::load(&store))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
 }
 
 /// The UTC+8 date of a block timestamp, through the indexer's `block_date`.
@@ -286,6 +322,30 @@ mod tests {
         let chain = ChainTime::from_window(&full).unwrap();
         // Upper median of 37 values 9_964..=10_000.
         assert_eq!(chain.median_time_ms(), 9_982);
+    }
+
+    #[test]
+    fn cache_keys_follow_the_last_complete_day_and_hour() {
+        let chain = ChainTime::from_window(&[
+            (2, utc_ms("2026-10-23T16:00:30Z")),
+            (1, utc_ms("2026-10-23T15:59:55Z")),
+            (0, utc_ms("2026-10-23T15:59:50Z")),
+        ])
+        .unwrap();
+        // Median time 15:59:55Z (23:59:55 UTC+8 on 10-23): 10-22 and the
+        // 14:00 UTC hour are the newest complete buckets.
+        assert_eq!(
+            complete_days_cache_key("chart:x", Some(chain)).unwrap(),
+            "chart:x:complete-through:20261022"
+        );
+        assert_eq!(
+            complete_days_cache_key("chart:x", None).unwrap(),
+            "chart:x:complete-through:none"
+        );
+        assert_eq!(
+            chain.last_complete_hour_start_secs(),
+            utc_ms("2026-10-23T14:00:00Z") / 1000
+        );
     }
 
     #[test]

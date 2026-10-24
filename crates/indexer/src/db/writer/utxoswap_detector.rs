@@ -15,7 +15,14 @@ impl UtxoSwapDetector {
     }
 }
 
+/// The protocol id of this detector's actions (`docs/metadata/protocols.toml`).
+const PROTOCOL: &str = "utxoswap";
+
 impl ProtocolDetector for UtxoSwapDetector {
+    fn protocol(&self) -> &'static str {
+        PROTOCOL
+    }
+
     fn might_apply_batch(
         &self,
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
@@ -78,7 +85,7 @@ impl ProtocolDetector for UtxoSwapDetector {
             let action_name = format!("{}_submitted", parsed.intent_type.action_name());
 
             actions.push(ProtocolAction::new(
-                "utxoswap",
+                PROTOCOL,
                 action_name,
                 parsed.metadata_json(),
             ));
@@ -100,7 +107,7 @@ impl ProtocolDetector for UtxoSwapDetector {
                 let action_name = format!("{}_settled", parsed.intent_type.action_name());
 
                 actions.push(ProtocolAction::new(
-                    "utxoswap",
+                    PROTOCOL,
                     action_name,
                     parsed.metadata_json(),
                 ));
