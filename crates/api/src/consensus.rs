@@ -1,9 +1,9 @@
 //! The chain's consensus parameters, read from the node — the API's one source
-//! for the NC-Max proposal window and the block limits.
+//! for the NC-Max proposal window, the orphan-rate target and the block limits.
 //!
 //! Every derivation that depends on these (proposal commitment windows, the
-//! committable/expired split, mempool block packing, the pipeline snapshot)
-//! reads them from here. They come from the node's `get_consensus` RPC once
+//! committable/expired split, mempool block packing, the pipeline snapshot,
+//! the uncle-rate chart's target line) reads them from here. They come from the node's `get_consensus` RPC once
 //! per process and are then cached; when the node cannot answer, the request
 //! that needed them fails with the RPC error — there is no hardcoded mainnet
 //! value standing in, because a testnet or devnet chain may differ.
@@ -66,10 +66,49 @@ impl ProposalWindow {
     }
 }
 
+/// The NC-Max orphan-rate target (RFC-0020): the uncle rate the difficulty
+/// adjustment steers each epoch toward, `numerator / denominator` (mainnet
+/// `1/40` = 2.5%). Kept as the node's exact fraction, never as a float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrphanRateTarget {
+    numerator: u32,
+    denominator: u32,
+}
+
+impl OrphanRateTarget {
+    /// Build the target from the node's values. A zero denominator is not a
+    /// rate, and a value beyond `u32` is not one any CKB chain uses; both are
+    /// errors, not something to repair.
+    pub fn new(numerator: u64, denominator: u64) -> Result<Self, String> {
+        if denominator == 0 {
+            return Err(format!(
+                "invalid orphan_rate_target {numerator}/{denominator}: denominator is 0"
+            ));
+        }
+        let to_u32 = |value: u64, field: &str| {
+            u32::try_from(value)
+                .map_err(|_| format!("orphan_rate_target.{field} {value} does not fit u32"))
+        };
+        Ok(Self {
+            numerator: to_u32(numerator, "numer")?,
+            denominator: to_u32(denominator, "denom")?,
+        })
+    }
+
+    pub fn numerator(&self) -> u32 {
+        self.numerator
+    }
+
+    pub fn denominator(&self) -> u32 {
+        self.denominator
+    }
+}
+
 /// The consensus parameters the API derives from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsensusParams {
     pub tx_proposal_window: ProposalWindow,
+    pub orphan_rate_target: OrphanRateTarget,
     /// Serialized-size limit of a whole block, in bytes.
     pub max_block_bytes: u64,
     /// Total verification-cycles limit of a block.
@@ -83,6 +122,7 @@ pub struct ConsensusParams {
 #[derive(Debug, Deserialize)]
 struct RpcConsensus {
     tx_proposal_window: RpcProposalWindow,
+    orphan_rate_target: RpcRational,
     max_block_bytes: String,
     max_block_cycles: String,
     max_block_proposals_limit: String,
@@ -92,6 +132,13 @@ struct RpcConsensus {
 struct RpcProposalWindow {
     closest: String,
     farthest: String,
+}
+
+/// A `RationalU256` as the node serializes it: hex `numer` and `denom`.
+#[derive(Debug, Deserialize)]
+struct RpcRational {
+    numer: String,
+    denom: String,
 }
 
 impl ConsensusParams {
@@ -112,6 +159,11 @@ impl ConsensusParams {
                     &raw.tx_proposal_window.farthest,
                     "tx_proposal_window.farthest",
                 )?,
+            )
+            .map_err(|e| format!("{GET_CONSENSUS}: {e}"))?,
+            orphan_rate_target: OrphanRateTarget::new(
+                field(&raw.orphan_rate_target.numer, "orphan_rate_target.numer")?,
+                field(&raw.orphan_rate_target.denom, "orphan_rate_target.denom")?,
             )
             .map_err(|e| format!("{GET_CONSENSUS}: {e}"))?,
             max_block_bytes: field(&raw.max_block_bytes, "max_block_bytes")?,
@@ -213,6 +265,8 @@ mod tests {
         let params = ConsensusParams::from_get_consensus(&mainnet_result()).unwrap();
         assert_eq!(params.tx_proposal_window.closest(), 2);
         assert_eq!(params.tx_proposal_window.farthest(), 10);
+        assert_eq!(params.orphan_rate_target.numerator(), 1);
+        assert_eq!(params.orphan_rate_target.denominator(), 40);
         assert_eq!(params.max_block_bytes, 597_000);
         assert_eq!(params.max_block_cycles, 3_500_000_000);
         assert_eq!(params.max_block_proposals_limit, 1500);
@@ -232,6 +286,38 @@ mod tests {
         result["max_block_cycles"] = serde_json::json!("0xZZ");
         let err = ConsensusParams::from_get_consensus(&result).unwrap_err();
         assert!(err.contains("max_block_cycles"), "{err}");
+    }
+
+    #[test]
+    fn missing_orphan_rate_target_is_named() {
+        let mut result = mainnet_result();
+        result.as_object_mut().unwrap().remove("orphan_rate_target");
+        let err = ConsensusParams::from_get_consensus(&result).unwrap_err();
+        assert!(err.contains("orphan_rate_target"), "{err}");
+    }
+
+    #[test]
+    fn malformed_orphan_rate_target_is_an_error() {
+        for (target, needle) in [
+            (
+                serde_json::json!({ "numer": "0x1", "denom": "0x0" }),
+                "denominator is 0",
+            ),
+            (
+                serde_json::json!({ "numer": "0x1", "denom": "0xZZ" }),
+                "orphan_rate_target.denom",
+            ),
+            (
+                serde_json::json!({ "numer": "0x100000000", "denom": "0x28" }),
+                "orphan_rate_target.numer",
+            ),
+            (serde_json::json!({ "numer": "0x1" }), "denom"),
+        ] {
+            let mut result = mainnet_result();
+            result["orphan_rate_target"] = target;
+            let err = ConsensusParams::from_get_consensus(&result).unwrap_err();
+            assert!(err.contains(needle), "{needle}: {err}");
+        }
     }
 
     #[test]

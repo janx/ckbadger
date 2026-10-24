@@ -907,3 +907,115 @@ async fn test_date_keyed_charts_emit_canonical_iso_dates() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Uncle rate carries the chain's NC-Max orphan-rate target
+// ---------------------------------------------------------------------------
+
+/// Two complete days of uncle-rate data plus the tip block's day.
+fn seed_uncle_rate_days(store: &CkbadgerStore) {
+    for (date, uncles) in [("20240115", 250), ("20240116", 200)] {
+        store
+            .put_daily_block_stats(
+                date,
+                &DailyBlockStats {
+                    avg_difficulty: 1_000_000.0,
+                    block_count: 10_000,
+                    total_uncles: uncles,
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(store, 20_000, "2024-01-16");
+}
+
+/// The homepage draws the uncle-rate chart against the NC-Max orphan-rate
+/// target (RFC-0020), a consensus parameter: the response carries it from the
+/// node's `get_consensus` (mainnet `1/40` = 2.5%), next to the unchanged chart
+/// fields, and a cached response carries it too.
+#[tokio::test]
+async fn test_uncle_rate_chart_carries_the_orphan_rate_target() {
+    let store = test_store();
+    seed_uncle_rate_days(&store);
+    let app = create_router(test_config(store.clone())).await;
+
+    let (status, computed) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{computed}");
+    assert_eq!(
+        computed,
+        serde_json::json!({
+            "data": [{ "date": "2024-01-15", "value": "0.025000", "value2": null }],
+            "title": "Uncle Rate",
+            "yAxisLabel": "Uncle Rate",
+            "y2AxisLabel": null,
+            "orphanRateTarget": { "numerator": 1, "denominator": 40 }
+        })
+    );
+
+    // Change the stored day: a recomputed response would differ, so an
+    // identical one is the cached value — and it still carries the target.
+    store
+        .put_daily_block_stats(
+            "20240115",
+            &DailyBlockStats {
+                avg_difficulty: 1_000_000.0,
+                block_count: 10_000,
+                total_uncles: 1,
+            },
+        )
+        .unwrap();
+    let (status, cached) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{cached}");
+    assert_eq!(cached, computed);
+}
+
+/// The target is the node's, not a mainnet constant: a chain with another
+/// `orphan_rate_target` must see its own.
+#[tokio::test]
+async fn test_uncle_rate_target_comes_from_the_node_consensus() {
+    let store = test_store();
+    seed_uncle_rate_days(&store);
+    let server = MockServer::start().await;
+    let mut consensus = mainnet_get_consensus_result();
+    consensus["orphan_rate_target"] = serde_json::json!({ "denom": "0x14", "numer": "0x1" });
+    mount_consensus_rpc(&server, consensus).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    // Production wiring: nothing preloaded, the API asks the node.
+    config.consensus = None;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["orphanRateTarget"],
+        serde_json::json!({ "numerator": 1, "denominator": 20 }),
+        "{json}"
+    );
+}
+
+/// A node whose `get_consensus` lacks `orphan_rate_target` cannot be charted
+/// against its target: the request fails naming the field, with no fallback.
+#[tokio::test]
+async fn test_uncle_rate_chart_fails_without_an_orphan_rate_target() {
+    let store = test_store();
+    seed_uncle_rate_days(&store);
+    let server = MockServer::start().await;
+    let mut consensus = mainnet_get_consensus_result();
+    consensus
+        .as_object_mut()
+        .unwrap()
+        .remove("orphan_rate_target");
+    mount_consensus_rpc(&server, consensus).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    config.consensus = None;
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(message.contains("orphan_rate_target"), "{json}");
+}

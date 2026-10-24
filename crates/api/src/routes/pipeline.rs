@@ -1507,6 +1507,7 @@ async fn build_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus::OrphanRateTarget;
     use crate::pool::fake::FakePoolSource;
     use crate::pool::PoolEntryMeta;
 
@@ -1533,6 +1534,7 @@ mod tests {
     fn consensus(max_block_proposals_limit: u64) -> ConsensusParams {
         ConsensusParams {
             tx_proposal_window: mainnet_window(),
+            orphan_rate_target: OrphanRateTarget::new(1, 40).unwrap(),
             max_block_bytes: 1_000,
             max_block_cycles: 1_000,
             max_block_proposals_limit,

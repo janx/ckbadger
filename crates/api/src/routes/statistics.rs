@@ -2832,12 +2832,36 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     ok(response)
 }
 
-async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+/// The NC-Max orphan-rate target as served: the node's exact fraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanRateTargetResponse {
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+/// `/charts/uncle-rate`: the daily uncle-rate chart (the common chart fields)
+/// plus the chain's orphan-rate target, which the rate is read against. Its
+/// own type, so no other chart grows an optional field only this one fills.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleRateChartResponse {
+    #[serde(flatten)]
+    pub chart: ChartResponse,
+    pub orphan_rate_target: OrphanRateTargetResponse,
+}
+
+async fn get_uncle_rate_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<UncleRateChartResponse> {
     let cache_key = "chart:uncle-rate";
-    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+    // The cached value is the whole response, target included; the target is
+    // a consensus constant of the chain this process serves.
+    if let Some(cached) = state.cache.get::<UncleRateChartResponse>(cache_key).await {
         return ok(cached);
     }
 
+    let target = state.consensus().await?.orphan_rate_target;
     let (in_progress, daily_block_stats) = load_daily_block_stats(&state).await?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
@@ -2857,11 +2881,17 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         });
     }
 
-    let response = ChartResponse {
-        data,
-        title: "Uncle Rate".to_string(),
-        y_axis_label: "Uncle Rate".to_string(),
-        y2_axis_label: None,
+    let response = UncleRateChartResponse {
+        chart: ChartResponse {
+            data,
+            title: "Uncle Rate".to_string(),
+            y_axis_label: "Uncle Rate".to_string(),
+            y2_axis_label: None,
+        },
+        orphan_rate_target: OrphanRateTargetResponse {
+            numerator: target.numerator(),
+            denominator: target.denominator(),
+        },
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
