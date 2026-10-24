@@ -1,5 +1,17 @@
 import { http, HttpResponse } from 'msw';
 import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
+import {
+  activitySummary24h,
+  averageBlockTimeChart,
+  dailyActivities,
+  daoStatistics,
+  hashRateChart,
+  knowledgeSizeChart,
+  latestActivities,
+  totalDepositChart,
+  txStats,
+  uncleRateChart,
+} from '@/__tests__/msw/fixtures/home';
 
 // API calls are now same-origin and network-scoped (`/api/<network>/v1/*`), served by the
 // Rust proxy in production. A relative handler base with a `:network` path param matches the
@@ -122,7 +134,7 @@ export const handlers = [
       avgBlockTime: '8.5',
       hashRate: '1.5 PH/s',
       difficulty: '0x1000000000',
-      epoch: '100/50/1000',
+      epoch: '100(50/1000)',
       tps: '2.5',
       estimatedEpochTime: '4h 30m',
       transactionsPerMinute: '150',
@@ -149,6 +161,22 @@ export const handlers = [
       circulatingSupply: null,
       daoLocked: null,
     });
+  }),
+
+  // The homepage's charts and panels (fixtures/home.ts).
+  http.get(`${API_BASE}/charts/average-block-time`, () => HttpResponse.json(averageBlockTimeChart)),
+  http.get(`${API_BASE}/charts/hash-rate`, () => HttpResponse.json(hashRateChart)),
+  // Carries the NC-Max orphan-rate target next to the data (BE-3 contract).
+  http.get(`${API_BASE}/charts/uncle-rate`, () => HttpResponse.json(uncleRateChart)),
+  http.get(`${API_BASE}/charts/knowledge-size`, () => HttpResponse.json(knowledgeSizeChart)),
+  http.get(`${API_BASE}/dao/charts/total-deposit`, () => HttpResponse.json(totalDepositChart)),
+  http.get(`${API_BASE}/dao/statistics`, () => HttpResponse.json(daoStatistics)),
+  http.get(`${API_BASE}/statistics/tx-stats`, () => HttpResponse.json(txStats)),
+  http.get(`${API_BASE}/stats/activity-summary-24h`, () => HttpResponse.json(activitySummary24h)),
+  http.get(`${API_BASE}/stats/daily-activities`, () => HttpResponse.json(dailyActivities)),
+  http.get(`${API_BASE}/activities/latest`, ({ request }) => {
+    const limit = Number(new URL(request.url).searchParams.get('limit') ?? '8');
+    return HttpResponse.json(latestActivities.slice(0, limit));
   }),
 
   http.get(`${API_BASE}/status/health`, () => {
