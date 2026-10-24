@@ -74,26 +74,16 @@ async fn test_address_activities_reads_from_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
 }
 
-#[tokio::test]
-async fn test_address_activities_returns_protocol_metadata() {
+/// Seed one committed activity (block 88, tx index 1) for `lock_hash` and
+/// return the JSON of that address's activity list.
+async fn address_activities_json(
+    lock_hash: &[u8],
+    actions: &ckbadger_store::types::TxActions,
+) -> serde_json::Value {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
-    let lock_hash = vec![0x24; 32];
-    let tx_hash = vec![0xaa; 32];
-    let block_hash = vec![0xbb; 32];
-
-    let mut actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 88, 1, 100, 0);
-    actions.protocol_actions = vec![ProtocolAction::new(
-        "stablepp",
-        "deposit",
-        serde_json::json!({
-            "hasIntent": true,
-            "vaultCount": 2,
-        }),
-    )];
-
     let mut batch = StoreBatch::new(core_store.as_ref());
-    batch.put_tx_hash_map(&tx_hash, 88, 1);
+    batch.put_tx_hash_map(&actions.tx_hash, 88, 1);
     batch.put_tx_index(
         88,
         1,
@@ -111,7 +101,7 @@ async fn test_address_activities_returns_protocol_metadata() {
     batch.put_block_header(
         88,
         &CachedBlockHeader {
-            hash: block_hash,
+            hash: actions.block_hash.clone(),
             parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123,
             epoch_number: 0,
@@ -126,12 +116,12 @@ async fn test_address_activities_returns_protocol_metadata() {
             cycles: None,
         },
     );
-    batch.put_tx_actions(&actions);
+    batch.put_tx_actions(actions);
     batch.put_addr_tx(
-        &lock_hash,
+        lock_hash,
         88,
         1,
-        &tx_hash,
+        &actions.tx_hash,
         &AddrTxValue::new(0, false, true, 0),
     );
     batch.commit().unwrap();
@@ -146,15 +136,33 @@ async fn test_address_activities_returns_protocol_metadata() {
     let request = Request::builder()
         .uri(format!(
             "/api/v1/addresses/0x{}/activities",
-            hex::encode(&lock_hash)
+            hex::encode(lock_hash)
         ))
         .body(Body::empty())
         .unwrap();
-
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn test_address_activities_returns_protocol_metadata() {
+    let lock_hash = vec![0x24; 32];
+    let tx_hash = vec![0xaa; 32];
+    let block_hash = vec![0xbb; 32];
+
+    let mut actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 88, 1, 100, 0);
+    actions.protocol_actions = vec![ProtocolAction::new(
+        "stablepp",
+        "deposit",
+        serde_json::json!({
+            "hasIntent": true,
+            "vaultCount": 2,
+        }),
+    )];
+
+    let json = address_activities_json(&lock_hash, &actions).await;
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(
         json["data"][0]["protocolActions"][0]["protocol"],
@@ -164,10 +172,60 @@ async fn test_address_activities_returns_protocol_metadata() {
         json["data"][0]["protocolActions"][0]["metadata"]["hasIntent"],
         true
     );
+    // Every integer in metadata is an exact decimal string (BE-5 contract).
     assert_eq!(
         json["data"][0]["protocolActions"][0]["metadata"]["vaultCount"],
-        2
+        "2"
     );
+}
+
+/// Regression (API-020): a browser parses every JSON number as a double, so an
+/// integer above 2^53 — a DAO cell of more than ~90M CKB, a Fiber commitment's
+/// since-encoded delay — was rounded before the frontend saw it. Free-form
+/// JSON the API passes through (protocol-action metadata, decoded lock args)
+/// carries every integer as an exact decimal string, whatever its size.
+#[tokio::test]
+async fn test_activity_free_form_json_carries_integers_as_exact_strings() {
+    let lock_hash = vec![0x24; 32];
+    let tx_hash = vec![0xaa; 32];
+    let block_hash = vec![0xbb; 32];
+
+    let mut actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 88, 1, 100, 0);
+    // 2^53 + 1 and 2^53 + 3 shannons: not representable as a double.
+    actions.protocol_actions = vec![ProtocolAction::new(
+        "dao",
+        "withdraw_complete",
+        serde_json::json!({
+            "capacity": 9_007_199_254_740_993_i64,
+            "compensation": 9_007_199_254_740_995_i64,
+            "lockHash": "24",
+            "nested": [{ "depositBlock": 19_695_550 }],
+        }),
+    )];
+    // Fiber commitment lock args: pubkey hash, delay_epoch (u64 LE; a relative
+    // epoch `since` with its flag bits set), version (u64 BE).
+    let mut args = vec![0x11; 20];
+    args.extend_from_slice(&0xa001_0000_0000_0006u64.to_le_bytes());
+    args.extend_from_slice(&7u64.to_be_bytes());
+    actions.lock_calls = vec![ckbadger_store::types::LockCallEntry {
+        lock_code_hash: hex::decode(
+            "2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+        )
+        .unwrap(),
+        lock_hash_type: 1,
+        lock_args: args,
+    }];
+
+    let json = address_activities_json(&lock_hash, &actions).await;
+    let metadata = &json["data"][0]["protocolActions"][0]["metadata"];
+    assert_eq!(metadata["capacity"], "9007199254740993", "{json}");
+    assert_eq!(metadata["compensation"], "9007199254740995", "{json}");
+    assert_eq!(metadata["lockHash"], "24", "{json}");
+    assert_eq!(metadata["nested"][0]["depositBlock"], "19695550", "{json}");
+    let decoded = &json["data"][0]["lockCalls"][0]["decoded"];
+    assert_eq!(decoded["delayEpoch"], "11529496521045180422", "{json}");
+    assert_eq!(decoded["version"], "7", "{json}");
+    assert_eq!(decoded["protocol"], "fiber", "{json}");
 }
 
 #[tokio::test]

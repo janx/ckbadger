@@ -3595,4 +3595,45 @@ quantities that both sum over the same cells cannot sit side by side.
 
 ---
 
+### API-020: Exact integers handed to a reader that parses doubles
+
+**Date**: 2026-10-24
+
+**Symptom**: Found in review by the frontend lane, not yet seen in a live value. Activity responses
+carried DAO protocol-action `capacity` and `compensation`, and a decoded Fiber commitment lock's
+`delayEpoch` and `version`, as JSON numbers. A browser parses every JSON number as an IEEE double,
+so any value above 2^53 was rounded before the frontend saw it. That means a DAO cell over
+~90,071,992 CKB, or a relative-epoch `since` with its flag bits set (`0xa001000000000006`, which
+every real commitment lock carries).
+
+**Root Cause**: Typed response fields carry amounts as strings, but the two free-form JSON values
+the API passes through did not:
+
+- `protocolActions[].metadata`, stored by the indexer's detectors;
+- `lockCalls[].decoded`, decoded per request.
+
+Fiber and UTXOSwap metadata already wrote amounts as strings. The DAO builder and the commitment
+decoder wrote numbers. Rust and serde_json kept them exact, so no Rust test could see the loss.
+
+**Fix**: `utils::exact_json::integers_as_strings`, one function at the response boundary.
+`convert_protocol_action` and `convert_lock_call` both call it. Every integer in those two values
+leaves as its exact decimal string, whatever its size, so a field's type never depends on its value.
+A non-integer number is an error naming its JSON path. Stored metadata is unchanged; no re-sync.
+This covers `/addresses/{addr}/activities`, `/activities`, `/activities/latest` and the WebSocket
+activity broadcast.
+
+**Why the tests missed it**: the loss happens in the JavaScript parser. Every Rust assertion
+compared serde_json numbers, which are exact. One test even pinned `vaultCount: 2` as a number.
+Regression: `test_activity_free_form_json_carries_integers_as_exact_strings` (2^53 + 1 shannons
+and a flagged `since`).
+
+**Lesson**: A JSON contract read by JavaScript has two number types: safe integers and everything
+else. Any integer that comes from chain data must be a string, and that should be enforced in one
+place at the boundary, not remembered per field.
+
+**Files**: `crates/api/src/utils/exact_json.rs`, `crates/api/src/routes/activities.rs`,
+`crates/api/tests/api_activities.rs`
+
+---
+
 _Last updated: 2026-10-24_

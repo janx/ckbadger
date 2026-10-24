@@ -23,6 +23,7 @@ use crate::routes::address_pool;
 use crate::utils::address::{
     address_to_lock_script_hash, compute_script_hash, encode_lock_address, resolve_lock_address,
 };
+use crate::utils::exact_json::integers_as_strings;
 use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
 
@@ -215,6 +216,8 @@ pub struct LockCallResponse {
     pub lock_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
+    /// Decoded lock args; every integer in it is an exact decimal string
+    /// (`utils::exact_json`).
     pub decoded: Option<serde_json::Value>,
 }
 
@@ -223,6 +226,8 @@ pub struct LockCallResponse {
 pub struct ProtocolActionResponse {
     pub protocol: String,
     pub action: String,
+    /// Protocol-specific JSON; every integer in it is an exact decimal
+    /// string (`utils::exact_json`).
     pub metadata: serde_json::Value,
 }
 
@@ -559,7 +564,10 @@ fn convert_lock_call(
         script_name: normalized_script_name(script_info),
         decoded: LOCK_ARGS_DECODERS
             .get(call.lock_code_hash.as_slice())
-            .and_then(|decoder| decoder(&call.lock_args)),
+            .and_then(|decoder| decoder(&call.lock_args))
+            .map(|decoded| integers_as_strings(decoded, "decoded lock args"))
+            .transpose()
+            .map_err(anyhow::Error::msg)?,
     })
 }
 
@@ -586,10 +594,11 @@ fn convert_protocol_action(
         )
     })?;
 
+    let context = format!("{}/{} protocol metadata", action.protocol, action.action);
     Ok(ProtocolActionResponse {
         protocol: action.protocol.clone(),
         action: action.action.clone(),
-        metadata,
+        metadata: integers_as_strings(metadata, &context).map_err(anyhow::Error::msg)?,
     })
 }
 
