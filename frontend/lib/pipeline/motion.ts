@@ -10,13 +10,16 @@ import {
   type SquareStyle,
 } from '@/lib/pipeline/encoding';
 import {
-  G,
   chainPaths,
+  chainTail,
+  rewardLink,
   rulerPath,
   windowLabel,
   windowMarksPath,
   windowRuler,
   type ChainSlotState,
+  type Point,
+  type RewardLink,
   type RulerSlot,
   type Scene,
   type SceneSquare,
@@ -147,35 +150,24 @@ export interface GoOptions {
 
 export type ExitKind = 'hide' | 'retire' | 'drop' | 'orphan';
 
-export interface Point {
-  X: number;
-  Y: number;
-}
-
 interface Fx {
   kind: 'ripple' | 'arc';
   el: SVGElement;
+  /** An arc's open dotted end (drawn when its paid cellbase is off screen). */
+  tail: SVGElement | null;
   t0: number;
   dur: number;
   r: number;
-  ends: (() => [Point, Point] | null) | null;
+  link: (() => RewardLink | null) | null;
   onArrive: (() => void) | null;
   arrived: boolean;
 }
 
 const NS = 'http://www.w3.org/2000/svg';
 
-/** The reward link rises from one cellbase, runs above the card row and drops into the other. */
-export function arcPath(a: Point, b: Point): { d: string; len: number } {
-  // The window's lane: the ruler steps back while a reward link is shown.
-  const top = G.winY;
-  const r = 5;
-  const dir = Math.sign(b.X - a.X) || 1;
-  const f = (v: number) => v.toFixed(1);
-  return {
-    d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + dir * r)} ${top}H${f(b.X - dir * r)}Q${f(b.X)} ${top} ${f(b.X)} ${top + r}V${f(b.Y)}`,
-    len: Math.abs(b.X - a.X) + a.Y + b.Y - 2 * top,
-  };
+function removeFx(f: Fx): void {
+  f.el.remove();
+  f.tail?.remove();
 }
 
 /** Paints a square node (rect, or the cellbase diamond) from its values and look. */
@@ -365,20 +357,24 @@ export class Animator {
     this.fx.push({
       kind: 'ripple',
       el,
+      tail: null,
       t0: this.clock.now() + delay,
       dur: 480,
       r,
-      ends: null,
+      link: null,
       onArrive: null,
       arrived: false,
     });
     this.kick();
   }
 
-  /** The reward link from a new cellbase to the cellbase whose block it pays, drawn once. */
+  /**
+   * The reward link from a new cellbase to the block it pays, drawn once. `link` gives its geometry
+   * on every frame (the cards move meanwhile), or null once its cellbase is gone.
+   */
   rewardArc(
     layer: SVGElement,
-    ends: () => [Point, Point] | null,
+    link: () => RewardLink | null,
     delay: number,
     onArrive: () => void
   ): void {
@@ -386,20 +382,27 @@ export class Animator {
       onArrive();
       return;
     }
-    const el = document.createElementNS(NS, 'path');
-    el.setAttribute('fill', 'none');
-    el.setAttribute('stroke-width', '1.2');
-    el.setAttribute('vector-effect', 'non-scaling-stroke');
-    el.setAttribute('opacity', '0');
-    el.style.setProperty('stroke', tok('jade'));
-    layer.appendChild(el);
+    const path = (part: 'line' | 'tail') => {
+      const el = document.createElementNS(NS, 'path');
+      el.setAttribute('data-reward', part);
+      el.setAttribute('fill', 'none');
+      el.setAttribute('stroke-width', '1.2');
+      el.setAttribute('vector-effect', 'non-scaling-stroke');
+      el.setAttribute('opacity', '0');
+      // The open end is dotted like the chain line's off-screen tail.
+      if (part === 'tail') el.setAttribute('stroke-dasharray', '1 3');
+      el.style.setProperty('stroke', tok('jade'));
+      layer.appendChild(el);
+      return el;
+    };
     this.fx.push({
       kind: 'arc',
-      el,
+      el: path('line'),
+      tail: path('tail'),
       t0: this.clock.now() + delay,
       dur: 2200,
       r: 0,
-      ends,
+      link,
       onArrive,
       arrived: false,
     });
@@ -444,7 +447,7 @@ export class Animator {
       const fx = this.fx;
       this.fx = [];
       for (const f of fx) {
-        f.el.remove();
+        removeFx(f);
         if (f.onArrive && !f.arrived) f.onArrive();
       }
       const timers = this.timers.sort((a, b) => a.t - b.t);
@@ -458,7 +461,7 @@ export class Animator {
   dispose(): void {
     if (this.frameId !== null) this.clock.cancel(this.frameId);
     this.frameId = null;
-    for (const f of this.fx) f.el.remove();
+    for (const f of this.fx) removeFx(f);
     this.fx = [];
     this.timers = [];
     this.active.clear();
@@ -540,7 +543,7 @@ export class Animator {
       const life = (now - f.t0) / f.dur;
       if (life < 0) return true;
       if (life >= 1) {
-        f.el.remove();
+        removeFx(f);
         if (f.onArrive && !f.arrived) f.onArrive();
         return false;
       }
@@ -549,20 +552,24 @@ export class Animator {
         f.el.setAttribute('opacity', (Math.sin(Math.PI * life) * 0.9).toFixed(3));
         return true;
       }
-      const ends = (f.ends as () => [Point, Point] | null)();
-      if (!ends) {
-        f.el.remove();
+      const link = (f.link as () => RewardLink | null)();
+      if (!link) {
+        removeFx(f);
         if (f.onArrive && !f.arrived) f.onArrive();
         return false;
       }
-      const ap = arcPath(ends[0], ends[1]);
-      f.el.setAttribute('d', ap.d);
+      f.el.setAttribute('d', link.d);
       const draw = clamp01(life / 0.4);
       f.el.setAttribute(
         'stroke-dasharray',
-        `${(ap.len * E.lob(draw)).toFixed(1)} ${ap.len.toFixed(1)}`
+        `${(link.len * E.lob(draw)).toFixed(1)} ${link.len.toFixed(1)}`
       );
-      f.el.setAttribute('opacity', (1 - smoothstep(0.6, 1, life)).toFixed(3));
+      const op = 1 - smoothstep(0.6, 1, life);
+      f.el.setAttribute('opacity', op.toFixed(3));
+      // The open end shows once the line has reached it.
+      const tail = f.tail as SVGElement;
+      tail.setAttribute('d', link.tail || 'M0 0');
+      tail.setAttribute('opacity', (link.tail ? op * smoothstep(0.4, 0.48, life) : 0).toFixed(3));
       if (draw >= 1 && !f.arrived) {
         f.arrived = true;
         (f.onArrive as () => void)();
@@ -974,24 +981,45 @@ export class SceneMotion {
     }
 
     // ---- The reward link: the new cellbase pays the block its finalized_at names ----
-    if (mined?.payee && !boot) {
-      const from = mined.cellbase;
-      const to = mined.payee.cellbase;
-      this.animator.rewardArc(
-        fx,
-        () => {
-          const a = this.centre(from);
-          const b = this.centre(to);
-          return a && b ? [a, b] : null;
-        },
-        tr.contact + 500,
-        () => {
-          const b = this.centre(to);
-          if (b) this.animator.ripple(fx, b.X, b.Y, 12, tok('jade'));
-        }
-      );
+    if (mined && !boot) {
+      const payer = scene.cards.find((c) => c.id === mined.block);
+      if (!payer) throw new Error(`motion: the mined block ${mined.block} is not on screen`);
+      if (payer.block.cellbase.pays) {
+        const from = mined.cellbase;
+        const payee = mined.payee;
+        this.animator.rewardArc(
+          fx,
+          () => {
+            const a = this.centre(from);
+            if (!a) return null;
+            const tail = chainTail(this.liveChain().slots, (this.scene as Scene).viewW);
+            if (!tail) throw new Error(`motion: reward link from ${from} with no card on screen`);
+            return rewardLink(a, this.payeeCentre(payee), tail);
+          },
+          tr.contact + 500,
+          () => {
+            const b = this.payeeCentre(payee);
+            if (b) this.animator.ripple(fx, b.X, b.Y, 12, tok('jade'));
+          }
+        );
+      }
     }
     this.paintChain();
+  }
+
+  /**
+   * Centre of the paid block's cellbase while that block is on screen; null while it is not (not in
+   * the snapshot, past the right edge, or retiring): the link then runs off the edge instead.
+   */
+  private payeeCentre(payee: { hash: string; cellbase: string } | null): Point | null {
+    if (!payee || !this.cards.has(payee.hash)) return null;
+    const b = this.centre(payee.cellbase);
+    if (!b) {
+      throw new Error(
+        `motion: block ${payee.hash} is on screen but its cellbase ${payee.cellbase} is not`
+      );
+    }
+    return b;
   }
 
   /** Absolute centre of a square that is on screen now. */
@@ -1032,20 +1060,13 @@ export class SceneMotion {
     }
   }
 
-  /** The chain line and the window ruler follow the cards while they move. */
-  private paintChain(): void {
-    const svg = this.svg;
-    const scene = this.scene;
-    if (!svg || !scene) return;
-    const { consensus } = scene.snapshot;
-    const H = this.view.anchor();
+  /** Where the cards are drawn right now (the ones still visible), for the chain and its links. */
+  private liveChain(): { slots: ChainSlotState[]; nextSlot: RulerSlot | null } {
     const slots: ChainSlotState[] = [];
-    let next: { x: number; w: number } | null = null;
     let nextSlot: RulerSlot | null = null;
     for (const r of [...this.cards.values(), ...this.exitingCards]) {
       if (r.node.v.op <= 0.02) continue;
       if (!r.mined) {
-        next = { x: r.node.v.X, w: r.node.v.w };
         nextSlot = { number: r.number, x: r.node.v.X, w: r.node.v.w, mined: false };
         continue;
       }
@@ -1059,6 +1080,18 @@ export class SceneMotion {
         solid: r.node.v.solid,
       });
     }
+    return { slots, nextSlot };
+  }
+
+  /** The chain line and the window ruler follow the cards while they move. */
+  private paintChain(): void {
+    const svg = this.svg;
+    const scene = this.scene;
+    if (!svg || !scene) return;
+    const { consensus } = scene.snapshot;
+    const H = this.view.anchor();
+    const { slots, nextSlot } = this.liveChain();
+    const next = nextSlot ? { x: nextSlot.x, w: nextSlot.w } : null;
     const paths = chainPaths(slots, next, H, consensus, scene.viewW);
     const ruler = windowRuler(
       nextSlot ? [nextSlot, ...slots] : slots,

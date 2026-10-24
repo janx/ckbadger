@@ -382,6 +382,70 @@ export function windowLabel(H: number, windowTip: number, w: WindowParams): stri
   return `${whose} commit txs proposed in these ${n} blocks`;
 }
 
+export interface Point {
+  X: number;
+  Y: number;
+}
+
+/** The chain's off-screen tail: dotted from `x0` to `x1`. */
+export interface ChainTail {
+  x0: number;
+  x1: number;
+}
+
+/**
+ * Where the chain runs on past the last card on screen: from just after that card to 4 px before
+ * the view edge. The chain line and an off-screen reward link both end in this one span.
+ */
+export function chainTail(
+  cards: readonly { x: number; w: number }[],
+  viewW: number
+): ChainTail | null {
+  if (!cards.length) return null;
+  const last = cards.reduce((a, b) => (b.x > a.x ? b : a));
+  return { x0: last.x + last.w + 2, x1: viewW - 4 };
+}
+
+export interface RewardLink {
+  /** From the paying cellbase up into the lane, along it, and down into the paid one if shown. */
+  d: string;
+  /** The length of `d` with its bends taken as corners (at least the drawn length). */
+  len: number;
+  /** The open dotted end when the paid cellbase is off screen; '' when the link drops into it. */
+  tail: string;
+}
+
+/**
+ * The reward link of the cellbase at `a`. It rises into the lane above the cards (the window's
+ * lane: the ruler steps back while a link is shown) and runs right. With the paid block's cellbase
+ * on screen at `b` it drops into it. Without (`b` null: the paid block is past the right edge) it
+ * runs on to where the chain's own tail starts and ends there in the same open dotted tail, one
+ * lane up; it never drops anywhere. The static render and the motion layer both draw this.
+ */
+export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink {
+  const top = G.winY;
+  const r = 5;
+  const f = (v: number) => v.toFixed(1);
+  if (b) {
+    const dir = Math.sign(b.X - a.X) || 1;
+    return {
+      d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + dir * r)} ${top}H${f(b.X - dir * r)}Q${f(b.X)} ${top} ${f(b.X)} ${top + r}V${f(b.Y)}`,
+      len: Math.abs(b.X - a.X) + a.Y + b.Y - 2 * top,
+      tail: '',
+    };
+  }
+  if (tail.x0 < a.X + r) {
+    throw new Error(
+      `pipeline: a reward link from x ${a.X} cannot end in a tail at ${tail.x0}, before its bend into the lane`
+    );
+  }
+  return {
+    d: `M${f(a.X)} ${f(a.Y)}V${top + r}Q${f(a.X)} ${top} ${f(a.X + r)} ${top}H${f(tail.x0)}`,
+    len: tail.x0 - a.X + a.Y - top,
+    tail: `M${f(tail.x0)} ${top}H${f(tail.x1)}`,
+  };
+}
+
 export interface ChainSlotState extends RulerSlot {
   hash: string;
   parentHash: string;
@@ -431,12 +495,12 @@ export function chainPaths(
     else if (a.solid < 0.5) pend += seg;
     else solid += seg;
   }
-  const last = list[list.length - 1];
+  const tail = chainTail(list, viewW);
   return {
     solid,
     pend,
     win,
-    tail: last ? `M${f(last.x + last.w + 2)} ${y}L${viewW - 4} ${y}` : '',
+    tail: tail ? `M${f(tail.x0)} ${y}L${tail.x1} ${y}` : '',
   };
 }
 
@@ -806,6 +870,45 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
 }
 
 /**
+ * Where the reward link of `card`'s cellbase ends: the card of the block it pays when that block
+ * is on screen, 'off' when it is older than every card on screen (past the right edge), null when
+ * the cellbase pays no block yet. A paid block that should be on screen but is not, or that is on
+ * screen under another number or hash, contradicts the snapshot and throws.
+ */
+export function rewardTarget(
+  cards: readonly SceneCard[],
+  card: SceneCard
+): SceneCard | 'off' | null {
+  const b = card.block;
+  const pays = b.cellbase.pays;
+  if (!pays) return null;
+  const at = `pipeline: cellbase of #${b.number} pays`;
+  if (pays.number >= b.number) {
+    throw new Error(`${at} #${pays.number}, which is not an earlier block`);
+  }
+  const byHash = cards.find((k) => k.id === pays.hash);
+  const byNumber = cards.find((k) => k.block.number === pays.number);
+  if (byHash && byHash !== byNumber) {
+    throw new Error(
+      `${at} ${pays.hash} as #${pays.number}, but that block is #${byHash.block.number}`
+    );
+  }
+  if (byNumber && byNumber !== byHash) {
+    throw new Error(
+      `${at} ${pays.hash} as #${pays.number}, but #${pays.number} on screen is ${byNumber.id}`
+    );
+  }
+  if (byNumber) return byNumber;
+  const oldest = Math.min(...cards.map((k) => k.block.number));
+  if (pays.number >= oldest) {
+    throw new Error(
+      `${at} #${pays.number}, which should be on screen (down to #${oldest}) but is not`
+    );
+  }
+  return 'off';
+}
+
+/**
  * Lay out one snapshot. Every chain fact comes from the snapshot; this only places it. Contract
  * violations the layout depends on throw with context instead of being drawn around.
  */
@@ -871,6 +974,8 @@ export function buildScene(s: PipelineSnapshot, viewW: number, phase: ScenePhase
   const geoms = s.blocks.map(cardGeom);
   const slots = chainLayout(geoms.length, viewW, phase === 'landing');
   const cards = slots.map((slot) => sceneCard(geoms[slot.index], slot.x, slot.slot));
+  // Every reward link a hover can draw ends where the snapshot says: checked here, once.
+  for (const c of cards) rewardTarget(cards, c);
   const next = phase === 'settled' && s.next ? sceneNext(s, s.next) : null;
   return {
     viewW,

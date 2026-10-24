@@ -21,10 +21,13 @@ import {
   buildScene,
   chainLayout,
   chainPaths,
+  chainTail,
   chipSlots,
   inWindow,
   pack2D,
   pick,
+  rewardLink,
+  rewardTarget,
   rulerPath,
   uncleBoxH,
   unclesH,
@@ -577,6 +580,119 @@ describe('chainPaths: the chain line', () => {
     const forked = cards.map((c) => (c.number === 95 ? { ...c, parentHash: 'elsewhere' } : c));
     const paths = chainPaths(forked, next, 101, MAINNET, 2000);
     expect(paths.win.match(/M/g)).toHaveLength(7);
+  });
+
+  it('ends in a dotted tail from just past the last card to 4 px before the view edge', () => {
+    const tail = chainTail(cards, 2000);
+    const last = cards[cards.length - 1];
+    expect(tail).toEqual({ x0: last.x + CARD_W + 2, x1: 1996 });
+    const y = (G.chainY + 0.5).toFixed(1);
+    expect(chainPaths(cards, next, 101, MAINNET, 2000).tail).toBe(
+      `M${(last.x + CARD_W + 2).toFixed(1)} ${y}L1996 ${y}`
+    );
+    expect(chainTail([], 2000)).toBeNull();
+  });
+});
+
+describe('rewardLink: a cellbase to the block it pays', () => {
+  const a = { X: 390.5, Y: 76.5 };
+  const tail = { x0: 1235, x1: 1242 };
+
+  it('drops into the paid cellbase when it is on screen, without a tail', () => {
+    const b = { X: 1589.5, Y: 76.5 };
+    // Up into the lane at winY (16), a 5 px bend, along the lane, a 5 px bend, down into it.
+    expect(rewardLink(a, b, tail)).toEqual({
+      d: 'M390.5 76.5V21Q390.5 16 395.5 16H1584.5Q1589.5 16 1589.5 21V76.5',
+      len: 1589.5 - 390.5 + 76.5 + 76.5 - 2 * 16,
+      tail: '',
+    });
+  });
+
+  it('runs right along the lane to the chain tail and ends there open, dotted to the edge', () => {
+    const link = rewardLink(a, null, tail);
+    expect(link.d).toBe('M390.5 76.5V21Q390.5 16 395.5 16H1235.0');
+    // It never drops anywhere: the last command stays in the lane.
+    expect(link.d).not.toMatch(/H[\d.]+Q|V[\d.]+$/);
+    expect(link.len).toBe(1235 - 390.5 + 76.5 - 16);
+    // The open end: the span of the chain line's own off-screen tail, one lane up.
+    expect(link.tail).toBe(`M1235.0 ${G.winY}H1242.0`);
+  });
+
+  it('refuses a tail that starts before the cellbase has turned into the lane', () => {
+    expect(() => rewardLink(a, null, { x0: 392, x1: 1242 })).toThrow(/tail at 392/);
+  });
+});
+
+describe('rewardTarget: where a reward link ends', () => {
+  const s = buildPipelineSnapshot();
+  const at = (scene: Scene, n: number) => cardOf(scene, n);
+
+  it('is the paid block on screen in a wide view, and off screen in the 1280 px container', () => {
+    const wide = buildScene(s, 2000, 'settled');
+    expect(rewardTarget(wide.cards, at(wide, T))).toBe(at(wide, T - 11));
+    const fit = buildScene(s, CONTAINER_VIEW_W, 'settled');
+    // tip − 7 is the last block on screen: tip − 11 is past the right edge.
+    expect(fit.cards[fit.cards.length - 1].block.number).toBe(T - 7);
+    expect(rewardTarget(fit.cards, at(fit, T))).toBe('off');
+  });
+
+  it('is off screen too when the paid block is not in the snapshot at all', () => {
+    const scene = buildScene(s, CONTAINER_VIEW_W, 'settled');
+    const c = at(scene, T);
+    const pays = { number: T - 40, hash: '0xolder' };
+    const far = { ...c, block: { ...c.block, cellbase: { ...c.block.cellbase, pays } } };
+    expect(rewardTarget(scene.cards, far)).toBe('off');
+  });
+
+  it('is nothing for a cellbase that pays no block yet', () => {
+    const scene = buildScene(s, CONTAINER_VIEW_W, 'settled');
+    const c = at(scene, T);
+    const none = { ...c, block: { ...c.block, cellbase: { ...c.block.cellbase, pays: null } } };
+    expect(rewardTarget(scene.cards, none)).toBeNull();
+  });
+
+  it('rejects a paid block that should be on screen but is not', () => {
+    const blocks = s.blocks.map((b) =>
+      b.number === T
+        ? { ...b, cellbase: { ...b.cellbase, pays: { number: T - 3, hash: '0xelsewhere' } } }
+        : b
+    );
+    expect(() => buildScene({ ...s, blocks }, CONTAINER_VIEW_W, 'settled')).toThrow(
+      /pays 0xelsewhere as #\d+, but #\d+ on screen is 0x/
+    );
+  });
+
+  it('rejects a paid block inside the range on screen that has no card', () => {
+    const scene = buildScene(s, CONTAINER_VIEW_W, 'settled');
+    const c = at(scene, T);
+    const pays = { number: T - 3, hash: at(scene, T - 3).id };
+    const payer = { ...c, block: { ...c.block, cellbase: { ...c.block.cellbase, pays } } };
+    const gap = scene.cards.filter((k) => k.block.number !== T - 3);
+    expect(() => rewardTarget(gap, payer)).toThrow(
+      new RegExp(`pays #${T - 3}, which should be on screen \\(down to #${T - 7}\\) but is not`)
+    );
+  });
+
+  it('rejects a paid block on screen under another number', () => {
+    const blocks = s.blocks.map((b) =>
+      b.number === T
+        ? { ...b, cellbase: { ...b.cellbase, pays: { number: T - 30, hash: b.parentHash } } }
+        : b
+    );
+    expect(() => buildScene({ ...s, blocks }, CONTAINER_VIEW_W, 'settled')).toThrow(
+      /pays 0x\w+ as #\d+, but that block is #\d+/
+    );
+  });
+
+  it('rejects a cellbase that pays a block that is not older than its own', () => {
+    const blocks = s.blocks.map((b) =>
+      b.number === T - 1
+        ? { ...b, cellbase: { ...b.cellbase, pays: { number: T, hash: s.blocks[0].hash } } }
+        : b
+    );
+    expect(() => buildScene({ ...s, blocks }, CONTAINER_VIEW_W, 'settled')).toThrow(
+      /pays #\d+, which is not an earlier block/
+    );
   });
 });
 

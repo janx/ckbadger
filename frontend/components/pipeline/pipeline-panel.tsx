@@ -20,16 +20,19 @@ import { usePipelineSnapshot } from '@/hooks/usePipelineSnapshot';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import type { PipelineSnapshot } from '@/lib/api';
-import { arcPath, type MotionCtx, type MotionView } from '@/lib/pipeline/motion';
+import type { MotionCtx, MotionView } from '@/lib/pipeline/motion';
 import { diffSnapshots, type Transition } from '@/lib/pipeline/transitions';
 import { STAGE_BASE, mixColor, tok } from '@/lib/pipeline/encoding';
 import {
   G,
   buildScene,
   chainPaths,
+  chainTail,
   inWindow,
   pick,
   pickTargets,
+  rewardLink,
+  rewardTarget,
   windowLabel,
   windowRuler,
   type ChainSlotState,
@@ -402,16 +405,23 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const ghost = hoverTx ? (ghostOfTx.get(hoverTx) ?? null) : null;
   const onIds = useMemo(() => new Set(hovered && hoverTx ? [hoverTx] : []), [hovered, hoverTx]);
 
-  // The reward link of a hovered cellbase, to the cellbase of the block it pays.
+  // The reward link of a hovered cellbase, to the cellbase of the block it pays: dropping into it
+  // when that block is on screen, else running off the right edge.
   const arc = (() => {
     if (arcBlock === null) return null;
+    // The hovered block may have left the screen with a newer snapshot.
     const c = byNumber.get(arcBlock);
-    const pays = c?.block.cellbase.pays;
-    const payee = pays ? scene.cards.find((k) => k.id === pays.hash) : undefined;
-    if (!c || !pays || !payee) return null;
-    const a = squares.get(c.block.cellbase.hash) as AbsSquare;
-    const b = squares.get(payee.block.cellbase.hash) as AbsSquare;
-    return { from: c.block.number, to: pays.number, d: arcPath(centreOf(a), centreOf(b)).d };
+    if (!c) return null;
+    const target = rewardTarget(scene.cards, c);
+    if (target === null) return null;
+    const cellbase = (k: typeof c) => {
+      const q = squares.get(k.block.cellbase.hash);
+      if (!q) throw new Error(`pipeline: the cellbase of #${k.block.number} is not drawn`);
+      return centreOf(q);
+    };
+    const tail = chainTail(chainSlots, scene.viewW);
+    if (!tail) throw new Error(`pipeline: #${c.block.number} is on screen but the chain is not`);
+    return rewardLink(cellbase(c), target === 'off' ? null : cellbase(target), tail);
   })();
 
   const place = () => {
@@ -619,6 +629,18 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
               strokeWidth={1}
               strokeOpacity={0.8}
               strokeDasharray="2 3"
+              vectorEffect="non-scaling-stroke"
+              style={{ stroke: tok('jade') }}
+            />
+          )}
+          {arc?.tail && (
+            <path
+              data-hover="reward-tail"
+              d={arc.tail}
+              fill="none"
+              strokeWidth={1}
+              strokeOpacity={0.8}
+              strokeDasharray="1 3"
               vectorEffect="non-scaling-stroke"
               style={{ stroke: tok('jade') }}
             />
