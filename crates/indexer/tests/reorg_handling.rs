@@ -1866,6 +1866,9 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
         deposit_compensation: 0,
         burnt: 0,
         pending_withdrawal_capacity: 0,
+        // One 102-CKB-occupied deposit of 102 CKB: no free capacity.
+        dao_capacity: 10_200_000_000,
+        dao_free_capacity: 0,
     };
     let latest_key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
