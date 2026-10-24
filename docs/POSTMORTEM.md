@@ -3622,17 +3622,25 @@ A non-integer number is an error naming its JSON path. Stored metadata is unchan
 This covers `/addresses/{addr}/activities`, `/activities`, `/activities/latest` and the WebSocket
 activity broadcast.
 
+The same value also reached a typed field, which this first fix missed: `FiberChannelResponse.delay_epoch`
+(`/fiber/channels`, `/fiber/channels/{id}`, `/addresses/{addr}/fiber/channels`) was a `u64`
+JSON number. It is a decimal string now. An audit of the typed responses the homepage reads
+(network stats, tx-stats, charts, DAO statistics, CKBytes allocation, daily and 24 h activity
+stats, transactions, `/pipeline`) found no other integer that can exceed 2^53. Those responses
+carry amounts as strings, and their integers are counts, block numbers, millisecond timestamps,
+or sizes and cycles bounded by consensus.
+
 **Why the tests missed it**: the loss happens in the JavaScript parser. Every Rust assertion
 compared serde_json numbers, which are exact. One test even pinned `vaultCount: 2` as a number.
-Regression: `test_activity_free_form_json_carries_integers_as_exact_strings` (2^53 + 1 shannons
-and a flagged `since`).
+Regressions: `test_activity_free_form_json_carries_integers_as_exact_strings` (2^53 + 1 shannons
+and a flagged `since`), `test_fiber_channel_delay_epoch_is_an_exact_decimal_string`.
 
 **Lesson**: A JSON contract read by JavaScript has two number types: safe integers and everything
 else. Any integer that comes from chain data must be a string, and that should be enforced in one
 place at the boundary, not remembered per field.
 
-**Files**: `crates/api/src/utils/exact_json.rs`, `crates/api/src/routes/activities.rs`,
-`crates/api/tests/api_activities.rs`
+**Files**: `crates/api/src/utils/exact_json.rs`, `crates/api/src/routes/{activities,fiber}.rs`,
+`crates/api/tests/{api_activities,api_fiber}.rs`
 
 ---
 
