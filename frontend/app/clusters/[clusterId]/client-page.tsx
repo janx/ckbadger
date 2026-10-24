@@ -621,15 +621,27 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               <div className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-sm">
                 <div className="flex items-center gap-2">
                   <span className="text-text-dim text-xs uppercase tracking-wider">version</span>
-                  <a
-                    href={`https://github.com/sporeprotocol/spore-dob-${dobInfo.version ?? 0}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-text-bright tabular-nums hover:underline"
-                    title="View DOB specification"
-                  >
-                    DOB/{dobInfo.version ?? '?'} ↗
-                  </a>
+                  {/* dob.ver is creator-written and optional: unstated stays unstated, never DOB/0 */}
+                  {dobInfo.version === null ? (
+                    <span
+                      data-testid="dob-version"
+                      className="text-text-dim"
+                      title="The cluster description sets no dob.ver, so its DOB specification is unknown"
+                    >
+                      not stated
+                    </span>
+                  ) : (
+                    <a
+                      data-testid="dob-version"
+                      href={`https://github.com/sporeprotocol/spore-dob-${encodeURIComponent(String(dobInfo.version))}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-text-bright tabular-nums hover:underline"
+                      title="View DOB specification"
+                    >
+                      DOB/{dobInfo.version} ↗
+                    </a>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-text-dim text-xs uppercase tracking-wider">traits</span>

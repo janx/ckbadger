@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ClusterDetailPage from '@/app/clusters/[clusterId]/client-page';
 import { api } from '@/lib/api';
@@ -427,6 +427,38 @@ describe('ClusterDetailPage', () => {
       expect(pre?.textContent).toContain('"category"');
       expect(pre?.textContent).toContain('"collectible"');
     });
+  });
+
+  it('links the DOB version a cluster description states', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue({
+      ...mockCluster,
+      description: JSON.stringify({ dob: { ver: 1, pattern: [{}], decoders: [{}] } }),
+    });
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
+
+    const link = await screen.findByRole('link', { name: 'DOB/1 ↗' });
+    expect(link).toHaveAttribute('href', 'https://github.com/sporeprotocol/spore-dob-1');
+  });
+
+  it('shows a DOB version the cluster description does not state as such, not as DOB/0', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue({
+      ...mockCluster,
+      description: JSON.stringify({ dob: { pattern: [{}], decoders: [{}] } }),
+    });
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
+
+    const version = await screen.findByTestId('dob-version');
+    expect(version).toHaveTextContent('not stated');
+    expect(version).toHaveAttribute(
+      'title',
+      'The cluster description sets no dob.ver, so its DOB specification is unknown'
+    );
+    expect(within(version.parentElement!).queryByRole('link')).toBeNull();
+    expect(document.querySelector('a[href*="spore-dob-0"]')).toBeNull();
   });
 
   it('resolves creator address from owner lock hash', async () => {
