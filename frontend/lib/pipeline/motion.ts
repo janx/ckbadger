@@ -12,6 +12,9 @@ import {
 import {
   G,
   chainPaths,
+  rulerPath,
+  windowLabel,
+  windowMarksPath,
   windowRuler,
   type ChainSlotState,
   type RulerSlot,
@@ -164,7 +167,8 @@ const NS = 'http://www.w3.org/2000/svg';
 
 /** The reward link rises from one cellbase, runs above the card row and drops into the other. */
 export function arcPath(a: Point, b: Point): { d: string; len: number } {
-  const top = G.cardTop - 17;
+  // The window's lane: the ruler steps back while a reward link is shown.
+  const top = G.winY;
   const r = 5;
   const dir = Math.sign(b.X - a.X) || 1;
   const f = (v: number) => v.toFixed(1);
@@ -192,7 +196,8 @@ export function paintSquareNode(n: MotionNode): void {
     el.setAttribute('height', s.toFixed(2));
     el.setAttribute('rx', Math.min(1.5, s * 0.2).toFixed(2));
   }
-  el.setAttribute('opacity', op.toFixed(3));
+  // A square born from nothing stays unseen until it has a size (a 0-size diamond is still a dot).
+  el.setAttribute('opacity', (n.v.s < 0.5 ? 0 : op).toFixed(3));
   const key = `${look.base}|${look.style}|${look.step}`;
   if (key === n.painted) return;
   n.painted = key;
@@ -623,8 +628,8 @@ const lookOf = (q: SceneSquare): Look => ({
 const sameLook = (a: Look | null, b: Look) =>
   !!a && a.base === b.base && a.style === b.style && a.step === b.step;
 
-/** Exponential decay with an 1800 ms time constant, landing exactly on 0 after 7.2 s. */
-const FRESH_MS = 7200;
+/** Exponential decay with a 600 ms time constant, landing exactly on 0 after 2.4 s. */
+export const FRESH_MS = 2400;
 const freshEase = (u: number) => (1 - Math.exp(-4 * u)) / (1 - Math.exp(-4));
 
 function paintChip(el: Element, state: PipelineProposalState): void {
@@ -950,19 +955,19 @@ export class SceneMotion {
       this.animator.exit(rec.node, e?.kind === 'drop' ? 'drop' : 'hide', delay);
     }
 
-    // ---- Proposal chips resolve when the commit lands, not before ----
+    // ---- Proposal dots resolve when the commit lands, not before ----
     for (const e of events) {
       if (e.kind !== 'resolve' || boot) continue;
       const key = `${e.shortId}|${e.uncleIndex ?? ''}`;
       const el = cardsLayer.querySelector(`[data-card="${e.block}"] [data-chip="${key}"]`);
-      if (!el) continue; // past the three chip rows: drawn as +N
+      if (!el) continue; // past the two rows of dots: drawn as +N
       paintChip(el, e.from);
       this.animator.after(e.at, () => {
         paintChip(el, e.to);
         const rec = this.cards.get(e.block);
         if (rec) {
-          const x = rec.node.v.X + Number(el.getAttribute('x')) + G.chip / 2;
-          const y = Number(el.getAttribute('y')) + G.chip / 2;
+          const x = rec.node.v.X + Number(el.getAttribute('cx'));
+          const y = Number(el.getAttribute('cy'));
           this.animator.ripple(fx, x, y, 7, tok('gold'));
         }
       });
@@ -1009,13 +1014,14 @@ export class SceneMotion {
     box.setAttribute('height', Math.max(1, h - 1).toFixed(2));
     if (n.id === NEXT_CARD_ID) return;
     const hl = this.view.highlighted(n.id);
+    // A settled tile has no outline: the dashed NEXT outline fades out as the block solidifies.
     box.setAttribute(
       'stroke-opacity',
-      String(hl ? 1 : Math.round((0.3 + 0.2 * solid + 0.5 * fresh) * 1000) / 1000)
+      String(hl ? 0.7 : Math.round(Math.min(1, 0.6 * (1 - solid) + 0.6 * fresh) * 1000) / 1000)
     );
     box.setAttribute(
       'fill-opacity',
-      String(hl ? 0.9 : Math.round((0.35 + 0.3 * solid) * 1000) / 1000)
+      String(hl ? 1 : Math.round((0.35 + 0.65 * solid) * 1000) / 1000)
     );
     if (solid < 0.5) box.setAttribute('stroke-dasharray', '3 2');
     else box.removeAttribute('stroke-dasharray');
@@ -1054,28 +1060,30 @@ export class SceneMotion {
       });
     }
     const paths = chainPaths(slots, next, H, consensus, scene.viewW);
-    const ruler = windowRuler(nextSlot ? [nextSlot, ...slots] : slots, H, consensus, scene.viewW);
+    const ruler = windowRuler(
+      nextSlot ? [nextSlot, ...slots] : slots,
+      H,
+      consensus,
+      scene.viewW,
+      windowLabel(H, scene.windowTip, consensus)
+    );
     const set = (sel: string, d: string) => svg.querySelector(sel)?.setAttribute('d', d || 'M0 0');
     set('[data-path="solid"]', paths.solid);
-    set('[data-path="arrows"]', paths.arrows);
     set('[data-path="pend"]', paths.pend);
     set('[data-path="win"]', paths.win);
-    set('[data-path="winArrows"]', paths.winArrows);
     set('[data-path="tail"]', paths.tail);
     const tail = svg.querySelector('[data-path="tail"]') as SVGElement | null;
     if (tail) {
-      tail.style.setProperty('stroke', ruler.tailOpen ? tok('gold') : tok('jade'));
+      tail.style.setProperty('stroke', tok(ruler.tailOpen ? 'gold' : 'jade'));
       tail.setAttribute('stroke-opacity', ruler.tailOpen ? '0.7' : '0.25');
     }
-    set(
-      '[data-ruler-ticks]',
-      ruler.ticks.map((x) => `M${x.toFixed(1)} ${G.cardTop - 12}V${G.cardTop + G.headH}`).join('')
-    );
+    set('[data-window-marks]', windowMarksPath(ruler));
+    set('[data-ruler-ticks]', rulerPath(ruler));
     const label = svg.querySelector('[data-window-label]');
     if (label) {
-      if (ruler.labelX === null) label.setAttribute('visibility', 'hidden');
+      if (ruler.label === null) label.setAttribute('visibility', 'hidden');
       else {
-        label.setAttribute('x', ruler.labelX.toFixed(1));
+        label.setAttribute('x', ruler.label.x.toFixed(1));
         label.removeAttribute('visibility');
       }
     }

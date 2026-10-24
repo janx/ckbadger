@@ -30,7 +30,7 @@ import {
   inWindow,
   pick,
   pickTargets,
-  tail4,
+  windowLabel,
   windowRuler,
   type ChainSlotState,
   type RulerSlot,
@@ -60,11 +60,11 @@ import {
   type TipContent,
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
-import { T10C, TZ, fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
-import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
+import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
+import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/window-ruler';
 
 const SVG_LABEL =
-  'Mempool queue, the next block being formed, and the chain of recent blocks drawn as flat cards linked to their parents through their headers, each with a row of proposal chips and a field of committed transactions starting with the cellbase';
+  'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase';
 
 const MIN_VIEW_W = 760;
 
@@ -97,17 +97,9 @@ function Stat({ label, value, tone }: { label: string; value: string; tone: stri
 }
 
 function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
-  const pool = snapshot?.pool ?? null;
-  const next = snapshot?.next ?? null;
+  // The pool and NEXT counts are on the canvas itself; the header keeps only the tip.
   return (
     <div data-testid="pipeline-stats" className="flex flex-wrap gap-x-[18px] gap-y-1">
-      <Stat label="Mempool" value={pool ? fmtInt(pool.pendingTotal) : '—'} tone="text-aqua" />
-      <Stat label="Proposed" value={pool ? fmtInt(pool.proposedTotal) : '—'} tone="text-gold" />
-      <Stat
-        label="Next"
-        value={next ? `~${fmtInt(next.txs.length + next.omittedTxs + 1)} tx` : '—'}
-        tone="text-jade"
-      />
       <Stat
         label="Tip"
         value={snapshot ? `#${fmtInt(snapshot.tip.number)}` : '—'}
@@ -122,7 +114,8 @@ function StatusRow({ testId, tone, children }: { testId: string; tone: string; c
     <div
       data-testid={testId}
       role={testId === 'pipeline-error' ? 'alert' : undefined}
-      className={`flex h-[240px] items-center px-3 font-mono text-sm ${tone}`}
+      className={`flex items-center px-3 font-mono text-sm ${tone}`}
+      style={{ height: G.H }}
     >
       {children}
     </div>
@@ -209,7 +202,7 @@ export function PipelineCanvas({ snapshot }: CanvasProps) {
   return (
     <div ref={wrapRef} className="overflow-x-auto overscroll-x-contain">
       {built === null ? (
-        <div data-testid="pipeline-measuring" className="h-[240px]" />
+        <div data-testid="pipeline-measuring" style={{ height: G.H }} />
       ) : 'error' in built ? (
         <StatusRow testId="pipeline-error" tone="text-rouge">
           {`Pipeline snapshot rejected: ${built.error.message}`}
@@ -368,8 +361,19 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const rulerSlots: RulerSlot[] = scene.next
     ? [{ number: scene.next.number, x: scene.next.x, w: scene.next.w, mined: false }, ...chainSlots]
     : chainSlots;
-  const ruler = windowRuler(rulerSlots, anchor, consensus, scene.viewW);
-  const laneGeom = windowRuler(rulerSlots, defaultH, consensus, scene.viewW).hit;
+  const windowText = windowLabel(anchor, scene.windowTip, consensus);
+  const ruler = windowRuler(rulerSlots, anchor, consensus, scene.viewW, windowText);
+  // The window is drawn in full only while something that has one is hovered: NEXT, a block, the
+  // proposed well or the lane itself. At rest only its gold links and the marks across the chain
+  // line show it.
+  const showWindow = lane || windowBlock !== null;
+  const laneGeom = windowRuler(
+    rulerSlots,
+    defaultH,
+    consensus,
+    scene.viewW,
+    windowLabel(defaultH, scene.windowTip, consensus)
+  ).hit;
   const paths = chainPaths(
     chainSlots,
     scene.next ? { x: scene.next.x, w: scene.next.w } : null,
@@ -495,8 +499,15 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       const cardEl = el.closest('[data-card]');
       const uncleEl = el.closest('[data-uncle]');
       if (el.closest('[data-next]') && snapshot.next) {
+        // NEXT shows its own window: where the txs it can commit were proposed.
         clearHover();
+        nextLane = true;
         show(nextTip(snapshot));
+      } else if (el.closest('[data-pool-card="proposed"]')) {
+        // The proposed well holds exactly the proposals of NEXT's window (and the tip's, too early).
+        clearHover();
+        nextLane = true;
+        show(windowTip(defaultH, snapshot));
       } else if (cardEl) {
         const n = Number(cardEl.getAttribute('data-number'));
         const card = byNumber.get(n);
@@ -555,8 +566,9 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
         attrs={
           {
             'data-testid': 'pipeline-svg',
-            className: `pipeline-svg block h-[240px] w-full min-w-[760px] select-none font-mono tabular-nums${focus ? ' is-focus' : ''}`,
-            style: cursor ? { cursor } : undefined,
+            className: `pipeline-svg block w-full min-w-[760px] select-none font-mono tabular-nums${focus ? ' is-focus' : ''}`,
+            // The canvas is drawn 1:1: its CSS height is the viewBox height.
+            style: cursor ? { height: G.H, cursor } : { height: G.H },
             viewBox: `0 0 ${scene.viewW} ${G.H}`,
             role: 'img',
             'aria-label': SVG_LABEL,
@@ -567,18 +579,9 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
         }
       >
         <g pointerEvents="none">
-          <line
-            x1={G.divX}
-            x2={G.divX}
-            y1={8}
-            y2={G.H - 8}
-            strokeWidth={1}
-            strokeDasharray="2 3"
-            vectorEffect="non-scaling-stroke"
-            style={{ stroke: tok('border') }}
-          />
           <ChainLine paths={paths} tailOpen={ruler.tailOpen} windowEmphasis={lane} />
-          <WindowTicks ruler={ruler} faded={arc !== null} />
+          <WindowMarks ruler={ruler} />
+          {showWindow && <WindowTicks ruler={ruler} faded={arc !== null} />}
         </g>
         <PoolZone scene={scene} dimOf={poolDim} onIds={onIds} />
         <g data-layer="cards">
@@ -589,28 +592,23 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
               dim={dimAnchor === null || dimAnchor === scene.next.number ? 'false' : 'true'}
             />
           )}
-          {scene.cards.map((c) => (
+          {scene.cards.map((c, i) => (
             <BlockCard
               key={c.id}
               card={c}
-              numberInWindow={inWindow(c.block.number, anchor, consensus)}
+              numberInWindow={showWindow && inWindow(c.block.number, anchor, consensus)}
               highlighted={highlighted === c.id}
               dim={cardDim(c.block.number)}
               onIds={onIds}
+              age={i}
             />
           ))}
         </g>
         <g data-layer="labels" pointerEvents="none">
           <NextColumn available={snapshot.next !== null} />
-          <text x={G.chainX0} y={16} className={TZ}>
-            Chain
-          </text>
-          {arc && (
-            <text data-chain-sub x={G.chainX0} y={30} className={T10C}>
-              {`the cellbase of ${tail4(arc.from)} pays the reward of ${tail4(arc.to)}, ${arc.from - arc.to} blocks back`}
-            </text>
+          {showWindow && (
+            <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} text={windowText} />
           )}
-          <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} />
         </g>
         <g data-layer="hover" pointerEvents="none">
           {arc && (
@@ -626,13 +624,11 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             />
           )}
           {chip && (
-            <rect
+            <circle
               data-hover="chip-ring"
-              x={chip.X - 1.5}
-              y={chip.Y - 1.5}
-              width={G.chip + 3}
-              height={G.chip + 3}
-              rx={1.5}
+              cx={chip.X + G.chip / 2}
+              cy={chip.Y + G.chip / 2}
+              r={G.chip / 2 + 2}
               fill="none"
               strokeWidth={1.5}
               vectorEffect="non-scaling-stroke"

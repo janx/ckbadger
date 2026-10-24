@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Animator,
   E,
+  FRESH_MS,
   bezier,
   birthEase,
   browserClock,
@@ -50,6 +51,43 @@ describe('easing curves', () => {
     expect(birthEase(0)).toBe(0);
     expect(birthEase(0.78)).toBeCloseTo(1.08, 6);
     expect(birthEase(1)).toBeCloseTo(1, 6);
+  });
+});
+
+describe('paintSquareNode', () => {
+  const paint = (s: number, cellbase: boolean) => {
+    const el = document.createElementNS(NS, cellbase ? 'path' : 'rect');
+    const n: MotionNode = {
+      id: 'q',
+      el,
+      v: { X: 10, Y: 20, s, op: 1 },
+      target: { X: 10, Y: 20, s, op: 1 },
+      look: { base: STAGE_BASE.committed, style: 'solid', step: 0, cellbase },
+      paint: paintSquareNode,
+      tws: new Map(),
+      exiting: false,
+      painted: '',
+    };
+    paintSquareNode(n);
+    return el;
+  };
+
+  it('keeps a square that has no size yet (a cellbase before its birth) invisible', () => {
+    expect(paint(0, true).getAttribute('opacity')).toBe('0.000');
+    expect(paint(0.4, false).getAttribute('opacity')).toBe('0.000');
+  });
+
+  it('shows a square at its own opacity once it has a size', () => {
+    expect(paint(0.5, true).getAttribute('opacity')).toBe('1.000');
+    const rect = paint(9, false);
+    expect(rect.getAttribute('opacity')).toBe('1.000');
+    expect(rect.getAttribute('width')).toBe('9.00');
+  });
+});
+
+describe('fresh outline', () => {
+  it('decays over 2.4 s after a block lands', () => {
+    expect(FRESH_MS).toBe(2400);
   });
 });
 

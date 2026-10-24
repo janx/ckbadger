@@ -715,8 +715,13 @@ body::before {
 .pipeline-svg [data-dim='soft'] {
   opacity: 0.5;
 }
+/* The age fade: a block steps back as newer ones land (opacity is set inline per card). */
+.pipeline-svg [data-age] {
+  transition: opacity 600ms ease-out;
+}
 @media (prefers-reduced-motion: reduce) {
-  .pipeline-svg [data-dim] {
+  .pipeline-svg [data-dim],
+  .pipeline-svg [data-age] {
     transition: none;
   }
 }

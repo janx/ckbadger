@@ -292,7 +292,13 @@ interface PipelineTooltipProps {
   content: TipContent | null;
 }
 
-/** The hover explanation, positioned next to the pointer by the canvas (fixed, in a portal). */
+/**
+ * The hover explanation, positioned next to the pointer by the canvas (fixed, in a portal).
+ *
+ * Its width comes from its rows (`w-max`, at least the 268 px it always had): every value stays on
+ * one line, and the longest label beside it no longer squeezes the value column until the value
+ * wraps. The footnote does not take part in that width (`w-0 min-w-full`): it wraps to it.
+ */
 export const PipelineTooltip = forwardRef<HTMLDivElement, PipelineTooltipProps>(
   function PipelineTooltip({ content }, ref) {
     if (!content) return null;
@@ -301,7 +307,7 @@ export const PipelineTooltip = forwardRef<HTMLDivElement, PipelineTooltipProps>(
         ref={ref}
         data-testid="pipeline-tooltip"
         role="tooltip"
-        className="border-base-border bg-base-surface/95 text-text pointer-events-none fixed z-50 w-[268px] rounded-lg border px-3 pb-2.5 pt-2 font-mono text-[11px] leading-[1.55] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+        className="border-base-border bg-base-surface/95 text-text pointer-events-none fixed z-50 w-max min-w-[268px] max-w-[calc(100vw-16px)] rounded-lg border px-3 pb-2.5 pt-2 font-mono text-[11px] leading-[1.55] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
       >
         <div className="border-base-border text-text-bright mb-1.5 flex items-center justify-between gap-2.5 border-b pb-1.5">
           <span>{content.title}</span>
@@ -318,12 +324,16 @@ export const PipelineTooltip = forwardRef<HTMLDivElement, PipelineTooltipProps>(
           {content.rows.map(([k, v]) => (
             <div key={k} className="contents">
               <dt className="text-text-dim">{k}</dt>
-              <dd className="text-text-bright m-0 text-right tabular-nums">{v}</dd>
+              <dd className="text-text-bright m-0 whitespace-nowrap text-right tabular-nums">
+                {v}
+              </dd>
             </div>
           ))}
         </dl>
         {content.foot && (
-          <div className="text-text-dim mt-[7px] text-[10px] leading-[1.45]">{content.foot}</div>
+          <div className="text-text-dim mt-[7px] w-0 min-w-full text-[10px] leading-[1.45]">
+            {content.foot}
+          </div>
         )}
       </div>,
       document.body

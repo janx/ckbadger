@@ -3,25 +3,25 @@
 import { GHOST, diamondPath, tok } from '@/lib/pipeline/encoding';
 import { G, tail4, type SceneNext } from '@/lib/pipeline/layout';
 import type { DimLevel } from '@/components/pipeline/block-card';
-import { T10, T10C, T11C, TZ } from '@/components/pipeline/svg-text';
+import { T10, T11C } from '@/components/pipeline/svg-text';
 
 interface NextColumnProps {
   available: boolean;
 }
 
-/** The NEXT zone title, and why its card is missing when the pool is unavailable. */
+/** Nothing labels NEXT (its dashed card says "predicted"); only a missing prediction is said. */
 export function NextColumn({ available }: NextColumnProps) {
+  if (available) return null;
   return (
-    <g data-next-column pointerEvents="none">
-      <text x={G.nextX} y={16} className={TZ}>
-        Next
-      </text>
-      {!available && (
-        <text x={G.nextX} y={30} className={T10}>
-          unavailable
-        </text>
-      )}
-    </g>
+    <text
+      data-next-column
+      x={G.nextX + G.padX}
+      y={G.cardTop + 34}
+      className={T10}
+      pointerEvents="none"
+    >
+      unavailable
+    </text>
   );
 }
 
@@ -46,41 +46,21 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
           strokeWidth={1}
           strokeDasharray="3 2"
           vectorEffect="non-scaling-stroke"
-          fillOpacity={highlighted ? 0.9 : 0.35}
-          strokeOpacity={highlighted ? 1 : 0.3}
+          fillOpacity={highlighted ? 0.9 : 0.5}
+          strokeOpacity={highlighted ? 1 : 0.6}
           style={{ fill: tok('elevated'), stroke: tok('jade') }}
-        />
-        <line
-          x1={1}
-          x2={next.w - 1}
-          y1={G.cardTop + G.headH + 0.5}
-          y2={G.cardTop + G.headH + 0.5}
-          strokeWidth={1}
-          vectorEffect="non-scaling-stroke"
-          style={{ stroke: tok('border') }}
-        />
-        <line
-          x1={G.padX}
-          x2={next.w - G.padX}
-          y1={G.sepY + 0.5}
-          y2={G.sepY + 0.5}
-          strokeWidth={1}
-          vectorEffect="non-scaling-stroke"
-          style={{ stroke: tok('border') }}
         />
         <text x={G.padX} y={G.chainY + 3.5} className={T11C}>
           {tail4(next.number)}
         </text>
         <g data-ghost-chips>
           {next.ghostChips.map((k, i) => (
-            <rect
+            <circle
               key={i}
               data-ghost-chip
-              x={k.x}
-              y={k.y}
-              width={G.chip}
-              height={G.chip}
-              rx={1}
+              cx={k.x + G.chip / 2}
+              cy={k.y + G.chip / 2}
+              r={G.chip / 2 - 0.5}
               fill="none"
               strokeWidth={1}
               strokeOpacity={GHOST.chip.strokeOpacity}
@@ -132,17 +112,14 @@ export function NextCard({ next, highlighted, dim }: NextCardProps) {
           )}
         </g>
         {next.hidden > 0 && (
-          <text data-hidden x={G.padX} y={G.cardTop + next.h + 11} className={T10C}>
-            {`+${next.hidden}`}
-          </text>
+          <text
+            data-count
+            x={next.w - G.padX}
+            y={G.chainY + 3.5}
+            textAnchor="end"
+            className={T10}
+          >{`+${next.hidden}`}</text>
         )}
-        <text
-          data-count
-          x={next.w - 2}
-          y={G.cardTop + next.h + 11}
-          textAnchor="end"
-          className={T10}
-        >{`~${next.predicted + 1} tx`}</text>
       </g>
     </g>
   );
