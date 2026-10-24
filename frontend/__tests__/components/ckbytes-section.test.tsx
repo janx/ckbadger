@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
+import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
@@ -207,5 +207,105 @@ describe('CkbytesSection', () => {
     expect(dao).toHaveTextContent('Change in 24 h—');
     // No depositor change either.
     expect(dao).toHaveTextContent('Depositors16,673Active deposits');
+  });
+});
+
+describe('CkbytesSection allocation highlight', () => {
+  beforeEach(() => {
+    stubChartWidth(280);
+    stubPointerEvents();
+    serveStats(networkStats());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function renderBar() {
+    render(<CkbytesSection />);
+    const bar = await screen.findByRole('img', { name: /^Knowledge 0\.30 percent/ });
+    const seg = (part: string) => bar.querySelector(`[data-segment="${part}"]`) as HTMLElement;
+    return { bar, seg };
+  }
+  const legend = (name: RegExp) => screen.getByRole('button', { name });
+
+  function expectHighlighted(seg: (p: string) => HTMLElement, on: string) {
+    for (const part of ['knowledge', 'free', 'dao']) {
+      if (part === on) {
+        expect(seg(part)).toHaveAttribute('data-active', 'true');
+        expect(seg(part)).not.toHaveClass('opacity-35');
+      } else {
+        expect(seg(part)).not.toHaveAttribute('data-active');
+        expect(seg(part)).toHaveClass('opacity-35');
+      }
+    }
+  }
+  function expectNoHighlight(seg: (p: string) => HTMLElement) {
+    for (const part of ['knowledge', 'free', 'dao']) {
+      expect(seg(part)).not.toHaveAttribute('data-active');
+      expect(seg(part)).not.toHaveClass('opacity-35');
+    }
+  }
+
+  it('highlights a hovered segment and reads it out exactly in its legend item', async () => {
+    const { seg } = await renderBar();
+    fireEvent.pointerEnter(seg('free'));
+    expectHighlighted(seg, 'free');
+    const free = legend(/^Free/);
+    expect(free).toHaveTextContent('Free41,588,753,173.07133425 CKB83.40%');
+    expect(within(free).getByText('Free')).toHaveClass('text-text-bright');
+
+    fireEvent.pointerLeave(seg('free'));
+    expectNoHighlight(seg);
+    expect(free).toHaveTextContent('Free41.59B CKB83.40%');
+    expect(within(free).getByText('Free')).toHaveClass('text-text');
+  });
+
+  it('highlights the segment of a hovered legend item', async () => {
+    const { seg } = await renderBar();
+    const dao = legend(/^Nervos DAO/);
+    fireEvent.pointerEnter(dao);
+    expectHighlighted(seg, 'dao');
+    expect(dao).toHaveTextContent('Nervos DAO8,128,895,616.43799700 CKB16.30%');
+    fireEvent.pointerLeave(dao);
+    expectNoHighlight(seg);
+  });
+
+  it('highlights on keyboard focus of a legend item', async () => {
+    const { seg } = await renderBar();
+    const knowledge = legend(/^Knowledge/);
+    act(() => knowledge.focus());
+    expect(knowledge).toHaveFocus();
+    expectHighlighted(seg, 'knowledge');
+    expect(knowledge).toHaveTextContent('Knowledge151,134,245.00000000 CKB151.1 MB · 0.30%');
+    act(() => knowledge.blur());
+    expectNoHighlight(seg);
+  });
+
+  it('toggles the highlight with a tap on touch', async () => {
+    const { seg } = await renderBar();
+    const free = legend(/^Free/);
+    const tap = (el: HTMLElement) => {
+      fireEvent.pointerDown(el, { pointerType: 'touch' });
+      fireEvent.pointerEnter(el, { pointerType: 'touch' });
+      fireEvent.click(el);
+      fireEvent.pointerLeave(el, { pointerType: 'touch' });
+    };
+    tap(free);
+    expectHighlighted(seg, 'free');
+    tap(free);
+    expectNoHighlight(seg);
+    tap(seg('dao'));
+    expectHighlighted(seg, 'dao');
+  });
+
+  it('does not pin on a mouse click', async () => {
+    const { seg } = await renderBar();
+    const free = legend(/^Free/);
+    fireEvent.pointerDown(free, { pointerType: 'mouse' });
+    fireEvent.pointerEnter(free, { pointerType: 'mouse' });
+    fireEvent.click(free);
+    fireEvent.pointerLeave(free, { pointerType: 'mouse' });
+    expectNoHighlight(seg);
   });
 });

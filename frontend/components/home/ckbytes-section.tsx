@@ -1,6 +1,12 @@
 'use client';
 
-import { useMemo, type ReactNode } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import {
@@ -156,9 +162,58 @@ function Allocation({ stats }: { stats: NetworkStats | undefined }) {
       </div>
     );
   }
-  const { circulating, knowledge, free, dao } = a.view;
+  return <AllocationReady view={a.view} />;
+}
+
+type Part = 'knowledge' | 'free' | 'dao';
+
+/**
+ * Which part of the allocation is highlighted: the hovered or focused one, else the one a tap
+ * pinned. A mouse hovers and never pins; a touch tap toggles the pin; focus works like hover.
+ */
+function useHighlight() {
+  const [hovered, setHovered] = useState<Part | null>(null);
+  const [pinned, setPinned] = useState<Part | null>(null);
+  const touch = useRef(false);
+  const handlers = (part: Part) => ({
+    onPointerDown: (e: ReactPointerEvent) => {
+      touch.current = e.pointerType === 'touch';
+    },
+    onPointerEnter: (e: ReactPointerEvent) => {
+      if (e.pointerType !== 'touch') setHovered(part);
+    },
+    onPointerLeave: (e: ReactPointerEvent) => {
+      if (e.pointerType !== 'touch') setHovered(null);
+    },
+    onClick: () => {
+      if (!touch.current) return;
+      touch.current = false;
+      setPinned((p) => (p === part ? null : part));
+    },
+  });
+  const focusHandlers = (part: Part) => ({
+    onFocus: () => setHovered(part),
+    onBlur: () => setHovered(null),
+  });
+  return { active: hovered ?? pinned, handlers, focusHandlers };
+}
+
+function AllocationReady({ view }: { view: AllocationView }) {
+  const { circulating, knowledge, free, dao } = view;
+  const { active, handlers, focusHandlers } = useHighlight();
   const pct = (part: bigint) => formatPercent(part, circulating, 2);
   const total = formatCkbAmount(circulating);
+  const segment = (part: Part) => ({
+    'data-segment': part,
+    'data-active': active === part || undefined,
+    ...handlers(part),
+  });
+  const dim = (part: Part) => active !== null && active !== part && 'opacity-35';
+  const legend = (part: Part) => ({
+    active: active === part,
+    ...handlers(part),
+    ...focusHandlers(part),
+  });
   return (
     <div className="flex flex-col gap-3.5">
       <div
@@ -175,48 +230,79 @@ function Allocation({ stats }: { stats: NetworkStats | undefined }) {
         className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden rounded-[5px]"
       >
         <span
-          data-segment="knowledge"
-          className="bg-jade min-w-[3px] shrink-0"
+          {...segment('knowledge')}
+          className={cn(SEGMENT, 'bg-jade min-w-[3px] shrink-0', dim('knowledge'))}
           style={{ width: `${pct(knowledge)}%` }}
         />
-        <span data-segment="free" className={FREE_COLOR} style={{ width: `${pct(free)}%` }} />
-        <span data-segment="dao" className="bg-gold flex-1" />
+        <span
+          {...segment('free')}
+          className={cn(SEGMENT, FREE_COLOR, dim('free'))}
+          style={{ width: `${pct(free)}%` }}
+        />
+        <span {...segment('dao')} className={cn(SEGMENT, 'bg-gold flex-1', dim('dao'))} />
       </div>
-      <div className="flex flex-wrap gap-x-8 gap-y-2 text-xs">
+      <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs">
         <LegendItem
           swatch="bg-jade"
           name="Knowledge"
           value={knowledge}
           note={`${formatDecimalBytes(knowledge / SHANNONS_PER_CKB)} · ${pct(knowledge)}%`}
+          {...legend('knowledge')}
         />
-        <LegendItem swatch={FREE_COLOR} name="Free" value={free} note={`${pct(free)}%`} />
-        <LegendItem swatch="bg-gold" name="Nervos DAO" value={dao} note={`${pct(dao)}%`} />
+        <LegendItem
+          swatch={FREE_COLOR}
+          name="Free"
+          value={free}
+          note={`${pct(free)}%`}
+          {...legend('free')}
+        />
+        <LegendItem
+          swatch="bg-gold"
+          name="Nervos DAO"
+          value={dao}
+          note={`${pct(dao)}%`}
+          {...legend('dao')}
+        />
       </div>
     </div>
   );
 }
 
-function LegendItem({
-  swatch,
-  name,
-  value,
-  note,
-}: {
+const SEGMENT = 'transition-opacity duration-150';
+
+interface LegendItemProps {
   swatch: string;
   name: string;
   value: bigint;
   note: string;
-}) {
+  /** Highlighted: the name and amount brighten and the amount reads out exactly. */
+  active: boolean;
+  onPointerDown: (e: ReactPointerEvent) => void;
+  onPointerEnter: (e: ReactPointerEvent) => void;
+  onPointerLeave: (e: ReactPointerEvent) => void;
+  onClick: () => void;
+  onFocus: () => void;
+  onBlur: () => void;
+}
+
+/** One legend item: a button, so it is focusable; hovered, focused or tapped, it highlights. */
+function LegendItem({ swatch, name, value, note, active, ...events }: LegendItemProps) {
   const compact = formatCkbCompact(value);
   return (
-    <span data-legend={name} className="flex items-baseline gap-2">
+    <button
+      type="button"
+      data-legend={name}
+      data-active={active || undefined}
+      className="focus-visible:ring-base-border -mx-1 flex items-baseline gap-2 rounded bg-transparent px-1 py-1 text-left outline-none focus-visible:ring-1"
+      {...events}
+    >
       <span aria-hidden="true" className={cn('h-2 w-2 self-center rounded-sm', swatch)} />
-      <span className="text-text">{name}</span>
-      <span className="text-text-bright tabular-nums" title={`${compact.full} CKB`}>
-        {compact.value} CKB
+      <span className={active ? 'text-text-bright' : 'text-text'}>{name}</span>
+      <span className="text-text-bright tabular-nums">
+        {active ? formatCkbAmount(value).full : compact.value} CKB
       </span>
-      <span className="text-text-dim tabular-nums">{note}</span>
-    </span>
+      <span className={cn('tabular-nums', active ? 'text-text' : 'text-text-dim')}>{note}</span>
+    </button>
   );
 }
 
