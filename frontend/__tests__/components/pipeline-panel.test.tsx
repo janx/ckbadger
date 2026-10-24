@@ -50,16 +50,33 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 /** The width the stubbed ResizeObserver reports; a test may change it before rendering. */
 let viewW = VIEW_W;
 
+/** The observers the canvas is using, so a test can resize the view. */
+const observers = new Set<ResizeObserverStub>();
+
 class ResizeObserverStub {
   constructor(private readonly cb: ResizeObserverCallback) {}
   observe() {
+    observers.add(this);
+    this.report();
+  }
+  report() {
     this.cb(
       [{ contentRect: { width: viewW } } as ResizeObserverEntry],
       this as unknown as ResizeObserver
     );
   }
   unobserve() {}
-  disconnect() {}
+  disconnect() {
+    observers.delete(this);
+  }
+}
+
+/** The page is resized: every live observer reports the new width. */
+function resizeTo(width: number) {
+  viewW = width;
+  act(() => {
+    for (const o of observers) o.report();
+  });
 }
 
 function stubMatchMedia(reduced: boolean) {
@@ -76,6 +93,7 @@ function stubMatchMedia(reduced: boolean) {
 
 beforeEach(() => {
   viewW = VIEW_W;
+  observers.clear();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   stubMatchMedia(false);
 });
@@ -676,6 +694,67 @@ describe('PipelineCanvas motion', () => {
     expect(exitLayer.querySelectorAll('g').length).toBe(0);
   });
 
+  it('retires and brings back whole blocks as the view is resized between wide and narrow', () => {
+    viewW = 1000;
+    const { getByTestId } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    const cardsLayer = svg.querySelector('[data-layer="cards"]') as SVGGElement;
+    const exitLayer = svg.querySelector('[data-layer="exit"]') as SVGGElement;
+    const shown = () =>
+      [...cardsLayer.querySelectorAll('[data-card]')].map((el) =>
+        Number(el.getAttribute('data-number'))
+      );
+    const cardX = (el: Element) =>
+      Number(/translate\(([\d.]+),/.exec(el.getAttribute('transform') ?? '')?.[1]);
+    // NEXT's window is drawn (hovered from outside the canvas) the whole time.
+    act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T + 1 }));
+    /** At rest at `width`: only whole blocks, and the chain, marks and label drawn for them. */
+    const expectRow = (width: number) => {
+      const scene = buildScene(s1, width, 'settled');
+      expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${G.H}`);
+      expect(shown()).toEqual(scene.cards.map((c) => c.block.number));
+      for (const el of cardsLayer.querySelectorAll('[data-card]')) {
+        expect(cardX(el) + G.cardW).toBeLessThanOrEqual(width - G.marginR);
+      }
+      expect(exitLayer.childElementCount).toBe(0);
+      const last = scene.cards[scene.cards.length - 1];
+      const y = G.chainY + 0.5;
+      expect(path(svg, 'tail')).toHaveAttribute(
+        'd',
+        `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
+      );
+      const text = windowLabel(T + 1, T, s1.consensus);
+      const ruler = windowRuler(rulerSlots(scene), T + 1, s1.consensus, width, text);
+      expect(svg.querySelector('[data-window-marks]')).toHaveAttribute('d', windowMarksPath(ruler));
+      // The window of NEXT runs past the last block at every one of these widths: gold tail.
+      expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('gold'));
+      expectLabelClear(svg, width);
+    };
+    expectRow(1000);
+    expect(shown()).toHaveLength(5);
+
+    // Narrower: the two blocks that no longer fit whole retire through the exit layer.
+    resizeTo(760);
+    expect(shown()).toHaveLength(3);
+    expect(exitLayer.querySelectorAll('g').length).toBeGreaterThanOrEqual(2);
+    for (let ms = 0; ms < 700; ms += 16) {
+      at(16);
+      expectLabelClear(svg, 760);
+    }
+    expectRow(760);
+
+    // Wider again: the blocks that fit now fade in from nothing.
+    resizeTo(CONTAINER_VIEW_W);
+    expect(shown()).toHaveLength(8);
+    expect(card(svg, T - 5)).toHaveAttribute('opacity', '0.000');
+    for (let ms = 0; ms < 400; ms += 16) {
+      at(16);
+      expectLabelClear(svg, CONTAINER_VIEW_W);
+    }
+    expect(card(svg, T - 5)).toHaveAttribute('opacity', '1.000');
+    expectRow(CONTAINER_VIEW_W);
+  });
+
   it('keeps the landing cellbase invisible until it is born at contact', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
@@ -1107,6 +1186,66 @@ describe('PipelinePanel interactions', () => {
         `${tail4(n)} could commit txs proposed in these 9 blocks`
       );
       expectLabelClear(svg, CONTAINER_VIEW_W);
+    }
+  );
+
+  it.each([
+    { width: 760, blocks: 3 },
+    { width: 1000, blocks: 5 },
+    { width: CONTAINER_VIEW_W, blocks: 8 },
+  ])(
+    'shows $blocks whole blocks at $width px, its tail after the last one, every window label in view',
+    async ({ width, blocks }) => {
+      viewW = width;
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        width,
+        height: G.H,
+        right: width,
+        bottom: G.H,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const svg = await renderPanel(snapshot);
+      const fit = buildScene(snapshot, width, 'settled');
+      expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${G.H}`);
+      expect(svg.querySelectorAll('[data-card]')).toHaveLength(blocks);
+      expect(fit.cards.map((c) => c.block.number)).toEqual(
+        Array.from({ length: blocks }, (_, i) => T - i)
+      );
+      for (const c of fit.cards) {
+        expect(card(svg, c.block.number)).toHaveAttribute(
+          'transform',
+          `translate(${c.x.toFixed(2)},0.00)`
+        );
+        expect(c.x + c.w).toBeLessThanOrEqual(width - G.marginR);
+      }
+      const last = fit.cards[blocks - 1];
+      const y = G.chainY + 0.5;
+      expect(path(svg, 'tail')).toHaveAttribute(
+        'd',
+        `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
+      );
+      // NEXT, then every block: its window's label stays in view and off its ticks, or, when its
+      // near end is past the last block, no window is drawn at all.
+      hoverNext(svg);
+      expectLabelClear(svg, width);
+      for (const c of fit.cards) {
+        const n = c.block.number;
+        fireEvent.pointerMove(card(svg, n).querySelector('[data-box]') as Element, {
+          clientX: c.x + c.w / 2,
+          clientY: G.cardTop + 5,
+        });
+        expect(tooltip()).toHaveTextContent(`Block #${fmt(n)}`);
+        if (n - snapshot.consensus.proposalWindowClosest < last.block.number) {
+          expect(svg.querySelector('[data-window-label]')).toBeNull();
+          expect(svg.querySelector('[data-ruler-ticks]')).toHaveAttribute('d', 'M0 0');
+        } else {
+          expectLabelClear(svg, width);
+        }
+      }
     }
   );
 

@@ -64,7 +64,10 @@ const CHAIN_BASE = {
   gap: 20,
   /** NEXT stands alone between the pool and the chain: the gaps on both of its sides are wider. */
   frontierGap: 44,
-  minBlocks: 8,
+  /** The narrowest canvas: below it the panel scrolls instead of laying out a narrower row. */
+  minViewW: 760,
+  /** Kept free between the last chain card and the right edge of the view. */
+  marginR: 10,
   maxBlocks: 24,
 } as const;
 
@@ -73,6 +76,15 @@ const CARD_W = CHAIN_BASE.cardCols * U - 1 + 2 * CHAIN_BASE.padX;
 const PITCH = CARD_W + CHAIN_BASE.gap;
 
 const NEXT_X = CHAIN_BASE.x0 + PITCH + CARD_W + CHAIN_BASE.frontierGap;
+const CHAIN_X0 = NEXT_X + CARD_W + CHAIN_BASE.frontierGap;
+
+/**
+ * How many whole chain cards fit a view `viewW` px wide: card k ends at chainX0 + k·pitch + cardW,
+ * which must stay `marginR` clear of the right edge.
+ */
+function wholeCards(viewW: number): number {
+  return Math.floor((viewW - CHAIN_BASE.marginR - CHAIN_X0 + CHAIN_BASE.gap) / PITCH);
+}
 
 /**
  * One row, one tx lifetime, left to right: mempool (pending) ⇢ proposed ⇢ NEXT ⇢ the tip → older
@@ -86,7 +98,9 @@ export const G = {
   mempoolX: CHAIN_BASE.x0,
   proposedX: CHAIN_BASE.x0 + PITCH,
   nextX: NEXT_X,
-  chainX0: NEXT_X + CARD_W + CHAIN_BASE.frontierGap,
+  chainX0: CHAIN_X0,
+  /** The fewest chain blocks ever shown: the ones that fit the narrowest canvas. */
+  minBlocks: wholeCards(CHAIN_BASE.minViewW),
 } as const;
 
 /** An uncle travels inside the block that includes it: its header and proposals, never its txs. */
@@ -205,26 +219,26 @@ export interface ChainSlot {
 }
 
 /**
- * x positions of `count` cards, newest first. At least `minBlocks` cards, at most `maxBlocks`,
- * otherwise cut at the view width. A landing block (just mined, still being settled) sits at the
- * NEXT position.
+ * x positions of `count` cards, newest first: as many whole chain cards as fit the view (never a
+ * card cut by its edge), at most `maxBlocks`. The view is never narrower than `minViewW` (the panel
+ * scrolls below it), so at least `minBlocks` fit. A landing block (just mined, still being
+ * settled) sits at the NEXT position.
  */
 export function chainLayout(count: number, viewW: number, landing: boolean): ChainSlot[] {
+  if (viewW < G.minViewW) {
+    throw new Error(`pipeline: a ${viewW} px view is narrower than the ${G.minViewW} px canvas`);
+  }
   const out: ChainSlot[] = [];
   const w = G.cardW;
-  let x: number = G.chainX0;
-  let n = 0;
   let i0 = 0;
   if (landing) {
     if (!count) throw new Error('pipeline: a landing layout needs the landing block');
     out.push({ index: 0, x: G.nextX, w, slot: 'landing' });
     i0 = 1;
   }
-  for (let i = i0; i < count; i++) {
-    if (n >= G.maxBlocks || (n >= G.minBlocks && x + w > viewW - 10)) break;
-    out.push({ index: i, x, w, slot: 'chain' });
-    x += w + G.gap;
-    n++;
+  const fit = Math.min(G.maxBlocks, wholeCards(viewW));
+  for (let n = 0; n < fit && i0 + n < count; n++) {
+    out.push({ index: i0 + n, x: G.chainX0 + n * PITCH, w, slot: 'chain' });
   }
   return out;
 }

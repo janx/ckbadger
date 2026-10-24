@@ -322,7 +322,7 @@ describe('uncle box', () => {
 });
 
 describe('chainLayout', () => {
-  it('stops at the view width once at least 8 cards are shown', () => {
+  it('stops at the last whole card that fits the view', () => {
     const slots = chainLayout(24, 1600, false);
     expect(slots.length).toBeGreaterThanOrEqual(G.minBlocks);
     expect(slots.length).toBeLessThan(24);
@@ -335,9 +335,38 @@ describe('chainLayout', () => {
     ).toBe(true);
   });
 
-  it('always shows at least 8 cards, even past a narrow view', () => {
-    expect(G.minBlocks).toBe(8);
-    expect(chainLayout(24, 760, false)).toHaveLength(8);
+  it.each([
+    { width: 760, blocks: 3 },
+    { width: 1000, blocks: 5 },
+    { width: CONTAINER_VIEW_W, blocks: 8 },
+  ])(
+    'shows only whole blocks: $blocks at $width px, 10 px clear of the edge',
+    ({ width, blocks }) => {
+      const slots = chainLayout(24, width, false);
+      expect(slots).toHaveLength(blocks);
+      for (const sl of slots) expect(sl.x + sl.w).toBeLessThanOrEqual(width - G.marginR);
+      // One more would not fit whole.
+      const last = slots[slots.length - 1];
+      expect(last.x + last.w + G.gap + CARD_W).toBeGreaterThan(width - G.marginR);
+      expect(G.marginR).toBe(10);
+    }
+  );
+
+  it('never shows fewer blocks than fit the 760 px minimum canvas: 3 by this geometry', () => {
+    expect(G.minViewW).toBe(760);
+    // Derived from the geometry: the cards that fit from the chain start to the margin.
+    expect(G.minBlocks).toBe(
+      Math.floor((G.minViewW - G.marginR - G.chainX0 + G.gap) / (CARD_W + G.gap))
+    );
+    expect(G.minBlocks).toBe(3);
+    expect(chainLayout(24, G.minViewW, false)).toHaveLength(G.minBlocks);
+    // The landing block sits at NEXT, beside as many chain blocks as fit.
+    const landing = chainLayout(24, G.minViewW, true);
+    expect(landing.map((sl) => sl.slot)).toEqual(['landing', 'chain', 'chain', 'chain']);
+  });
+
+  it('refuses a view narrower than the minimum canvas instead of clipping its cards', () => {
+    expect(() => chainLayout(24, G.minViewW - 1, false)).toThrow(/759 px view .* 760 px/);
   });
 
   it('fits all 8 chain blocks inside the 1280 px page container', () => {
@@ -345,7 +374,7 @@ describe('chainLayout', () => {
     expect(slots).toHaveLength(8);
     const last = slots[slots.length - 1];
     expect(last.x + last.w).toBeLessThanOrEqual(CONTAINER_VIEW_W - 10);
-    // A ninth would not fit: the minimum is exactly what the container holds.
+    // A ninth would not fit.
     expect(last.x + last.w + G.gap + CARD_W).toBeGreaterThan(CONTAINER_VIEW_W - 10);
   });
 
@@ -531,7 +560,7 @@ describe('window label placement: inside the view, never across a tick', () => {
   });
 
   it('draws no label when the near tick itself is past the view edge', () => {
-    // A narrow 760 px view still lays out 8 blocks: the window of T−4 starts at 1025, off view.
+    // The 1246 px row read through a 760 px view: the window of T−4 starts at 1025, off view.
     const text = windowLabel(TIP - 4, TIP, MAINNET);
     const ruler = windowRuler(slots, TIP - 4, MAINNET, 760, text);
     expect(ruler.ticks).toEqual([1025]);
@@ -539,6 +568,45 @@ describe('window label placement: inside the view, never across a tick', () => {
     // The ruler itself is still drawn (and clipped by the view).
     expect(rulerPath(ruler)).toContain('M1025.0 16H760.0');
   });
+});
+
+describe('a narrower view: fewer blocks, all of them whole', () => {
+  it.each([760, 1000, CONTAINER_VIEW_W])(
+    'at %i px: no card past the edge, a forward tail, every window label in view and off its ticks',
+    (W) => {
+      const s = buildPipelineSnapshot();
+      const scene = buildScene(s, W, 'settled');
+      const next = scene.next as NonNullable<Scene['next']>;
+      for (const c of scene.cards) expect(c.x + c.w).toBeLessThanOrEqual(W - G.marginR);
+      const last = scene.cards[scene.cards.length - 1];
+      expect(chainTail(scene.cards, W)).toEqual({ x0: last.x + last.w + 2, x1: W - 4 });
+      expect(last.x + last.w + 2).toBeLessThan(W - 4);
+      const slots: RulerSlot[] = [
+        { number: next.number, x: next.x, w: next.w, mined: false },
+        ...scene.cards.map((c) => ({ number: c.block.number, x: c.x, w: c.w, mined: true })),
+      ];
+      for (const sl of slots) {
+        const text = windowLabel(sl.number, scene.windowTip, s.consensus);
+        const ruler = windowRuler(slots, sl.number, s.consensus, W, text);
+        for (const tx of ruler.ticks) {
+          expect(tx).toBeGreaterThanOrEqual(0);
+          expect(tx).toBeLessThanOrEqual(W);
+        }
+        if (!ruler.label) {
+          // Only a window whose near end is past the last card has no label (and no ruler).
+          expect(ruler.hit).toBeNull();
+          expect(sl.number - s.consensus.proposalWindowClosest).toBeLessThan(last.block.number);
+          continue;
+        }
+        const half = labelWidth(text) / 2;
+        expect(ruler.label.x - half).toBeGreaterThanOrEqual(0);
+        expect(ruler.label.x + half).toBeLessThanOrEqual(W);
+        for (const tx of ruler.ticks) {
+          expect(tx < ruler.label.x - half || tx > ruler.label.x + half).toBe(true);
+        }
+      }
+    }
+  );
 });
 
 describe('chainPaths: the chain line', () => {
