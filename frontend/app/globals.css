@@ -190,19 +190,20 @@ body {
     animation: none;
   }
 
+  /* The badge's idle halo: dim and slow (logo-breathe, 4.8 s). */
   .logo-image {
     transform-origin: top left;
-    animation: logo-neon-breathe 3.6s ease-in-out infinite;
+    animation: logo-breathe 4.8s ease-in-out infinite;
   }
 
   .logo-image:hover {
     animation-play-state: paused;
     filter: saturate(1.3) brightness(1.08) drop-shadow(0 0 4px rgba(46, 219, 163, 0.85))
-      drop-shadow(0 0 14px rgba(46, 219, 163, 0.45)) drop-shadow(0 0 22px rgba(46, 219, 163, 0.25))
-      drop-shadow(0 0 8px rgba(104, 204, 240, 0.4));
+      drop-shadow(0 0 14px rgba(46, 219, 163, 0.45)) drop-shadow(0 0 8px rgba(104, 204, 240, 0.4));
   }
 
-  .neon-flicker {
+  /* One flicker per new block. */
+  .logo-image.neon-flicker {
     animation: neon-flicker-anim 0.8s steps(1) forwards;
   }
 
@@ -235,27 +236,25 @@ body {
   }
 }
 
-/* Idle ambient halo: gentle breathing of the neon glow */
-@keyframes logo-neon-breathe {
+/* Idle ambient halo: a dim, slow breathing of the neon glow */
+@keyframes logo-breathe {
   0%,
   100% {
-    filter: saturate(1.2) brightness(1) drop-shadow(0 0 3px rgba(46, 219, 163, 0.65))
-      drop-shadow(0 0 12px rgba(46, 219, 163, 0.32)) drop-shadow(0 0 22px rgba(46, 219, 163, 0.18))
-      drop-shadow(0 0 6px rgba(104, 204, 240, 0.3));
+    filter: saturate(1.15) drop-shadow(0 0 2px rgba(46, 219, 163, 0.45))
+      drop-shadow(0 0 8px rgba(46, 219, 163, 0.18)) drop-shadow(0 0 4px rgba(104, 204, 240, 0.18));
   }
   50% {
-    filter: saturate(1.3) brightness(1.04) drop-shadow(0 0 5px rgba(46, 219, 163, 0.85))
-      drop-shadow(0 0 18px rgba(46, 219, 163, 0.45)) drop-shadow(0 0 30px rgba(46, 219, 163, 0.25))
-      drop-shadow(0 0 9px rgba(104, 204, 240, 0.4));
+    filter: saturate(1.2) brightness(1.02) drop-shadow(0 0 3px rgba(46, 219, 163, 0.6))
+      drop-shadow(0 0 12px rgba(46, 219, 163, 0.26)) drop-shadow(0 0 6px rgba(104, 204, 240, 0.24));
   }
 }
 
-/* New-block flicker: tighter halo, higher brightness */
+/* New-block flicker: tighter halo, higher brightness, ending on the idle halo */
 @keyframes neon-flicker-anim {
   0% {
     opacity: 1;
     filter: saturate(1.2) brightness(1.05) drop-shadow(0 0 2px rgba(46, 219, 163, 0.6))
-      drop-shadow(0 0 6px rgba(46, 219, 163, 0.25)) drop-shadow(0 0 4px rgba(104, 204, 240, 0.3));
+      drop-shadow(0 0 6px rgba(46, 219, 163, 0.25));
   }
   6% {
     opacity: 0.55;
@@ -282,7 +281,7 @@ body {
   44% {
     opacity: 1;
     filter: saturate(1.55) brightness(1.7) drop-shadow(0 0 4px rgba(46, 219, 163, 0.95))
-      drop-shadow(0 0 9px rgba(46, 219, 163, 0.45)) drop-shadow(0 0 5px rgba(104, 204, 240, 0.6));
+      drop-shadow(0 0 9px rgba(46, 219, 163, 0.45));
   }
   56% {
     opacity: 0.7;
@@ -291,17 +290,27 @@ body {
   68% {
     opacity: 1;
     filter: saturate(1.45) brightness(1.5) drop-shadow(0 0 3px rgba(46, 219, 163, 0.9))
-      drop-shadow(0 0 7px rgba(46, 219, 163, 0.4)) drop-shadow(0 0 5px rgba(104, 204, 240, 0.5));
+      drop-shadow(0 0 7px rgba(46, 219, 163, 0.4));
   }
   82% {
     opacity: 0.95;
     filter: saturate(1.3) brightness(1.25) drop-shadow(0 0 3px rgba(46, 219, 163, 0.75))
-      drop-shadow(0 0 6px rgba(46, 219, 163, 0.3)) drop-shadow(0 0 4px rgba(104, 204, 240, 0.4));
+      drop-shadow(0 0 6px rgba(46, 219, 163, 0.3));
   }
   100% {
     opacity: 1;
-    filter: saturate(1.2) brightness(1.05) drop-shadow(0 0 2px rgba(46, 219, 163, 0.6))
-      drop-shadow(0 0 6px rgba(46, 219, 163, 0.25)) drop-shadow(0 0 4px rgba(104, 204, 240, 0.3));
+    filter: saturate(1.15) drop-shadow(0 0 2px rgba(46, 219, 163, 0.45))
+      drop-shadow(0 0 8px rgba(46, 219, 163, 0.18));
+  }
+}
+
+/* Reduced motion: no breathing and no flicker, a static halo. */
+@media (prefers-reduced-motion: reduce) {
+  .logo-image,
+  .logo-image.neon-flicker {
+    animation: none;
+    filter: saturate(1.15) drop-shadow(0 0 2px rgba(46, 219, 163, 0.45))
+      drop-shadow(0 0 8px rgba(46, 219, 163, 0.18));
   }
 }
 

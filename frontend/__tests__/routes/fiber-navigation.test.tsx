@@ -1,8 +1,7 @@
 import { MemoryRouter, useLocation, useRoutes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { Header } from '@/components/layout/header';
-import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 import { createAppRouter } from '@/src/routes/router';
 
 vi.mock('@/components/command-palette', () => ({
@@ -18,7 +17,7 @@ vi.mock('@/components/layout/logo', () => ({
 }));
 
 vi.mock('@/components/stats-bar', () => ({
-  GlobalStatsBar: () => <div data-testid="global-stats-bar">GlobalStatsBar</div>,
+  VitalsStrip: () => <div data-testid="vitals-strip">VitalsStrip</div>,
 }));
 
 vi.mock('@/components/layout/site-footer', () => ({
@@ -51,10 +50,6 @@ function AppHarness() {
 }
 
 describe('fiber navigation', () => {
-  beforeEach(() => {
-    useHomeScrollStore.setState({ heroVisible: true });
-  });
-
   it('renders the fiber channels route instead of the 404 page', async () => {
     render(
       <MemoryRouter initialEntries={['/mainnet/fiber/channels']}>

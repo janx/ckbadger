@@ -27,7 +27,8 @@ export default {
         text: {
           bright: '#dee2ec',
           DEFAULT: '#a0a8be',
-          dim: '#606880',
+          // ≥ 4.5:1 on base.surface (#10131c) and base.bg; the pipeline keeps --pipeline-ink-dim.
+          dim: '#7c849c',
           ghost: '#343c50',
         },
         interactive: {

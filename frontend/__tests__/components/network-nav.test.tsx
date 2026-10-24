@@ -18,7 +18,7 @@ vi.mock('@/components/layout/logo', () => ({
   Logo: () => <div data-testid="logo" />,
 }));
 vi.mock('@/components/stats-bar', () => ({
-  GlobalStatsBar: () => <div data-testid="global-stats-bar" />,
+  VitalsStrip: () => <div data-testid="vitals-strip" />,
 }));
 
 describe('Peers nav entry', () => {

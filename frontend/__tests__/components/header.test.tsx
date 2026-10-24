@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '../utils/test-utils';
 import { Header } from '@/components/layout/header';
-import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 
 const usePathnameMock = vi.fn(() => '/');
 const searchBarMock = vi.fn(({ variant }: { variant?: 'default' | 'compact' | 'home' }) => (
@@ -29,14 +28,13 @@ vi.mock('@/components/layout/logo', () => ({
 }));
 
 vi.mock('@/components/stats-bar', () => ({
-  GlobalStatsBar: () => <div data-testid="global-stats-bar">GlobalStatsBar</div>,
+  VitalsStrip: () => <div data-testid="vitals-strip">VitalsStrip</div>,
 }));
 
 describe('Header', () => {
   beforeEach(() => {
     usePathnameMock.mockReset();
     searchBarMock.mockClear();
-    useHomeScrollStore.setState({ heroVisible: true });
   });
 
   afterEach(() => {
@@ -57,7 +55,7 @@ describe('Header', () => {
     render(<Header />);
 
     expect(screen.getByTestId('search-bar')).toBeInTheDocument();
-    expect(screen.getByTestId('global-stats-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('vitals-strip')).toBeInTheDocument();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'compact')).toBeTruthy();
     expect(screen.getAllByRole('link', { name: 'DAO' }).at(0)).toHaveAttribute(
       'href',
@@ -88,6 +86,39 @@ describe('Header', () => {
       '/mainnet/charts'
     );
     expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
+  });
+
+  it('shows the vitals strip on the home page too, not only after the hero scrolls away', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+
+    expect(screen.getByTestId('vitals-strip')).toBeInTheDocument();
+  });
+
+  it('shows the badge at every width, with a notch reserved for it in the header and the strip', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+
+    const logo = screen.getByTestId('logo');
+    // Not wrapped in a desktop-only container any more.
+    expect(logo.closest('.hidden')).toBeNull();
+    const notch = screen.getByTestId('header-logo-notch');
+    expect(notch).toHaveAttribute('aria-hidden', 'true');
+    expect(notch.className).toContain('clamp(96px,11vw,157px)');
+    // The nav starts right of the notch.
+    expect(notch.nextElementSibling).toBe(screen.getByRole('navigation', { name: 'Main' }));
+    expect(screen.getByTestId('vitals-logo-notch').className).toContain('md:block');
+  });
+
+  it('labels the nav in sentence case with normal tracking', () => {
+    usePathnameMock.mockReturnValue('/dao');
+    render(<Header />);
+
+    const dao = screen.getAllByRole('link', { name: 'DAO' })[0];
+    expect(dao.className).not.toContain('uppercase');
+    expect(dao.className).not.toContain('tracking');
+    expect(dao).toHaveClass('text-jade');
+    expect(screen.getAllByRole('link', { name: 'Charts' })[0]).toHaveClass('text-text');
   });
 
   it('opens and closes the mobile menu with navigation links', () => {

@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
+import { LOGO_NOTCH_CLASS, LOGO_STRIP_NOTCH_CLASS } from '@/components/layout/logo-geometry';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 import {
   NAVBAR_DROPDOWN_ITEM_ACTIVE_CLASS,
@@ -13,12 +14,11 @@ import {
   NAVBAR_DROPDOWN_ITEM_DEFAULT_CLASS,
   NAVBAR_DROPDOWN_PANEL_CLASS,
   NAVBAR_DROPDOWN_POPOVER_CLASS,
-  NAVBAR_DROPDOWN_TRIGGER_ACTIVE_CLASS,
-  NAVBAR_DROPDOWN_TRIGGER_CLASS,
-  NAVBAR_DROPDOWN_TRIGGER_DEFAULT_CLASS,
+  NAVBAR_LINK_ACTIVE_CLASS,
+  NAVBAR_LINK_CLASS,
+  NAVBAR_LINK_DEFAULT_CLASS,
 } from '@/components/layout/navbar-dropdown-styles';
-import { GlobalStatsBar } from '@/components/stats-bar';
-import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
+import { VitalsStrip } from '@/components/stats-bar';
 import { cn } from '@/lib/utils';
 
 interface NavLink {
@@ -52,17 +52,12 @@ const navItems: NavItem[] = [
   { href: '/charts', label: 'Charts' },
 ];
 
-const DESKTOP_START_COLUMN = 'hidden md:block md:w-[108px] md:shrink-0';
-
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const pathname = usePathname();
-  const isHomePage = pathname === '/';
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const isDropdownActive = (item: NavDropdown) =>
     item.children.some((child) => isLinkActive(child.href));
-  const heroVisible = useHomeScrollStore((s) => s.heroVisible);
-  const showStatsBar = isHomePage ? !heroVisible : true;
 
   const activeLabel = (() => {
     if (pathname === '/') return 'Home';
@@ -78,18 +73,15 @@ export function Header() {
   })();
 
   return (
-    <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
-      <div className="container relative mx-auto flex h-[56px] items-center gap-4 px-4 md:gap-0">
-        <div className="hidden md:block">
-          <Logo />
-        </div>
-        <div
-          data-testid="desktop-header-start-column"
-          aria-hidden="true"
-          className={DESKTOP_START_COLUMN}
-        />
+    <header className="border-base-border-subtle bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
+      <div className="container relative mx-auto flex min-h-[60px] items-center gap-2 px-4 md:gap-8">
+        <Logo />
+        <div data-testid="header-logo-notch" aria-hidden="true" className={LOGO_NOTCH_CLASS} />
 
-        <nav className="relative z-10 hidden shrink-0 items-center gap-0.5 md:flex">
+        <nav
+          aria-label="Main"
+          className="relative z-10 hidden shrink-0 items-center gap-x-4 md:flex lg:gap-x-6"
+        >
           <NetworkSwitcher />
           {navItems.map((item) =>
             isDropdown(item) ? (
@@ -97,10 +89,9 @@ export function Header() {
                 <button
                   type="button"
                   className={cn(
-                    NAVBAR_DROPDOWN_TRIGGER_CLASS,
-                    isDropdownActive(item)
-                      ? NAVBAR_DROPDOWN_TRIGGER_ACTIVE_CLASS
-                      : NAVBAR_DROPDOWN_TRIGGER_DEFAULT_CLASS
+                    NAVBAR_LINK_CLASS,
+                    'flex items-center gap-1',
+                    isDropdownActive(item) ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
                   )}
                 >
                   {item.label}
@@ -141,11 +132,10 @@ export function Header() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-md border px-2 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
-                  isLinkActive(item.href)
-                    ? 'border-jade/40 bg-jade/8 text-jade'
-                    : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
-                }`}
+                className={cn(
+                  NAVBAR_LINK_CLASS,
+                  isLinkActive(item.href) ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
+                )}
               >
                 {item.label}
               </Link>
@@ -180,11 +170,7 @@ export function Header() {
               </svg>
             )}
           </button>
-          {activeLabel && (
-            <span className="text-jade font-mono text-xs uppercase tracking-[0.12em]">
-              {activeLabel}
-            </span>
-          )}
+          {activeLabel && <span className="text-jade truncate text-[13px]">{activeLabel}</span>}
         </div>
 
         <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
@@ -194,18 +180,14 @@ export function Header() {
         </div>
       </div>
 
-      <div
-        className={`border-jade/10 overflow-hidden border-t bg-[#060810] transition-all duration-300 ${
-          showStatsBar ? 'h-7 opacity-100' : 'h-0 border-t-0 opacity-0'
-        }`}
-      >
-        <div className="container mx-auto flex h-7 items-center px-4">
+      <div className="border-base-border-subtle border-t bg-[#0a0c12]">
+        <div className="container mx-auto flex px-4">
           <div
-            data-testid="desktop-stats-start-column"
+            data-testid="vitals-logo-notch"
             aria-hidden="true"
-            className={DESKTOP_START_COLUMN}
+            className={LOGO_STRIP_NOTCH_CLASS}
           />
-          <GlobalStatsBar />
+          <VitalsStrip />
         </div>
       </div>
 
@@ -216,7 +198,7 @@ export function Header() {
               <Link
                 href="/"
                 onClick={() => setIsMenuOpen(false)}
-                className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                className={`block rounded-md border px-3 py-2.5 text-[13px] transition ${
                   pathname === '/'
                     ? 'border-jade/40 bg-jade/8 text-jade'
                     : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -229,7 +211,7 @@ export function Header() {
                 isDropdown(item) ? (
                   <div key={item.label} className="flex flex-col">
                     <span
-                      className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] ${
+                      className={`block rounded-md border px-3 py-2.5 text-[13px] ${
                         isDropdownActive(item)
                           ? 'border-jade/40 bg-jade/8 text-jade'
                           : 'text-text border-transparent'
@@ -243,7 +225,7 @@ export function Header() {
                           key={child.href}
                           href={child.href}
                           onClick={() => setIsMenuOpen(false)}
-                          className={`block rounded-md px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition ${
+                          className={`block rounded-md px-3 py-2 text-xs transition ${
                             isLinkActive(child.href)
                               ? 'text-jade bg-jade/8'
                               : 'text-text-dim hover:text-jade'
@@ -259,7 +241,7 @@ export function Header() {
                     key={item.href}
                     href={item.href}
                     onClick={() => setIsMenuOpen(false)}
-                    className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                    className={`block rounded-md border px-3 py-2.5 text-[13px] transition ${
                       isLinkActive(item.href)
                         ? 'border-jade/40 bg-jade/8 text-jade'
                         : 'text-text hover:text-jade hover:border-jade/20 border-transparent'

@@ -1,132 +1,149 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { api, type NetworkStats } from '@/lib/api';
+import { parseEpoch, type EpochInfo } from '@/lib/epoch';
 
-interface StatsBarProps {
-  stats: NetworkStats | null;
-}
-
-function parseEpoch(epoch: string): { number: number; index: number; length: number } | null {
-  const match = epoch.match(/(\d+)\((\d+)\/(\d+)\)/);
-  if (!match) return null;
-  return {
-    number: parseInt(match[1], 10),
-    index: parseInt(match[2], 10),
-    length: parseInt(match[3], 10),
-  };
-}
-
-export function StatsBar({ stats }: StatsBarProps) {
-  if (!stats) {
-    return (
-      <div className="flex h-6 items-center gap-6">
-        {Array.from({ length: 3 }, (_, i) => (
-          <div key={i} className="bg-base-elevated h-3 w-24 animate-pulse rounded" />
-        ))}
-      </div>
-    );
-  }
-
-  const epoch = parseEpoch(stats.epoch);
-  const epochPct = epoch ? ((epoch.index / epoch.length) * 100).toFixed(1) : '0';
-
-  return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-      <Link href={`/blocks/${stats.latestBlock}`} className="group flex items-baseline gap-1.5">
-        <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">Block</span>
-        <span className="text-text-bright group-hover:text-jade font-mono text-xs font-bold tabular-nums transition-colors">
-          #{stats.latestBlock.toLocaleString()}
-        </span>
-      </Link>
-
-      <Link href="/charts/epoch-time-length" className="group flex items-baseline gap-1.5">
-        <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">Epoch</span>
-        <span className="text-text-bright group-hover:text-jade font-mono text-xs font-bold tabular-nums transition-colors">
-          {epoch ? `#${epoch.number.toLocaleString()}` : stats.epoch}
-        </span>
-        {epoch && (
-          <span className="text-text-dim font-mono text-[10px] tabular-nums">
-            {epoch.index}/{epoch.length} ({epochPct}%)
-          </span>
-        )}
-      </Link>
-
-      <Link href="/charts/hash-rate" className="group flex items-baseline gap-1.5">
-        <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-          Hash Rate
-        </span>
-        <span className="text-text-bright group-hover:text-jade font-mono text-xs font-bold tabular-nums transition-colors">
-          {stats.hashRate}
-        </span>
-      </Link>
-
-      <span className="flex items-baseline gap-1.5">
-        <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-          Block Time
-        </span>
-        <span className="text-text-bright font-mono text-xs font-bold tabular-nums">
-          {stats.avgBlockTime}
-        </span>
-      </span>
-    </div>
-  );
-}
-
-export function GlobalStatsBar() {
+/**
+ * The chain vitals strip under the header, on every page: block, epoch progress, block time,
+ * hash rate, difficulty, and whether realtime updates are live. It replaces the homepage's old hero
+ * numbers, epoch card and floating LIVE pill.
+ */
+export function VitalsStrip() {
   const { data: stats } = useQuery({
     queryKey: ['network-stats'],
     queryFn: () => api.getNetworkStats(),
     staleTime: 0,
     refetchInterval: 10000,
   });
-
-  if (!stats) return null;
-
-  const epoch = parseEpoch(stats.epoch);
-  const epochPct = epoch ? ((epoch.index / epoch.length) * 100).toFixed(1) : null;
+  const isConnected = useRealtimeStore((s) => s.isConnected);
 
   return (
-    <div className="scrollbar-hide flex items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
-      <Link href={`/blocks/${stats.latestBlock}`} className="group flex items-center">
-        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">block</span>
-        <span className="text-jade/50 uppercase tracking-wider sm:hidden">#</span>
-        <span className="text-jade group-hover:text-emphasis ml-0.5 font-bold transition-colors sm:ml-1.5">
-          {stats.latestBlock.toLocaleString()}
-        </span>
-      </Link>
+    <section
+      aria-label="Chain vitals"
+      data-testid="vitals-strip"
+      className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 md:gap-x-9 md:gap-y-2.5 md:py-3"
+    >
+      {stats ? <Vitals stats={stats} /> : <VitalsLoading />}
+      {isConnected && <LiveStatus />}
+    </section>
+  );
+}
 
-      <span className="text-jade/20 mx-1.5 select-none sm:mx-2.5">|</span>
+const LABEL = 'text-text-dim text-[11px] md:text-xs';
+const VALUE =
+  'text-text-bright group-hover:text-jade text-[13px] font-medium tabular-nums transition-colors md:text-[15px]';
 
-      <Link href="/charts/epoch-time-length" className="group flex items-center">
-        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">epoch</span>
-        <span className="text-jade/50 uppercase tracking-wider sm:hidden">E</span>
-        <span className="text-jade group-hover:text-emphasis ml-0.5 font-bold transition-colors sm:ml-1.5">
-          {epoch ? epoch.number.toLocaleString() : stats.epoch}
-        </span>
-        {epoch && (
-          <span className="text-jade/40 ml-1.5 hidden sm:inline">
-            {epoch.index}/{epoch.length} {epochPct}%
-          </span>
-        )}
-      </Link>
+function Vital({ label, href, children }: { label: string; href?: string; children: ReactNode }) {
+  const body = (
+    <>
+      <span className={LABEL}>{label}</span>
+      <span className={VALUE}>{children}</span>
+    </>
+  );
+  const cls = 'group flex items-baseline gap-1.5 md:gap-2';
+  return href ? (
+    <Link href={href} className={cls}>
+      {body}
+    </Link>
+  ) : (
+    <div className={cls}>{body}</div>
+  );
+}
 
-      <span className="text-jade/20 mx-1.5 select-none sm:mx-2.5">|</span>
+function Vitals({ stats }: { stats: NetworkStats }) {
+  return (
+    <>
+      <Vital label="Block" href={`/blocks/${stats.latestBlock}`}>
+        #{stats.latestBlock.toLocaleString('en-US')}
+      </Vital>
+      <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
+      <Vital label="Block time">{stats.avgBlockTime}</Vital>
+      <Vital label="Hash rate" href="/charts/hash-rate">
+        {stats.hashRate}
+      </Vital>
+      <Vital label="Difficulty" href="/charts/difficulty">
+        {stats.difficulty}
+      </Vital>
+    </>
+  );
+}
 
-      <Link href="/charts/hash-rate" className="group flex items-center">
-        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">hash</span>
-        <span className="text-jade group-hover:text-emphasis font-bold transition-colors sm:ml-1.5">
-          {stats.hashRate}
-        </span>
-      </Link>
+function readEpoch(raw: string): { epoch: EpochInfo } | { error: string } {
+  try {
+    return { epoch: parseEpoch(raw) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
-      <span className="text-jade/20 mx-1.5 select-none sm:mx-2.5">|</span>
-
-      <span className="flex items-center">
-        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">interval</span>
-        <span className="text-jade font-bold sm:ml-1.5">{stats.avgBlockTime}</span>
+/** Epoch number, a neutral progress bar, `index / length` and the time left — or why it can't. */
+function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string }) {
+  const read = readEpoch(raw);
+  if ('error' in read) {
+    return (
+      <div role="alert" data-testid="vitals-epoch-error" className="flex items-baseline gap-2">
+        <span className={LABEL}>Epoch</span>
+        <span className="text-rouge text-xs">{`unreadable: ${read.error}`}</span>
+      </div>
+    );
+  }
+  const { epoch } = read;
+  const pct = (epoch.index / epoch.length) * 100;
+  const index = epoch.index.toLocaleString('en-US');
+  const length = epoch.length.toLocaleString('en-US');
+  return (
+    <Link
+      href="/charts/epoch-time-length"
+      data-testid="vitals-epoch"
+      aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, block ${index} of ${length}, about ${estimatedLeft} left`}
+      className="group flex flex-wrap items-center gap-x-1.5 gap-y-1 md:gap-x-2"
+    >
+      <span className={LABEL}>Epoch</span>
+      <span className={VALUE}>{epoch.number.toLocaleString('en-US')}</span>
+      <span
+        aria-hidden="true"
+        className="bg-base-border flex h-1 w-12 overflow-hidden rounded-sm md:w-[72px]"
+      >
+        <span
+          data-testid="vitals-epoch-progress"
+          className="bg-text"
+          style={{ width: `${pct}%` }}
+        />
       </span>
+      <span className="text-text text-[11px] tabular-nums md:text-xs">
+        {index} / {length}
+      </span>
+      <span className={LABEL}>≈ {estimatedLeft} left</span>
+    </Link>
+  );
+}
+
+function VitalsLoading() {
+  return (
+    <>
+      {['Block', 'Epoch', 'Block time', 'Hash rate', 'Difficulty'].map((label) => (
+        <div key={label} className="flex items-baseline gap-1.5 md:gap-2">
+          <span className={LABEL}>{label}</span>
+          <span
+            aria-hidden="true"
+            className="bg-base-elevated inline-block h-3 w-16 animate-pulse rounded"
+          />
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Shown while the realtime WebSocket is connected. */
+function LiveStatus() {
+  return (
+    <div role="status" data-testid="vitals-live" className="ml-auto flex items-center gap-2">
+      <span aria-hidden="true" className="bg-jade h-[7px] w-[7px] rounded-full" />
+      <span className="text-jade text-[11px] md:text-xs">Live</span>
     </div>
   );
 }

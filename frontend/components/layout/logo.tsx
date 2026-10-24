@@ -4,6 +4,7 @@ import Image from '@/components/ui/image';
 import Link from '@/components/ui/link';
 import { useEffect, useRef } from 'react';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
+import { LOGO_WIDTH_CLASS } from '@/components/layout/logo-geometry';
 
 export function Logo() {
   const blockNumber = useRealtimeStore((state) => state.latestBlock?.number);
@@ -29,10 +30,12 @@ export function Logo() {
     return () => clearTimeout(timer);
   }, [blockNumber]);
 
+  // The badge hangs across the header border into its own notch (see logo-geometry), so it never
+  // covers text: 96 px on a phone, 157 px on a desktop.
   return (
     <Link
       href="/"
-      className="logo-container group absolute -left-[16px] -top-[13px] z-[9999] md:-left-[22px] md:-top-[7px]"
+      className="logo-container group absolute left-[2px] top-[-7px] z-[9999] block"
       aria-label="CKBadger Home"
       title="Hi, I'm the ckbadger Shannon!"
     >
@@ -44,7 +47,7 @@ export function Logo() {
         height={97}
         unoptimized
         priority
-        className="logo-image h-auto w-[135px] rotate-[8deg] transform-gpu object-contain transition-[transform,filter] duration-300 group-hover:rotate-[9deg] md:w-[157px]"
+        className={`logo-image h-auto ${LOGO_WIDTH_CLASS} rotate-[8deg] transform-gpu object-contain transition-[transform,filter] duration-300 group-hover:rotate-[9deg]`}
       />
     </Link>
   );
