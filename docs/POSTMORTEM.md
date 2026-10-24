@@ -3600,8 +3600,8 @@ on every batch commit, every rollback and at startup) now carries:
 
 It is computed in the existing per-commit scan, and a phase-1 entry without its request occupied
 capacity is an error. `GET /statistics/ckbytes-allocation` reads `circulating = C − burnt − S`
-and `knowledge = U − virtual_occupied` from the header of the block that aggregate was computed
-at. So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
+and `knowledge = U − virtual_occupied` from the C, S and U of the block that aggregate was
+computed at, stored in the same row (see the review note below). So `circulating = knowledge + daoFree + free` holds by construction at one block, and a
 negative `free` is a 500. Phase-1 cells are in the segment: they remain DAO-typed and locked
 until phase 2, and their occupied part is in `U` like any live cell's. `free` also holds the
 capacity that is in no cell yet. `C − burnt − S` exceeds the live cells' capacity by the block
