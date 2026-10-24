@@ -74,7 +74,7 @@ export function Header() {
 
   return (
     <header className="border-base-border-subtle bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
-      <div className="container relative mx-auto flex min-h-[60px] items-center gap-2 px-4 md:gap-8">
+      <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 px-4 md:min-h-[60px] md:gap-8">
         <Logo />
         <div data-testid="header-logo-notch" aria-hidden="true" className={LOGO_NOTCH_CLASS} />
 

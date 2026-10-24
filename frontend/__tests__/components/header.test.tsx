@@ -105,6 +105,8 @@ describe('Header', () => {
     const notch = screen.getByTestId('header-logo-notch');
     expect(notch).toHaveAttribute('aria-hidden', 'true');
     expect(notch.className).toContain('clamp(96px,11vw,157px)');
+    // A 52 px row on phones lets the 96 px badge hang across the border as the 157 px one does.
+    expect(notch.parentElement).toHaveClass('min-h-[52px]', 'md:min-h-[60px]');
     // The nav starts right of the notch.
     expect(notch.nextElementSibling).toBe(screen.getByRole('navigation', { name: 'Main' }));
     expect(screen.getByTestId('vitals-logo-notch').className).toContain('md:block');
