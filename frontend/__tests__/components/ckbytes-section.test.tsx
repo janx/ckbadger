@@ -3,58 +3,15 @@ import { http, HttpResponse } from 'msw';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
-import { daoStatistics } from '@/__tests__/msw/fixtures/home';
-import { CkbytesSection, allocationOf } from '@/components/home/ckbytes-section';
+import { ckbytesAllocation, daoStatistics } from '@/__tests__/msw/fixtures/home';
+import { CkbytesSection } from '@/components/home/ckbytes-section';
 import { MINUS } from '@/lib/chart-ticks';
-import type { NetworkStats } from '@/lib/api';
+import type { CkbytesAllocation } from '@/lib/api';
 
 const API = '/api/:network/v1';
 
-/** Whole CKB → shannon string. */
-const ckb = (whole: number | string) => `${whole}00000000`;
-
-function networkStats(overrides: Partial<NetworkStats> = {}): NetworkStats {
-  return {
-    latestBlock: 20819348,
-    avgBlockTime: '8.83s',
-    hashRate: '93.54 PH/s',
-    difficulty: '850.46 P',
-    epoch: '15168(451/1590)',
-    tps: '0.20',
-    estimatedEpochTime: '2h 47m',
-    transactionsPerMinute: '11.8',
-    transactionsPerDay: '16960',
-    syncStatus: {
-      isSyncing: false,
-      syncedBlock: 20819348,
-      tipBlock: 20819348,
-      progress: 100,
-      estimatedTime: null,
-      chartDataMayBeIncomplete: false,
-      blocksPerSecond: null,
-      emaBlocksPerSecond: null,
-      syncMode: 'synced',
-      startedAt: null,
-      elapsedTime: null,
-      totalTime: null,
-    },
-    deepForkStatus: {
-      detected: false,
-      detectedAt: null,
-      depth: null,
-      dbTip: null,
-      chainTip: null,
-      forkPoint: null,
-    },
-    knowledgeSize: '15113424500000000',
-    circulatingSupply: '4986878303450933125',
-    daoLocked: '812889561643799700',
-    ...overrides,
-  };
-}
-
-function serveStats(stats: NetworkStats) {
-  server.use(http.get(`${API}/statistics/network`, () => HttpResponse.json(stats)));
+function serveAllocation(allocation: CkbytesAllocation) {
+  server.use(http.get(`${API}/statistics/ckbytes-allocation`, () => HttpResponse.json(allocation)));
 }
 
 describe('CkbytesSection', () => {
@@ -67,23 +24,22 @@ describe('CkbytesSection', () => {
     vi.restoreAllMocks();
   });
 
-  it('prints circulation exactly from shannons, the decimals and unit dim', async () => {
-    serveStats(networkStats());
+  it("prints the allocation's circulation exactly, decimals and unit dim, at its block", async () => {
     render(<CkbytesSection />);
     const total = await screen.findByTestId('ckbytes-circulating');
     expect(total).toHaveTextContent('49,868,783,034.50933125 CKB');
     expect(within(total).getByText('.50933125')).toHaveClass('text-text-dim');
+    expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
     expect(screen.getByRole('link', { name: 'CKBytes in circulation' })).toHaveAttribute(
       'href',
       '/mainnet/charts/total-supply'
     );
   });
 
-  it('splits it into knowledge, free and Nervos DAO with exact two-decimal shares', async () => {
-    serveStats(networkStats());
+  it('draws the three served parts, which partition circulation exactly', async () => {
     render(<CkbytesSection />);
     const bar = await screen.findByRole('img', {
-      name: 'Knowledge 0.30 percent, free 83.40 percent, Nervos DAO 16.30 percent',
+      name: 'Knowledge 0.30 percent, free 83.22 percent, Nervos DAO 16.48 percent',
     });
     expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade', 'min-w-[3px]');
     expect(bar.querySelector('[data-segment="dao"]')).toHaveClass('bg-gold');
@@ -91,50 +47,59 @@ describe('CkbytesSection', () => {
       'Knowledge151.13M CKB151.1 MB · 0.30%'
     );
     expect(document.querySelector('[data-legend="Free"]')).toHaveTextContent(
-      'Free41.59B CKB83.40%'
+      'Free41.50B CKB83.22%'
     );
+    // The DAO part is the DAO cells' free capacity; their whole capacity is context only.
     expect(document.querySelector('[data-legend="Nervos DAO"]')).toHaveTextContent(
-      'Nervos DAO8.13B CKB16.30%'
+      'Nervos DAO8.22B CKB16.48% · 8.22B locked'
     );
   });
 
-  it('keeps free as the exact remainder of circulation', () => {
-    const a = allocationOf(
-      networkStats({
-        knowledgeSize: ckb(159_690_777),
-        circulatingSupply: ckb(49_345_845_077),
-        daoLocked: ckb(8_371_195_163),
-      })
-    );
-    expect(a.state).toBe('ready');
-    if (a.state === 'ready') expect(a.view.free).toBe(BigInt(ckb(40_814_959_137)));
+  it('uses the served free part, never a remainder of its own', async () => {
+    // free is served; a frontend remainder would read circulating − knowledge − DAO deposit.
+    render(<CkbytesSection />);
+    const free = await screen.findByRole('button', { name: /^Free/ });
+    act(() => free.focus());
+    expect(free).toHaveTextContent('41,499,405,173.07133425 CKB');
   });
 
-  it('surfaces an impossible allocation instead of clamping free to zero', async () => {
-    serveStats(
-      networkStats({
-        knowledgeSize: ckb(40_000_000_000),
-        daoLocked: ckb(20_000_000_000),
-        circulatingSupply: ckb(49_345_845_077),
-      })
-    );
+  it('fails fast when the served parts do not add up to the circulation', async () => {
+    serveAllocation({ ...ckbytesAllocation, free: '4149940517307133424' });
     render(<CkbytesSection />);
     const error = await screen.findByTestId('ckbytes-allocation-error');
     expect(error).toHaveAttribute('role', 'alert');
-    expect(error.textContent).toContain('40,000,000,000');
-    expect(error.textContent).toContain('20,000,000,000');
-    expect(error.textContent).toContain('49,345,845,077');
+    expect(error).toHaveTextContent(
+      'The allocation at #20,820,045 does not partition circulation: 4,986,878,303,450,933,125 ≠ knowledge 15,113,424,500,000,000 + DAO free 821,824,361,643,799,700 + free 4,149,940,517,307,133,424 shannons.'
+    );
     expect(screen.queryByTestId('ckbytes-circulating')).not.toBeInTheDocument();
   });
 
-  it('says so while the supply figures are not available', async () => {
-    serveStats(networkStats({ circulatingSupply: null }));
+  it('fails fast on a negative part', async () => {
+    serveAllocation({
+      ...ckbytesAllocation,
+      free: '-1',
+      knowledge: String(
+        BigInt(ckbytesAllocation.knowledge) + BigInt(ckbytesAllocation.free) + BigInt(1)
+      ),
+    });
     render(<CkbytesSection />);
-    expect(await screen.findByText('Supply figures are not available yet.')).toBeInTheDocument();
+    expect(await screen.findByTestId('ckbytes-allocation-error')).toHaveTextContent(/free -1/);
+  });
+
+  it('shows the failed endpoint as an error, not a stale or invented bar', async () => {
+    server.use(
+      http.get(`${API}/statistics/ckbytes-allocation`, () =>
+        HttpResponse.json({ error: 'DAO aggregate row has the old format' }, { status: 500 })
+      )
+    );
+    render(<CkbytesSection />);
+    expect(await screen.findByTestId('ckbytes-allocation-error')).toHaveTextContent(
+      /Failed to load/
+    );
+    expect(screen.queryByRole('img', { name: /^Knowledge/ })).not.toBeInTheDocument();
   });
 
   it('charts the last 30 days of knowledge-size change, clipping the outlier', async () => {
-    serveStats(networkStats());
     render(<CkbytesSection />);
     const fig = screen.getByTestId('home-knowledge-change');
     await waitFor(() =>
@@ -155,7 +120,6 @@ describe('CkbytesSection', () => {
   });
 
   it('charts DAO deposit changes exactly: the headline is the last day, truncated to whole CKB', async () => {
-    serveStats(networkStats());
     render(<CkbytesSection />);
     const fig = screen.getByTestId('home-dao-change');
     await waitFor(() =>
@@ -175,7 +139,6 @@ describe('CkbytesSection', () => {
   });
 
   it('shows the DAO block: exact deposit, APC, depositors, active deposits and the signed 24 h change', async () => {
-    serveStats(networkStats());
     render(<CkbytesSection />);
     const dao = screen.getByTestId('home-dao');
     const deposited = await within(dao).findByTestId('home-dao-deposited');
@@ -197,7 +160,6 @@ describe('CkbytesSection', () => {
   });
 
   it('shows a dash, not a zero, when there is no previous day to compare with', async () => {
-    serveStats(networkStats());
     const { depositChange24h: _a, depositorsChange24h: _b, ...first } = daoStatistics;
     server.use(http.get(`${API}/dao/statistics`, () => HttpResponse.json(first)));
     render(<CkbytesSection />);
@@ -214,7 +176,6 @@ describe('CkbytesSection allocation highlight', () => {
   beforeEach(() => {
     stubChartWidth(280);
     stubPointerEvents();
-    serveStats(networkStats());
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -252,12 +213,12 @@ describe('CkbytesSection allocation highlight', () => {
     fireEvent.pointerEnter(seg('free'));
     expectHighlighted(seg, 'free');
     const free = legend(/^Free/);
-    expect(free).toHaveTextContent('Free41,588,753,173.07133425 CKB83.40%');
+    expect(free).toHaveTextContent('Free41,499,405,173.07133425 CKB83.22%');
     expect(within(free).getByText('Free')).toHaveClass('text-text-bright');
 
     fireEvent.pointerLeave(seg('free'));
     expectNoHighlight(seg);
-    expect(free).toHaveTextContent('Free41.59B CKB83.40%');
+    expect(free).toHaveTextContent('Free41.50B CKB83.22%');
     expect(within(free).getByText('Free')).toHaveClass('text-text');
   });
 
@@ -266,7 +227,7 @@ describe('CkbytesSection allocation highlight', () => {
     const dao = legend(/^Nervos DAO/);
     fireEvent.pointerEnter(dao);
     expectHighlighted(seg, 'dao');
-    expect(dao).toHaveTextContent('Nervos DAO8,128,895,616.43799700 CKB16.30%');
+    expect(dao).toHaveTextContent('Nervos DAO8,218,243,616.43799700 CKB16.48% · 8.22B locked');
     fireEvent.pointerLeave(dao);
     expectNoHighlight(seg);
   });

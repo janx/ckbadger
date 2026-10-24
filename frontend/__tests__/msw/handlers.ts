@@ -3,6 +3,7 @@ import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import {
   activitySummary24h,
   averageBlockTimeChart,
+  ckbytesAllocation,
   dailyActivities,
   daoStatistics,
   hashRateChart,
@@ -171,6 +172,7 @@ export const handlers = [
   http.get(`${API_BASE}/charts/knowledge-size`, () => HttpResponse.json(knowledgeSizeChart)),
   http.get(`${API_BASE}/dao/charts/total-deposit`, () => HttpResponse.json(totalDepositChart)),
   http.get(`${API_BASE}/dao/statistics`, () => HttpResponse.json(daoStatistics)),
+  http.get(`${API_BASE}/statistics/ckbytes-allocation`, () => HttpResponse.json(ckbytesAllocation)),
   http.get(`${API_BASE}/statistics/tx-stats`, () => HttpResponse.json(txStats)),
   http.get(`${API_BASE}/stats/activity-summary-24h`, () => HttpResponse.json(activitySummary24h)),
   http.get(`${API_BASE}/stats/daily-activities`, () => HttpResponse.json(dailyActivities)),

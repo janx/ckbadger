@@ -1438,6 +1438,22 @@ interface UncleRateChartResponse extends ChartResponse {
   orphanRateTarget: { numerator: number; denominator: number };
 }
 
+/**
+ * `/statistics/ckbytes-allocation`: circulation split into three exact, non-overlapping parts at
+ * one block (`blockNumber`); every amount is a shannon string. `circulating` = knowledge + daoFree
+ * + free exactly. `knowledge` is the occupied capacity of every live cell (DAO cells included),
+ * `daoFree` the free capacity of the live NervosDAO cells (deposits and withdraw requests), `free`
+ * everything else. `daoCapacity` is those DAO cells' whole capacity — context, not a part.
+ */
+interface CkbytesAllocation {
+  blockNumber: number;
+  circulating: string;
+  knowledge: string;
+  daoFree: string;
+  free: string;
+  daoCapacity: string;
+}
+
 interface TxStatsDataPoint {
   label: string;
   value: number;
@@ -2172,6 +2188,7 @@ export type {
   MnftItemActivity,
   ChartDataPoint,
   ChartResponse,
+  CkbytesAllocation,
   UncleRateChartResponse,
   TxStatsDataPoint,
   TxStatsResponse,
@@ -2713,6 +2730,10 @@ export const api = {
 
   getTxStats: (): Promise<TxStatsResponse> => {
     return fetchApi('/statistics/tx-stats');
+  },
+
+  getCkbytesAllocation: (): Promise<CkbytesAllocation> => {
+    return fetchApi('/statistics/ckbytes-allocation');
   },
 
   getRecentBlocks: (): Promise<RecentBlocksResponse> => {

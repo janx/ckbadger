@@ -1,5 +1,6 @@
 import type {
   ActivitySummary24h,
+  CkbytesAllocation,
   ChartResponse,
   DailyActivityStats,
   DaoStatistics,
@@ -451,4 +452,17 @@ export const feedSamples = {
       party('p8', `-${CKB('50')}`, '0'),
     ],
   }),
+};
+
+/**
+ * `/statistics/ckbytes-allocation` at one block: knowledge + DAO free + free is exactly the
+ * circulation; the DAO capacity (deposits and withdraw requests) is context, not a part.
+ */
+export const ckbytesAllocation: CkbytesAllocation = {
+  blockNumber: 20_820_045,
+  circulating: '4986878303450933125',
+  knowledge: '15113424500000000',
+  daoFree: '821824361643799700',
+  free: '4149940517307133425',
+  daoCapacity: '822052561643799700',
 };

@@ -22,7 +22,7 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
-import { api, type ChartResponse, type DaoStatistics, type NetworkStats } from '@/lib/api';
+import { api, type ChartResponse, type CkbytesAllocation, type DaoStatistics } from '@/lib/api';
 import { formatCompactSigned } from '@/lib/chart-ticks';
 import {
   formatDecimalBytes,
@@ -43,9 +43,10 @@ const CHANGE_DAYS = 30;
 
 /** CKBytes in circulation: the exact total, where it sits, and how knowledge and the DAO move. */
 export function CkbytesSection() {
-  const { data: stats } = useQuery({
-    queryKey: ['network-stats'],
-    queryFn: () => api.getNetworkStats(),
+  // The number and the bar come from one response, so they describe one block.
+  const allocation = useQuery({
+    queryKey: ['ckbytes-allocation'],
+    queryFn: () => api.getCkbytesAllocation(),
     staleTime: 0,
     refetchInterval: 10000,
   });
@@ -56,7 +57,7 @@ export function CkbytesSection() {
           CKBytes in circulation
         </Link>
       </h2>
-      <Allocation stats={stats} />
+      <Allocation data={allocation.data} error={allocation.error} />
       <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-x-10 gap-y-8">
         <div className={SMALL_MULTIPLES_CLASS}>
           <ChangeFigure
@@ -83,64 +84,53 @@ export function CkbytesSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Allocation: circulating = knowledge + free + Nervos DAO
+// Allocation: circulating = knowledge + DAO free + free, as the API serves it
 // ---------------------------------------------------------------------------
 
 interface AllocationView {
+  blockNumber: number;
   circulating: bigint;
   knowledge: bigint;
+  daoFree: bigint;
   free: bigint;
-  dao: bigint;
+  /** The DAO cells' whole capacity: context, not a part of the split. */
+  daoCapacity: bigint;
 }
 
-type AllocationState =
-  | { state: 'loading' }
-  | { state: 'unavailable' }
-  | { state: 'error'; message: string }
-  | { state: 'ready'; view: AllocationView };
-
 /**
- * Circulating supply split into its three parts, in exact shannons. Free is the remainder and is
- * never clamped: knowledge + DAO above circulation means the API's figures contradict each other.
+ * The served allocation in exact shannons. The three parts must partition the circulation exactly
+ * (the endpoint's contract) and none may be negative; anything else is an error, never a bar.
+ * Nothing is derived here: `free` is the served part, not a remainder.
  */
-export function allocationOf(stats: NetworkStats | undefined): AllocationState {
-  if (!stats) return { state: 'loading' };
-  if (
-    stats.circulatingSupply === null ||
-    stats.knowledgeSize === null ||
-    stats.daoLocked === null
-  ) {
-    return { state: 'unavailable' };
+export function allocationOf(a: CkbytesAllocation): AllocationView {
+  const v = {
+    blockNumber: a.blockNumber,
+    circulating: parseShannons(a.circulating, 'circulating'),
+    knowledge: parseShannons(a.knowledge, 'knowledge'),
+    daoFree: parseShannons(a.daoFree, 'daoFree'),
+    free: parseShannons(a.free, 'free'),
+    daoCapacity: parseShannons(a.daoCapacity, 'daoCapacity'),
+  };
+  const g = (n: bigint) => n.toLocaleString('en-US');
+  const at = `The allocation at #${g(BigInt(v.blockNumber))}`;
+  const negative = (['circulating', 'knowledge', 'daoFree', 'free', 'daoCapacity'] as const).find(
+    (k) => v[k] < BigInt(0)
+  );
+  if (negative) throw new Error(`${at} has a negative part: ${negative} ${v[negative]} shannons.`);
+  if (v.circulating === BigInt(0)) throw new Error(`${at} has no circulation.`);
+  if (v.knowledge + v.daoFree + v.free !== v.circulating) {
+    throw new Error(
+      `${at} does not partition circulation: ${g(v.circulating)} ≠ knowledge ${g(v.knowledge)} + DAO free ${g(v.daoFree)} + free ${g(v.free)} shannons.`
+    );
   }
-  try {
-    const circulating = parseShannons(stats.circulatingSupply, 'circulatingSupply');
-    const knowledge = parseShannons(stats.knowledgeSize, 'knowledgeSize');
-    const dao = parseShannons(stats.daoLocked, 'daoLocked');
-    if (knowledge < BigInt(0) || dao < BigInt(0) || circulating <= BigInt(0)) {
-      return {
-        state: 'error',
-        message: `Inconsistent supply data: circulating ${circulating}, knowledge ${knowledge}, DAO ${dao} shannons.`,
-      };
-    }
-    const free = circulating - knowledge - dao;
-    if (free < BigInt(0)) {
-      const f = (s: bigint) => formatCkbAmount(s).full;
-      return {
-        state: 'error',
-        message: `Inconsistent supply data: knowledge ${f(knowledge)} CKB + DAO ${f(dao)} CKB exceed circulating ${f(circulating)} CKB.`,
-      };
-    }
-    return { state: 'ready', view: { circulating, knowledge, free, dao } };
-  } catch (e) {
-    return { state: 'error', message: e instanceof Error ? e.message : String(e) };
-  }
+  return v;
 }
 
 const FREE_COLOR = 'bg-[#3a4258]';
 
-function Allocation({ stats }: { stats: NetworkStats | undefined }) {
-  const a = allocationOf(stats);
-  if (a.state === 'loading') {
+function Allocation({ data, error }: { data: CkbytesAllocation | undefined; error: Error | null }) {
+  const d = derive({ data, error }, allocationOf, 'No allocation yet');
+  if (d.state === 'loading') {
     return (
       <div aria-hidden="true" className="flex flex-col gap-3.5">
         <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
@@ -148,21 +138,18 @@ function Allocation({ stats }: { stats: NetworkStats | undefined }) {
       </div>
     );
   }
-  if (a.state === 'unavailable') {
-    return <p className="text-text-dim m-0 text-xs">Supply figures are not available yet.</p>;
-  }
-  if (a.state === 'error') {
+  if (d.state === 'error' || d.state === 'empty') {
     return (
       <div
         role="alert"
         data-testid="ckbytes-allocation-error"
         className="border-negative/40 text-negative rounded border px-3 py-2 text-xs"
       >
-        {a.message}
+        {d.message}
       </div>
     );
   }
-  return <AllocationReady view={a.view} />;
+  return <AllocationReady view={d.view} />;
 }
 
 type Part = 'knowledge' | 'free' | 'dao';
@@ -199,7 +186,7 @@ function useHighlight() {
 }
 
 function AllocationReady({ view }: { view: AllocationView }) {
-  const { circulating, knowledge, free, dao } = view;
+  const { circulating, knowledge, free, daoFree, daoCapacity } = view;
   const { active, handlers, focusHandlers } = useHighlight();
   const pct = (part: bigint) => formatPercent(part, circulating, 2);
   const total = formatCkbAmount(circulating);
@@ -223,10 +210,16 @@ function AllocationReady({ view }: { view: AllocationView }) {
         {total.integer}
         <span className="text-text-dim">.{total.decimal}</span>
         <span className="text-text-dim text-[0.5em]"> CKB</span>
+        <span
+          data-testid="ckbytes-block"
+          className="text-text-dim ml-3 align-middle text-xs font-normal"
+        >
+          at #{view.blockNumber.toLocaleString('en-US')}
+        </span>
       </div>
       <div
         role="img"
-        aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(dao)} percent`}
+        aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
         className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden rounded-[5px]"
       >
         <span
@@ -259,8 +252,8 @@ function AllocationReady({ view }: { view: AllocationView }) {
         <LegendItem
           swatch="bg-gold"
           name="Nervos DAO"
-          value={dao}
-          note={`${pct(dao)}%`}
+          value={daoFree}
+          note={`${pct(daoFree)}% · ${formatCkbCompact(daoCapacity).value} locked`}
           {...legend('dao')}
         />
       </div>
