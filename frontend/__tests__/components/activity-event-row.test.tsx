@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '../utils/test-utils';
-import { ActivityEventGroup, ParticipantLine } from '@/components/activity-event-row';
-import type { Activity } from '@/lib/api';
+import {
+  ActivityEventGroup,
+  ParticipantLine,
+  TxEventSummary,
+  buildGlobalTxEvents,
+  globalTxEvents,
+  summarizeTxEvents,
+} from '@/components/activity-event-row';
+import type { Activity, GlobalActivity } from '@/lib/api';
 
 // Spread the overrides rather than `??`-ing each field: a pool row's
 // `blockNumber` is explicitly null, and `null ?? default` would quietly hand it
@@ -422,5 +429,102 @@ describe('ActivityEventGroup — tx-pool rows', () => {
     );
     expect(screen.getAllByText(/12,345/).length).toBeGreaterThan(0);
     expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+  });
+});
+
+function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
+  return {
+    txHash: '0x54522856aa00000000000000000000000000000000000000000000000000007b60c3',
+    blockNumber: 20_819_142,
+    txIndex: 1,
+    timestamp: '1700000000000',
+    isCellbase: false,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    participants: [],
+    ...overrides,
+  };
+}
+
+const bitTypeCalls = [
+  {
+    typeCodeHash: '0x3a46',
+    typeHashType: 'type',
+    typeArgs: '0x00',
+    scriptHash: '0xh1',
+    scriptName: '.bit Time Index State',
+  },
+  {
+    typeCodeHash: '0x9e53',
+    typeHashType: 'type',
+    typeArgs: '0x00',
+    scriptHash: '0xh2',
+    scriptName: '.bit Time Info',
+  },
+];
+
+describe('global tx events — one classification for full rows and the compact summary', () => {
+  it('orders protocol actions, type calls, then lock calls a protocol does not explain', () => {
+    const activity = makeGlobal({
+      protocolActions: [{ protocol: 'utxoswap', action: 'swap', metadata: {} }],
+      typeCalls: [bitTypeCalls[0]],
+      lockCalls: [
+        {
+          lockCodeHash: '0xintent',
+          lockHashType: 'type',
+          lockArgs: '0x01',
+          scriptHash: '0xi',
+          scriptName: 'UTXOSwap Intent',
+          decoded: { protocol: 'utxoswap' },
+        },
+        {
+          lockCodeHash: '0xomni',
+          lockHashType: 'type',
+          lockArgs: '0x02',
+          scriptHash: '0xo',
+          scriptName: 'Omnilock',
+        },
+      ],
+    });
+    expect(globalTxEvents(activity).map((e) => e.kind)).toEqual(['protocol', 'type', 'lock']);
+    // The full rows render exactly those events.
+    expect(buildGlobalTxEvents(activity)).toHaveLength(3);
+    expect(summarizeTxEvents(globalTxEvents(activity), false)).toEqual([
+      { count: null, names: ['utxoswap \u00B7 swap'] },
+      { count: '1 type call', names: ['.bit Time Index State'] },
+      { count: '1 lock call', names: ['Omnilock'] },
+    ]);
+  });
+
+  it('counts type calls and lists the distinct script names', () => {
+    const activity = makeGlobal({
+      typeCalls: [...bitTypeCalls, { ...bitTypeCalls[1], scriptHash: '0xh3' }],
+    });
+    expect(summarizeTxEvents(globalTxEvents(activity), false)).toEqual([
+      { count: '3 type calls', names: ['.bit Time Index State', '.bit Time Info'] },
+    ]);
+  });
+
+  it('labels DAO steps as their rows do', () => {
+    const activity = makeGlobal({
+      protocolActions: [{ protocol: 'dao', action: 'withdraw_request', metadata: {} }],
+    });
+    expect(summarizeTxEvents(globalTxEvents(activity), false)).toEqual([
+      { count: null, names: ['DAO Withdraw Request'] },
+    ]);
+  });
+
+  it('reads a tx without events as its CKB movement', () => {
+    expect(summarizeTxEvents([], false)).toEqual([{ count: null, names: ['CKB Transfer'] }]);
+    expect(summarizeTxEvents([], true)).toEqual([{ count: null, names: ['Coinbase'] }]);
+  });
+
+  it('renders the summary as one line: dim count, then the names', () => {
+    render(<TxEventSummary activity={makeGlobal({ typeCalls: bitTypeCalls })} />);
+    const summary = screen.getByTestId('tx-event-summary');
+    expect(summary).toHaveTextContent('2 type calls .bit Time Index State \u00B7 .bit Time Info');
+    expect(screen.getByText(/2 type calls/)).toHaveClass('text-text-dim');
+    expect(summary).toHaveClass('truncate');
   });
 });

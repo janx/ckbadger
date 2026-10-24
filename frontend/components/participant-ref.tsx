@@ -25,15 +25,18 @@ function compactLabel(value: string): string {
  * A party with none of the three is an API contract violation and throws.
  *
  * `compact` is the per-participant line inside an activity row; the default is
- * the standalone form.
+ * the standalone form. `muted` draws a compact address in the neutral ink instead
+ * of jade, for rows where colour is kept for the amounts (the homepage feed).
  */
 export function ParticipantRefView({
   participant,
   compact = false,
+  muted = false,
   className,
 }: {
   participant: ParticipantRef;
   compact?: boolean;
+  muted?: boolean;
   className?: string;
 }) {
   const roles = participant.roles.length > 0 ? participant.roles.join(', ') : null;
@@ -48,7 +51,7 @@ export function ParticipantRefView({
             href={`/address/${address}`}
             className={cn(
               'shrink-0 font-mono text-xs transition-colors',
-              isCkbAddr ? 'text-jade/80 hover:text-jade' : 'text-text-dim hover:text-aqua'
+              isCkbAddr && !muted ? 'text-jade/80 hover:text-jade' : 'text-text-dim hover:text-aqua'
             )}
             title={address}
             onClick={(e) => e.stopPropagation()}

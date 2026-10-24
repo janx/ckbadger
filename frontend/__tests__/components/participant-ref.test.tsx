@@ -22,6 +22,17 @@ describe('ParticipantRefView', () => {
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
 
+  it('draws a compact address in jade, or in the neutral ink when muted', () => {
+    const { unmount } = render(<ParticipantRefView participant={makeRef({ address })} compact />);
+    expect(screen.getByRole('link')).toHaveClass('text-jade/80');
+    unmount();
+    render(<ParticipantRefView participant={makeRef({ address })} compact muted />);
+    const link = screen.getByRole('link');
+    expect(link).toHaveClass('text-text-dim');
+    expect(link).not.toHaveClass('text-jade/80');
+    expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
+  });
+
   it('renders the prefix and an unresolved marker when it did not, with no link', () => {
     const prefix = '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019';
     render(<ParticipantRefView participant={makeRef({ lockHashPrefix: prefix })} />);

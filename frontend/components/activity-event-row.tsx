@@ -230,14 +230,33 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
   }
 }
 
+/** The label of a DAO step, as its badge and the compact summary both print it. */
+function daoActionLabel(action: string): string {
+  switch (action) {
+    case 'deposit':
+      return 'DAO Deposit';
+    case 'withdraw_request':
+      return 'DAO Withdraw Request';
+    case 'withdraw_complete':
+      return 'DAO Withdraw Complete';
+    default:
+      return 'DAO';
+  }
+}
+
 function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
   const capacity = pa.metadata?.capacity as string | undefined;
   const compensation = pa.metadata?.compensation as string | undefined;
+  const label = daoActionLabel(pa.action);
 
   switch (pa.action) {
     case 'deposit':
       return {
-        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Deposit</span>,
+        badge: (
+          <span className="text-gold font-mono text-xs">
+            {'\u25C6'} {label}
+          </span>
+        ),
         value: (
           <span className="text-positive font-mono text-xs tabular-nums">
             +{capacity ? formatCkbAmount(capacity).full : '0'} CKB locked
@@ -246,7 +265,11 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
       };
     case 'withdraw_request':
       return {
-        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>,
+        badge: (
+          <span className="text-gold font-mono text-xs">
+            {'\u25C6'} {label}
+          </span>
+        ),
         value: (
           <span className="text-gold font-mono text-xs tabular-nums">
             {capacity ? formatCkbAmount(capacity).full : '0'} CKB
@@ -256,7 +279,9 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
     case 'withdraw_complete':
       return {
         badge: (
-          <span className="text-positive font-mono text-xs">{'\u25C6'} DAO Withdraw Complete</span>
+          <span className="text-positive font-mono text-xs">
+            {'\u25C6'} {label}
+          </span>
         ),
         value: (
           <div className="flex flex-col items-end gap-0.5">
@@ -273,7 +298,11 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
       };
     default:
       return {
-        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO</span>,
+        badge: (
+          <span className="text-gold font-mono text-xs">
+            {'\u25C6'} {label}
+          </span>
+        ),
         value: capacity ? (
           <span className="text-gold font-mono text-xs tabular-nums">
             {formatCkbAmount(capacity).full} CKB
@@ -328,6 +357,14 @@ function getFiberActionLabel(action: string): string {
   return FIBER_ACTION_LABELS[action] ?? formatProtocolAction(action);
 }
 
+/** The label of a protocol action (`DAO Deposit`, `fiber · Channel Open`, `utxoswap · swap`). */
+export function protocolActionLabel(pa: ActivityProtocolAction): string {
+  if (pa.protocol === 'dao') return daoActionLabel(pa.action);
+  const actionLabel =
+    pa.protocol === 'fiber' ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
+  return `${pa.protocol} \u00B7 ${actionLabel}`;
+}
+
 function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
   // DAO is handled separately via getDaoEventParts
   if (pa.protocol === 'dao') {
@@ -335,8 +372,7 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
   }
 
   const isFiber = pa.protocol === 'fiber';
-  const actionLabel = isFiber ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
-  const label = `${pa.protocol} \u00B7 ${actionLabel}`;
+  const label = protocolActionLabel(pa);
   const btcTxid = pa.metadata?.btcTxid as string | undefined;
   const capacity = pa.metadata?.capacity as string | undefined;
 
@@ -354,6 +390,11 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
   };
 }
 
+/** `Coinbase` for a cellbase, `CKB Transfer` when CKB is all the tx moves, else `CKB`. */
+export function ckbEventLabel(isCellbase: boolean, isPrimaryAction: boolean): string {
+  return isCellbase ? 'Coinbase' : isPrimaryAction ? 'CKB Transfer' : 'CKB';
+}
+
 /**
  * CKB event parts.
  * - "Coinbase" for cellbase transactions
@@ -366,7 +407,7 @@ function getCkbEventParts(
   isPrimaryAction: boolean
 ): EventParts {
   const icon = isCellbase ? '\u2605' : '\u2197';
-  const label = isCellbase ? 'Coinbase' : isPrimaryAction ? 'CKB Transfer' : 'CKB';
+  const label = ckbEventLabel(isCellbase, isPrimaryAction);
   const colorClass = isCellbase ? 'text-gold' : 'text-jade';
 
   return {
@@ -589,12 +630,19 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
 }
 
 /** Single participant line: party + CKB delta + item deltas (L1 + L2). */
-export function ParticipantLine({ participant }: { participant: ParticipantInfo }) {
+export function ParticipantLine({
+  participant,
+  muted = false,
+}: {
+  participant: ParticipantInfo;
+  /** Draw the party in the neutral ink (see ParticipantRefView). */
+  muted?: boolean;
+}) {
   const showCkb = participant.ckbDelta !== '0';
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <ParticipantRefView participant={participant} compact />
+      <ParticipantRefView participant={participant} compact muted={muted} />
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
         {showCkb && <CkbDelta delta={participant.ckbDelta} />}
         {participant.itemDeltas.map((item, i) => (
@@ -605,33 +653,114 @@ export function ParticipantLine({ participant }: { participant: ParticipantInfo 
   );
 }
 
+/** One tx-level event of a global activity: an L3 protocol action or an L2 type / lock call. */
+export type TxEvent =
+  | { kind: 'protocol'; action: ActivityProtocolAction }
+  | { kind: 'type'; call: ActivityTypeCall }
+  | { kind: 'lock'; call: ActivityLockCall };
+
+/**
+ * The tx-level events of a GlobalActivity, in display order: L3 protocol actions, then the L2
+ * catch-all type calls, then the lock calls a protocol action does not already explain. The one
+ * classification both the full event rows and the compact summary render.
+ */
+export function globalTxEvents(activity: GlobalActivity): TxEvent[] {
+  const events: TxEvent[] = activity.protocolActions.map((action) => ({
+    kind: 'protocol' as const,
+    action,
+  }));
+  for (const call of activity.typeCalls) events.push({ kind: 'type', call });
+  const protocolNames = new Set(
+    activity.protocolActions.map((pa: ActivityProtocolAction) => pa.protocol)
+  );
+  for (const call of activity.lockCalls) {
+    const decoded = call.decoded?.protocol as string | undefined;
+    if (decoded && protocolNames.has(decoded)) continue;
+    events.push({ kind: 'lock', call });
+  }
+  return events;
+}
+
 /**
  * Build tx-level event rows for a GlobalActivity.
  * Returns L3 protocol actions + L2 catch-all type/lock calls.
  * Per-participant data should be rendered separately via ParticipantLine.
  */
 export function buildGlobalTxEvents(activity: GlobalActivity): EventParts[] {
-  const events: EventParts[] = [];
-
-  // Layer 3: Protocol actions
-  for (const pa of activity.protocolActions) {
-    events.push(getProtocolActionEventParts(pa));
-  }
-
-  // Layer 2 catch-all: Type calls
-  for (const tc of activity.typeCalls) {
-    events.push(getTypeEventParts(tc));
-  }
-
-  // Layer 2 catch-all: Lock calls (skip those already covered by protocol actions)
-  const protocolNames = new Set(
-    activity.protocolActions.map((pa: ActivityProtocolAction) => pa.protocol)
+  return globalTxEvents(activity).map((e) =>
+    e.kind === 'protocol'
+      ? getProtocolActionEventParts(e.action)
+      : e.kind === 'type'
+        ? getTypeEventParts(e.call)
+        : getLockEventParts(e.call)
   );
-  for (const lc of activity.lockCalls) {
-    const decoded = lc.decoded?.protocol as string | undefined;
-    if (decoded && protocolNames.has(decoded)) continue;
-    events.push(getLockEventParts(lc));
-  }
+}
 
-  return events;
+/** One run of the compact summary: an optional dim count (`2 type calls`) and the names. */
+export interface TxSummaryGroup {
+  count: string | null;
+  names: string[];
+}
+
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * The one-line summary of a tx's events for a compact feed row: its protocol actions by name, then
+ * `N type calls` and `N lock calls` with the distinct script names. A tx without events reads as
+ * its CKB movement (`CKB Transfer`, or `Coinbase` for a cellbase), as the full rows label it.
+ */
+export function summarizeTxEvents(events: TxEvent[], isCellbase: boolean): TxSummaryGroup[] {
+  const protocols = events.flatMap((e) => (e.kind === 'protocol' ? [e.action] : []));
+  const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
+  const locks = events.flatMap((e) => (e.kind === 'lock' ? [e.call] : []));
+  const groups: TxSummaryGroup[] = [];
+  if (protocols.length > 0) {
+    groups.push({ count: null, names: protocols.map(protocolActionLabel) });
+  }
+  if (types.length > 0) {
+    groups.push({
+      count: plural(types.length, 'type call'),
+      names: [...new Set(types.map((sc) => formatScriptRef(sc)))],
+    });
+  }
+  if (locks.length > 0) {
+    groups.push({
+      count: plural(locks.length, 'lock call'),
+      names: [
+        ...new Set(
+          locks.map((lc) =>
+            formatScriptRef({ scriptHash: lc.scriptHash, scriptName: lc.scriptName })
+          )
+        ),
+      ],
+    });
+  }
+  if (groups.length === 0) {
+    groups.push({ count: null, names: [ckbEventLabel(isCellbase, true)] });
+  }
+  return groups;
+}
+
+/** The compact summary of a global activity, as one line of text (truncated by its container). */
+export function TxEventSummary({
+  activity,
+  className,
+}: {
+  activity: GlobalActivity;
+  className?: string;
+}) {
+  const groups = summarizeTxEvents(globalTxEvents(activity), activity.isCellbase);
+  return (
+    <span data-testid="tx-event-summary" className={cn('min-w-0 truncate', className)}>
+      {groups.map((g, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span className="text-text-dim">{' \u00B7 '}</span>}
+          {g.count && <span className="text-text-dim">{`${g.count}  `}</span>}
+          <span className="text-text">{g.names.join(' \u00B7 ')}</span>
+        </Fragment>
+      ))}
+    </span>
+  );
 }
