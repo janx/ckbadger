@@ -154,13 +154,14 @@ impl BulkBuildEngine {
                         resume_tip
                     )
                 })?;
-                let (c, _s, u) = dao_csu_from_bytes(&parent.dao).ok_or_else(|| {
-                    anyhow!(
+                let (c, _s, u) =
+                    ckbadger_common::dao::extract_dao_csu(&parent.dao).ok_or_else(|| {
+                        anyhow!(
                         "invalid parent DAO field while resuming bulk build: block={}, dao_len={}",
                         resume_tip,
                         parent.dao.len()
                     )
-                })?;
+                    })?;
                 runtime.owners.dao.seed_prev_dao_cu(c, u);
             }
         }
@@ -2166,17 +2167,6 @@ impl ChainStatsAccumulator {
 /// Read the consensus secondary issuance per epoch persisted at indexer
 /// startup. Bulk build cannot produce exact miner secondary issuance without
 /// it, so a missing value is an invariant violation, not a default.
-/// Extract DAO `C`/`S`/`U` from a 32-byte header DAO field.
-fn dao_csu_from_bytes(dao: &[u8]) -> Option<(i128, i128, i128)> {
-    if dao.len() < 32 {
-        return None;
-    }
-    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
-    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
-    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
-    Some((c, s, u))
-}
-
 fn required_secondary_epoch_reward(store: &CkbadgerStore) -> Result<u64> {
     store.get_secondary_epoch_reward()?.ok_or_else(|| {
         anyhow!(
