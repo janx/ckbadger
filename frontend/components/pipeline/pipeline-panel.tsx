@@ -111,6 +111,21 @@ function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined })
   );
 }
 
+/** The header's actions: the tip, then the way to every block. */
+function PipelineActions({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
+  return (
+    <div className="flex items-baseline gap-5">
+      <PipelineStats snapshot={snapshot} />
+      <Link
+        href="/blocks"
+        className="text-interactive hover:text-jade font-mono text-xs transition-colors"
+      >
+        All blocks →
+      </Link>
+    </div>
+  );
+}
+
 function StatusRow({ testId, tone, children }: { testId: string; tone: string; children: string }) {
   return (
     <div
@@ -805,7 +820,7 @@ export function PipelinePanel() {
   const { data, error } = usePipelineSnapshot();
   return (
     <TerminalPanel aria-label="Transaction pipeline" data-testid="pipeline-panel">
-      <TerminalPanelHeader indicator="active" actions={<PipelineStats snapshot={data} />}>
+      <TerminalPanelHeader indicator="active" actions={<PipelineActions snapshot={data} />}>
         <span className="flex items-center gap-2.5">
           Transaction Pipeline
           <span

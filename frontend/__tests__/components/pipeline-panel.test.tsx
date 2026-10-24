@@ -513,6 +513,14 @@ describe('PipelinePanel static render', () => {
     for (const gone of ['Mempool', 'Proposed', 'Next']) expect(stats).not.toHaveTextContent(gone);
   });
 
+  it('links from the header, next to the tip, to the list of all blocks', async () => {
+    await renderPanel();
+    const link = screen.getByRole('link', { name: 'All blocks →' });
+    expect(link).toHaveAttribute('href', '/mainnet/blocks');
+    // Beside the tip, not inside the stats.
+    expect(link.previousElementSibling).toBe(screen.getByTestId('pipeline-stats'));
+  });
+
   it('keeps drawing the chain when the pool tip differs from the synced tip', async () => {
     const s = buildPipelineSnapshot();
     const mismatch: PipelineSnapshot = {
