@@ -53,7 +53,9 @@ describe('ActivityFeed', () => {
     const activity = within(tabs).getByRole('button', { name: 'Latest activity' });
     const transactions = within(tabs).getByRole('button', { name: 'Transactions' });
     expect(activity).toHaveAttribute('aria-pressed', 'true');
-    expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11');
+    expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11', 'whitespace-nowrap');
+    expect(transactions).toHaveClass('whitespace-nowrap');
+    expect(screen.getByRole('link', { name: 'View all →' })).toHaveClass('whitespace-nowrap');
     expect(transactions).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('link', { name: 'View all →' })).toHaveAttribute(
       'href',
@@ -92,6 +94,11 @@ describe('ActivityFeed', () => {
     const type = first.querySelector('[data-role="detail"]') as HTMLElement;
     expect(type).toHaveTextContent('type.bit Time Index State(0x00) · .bit Time Info(0x00)');
     expect(first).not.toHaveTextContent(/type calls/);
+    // A line breaks between calls, never inside one.
+    const call = within(type).getByRole('link', { name: '.bit Time Info' })
+      .parentElement as HTMLElement;
+    expect(call).toHaveClass('whitespace-nowrap');
+    expect(call).toHaveTextContent(/^\.bit Time Info\(0x00\)$/);
     expect(within(type).getByRole('link', { name: '.bit Time Info' })).toHaveClass('text-text');
     expect(first.querySelector('[class*="gold"]')).toBeNull();
   });

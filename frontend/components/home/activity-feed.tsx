@@ -56,7 +56,7 @@ export function ActivityFeed() {
   return (
     <div data-testid="home-feed" className="flex min-w-0 flex-col">
       <div className="border-base-border-subtle flex items-center justify-between gap-4 border-b">
-        <div role="group" aria-label="Feed" className="flex gap-6">
+        <div role="group" aria-label="Feed" className="flex gap-4 sm:gap-6">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -64,7 +64,7 @@ export function ActivityFeed() {
               aria-pressed={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                '-mb-px h-11 border-b-2 bg-transparent p-0 text-[15px] transition-colors',
+                '-mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 text-[15px] transition-colors',
                 tab === t.id
                   ? 'border-jade text-text-bright font-medium'
                   : 'text-text-dim hover:text-text border-transparent'
@@ -76,7 +76,7 @@ export function ActivityFeed() {
         </div>
         <Link
           href={active.viewAll}
-          className="text-interactive hover:text-jade text-xs transition-colors"
+          className="text-interactive hover:text-jade whitespace-nowrap text-xs transition-colors"
         >
           View all →
         </Link>
@@ -233,7 +233,9 @@ function ActivityDetails({ activity }: { activity: GlobalActivity }) {
       <DetailLine key="type" label="type">
         <DotJoined
           parts={types.map((sc, i) => (
-            <TypeCallExpr key={i} sc={sc} quiet />
+            <span key={i} className="whitespace-nowrap">
+              <TypeCallExpr sc={sc} quiet />
+            </span>
           ))}
         />
       </DetailLine>
@@ -244,7 +246,9 @@ function ActivityDetails({ activity }: { activity: GlobalActivity }) {
       <DetailLine key="lock" label="lock">
         <DotJoined
           parts={locks.map((lc, i) => (
-            <LockCallExpr key={i} lc={lc} quiet />
+            <span key={i} className="whitespace-nowrap">
+              <LockCallExpr lc={lc} quiet />
+            </span>
           ))}
         />
       </DetailLine>
