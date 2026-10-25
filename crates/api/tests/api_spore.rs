@@ -302,7 +302,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         100,
         0,
         &TxIndexEntry {
-            tx_hash: [0u8; 32],
+            tx_hash: mint_tx.as_slice().try_into().unwrap(),
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 1,
@@ -317,7 +317,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         200,
         0,
         &TxIndexEntry {
-            tx_hash: [0u8; 32],
+            tx_hash: transfer_tx.as_slice().try_into().unwrap(),
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -332,7 +332,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         300,
         0,
         &TxIndexEntry {
-            tx_hash: [0u8; 32],
+            tx_hash: burn_tx.as_slice().try_into().unwrap(),
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 1,

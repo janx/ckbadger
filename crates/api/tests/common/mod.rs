@@ -1059,7 +1059,7 @@ pub fn seed_committed_activity(
         block_number,
         tx_index,
         &TxIndexEntry {
-            tx_hash: [0u8; 32],
+            tx_hash: tx_hash.try_into().expect("fixture tx hash is 32 bytes"),
             is_cellbase: false,
             timestamp,
             inputs_count: 1,
