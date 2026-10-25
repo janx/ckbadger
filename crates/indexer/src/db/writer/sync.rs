@@ -502,7 +502,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: ts_ms,
@@ -530,6 +530,16 @@ mod tests {
             outputs_count,
             ..make_tx_index_entry()
         }
+    }
+
+    fn seed_ten_second_histogram(store: &CkbadgerStore) {
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &10i32.to_be_bytes(),
+        );
+        store
+            .put_cf(store.cf_stats_chain(), &key, &1i32.to_le_bytes())
+            .unwrap();
     }
 
     #[test]
@@ -571,6 +581,7 @@ mod tests {
         batch.put_block_header(0, &make_header(0x10, 1_700_000_000_000));
         batch.put_block_header(1, &make_header(0x11, 1_700_000_010_000));
         batch.commit().unwrap();
+        seed_ten_second_histogram(&store);
 
         writer
             .init_sync_start(append_store.as_ref(), 0, false)
@@ -695,6 +706,7 @@ mod tests {
         batch.put_block_header(0, &make_header(0x60, 1_700_000_000_000));
         batch.put_block_header(1, &make_header(0x61, 1_700_000_010_000));
         batch.commit().unwrap();
+        seed_ten_second_histogram(&store);
 
         // force_cleanup=true AND partial data (block 1 beyond start_block 0) → cleanup runs
         writer
@@ -716,6 +728,7 @@ mod tests {
         batch.put_tx_index(1, 0, &make_tx_index_entry_with_counts(3, 5));
         batch.put_tx_index(1, 1, &make_tx_index_entry_with_counts(2, 4));
         batch.commit().unwrap();
+        seed_ten_second_histogram(&store);
 
         store
             .set_sync_status(&SyncStatus {

@@ -23,6 +23,10 @@ fn fixture_lock_script() -> Script {
 }
 
 fn fixture_header(number: u64) -> HeaderView {
+    let mut dao = [0u8; 32];
+    dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+    dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+    dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
     HeaderView {
         version: "0x0".to_string(),
         compact_target: "0x1a08a97e".to_string(),
@@ -33,7 +37,7 @@ fn fixture_header(number: u64) -> HeaderView {
         transactions_root: format!("0x{}", "22".repeat(32)),
         proposals_hash: format!("0x{}", "33".repeat(32)),
         extra_hash: format!("0x{}", "44".repeat(32)),
-        dao: format!("0x{}", "00".repeat(32)),
+        dao: format!("0x{}", hex::encode(dao)),
         nonce: "0x1".to_string(),
         hash: format!("0x{}", "55".repeat(32)),
     }

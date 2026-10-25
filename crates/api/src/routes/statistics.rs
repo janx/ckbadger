@@ -223,12 +223,12 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
     // Keyed by the last complete hour, which also moves whenever a day's
     // completeness does, so no cached `complete` flag outlives a reorg.
     let chain = load_chain_time(&state.store).await?;
+    let last_complete_hour = chain
+        .map(|chain| chain.last_complete_hour_start_secs())
+        .transpose()?;
     let cache_key = format!(
         "statistics:tx-stats:complete-through-hour:{}",
-        chain.map_or_else(
-            || "none".to_string(),
-            |chain| chain.last_complete_hour_start_secs().to_string()
-        )
+        last_complete_hour.map_or_else(|| "none".to_string(), |hour| hour.to_string())
     );
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<TxStatsResponse>(cache_key).await {
@@ -3358,9 +3358,9 @@ fn average_daily_difficulty(
 ///
 /// * numerator — `difficulty_sum` is the exact sum of each block's work.
 /// * denominator — `DailyStats.block_time_sum_ms` sums every inter-block gap
-///   `ts(b) − ts(b−1)` for the blocks `b` dated to this day, including the gap
+///   `t*(b) − t*(b−1)` for the blocks `b` assigned to this chain-time day, including the gap
 ///   across midnight from the previous day's last block, so it telescopes to
-///   `ts(last block of day) − ts(last block of previous day)`: the day's real
+///   `t*(last block of day) − t*(last block of previous day)`: the day's canonical
 ///   mined span. Only block 0 contributes no gap, which is why mainnet's
 ///   genesis day spans 67_712_964 ms (the chain started 05:09:50 UTC+8) and
 ///   not 86_400_000. The span is stored in milliseconds and converted to

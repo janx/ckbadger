@@ -146,6 +146,13 @@ pub fn materialize_bulk_artifacts_for_test(
 }
 
 #[doc(hidden)]
+pub fn materialize_bulk_artifacts_with_latest_dao_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<BulkArtifactSnapshot> {
+    bulk_build::materialize_bulk_artifacts_with_latest_dao_for_test(blocks)
+}
+
+#[doc(hidden)]
 pub fn materialize_bulk_stage_for_test(
     blocks: &[crate::rpc::BlockResponseWithCycles],
     chain_tip: u64,

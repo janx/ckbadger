@@ -994,7 +994,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: 1_000_000 + block_num * 1000,
@@ -1626,6 +1626,18 @@ mod tests {
 
         let before = domain.get_identity(&account_id).unwrap().unwrap();
         assert!(before.is_live, "reactivation should make the account live");
+
+        let histogram_key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &1i32.to_be_bytes(),
+        );
+        domain
+            .put_cf(
+                domain.cf_stats_chain(),
+                &histogram_key,
+                &50i32.to_le_bytes(),
+            )
+            .unwrap();
 
         // Production order (`execute_reorg`, `init_sync_start`,
         // `cleanup_batch_range`): undo replay first, then the canonical

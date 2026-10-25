@@ -206,7 +206,7 @@ impl BatchStats {
     /// canonical chain-time invariant.
     ///
     /// The per-day sum stores full millisecond precision so that the daily
-    /// average matches the on-the-fly average derived from raw block headers.
+    /// average matches the on-the-fly average derived from canonical chain-time headers.
     pub(crate) fn accumulate_block_time(
         &mut self,
         prev_ts: chrono::DateTime<chrono::Utc>,

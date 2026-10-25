@@ -4,6 +4,7 @@
 //! can be detected and corrected by rolling back to the last consistent block.
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{CachedBlockHeader, RollbackResult, TxIndexEntry};
 use std::sync::Arc;
@@ -39,7 +40,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
         transactions_count: 3,
         uncles_count: 0,
         proposals_count: 0,
-        compact_target: 0,
+        compact_target: 0x1a08a97e,
         miner_lock_hash: None,
         cycles: None,
         chain_time_ms: 1_600_000_000_000 + block_num * 8000,
@@ -170,6 +171,13 @@ fn test_rollback_restores_consistency() {
 
     // Insert partial block 6 (header only)
     insert_header_only(&store, 6);
+    // The synthetic forward chain has five 8-second inter-block intervals
+    // (1→2 through 5→6). Rollback must subtract the actual persisted bucket.
+    let histogram_key =
+        keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &8i32.to_be_bytes());
+    store
+        .put_cf(store.cf_stats_chain(), &histogram_key, &5i32.to_le_bytes())
+        .unwrap();
 
     // Confirm inconsistency
     assert!(store.get_block_header(6).unwrap().is_some());

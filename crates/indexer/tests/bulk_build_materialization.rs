@@ -8,7 +8,8 @@ use ckbadger_indexer::rpc::{
 };
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, materialize_bulk_artifacts_from_batches_for_test,
-    materialize_bulk_stage_for_test, materialize_bulk_stage_then_complete_sync_status_for_test,
+    materialize_bulk_artifacts_with_latest_dao_for_test, materialize_bulk_stage_for_test,
+    materialize_bulk_stage_then_complete_sync_status_for_test,
     run_sample_bulk_materialization_for_test, simulate_startup_sync_path_for_test,
 };
 use ckbadger_store::keys;
@@ -46,6 +47,7 @@ fn fixture_header_with_timestamp(number: u64, hash_byte: u8, timestamp_ms: i64) 
     // split secondary issuance against.
     let mut dao = [0u8; 32];
     dao[0..8].copy_from_slice(&FIXTURE_DAO_C.to_le_bytes());
+    dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
     dao[24..32].copy_from_slice(&FIXTURE_DAO_U.to_le_bytes());
     HeaderView {
         version: "0x0".to_string(),
@@ -897,6 +899,34 @@ fn bulk_stage_handoff_fixture() -> Vec<BlockResponseWithCycles> {
     vec![
         BlockResponseWithCycles {
             block: BlockView {
+                header: fixture_header_with_timestamp(0, 0xb0, 1_705_273_200_000),
+                uncles: vec![],
+                transactions: vec![TransactionView {
+                    hash: format!("0x{}", "b0".repeat(32)),
+                    version: "0x0".to_string(),
+                    cell_deps: vec![],
+                    header_deps: vec![],
+                    inputs: vec![CellInput {
+                        since: "0x0".to_string(),
+                        previous_output: OutPoint {
+                            tx_hash: format!("0x{}", "00".repeat(32)),
+                            index: "0xffffffff".to_string(),
+                        },
+                    }],
+                    outputs: vec![CellOutput {
+                        capacity: format!("0x{:x}", 100_00000000u64),
+                        lock: fixture_lock_script(),
+                        type_: None,
+                    }],
+                    outputs_data: vec!["0x".to_string()],
+                    witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+                }],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
                 header: fixture_header_with_timestamp(1, 0xb1, 1_705_276_800_000),
                 uncles: vec![],
                 transactions: vec![create_tx],
@@ -1317,15 +1347,49 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_dao_activity_a
 
 #[test]
 fn bulk_build_materializes_dao_daily_snapshot_and_latest_stats() {
-    let blocks = bulk_build_dao_activity_fixture();
-    let snapshot =
-        materialize_bulk_artifacts_for_test(&blocks).expect("bulk build dao artifact snapshot");
+    let mut blocks = bulk_build_dao_activity_fixture();
+    // Seal the lifecycle day with a real following-day block, so the daily
+    // snapshot is observable rather than reading a synthetic genesis row.
+    blocks.push(BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header_with_ar(103, 0xa4, 13_000, 1_700_386_420_000),
+            uncles: vec![],
+            transactions: vec![TransactionView {
+                hash: format!("0x{}", "a4".repeat(32)),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", "00".repeat(32)),
+                        index: "0xffffffff".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{:x}", 100_00000000u64),
+                    lock: fixture_lock_script(),
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+            }],
+            proposals: vec![],
+        },
+        cycles: None,
+    });
+    let snapshot = materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+        .expect("bulk build dao artifact snapshot");
 
     let dao_daily = snapshot
         .dao_daily_snapshots
-        .values()
-        .next()
-        .expect("dao daily snapshot");
+        .get(
+            &ckbadger_common::stats_bucket::stats_day(1_700_300_020_000)
+                .unwrap()
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .expect("DAO activity day snapshot");
     assert_eq!(dao_daily.total_deposited, 0);
     assert_eq!(dao_daily.depositors_count, 0);
     assert_eq!(dao_daily.new_deposits, 1);
@@ -1335,7 +1399,7 @@ fn bulk_build_materializes_dao_daily_snapshot_and_latest_stats() {
         .latest_dao_statistics
         .as_ref()
         .expect("latest dao statistics");
-    assert_eq!(latest.tip_block_number, 102);
+    assert_eq!(latest.tip_block_number, 103);
     assert_eq!(latest.total_deposited, 0);
     assert_eq!(latest.total_depositors, 0);
     assert_eq!(latest.active_deposits, 0);
@@ -1345,7 +1409,7 @@ fn bulk_build_materializes_dao_daily_snapshot_and_latest_stats() {
         .dao_top_depositors
         .as_ref()
         .expect("dao top depositors");
-    assert_eq!(top.tip_block_number, 102);
+    assert_eq!(top.tip_block_number, 103);
 }
 
 #[test]
@@ -1593,18 +1657,18 @@ fn bulk_build_stage_handoff_materializes_consistent_partial_state_without_comple
         .expect("bulk stage handoff snapshot");
 
     assert_eq!(snapshot.sync_status.tip_block_number, 2);
-    assert_eq!(snapshot.sync_status.total_transactions, 2);
-    assert_eq!(snapshot.sync_status.total_cells_created, 3);
+    assert_eq!(snapshot.sync_status.total_transactions, 3);
+    assert_eq!(snapshot.sync_status.total_cells_created, 4);
     assert_eq!(snapshot.sync_status.total_cells_consumed, 1);
     let live_summary = snapshot
         .live_cell_summary
         .expect("bulk handoff must publish its exact live-cell summary");
     assert_eq!(live_summary.tip_block_number, 2);
     assert_eq!(live_summary.tip_block_hash, [0xb2; 32]);
-    assert_eq!(live_summary.live_cells().unwrap(), 2);
+    assert_eq!(live_summary.live_cells().unwrap(), 3);
     assert_eq!(live_summary.dao, 0);
     assert_eq!(live_summary.typed_non_dao, 0);
-    assert_eq!(live_summary.plain, 2);
+    assert_eq!(live_summary.plain, 3);
     assert_eq!(live_summary.data_bearing, 0);
     assert!(snapshot.sync_status.sync_started_at.is_some());
     assert!(
@@ -1617,7 +1681,8 @@ fn bulk_build_stage_handoff_materializes_consistent_partial_state_without_comple
         "handoff-ready bulk stage must clear the in-progress marker"
     );
 
-    assert_eq!(snapshot.block_headers.len(), 2);
+    assert_eq!(snapshot.block_headers.len(), 3);
+    assert!(snapshot.block_headers.contains_key(&0));
     assert!(snapshot.block_headers.contains_key(&1));
     assert!(snapshot.block_headers.contains_key(&2));
     assert!(
@@ -1637,7 +1702,7 @@ fn bulk_build_stage_handoff_materializes_consistent_partial_state_without_comple
         .address_balances
         .get(&lock_b)
         .expect("address B balance after stage handoff");
-    assert_eq!(balance_a.balance, 80_00000000);
+    assert_eq!(balance_a.balance, 180_00000000);
     assert_eq!(balance_b.balance, 60_00000000);
 }
 
@@ -1651,8 +1716,8 @@ fn bulk_build_stage_handoff_pipeline_completion_marks_final_sync_status_at_chain
     .expect("bulk stage handoff pipeline completion status");
 
     assert_eq!(status.tip_block_number, 3);
-    assert_eq!(status.total_transactions, 3);
-    assert_eq!(status.total_cells_created, 4);
+    assert_eq!(status.total_transactions, 4);
+    assert_eq!(status.total_cells_created, 5);
     assert_eq!(status.total_cells_consumed, 2);
     assert!(status.sync_started_at.is_some());
     assert!(
@@ -1673,8 +1738,8 @@ fn startup_bulk_build_route_runs_handoff_and_pipeline_completion_for_fresh_store
         .sync_status
         .expect("fresh-store bulk route must produce a completed sync status");
     assert_eq!(status.tip_block_number, 3);
-    assert_eq!(status.total_transactions, 3);
-    assert_eq!(status.total_cells_created, 4);
+    assert_eq!(status.total_transactions, 4);
+    assert_eq!(status.total_cells_created, 5);
     assert_eq!(status.total_cells_consumed, 2);
     assert!(status.bulk_sync_completed_at.is_some());
     assert_eq!(status.bulk_sync_completed_block, Some(3));

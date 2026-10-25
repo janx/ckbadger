@@ -78,7 +78,7 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
         transactions_count: 0,
         uncles_count: 0,
         proposals_count: 0,
-        compact_target: 0,
+        compact_target: 0x1a08a97e,
         miner_lock_hash: None,
         cycles: None,
         chain_time_ms: timestamp,
@@ -308,8 +308,16 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
     }
 
     overlay.stage_final(&mut batch).unwrap();
+    let mut previous_chain_time = blocks
+        .first()
+        .and_then(|first| domain.get_block_header(first.block - 1).unwrap())
+        .map(|header| header.chain_time_ms);
     for b in blocks {
-        batch.put_block_header(b.block, &make_header(b.block, b.timestamp));
+        let mut header = make_header(b.block, b.timestamp);
+        header.chain_time_ms =
+            previous_chain_time.map_or(b.timestamp, |prior| prior.max(b.timestamp));
+        previous_chain_time = Some(header.chain_time_ms);
+        batch.put_block_header(b.block, &header);
     }
     batch.commit().unwrap();
     seed_epoch_rows(domain, blocks.iter().map(|b| (b.block, b.timestamp)));
@@ -346,7 +354,32 @@ fn read_stats(domain: &CkbadgerStore, key: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Production two-phase rollback, in `execute_reorg`'s order.
+fn seed_forward_histogram(domain: &CkbadgerStore) {
+    let mut headers = domain.list_blocks_desc(None, 10_000).unwrap();
+    headers.reverse();
+    let mut histogram = BTreeMap::<i32, i32>::new();
+    for pair in headers.windows(2) {
+        let [(previous_number, previous), (number, current)] = pair else {
+            unreachable!()
+        };
+        if *number != previous_number + 1 {
+            continue;
+        }
+        let delta_ms = current.chain_time_ms - previous.chain_time_ms;
+        assert!(delta_ms >= 0, "test fixture chain time must be monotone");
+        let bucket = ckbadger_common::stats_bucket::block_time_to_bucket(delta_ms / 1_000).unwrap();
+        *histogram.entry(bucket).or_default() += 1;
+    }
+    for (bucket, count) in histogram {
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &bucket.to_be_bytes());
+        domain
+            .put_cf(domain.cf_stats_chain(), &key, &count.to_le_bytes())
+            .unwrap();
+    }
+}
+
 fn rollback(domain: &CkbadgerStore, append: &CkbadgerStore, fork_point: i64) {
+    seed_forward_histogram(domain);
     let undo = domain.rollback_via_undo_log(append, fork_point).unwrap();
     domain
         .rollback_to_block_with_tx_contexts(fork_point, Some(append), undo.tx_contexts)
@@ -1623,6 +1656,10 @@ async fn crash_between_undo_replay_and_domain_rollback_is_recoverable() {
     );
 
     // Recovery: the startup cleanup path with the same target.
+    let mut genesis = StoreBatch::new(domain_a.as_ref());
+    genesis.put_block_header(0, &make_header(0, TS_PREV_DAY - 1_000));
+    genesis.commit().unwrap();
+    seed_forward_histogram(&domain_a);
     writer_a
         .init_sync_start_with_options(append_a.as_ref(), 2, false, true)
         .expect("startup cleanup must finish the interrupted rollback");
@@ -1835,6 +1872,7 @@ async fn cleanup_at_or_above_coverage_floor_still_runs() {
         ],
     );
     // No contract yet (fresh store mid-first-batch): cleanup proceeds.
+    seed_forward_histogram(&domain);
     writer
         .cleanup_batch_range(append.as_ref(), 2, 2)
         .expect("a store with no contract has nothing to protect");

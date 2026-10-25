@@ -7286,7 +7286,10 @@ mod tests {
         assert_eq!(runtime_live_delta(995, 1_000), -5);
         assert_eq!(format_signed_num_i128(5), "+5");
         assert_eq!(format_signed_num_i128(-5), "-5");
-        assert_eq!(super::format_num_u64(u64::MAX), "18,446,744,073,709,551,615");
+        assert_eq!(
+            super::format_num_u64(u64::MAX),
+            "18,446,744,073,709,551,615"
+        );
     }
 
     #[test]

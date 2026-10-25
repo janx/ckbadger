@@ -1503,7 +1503,7 @@ mod tests {
                 transactions_count: 1,
                 uncles_count: 0,
                 proposals_count: 0,
-                compact_target: 0,
+                compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
                 chain_time_ms: 1_700_000_000_000 + number * 1000,
@@ -1528,6 +1528,14 @@ mod tests {
 
         /// The production rollback sequence, in the production order.
         fn rollback_to(store: &Arc<CkbadgerStore>, block: i64) {
+            let key = ckbadger_store::keys::encode_stats_key(
+                ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+                &1i32.to_be_bytes(),
+            );
+            // Headers 198..=202 are consecutive one-second fixture blocks.
+            store
+                .put_cf(store.cf_stats_chain(), &key, &4i32.to_le_bytes())
+                .unwrap();
             let undo = store.rollback_via_undo_log(store.as_ref(), block).unwrap();
             store
                 .rollback_to_block_with_tx_contexts(block, Some(store.as_ref()), undo.tx_contexts)

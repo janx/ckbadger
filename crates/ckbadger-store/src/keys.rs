@@ -1839,9 +1839,12 @@ pub fn encode_dao_by_status_prefix(status: i16) -> [u8; 2] {
     status.to_be_bytes()
 }
 
-/// Convert a Unix timestamp in milliseconds to YYYYMMDD u32 (UTC+8 day boundary).
+/// Encode the canonical chain-time statistics day as YYYYMMDD (UTC+8).
+/// Parser-stage provisional keys may be built from raw time, but must be
+/// remapped by block number after the writer determines canonical chain time.
 pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
-    let date = ckbadger_common::block_date_from_ms(timestamp_ms);
+    let date = ckbadger_common::stats_bucket::stats_day(timestamp_ms)
+        .unwrap_or_else(|error| panic!("invalid statistics chain time {timestamp_ms}: {error}"));
     let s = date.format("%Y%m%d").to_string();
     s.parse::<u32>()
         .expect("timestamp_ms_to_date: formatted date must parse into u32")
@@ -2938,6 +2941,8 @@ mod tests {
         assert_eq!(timestamp_ms_to_date(1705334399000), 20240115);
         // 2024-01-15 16:00:00 UTC = 2024-01-16 00:00:00 UTC+8 → 20240116
         assert_eq!(timestamp_ms_to_date(1705334400000), 20240116);
+        let invalid = std::panic::catch_unwind(|| timestamp_ms_to_date(i64::MAX));
+        assert!(invalid.is_err(), "invalid chain time must fail immediately");
     }
 
     #[test]

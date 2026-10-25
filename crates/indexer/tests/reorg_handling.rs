@@ -2,6 +2,7 @@
 
 use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys;
 use ckbadger_store::types::{
     AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, HourlyStats, ParticipantDelta,
     ParticipantId, ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
@@ -11,6 +12,35 @@ use ckbadger_store::{
     CachedBlockHeader, DeepForkInfo, LiveCellInfo, PositionedCellInfo, RollbackResult, TxIndexEntry,
 };
 use std::sync::Arc;
+
+/// Rollback consumes the forward writer's block-time histogram. Synthetic
+/// headers in this suite must provide the same exact rows before rollback.
+fn rollback_fixture(
+    domain: &CkbadgerStore,
+    fork_point: i64,
+    append: Option<&CkbadgerStore>,
+) -> anyhow::Result<RollbackResult> {
+    let mut headers = domain.list_blocks_desc(None, 10_000)?;
+    headers.reverse();
+    let mut counts = std::collections::BTreeMap::<i32, i32>::new();
+    for pair in headers.windows(2) {
+        let [(prev_number, prev), (number, current)] = pair else {
+            unreachable!()
+        };
+        if *number != prev_number + 1 {
+            continue;
+        }
+        let delta_ms = current.chain_time_ms - prev.chain_time_ms;
+        assert!(delta_ms >= 0, "fixture chain time must be monotone");
+        let bucket = ckbadger_common::stats_bucket::block_time_to_bucket(delta_ms / 1_000)?;
+        *counts.entry(bucket).or_default() += 1;
+    }
+    for (bucket, count) in counts {
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &bucket.to_be_bytes());
+        domain.put_cf(domain.cf_stats_chain(), &key, &count.to_le_bytes())?;
+    }
+    domain.rollback_to_block_with_append_only_store(fork_point, append)
+}
 
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
@@ -43,7 +73,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
         transactions_count: 2,
         uncles_count: 0,
         proposals_count: 0,
-        compact_target: 0,
+        compact_target: 0x1a08a97e,
         miner_lock_hash: None,
         cycles: None,
         chain_time_ms: 1_000_000 + block_num * 1000,
@@ -287,9 +317,7 @@ fn test_rollback_removes_blocks() {
     populate_derived_cfs(&store, &lock_hash, 10);
 
     // Rollback to block 5: blocks 6-10 should be removed
-    let result: RollbackResult = store
-        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
-        .unwrap();
+    let result: RollbackResult = rollback_fixture(&store, 5, Some(append_store.as_ref())).unwrap();
     assert_eq!(result.blocks_removed, 5, "should remove blocks 6-10");
 
     // Blocks 1-5 should still exist
@@ -329,9 +357,7 @@ fn test_rollback_removes_transactions() {
     populate_derived_cfs(&store, &lock_hash, 6);
 
     // Rollback to block 3
-    let result = store
-        .rollback_to_block_with_append_only_store(3, Some(append_store.as_ref()))
-        .unwrap();
+    let result = rollback_fixture(&store, 3, Some(append_store.as_ref())).unwrap();
     // Blocks 4, 5, 6 removed => 3 blocks, each with 2 txs => 6 txs removed
     assert_eq!(result.blocks_removed, 3);
     assert_eq!(result.txs_removed, 6);
@@ -365,9 +391,7 @@ fn test_rollback_removes_cells_and_indexes() {
     populate_derived_cfs(&store, &lock_hash, 4);
 
     // Rollback to block 2: blocks 3-4 removed
-    let result = store
-        .rollback_to_block_with_append_only_store(2, Some(append_store.as_ref()))
-        .unwrap();
+    let result = rollback_fixture(&store, 2, Some(append_store.as_ref())).unwrap();
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
 
@@ -396,9 +420,7 @@ fn test_rollback_result_counts() {
     populate_derived_cfs(&store, &lock_hash, 8);
 
     // Rollback to block 5: remove blocks 6, 7, 8
-    let result = store
-        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
-        .unwrap();
+    let result = rollback_fixture(&store, 5, Some(append_store.as_ref())).unwrap();
 
     assert_eq!(result.blocks_removed, 3, "3 blocks removed (6, 7, 8)");
     assert_eq!(
@@ -499,9 +521,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
     assert_eq!(before.len(), 5);
 
     // Rollback to block 300: activities at blocks 400, 500 should be deleted
-    domain
-        .rollback_to_block_with_append_only_store(300, Some(&append))
-        .unwrap();
+    rollback_fixture(&domain, 300, Some(&append)).unwrap();
 
     let after = domain.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(
@@ -658,9 +678,7 @@ fn test_rollback_updates_derived_cfs_inline() {
 
     // 4. Rollback to block 2 — removes cells from blocks 3 and 4:
     //    2 regular cells + 2 UDT cells removed.
-    let result = store
-        .rollback_to_block_with_append_only_store(2, Some(append_store.as_ref()))
-        .unwrap();
+    let result = rollback_fixture(&store, 2, Some(append_store.as_ref())).unwrap();
     assert_eq!(result.blocks_removed, 2, "blocks 3 and 4 removed");
     // 2 regular cells + 2 UDT cells = 4 cells removed
     assert_eq!(result.cells_removed, 4, "4 cells removed (2 reg + 2 UDT)");
@@ -817,9 +835,7 @@ fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
     assert!(domain.get_fiber_channel(&channel_id_b).unwrap().is_some());
 
     // Rollback to block 4
-    domain
-        .rollback_to_block_with_append_only_store(4, Some(&append))
-        .unwrap();
+    rollback_fixture(&domain, 4, Some(&append)).unwrap();
 
     // Channel A (opened at 3) survives
     let ch_a = domain.get_fiber_channel(&channel_id_a).unwrap();
@@ -893,9 +909,7 @@ fn test_rollback_resets_fiber_channel_closed_after_fork_point_to_open() {
     batch.commit().unwrap();
 
     // Rollback to block 4 — channel was opened at 2, closed at 5
-    domain
-        .rollback_to_block_with_append_only_store(4, Some(&append))
-        .unwrap();
+    rollback_fixture(&domain, 4, Some(&append)).unwrap();
 
     // Channel should be reset to Open with close/commitment fields cleared
     let ch = domain
@@ -985,9 +999,7 @@ fn test_rollback_adjusts_script_reference_info_deltas() {
     batch.commit().unwrap();
 
     // Rollback to block 2 — removes blocks 3,4,5 (3 cells)
-    let result = domain
-        .rollback_to_block_with_append_only_store(2, Some(&append))
-        .unwrap();
+    let result = rollback_fixture(&domain, 2, Some(&append)).unwrap();
     assert_eq!(result.cells_removed, 3, "3 cells in blocks 3-5");
 
     // Script reference info should have deltas applied:
@@ -1182,9 +1194,7 @@ fn test_rollback_deletes_multi_participant_activities() {
     assert_eq!(acts_b.len(), 2, "lock_b participates in blocks 3 and 4");
 
     // Rollback to block 2 — removes blocks 3,4,5
-    domain
-        .rollback_to_block_with_append_only_store(2, Some(&append))
-        .unwrap();
+    rollback_fixture(&domain, 2, Some(&append)).unwrap();
 
     // Global list: only block 2 activity survives
     let remaining = domain.list_tx_actions_recent(10, None).unwrap();
@@ -1282,9 +1292,7 @@ fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
     // Shallow reorg: fork point block 3, blocks 4-5 rolled back. The fork
     // splits the "1970010100" hour, so that bucket must be repaired by delta
     // subtraction (2 blocks, 4 txs, 12 created, 4 consumed), not deleted.
-    let result = domain
-        .rollback_to_block_with_append_only_store(3, Some(append.as_ref()))
-        .unwrap();
+    let result = rollback_fixture(&domain, 3, Some(append.as_ref())).unwrap();
     assert_eq!(result.blocks_removed, 2);
 
     let hourly: std::collections::HashMap<String, HourlyStats> = domain
@@ -1443,9 +1451,7 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
         .unwrap();
 
     // Shallow partial-day, partial-hour reorg: fork point block 3.
-    let result = domain
-        .rollback_to_block_with_append_only_store(3, Some(append.as_ref()))
-        .unwrap();
+    let result = rollback_fixture(&domain, 3, Some(append.as_ref())).unwrap();
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "std cells of blocks 4-5 removed");
     assert_eq!(result.cells_restored, 1, "restore cell returns to live");
@@ -1577,7 +1583,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         transactions_count: 2,
         uncles_count: 0,
         proposals_count: 0,
-        compact_target: 0,
+        compact_target: 0x1a08a97e,
         miner_lock_hash: None,
         cycles: None,
         chain_time_ms: block_ts(b),
@@ -1652,6 +1658,12 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
             },
         )
         .unwrap();
+    // The new epoch at block 4 is one rounded hour after epoch 0's start.
+    let epoch_bucket =
+        keys::encode_stats_key(keys::STATS_PREFIX_EPOCH_TIME_DIST, &60i32.to_be_bytes());
+    domain
+        .put_cf(domain.cf_stats_chain(), &epoch_bucket, &1i32.to_le_bytes())
+        .unwrap();
 
     // Write the pre-reorg activity stats + addr sets through the live write
     // path (accumulate per bucket incl. the in-memory cellbase rows, then
@@ -1722,9 +1734,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
     };
 
     // Shallow partial-day reorg: fork point block 3, blocks 4-5 orphaned.
-    domain
-        .rollback_to_block_with_append_only_store(3, Some(append.as_ref()))
-        .unwrap();
+    rollback_fixture(&domain, 3, Some(append.as_ref())).unwrap();
 
     // Cutoff-day bucket: reset to the surviving portion {A, D}.
     let day_after = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
@@ -1885,9 +1895,7 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
     batch.put_stats(&latest_key, &bincode::serialize(&latest).unwrap());
     batch.commit().unwrap();
 
-    store
-        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
-        .unwrap();
+    rollback_fixture(&store, 5, Some(append_store.as_ref())).unwrap();
 
     assert!(
         store.get_dao_top_depositors().unwrap().is_some(),
@@ -2012,9 +2020,7 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     batch.commit().unwrap();
 
     domain.rollback_via_undo_log(&append, 2).unwrap();
-    domain
-        .rollback_to_block_with_append_only_store(2, Some(&append))
-        .unwrap();
+    rollback_fixture(&domain, 2, Some(&append)).unwrap();
 
     // Block 3's rows are gone from both indexes; block 2's survive.
     let rows = domain.list_addr_txs_recent(&lock_a, 10, None).unwrap();
@@ -2106,9 +2112,7 @@ fn test_rollback_bails_when_prefix_participant_row_is_missing() {
     );
     batch.commit().unwrap();
 
-    let err = domain
-        .rollback_to_block_with_append_only_store(2, Some(&append))
-        .unwrap_err();
+    let err = rollback_fixture(&domain, 2, Some(&append)).unwrap_err();
     assert!(
         err.to_string().contains("missing addr_txs_by_prefix row"),
         "{err}"

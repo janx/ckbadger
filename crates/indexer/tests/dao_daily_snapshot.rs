@@ -46,6 +46,74 @@ fn outpoint_bytes(tx_hash: &[u8], output_index: i16) -> Vec<u8> {
 /// atomically with their blocks; rollback fails fast when the boundary
 /// epoch row is missing.
 fn seed_epoch_rows_for_dao_fixture(store: &CkbadgerStore) {
+    // These focused rollback cases wrote only their last 2-3 headers. Supply
+    // the missing canonical prefix that production has before its binary
+    // chain-time/epoch searches, preserving the first fixture header's DAO.
+    let mut headers = store.list_blocks_desc(None, 1_000).unwrap();
+    headers.reverse();
+    let (first_number, first_header) = headers.first().expect("DAO rollback fixture headers");
+    if *first_number > 0 {
+        let prefix_time = first_header.chain_time_ms.checked_sub(1_000).unwrap();
+        let mut prefix = StoreBatch::new(store);
+        for number in 0..*first_number {
+            let mut header = first_header.clone();
+            header.hash = vec![number as u8; 32];
+            header.parent_hash = vec![if number == 0 { 0 } else { (number - 1) as u8 }; 32];
+            header.timestamp = prefix_time;
+            header.chain_time_ms = prefix_time;
+            header.epoch_index = number as i32;
+            prefix.put_block_header(number, &header);
+        }
+        prefix.commit().unwrap();
+    }
+    let mut headers = store.list_blocks_desc(None, 1_000).unwrap();
+    headers.reverse();
+    let mut histogram = std::collections::BTreeMap::<i32, i32>::new();
+    for pair in headers.windows(2) {
+        let [(previous_number, previous), (number, current)] = pair else {
+            unreachable!()
+        };
+        assert_eq!(
+            *number,
+            previous_number + 1,
+            "DAO fixture canonical prefix must be contiguous"
+        );
+        let delta_ms = current
+            .chain_time_ms
+            .checked_sub(previous.chain_time_ms)
+            .unwrap();
+        let bucket = ckbadger_common::stats_bucket::block_time_to_bucket(delta_ms / 1_000).unwrap();
+        *histogram.entry(bucket).or_default() += 1;
+    }
+    for (bucket, count) in histogram {
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &bucket.to_be_bytes());
+        store
+            .put_cf(store.cf_stats_chain(), &key, &count.to_le_bytes())
+            .unwrap();
+    }
+    let mut previous_epoch_start = None;
+    let mut epoch_histogram = std::collections::BTreeMap::<i32, i32>::new();
+    for (_, header) in &headers {
+        if header.epoch_index != 0 {
+            continue;
+        }
+        if let Some((previous_epoch, previous_ms)) = previous_epoch_start {
+            if header.epoch_number == previous_epoch + 1 {
+                let elapsed = u128::try_from(header.chain_time_ms - previous_ms).unwrap();
+                let bucket =
+                    i32::try_from(ckbadger_common::work::rounded_ratio(elapsed, 60_000).unwrap())
+                        .unwrap();
+                *epoch_histogram.entry(bucket).or_default() += 1;
+            }
+        }
+        previous_epoch_start = Some((header.epoch_number, header.chain_time_ms));
+    }
+    for (bucket, count) in epoch_histogram {
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH_TIME_DIST, &bucket.to_be_bytes());
+        store
+            .put_cf(store.cf_stats_chain(), &key, &count.to_le_bytes())
+            .unwrap();
+    }
     for (epoch, start_block, end_block) in [(1i64, 1i64, 99i64), (2, 100, 101)] {
         store
             .put_epoch_stats(
@@ -103,7 +171,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0407_end_ms,
@@ -129,7 +197,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t1_ms,
@@ -155,7 +223,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t2_ms,
@@ -356,7 +424,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_start_ms - 11_000,
@@ -382,7 +450,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_start_ms,
@@ -407,7 +475,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_mid_ms,
@@ -432,7 +500,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_late_ms,
@@ -587,7 +655,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0407_late_ms,
@@ -612,7 +680,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t1_ms,
@@ -637,7 +705,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t2_ms,
@@ -821,7 +889,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0407_late_ms,
@@ -846,7 +914,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t1_ms,
@@ -871,7 +939,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t2_ms,

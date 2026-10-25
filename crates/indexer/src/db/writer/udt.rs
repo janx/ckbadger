@@ -1607,7 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_udt_transfers_batch_errors_on_missing_block_timestamp() {
+    fn test_process_udt_transfers_batch_errors_on_missing_block_chain_time() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -1641,7 +1641,7 @@ mod tests {
             &mut batch,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("missing block timestamp"));
+        assert!(err.to_string().contains("missing block chain time"));
     }
 
     // -- apply_onchain_token_info binding semantics -----------------------------

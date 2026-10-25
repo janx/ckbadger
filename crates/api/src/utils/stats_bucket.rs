@@ -5,7 +5,9 @@
 //! this same monotonic time, so no later block can reopen an earlier bucket.
 
 use chrono::NaiveDate;
-use ckbadger_common::stats_bucket::{bucket_end_ms, is_bucket_complete, utc8_day_end_ms, HOUR_MS};
+use ckbadger_common::stats_bucket::{
+    bucket_end_ms, is_bucket_complete, stats_day, stats_hour, utc8_day_end_ms, HOUR_MS,
+};
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 
@@ -134,9 +136,12 @@ impl ChainTime {
 
     /// Start (UTC seconds) of the newest complete hour: the hour before the
     /// one the chain time falls in.
-    pub fn last_complete_hour_start_secs(&self) -> i64 {
-        let chain_secs = self.chain_time_ms.div_euclid(1000);
-        chain_secs - chain_secs.rem_euclid(3600) - 3600
+    pub fn last_complete_hour_start_secs(&self) -> Result<i64, ApiRouteError> {
+        stats_hour(self.chain_time_ms)
+            .map_err(|e| ApiError::internal(format!("invalid tip chain hour: {e}")))?
+            .timestamp()
+            .checked_sub(3600)
+            .ok_or_else(|| ApiError::internal("last complete hour timestamp underflow"))
     }
 
     /// Whether the UTC+8 day `date` is complete.
@@ -184,14 +189,13 @@ pub async fn load_chain_time(
         .map_err(|e| ApiError::internal(e.to_string()))?
 }
 
-/// The UTC+8 date of a block timestamp, through the indexer's `block_date`.
+/// The UTC+8 statistics day of a canonical block chain time.
 fn utc8_date_of(number: i64, timestamp_ms: i64) -> Result<NaiveDate, ApiRouteError> {
-    let at = chrono::DateTime::from_timestamp_millis(timestamp_ms).ok_or_else(|| {
+    stats_day(timestamp_ms).map_err(|e| {
         ApiError::internal(format!(
-            "block {number} has an out-of-range timestamp: {timestamp_ms} ms"
+            "block {number} has invalid chain time {timestamp_ms} ms: {e}"
         ))
-    })?;
-    Ok(ckbadger_common::block_date(at))
+    })
 }
 
 /// Whether the `series` row dated `date` aggregates a complete day.
@@ -359,7 +363,7 @@ mod tests {
             "chart:x:complete-through:none"
         );
         assert_eq!(
-            chain.last_complete_hour_start_secs(),
+            chain.last_complete_hour_start_secs().unwrap(),
             utc_ms("2026-10-23T15:00:00Z") / 1000
         );
     }
@@ -371,6 +375,13 @@ mod tests {
             err.contains("daily stats") && err.contains("no indexed block"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn invalid_tip_chain_hour_is_reported_with_context() {
+        let chain = ChainTime::from_header(1, 0, i64::MAX, [0; 32]).unwrap();
+        let error = message(chain.last_complete_hour_start_secs().unwrap_err());
+        assert!(error.contains("invalid tip chain hour"), "{error}");
     }
 
     #[test]

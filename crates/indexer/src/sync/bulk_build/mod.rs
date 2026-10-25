@@ -3384,7 +3384,14 @@ pub(crate) fn materialize_core_owner_state_for_test(
 pub(crate) fn materialize_bulk_artifacts_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<BulkArtifactSnapshot> {
-    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks])
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], false)
+}
+
+#[doc(hidden)]
+pub(crate) fn materialize_bulk_artifacts_with_latest_dao_for_test(
+    blocks: &[BlockResponseWithCycles],
+) -> Result<BulkArtifactSnapshot> {
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], true)
 }
 
 #[doc(hidden)]
@@ -3392,7 +3399,7 @@ pub(crate) fn materialize_bulk_artifacts_from_batches_for_test(
     batches: &[Vec<BlockResponseWithCycles>],
 ) -> Result<BulkArtifactSnapshot> {
     let batch_slices = batches.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    materialize_bulk_artifacts_from_block_batches_for_test_impl(&batch_slices)
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&batch_slices, false)
 }
 
 #[doc(hidden)]
@@ -3630,17 +3637,49 @@ fn apply_pipeline_sync_status_for_test(
 
 fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     block_batches: &[&[BlockResponseWithCycles]],
+    include_latest_dao: bool,
 ) -> Result<BulkArtifactSnapshot> {
+    let first = block_batches
+        .iter()
+        .flat_map(|batch| batch.iter())
+        .next()
+        .ok_or_else(|| anyhow!("bulk artifact test helper needs at least one block"))?;
+    let first_number = u64::from_str_radix(first.block.header.number.trim_start_matches("0x"), 16)?;
+    let first_time =
+        i64::from_str_radix(first.block.header.timestamp.trim_start_matches("0x"), 16)?;
+    let fixture_genesis_time = first_time.checked_sub(DAY_MS).ok_or_else(|| {
+        anyhow!("bulk artifact fixture first time has no preceding day: {first_time}")
+    })?;
     let mut runtime = BulkBuildRuntimeState::default();
     runtime
         .owners
         .dao
         .set_secondary_epoch_reward(61_369_863_013_698);
+    // Object/token test cases start at block 100, while DAO snapshot
+    // accumulation needs a proven genesis observation. This harness supplies
+    // that observation without changing the production bulk path.
+    let mut genesis_dao = [0u8; 32];
+    genesis_dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+    genesis_dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+    genesis_dao[16..24].copy_from_slice(&10_000_000_000u64.to_le_bytes());
+    genesis_dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+    if first_number > 0 {
+        runtime.owners.dao.record_block(&facts::BlockFacts {
+            number: 0,
+            timestamp_ms: fixture_genesis_time,
+            chain_time_ms: fixture_genesis_time,
+            dao: genesis_dao,
+            compact_target: 0x1a08a97e,
+            ..Default::default()
+        })?;
+    }
     // Mid-chain fixture: seed the parent DAO C/U for the miner split.
-    runtime
-        .owners
-        .dao
-        .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
+    if first_number > 0 {
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
+    }
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
@@ -3655,6 +3694,38 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         seed_test_genesis_baseline(domain_store.as_ref())?;
+        if include_latest_dao && first_number > 0 {
+            let mut prefix = ckbadger_store::batch::StoreBatch::new(domain_store.as_ref());
+            for number in 0..first_number {
+                let number = i64::try_from(number)?;
+                let mut hash = vec![0u8; 32];
+                hash[..8].copy_from_slice(&number.to_le_bytes());
+                let mut parent_hash = vec![0u8; 32];
+                if number > 0 {
+                    parent_hash[..8].copy_from_slice(&(number - 1).to_le_bytes());
+                }
+                prefix.put_block_header(
+                    number,
+                    &CachedBlockHeader {
+                        hash,
+                        parent_hash,
+                        timestamp: fixture_genesis_time,
+                        chain_time_ms: fixture_genesis_time,
+                        epoch_number: 0,
+                        epoch_index: 0,
+                        epoch_length: 1,
+                        dao: genesis_dao.to_vec(),
+                        transactions_count: 0,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            prefix.commit()?;
+        }
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
@@ -3682,8 +3753,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
         let sync_status =
             sync_totals.finalize_success(domain_store.as_ref(), true, &live_cell_summaries)?;
-        crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
-            .refresh_latest_dao_statistics()?;
+        if include_latest_dao {
+            crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
+                .refresh_latest_dao_statistics()?;
+        }
         domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
         collect_bulk_artifact_snapshot(
@@ -8152,6 +8225,7 @@ mod tests {
         let block = |number, timestamp_ms| facts::BlockFacts {
             number,
             timestamp_ms,
+            chain_time_ms: timestamp_ms,
             ..Default::default()
         };
 
@@ -8177,12 +8251,19 @@ mod tests {
         assert!(!acc.hourly_addrs.contains_key(&hour_key));
         assert!(acc.daily_stats.contains_key(&day_key));
 
-        let err = acc
-            .apply_batch(&[block(3, 14_400_000)], &[action])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("already sealed activity bucket"), "{err}");
-        assert!(err.contains("block=0"), "{err}");
+        let next = acc
+            .apply_batch(
+                &[block(3, 14_400_000)],
+                &[TxActions {
+                    block_number: 3,
+                    timestamp: 14_400_000,
+                    ..action
+                }],
+            )
+            .unwrap();
+        assert!(next.is_empty(), "new hour remains open");
+        assert!(!acc.hourly_stats.contains_key(&hour_key));
+        assert!(acc.daily_stats.contains_key(&day_key));
     }
 
     #[test]
@@ -8612,6 +8693,8 @@ mod tests {
                     epoch_index: 0,
                     // 240 minutes = 14,400,000 ms later
                     timestamp_ms: 1_700_000_000_000 + 14_400_000,
+                    chain_time_ms: 1_700_000_000_000 + 14_400_000,
+                    compact_target: 0x1a08a97e,
                     ..Default::default()
                 },
             ],
@@ -8638,6 +8721,8 @@ mod tests {
                     epoch_index: 0,
                     epoch_length: 1800,
                     timestamp_ms: 1_700_000_000_000,
+                    chain_time_ms: 1_700_000_000_000,
+                    compact_target: 0x1a08a97e,
                     transactions_count: 3,
                     ..Default::default()
                 },
@@ -8647,6 +8732,8 @@ mod tests {
                     epoch_index: 1,
                     epoch_length: 1800,
                     timestamp_ms: 1_700_000_010_000,
+                    chain_time_ms: 1_700_000_010_000,
+                    compact_target: 0x1a08a97e,
                     transactions_count: 2,
                     ..Default::default()
                 },
@@ -8657,6 +8744,8 @@ mod tests {
                     epoch_length: 1750,
                     // 240 minutes (4 hours) after epoch 5 start
                     timestamp_ms: 1_700_000_000_000 + 14_400_000,
+                    chain_time_ms: 1_700_000_000_000 + 14_400_000,
+                    compact_target: 0x1a08a97e,
                     transactions_count: 1,
                     ..Default::default()
                 },
@@ -8729,6 +8818,8 @@ mod tests {
                     epoch_index: 0,
                     epoch_length: 3,
                     timestamp_ms: 1_700_000_000_000,
+                    chain_time_ms: 1_700_000_000_000,
+                    compact_target: 0x1a08a97e,
                     transactions_count: 1,
                     ..Default::default()
                 },
@@ -8738,6 +8829,8 @@ mod tests {
                     epoch_index: 1,
                     epoch_length: 3,
                     timestamp_ms: 1_700_000_010_000,
+                    chain_time_ms: 1_700_000_010_000,
+                    compact_target: 0x1a08a97e,
                     transactions_count: 1,
                     ..Default::default()
                 },
@@ -8747,6 +8840,8 @@ mod tests {
                     epoch_index: 2,
                     epoch_length: 3,
                     timestamp_ms: 1_700_000_020_000,
+                    chain_time_ms: 1_700_000_020_000,
+                    compact_target: 0x1a08a97e,
                     transactions_count: 1,
                     ..Default::default()
                 },
@@ -8916,6 +9011,23 @@ mod tests {
             .owners
             .dao
             .set_secondary_epoch_reward(61_369_863_013_698);
+        let mut genesis_dao = [0u8; 32];
+        genesis_dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+        genesis_dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+        genesis_dao[16..24].copy_from_slice(&10_000_000_000u64.to_le_bytes());
+        genesis_dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+        runtime
+            .owners
+            .dao
+            .record_block(&facts::BlockFacts {
+                number: 0,
+                timestamp_ms: 0,
+                chain_time_ms: 0,
+                dao: genesis_dao,
+                compact_target: 0x1a08a97e,
+                ..Default::default()
+            })
+            .unwrap();
         // Mid-chain fixture: seed the parent DAO C/U for the miner split.
         runtime
             .owners
@@ -8927,7 +9039,8 @@ mod tests {
             .owners
             .dao
             .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
-        let block = bulk_build_addr_tx_fixture();
+        let mut block = bulk_build_addr_tx_fixture();
+        block.block.header.dao = format!("0x{}", hex::encode(genesis_dao));
         runtime
             .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
             .unwrap();
