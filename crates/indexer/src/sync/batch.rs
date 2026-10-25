@@ -8494,7 +8494,14 @@ mod tests {
         async fn bulk_and_live_write_identical_dotcell_rows_for_real_registration() {
             let _guard =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
-            let blocks = dotcell_registration_blocks();
+            let mut blocks = dotcell_registration_blocks();
+            for (block, raw_ms) in
+                blocks
+                    .iter_mut()
+                    .zip([1_700_000_001_000u64, 1_699_996_400_000, 1_700_003_601_000])
+            {
+                block.block.header.timestamp = format!("0x{raw_ms:x}");
+            }
 
             let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
                 .expect("bulk build must index the registration");
@@ -8532,6 +8539,10 @@ mod tests {
             assert_eq!(
                 live.stats_identity, bulk.dotcell.stats_identity,
                 "per-owner counters differ"
+            );
+            assert!(
+                !live.stats_identity.is_empty(),
+                "hourly .cell rows must be exercised"
             );
             assert_eq!(
                 live.name_by_owner, bulk.dotcell.name_by_owner,
