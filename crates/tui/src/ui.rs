@@ -3144,15 +3144,17 @@ fn controller_panel_lines(
     // Fill ratio: actual cells vs target cells
     let fill_text = match (bb.facts_cell_count, bb.target_cells) {
         (Some(actual), Some(target)) if target > 0 => {
-            let fill_pct = (actual as f64 / target as f64 * 100.0).min(999.0);
-            let fill_color = if fill_pct >= 80.0 {
+            let actual_scaled = u128::from(actual) * 100;
+            let target = u128::from(target);
+            let fill_pct = (actual_scaled + target / 2) / target;
+            let fill_color = if actual_scaled >= target * 80 {
                 TERMINAL_GREEN
-            } else if fill_pct >= 50.0 {
+            } else if actual_scaled >= target * 50 {
                 AMBER
             } else {
                 ERROR_RED
             };
-            Some((format!("{:.0}%", fill_pct), fill_color))
+            Some((format!("{fill_pct}%"), fill_color))
         }
         _ => None,
     };
@@ -7911,6 +7913,21 @@ mod tests {
             "should group tail phases: {}",
             all_text
         );
+    }
+
+    #[test]
+    fn controller_fill_readout_reports_true_ratio_above_999_percent() {
+        let bb = BulkBuildProgressData {
+            facts_cell_count: Some(1_500),
+            target_cells: Some(100),
+            ..Default::default()
+        };
+        let text = controller_panel_lines(&bb, false, None)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("1500%"), "true fill ratio missing: {text}");
     }
 
     #[test]
