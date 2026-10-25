@@ -1,4 +1,10 @@
-import { api, isServiceUnavailableError, resolveApiBase } from '@/lib/api';
+import {
+  api,
+  isServiceUnavailableError,
+  resolveApiBase,
+  type DaoCalculatorResult,
+} from '@/lib/api';
+import { expectTypeOf } from 'vitest';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 import { DEFAULT_API_BASE } from '@/lib/runtime-config';
@@ -193,7 +199,29 @@ describe('api', () => {
         })
       );
 
-      await api.calculateDaoCompensation('10000000000', 1000, 2000);
+      const result = await api.calculateDaoCompensation('10000000000', 1000, 2000);
+      expect(result.apc).toBe('3.5');
+      expectTypeOf<DaoCalculatorResult['apc']>().toEqualTypeOf<string | null>();
+    });
+
+    it('preserves undefined calculator APC as null', async () => {
+      server.use(
+        http.get('/api/:network/v1/dao/calculator', () =>
+          HttpResponse.json({
+            capacity: '10000000000',
+            capacityCkb: '100',
+            depositBlock: 1000,
+            withdrawBlock: 1000,
+            estimatedCompensation: '0',
+            estimatedCompensationCkb: '0',
+            totalWithdrawable: '10000000000',
+            totalWithdrawableCkb: '100',
+            apc: null,
+          })
+        )
+      );
+      const result = await api.calculateDaoCompensation('10000000000', 1000, 1000);
+      expect(result.apc).toBeNull();
     });
 
     it('builds query params for getScripts with filters', async () => {

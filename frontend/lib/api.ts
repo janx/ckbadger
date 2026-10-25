@@ -1109,7 +1109,7 @@ interface DaoCalculatorResult {
   estimatedCompensationCkb: string;
   totalWithdrawable: string;
   totalWithdrawableCkb: string;
-  apc: string;
+  apc: string | null;
 }
 
 interface DaoQueryParams {
