@@ -915,7 +915,8 @@ mod tests {
     use crate::db::writer::BatchWriter;
     use ckbadger_store::store::CkbadgerStore;
     use ckbadger_store::{
-        CachedBlockHeader, LiveCellInfo, ScriptInfo, TxIndexEntry, UndoLogEntry, UndoTxContext,
+        CachedBlockHeader, LiveCellInfo, ScriptInfo, ScriptReferenceInfo, TxIndexEntry,
+        UndoLogEntry, UndoTxContext,
     };
     use std::sync::Arc;
 
@@ -1602,13 +1603,34 @@ mod tests {
             &reactivate_tx_hash,
             &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
+        // The fixture inserts the protocol rows directly, so mirror the
+        // parser's script rollups too: two created cells (the first consumed),
+        // with only the reactivation cell live at the fork tip.
         domain_batch.put_script_info(
             &[0x55; 32],
             &ScriptInfo {
                 code_hash: vec![0x55; 32],
                 hash_type: 1,
+                lock_cells_count: 2,
                 lock_live_cells_count: 1,
+                lock_capacity_sum: 200_00000000,
                 lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 122_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        );
+        domain_batch.put_script_reference_info(
+            1,
+            &[0x55; 32],
+            &ScriptReferenceInfo {
+                reference_hash: vec![0x55; 32],
+                hash_type: 1,
+                lock_cells_count: 2,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 200_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 122_00000000,
                 lock_owned_knowledge_sum: 61_00000000,
                 ..Default::default()
             },
@@ -1672,5 +1694,16 @@ mod tests {
             !live_outpoints.contains_key(account_id.as_slice()),
             "rolled-back reactivation must not leave a live outpoint behind"
         );
+        let script = domain.get_script_info(&[0x55; 32]).unwrap().unwrap();
+        assert_eq!(script.lock_cells_count, 1);
+        assert_eq!(script.lock_live_cells_count, 0);
+        assert_eq!(script.lock_capacity_sum, 100_00000000);
+        assert_eq!(script.lock_owned_capacity_sum, 0);
+        let reference = domain
+            .get_script_reference_info(1, &[0x55; 32])
+            .unwrap()
+            .unwrap();
+        assert_eq!(reference.lock_cells_count, 1);
+        assert_eq!(reference.lock_live_cells_count, 0);
     }
 }

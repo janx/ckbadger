@@ -75,9 +75,9 @@ struct RollbackStatsDeltas {
     /// Per-date rolled-back inter-block time: `(sum_ms, count)`.
     ///
     /// Mirrors the forward writers exactly (`BatchStats::accumulate_block_time`
-    /// and `ChainStatsAccumulator`): the gap `ts(b) - ts(b-1)` is attributed to
-    /// block `b`'s UTC+8 date, and a negative gap (clock skew) contributes
-    /// nothing. Repairs `DailyStats.block_time_sum_ms`/`block_time_count`, which
+    /// and `ChainStatsAccumulator`): the nonnegative effective chain-time gap
+    /// `t*(b) - t*(b-1)` is attributed to `stats_day(t*(b))`. Repairs
+    /// `DailyStats.block_time_sum_ms`/`block_time_count`, which
     /// drive /charts/average-block-time and (since the exact hash-rate fix) the
     /// divisor of /charts/hash-rate.
     date_block_time: HashMap<String, (i64, i32)>,
@@ -4601,8 +4601,7 @@ impl CkbadgerStore {
                 continue;
             }
             let key = keys::encode_script_reference_key(*hash_type, code_hash);
-            if let std::collections::hash_map::Entry::Vacant(entry) =
-                staged_script_refs.entry(key)
+            if let std::collections::hash_map::Entry::Vacant(entry) = staged_script_refs.entry(key)
             {
                 let info = self.get_script_reference_info(*hash_type, code_hash)?
                     .ok_or_else(|| anyhow::anyhow!(

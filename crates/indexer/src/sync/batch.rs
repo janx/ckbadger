@@ -6201,7 +6201,6 @@ mod tests {
                 indexer,
                 blocks,
                 FixtureTokenDaily::Given(token_daily_changes),
-                false,
             )
             .await
         }
@@ -6210,7 +6209,7 @@ mod tests {
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
-            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells, true).await
+            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells).await
         }
 
         /// Same live write path, with `TOKEN_DAILY` changes derived from the
@@ -6220,7 +6219,7 @@ mod tests {
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
-            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells, false).await
+            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells).await
         }
 
         enum FixtureTokenDaily {
@@ -6407,7 +6406,6 @@ mod tests {
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
             token_daily: FixtureTokenDaily,
-            include_script_deltas: bool,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
@@ -6476,15 +6474,11 @@ mod tests {
                 }
             };
             let (script_usage_changes, script_reference_usage_changes, script_daily_changes) =
-                if include_script_deltas {
-                    fixture_script_deltas_from_cells(
-                        &all_tx_data,
-                        &input_cell_info,
-                        &batch_cell_infos,
-                    )?
-                } else {
-                    (HashMap::new(), HashMap::new(), EntityDailyChanges::new())
-                };
+                fixture_script_deltas_from_cells(
+                    &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                )?;
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
             let metrics = indexer
@@ -6823,22 +6817,34 @@ mod tests {
             assert_eq!(hourly_rows[0].1, 1);
             assert_eq!(&hourly_rows[0].0[1..33], type_script_hash.as_slice());
 
-            // Both carry an EntityStats undo entry for block 101, so a shallow
-            // fork can take them back.
-            let mut entity_undo = 0usize;
+            // The token daily/hourly rows and the lock/type script daily rows
+            // each carry an EntityStats undo entry for a shallow fork.
+            let mut entity_undo_prefixes = Vec::new();
             for item in store.iterator_cf(
                 store.cf_reorg_undo_log_by_block(),
                 rocksdb::IteratorMode::Start,
             ) {
-                let (key, _) = item.unwrap();
+                let (key, value) = item.unwrap();
                 let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
                 if block_num == 101 && crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
-                    entity_undo += 1;
+                    let entry: ckbadger_store::UndoLogEntry = bincode::deserialize(&value).unwrap();
+                    let ckbadger_store::UndoLogEntry::KeyMutation { key, .. } = entry else {
+                        panic!("EntityStats undo must be a key mutation");
+                    };
+                    entity_undo_prefixes.push(key[0]);
                 }
             }
+            entity_undo_prefixes.sort_unstable();
+            let mut expected_prefixes = vec![
+                ckbadger_store::keys::STATS_PREFIX_TOKEN_DAILY,
+                ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY,
+                ckbadger_store::keys::STATS_PREFIX_SCRIPT_DAILY,
+                ckbadger_store::keys::STATS_PREFIX_SCRIPT_DAILY,
+            ];
+            expected_prefixes.sort_unstable();
             assert_eq!(
-                entity_undo, 2,
-                "one undo entry each for the daily row and the hourly counter"
+                entity_undo_prefixes, expected_prefixes,
+                "token daily/hourly and lock/type script daily rows must all be reversible"
             );
         }
 
@@ -9519,7 +9525,9 @@ mod tests {
 
         fn cellbase_block(number: u64) -> BlockResponseWithCycles {
             let hash_byte = (number % 251) as u8;
-            let mut cellbase = cellbase_tx(hash_byte, 100_000_000);
+            // A secp-locked cell occupies 61 CKB; the fixture must fund that
+            // exact occupied capacity for parser-derived script aggregates.
+            let mut cellbase = cellbase_tx(hash_byte, 100_00000000);
             let mut hash = [hash_byte; 32];
             hash[..8].copy_from_slice(&number.to_le_bytes());
             cellbase.hash = format!("0x{}", hex::encode(hash));
@@ -9613,7 +9621,12 @@ mod tests {
                 header_100.timestamp / 3_600_000,
                 "the undo-window bound is the header at committed_tip(1100) - 1000"
             );
-            assert_eq!(entity_stats_undo_blocks(&store), vec![1150, 2550]);
+            let undo_blocks = entity_stats_undo_blocks(&store);
+            assert_eq!(
+                undo_blocks,
+                (101..=2600).collect::<Vec<_>>(),
+                "undo rows above coverage floor 100 include each later cellbase and token blocks 1150/2550"
+            );
             assert_eq!(
                 store
                     .get_entity_stats_undo_contract()
@@ -9633,10 +9646,11 @@ mod tests {
             )
             .await
             .unwrap();
+            let undo_blocks = entity_stats_undo_blocks(&store);
             assert_eq!(
-                entity_stats_undo_blocks(&store),
-                vec![2550],
-                "block 1150's EntityStats undo entry is pruned by the next batch"
+                undo_blocks,
+                (1601..=2601).collect::<Vec<_>>(),
+                "the next batch prunes entity undo entries through its coverage floor 1600"
             );
             assert_eq!(
                 store

@@ -1672,10 +1672,9 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
         .unwrap()
         .timestamp_millis();
     let mut batch = StoreBatch::new(core_store.as_ref());
-    // Genesis, the first mined block, then a full 37-block median-time window
-    // ending at the tip (one second apart), so the median time sits on the tip
-    // day. With only three blocks the median would be 2020-05-22 and, by CKB's
-    // median-time rule, no later day could be complete.
+    // Genesis, the first mined block, then 37 one-second-apart headers ending
+    // at the tip. Their effective chain times are monotonic, so the tip's
+    // `stats_day` marks the current incomplete day for this chart.
     let mut headers = vec![
         (0, 1_589_276_230_000), // testnet genesis: 2020-05-12 17:37:10 UTC+8
         (1, 1_590_137_711_584), // first mined block: 2020-05-22 16:55:11.584 UTC+8
