@@ -1705,6 +1705,7 @@ mod tests {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: 1_700_000_000_000,
             },
         );
         seed.put_dao_deposit(
@@ -1836,6 +1837,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: timestamp,
         };
         let snapshot = |date: NaiveDate| DaoDailySnapshot {
             date: date.format("%Y-%m-%d").to_string(),
@@ -2234,6 +2236,7 @@ mod tests {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: timestamp,
             }
         };
         let mut seed = StoreBatch::new(store);
@@ -2429,6 +2432,7 @@ mod tests {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: tip_timestamp,
             },
         );
 
@@ -2449,6 +2453,7 @@ mod tests {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: tip_timestamp - 86_400_000,
             },
         );
 
@@ -2920,6 +2925,7 @@ mod tests {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: i64::MAX,
             },
         );
         batch.commit().unwrap();

@@ -2345,6 +2345,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_100,
         },
     );
     core_batch.put_block_header(
@@ -2363,6 +2364,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_200,
         },
     );
     core_batch.put_block_header(
@@ -2381,6 +2383,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_300,
         },
     );
     core_batch.commit().unwrap();
@@ -3651,6 +3654,7 @@ fn seed_dotcell_name(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: tip_timestamp_ms,
         },
     );
     batch.commit().unwrap();
@@ -4275,6 +4279,7 @@ async fn dotcell_collection_activities_are_served_from_the_identity_cf() {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: 1_700_000_700,
             },
         );
         batch.put_identity_collection_activity(

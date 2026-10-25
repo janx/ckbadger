@@ -53,6 +53,7 @@ async fn test_get_block_includes_hardfork_activation() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -125,6 +126,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         },
     );
     batch.put_block_header(
@@ -143,6 +145,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -317,6 +320,7 @@ async fn test_block_proposals_resolve_commitments_via_shared_window() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -422,6 +426,7 @@ fn seed_proposer_header(store: &Arc<CkbadgerStore>, number: i64, hash: &[u8]) {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();

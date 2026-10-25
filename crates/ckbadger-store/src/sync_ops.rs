@@ -1015,6 +1015,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_007_000,
         };
         let mut seed = StoreBatch::new(&store);
         seed.put_block_header(7, &header);

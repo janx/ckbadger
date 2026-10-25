@@ -106,6 +106,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0407_end_ms,
         },
     );
 
@@ -131,6 +132,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_t1_ms,
         },
     );
 
@@ -156,6 +158,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_t2_ms,
         },
     );
 
@@ -356,6 +359,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_start_ms - 11_000,
         },
     );
 
@@ -381,6 +385,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_start_ms,
         },
     );
     // Block 100: the rollback target.
@@ -405,6 +410,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_mid_ms,
         },
     );
     // Block 101: the rolled-back block containing the phase-1 request.
@@ -429,6 +435,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_late_ms,
         },
     );
 
@@ -583,6 +590,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0407_late_ms,
         },
     );
     // Block 101: 2026-04-08 first block with deposit #1.
@@ -607,6 +615,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_t1_ms,
         },
     );
     // Block 102: 2026-04-08 second block with deposit #2.
@@ -631,6 +640,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_t2_ms,
         },
     );
 
@@ -814,6 +824,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0407_late_ms,
         },
     );
     // Block 100: 2026-04-08 first block — no deposits (rollback target)
@@ -838,6 +849,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_t1_ms,
         },
     );
     // Block 101: 2026-04-08 second block — second deposit from SAME lock 0xB0 (rolled back)
@@ -862,6 +874,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day_0408_t2_ms,
         },
     );
 

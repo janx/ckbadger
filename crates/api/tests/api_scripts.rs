@@ -1536,6 +1536,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: older_timestamp,
         },
     );
     batch.put_block_header(
@@ -1554,6 +1555,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: newer_earliest_timestamp,
         },
     );
     batch.put_block_header(
@@ -1572,6 +1574,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: newer_timestamp,
         },
     );
     batch.put_script_family(
@@ -2173,6 +2176,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_705_536_000_000,
         },
     );
     batch.commit().unwrap();
@@ -2281,6 +2285,7 @@ async fn test_script_capacity_history_chart_aggregates_family_member_references(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_705_536_000_000,
         },
     );
     batch.commit().unwrap();
@@ -2366,6 +2371,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_705_363_200_000,
         },
     );
     batch.commit().unwrap();
@@ -2428,6 +2434,7 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_705_536_000_000,
         },
     );
     batch.commit().unwrap();

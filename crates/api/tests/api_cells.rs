@@ -1572,6 +1572,7 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_011,
         },
     );
     batch.put_addr_tx_by_prefix(

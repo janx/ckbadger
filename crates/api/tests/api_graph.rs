@@ -126,6 +126,7 @@ fn seed_proposal_fixture(specs: &[FixtureBlock]) -> (std::sync::Arc<CkbadgerStor
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: 1_700_000_000_000 + block.number() as i64,
             },
         );
     }

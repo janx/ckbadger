@@ -5814,6 +5814,7 @@ mod tests {
                     compact_target: 0,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: 1_699_900_000_000,
                 },
             );
             batch.commit().unwrap();
@@ -5884,6 +5885,7 @@ mod tests {
                         compact_target: 0,
                         miner_lock_hash: None,
                         cycles: None,
+                        chain_time_ms: 1_699_999_999_000,
                     },
                 );
                 batch

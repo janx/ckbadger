@@ -46,6 +46,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
         compact_target: 0,
         miner_lock_hash: None,
         cycles: None,
+        chain_time_ms: 1_000_000 + block_num * 1000,
     }
 }
 
@@ -1578,6 +1579,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         compact_target: 0,
         miner_lock_hash: None,
         cycles: None,
+        chain_time_ms: block_ts(b),
     };
     let make_actions = |b: i64, tx_seed: u8, participants: &[[u8; 32]]| TxActions {
         tx_hash: vec![tx_seed; 32],

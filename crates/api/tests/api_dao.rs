@@ -49,6 +49,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -129,6 +130,7 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     let snapshot_key = ckbadger_store::keys::encode_stats_key(
@@ -240,6 +242,7 @@ async fn test_dao_stats_fails_fast_when_singleton_missing_at_synced_tip() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -1093,6 +1096,7 @@ fn seed_tip_header(store: &Arc<CkbadgerStore>, block_number: i64) {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();

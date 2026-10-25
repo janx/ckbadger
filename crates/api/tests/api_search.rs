@@ -43,6 +43,7 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.put_tx_hash_map(&hash, 123, 0);

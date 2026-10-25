@@ -283,6 +283,11 @@ pub struct CachedBlockHeader {
     /// Written only by lazy cycles evaluation, not during bulk/live sync.
     #[serde(default)]
     pub cycles: Option<i64>,
+    /// Running maximum of canonical block timestamps through this header.
+    /// Stats buckets use this monotonic clock; `timestamp` remains the raw
+    /// consensus header value. This field is intentionally required: an old
+    /// bincode header must trigger a full re-sync, not a partial fallback.
+    pub chain_time_ms: i64,
 }
 
 // ============================================

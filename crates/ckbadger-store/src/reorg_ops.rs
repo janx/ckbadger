@@ -5918,6 +5918,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_772_646_096_926,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -6000,6 +6001,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: ts,
         };
 
         let wave = |seed: i128| DailyHodlWave {
@@ -6221,6 +6223,7 @@ mod tests {
                         compact_target: 0x1a08a97e,
                         miner_lock_hash: None,
                         cycles: None,
+                        chain_time_ms: ts(n),
                     },
                 );
             }
@@ -6488,6 +6491,7 @@ mod tests {
                         compact_target: 0x1a08a97e,
                         miner_lock_hash: None,
                         cycles: None,
+                        chain_time_ms: ts(n),
                     },
                 );
             }
@@ -6612,6 +6616,7 @@ mod tests {
                         compact_target: 0x1a08a97e,
                         miner_lock_hash: None,
                         cycles: None,
+                        chain_time_ms: ts(n),
                     },
                 );
             }
@@ -6706,6 +6711,7 @@ mod tests {
                         compact_target: 0x1a08a97e,
                         miner_lock_hash: Some(miner.clone()),
                         cycles: None,
+                        chain_time_ms: day_start_ms + n * 1000,
                     },
                 );
             }
@@ -6802,6 +6808,7 @@ mod tests {
                         compact_target: 0x1a08a97e,
                         miner_lock_hash: None,
                         cycles: None,
+                        chain_time_ms: ts(n),
                     },
                 );
             }
@@ -6870,6 +6877,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_001_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x42; 32],
@@ -6885,6 +6893,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_002_000,
         };
 
         let keep_actions = make_tx_actions(&tx_hash_keep, 1, 0);
@@ -6944,6 +6953,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_001_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x22; 32],
@@ -6959,6 +6969,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_002_000,
         };
 
         let block1_tx = TxIndexEntry {
@@ -7081,6 +7092,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header1 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -7096,6 +7108,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let mut domain_batch = StoreBatch::new(&domain);
@@ -7194,6 +7207,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header1 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -7209,6 +7223,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let mut batch = StoreBatch::new(&domain);
@@ -7296,6 +7311,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -7311,6 +7327,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
         let cell = LiveCellInfo {
             capacity: 500,
@@ -7385,6 +7402,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -7400,6 +7418,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let input_tx = vec![0x31; 32];
@@ -7551,11 +7570,13 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
             timestamp: 1_700_000_010_000,
             transactions_count: 2,
+            chain_time_ms: 1_700_000_010_000,
             ..header1.clone()
         };
 
@@ -7814,6 +7835,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000 + i64::from(n) * 10_000,
         };
         let cellbase_index = |timestamp: i64| TxIndexEntry {
             is_cellbase: true,
@@ -7962,10 +7984,12 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
             timestamp: 1_700_000_010_000,
+            chain_time_ms: 1_700_000_010_000,
             ..header1.clone()
         };
 
@@ -8175,6 +8199,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -8190,6 +8215,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let input_tx = vec![0x31; 32];
@@ -8339,6 +8365,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -8354,6 +8381,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let type_hash = vec![0x90; 32];
@@ -8544,6 +8572,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -8559,6 +8588,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let type_hash = vec![0x90; 32];
@@ -8757,6 +8787,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -8772,6 +8803,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let type_hash = vec![0x90; 32];
@@ -8949,6 +8981,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -8964,6 +8997,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let input_tx = vec![0x41; 32];
@@ -9142,6 +9176,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9157,6 +9192,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let keep_tx = vec![0x11; 32];
@@ -9207,6 +9243,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9222,6 +9259,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let keep_tx = vec![0x11; 32];
@@ -9286,6 +9324,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9301,6 +9340,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let cellbase_tx = vec![0x22; 32];
@@ -9406,6 +9446,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9421,6 +9462,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
         let keep_cell = LiveCellInfo {
             capacity: 100,
@@ -9549,6 +9591,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9564,6 +9607,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
         let header3 = CachedBlockHeader {
             hash: vec![0x03; 32],
@@ -9579,6 +9623,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_020_000,
         };
 
         let tx_a = vec![0xAA; 32];
@@ -9749,6 +9794,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9764,6 +9810,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let deposit_tx = vec![0xAB; 32];
@@ -9857,6 +9904,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -9889,6 +9937,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9904,6 +9953,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
         let tx_hash = vec![0x21; 32];
         let lock_hash = vec![0xAA; 32];
@@ -9984,6 +10034,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -9999,6 +10050,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_010_000,
         };
 
         let cluster_id = vec![0xAA; 32];
@@ -10202,6 +10254,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_780_000_000_000,
         };
 
         // Seed: one live spore in cluster, with daily deltas
@@ -10416,6 +10469,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -10431,6 +10485,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_086_400_000,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -10739,6 +10794,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -10754,6 +10810,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_086_400_000,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -10952,6 +11009,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: 1_700_000_000_000 + b * 1000,
                 },
             );
         }
@@ -11010,6 +11068,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: base_ts_ms + b * 3_600_000,
                 },
             );
             // Each block has 1 cellbase + 1 non-cellbase tx.
@@ -11427,6 +11486,7 @@ mod tests {
                 compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: day_start_ms + 1000,
             },
             CachedBlockHeader {
                 hash: vec![0x02; 32],
@@ -11442,6 +11502,7 @@ mod tests {
                 compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: day_start_ms + 2000,
             },
             CachedBlockHeader {
                 hash: vec![0x03; 32],
@@ -11457,6 +11518,7 @@ mod tests {
                 compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: day_start_ms + 3000,
             },
             CachedBlockHeader {
                 hash: vec![0x04; 32],
@@ -11472,6 +11534,7 @@ mod tests {
                 compact_target: 0x1a07a97e,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: day_start_ms + 4000,
             },
         ];
 
@@ -11569,6 +11632,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: day_start_ms + offset,
                 },
             );
         }
@@ -11667,6 +11731,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: day_start_ms + offset,
                 },
             );
         }
@@ -11746,6 +11811,7 @@ mod tests {
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: timestamp,
         }
     }
 
@@ -12028,6 +12094,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: 1_700_000_000_000 + b * 1000,
                 },
             );
         }
@@ -12251,6 +12318,7 @@ mod tests {
                         compact_target: 0x1a08a97e,
                         miner_lock_hash: None,
                         cycles: None,
+                        chain_time_ms: 1_790_038_800_000 + n * 10_000,
                     },
                 );
             }
@@ -12409,6 +12477,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
+                    chain_time_ms: 1_790_038_800_000 + n * 10_000,
                 },
             );
         }

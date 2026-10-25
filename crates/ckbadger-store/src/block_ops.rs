@@ -1,5 +1,6 @@
 //! Block header operations.
 
+use anyhow::Context;
 use rocksdb::IteratorMode;
 
 use crate::keys;
@@ -10,7 +11,9 @@ impl CkbadgerStore {
     pub fn get_block_header(&self, block_number: i64) -> anyhow::Result<Option<CachedBlockHeader>> {
         let key = keys::encode_block_num(block_number);
         match self.get_cf(self.cf_block_headers(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value).with_context(|| {
+                format!("cannot decode block header at block {block_number}; re-sync from genesis after the chain-time schema change")
+            })?)),
             None => Ok(None),
         }
     }
@@ -314,7 +317,40 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: block_number,
         }
+    }
+
+    #[test]
+    fn test_old_header_layout_requires_resync_with_block_context() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let header = make_header(42);
+        // Bincode serializes structs as ordered fields. This is the exact
+        // pre-chain-time layout, deliberately omitting the appended field.
+        let old_bytes = bincode::serialize(&(
+            &header.hash,
+            &header.parent_hash,
+            header.timestamp,
+            header.epoch_number,
+            header.epoch_index,
+            header.epoch_length,
+            &header.dao,
+            header.transactions_count,
+            header.uncles_count,
+            header.proposals_count,
+            header.compact_target,
+            &header.miner_lock_hash,
+            header.cycles,
+        ))
+        .unwrap();
+        store
+            .put_cf(store.cf_block_headers(), &keys::encode_block_num(42), &old_bytes)
+            .unwrap();
+
+        let error = store.get_block_header(42).unwrap_err().to_string();
+        assert!(error.contains("block 42"), "{error}");
+        assert!(error.contains("re-sync"), "{error}");
     }
 
     #[test]

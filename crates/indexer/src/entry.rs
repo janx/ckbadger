@@ -1896,6 +1896,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day1_ts,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -1911,6 +1912,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: day2_ts,
         };
         let live_cell = LiveCellInfo {
             capacity: 1_000,
@@ -2076,6 +2078,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_704_067_200_000,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(block_number, &header);

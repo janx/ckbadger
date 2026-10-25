@@ -40,6 +40,7 @@ async fn test_address_activities_reads_from_store() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
@@ -124,6 +125,7 @@ async fn address_activities_response(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_123,
         },
     );
     batch.put_tx_actions(actions);
@@ -413,6 +415,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_888_000,
         },
     );
     core_batch.put_script_info(
@@ -528,6 +531,7 @@ async fn test_latest_activities_return_type_calls() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_999,
         },
     );
     core_batch.put_tx_hash_map(&tx_hash, 99, 1);
@@ -598,6 +602,7 @@ async fn test_global_activities_basic() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_200,
         },
     );
     batch.put_tx_hash_map(&tx_hash, 200, 0);
@@ -673,6 +678,7 @@ async fn test_address_transactions_reads_from_derived_store() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     core_batch.commit().unwrap();
@@ -776,6 +782,7 @@ fn seed_activity_with_txs_count(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     let actions = make_test_tx_actions(lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
@@ -882,6 +889,7 @@ async fn test_address_activities_omits_total_for_missing_addr_balance() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
@@ -1282,6 +1290,7 @@ fn seed_named_tx(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.put_tx_actions(actions);

@@ -997,6 +997,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_000_000 + block_num * 1000,
         }
     }
 

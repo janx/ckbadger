@@ -41,6 +41,7 @@ impl BatchWriter {
                 compact_target,
                 miner_lock_hash: block.miner_lock_hash.clone(),
                 cycles: None,
+                chain_time_ms: block.timestamp.timestamp_millis(),
             };
             batch.put_block_header(block.number, &header);
         }

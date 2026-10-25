@@ -81,6 +81,7 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
         compact_target: 0,
         miner_lock_hash: None,
         cycles: None,
+        chain_time_ms: timestamp,
     }
 }
 

@@ -724,6 +724,7 @@ fn seed_lifecycle_fixture(
         compact_target: 0,
         miner_lock_hash: None,
         cycles: None,
+        chain_time_ms: 1_700_000_000_000 + number,
     };
     for block in &blocks {
         let hash: [u8; 32] = block.hash().unpack();
@@ -1184,6 +1185,7 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.put_tx_hash_map(&tx_hash, block_number, 0);
@@ -1336,6 +1338,7 @@ fn seed_tx_awaiting_cycles(store: &Arc<CkbadgerStore>, tx_hash: &[u8; 32], cycle
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_123_456,
         },
     );
     batch.put_tx_hash_map(tx_hash, 321, 1);

@@ -505,6 +505,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: ts_ms,
         }
     }
 

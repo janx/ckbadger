@@ -1787,6 +1787,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1000,
         };
         batch.put_block_header(0, &header);
         assert!(!batch.is_empty());
@@ -2728,6 +2729,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 9999,
         };
         a.put_block_header(42, &header);
 

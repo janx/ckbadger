@@ -268,6 +268,7 @@ fn put_block_rows(batch: &mut StoreBatch, chain: &FixtureChain, number: u64, see
             compact_target: 0,
             miner_lock_hash: None,
             cycles: header_cycles,
+            chain_time_ms: block.timestamp() as i64,
         },
     );
     for (index, tx) in block.transactions().iter().enumerate() {

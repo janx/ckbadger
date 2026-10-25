@@ -356,6 +356,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_100,
         },
     );
     core_batch.put_block_header(
@@ -374,6 +375,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_200,
         },
     );
     core_batch.put_block_header(
@@ -392,6 +394,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_300,
         },
     );
     core_batch.commit().unwrap();

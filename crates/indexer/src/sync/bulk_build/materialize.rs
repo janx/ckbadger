@@ -772,6 +772,7 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
             compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
 
         materializer.stream_history_rows(&[
@@ -1379,6 +1380,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
 
         let history_rows = vec![
@@ -1534,6 +1536,7 @@ mod tests {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: 1_700_000_000_000,
             };
 
             let pending = super::super::PendingFlush {
@@ -1797,6 +1800,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         };
 
         let history_rows = vec![

@@ -134,6 +134,7 @@ pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: timestamp,
             },
         );
     }
@@ -969,6 +970,7 @@ pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) 
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_123_456,
         },
     );
     batch.put_tx_hash_map(tx_hash, 321, 0);
@@ -1068,6 +1070,7 @@ pub fn seed_committed_activity(
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: timestamp,
         },
     );
     let actions = make_test_tx_actions(
@@ -1574,6 +1577,7 @@ fn writer_fixture_header(block_num: i64) -> CachedBlockHeader {
         compact_target: 0,
         miner_lock_hash: None,
         cycles: None,
+        chain_time_ms: WRITER_FIXTURE_TS_MS + block_num * 1_000,
     }
 }
 

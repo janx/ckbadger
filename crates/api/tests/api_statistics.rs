@@ -164,6 +164,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_700_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -334,6 +335,7 @@ fn recent_block_header(number: i64, ts_ms: i64) -> CachedBlockHeader {
         compact_target: 0,
         miner_lock_hash: None,
         cycles: None,
+        chain_time_ms: ts_ms,
     }
 }
 
@@ -436,6 +438,7 @@ async fn test_tx_stats_reads_from_derived_store() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: now_ms,
         },
     );
     core_batch.commit().unwrap();
@@ -595,6 +598,7 @@ async fn test_network_stats_reads_derived_statistics() {
                 compact_target: 0x190d_f964,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: now_ms - (200 - block_num) * 8_000,
             },
         );
     }
@@ -679,6 +683,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: now_ms,
         },
     );
     core_batch.commit().unwrap();
@@ -844,6 +849,7 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: now_ms,
         },
     );
     core_batch.commit().unwrap();
@@ -939,6 +945,7 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: now_ms,
         },
     );
     core_batch.commit().unwrap();
@@ -1353,6 +1360,7 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: tip_timestamp,
         },
     );
     batch.commit().unwrap();
@@ -1466,6 +1474,7 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: timestamp,
             },
         );
     }
@@ -1569,6 +1578,7 @@ async fn test_inflation_rate_rejects_missing_snapshot_on_block_bearing_day() {
                 compact_target: 0,
                 miner_lock_hash: None,
                 cycles: None,
+                chain_time_ms: timestamp(date),
             },
         );
     }
@@ -1687,6 +1697,7 @@ async fn test_asset_ecosystem_returns_expected_structure() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_800_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -1810,6 +1821,7 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_800_000_000_000,
         },
     );
     batch.commit().unwrap();
@@ -2049,6 +2061,7 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
             compact_target: 0x190d_f964,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: tip_ms,
         },
     );
     core_batch.commit().unwrap();
@@ -2146,6 +2159,7 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: now_ms,
         },
     );
     core_batch.commit().unwrap();
@@ -2513,6 +2527,7 @@ fn seed_knowledge_size_fixture(store: &Arc<CkbadgerStore>, occupied_capacity: i1
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: chrono::Utc::now().timestamp_millis(),
         },
     );
     batch.commit().unwrap();

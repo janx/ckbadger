@@ -396,6 +396,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: ts,
         };
         let mut batch = ckbadger_store::batch::StoreBatch::new(&store);
         for number in 0..40 {

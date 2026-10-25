@@ -956,6 +956,7 @@ mod tests {
             compact_target: 0x190d_f964,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_705_733_626_764,
         };
         let resp = cached_header_to_block_response(
             12_000_000,
@@ -993,6 +994,7 @@ mod tests {
             compact_target: 0x190d_f964,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1_705_733_626_764,
         };
         let header_info = ckb_store_reader::BlockHeaderInfo {
             parent_hash: [0x11; 32],

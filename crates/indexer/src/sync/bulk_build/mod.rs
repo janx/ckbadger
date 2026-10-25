@@ -4104,6 +4104,7 @@ fn build_history_rows_for_block(
         compact_target: block.compact_target,
         miner_lock_hash: block.miner_lock_hash.map(|h| h.to_vec()),
         cycles: None,
+        chain_time_ms: block.timestamp_ms,
     };
     rows.push_serialized(
         CF_BLOCK_HEADERS,
@@ -7819,6 +7820,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 1710000000000,
         };
         let standard = bincode::serialize(&header).unwrap();
         let presized = bincode_serialize_presized(&header).unwrap();
@@ -7858,6 +7860,7 @@ mod tests {
             compact_target: 0,
             miner_lock_hash: None,
             cycles: None,
+            chain_time_ms: 0,
         };
         let standard = bincode::serialize(&header).unwrap();
         let presized = bincode_serialize_presized(&header).unwrap();
