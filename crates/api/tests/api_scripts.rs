@@ -2423,7 +2423,8 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
         &CachedBlockHeader {
             hash: vec![0x01; 32],
             parent_hash: vec![0u8; 32],
-            timestamp: 1_705_536_000_000,
+            // Raw tip time regressed, while its canonical chain day advanced.
+            timestamp: 1_705_449_600_000,
             epoch_number: 0,
             epoch_index: 0,
             epoch_length: 1,

@@ -3842,4 +3842,18 @@ rejection tests for an output that is not the paired request.
 
 **Regression checks**: exact work across live batches above `2^53`, exact rollback subtraction, integer half-up boundaries and overflow, and chart values as decimal strings.
 
+---
+
+### STATS-017: Raw block time split one canonical chain across incompatible calendar buckets
+
+**Date**: 2026-10-25
+
+**Root cause**: CKB permits a block's raw timestamp to be earlier than its parent's. The live and bulk writers, rollback, DAO snapshots, hourly object counters, API completion checks, and verifier did not share one monotone calendar clock. A raw-timestamp binary search could also search a sequence that was not ordered. The API's completed-day cache keyed only by date could reuse a prior fork's answer after a same-day reorg.
+
+**Fix**: Every canonical block header persists `chain_time_ms`, the running maximum of raw timestamps from genesis through that block. One shared bucket definition assigns daily and hourly aggregates and marks a bucket complete at its exclusive end. Live, bulk, and rollback use the same chain time; DAO daily snapshots use one checked reducer fed by exact lifecycle and header facts. The original header timestamp remains in immutable chain payloads and displays. A completed-day cache entry binds to the last block of that completed day, so a fork changing the day invalidates it without invalidating on every later tip block.
+
+**Detection and tests**: Fixtures with a parent across midnight or an hour boundary followed by a backward raw timestamp verify that subsequent work stays in the parent's day and hour, including mNFT transfer counters and zero inter-block gaps. Single-batch, split-batch, and rollback/replay tests compare persisted DAO and statistics rows. Store rollback fixtures now include the exact histogram rows their synthetic forward chain would have written; an absent or corrupt row remains an error.
+
+**Re-sync required**: Yes. `CachedBlockHeader` gained a required persisted field and existing date/hour aggregates were written under the old calendar rule. Rebuild the mutable domain store from genesis. The append-only cell payload store and network-observation store do not change.
+
 _Last updated: 2026-10-25_

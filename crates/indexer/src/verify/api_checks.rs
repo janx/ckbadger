@@ -4705,13 +4705,12 @@ impl Check for DotCellRingIntegrity {
 pub struct DotCellIdIsLabelHash;
 
 fn required_dotcell_label<'a>(name: Option<&'a str>, nft_id: &str) -> anyhow::Result<&'a str> {
-    let name = name.ok_or_else(|| {
-        anyhow::anyhow!(
-            ".cell item {} is missing its name in dotcell_id_is_label_hash",
-            nft_id
-        )
+    let name = name.filter(|name| !name.is_empty()).ok_or_else(|| {
+        anyhow::anyhow!("live .cell item has no name while verifying id: nft_id={nft_id}")
     })?;
-    Ok(name.strip_suffix(".cell").unwrap_or(name))
+    name.strip_suffix(".cell").ok_or_else(|| {
+        anyhow::anyhow!("live .cell item name lacks .cell suffix: nft_id={nft_id} name={name:?}")
+    })
 }
 
 impl Check for DotCellIdIsLabelHash {
@@ -5035,6 +5034,18 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dotcell_id_check_rejects_missing_or_malformed_label() {
+        assert_eq!(
+            required_dotcell_label(Some("alice.cell"), "0xaa").unwrap(),
+            "alice"
+        );
+        for name in [None, Some(""), Some("alice")] {
+            let err = required_dotcell_label(name, "0xaa").unwrap_err();
+            assert!(err.to_string().contains("nft_id=0xaa"), "{err:#}");
+        }
+    }
 
     fn dao_observation(
         recorded: &[(&str, i16, i64)],

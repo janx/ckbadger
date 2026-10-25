@@ -2343,6 +2343,11 @@ impl Indexer {
                         .iter()
                         .map(|p| (p.number, p.timestamp.timestamp_millis()))
                         .collect();
+                    let block_chain_times_ms: HashMap<i64, i64> = all_parsed_blocks
+                        .iter()
+                        .zip(&chain_times_ms)
+                        .map(|(p, &chain_time_ms)| (p.number, chain_time_ms))
+                        .collect();
                     let mut udt_state = self
                         .writer
                         .new_udt_batch_state(entity_stats.clone(), batch_undo_seq.clone());
@@ -2351,6 +2356,7 @@ impl Indexer {
                         &max_supply_observations,
                         &onchain_token_info,
                         &block_timestamps,
+                        &block_chain_times_ms,
                         &mut data_batch,
                         &mut udt_state,
                     )?;
@@ -5793,33 +5799,39 @@ mod tests {
 
         /// The post-rollback DAO snapshot recompute reads block N-1 of the first
         /// block of the affected day (RFC-0023). The fixture's own parent is
-        /// block 99, so its parent needs a header too — dated a day earlier so
-        /// block 99 stays that day's first block.
+        /// block 99, so its complete canonical prefix needs headers too —
+        /// dated a day earlier so block 99 stays that day's first block.
         pub(super) fn seed_pre_parent_header(store: &CkbadgerStore) {
             let mut dao = vec![0u8; 32];
             dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
             dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
             dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
             let mut batch = ckbadger_store::batch::StoreBatch::new(store);
-            batch.put_block_header(
-                98,
-                &ckbadger_store::types::CachedBlockHeader {
-                    hash: block_hash(98).to_vec(),
-                    parent_hash: block_hash(97).to_vec(),
-                    timestamp: 1_699_900_000_000,
-                    epoch_number: 39,
-                    epoch_index: 1798,
-                    epoch_length: 1800,
-                    dao,
-                    transactions_count: 1,
-                    uncles_count: 0,
-                    proposals_count: 0,
-                    compact_target: 0,
-                    miner_lock_hash: None,
-                    cycles: None,
-                    chain_time_ms: 1_699_900_000_000,
-                },
-            );
+            for number in 0..=98 {
+                batch.put_block_header(
+                    number,
+                    &ckbadger_store::types::CachedBlockHeader {
+                        hash: block_hash(number as u64).to_vec(),
+                        parent_hash: if number == 0 {
+                            vec![0; 32]
+                        } else {
+                            block_hash((number - 1) as u64).to_vec()
+                        },
+                        timestamp: 1_699_900_000_000,
+                        epoch_number: 39,
+                        epoch_index: 1700 + number as i32,
+                        epoch_length: 1800,
+                        dao: dao.clone(),
+                        transactions_count: 1,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                        chain_time_ms: 1_699_900_000_000,
+                    },
+                );
+            }
             batch.commit().unwrap();
         }
 
@@ -5913,7 +5925,7 @@ mod tests {
                         transactions_count: 1,
                         uncles_count: 0,
                         proposals_count: 0,
-                        compact_target: 0,
+                        compact_target: 0x1a08a97e,
                         miner_lock_hash: None,
                         cycles: None,
                         chain_time_ms: 1_699_999_999_000,

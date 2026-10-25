@@ -287,28 +287,23 @@ impl CkbadgerStore {
         Ok(None)
     }
 
-    /// Find the first block number of the UTC+8 day containing `block_number`.
-    /// If a predecessor header is missing, stops at the first available block.
+    /// Find the first block number of the CKB day containing `block_number`.
+    /// Every predecessor through genesis must exist in a complete canonical store.
     pub fn find_day_start_block(&self, block_number: i64) -> anyhow::Result<Option<i64>> {
         let Some(header) = self.get_block_header(block_number)? else {
             return Ok(None);
         };
-        let Some(dt) = chrono::DateTime::from_timestamp(header.timestamp / 1000, 0) else {
-            return Ok(Some(block_number));
-        };
-        let target_date = ckbadger_common::block_date(dt);
+        let target_date = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
 
         let mut cursor = block_number;
         while cursor > 0 {
             let prev_num = cursor - 1;
-            let Some(prev_header) = self.get_block_header(prev_num)? else {
-                break;
-            };
-            let Some(prev_dt) = chrono::DateTime::from_timestamp(prev_header.timestamp / 1000, 0)
-            else {
-                break;
-            };
-            let d = ckbadger_common::block_date(prev_dt);
+            let prev_header = self.get_block_header(prev_num)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing predecessor block header while finding CKB day start: block={block_number}, missing={prev_num}"
+                )
+            })?;
+            let d = ckbadger_common::stats_bucket::stats_day(prev_header.chain_time_ms)?;
             if d == target_date {
                 cursor = prev_num;
                 continue;
@@ -512,12 +507,16 @@ mod tests {
 
         let mut h0 = make_header(0);
         h0.timestamp = day_start_ts + 10_000;
+        h0.chain_time_ms = day_start_ts + 10_000;
         let mut h1 = make_header(1);
         h1.timestamp = day_start_ts + 20_000;
+        h1.chain_time_ms = day_start_ts + 20_000;
         let mut h2 = make_header(2);
-        h2.timestamp = day_start_ts + 30_000;
+        h2.timestamp = day_start_ts - 8 * 3_600_000 - 30_000; // raw time moved backward across CKB day boundary
+        h2.chain_time_ms = day_start_ts + 20_000;
         let mut h3 = make_header(3);
         h3.timestamp = day_start_ts + 86_400_000 + 10_000; // next day
+        h3.chain_time_ms = h3.timestamp;
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(0, &h0);
@@ -529,6 +528,23 @@ mod tests {
         assert_eq!(store.find_day_start_block(2).unwrap(), Some(0));
         assert_eq!(store.find_day_start_block(3).unwrap(), Some(3));
         assert_eq!(store.find_day_start_block(999).unwrap(), None);
+    }
+
+    #[test]
+    fn find_day_start_block_rejects_missing_predecessor() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut header = make_header(2);
+        header.chain_time_ms = 1_771_286_400_000;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(2, &header);
+        batch.commit().unwrap();
+
+        let error = store.find_day_start_block(2).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("missing predecessor block header"));
+        assert!(error.to_string().contains("missing=1"));
     }
 
     #[test]

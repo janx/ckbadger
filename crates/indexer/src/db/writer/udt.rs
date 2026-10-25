@@ -207,13 +207,14 @@ impl BatchWriter {
     }
 
     /// Process a batch of UDT transfers: upsert tokens and update holder balances.
-    /// `block_timestamps` maps block_number → timestamp_ms for hourly bucket computation.
+    /// Raw timestamps are preserved in transfer rows; chain times own hourly buckets.
     pub(crate) fn process_udt_transfers_batch_with_state(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
         max_supply_observations: &HashMap<Vec<u8>, u128>,
         onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
+        block_chain_times_ms: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
         state: &mut UdtBatchState,
     ) -> Result<()> {
@@ -263,18 +264,18 @@ impl BatchWriter {
                 )
             })?;
 
-            let ts_ms = block_timestamps
+            let chain_time_ms = block_chain_times_ms
                 .get(block_number)
                 .copied()
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "missing block timestamp for UDT transfer aggregation: type_hash=0x{}, tx_hash=0x{}, block_number={}",
+                        "missing block chain time for UDT transfer aggregation: type_hash=0x{}, tx_hash=0x{}, block_number={}",
                         hex::encode(&transfer.type_script_hash),
                         hex::encode(tx_hash),
                         block_number
                     )
                 })?;
-            let hour_bucket = ts_ms / 3_600_000;
+            let hour_bucket = ckbadger_common::stats_bucket::stats_hour_index(chain_time_ms)?;
             *hourly_transfer_updates
                 .entry((
                     *block_number,
@@ -643,6 +644,7 @@ mod tests {
             transfers,
             max_supply_observations,
             onchain_token_info,
+            block_timestamps,
             block_timestamps,
             batch,
             &mut state,
@@ -1323,8 +1325,10 @@ mod tests {
         let tx_hash_a = [0xF1; 32];
         let tx_hash_b = [0xF2; 32];
         let mut block_timestamps = HashMap::new();
-        block_timestamps.insert(401i64, 1_800_000i64);
-        block_timestamps.insert(402i64, 2_000_000i64);
+        block_timestamps.insert(401i64, 3_600_000i64);
+        // Raw time regresses before the hour even though parent t* reached it.
+        block_timestamps.insert(402i64, 3_599_000i64);
+        let block_chain_times_ms = HashMap::from([(401i64, 3_600_000i64), (402, 3_600_000)]);
 
         let first = vec![(&transfer_a, tx_hash_a.as_slice(), 401i64)];
         let second = vec![(&transfer_b, tx_hash_b.as_slice(), 402i64)];
@@ -1337,6 +1341,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &block_timestamps,
+                &block_chain_times_ms,
                 &mut batch,
                 &mut state,
             )
@@ -1347,6 +1352,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &block_timestamps,
+                &block_chain_times_ms,
                 &mut batch,
                 &mut state,
             )
@@ -1354,9 +1360,15 @@ mod tests {
         entity_stats.stage_final(&mut batch).unwrap();
         batch.commit().unwrap();
 
-        let hour0_key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, 0);
-        let hour0 = store.get_stats_key(&hour0_key).unwrap().unwrap();
-        assert_eq!(i64::from_le_bytes(hour0[..8].try_into().unwrap()), 2);
+        let hour1_key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, 1);
+        let hour1 = store.get_stats_key(&hour1_key).unwrap().unwrap();
+        assert_eq!(i64::from_le_bytes(hour1[..8].try_into().unwrap()), 2);
+        assert_eq!(
+            store.list_token_transfers(&type_hash, 10, None).unwrap()[0]
+                .2
+                .timestamp,
+            3_599_000
+        );
     }
 
     #[test]

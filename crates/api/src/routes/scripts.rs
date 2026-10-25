@@ -1744,14 +1744,17 @@ fn apply_script_chart_delta(
     .map_err(|e| ApiError::internal(e.to_string()))
 }
 
-fn latest_complete_script_chart_date_from_tip(tip_timestamp_ms: i64) -> Result<u32, ApiRouteError> {
-    let tip_date = ckbadger_common::block_date_from_ms(tip_timestamp_ms);
+fn latest_complete_script_chart_date_from_tip(
+    tip_chain_time_ms: i64,
+) -> Result<u32, ApiRouteError> {
+    let tip_date = ckbadger_common::stats_bucket::stats_day(tip_chain_time_ms)
+        .map_err(|e| ApiError::internal(format!("invalid script chart tip chain time: {e}")))?;
     let latest_complete = tip_date
         .checked_sub_signed(chrono::Duration::days(1))
         .ok_or_else(|| {
             ApiError::internal(format!(
-                "tip timestamp does not have a previous CKB chart day: tip_timestamp_ms={}",
-                tip_timestamp_ms
+                "tip chain time does not have a previous CKB chart day: tip_chain_time_ms={}",
+                tip_chain_time_ms
             ))
         })?;
 
@@ -1761,8 +1764,8 @@ fn latest_complete_script_chart_date_from_tip(tip_timestamp_ms: i64) -> Result<u
         .parse::<u32>()
         .map_err(|e| {
             ApiError::internal(format!(
-                "failed to encode latest complete script chart date: tip_timestamp_ms={}, date={}, error={}",
-                tip_timestamp_ms,
+                "failed to encode latest complete script chart date: tip_chain_time_ms={}, date={}, error={}",
+                tip_chain_time_ms,
                 latest_complete,
                 e
             ))
@@ -1780,7 +1783,7 @@ fn latest_complete_script_chart_date(state: &AppState) -> Result<u32, ApiRouteEr
             )
         })?;
 
-    latest_complete_script_chart_date_from_tip(header.timestamp)
+    latest_complete_script_chart_date_from_tip(header.chain_time_ms)
 }
 
 fn resolve_script_capacity_chart_bounds(
