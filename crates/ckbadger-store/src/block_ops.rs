@@ -473,6 +473,7 @@ mod tests {
         for (number, timestamp) in [(0, 1_000), (1, 2_000), (2, 4_000), (3, 8_000)] {
             let mut header = make_header(number);
             header.timestamp = timestamp;
+            header.chain_time_ms = timestamp;
             batch.put_block_header(number, &header);
         }
         batch.commit().unwrap();

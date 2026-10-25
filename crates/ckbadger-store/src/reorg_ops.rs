@@ -5291,6 +5291,49 @@ mod tests {
         TokenInfo, TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
+    /// Complete the synthetic forward chain state before exercising production
+    /// rollback. Many focused reorg fixtures wrote headers directly instead
+    /// of running the indexer, so they must also write each header's exact
+    /// inter-block histogram contribution now that rollback verifies it.
+    fn seed_forward_chain_histogram(store: &CkbadgerStore) -> anyhow::Result<()> {
+        let mut headers = store.list_blocks_desc(None, 10_000)?;
+        headers.reverse();
+        let mut counts = std::collections::BTreeMap::<i32, i32>::new();
+        for pair in headers.windows(2) {
+            let [(previous_number, previous), (number, current)] = pair else {
+                unreachable!("windows(2) always has two headers")
+            };
+            if *number != previous_number + 1 {
+                continue;
+            }
+            let delta_ms = current.chain_time_ms.checked_sub(previous.chain_time_ms)
+                .ok_or_else(|| anyhow::anyhow!("fixture chain-time interval overflow: previous_block={previous_number} block={number}"))?;
+            if delta_ms < 0 {
+                anyhow::bail!(
+                    "fixture chain time regressed: previous_block={previous_number} block={number}"
+                );
+            }
+            let bucket = ckbadger_common::stats_bucket::block_time_to_bucket(delta_ms / 1_000)?;
+            let count = counts.entry(bucket).or_default();
+            *count = count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!("fixture histogram count overflow: bucket={bucket}")
+            })?;
+        }
+        for (bucket, count) in counts {
+            let key =
+                keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &bucket.to_be_bytes());
+            if store.get_stats_key(&key)?.is_none() {
+                store.put_cf(store.cf_stats_chain(), &key, &count.to_le_bytes())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn rollback_fixture(store: &CkbadgerStore, rollback_to: i64) -> anyhow::Result<RollbackResult> {
+        seed_forward_chain_histogram(store)?;
+        store.rollback_to_block(rollback_to)
+    }
+
     /// Persist a DAO daily snapshot directly, so a rollback fixture can start
     /// from materialized DAO aggregate state.
     #[cfg(test)]
@@ -6041,7 +6084,7 @@ mod tests {
             .put_daily_stats("20260305", &Default::default())
             .unwrap();
 
-        store.rollback_to_block(-1).unwrap();
+        rollback_fixture(&store, -1).unwrap();
 
         assert!(store.get_daily_stats("20260304").unwrap().is_some());
         assert!(store.get_daily_stats("20260305").unwrap().is_none());
@@ -6056,7 +6099,7 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         // Rollback to -1 (pre-genesis) on empty store succeeds trivially
-        let result = store.rollback_to_block(-1).unwrap();
+        let result = rollback_fixture(&store, -1).unwrap();
         assert_eq!(result.blocks_removed, 0);
     }
 
@@ -6199,7 +6242,7 @@ mod tests {
             );
 
             // Fork inside day D: rollback_to=3, replay_start=4, cutoff=20260921.
-            store.rollback_to_block(3).unwrap();
+            rollback_fixture(&store, 3).unwrap();
 
             assert_eq!(
                 snapshot_bytes(&store, "20260920"),
@@ -6242,7 +6285,7 @@ mod tests {
             assert!(before_d.iter().all(Option::is_some));
 
             // Orphan block 5 and 6: rollback_to=4, replay_start=5, cutoff=20260922.
-            store.rollback_to_block(4).unwrap();
+            rollback_fixture(&store, 4).unwrap();
 
             assert_eq!(
                 snapshot_bytes(&store, "20260920"),
@@ -6454,7 +6497,7 @@ mod tests {
 
         // Orphan blocks 4 and 5. No EntityStats undo entry exists for them,
         // i.e. they never modified any of these keys.
-        store.rollback_to_block(3).unwrap();
+        rollback_fixture(&store, 3).unwrap();
 
         let after = read_all(&store);
         let mut lost = Vec::new();
@@ -6658,7 +6701,7 @@ mod tests {
             }
         }
 
-        let result = store.rollback_to_block(140).unwrap();
+        let result = rollback_fixture(&store, 140).unwrap();
 
         // The replay-scoped row is gone; the boundary epoch is truncated, not
         // deleted, so the sweep must still have visited it.
@@ -6762,7 +6805,7 @@ mod tests {
         );
         seed_sync_status(&store, 150, &[150u8; 32], 102, 0, 0);
 
-        store.rollback_to_block(120).unwrap();
+        rollback_fixture(&store, 120).unwrap();
 
         let boundary = read_epoch_row(&store, 5).expect("boundary epoch row must survive rollback");
         assert_eq!(boundary.start_block, 100, "start_block must be preserved");
@@ -6866,7 +6909,7 @@ mod tests {
         seed_sync_status(&store, 4, &[4u8; 32], 4, 0, 0);
 
         // Roll back blocks 3 and 4 — both mined by miner_b.
-        store.rollback_to_block(2).unwrap();
+        rollback_fixture(&store, 2).unwrap();
 
         let read_miner = |miner: &[u8]| -> Option<MinerStats> {
             let suffix = [date.as_bytes(), miner].concat();
@@ -6953,7 +6996,12 @@ mod tests {
 
         // Fork exactly before epoch 6's first block: replay starts at 130
         // (epoch_index 0), so epoch 6's row is rebuilt from scratch.
-        store.rollback_to_block(129).unwrap();
+        let epoch_bucket =
+            keys::encode_stats_key(keys::STATS_PREFIX_EPOCH_TIME_DIST, &5i32.to_be_bytes());
+        store
+            .put_cf(store.cf_stats_chain(), &epoch_bucket, &1i32.to_le_bytes())
+            .unwrap();
+        rollback_fixture(&store, 129).unwrap();
 
         assert!(
             read_epoch_row(&store, 6).is_none(),
@@ -7032,7 +7080,7 @@ mod tests {
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 2, 2, 2);
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_tx_actions(1, 0, &tx_hash_keep).unwrap().is_some());
         assert!(store.get_tx_actions(2, 0, &tx_hash_drop).unwrap().is_none());
@@ -7153,7 +7201,7 @@ mod tests {
             })
             .unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         let status = store.get_sync_status().unwrap();
         assert_eq!(status.tip_block_number, 1);
@@ -7284,7 +7332,7 @@ mod tests {
         );
         domain_batch.commit().unwrap();
 
-        domain.rollback_to_block(0).unwrap();
+        rollback_fixture(&domain, 0).unwrap();
 
         let rebuilt = domain
             .get_mnft_collection_aggregate(&class_id)
@@ -7389,7 +7437,7 @@ mod tests {
         );
         batch.commit().unwrap();
 
-        domain.rollback_to_block(0).unwrap();
+        rollback_fixture(&domain, 0).unwrap();
 
         let rebuilt = domain
             .get_mnft_collection_aggregate(&class_id)
@@ -7484,7 +7532,7 @@ mod tests {
             .unwrap()
             .is_some());
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_cell(&tx_hash, 0, &store).unwrap().is_some());
 
@@ -7638,7 +7686,7 @@ mod tests {
             .unwrap()
             .is_some());
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_some());
         assert!(store.get_cell(&consuming_tx, 0, &store).unwrap().is_none());
@@ -7877,7 +7925,7 @@ mod tests {
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 3, 3, 1);
 
-        let result = store.rollback_to_block(1).unwrap();
+        let result = rollback_fixture(&store, 1).unwrap();
 
         let addr_txs_of = |lock_hash: &[u8]| {
             store
@@ -8045,7 +8093,7 @@ mod tests {
             "fixture must seed a CF_CELLS payload"
         );
 
-        store.rollback_to_block(4).unwrap();
+        rollback_fixture(&store, 4).unwrap();
 
         let ab = store.get_addr_balance(&addr_a).unwrap().unwrap();
         assert_eq!(ab.txs_count, 1);
@@ -8252,7 +8300,7 @@ mod tests {
         );
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
-        let result = store.rollback_to_block(1).unwrap();
+        let result = rollback_fixture(&store, 1).unwrap();
 
         // Only the surviving row is left for this token.
         let remaining = store.list_token_transfers(&type_hash, 10, None).unwrap();
@@ -8442,6 +8490,7 @@ mod tests {
 
         // Step 2: rollback_to_block_with_tx_contexts uses the pre-loaded
         // tx-context entries (targeted lookup, not full CF scan).
+        seed_forward_chain_histogram(&store).unwrap();
         store
             .rollback_to_block_with_tx_contexts(1, None, undo_result.tx_contexts)
             .unwrap();
@@ -8636,7 +8685,7 @@ mod tests {
             vec![(lock_b.clone(), TokenBalance::from(100))]
         );
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
@@ -8844,7 +8893,7 @@ mod tests {
             vec![(lock_b.clone(), TokenBalance::from(big))]
         );
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         // lock_a's input cell (amount = big) is restored to live; lock_b's output removed.
         assert_eq!(
@@ -9053,7 +9102,7 @@ mod tests {
 
         // Naive `current.checked_add(added)` computes big+big (=2*big) and overflows
         // u128 → this rollback errors. Net-difference form restores cleanly.
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         // lock_a's balance is restored to its prior value `big` (input cell live again,
         // output cell removed; the self-transfer nets to no change).
@@ -9259,7 +9308,7 @@ mod tests {
             .unwrap()
             .is_some());
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_some());
         assert!(store
@@ -9337,7 +9386,7 @@ mod tests {
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
         assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
@@ -9420,7 +9469,7 @@ mod tests {
             .put_cf(store.cf_tx_hash_map(), &[0xFF; 32], &[0xAA; 8])
             .unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
         assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
@@ -9536,7 +9585,7 @@ mod tests {
         seed_tx_address_history(&store, 2, 0, &cellbase_tx, &[&[0xAA; 32]]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 0);
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_cell(&cellbase_tx, 0, &store).unwrap().is_none());
         assert!(store.get_tx_index(2, 0).unwrap().is_none());
@@ -9680,7 +9729,7 @@ mod tests {
         batch.delete_cell(&drop_consumed_tx, 0);
         batch.commit().unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_cell(&keep_tx, 0, &store).unwrap().is_some());
         assert!(store.get_cell(&drop_live_tx, 0, &store).unwrap().is_none());
@@ -9841,7 +9890,7 @@ mod tests {
         batch.put_dao_by_withdraw_tx(&orphan_request_tx, 0, &orphan_outpoint);
         batch.commit().unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         let repaired_a = store.get_dao_deposit(&outpoint_a).unwrap().unwrap();
         assert_eq!(repaired_a.status, 0);
@@ -9966,7 +10015,7 @@ mod tests {
         batch.put_dao_by_withdraw_tx(&request_tx, 0, &deposit_outpoint);
         batch.commit().unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_dao_deposit(&deposit_outpoint).unwrap().is_none());
         assert!(store
@@ -10033,11 +10082,17 @@ mod tests {
         batch.put_block_header(2, &header2);
         batch.commit().unwrap();
 
+        seed_forward_chain_histogram(&store).unwrap();
         let err = store.rollback_to_block(1).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("missing rollback target block header while updating sync status tip"));
-        assert!(err.to_string().contains("rollback_to=1"));
+        assert!(
+            err.to_string()
+                .contains("missing canonical header while locating prior epoch start"),
+            "{err:#}"
+        );
+        assert!(
+            err.to_string().contains("block=1 rollback_block=2"),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -10132,6 +10187,7 @@ mod tests {
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 0);
 
+        seed_forward_chain_histogram(&store).unwrap();
         let err = store.rollback_to_block(1).unwrap_err();
         assert!(err.to_string().contains("total_cells_count underflow"));
         assert!(err.to_string().contains("txs_count underflow"));
@@ -10321,7 +10377,7 @@ mod tests {
         batch.commit().unwrap();
 
         store.rollback_via_undo_log(&store, 1).unwrap();
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         assert!(store.get_spore(&spore_keep_id).unwrap().is_some());
         assert!(store.get_spore(&spore_drop_id).unwrap().is_none());
@@ -10461,7 +10517,7 @@ mod tests {
         // from rows that are already exact — the sweep no longer deletes them,
         // and the undo entry has restored the one the orphan moved.
         store.rollback_via_undo_log(&store, 200).unwrap();
-        store.rollback_to_block(200).unwrap();
+        rollback_fixture(&store, 200).unwrap();
 
         let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(agg.owned_capacity, 800); // 500 + 300
@@ -10627,7 +10683,7 @@ mod tests {
             })
             .unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         let repaired = store.get_hodl_tracker_state().unwrap().unwrap();
         assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
@@ -10952,7 +11008,7 @@ mod tests {
             })
             .unwrap();
 
-        store.rollback_to_block(1).unwrap();
+        rollback_fixture(&store, 1).unwrap();
 
         let repaired = store.get_cell_dist_tracker_state().unwrap().unwrap();
         assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
@@ -11139,7 +11195,7 @@ mod tests {
         seed_sync_status(&store, 160, &[160u8; 32], 0, 0, 0);
 
         // Rollback to block 120.
-        store.rollback_to_block(120).unwrap();
+        rollback_fixture(&store, 120).unwrap();
 
         // Verify commitment index was cleaned up.
         let commitment_entry = store
@@ -11266,7 +11322,7 @@ mod tests {
 
         // Rollback to block 3 — blocks 4 and 5 are rolled back.
         // Fork point (block 3) is on the same day as the cutoff.
-        store.rollback_to_block(3).unwrap();
+        rollback_fixture(&store, 3).unwrap();
 
         // The daily stats for 20240324 should be REPAIRED, not deleted.
         let repaired_raw = store.get_stats_key(&daily_key).unwrap();
@@ -11697,7 +11753,7 @@ mod tests {
 
         // Rollback block 4 — the one with 1 uncle.
         // rollback_to=3 means block 4 is removed.
-        store.rollback_to_block(3).unwrap();
+        rollback_fixture(&store, 3).unwrap();
 
         // Verify: DailyBlockStats for 2026-04-08 should now have
         // block_count=3, total_uncles=1 (not 2).
@@ -11799,7 +11855,7 @@ mod tests {
         );
 
         // Orphan block 4 only. Its gap is ts(4) - ts(3) = 1500 ms, one delta.
-        store.rollback_to_block(3).unwrap();
+        rollback_fixture(&store, 3).unwrap();
 
         let repaired = store
             .get_daily_stats("20260408")
@@ -11826,19 +11882,21 @@ mod tests {
         );
     }
 
-    /// A negative gap (clock skew) is skipped by both forward writers, so
-    /// rollback must skip it too — subtracting it would inflate the day's sum.
+    /// A raw clock regression becomes a zero chain-time gap. Forward writes
+    /// count it in bucket zero and rollback must reverse that exact count.
     #[test]
-    fn test_rollback_skips_negative_block_time_gap_like_the_writers() {
+    fn test_rollback_reverses_zero_chain_time_gap_after_raw_clock_regression() {
         let day_start_ms: i64 = 1775577600000;
 
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
-        // b3 -> b4 goes backwards by 500 ms: the forward path never counted it.
+        // b3 -> b4 raw time goes backwards by 500 ms; t* stays at b3's time.
         let timestamps = [0i64, 1000, 2000, 3000, 2500];
         let mut batch = StoreBatch::new(&store);
+        let mut chain_offset = 0i64;
         for (block, offset) in timestamps.iter().enumerate() {
+            chain_offset = chain_offset.max(*offset);
             batch.put_block_header(
                 block as i64,
                 &CachedBlockHeader {
@@ -11855,7 +11913,7 @@ mod tests {
                     compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
-                    chain_time_ms: day_start_ms + offset,
+                    chain_time_ms: day_start_ms + chain_offset,
                 },
             );
         }
@@ -11867,7 +11925,7 @@ mod tests {
                 &DailyStats {
                     blocks_count: 5,
                     block_time_sum_ms: 3_000,
-                    block_time_count: 3,
+                    block_time_count: 4,
                     ..Default::default()
                 },
             )
@@ -11887,13 +11945,13 @@ mod tests {
             },
         );
 
-        store.rollback_to_block(3).unwrap();
+        rollback_fixture(&store, 3).unwrap();
 
         let repaired = store.get_daily_stats("20260408").unwrap().unwrap();
         assert_eq!(
             (repaired.block_time_sum_ms, repaired.block_time_count),
             (3_000, 3),
-            "a gap the writers skipped must not be subtracted on rollback"
+            "rollback must subtract the zero-gap count while retaining its zero duration"
         );
     }
 
@@ -12016,7 +12074,7 @@ mod tests {
         seed_dao_daily_snapshot(&store, "20260311", &stale_dao_daily_snapshot("2026-03-11"));
         let completed_before = store.get_dao_daily_snapshot("20260310").unwrap();
 
-        store.rollback_to_block(3).unwrap();
+        rollback_fixture(&store, 3).unwrap();
 
         assert_eq!(
             bincode::serialize(&store.get_dao_daily_snapshot("20260310").unwrap()).unwrap(),
@@ -12185,7 +12243,7 @@ mod tests {
         }
 
         store.rollback_via_undo_log(&store, 120).unwrap();
-        store.rollback_to_block(120).unwrap();
+        rollback_fixture(&store, 120).unwrap();
 
         // Rolled-back identities are gone, together with their outpoint rows.
         assert!(store.get_identity(&short_a).unwrap().is_none());
@@ -12249,7 +12307,7 @@ mod tests {
         // remains the cutoff date. Neither date has a DAO aggregate row.
         seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, true);
 
-        store.rollback_to_block(3).expect(
+        rollback_fixture(&store, 3).expect(
             "rollback must skip dates with no materialized DAO snapshot instead of failing on \
              the missing previous block header",
         );
@@ -12273,7 +12331,7 @@ mod tests {
         seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, false);
         seed_dao_daily_snapshot(&store, "20260310", &stale_dao_daily_snapshot("2026-03-10"));
 
-        store.rollback_to_block(3).expect(
+        rollback_fixture(&store, 3).expect(
             "an unaffected date must not be recomputed, so a store without its block prehistory \
              must still roll back cleanly",
         );
@@ -12433,7 +12491,7 @@ mod tests {
         );
 
         // Both names survive: every forward row must come back.
-        store.rollback_to_block(15).unwrap();
+        rollback_fixture(&store, 15).unwrap();
         let expected: std::collections::BTreeSet<Vec<u8>> = [
             sentinel_row(&alice_id),
             sentinel_row(&child_id),
@@ -12470,7 +12528,7 @@ mod tests {
             batch.commit().unwrap();
         }
         store.rollback_via_undo_log(&store, 11).unwrap();
-        store.rollback_to_block(11).unwrap();
+        rollback_fixture(&store, 11).unwrap();
         assert!(store.get_identity(&child_id).unwrap().is_none());
         assert!(store.get_identity(&alice_id).unwrap().is_some());
         let expected: std::collections::BTreeSet<Vec<u8>> = [
@@ -12637,6 +12695,7 @@ mod tests {
             assert!(before.is_some(), "{cf_name}: fixture must seed the entity");
 
             // No undo entry: the writer "forgot" its pre-image.
+            seed_forward_chain_histogram(&store).unwrap();
             let err = store
                 .rollback_to_block(4)
                 .expect_err("an entity above the fork point must not survive undo replay");
@@ -12666,7 +12725,7 @@ mod tests {
                 batch.commit().unwrap();
             }
             store.rollback_via_undo_log(&store, 4).unwrap();
-            store.rollback_to_block(4).unwrap();
+            rollback_fixture(&store, 4).unwrap();
             assert_eq!(store.get_cf(cf, &id).unwrap(), None, "{cf_name}");
         }
     }
