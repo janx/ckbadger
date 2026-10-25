@@ -1961,96 +1961,128 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
     }
 
     let content = fs::read_to_string(path)?;
-    let map = content
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect::<HashMap<_, _>>();
+    let mut map = HashMap::new();
+    for (line_number, line) in content.lines().enumerate() {
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}:{} missing '=' in metrics.env",
+                path.display(),
+                line_number + 1
+            )
+        })?;
+        if map.insert(key.to_string(), value.to_string()).is_some() {
+            bail!(
+                "{}:{} duplicate metrics key {key}",
+                path.display(),
+                line_number + 1
+            );
+        }
+    }
     let peak_owner_memory_bytes = map
         .iter()
         .filter_map(|(key, value)| {
-            key.strip_prefix("peak_owner_memory_bytes_")
-                .map(|owner| (owner.to_string(), value.parse::<u64>().unwrap_or_default()))
+            key.strip_prefix("peak_owner_memory_bytes_").map(|owner| {
+                value
+                    .parse::<u64>()
+                    .map(|bytes| (owner.to_string(), bytes))
+                    .map_err(|error| {
+                        anyhow::anyhow!("{}: invalid {key}={value}: {error}", path.display())
+                    })
+            })
         })
-        .collect::<HashMap<_, _>>();
+        .collect::<Result<HashMap<_, _>>>()?;
 
     Ok(Some(BulkSyncPerfMetrics {
-        run_id: read_string(&map, "run_id"),
-        status: read_string(&map, "status"),
-        started_at_utc: read_string(&map, "started_at_utc"),
+        run_id: read_string(&map, "run_id")?,
+        status: read_string(&map, "status")?,
+        started_at_utc: read_string(&map, "started_at_utc")?,
         finished_at_utc: map.get("finished_at_utc").cloned(),
-        wall_clock_seconds: read_f64(&map, "wall_clock_seconds"),
-        batches: read_u64(&map, "batches"),
-        blocks: read_u64(&map, "blocks"),
-        total_txs: read_u64(&map, "total_txs"),
-        blocks_per_sec_wall: read_f64(&map, "blocks_per_sec_wall"),
-        txs_per_sec_wall: read_f64(&map, "txs_per_sec_wall"),
-        blocks_per_batch: read_f64(&map, "blocks_per_batch"),
-        avg_batch_seconds: read_f64(&map, "avg_batch_seconds"),
-        p95_batch_seconds: read_f64(&map, "p95_batch_seconds"),
-        p99_batch_seconds: read_f64(&map, "p99_batch_seconds"),
-        total_commit_seconds: read_f64(&map, "total_commit_seconds"),
-        avg_commit_ms: read_f64(&map, "avg_commit_ms"),
-        p95_commit_ms: read_f64(&map, "p95_commit_ms"),
-        p99_commit_ms: read_f64(&map, "p99_commit_ms"),
-        finalize_seconds: read_f64(&map, "finalize_seconds"),
-        max_compaction_pending_mb: read_u64(&map, "max_compaction_pending_mb"),
-        max_l0_files: read_u64(&map, "max_l0_files"),
-        max_imm_memtables: read_u64(&map, "max_imm_memtables"),
-        avg_load_avg_1m: read_f64(&map, "avg_load_avg_1m"),
-        max_load_avg_1m: read_f64(&map, "max_load_avg_1m"),
-        min_mem_available_mb: read_u64(&map, "min_mem_available_mb"),
-        avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch"),
-        avg_disk_util_pct: read_optional_f64(&map, "avg_disk_util_pct"),
-        p95_disk_util_pct: read_optional_f64(&map, "p95_disk_util_pct"),
-        avg_disk_await_ms: read_optional_f64(&map, "avg_disk_await_ms"),
-        p95_disk_await_ms: read_optional_f64(&map, "p95_disk_await_ms"),
-        max_disk_avg_queue_depth: read_optional_f64(&map, "max_disk_avg_queue_depth"),
-        peak_disk_write_mb_s: read_optional_f64(&map, "peak_disk_write_mb_s"),
-        peak_disk_write_iops: read_optional_f64(&map, "peak_disk_write_iops"),
-        saturated_window_count: read_u64(&map, "saturated_window_count"),
-        saturated_window_ratio: read_optional_f64(&map, "saturated_window_ratio"),
-        disk_telemetry_status: {
-            let status = read_string(&map, "disk_telemetry_status");
-            if status.is_empty() {
-                "unavailable".to_string()
-            } else {
-                status
-            }
-        },
+        wall_clock_seconds: read_f64(&map, "wall_clock_seconds")?,
+        batches: read_u64(&map, "batches")?,
+        blocks: read_u64(&map, "blocks")?,
+        total_txs: read_u64(&map, "total_txs")?,
+        blocks_per_sec_wall: read_f64(&map, "blocks_per_sec_wall")?,
+        txs_per_sec_wall: read_f64(&map, "txs_per_sec_wall")?,
+        blocks_per_batch: read_f64(&map, "blocks_per_batch")?,
+        avg_batch_seconds: read_f64(&map, "avg_batch_seconds")?,
+        p95_batch_seconds: read_f64(&map, "p95_batch_seconds")?,
+        p99_batch_seconds: read_f64(&map, "p99_batch_seconds")?,
+        total_commit_seconds: read_f64(&map, "total_commit_seconds")?,
+        avg_commit_ms: read_f64(&map, "avg_commit_ms")?,
+        p95_commit_ms: read_f64(&map, "p95_commit_ms")?,
+        p99_commit_ms: read_f64(&map, "p99_commit_ms")?,
+        finalize_seconds: read_f64(&map, "finalize_seconds")?,
+        max_compaction_pending_mb: read_u64(&map, "max_compaction_pending_mb")?,
+        max_l0_files: read_u64(&map, "max_l0_files")?,
+        max_imm_memtables: read_u64(&map, "max_imm_memtables")?,
+        avg_load_avg_1m: read_f64(&map, "avg_load_avg_1m")?,
+        max_load_avg_1m: read_f64(&map, "max_load_avg_1m")?,
+        min_mem_available_mb: read_u64(&map, "min_mem_available_mb")?,
+        avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch")?,
+        avg_disk_util_pct: read_optional_f64(&map, "avg_disk_util_pct")?,
+        p95_disk_util_pct: read_optional_f64(&map, "p95_disk_util_pct")?,
+        avg_disk_await_ms: read_optional_f64(&map, "avg_disk_await_ms")?,
+        p95_disk_await_ms: read_optional_f64(&map, "p95_disk_await_ms")?,
+        max_disk_avg_queue_depth: read_optional_f64(&map, "max_disk_avg_queue_depth")?,
+        peak_disk_write_mb_s: read_optional_f64(&map, "peak_disk_write_mb_s")?,
+        peak_disk_write_iops: read_optional_f64(&map, "peak_disk_write_iops")?,
+        saturated_window_count: read_u64(&map, "saturated_window_count")?,
+        saturated_window_ratio: read_optional_f64(&map, "saturated_window_ratio")?,
+        disk_telemetry_status: read_string(&map, "disk_telemetry_status")?,
         peak_owner_memory_bytes,
-        peak_live_cell_count: read_u64(&map, "peak_live_cell_count"),
-        streamed_history_rows: read_u64(&map, "streamed_history_rows"),
-        sealed_aggregate_rows: read_u64(&map, "sealed_aggregate_rows"),
-        final_snapshot_rows: read_u64(&map, "final_snapshot_rows"),
-        history_flushes: read_u64(&map, "history_flushes"),
-        sealed_aggregate_flushes: read_u64(&map, "sealed_aggregate_flushes"),
-        final_snapshot_flushes: read_u64(&map, "final_snapshot_flushes"),
-        total_batch_seconds: read_f64(&map, "total_batch_seconds"),
-        stall_count: read_u64(&map, "stall_count"),
+        peak_live_cell_count: read_u64(&map, "peak_live_cell_count")?,
+        streamed_history_rows: read_u64(&map, "streamed_history_rows")?,
+        sealed_aggregate_rows: read_u64(&map, "sealed_aggregate_rows")?,
+        final_snapshot_rows: read_u64(&map, "final_snapshot_rows")?,
+        history_flushes: read_u64(&map, "history_flushes")?,
+        sealed_aggregate_flushes: read_u64(&map, "sealed_aggregate_flushes")?,
+        final_snapshot_flushes: read_u64(&map, "final_snapshot_flushes")?,
+        total_batch_seconds: read_f64(&map, "total_batch_seconds")?,
+        stall_count: read_u64(&map, "stall_count")?,
     }))
 }
 
-fn read_string(map: &HashMap<String, String>, key: &str) -> String {
-    map.get(key).cloned().unwrap_or_default()
+fn read_string(map: &HashMap<String, String>, key: &str) -> Result<String> {
+    let value = map
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("missing metrics key {key}"))?;
+    if value.is_empty() {
+        bail!("empty metrics key {key}");
+    }
+    Ok(value.clone())
 }
 
-fn read_u64(map: &HashMap<String, String>, key: &str) -> u64 {
-    map.get(key)
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0)
+fn read_u64(map: &HashMap<String, String>, key: &str) -> Result<u64> {
+    let value = read_string(map, key)?;
+    value
+        .parse::<u64>()
+        .map_err(|error| anyhow::anyhow!("invalid metrics {key}={value}: {error}"))
 }
 
-fn read_f64(map: &HashMap<String, String>, key: &str) -> f64 {
-    map.get(key)
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(0.0)
+fn read_f64(map: &HashMap<String, String>, key: &str) -> Result<f64> {
+    let value = read_string(map, key)?;
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|error| anyhow::anyhow!("invalid metrics {key}={value}: {error}"))?;
+    if !parsed.is_finite() {
+        bail!("non-finite metrics {key}={value}");
+    }
+    Ok(parsed)
 }
 
-fn read_optional_f64(map: &HashMap<String, String>, key: &str) -> Option<f64> {
-    match map.get(key).map(String::as_str) {
-        Some("n/a") | None => None,
-        Some(value) => value.parse::<f64>().ok(),
+fn read_optional_f64(map: &HashMap<String, String>, key: &str) -> Result<Option<f64>> {
+    let value = read_string(map, key)?;
+    match value.as_str() {
+        "n/a" => Ok(None),
+        _ => {
+            let parsed = value
+                .parse::<f64>()
+                .map_err(|error| anyhow::anyhow!("invalid metrics {key}={value}: {error}"))?;
+            if !parsed.is_finite() {
+                bail!("non-finite metrics {key}={value}");
+            }
+            Ok(Some(parsed))
+        }
     }
 }
 
@@ -2065,6 +2097,21 @@ mod tests {
     use tempfile::TempDir;
 
     const TEST_BUILD_VERSION: &str = "0.1.0+feature/foo@abcdef123456";
+
+    #[test]
+    fn metrics_baseline_rejects_missing_and_invalid_required_values() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("metrics.env");
+        std::fs::write(&path, "run_id=test\nstatus=completed\nstarted_at_utc=2026-10-25T00:00:00Z\nwall_clock_seconds=1\nbatches=not-a-number\n").unwrap();
+        let error = super::read_metrics_env(&path).unwrap_err().to_string();
+        assert!(error.contains("batches"), "{error}");
+        std::fs::write(&path, "run_id=test\n").unwrap();
+        let error = super::read_metrics_env(&path).unwrap_err().to_string();
+        assert!(
+            error.contains("status") || error.contains("batches"),
+            "{error}"
+        );
+    }
 
     fn test_batch_sample(
         blocks: u64,
