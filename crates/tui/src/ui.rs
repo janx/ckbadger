@@ -2489,10 +2489,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
     let rate_jitter_text = rate_jitter_value
         .map(|v| format!("{v:.1} blk/s"))
         .unwrap_or_else(|| "-".to_string());
-    let eta_conf = eta_confidence_label(
-        sync.rate_ema.unwrap_or(0.0),
-        rate_jitter_value.unwrap_or(0.0),
-    );
+    let eta_conf = eta_confidence_label(sync.rate_ema, rate_jitter_value);
     let dense_panel = diagnostics_dense_panel(app.diagnostics_view_mode, inner.width, inner.height);
 
     let is_bulk_build = sync.bulk_build.is_some();
@@ -5729,7 +5726,9 @@ fn format_num_compact(value: u64) -> String {
 }
 
 fn pipeline_stability_label(history: &VecDeque<f64>) -> (&'static str, Color) {
-    let jitter = rate_jitter(history, 30);
+    let Some(jitter) = rate_jitter(history, 30) else {
+        return ("N/A", SLATE_500);
+    };
     let mean = history
         .iter()
         .rev()
@@ -5745,7 +5744,7 @@ fn pipeline_stability_label(history: &VecDeque<f64>) -> (&'static str, Color) {
         return ("N/A", SLATE_500);
     }
 
-    let ratio = jitter.unwrap_or(0.0) / mean;
+    let ratio = jitter / mean;
     if ratio < 0.2 {
         ("HIGH", TERMINAL_GREEN)
     } else if ratio < 0.4 {
@@ -5755,7 +5754,10 @@ fn pipeline_stability_label(history: &VecDeque<f64>) -> (&'static str, Color) {
     }
 }
 
-fn eta_confidence_label(ema_rate: f64, jitter: f64) -> (&'static str, Color) {
+fn eta_confidence_label(ema_rate: Option<f64>, jitter: Option<f64>) -> (&'static str, Color) {
+    let (Some(ema_rate), Some(jitter)) = (ema_rate, jitter) else {
+        return ("ETA ?", SLATE_500);
+    };
     if ema_rate <= 0.0 {
         return ("ETA ?", SLATE_500);
     }
@@ -6851,22 +6853,29 @@ mod tests {
 
     #[test]
     fn test_eta_confidence_label() {
+        assert_eq!(eta_confidence_label(Some(100.0), None).0, "ETA ?");
         assert_eq!(
-            eta_confidence_label(0.0, 0.0),
+            eta_confidence_label(Some(0.0), Some(0.0)),
             ("ETA ?", Color::Rgb(160, 174, 192))
         );
         assert_eq!(
-            eta_confidence_label(100.0, 5.0),
+            eta_confidence_label(Some(100.0), Some(5.0)),
             ("ETA HIGH", Color::Rgb(0, 255, 65))
         );
         assert_eq!(
-            eta_confidence_label(100.0, 25.0),
+            eta_confidence_label(Some(100.0), Some(25.0)),
             ("ETA MED", Color::Rgb(255, 176, 0))
         );
         assert_eq!(
-            eta_confidence_label(100.0, 60.0),
+            eta_confidence_label(Some(100.0), Some(60.0)),
             ("ETA LOW", Color::Rgb(239, 68, 68))
         );
+    }
+
+    #[test]
+    fn single_sample_pipeline_stability_is_unknown() {
+        let history = VecDeque::from([100.0]);
+        assert_eq!(super::pipeline_stability_label(&history).0, "N/A");
     }
 
     #[test]
