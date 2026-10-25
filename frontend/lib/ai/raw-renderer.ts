@@ -573,9 +573,17 @@ async function fetchCellFromTxByOutPoint(
       `Output ${outPoint.index} not found in transaction ${normalizeHex(outPoint.tx_hash)}`
     );
   }
+  const data = tx.outputs_data[outputIndex];
+  if (data === undefined) {
+    throw new RawRenderError(
+      502,
+      'rpc_output_data_not_found',
+      `Output data ${outPoint.index} not found in transaction ${normalizeHex(outPoint.tx_hash)}`
+    );
+  }
   return {
     output,
-    data: tx.outputs_data[outputIndex] ?? '0x',
+    data,
   };
 }
 

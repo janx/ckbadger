@@ -93,6 +93,7 @@ describe('renderRawPage', () => {
     const headerHash = `0x${'3'.repeat(64)}`;
     const inputCommitBlockHash = `0x${'4'.repeat(64)}`;
     const depCommitBlockHash = `0x${'5'.repeat(64)}`;
+    let missingSpentOutputData = false;
 
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: txHash,
@@ -172,6 +173,33 @@ describe('renderRawPage', () => {
             { status: 200, headers: { 'content-type': 'application/json' } }
           );
         }
+        if (missingSpentOutputData && payload.params?.[0] === inputTxHash) {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                transaction: {
+                  version: '0x0',
+                  cell_deps: [],
+                  header_deps: [],
+                  inputs: [],
+                  outputs: [
+                    {},
+                    {
+                      capacity: '0x174876e800',
+                      lock: { code_hash: `0x${'f'.repeat(64)}`, hash_type: 'type', args: '0x' },
+                      type: null,
+                    },
+                  ],
+                  outputs_data: [],
+                  witnesses: [],
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
         expect(payload.params?.[0]).toBe(txHash);
         return new Response(
           JSON.stringify({
@@ -205,6 +233,19 @@ describe('renderRawPage', () => {
 
       if (payload.method === 'get_live_cell') {
         const outPoint = payload.params?.[0] as { tx_hash: string; index: string };
+        if (missingSpentOutputData && outPoint.tx_hash === inputTxHash) {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                status: 'dead',
+                cell: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
         if (outPoint.tx_hash === inputTxHash && outPoint.index === '0x1') {
           return new Response(
             JSON.stringify({
@@ -313,6 +354,15 @@ describe('renderRawPage', () => {
       result.body.data?.txWitness?.inference.some((item) => item.kind === 'extra_witnesses')
     ).toBe(true);
     expect(rpcFetch).toHaveBeenCalled();
+
+    missingSpentOutputData = true;
+    await expect(
+      renderRawPage({
+        page: parseRawSourcePath(`/tx/${txHash}`),
+        searchParams: new URLSearchParams('profile=debugger'),
+        origin: 'http://localhost:3000',
+      })
+    ).rejects.toMatchObject({ status: 502, code: 'rpc_output_data_not_found' });
   });
 
   it('renders did:ckb item raw with default profile', async () => {
