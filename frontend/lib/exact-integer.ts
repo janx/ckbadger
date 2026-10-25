@@ -42,3 +42,56 @@ export function formatDecimal(value: string, decimals: number, multiplier = 1): 
   const numerator = BigInt(match[1] + fraction) * BigInt(multiplier);
   return formatScaledInteger(numerator, BigInt(10) ** BigInt(fraction.length), decimals);
 }
+
+/** Non-negative decimal API value as a rational, before any chart geometry conversion. */
+export function exactDecimalRatio(value: string, context: string): [bigint, bigint] {
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(value);
+  if (!match) throw new Error(`${context}: invalid decimal ${JSON.stringify(value)}`);
+  const fraction = match[2] ?? '';
+  return [BigInt(match[1] + fraction), BigInt(10) ** BigInt(fraction.length)];
+}
+
+/** Compact amount rounded half-up from an exact decimal rational. */
+export function formatCompactRatio(numerator: bigint, denominator: bigint): string {
+  if (numerator < BigInt(0) || denominator <= BigInt(0)) {
+    throw new Error('invalid compact decimal ratio');
+  }
+  for (const [suffix, unit] of [
+    ['E', BigInt(10) ** BigInt(18)],
+    ['P', BigInt(10) ** BigInt(15)],
+    ['T', BigInt(10) ** BigInt(12)],
+    ['B', BigInt(10) ** BigInt(9)],
+    ['M', BigInt(10) ** BigInt(6)],
+    ['K', BigInt(10) ** BigInt(3)],
+  ] as const) {
+    if (numerator >= denominator * unit) {
+      return `${formatScaledInteger(numerator, denominator * unit, 2)}${suffix}`;
+    }
+  }
+  return formatScaledInteger(numerator, denominator, 2);
+}
+
+/** Share of exact decimal values. Zero total has no defined percentage. */
+export function formatExactShare(values: readonly [bigint, bigint][], index: number): string {
+  const gcd = (a: bigint, b: bigint): bigint => {
+    while (b !== BigInt(0)) [a, b] = [b, a % b];
+    return a;
+  };
+  if (
+    values.some(([numerator, denominator]) => numerator < BigInt(0) || denominator <= BigInt(0))
+  ) {
+    throw new Error('invalid chart share ratio');
+  }
+  const commonDenominator = values.reduce(
+    (lcm, [, denominator]) => (lcm / gcd(lcm, denominator)) * denominator,
+    BigInt(1)
+  );
+  const scaled = values.map(
+    ([numerator, denominator]) => numerator * (commonDenominator / denominator)
+  );
+  const part = scaled[index];
+  if (part === undefined) throw new Error(`missing chart share index ${index}`);
+  const total = scaled.reduce((sum, part) => sum + part, BigInt(0));
+  if (total === BigInt(0)) return '—';
+  return `${formatScaledInteger(part * BigInt(100), total, 2)}%`;
+}

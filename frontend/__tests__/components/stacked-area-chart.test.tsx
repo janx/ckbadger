@@ -4,6 +4,36 @@ import { render } from '../utils/test-utils';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 
 describe('StackedAreaChart', () => {
+  it('rounds shannon tooltip amounts from the exact integer', () => {
+    render(
+      <StackedAreaChart
+        data={[{ date: '2026-02-19', values: { used: '100500000' } }]}
+        series={[{ key: 'used', label: 'Used', color: '#f59e0b' }]}
+        valueUnit="shannon"
+      />
+    );
+    const svg = document.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    fireEvent.mouseMove(svg, { clientX: 70 });
+    expect(screen.getByText('1.01')).toBeInTheDocument();
+  });
+
+  it('rounds percentage tooltips from exact series ratios', () => {
+    render(
+      <StackedAreaChart
+        data={[{ date: '2026-02-19', values: { used: '201', other: '19799' } }]}
+        series={[
+          { key: 'used', label: 'Used', color: '#f59e0b' },
+          { key: 'other', label: 'Other', color: '#00c389' },
+        ]}
+        isPercentage
+      />
+    );
+    const svg = document.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    fireEvent.mouseMove(svg, { clientX: 70 });
+    expect(screen.getByText('1.01%')).toBeInTheDocument();
+  });
   it('rejects malformed shannon data instead of graphing zero', () => {
     expect(() =>
       render(

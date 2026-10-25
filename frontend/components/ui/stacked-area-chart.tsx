@@ -8,6 +8,7 @@ import {
   CHART_TOOLTIP_BG,
   CHART_TOOLTIP_BORDER,
 } from '@/lib/chart-colors';
+import { exactDecimalRatio, formatCompactRatio, formatExactShare } from '@/lib/exact-integer';
 
 export interface StackedAreaDataPoint {
   date: string;
@@ -36,13 +37,13 @@ interface StackedAreaChartProps {
 
 const TOOLTIP_WIDTH = 240;
 
-function formatValue(val: number | undefined, isPercentage = false): string {
-  if (val === undefined || val === null || isNaN(val)) return '-';
-  if (isPercentage) return `${val.toFixed(2)}%`;
-  if (val >= 1_000_000_000) return `${(val / 1_000_000_000).toFixed(2)}B`;
-  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(2)}M`;
-  if (val >= 1_000) return `${(val / 1_000).toFixed(2)}K`;
-  return val.toFixed(2);
+function exactChartRatio(value: string | undefined, unit: 'raw' | 'shannon'): [bigint, bigint] {
+  if (value === undefined) throw new Error('missing chart value');
+  if (unit === 'shannon') {
+    if (!/^(0|[1-9]\d*)$/.test(value)) throw new Error(`invalid shannon chart value ${value}`);
+    return [BigInt(value), BigInt(100_000_000)];
+  }
+  return exactDecimalRatio(value, 'chart value');
 }
 
 function formatAxisValue(val: number, isPercentage = false): string {
@@ -122,7 +123,10 @@ export function StackedAreaChart({
   const stackedValues = useMemo(() => {
     return data.map((d) => {
       const result: Record<string, number> = {};
-      const rawValues = series.map((s) => parseChartValue(d.values[s.key], valueUnit));
+      const rawValues = series.map((s) => {
+        exactChartRatio(d.values[s.key], valueUnit);
+        return parseChartValue(d.values[s.key], valueUnit);
+      });
       const rawTotal = rawValues.reduce((sum, value) => sum + value, 0);
       const values =
         isPercentage && rawTotal > 0
@@ -150,7 +154,10 @@ export function StackedAreaChart({
 
   const overlayValues = useMemo(() => {
     if (!overlayLine) return null;
-    return data.map((d) => parseChartValue(d.values[overlayLine.key], valueUnit));
+    return data.map((d) => {
+      exactChartRatio(d.values[overlayLine.key], valueUnit);
+      return parseChartValue(d.values[overlayLine.key], valueUnit);
+    });
   }, [data, overlayLine, valueUnit]);
 
   const overlayMaxVal = useMemo(() => {
@@ -545,7 +552,16 @@ export function StackedAreaChart({
                 <tspan fill={s.color}>● </tspan>
                 <tspan>{formatTooltipLabel(s.label)}: </tspan>
                 <tspan className="fill-text-bright">
-                  {formatValue(stackedValues[hoverIndex][s.key], isPercentage)}
+                  {isPercentage
+                    ? formatExactShare(
+                        series.map((item) =>
+                          exactChartRatio(data[hoverIndex].values[item.key], valueUnit)
+                        ),
+                        i
+                      )
+                    : formatCompactRatio(
+                        ...exactChartRatio(data[hoverIndex].values[s.key], valueUnit)
+                      )}
                 </tspan>
               </text>
             ))}
@@ -559,7 +575,11 @@ export function StackedAreaChart({
                 <title>{overlayLine.label}</title>
                 <tspan fill={overlayLine.color}>━ </tspan>
                 <tspan>{formatTooltipLabel(overlayLine.label)}: </tspan>
-                <tspan className="fill-text-bright">{formatValue(overlayValues[hoverIndex])}</tspan>
+                <tspan className="fill-text-bright">
+                  {formatCompactRatio(
+                    ...exactChartRatio(data[hoverIndex].values[overlayLine.key], valueUnit)
+                  )}
+                </tspan>
               </text>
             )}
           </g>
