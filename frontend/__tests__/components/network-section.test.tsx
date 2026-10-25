@@ -75,6 +75,8 @@ describe('NetworkSection', () => {
       expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('1.01%')
     );
     expect(figure('home-uncle-rate')).toHaveTextContent('NC-Max target 1.01%');
+    fireEvent.pointerMove(within(figure('home-uncle-rate')).getByRole('img'), { clientX: 268 });
+    expect(screen.getByTestId('home-uncle-rate-readout')).toHaveTextContent('1.01%');
   });
 
   it('reads hash rate in H/s and only divides it into PH/s for display', async () => {

@@ -78,7 +78,8 @@ const range = (v: LineView) => `${v.points[0].label} to ${v.last.label}`;
 
 function exactLineView(
   chart: ChartResponse,
-  multiplier: number
+  multiplier: number,
+  displaySuffix = ''
 ):
   | (LineView & {
       minExact: string;
@@ -102,7 +103,10 @@ function exactLineView(
   );
   return {
     ...view,
-    points: view.points.map((point, index) => ({ ...point, display: values[index].display })),
+    points: view.points.map((point, index) => ({
+      ...point,
+      display: `${values[index].display}${displaySuffix}`,
+    })),
     minExact: min.display,
     maxExact: max.display,
     lastExact: values[values.length - 1].display,
@@ -221,7 +225,7 @@ function UncleRateFigure() {
         (chart) => {
           // The target is a consensus parameter the API reports; without it there is no chart.
           const target = orphanRateTargetPercent(chart.orphanRateTarget);
-          const view = exactLineView(chart, 100);
+          const view = exactLineView(chart, 100, '%');
           return (
             view && { ...view, target, targetExact: formatOrphanRateTarget(chart.orphanRateTarget) }
           );
