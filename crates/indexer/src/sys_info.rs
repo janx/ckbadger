@@ -17,8 +17,8 @@ pub struct EnvironmentSnapshot {
 /// Per-batch environment readings.
 #[derive(Debug, Clone, Default)]
 pub struct BatchEnvironment {
-    pub load_avg_1m: f64,
-    pub mem_available_mb: u64,
+    pub load_avg_1m: Option<f64>,
+    pub mem_available_mb: Option<u64>,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
     pub disk_read_mb_s: Option<f64>,
@@ -401,11 +401,15 @@ pub fn parse_mem_total_mb(meminfo: &str) -> u64 {
 }
 
 /// Extract MemAvailable in MB from /proc/meminfo.
-pub fn parse_mem_available_mb(meminfo: &str) -> u64 {
-    parse_meminfo_field(meminfo, "MemAvailable")
+pub fn parse_mem_available_mb(meminfo: &str) -> Option<u64> {
+    parse_meminfo_field_optional(meminfo, "MemAvailable")
 }
 
 fn parse_meminfo_field(meminfo: &str, field: &str) -> u64 {
+    parse_meminfo_field_optional(meminfo, field).unwrap_or(0)
+}
+
+fn parse_meminfo_field_optional(meminfo: &str, field: &str) -> Option<u64> {
     for line in meminfo.lines() {
         if line.starts_with(field) && line.as_bytes().get(field.len()) == Some(&b':') {
             // Format: "FieldName:    12345 kB"
@@ -414,21 +418,21 @@ fn parse_meminfo_field(meminfo: &str, field: &str) -> u64 {
                 // Strip " kB" suffix if present
                 let numeric = trimmed.strip_suffix(" kB").unwrap_or(trimmed);
                 if let Ok(kb) = numeric.trim().parse::<u64>() {
-                    return kb / 1024;
+                    return Some(kb / 1024);
                 }
             }
         }
     }
-    0
+    None
 }
 
 /// Extract first field from /proc/loadavg.
-pub fn parse_load_avg_1m(loadavg: &str) -> f64 {
+pub fn parse_load_avg_1m(loadavg: &str) -> Option<f64> {
     loadavg
         .split_whitespace()
         .next()
         .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0)
+        .filter(|load| load.is_finite() && *load >= 0.0)
 }
 
 /// Extract (read_sectors, write_sectors) for device from /proc/diskstats.
@@ -761,13 +765,19 @@ fn sysconf_cpu_cores() -> u32 {
 }
 
 /// Read 1-minute load average using POSIX getloadavg.
-fn posix_load_avg_1m() -> f64 {
+fn posix_load_avg_1m() -> Option<f64> {
     let mut loadavg = [0.0f64; 1];
     unsafe {
         if libc::getloadavg(loadavg.as_mut_ptr(), 1) == 1 {
-            loadavg[0]
+            if loadavg[0].is_finite() && loadavg[0] >= 0.0 {
+                Some(loadavg[0])
+            } else {
+                tracing::warn!(value = loadavg[0], "POSIX load average is invalid");
+                None
+            }
         } else {
-            0.0
+            tracing::warn!("POSIX getloadavg failed; load average unavailable");
+            None
         }
     }
 }
@@ -806,16 +816,27 @@ fn read_cpu_model() -> String {
 /// Read available memory in MB (platform-specific).
 ///
 /// On Linux, reads MemAvailable from /proc/meminfo.
-/// On other platforms, returns 0 (used for monitoring only, not critical decisions).
+/// On other platforms, returns None (the observation is unavailable).
 #[cfg(target_os = "linux")]
-fn read_mem_available_mb() -> u64 {
-    let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    parse_mem_available_mb(&meminfo)
+fn read_mem_available_mb() -> Option<u64> {
+    match fs::read_to_string("/proc/meminfo") {
+        Ok(meminfo) => {
+            let value = parse_mem_available_mb(&meminfo);
+            if value.is_none() {
+                tracing::warn!("/proc/meminfo has no valid MemAvailable field");
+            }
+            value
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to read /proc/meminfo for MemAvailable");
+            None
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn read_mem_available_mb() -> u64 {
-    0
+fn read_mem_available_mb() -> Option<u64> {
+    None
 }
 
 /// Read a sysctl string value (macOS/BSD).
@@ -958,7 +979,8 @@ fn resolve_scheduler_device(device: &str) -> String {
 
 /// Read per-batch environment. Uses cross-platform POSIX APIs for load/memory,
 /// with Linux-specific procfs windowed disk telemetry.
-/// Never fails (returns defaults on error).
+/// Unavailable host observations are reported as None; telemetry failure
+/// does not interrupt indexing.
 pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvironment {
     let load_avg_1m = posix_load_avg_1m();
     let mem_available_mb = read_mem_available_mb();
@@ -966,8 +988,8 @@ pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvir
 }
 
 fn batch_environment_from_disk_sample(
-    load_avg_1m: f64,
-    mem_available_mb: u64,
+    load_avg_1m: Option<f64>,
+    mem_available_mb: Option<u64>,
     sample: DiskWindowSample,
 ) -> BatchEnvironment {
     match sample {
@@ -1078,17 +1100,19 @@ MemAvailable:   45000000 kB
     #[test]
     fn test_parse_mem_available_mb() {
         let meminfo = "MemAvailable:   45000000 kB\n";
-        assert_eq!(parse_mem_available_mb(meminfo), 43945);
+        assert_eq!(parse_mem_available_mb(meminfo), Some(43945));
+        assert_eq!(parse_mem_available_mb("MemAvailable: broken kB"), None);
     }
 
     #[test]
     fn test_parse_load_avg_1m() {
-        assert_eq!(parse_load_avg_1m("8.23 6.01 4.50 3/1234 56789"), 8.23);
+        assert_eq!(parse_load_avg_1m("8.23 6.01 4.50 3/1234 56789"), Some(8.23));
     }
 
     #[test]
     fn test_parse_load_avg_1m_empty() {
-        assert_eq!(parse_load_avg_1m(""), 0.0);
+        assert_eq!(parse_load_avg_1m(""), None);
+        assert_eq!(parse_load_avg_1m("NaN 0.0 0.0"), None);
     }
 
     #[test]
@@ -1375,9 +1399,10 @@ MemAvailable:   45000000 kB
 
     #[test]
     fn test_batch_environment_maps_disk_window_states_without_fake_zeros() {
-        let warmup = batch_environment_from_disk_sample(12.5, 4096, DiskWindowSample::Warmup);
-        assert_eq!(warmup.load_avg_1m, 12.5);
-        assert_eq!(warmup.mem_available_mb, 4096);
+        let warmup =
+            batch_environment_from_disk_sample(Some(12.5), Some(4096), DiskWindowSample::Warmup);
+        assert_eq!(warmup.load_avg_1m, Some(12.5));
+        assert_eq!(warmup.mem_available_mb, Some(4096));
         assert_eq!(warmup.disk_read_mb, 0.0);
         assert_eq!(warmup.disk_write_mb, 0.0);
         assert_eq!(warmup.disk_read_mb_s, None);
@@ -1391,8 +1416,8 @@ MemAvailable:   45000000 kB
         assert_eq!(warmup.disk_state, None);
 
         let sample = batch_environment_from_disk_sample(
-            12.5,
-            4096,
+            Some(12.5),
+            Some(4096),
             DiskWindowSample::Sample(DiskWindowMetrics {
                 read_mb: 1.25,
                 write_mb: 2.5,
@@ -1418,8 +1443,8 @@ MemAvailable:   45000000 kB
         assert_eq!(sample.disk_in_flight, Some(7));
 
         let unavailable = batch_environment_from_disk_sample(
-            12.5,
-            4096,
+            Some(12.5),
+            Some(4096),
             DiskWindowSample::Unavailable {
                 reason: "missing device".to_string(),
             },

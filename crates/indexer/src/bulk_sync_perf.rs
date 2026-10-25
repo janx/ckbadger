@@ -82,8 +82,8 @@ pub struct BatchSample {
     pub l0_files: u64,
     pub imm_memtables: u64,
     pub timestamp_utc: String,
-    pub load_avg_1m: f64,
-    pub mem_available_mb: u64,
+    pub load_avg_1m: Option<f64>,
+    pub mem_available_mb: Option<u64>,
     pub process_committed_bytes: u64,
     pub process_rss_bytes: u64,
     pub process_rss_anon_bytes: u64,
@@ -137,8 +137,8 @@ impl BatchSample {
         l0_files: u64,
         imm_memtables: u64,
         timestamp_utc: String,
-        load_avg_1m: f64,
-        mem_available_mb: u64,
+        load_avg_1m: impl Into<Option<f64>>,
+        mem_available_mb: impl Into<Option<u64>>,
         disk_read_mb: f64,
         disk_write_mb: f64,
     ) -> Self {
@@ -187,8 +187,8 @@ impl BatchSample {
             l0_files,
             imm_memtables,
             timestamp_utc,
-            load_avg_1m,
-            mem_available_mb,
+            load_avg_1m: load_avg_1m.into(),
+            mem_available_mb: mem_available_mb.into(),
             process_committed_bytes: 0,
             process_rss_bytes: 0,
             process_rss_anon_bytes: 0,
@@ -285,9 +285,9 @@ pub struct BulkSyncPerfMetrics {
     pub max_compaction_pending_mb: u64,
     pub max_l0_files: u64,
     pub max_imm_memtables: u64,
-    pub avg_load_avg_1m: f64,
-    pub max_load_avg_1m: f64,
-    pub min_mem_available_mb: u64,
+    pub avg_load_avg_1m: Option<f64>,
+    pub max_load_avg_1m: Option<f64>,
+    pub min_mem_available_mb: Option<u64>,
     pub avg_disk_write_mb_per_batch: f64,
     pub avg_disk_util_pct: Option<f64>,
     pub p95_disk_util_pct: Option<f64>,
@@ -516,19 +516,21 @@ impl BulkSyncPerfRun {
             .unwrap_or(0);
 
         // Environment pressure aggregates
-        let load_avgs: Vec<f64> = self.batch_samples.iter().map(|s| s.load_avg_1m).collect();
-        let avg_load_avg_1m = average(&load_avgs);
+        let load_avgs: Option<Vec<f64>> =
+            self.batch_samples.iter().map(|s| s.load_avg_1m).collect();
+        let avg_load_avg_1m = load_avgs
+            .as_ref()
+            .filter(|values| !values.is_empty())
+            .map(|values| average(values));
         let max_load_avg_1m = load_avgs
-            .iter()
-            .copied()
-            .max_by(f64::total_cmp)
-            .unwrap_or(0.0);
+            .as_ref()
+            .and_then(|values| values.iter().copied().max_by(f64::total_cmp));
         let min_mem_available_mb = self
             .batch_samples
             .iter()
             .map(|s| s.mem_available_mb)
-            .min()
-            .unwrap_or(0);
+            .collect::<Option<Vec<u64>>>()
+            .and_then(|values| values.into_iter().min());
         let disk_writes: Vec<f64> = self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
         let avg_disk_write_mb_per_batch = average(&disk_writes);
         let disk_util_pct: Vec<Option<f64>> =
@@ -720,9 +722,9 @@ impl BulkSyncPerfRun {
             metrics.max_compaction_pending_mb,
             metrics.max_l0_files,
             metrics.max_imm_memtables,
-            format_float(metrics.avg_load_avg_1m),
-            format_float(metrics.max_load_avg_1m),
-            metrics.min_mem_available_mb,
+            format_optional_float(metrics.avg_load_avg_1m),
+            format_optional_float(metrics.max_load_avg_1m),
+            format_optional_u64(metrics.min_mem_available_mb),
             format_float(metrics.avg_disk_write_mb_per_batch),
             format_optional_float(metrics.avg_disk_util_pct),
             format_optional_float(metrics.p95_disk_util_pct),
@@ -877,15 +879,15 @@ impl BulkSyncPerfRun {
         ));
         content.push_str(&format!(
             "| avg_load_avg_1m | {} |\n",
-            format_float(metrics.avg_load_avg_1m)
+            format_optional_float(metrics.avg_load_avg_1m)
         ));
         content.push_str(&format!(
             "| max_load_avg_1m | {} |\n",
-            format_float(metrics.max_load_avg_1m)
+            format_optional_float(metrics.max_load_avg_1m)
         ));
         content.push_str(&format!(
             "| min_mem_available_mb | {} |\n",
-            metrics.min_mem_available_mb
+            format_optional_u64(metrics.min_mem_available_mb)
         ));
         content.push_str(&format!(
             "| avg_disk_write_mb_per_batch | {} |\n",
@@ -1045,16 +1047,6 @@ impl BulkSyncPerfRun {
                     baseline.finalize_seconds,
                 ),
                 (
-                    "avg_load_avg_1m",
-                    metrics.avg_load_avg_1m,
-                    baseline.avg_load_avg_1m,
-                ),
-                (
-                    "max_load_avg_1m",
-                    metrics.max_load_avg_1m,
-                    baseline.max_load_avg_1m,
-                ),
-                (
                     "avg_disk_write_mb_per_batch",
                     metrics.avg_disk_write_mb_per_batch,
                     baseline.avg_disk_write_mb_per_batch,
@@ -1068,14 +1060,32 @@ impl BulkSyncPerfRun {
                     format_delta_pct(current, previous),
                 ));
             }
-            // min_mem_available_mb is u64 — handle separately
+            for (name, current, previous) in [
+                (
+                    "avg_load_avg_1m",
+                    metrics.avg_load_avg_1m,
+                    baseline.avg_load_avg_1m,
+                ),
+                (
+                    "max_load_avg_1m",
+                    metrics.max_load_avg_1m,
+                    baseline.max_load_avg_1m,
+                ),
+            ] {
+                content.push_str(&format!(
+                    "| {name} | {} | {} | {} |\n",
+                    format_optional_float(current),
+                    format_optional_float(previous),
+                    format_optional_delta_pct(current, previous)
+                ));
+            }
             content.push_str(&format!(
                 "| min_mem_available_mb | {} | {} | {} |\n",
-                metrics.min_mem_available_mb,
-                baseline.min_mem_available_mb,
-                format_delta_pct(
-                    metrics.min_mem_available_mb as f64,
-                    baseline.min_mem_available_mb as f64
+                format_optional_u64(metrics.min_mem_available_mb),
+                format_optional_u64(baseline.min_mem_available_mb),
+                format_optional_delta_pct(
+                    metrics.min_mem_available_mb.map(|v| v as f64),
+                    baseline.min_mem_available_mb.map(|v| v as f64)
                 ),
             ));
             for (name, current, previous) in [
@@ -1571,6 +1581,12 @@ fn format_optional_float(value: Option<f64>) -> String {
     value.map(format_float).unwrap_or_else(|| "n/a".to_string())
 }
 
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
 fn format_delta_pct(current: f64, baseline: f64) -> String {
     if baseline == 0.0 {
         return "n/a".to_string();
@@ -1934,12 +1950,12 @@ fn build_diagnosis(
 
     // CPU pressure
     if let Some(env) = environment {
-        if env.cpu_cores > 0 {
+        if let Some(avg_load) = metrics.avg_load_avg_1m.filter(|_| env.cpu_cores > 0) {
             let threshold = env.cpu_cores as f64 * 1.5;
-            if metrics.avg_load_avg_1m > threshold {
+            if avg_load > threshold {
                 findings.push(format!(
                     "System under CPU pressure (avg load {:.1} vs {} cores).",
-                    metrics.avg_load_avg_1m, env.cpu_cores,
+                    avg_load, env.cpu_cores,
                 ));
             }
         }
@@ -2015,9 +2031,9 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         max_compaction_pending_mb: read_u64(&map, "max_compaction_pending_mb")?,
         max_l0_files: read_u64(&map, "max_l0_files")?,
         max_imm_memtables: read_u64(&map, "max_imm_memtables")?,
-        avg_load_avg_1m: read_f64(&map, "avg_load_avg_1m")?,
-        max_load_avg_1m: read_f64(&map, "max_load_avg_1m")?,
-        min_mem_available_mb: read_u64(&map, "min_mem_available_mb")?,
+        avg_load_avg_1m: read_optional_f64(&map, "avg_load_avg_1m")?,
+        max_load_avg_1m: read_optional_f64(&map, "max_load_avg_1m")?,
+        min_mem_available_mb: read_optional_u64(&map, "min_mem_available_mb")?,
         avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch")?,
         avg_disk_util_pct: read_optional_f64(&map, "avg_disk_util_pct")?,
         p95_disk_util_pct: read_optional_f64(&map, "p95_disk_util_pct")?,
@@ -2083,6 +2099,17 @@ fn read_optional_f64(map: &HashMap<String, String>, key: &str) -> Result<Option<
             }
             Ok(Some(parsed))
         }
+    }
+}
+
+fn read_optional_u64(map: &HashMap<String, String>, key: &str) -> Result<Option<u64>> {
+    let value = read_string(map, key)?;
+    match value.as_str() {
+        "n/a" => Ok(None),
+        _ => value
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|error| anyhow::anyhow!("invalid metrics {key}={value}: {error}")),
     }
 }
 
@@ -2569,6 +2596,41 @@ mod tests {
         assert!(metrics.contains("saturated_window_count=0"));
         assert!(metrics.contains("saturated_window_ratio=0.000"));
         assert!(metrics.contains("disk_telemetry_status=partial"));
+    }
+
+    #[test]
+    fn missing_host_observation_does_not_become_zero_or_partial_average() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-host-missing", TEST_BUILD_VERSION)
+                .unwrap();
+        let mut observed = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        observed.load_avg_1m = Some(6.0);
+        observed.mem_available_mb = Some(2048);
+        run.record_batch_sample(observed).unwrap();
+        let mut missing = test_batch_sample(20, 2.0, 80.0, 200, 7, 2);
+        missing.load_avg_1m = None;
+        missing.mem_available_mb = None;
+        run.record_batch_sample(missing).unwrap();
+        run.finish_completed().unwrap();
+
+        let path = dir.path().join("run-host-missing/metrics.env");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("avg_load_avg_1m=n/a\n"));
+        assert!(contents.contains("max_load_avg_1m=n/a\n"));
+        assert!(contents.contains("min_mem_available_mb=n/a\n"));
+        let parsed = super::read_metrics_env(&path).unwrap().unwrap();
+        assert_eq!(parsed.avg_load_avg_1m, None);
+        assert_eq!(parsed.min_mem_available_mb, None);
+        assert!(!build_diagnosis(
+            &parsed,
+            Some(&EnvironmentSnapshot {
+                cpu_cores: 1,
+                ..Default::default()
+            })
+        )
+        .iter()
+        .any(|finding| finding.contains("CPU pressure")));
     }
 
     #[test]
@@ -3528,9 +3590,9 @@ mod tests {
             max_compaction_pending_mb: 100,
             max_l0_files: 10,
             max_imm_memtables: 3,
-            avg_load_avg_1m: 4.0,
-            max_load_avg_1m: 8.0,
-            min_mem_available_mb: 8000,
+            avg_load_avg_1m: Some(4.0),
+            max_load_avg_1m: Some(8.0),
+            min_mem_available_mb: Some(8000),
             avg_disk_write_mb_per_batch: 50.0,
             avg_disk_util_pct: Some(40.0),
             p95_disk_util_pct: Some(60.0),
@@ -3601,7 +3663,7 @@ mod tests {
     #[test]
     fn test_diagnosis_identifies_cpu_pressure() {
         let mut metrics = build_test_metrics(10, 100);
-        metrics.avg_load_avg_1m = 60.0;
+        metrics.avg_load_avg_1m = Some(60.0);
         let env = EnvironmentSnapshot {
             cpu_cores: 16,
             ..Default::default()
