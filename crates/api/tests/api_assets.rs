@@ -831,6 +831,17 @@ async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
     );
     batch.commit().unwrap();
 
+    store
+        .put_mnft_daily_delta(
+            &collection_id,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 1200,
+                owned_knowledge_delta: 600,
+            },
+        )
+        .unwrap();
+
     let config = test_config(store);
     let app = create_router(config).await;
     let request = Request::builder()
@@ -844,6 +855,38 @@ async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["holdersCount"], 77);
     assert_eq!(json["activitiesCount"], 6543);
+    assert_eq!(json["ownedCapacity"], "1200");
+    assert_eq!(json["ownedKnowledge"], "600");
+}
+
+#[tokio::test]
+async fn test_assets_nonempty_collection_missing_daily_history_is_error() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_collection_aggregate(
+        &collection_id,
+        &IdentityCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: IdentityStandard::DotBit,
+            total_count: 1,
+            live_count: 1,
+            holders_count: 1,
+            activities_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets/objects/dotbit")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
@@ -914,6 +957,17 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
     );
     batch.commit().unwrap();
 
+    store
+        .put_mnft_daily_delta(
+            &class_id,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 400,
+                owned_knowledge_delta: 200,
+            },
+        )
+        .unwrap();
+
     // Hit the endpoint
     let config = test_config(store);
     let app = create_router(config).await;
@@ -932,6 +986,8 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
 
     // Verify base collection fields
     assert_eq!(json["standard"], "m-nft");
+    assert_eq!(json["ownedCapacity"], "400");
+    assert_eq!(json["ownedKnowledge"], "200");
     assert_eq!(json["name"], "Class-A");
     assert_eq!(json["totalCount"], 50);
     assert_eq!(json["liveCount"], 40);

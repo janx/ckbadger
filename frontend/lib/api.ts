@@ -1211,8 +1211,8 @@ interface ObjectCollection {
   liveCount: number;
   holdersCount: number;
   activitiesCount: number;
-  ownedCapacity: string;
-  ownedKnowledge: string;
+  ownedCapacity: string | null;
+  ownedKnowledge: string | null;
   composition?: {
     tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     fullyOnchainCount: number;
@@ -1424,7 +1424,7 @@ interface MnftItemDetail {
     decentralizedMixtureCount: number;
     centralizedMixtureCount: number;
     unknownCount: number;
-    onchainRatio: string;
+    onchainRatio: string | null;
   };
 }
 

@@ -1574,7 +1574,7 @@ fn writer_fixture_header(block_num: i64) -> CachedBlockHeader {
         transactions_count: 0,
         uncles_count: 0,
         proposals_count: 0,
-        compact_target: 0,
+        compact_target: 0x1e083126,
         miner_lock_hash: None,
         cycles: None,
         chain_time_ms: WRITER_FIXTURE_TS_MS + block_num * 1_000,

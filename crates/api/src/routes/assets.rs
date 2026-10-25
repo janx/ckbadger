@@ -302,7 +302,7 @@ pub struct CollectionCompositionResponse {
     pub decentralized_mixture_count: i64,
     pub centralized_mixture_count: i64,
     pub unknown_count: i64,
-    pub onchain_ratio: String,
+    pub onchain_ratio: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,8 +315,8 @@ pub struct NftCollectionDetailResponse {
     pub live_count: i64,
     pub holders_count: i64,
     pub activities_count: i64,
-    pub owned_capacity: String,
-    pub owned_knowledge: String,
+    pub owned_capacity: Option<String>,
+    pub owned_knowledge: Option<String>,
     pub composition: CollectionCompositionResponse,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class_detail: Option<MnftClassSummaryResponse>,
@@ -775,17 +775,27 @@ fn parse_ratio_1e4(value: Option<&str>) -> Option<i64> {
     whole.checked_mul(10_000)?.checked_add(frac_num)
 }
 
-fn format_ratio_4(numerator: i64, denominator: i64) -> String {
-    if denominator <= 0 {
-        return "0.0000".to_string();
+fn format_ratio_4(numerator: i64, denominator: i64) -> anyhow::Result<Option<String>> {
+    anyhow::ensure!(
+        numerator >= 0 && denominator >= 0,
+        "negative collection composition ratio: {numerator}/{denominator}"
+    );
+    if denominator == 0 {
+        anyhow::ensure!(
+            numerator == 0,
+            "collection composition has positive onchain count with zero total"
+        );
+        return Ok(None);
     }
-    let scaled = numerator
-        .saturating_mul(10_000)
-        .checked_div(denominator)
-        .unwrap_or(0);
+    anyhow::ensure!(
+        numerator <= denominator,
+        "collection composition onchain count {numerator} exceeds total {denominator}"
+    );
+    let scaled =
+        (i128::from(numerator) * 10_000 + i128::from(denominator) / 2) / i128::from(denominator);
     let whole = scaled / 10_000;
-    let frac = (scaled % 10_000).abs();
-    format!("{whole}.{frac:04}")
+    let frac = scaled % 10_000;
+    Ok(Some(format!("{whole}.{frac:04}")))
 }
 
 fn resolve_composition_tier(
@@ -814,20 +824,46 @@ fn resolve_composition_tier(
 fn collection_composition_from_aggregate(
     agg: &MnftCollectionAggregate,
     standard: &str,
-) -> CollectionCompositionResponse {
+) -> anyhow::Result<CollectionCompositionResponse> {
+    for (field, count) in [
+        ("live_count", agg.live_count),
+        ("btc_ckb_count", agg.btc_ckb_count),
+        ("pure_ckb_count", agg.pure_ckb_count),
+        (
+            "decentralized_mixture_count",
+            agg.decentralized_mixture_count,
+        ),
+        ("centralized_mixture_count", agg.centralized_mixture_count),
+        ("unknown_count", agg.unknown_count),
+    ] {
+        anyhow::ensure!(
+            count >= 0,
+            "collection composition {field} is negative: {count}"
+        );
+    }
     let has_tier_counts = agg.pure_ckb_count > 0
         || agg.btc_ckb_count > 0
         || agg.decentralized_mixture_count > 0
         || agg.centralized_mixture_count > 0;
 
     if has_tier_counts {
-        let total_onchain = agg.btc_ckb_count + agg.pure_ckb_count;
-        let total = agg.btc_ckb_count
-            + agg.pure_ckb_count
-            + agg.decentralized_mixture_count
-            + agg.centralized_mixture_count
-            + agg.unknown_count;
-        CollectionCompositionResponse {
+        let total_onchain = agg
+            .btc_ckb_count
+            .checked_add(agg.pure_ckb_count)
+            .ok_or_else(|| anyhow::anyhow!("collection onchain tier count exceeds i64"))?;
+        let total = [
+            agg.btc_ckb_count,
+            agg.pure_ckb_count,
+            agg.decentralized_mixture_count,
+            agg.centralized_mixture_count,
+            agg.unknown_count,
+        ]
+        .into_iter()
+        .try_fold(0_i64, |sum, count| {
+            sum.checked_add(count)
+                .ok_or_else(|| anyhow::anyhow!("collection tier count exceeds i64"))
+        })?;
+        Ok(CollectionCompositionResponse {
             tier: resolve_composition_tier(
                 agg.btc_ckb_count,
                 agg.pure_ckb_count,
@@ -840,8 +876,8 @@ fn collection_composition_from_aggregate(
             decentralized_mixture_count: agg.decentralized_mixture_count,
             centralized_mixture_count: agg.centralized_mixture_count,
             unknown_count: agg.unknown_count,
-            onchain_ratio: format_ratio_4(total_onchain, total),
-        }
+            onchain_ratio: format_ratio_4(total_onchain, total)?,
+        })
     } else {
         // No per-item tier counts available — use standard-level override
         // (e.g. dotbit / did:ckb are known pure_ckb).
@@ -853,15 +889,15 @@ fn collection_composition_from_aggregate(
         } else {
             0
         };
-        CollectionCompositionResponse {
+        Ok(CollectionCompositionResponse {
             tier,
             onchain_count,
             pure_ckb_count: 0,
             decentralized_mixture_count: 0,
             centralized_mixture_count: 0,
             unknown_count: if onchain_count > 0 { 0 } else { agg.live_count },
-            onchain_ratio: format_ratio_4(onchain_count, agg.live_count),
-        }
+            onchain_ratio: format_ratio_4(onchain_count, agg.live_count)?,
+        })
     }
 }
 
@@ -1414,22 +1450,35 @@ fn build_capacity_history_chart_with_initial(
     })
 }
 
-fn latest_capacity_from_chart(chart: &StackedAreaChartResponse) -> (String, String) {
-    if let Some(last) = chart.data.last() {
-        let used = last
-            .values
-            .get("used")
-            .cloned()
-            .unwrap_or_else(|| "0".to_string());
-        let unused = last
-            .values
-            .get("unused")
-            .cloned()
-            .unwrap_or_else(|| "0".to_string());
-        let total = used.parse::<i128>().unwrap_or(0) + unused.parse::<i128>().unwrap_or(0);
-        return (total.to_string(), used);
-    }
-    ("0".to_string(), "0".to_string())
+fn latest_capacity_from_chart(
+    chart: &StackedAreaChartResponse,
+) -> anyhow::Result<Option<(String, String)>> {
+    let Some(last) = chart.data.last() else {
+        return Ok(None);
+    };
+    let read = |key: &str| -> anyhow::Result<i128> {
+        let raw = last.values.get(key).ok_or_else(|| {
+            anyhow::anyhow!("collection capacity chart {} missing {key}", last.date)
+        })?;
+        let value = raw.parse::<i128>().map_err(|error| {
+            anyhow::anyhow!(
+                "collection capacity chart {} invalid {key} {raw:?}: {error}",
+                last.date
+            )
+        })?;
+        anyhow::ensure!(
+            value >= 0,
+            "collection capacity chart {} negative {key}: {value}",
+            last.date
+        );
+        Ok(value)
+    };
+    let used = read("used")?;
+    let unused = read("unused")?;
+    let total = used.checked_add(unused).ok_or_else(|| {
+        anyhow::anyhow!("collection capacity chart {} total exceeds i128", last.date)
+    })?;
+    Ok(Some((total.to_string(), used.to_string())))
 }
 
 async fn get_object_item_detail(
@@ -1593,7 +1642,14 @@ async fn get_object_item_detail(
         .store
         .get_mnft_collection_aggregate(&class_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .map(|agg| collection_composition_from_aggregate(&agg, "m-nft"));
+        .map(|agg| collection_composition_from_aggregate(&agg, "m-nft"))
+        .transpose()
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "object collection 0x{} composition: {error}",
+                hex::encode(&class_id)
+            ))
+        })?;
 
     ok(MnftItemDetailResponse {
         nft_id: format!("0x{}", hex::encode(&object_id_bytes)),
@@ -1880,12 +1936,33 @@ async fn get_object_collection(
         "Object Collection Capacity History".to_string(),
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
+    let owned = latest_capacity_from_chart(&chart).map_err(|error| {
+        ApiError::internal(format!(
+            "object collection 0x{}: {error}",
+            hex::encode(&collection_id_bytes)
+        ))
+    })?;
+    if owned.is_none() && agg.total_count > 0 {
+        return Err(ApiError::internal(format!(
+            "object collection 0x{} has {} historical items but no daily capacity history",
+            hex::encode(&collection_id_bytes),
+            agg.total_count
+        )));
+    }
+    let (owned_capacity, owned_knowledge) = match owned {
+        Some((capacity, knowledge)) => (Some(capacity), Some(knowledge)),
+        None => (None, None),
+    };
 
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
     let name = resolve_object_collection_name(&standard, agg.name.as_deref());
-    let composition = collection_composition_from_aggregate(&agg, &standard);
+    let composition = collection_composition_from_aggregate(&agg, &standard).map_err(|error| {
+        ApiError::internal(format!(
+            "object collection 0x{} composition: {error}",
+            hex::encode(&collection_id_bytes)
+        ))
+    })?;
 
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
@@ -3094,6 +3171,35 @@ mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::types::{AssetAction, CachedBlockHeader, TxIndexEntry};
+
+    #[test]
+    fn zero_denominator_ratio_is_not_a_fabricated_zero() {
+        assert_eq!(format_ratio_4(0, 0).unwrap(), None);
+    }
+
+    #[test]
+    fn ratio_uses_wide_exact_intermediate() {
+        assert_eq!(
+            format_ratio_4(i64::MAX, i64::MAX).unwrap().as_deref(),
+            Some("1.0000")
+        );
+    }
+
+    #[test]
+    fn malformed_chart_capacity_is_not_repaired_to_zero() {
+        let chart = StackedAreaChartResponse {
+            data: vec![StackedAreaDataPoint {
+                date: "2026-10-24".to_string(),
+                values: HashMap::from([
+                    ("used".to_string(), "oops".to_string()),
+                    ("unused".to_string(), "1".to_string()),
+                ]),
+            }],
+            series: vec![],
+            title: "test".to_string(),
+        };
+        assert!(latest_capacity_from_chart(&chart).is_err());
+    }
 
     /// Identity ids contain a colon, so only the first one separates the type.
     #[test]
