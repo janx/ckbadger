@@ -271,8 +271,8 @@ pub struct BulkSyncPerfMetrics {
     pub batches: u64,
     pub blocks: u64,
     pub total_txs: u64,
-    pub blocks_per_sec_wall: f64,
-    pub txs_per_sec_wall: f64,
+    pub blocks_per_sec_wall: Option<f64>,
+    pub txs_per_sec_wall: Option<f64>,
     pub blocks_per_batch: Option<f64>,
     pub avg_batch_seconds: Option<f64>,
     pub p95_batch_seconds: Option<f64>,
@@ -469,16 +469,8 @@ impl BulkSyncPerfRun {
         let total_commit_seconds = commit_ms.iter().sum::<f64>() / 1000.0;
         let wall_clock_seconds =
             elapsed_wall_clock_seconds(&self.started_at_utc, finished_at_utc.as_deref());
-        let blocks_per_sec_wall = if wall_clock_seconds > 0.0 {
-            blocks as f64 / wall_clock_seconds
-        } else {
-            0.0
-        };
-        let txs_per_sec_wall = if wall_clock_seconds > 0.0 {
-            total_txs as f64 / wall_clock_seconds
-        } else {
-            0.0
-        };
+        let blocks_per_sec_wall = wall_throughput(blocks, wall_clock_seconds);
+        let txs_per_sec_wall = wall_throughput(total_txs, wall_clock_seconds);
         let blocks_per_batch = (batches > 0).then(|| blocks as f64 / batches as f64);
 
         let max_compaction_pending_mb = self
@@ -589,10 +581,13 @@ impl BulkSyncPerfRun {
         }
         let peak_live_cell_count = self.batch_samples.iter().map(|s| s.live_cell_count).max();
         let materialization_report = self.materialization_report.as_ref();
-        let total_batch_seconds = batch_seconds.iter().sum::<f64>();
-        let avg_for_stall = average(&batch_seconds);
-        let stall_threshold = avg_for_stall * STALL_THRESHOLD_MULTIPLIER;
+        let total_batch_seconds = if batch_seconds.is_empty() {
+            0.0
+        } else {
+            batch_seconds.iter().sum::<f64>()
+        };
         let stall_count = if batches >= 3 {
+            let stall_threshold = average(&batch_seconds) * STALL_THRESHOLD_MULTIPLIER;
             batch_seconds
                 .iter()
                 .filter(|&&s| s > stall_threshold)
@@ -705,8 +700,8 @@ impl BulkSyncPerfRun {
             metrics.batches,
             metrics.blocks,
             metrics.total_txs,
-            format_float(metrics.blocks_per_sec_wall),
-            format_float(metrics.txs_per_sec_wall),
+            format_optional_float(metrics.blocks_per_sec_wall),
+            format_optional_float(metrics.txs_per_sec_wall),
             format_optional_float(metrics.blocks_per_batch),
             format_optional_float(metrics.avg_batch_seconds),
             format_optional_float(metrics.p95_batch_seconds),
@@ -778,11 +773,11 @@ impl BulkSyncPerfRun {
         content.push_str(&format!("| total_txs | {} |\n", metrics.total_txs));
         content.push_str(&format!(
             "| blocks_per_sec_wall | {} |\n",
-            format_float(metrics.blocks_per_sec_wall)
+            format_optional_float(metrics.blocks_per_sec_wall)
         ));
         content.push_str(&format!(
             "| txs_per_sec_wall | {} |\n",
-            format_float(metrics.txs_per_sec_wall)
+            format_optional_float(metrics.txs_per_sec_wall)
         ));
         content.push_str(&format!(
             "| blocks_per_batch | {} |\n",
@@ -992,16 +987,6 @@ impl BulkSyncPerfRun {
                     baseline.wall_clock_seconds,
                 ),
                 (
-                    "blocks_per_sec_wall",
-                    metrics.blocks_per_sec_wall,
-                    baseline.blocks_per_sec_wall,
-                ),
-                (
-                    "txs_per_sec_wall",
-                    metrics.txs_per_sec_wall,
-                    baseline.txs_per_sec_wall,
-                ),
-                (
                     "total_commit_seconds",
                     metrics.total_commit_seconds,
                     baseline.total_commit_seconds,
@@ -1016,6 +1001,16 @@ impl BulkSyncPerfRun {
                 ));
             }
             for (name, current, previous) in [
+                (
+                    "blocks_per_sec_wall",
+                    metrics.blocks_per_sec_wall,
+                    baseline.blocks_per_sec_wall,
+                ),
+                (
+                    "txs_per_sec_wall",
+                    metrics.txs_per_sec_wall,
+                    baseline.txs_per_sec_wall,
+                ),
                 (
                     "blocks_per_batch",
                     metrics.blocks_per_batch,
@@ -1506,8 +1501,8 @@ struct TrendEntry<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     finished_at_utc: Option<&'a str>,
     wall_clock_seconds: f64,
-    blocks_per_sec_wall: f64,
-    txs_per_sec_wall: f64,
+    blocks_per_sec_wall: Option<f64>,
+    txs_per_sec_wall: Option<f64>,
     batches: u64,
     blocks: u64,
     total_txs: u64,
@@ -1536,6 +1531,14 @@ fn elapsed_wall_clock_seconds(started_at_utc: &str, finished_at_utc: Option<&str
     elapsed_ms as f64 / 1000.0
 }
 
+fn wall_throughput(count: u64, seconds: f64) -> Option<f64> {
+    assert!(
+        seconds.is_finite() && seconds >= 0.0,
+        "invalid wall-clock seconds: {seconds}"
+    );
+    (seconds > 0.0).then(|| count as f64 / seconds)
+}
+
 fn parse_rfc3339_utc(value: &str) -> chrono::DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .unwrap_or_else(|err| panic!("bulk sync perf timestamp must be RFC3339: {value} ({err})"))
@@ -1543,9 +1546,7 @@ fn parse_rfc3339_utc(value: &str) -> chrono::DateTime<Utc> {
 }
 
 fn average(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
+    assert!(!values.is_empty(), "average requires an observed sample");
     values.iter().sum::<f64>() / values.len() as f64
 }
 
@@ -1558,9 +1559,7 @@ fn average_valid(values: &[Option<f64>]) -> Option<f64> {
 }
 
 fn percentile(mut values: Vec<f64>, pct: usize) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
+    assert!(!values.is_empty(), "percentile requires an observed sample");
     values.sort_by(f64::total_cmp);
     let index = (pct * values.len()).div_ceil(100);
     values[index.saturating_sub(1).min(values.len() - 1)]
@@ -2061,8 +2060,8 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         batches: read_u64(&map, "batches")?,
         blocks: read_u64(&map, "blocks")?,
         total_txs: read_u64(&map, "total_txs")?,
-        blocks_per_sec_wall: read_f64(&map, "blocks_per_sec_wall")?,
-        txs_per_sec_wall: read_f64(&map, "txs_per_sec_wall")?,
+        blocks_per_sec_wall: read_optional_f64(&map, "blocks_per_sec_wall")?,
+        txs_per_sec_wall: read_optional_f64(&map, "txs_per_sec_wall")?,
         blocks_per_batch: read_optional_f64(&map, "blocks_per_batch")?,
         avg_batch_seconds: read_optional_f64(&map, "avg_batch_seconds")?,
         p95_batch_seconds: read_optional_f64(&map, "p95_batch_seconds")?,
@@ -3357,6 +3356,13 @@ mod tests {
                 "{key} was fabricated: {metrics}"
             );
         }
+        assert!(metrics.contains("total_batch_seconds=0.000\n"), "{metrics}");
+    }
+
+    #[test]
+    fn zero_wall_clock_span_has_no_throughput_rate() {
+        assert_eq!(super::wall_throughput(100, 0.0), None);
+        assert_eq!(super::wall_throughput(100, 20.0), Some(5.0));
     }
 
     // ── Wall Clock Breakdown tests ──────────────────────────────────────
@@ -3557,8 +3563,12 @@ mod tests {
         assert_eq!(entry["build_version"], TEST_BUILD_VERSION);
         assert_eq!(entry["status"], "completed");
         assert_eq!(entry["blocks"], 10);
-        assert!(entry["wall_clock_seconds"].as_f64().is_some());
-        assert!(entry["blocks_per_sec_wall"].as_f64().is_some());
+        let elapsed = entry["wall_clock_seconds"].as_f64().unwrap();
+        if elapsed > 0.0 {
+            assert!(entry["blocks_per_sec_wall"].as_f64().is_some());
+        } else {
+            assert!(entry["blocks_per_sec_wall"].is_null());
+        }
         assert!(entry["stall_count"].as_u64().is_some());
     }
 
@@ -3662,8 +3672,8 @@ mod tests {
             batches,
             blocks,
             total_txs: blocks * 2,
-            blocks_per_sec_wall: blocks as f64 / 3600.0,
-            txs_per_sec_wall: (blocks * 2) as f64 / 3600.0,
+            blocks_per_sec_wall: Some(blocks as f64 / 3600.0),
+            txs_per_sec_wall: Some((blocks * 2) as f64 / 3600.0),
             blocks_per_batch: Some(blocks as f64 / batches as f64),
             avg_batch_seconds: Some(3.0),
             p95_batch_seconds: Some(5.0),
