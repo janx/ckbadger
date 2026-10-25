@@ -363,6 +363,11 @@ authenticated peer returns a valid Identify for the configured CKB network. Fiel
 optional `geo`/`asn`/`last_rtt_ms`, exact `DiscoveryEvidence`, and `known_peers` resolved from the
 last Discovery observation. `known_peers` is source-centric address-book gossip, not a live edge;
 the durable source for a detail response's advertisers is the target candidate described below.
+GeoIP latitude and longitude are independently optional; absent MMDB coordinates are not `(0, 0)`.
+An ASN record without a valid number is absent, not `AS0`. GeoIP database decode/read failures
+abort that crawler round before `net_nodes` publication; ordinary IP misses remain absent.
+`NodeRecord` uses bincode, so the optional-coordinate schema requires deleting the existing
+network store and re-crawling after this change. Domain and append-only chain stores are unaffected.
 `DiscoveryEvidence` separately counts all valid `Nodes` messages, regular responses, announces,
 malformed/unexpected messages, normalized advertised addresses, and rejected addresses; checked
 validation requires responses plus announces to equal total valid `Nodes` messages.
