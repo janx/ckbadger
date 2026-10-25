@@ -273,14 +273,14 @@ pub struct BulkSyncPerfMetrics {
     pub total_txs: u64,
     pub blocks_per_sec_wall: f64,
     pub txs_per_sec_wall: f64,
-    pub blocks_per_batch: f64,
-    pub avg_batch_seconds: f64,
-    pub p95_batch_seconds: f64,
-    pub p99_batch_seconds: f64,
+    pub blocks_per_batch: Option<f64>,
+    pub avg_batch_seconds: Option<f64>,
+    pub p95_batch_seconds: Option<f64>,
+    pub p99_batch_seconds: Option<f64>,
     pub total_commit_seconds: f64,
-    pub avg_commit_ms: f64,
-    pub p95_commit_ms: f64,
-    pub p99_commit_ms: f64,
+    pub avg_commit_ms: Option<f64>,
+    pub p95_commit_ms: Option<f64>,
+    pub p99_commit_ms: Option<f64>,
     pub finalize_seconds: Option<f64>,
     pub max_compaction_pending_mb: Option<u64>,
     pub max_l0_files: Option<u64>,
@@ -288,7 +288,7 @@ pub struct BulkSyncPerfMetrics {
     pub avg_load_avg_1m: Option<f64>,
     pub max_load_avg_1m: Option<f64>,
     pub min_mem_available_mb: Option<u64>,
-    pub avg_disk_write_mb_per_batch: f64,
+    pub avg_disk_write_mb_per_batch: Option<f64>,
     pub avg_disk_util_pct: Option<f64>,
     pub p95_disk_util_pct: Option<f64>,
     pub avg_disk_await_ms: Option<f64>,
@@ -479,11 +479,7 @@ impl BulkSyncPerfRun {
         } else {
             0.0
         };
-        let blocks_per_batch = if batches > 0 {
-            blocks as f64 / batches as f64
-        } else {
-            0.0
-        };
+        let blocks_per_batch = (batches > 0).then(|| blocks as f64 / batches as f64);
 
         let max_compaction_pending_mb = self
             .batch_samples
@@ -536,7 +532,7 @@ impl BulkSyncPerfRun {
             .collect::<Option<Vec<u64>>>()
             .and_then(|values| values.into_iter().min());
         let disk_writes: Vec<f64> = self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
-        let avg_disk_write_mb_per_batch = average(&disk_writes);
+        let avg_disk_write_mb_per_batch = (!disk_writes.is_empty()).then(|| average(&disk_writes));
         let disk_util_pct: Vec<Option<f64>> =
             self.batch_samples.iter().map(|s| s.disk_util_pct).collect();
         let disk_await_ms: Vec<Option<f64>> =
@@ -617,13 +613,14 @@ impl BulkSyncPerfRun {
             blocks_per_sec_wall,
             txs_per_sec_wall,
             blocks_per_batch,
-            avg_batch_seconds: average(&batch_seconds),
-            p95_batch_seconds: percentile(batch_seconds.clone(), 95),
-            p99_batch_seconds: percentile(batch_seconds, 99),
+            avg_batch_seconds: (!batch_seconds.is_empty()).then(|| average(&batch_seconds)),
+            p95_batch_seconds: (!batch_seconds.is_empty())
+                .then(|| percentile(batch_seconds.clone(), 95)),
+            p99_batch_seconds: (!batch_seconds.is_empty()).then(|| percentile(batch_seconds, 99)),
             total_commit_seconds,
-            avg_commit_ms: average(&commit_ms),
-            p95_commit_ms: percentile(commit_ms.clone(), 95),
-            p99_commit_ms: percentile(commit_ms, 99),
+            avg_commit_ms: (!commit_ms.is_empty()).then(|| average(&commit_ms)),
+            p95_commit_ms: (!commit_ms.is_empty()).then(|| percentile(commit_ms.clone(), 95)),
+            p99_commit_ms: (!commit_ms.is_empty()).then(|| percentile(commit_ms, 99)),
             finalize_seconds: self.finalize_seconds,
             max_compaction_pending_mb,
             max_l0_files,
@@ -710,14 +707,14 @@ impl BulkSyncPerfRun {
             metrics.total_txs,
             format_float(metrics.blocks_per_sec_wall),
             format_float(metrics.txs_per_sec_wall),
-            format_float(metrics.blocks_per_batch),
-            format_float(metrics.avg_batch_seconds),
-            format_float(metrics.p95_batch_seconds),
-            format_float(metrics.p99_batch_seconds),
+            format_optional_float(metrics.blocks_per_batch),
+            format_optional_float(metrics.avg_batch_seconds),
+            format_optional_float(metrics.p95_batch_seconds),
+            format_optional_float(metrics.p99_batch_seconds),
             format_float(metrics.total_commit_seconds),
-            format_float(metrics.avg_commit_ms),
-            format_float(metrics.p95_commit_ms),
-            format_float(metrics.p99_commit_ms),
+            format_optional_float(metrics.avg_commit_ms),
+            format_optional_float(metrics.p95_commit_ms),
+            format_optional_float(metrics.p99_commit_ms),
             format_optional_float(metrics.finalize_seconds),
             format_optional_u64(metrics.max_compaction_pending_mb),
             format_optional_u64(metrics.max_l0_files),
@@ -725,7 +722,7 @@ impl BulkSyncPerfRun {
             format_optional_float(metrics.avg_load_avg_1m),
             format_optional_float(metrics.max_load_avg_1m),
             format_optional_u64(metrics.min_mem_available_mb),
-            format_float(metrics.avg_disk_write_mb_per_batch),
+            format_optional_float(metrics.avg_disk_write_mb_per_batch),
             format_optional_float(metrics.avg_disk_util_pct),
             format_optional_float(metrics.p95_disk_util_pct),
             format_optional_float(metrics.avg_disk_await_ms),
@@ -789,7 +786,7 @@ impl BulkSyncPerfRun {
         ));
         content.push_str(&format!(
             "| blocks_per_batch | {} |\n",
-            format_float(metrics.blocks_per_batch)
+            format_optional_float(metrics.blocks_per_batch)
         ));
         content.push('\n');
 
@@ -798,15 +795,15 @@ impl BulkSyncPerfRun {
         content.push_str("| --- | ---: |\n");
         content.push_str(&format!(
             "| avg_batch_seconds | {} |\n",
-            format_float(metrics.avg_batch_seconds)
+            format_optional_float(metrics.avg_batch_seconds)
         ));
         content.push_str(&format!(
             "| p95_batch_seconds | {} |\n",
-            format_float(metrics.p95_batch_seconds)
+            format_optional_float(metrics.p95_batch_seconds)
         ));
         content.push_str(&format!(
             "| p99_batch_seconds | {} |\n",
-            format_float(metrics.p99_batch_seconds)
+            format_optional_float(metrics.p99_batch_seconds)
         ));
         content.push_str(&format!(
             "| total_commit_seconds | {} |\n",
@@ -814,15 +811,15 @@ impl BulkSyncPerfRun {
         ));
         content.push_str(&format!(
             "| avg_commit_ms | {} |\n",
-            format_float(metrics.avg_commit_ms)
+            format_optional_float(metrics.avg_commit_ms)
         ));
         content.push_str(&format!(
             "| p95_commit_ms | {} |\n",
-            format_float(metrics.p95_commit_ms)
+            format_optional_float(metrics.p95_commit_ms)
         ));
         content.push_str(&format!(
             "| p99_commit_ms | {} |\n",
-            format_float(metrics.p99_commit_ms)
+            format_optional_float(metrics.p99_commit_ms)
         ));
         content.push_str(&format!(
             "| finalize_seconds | {} |\n",
@@ -894,7 +891,7 @@ impl BulkSyncPerfRun {
         ));
         content.push_str(&format!(
             "| avg_disk_write_mb_per_batch | {} |\n",
-            format_float(metrics.avg_disk_write_mb_per_batch)
+            format_optional_float(metrics.avg_disk_write_mb_per_batch)
         ));
         content.push_str(&format!(
             "| avg_disk_util_pct | {} |\n",
@@ -1005,6 +1002,21 @@ impl BulkSyncPerfRun {
                     baseline.txs_per_sec_wall,
                 ),
                 (
+                    "total_commit_seconds",
+                    metrics.total_commit_seconds,
+                    baseline.total_commit_seconds,
+                ),
+            ] {
+                content.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    name,
+                    format_float(current),
+                    format_float(previous),
+                    format_delta_pct(current, previous),
+                ));
+            }
+            for (name, current, previous) in [
+                (
                     "blocks_per_batch",
                     metrics.blocks_per_batch,
                     baseline.blocks_per_batch,
@@ -1023,11 +1035,6 @@ impl BulkSyncPerfRun {
                     "p99_batch_seconds",
                     metrics.p99_batch_seconds,
                     baseline.p99_batch_seconds,
-                ),
-                (
-                    "total_commit_seconds",
-                    metrics.total_commit_seconds,
-                    baseline.total_commit_seconds,
                 ),
                 (
                     "avg_commit_ms",
@@ -1049,16 +1056,6 @@ impl BulkSyncPerfRun {
                     metrics.avg_disk_write_mb_per_batch,
                     baseline.avg_disk_write_mb_per_batch,
                 ),
-            ] {
-                content.push_str(&format!(
-                    "| {} | {} | {} | {} |\n",
-                    name,
-                    format_float(current),
-                    format_float(previous),
-                    format_delta_pct(current, previous),
-                ));
-            }
-            for (name, current, previous) in [
                 (
                     "finalize_seconds",
                     metrics.finalize_seconds,
@@ -1310,7 +1307,9 @@ impl BulkSyncPerfRun {
             return;
         }
 
-        let avg = metrics.avg_batch_seconds;
+        let avg = metrics
+            .avg_batch_seconds
+            .expect("three batch samples must define average batch seconds");
         let threshold = avg * STALL_THRESHOLD_MULTIPLIER;
 
         let stalls: Vec<(usize, &BatchSample)> = self
@@ -1512,7 +1511,7 @@ struct TrendEntry<'a> {
     batches: u64,
     blocks: u64,
     total_txs: u64,
-    avg_batch_seconds: f64,
+    avg_batch_seconds: Option<f64>,
     total_commit_seconds: f64,
     finalize_seconds: Option<f64>,
     stall_count: u64,
@@ -2064,14 +2063,14 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         total_txs: read_u64(&map, "total_txs")?,
         blocks_per_sec_wall: read_f64(&map, "blocks_per_sec_wall")?,
         txs_per_sec_wall: read_f64(&map, "txs_per_sec_wall")?,
-        blocks_per_batch: read_f64(&map, "blocks_per_batch")?,
-        avg_batch_seconds: read_f64(&map, "avg_batch_seconds")?,
-        p95_batch_seconds: read_f64(&map, "p95_batch_seconds")?,
-        p99_batch_seconds: read_f64(&map, "p99_batch_seconds")?,
+        blocks_per_batch: read_optional_f64(&map, "blocks_per_batch")?,
+        avg_batch_seconds: read_optional_f64(&map, "avg_batch_seconds")?,
+        p95_batch_seconds: read_optional_f64(&map, "p95_batch_seconds")?,
+        p99_batch_seconds: read_optional_f64(&map, "p99_batch_seconds")?,
         total_commit_seconds: read_f64(&map, "total_commit_seconds")?,
-        avg_commit_ms: read_f64(&map, "avg_commit_ms")?,
-        p95_commit_ms: read_f64(&map, "p95_commit_ms")?,
-        p99_commit_ms: read_f64(&map, "p99_commit_ms")?,
+        avg_commit_ms: read_optional_f64(&map, "avg_commit_ms")?,
+        p95_commit_ms: read_optional_f64(&map, "p95_commit_ms")?,
+        p99_commit_ms: read_optional_f64(&map, "p99_commit_ms")?,
         finalize_seconds: read_optional_f64(&map, "finalize_seconds")?,
         max_compaction_pending_mb: read_optional_u64(&map, "max_compaction_pending_mb")?,
         max_l0_files: read_optional_u64(&map, "max_l0_files")?,
@@ -2079,7 +2078,7 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         avg_load_avg_1m: read_optional_f64(&map, "avg_load_avg_1m")?,
         max_load_avg_1m: read_optional_f64(&map, "max_load_avg_1m")?,
         min_mem_available_mb: read_optional_u64(&map, "min_mem_available_mb")?,
-        avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch")?,
+        avg_disk_write_mb_per_batch: read_optional_f64(&map, "avg_disk_write_mb_per_batch")?,
         avg_disk_util_pct: read_optional_f64(&map, "avg_disk_util_pct")?,
         p95_disk_util_pct: read_optional_f64(&map, "p95_disk_util_pct")?,
         avg_disk_await_ms: read_optional_f64(&map, "avg_disk_await_ms")?,
@@ -3336,6 +3335,14 @@ mod tests {
         run.finish_completed().unwrap();
         let metrics = std::fs::read_to_string(dir.path().join("unknowns/metrics.env")).unwrap();
         for key in [
+            "blocks_per_batch",
+            "avg_batch_seconds",
+            "p95_batch_seconds",
+            "p99_batch_seconds",
+            "avg_commit_ms",
+            "p95_commit_ms",
+            "p99_commit_ms",
+            "avg_disk_write_mb_per_batch",
             "finalize_seconds",
             "peak_live_cell_count",
             "streamed_history_rows",
@@ -3657,14 +3664,14 @@ mod tests {
             total_txs: blocks * 2,
             blocks_per_sec_wall: blocks as f64 / 3600.0,
             txs_per_sec_wall: (blocks * 2) as f64 / 3600.0,
-            blocks_per_batch: blocks as f64 / batches as f64,
-            avg_batch_seconds: 3.0,
-            p95_batch_seconds: 5.0,
-            p99_batch_seconds: 8.0,
+            blocks_per_batch: Some(blocks as f64 / batches as f64),
+            avg_batch_seconds: Some(3.0),
+            p95_batch_seconds: Some(5.0),
+            p99_batch_seconds: Some(8.0),
             total_commit_seconds: 10.0,
-            avg_commit_ms: 100.0,
-            p95_commit_ms: 200.0,
-            p99_commit_ms: 300.0,
+            avg_commit_ms: Some(100.0),
+            p95_commit_ms: Some(200.0),
+            p99_commit_ms: Some(300.0),
             finalize_seconds: Some(60.0),
             max_compaction_pending_mb: Some(100),
             max_l0_files: Some(10),
@@ -3672,7 +3679,7 @@ mod tests {
             avg_load_avg_1m: Some(4.0),
             max_load_avg_1m: Some(8.0),
             min_mem_available_mb: Some(8000),
-            avg_disk_write_mb_per_batch: 50.0,
+            avg_disk_write_mb_per_batch: Some(50.0),
             avg_disk_util_pct: Some(40.0),
             p95_disk_util_pct: Some(60.0),
             avg_disk_await_ms: Some(2.0),
