@@ -17,6 +17,102 @@ async fn test_blocks_list_empty_db() {
 }
 
 #[tokio::test]
+async fn block_fee_stats_preserve_rates_above_ieee_safe_integer() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        7,
+        &CachedBlockHeader {
+            hash: vec![0x77; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 2,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1e083126,
+            miner_lock_hash: None,
+            cycles: Some(100),
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    for (index, fee) in [(0, 9_007_199_254_740_993i64), (1, 1i64)] {
+        batch.put_tx_index(
+            7,
+            index,
+            &TxIndexEntry {
+                tx_hash: [index as u8; 32],
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee,
+                tx_size: 996,
+                cycles: Some(50),
+                semantic_tags: 0,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/blocks/7/fee-stats").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["maxFeeRate"], "9007199254740993.00");
+    assert_eq!(json["minFeeRate"], "1.00");
+    assert_eq!(json["avgFeeRate"], "4503599627370497.00");
+}
+
+#[tokio::test]
+async fn block_fee_stats_without_fee_sample_are_null() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        8,
+        &CachedBlockHeader {
+            hash: vec![0x88; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1e083126,
+            miner_lock_hash: None,
+            cycles: Some(0),
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_index(
+        8,
+        0,
+        &TxIndexEntry {
+            tx_hash: [0x88; 32],
+            is_cellbase: true,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/blocks/8/fee-stats").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["avgFeeRate"].is_null());
+    assert!(json["minFeeRate"].is_null());
+    assert!(json["maxFeeRate"].is_null());
+}
+
+#[tokio::test]
 async fn test_get_block_includes_hardfork_activation() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
@@ -227,12 +323,10 @@ async fn test_block_fee_stats_uses_serialized_size_in_block_denominator() {
     // disagree with the summed per-tx `txSize` and made every client-side
     // `fee / size` disagree with the served fee rate.
     assert_eq!(json["totalSize"], 226);
-    let expected_rate = 1234.0f64 * 1000.0 / 226.0;
     for field in ["avgFeeRate", "minFeeRate", "maxFeeRate"] {
-        let got = json[field].as_f64().unwrap();
-        assert!(
-            (got - expected_rate).abs() < 1e-9,
-            "{field} must divide by serialized_size_in_block: got {got}, expected {expected_rate}"
+        assert_eq!(
+            json[field], "5460.18",
+            "{field} must use serialized_size_in_block"
         );
     }
 }

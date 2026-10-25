@@ -1856,9 +1856,10 @@ interface BlockFeeStats {
   blockNumber: number;
   totalSize: number;
   totalCycles: number;
-  avgFeeRate: number;
-  minFeeRate: number;
-  maxFeeRate: number;
+  /** Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples. */
+  avgFeeRate: string | null;
+  minFeeRate: string | null;
+  maxFeeRate: string | null;
   transactionCount: number;
   cyclesPending?: boolean;
 }

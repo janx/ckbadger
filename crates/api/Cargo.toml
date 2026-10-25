@@ -48,6 +48,8 @@ tracing-subscriber = { workspace = true }
 # Utilities
 chrono = { workspace = true }
 hex = { workspace = true }
+num-bigint = "0.4.6"
+num-integer = "0.1.46"
 arc-swap = "1"
 uuid = { workspace = true }
 

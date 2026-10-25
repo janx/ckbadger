@@ -89,9 +89,9 @@ describe('BlockDetailPage', () => {
       blockNumber: mockBlock.number,
       totalSize: 1200,
       totalCycles: 5_000_000,
-      avgFeeRate: 1000,
-      minFeeRate: 900,
-      maxFeeRate: 1100,
+      avgFeeRate: '1000.00',
+      minFeeRate: '900.00',
+      maxFeeRate: '1100.00',
       transactionCount: 1,
     });
     vi.mocked(api.getBlockProposals).mockResolvedValue([]);

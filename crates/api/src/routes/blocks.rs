@@ -19,6 +19,7 @@ use crate::response::{
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::routes::proposal_window::{block_proposal_zone, resolve_committed_txs};
 use crate::routes::transactions::tx_serialized_size_in_block;
+use crate::utils::exact_fee::{mean_rate, FeeRate};
 use crate::utils::{
     parse_block_number, parse_hash32, parse_optional_block_cursor_start, script_to_address,
 };
@@ -688,12 +689,40 @@ pub struct BlockFeeStatsResponse {
     pub block_number: i64,
     pub total_size: i64,
     pub total_cycles: i64,
-    pub avg_fee_rate: f64,
-    pub min_fee_rate: f64,
-    pub max_fee_rate: f64,
+    /// Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples.
+    pub avg_fee_rate: Option<String>,
+    pub min_fee_rate: Option<String>,
+    pub max_fee_rate: Option<String>,
     pub transaction_count: i32,
     #[serde(default)]
     pub cycles_pending: bool,
+}
+
+fn indexed_block_fee_rate(
+    entry: &ckbadger_store::TxIndexEntry,
+    block_number: i64,
+    tx_index: i32,
+) -> Result<FeeRate, ApiRouteError> {
+    let fee = u64::try_from(entry.fee).map_err(|_| {
+        ApiError::internal(format!(
+            "negative transaction fee in block={block_number} tx_index={tx_index}: {}",
+            entry.fee
+        ))
+    })?;
+    if entry.tx_size <= 0 {
+        return Err(ApiError::internal(format!(
+            "nonpositive transaction size in block={block_number} tx_index={tx_index}: {}",
+            entry.tx_size
+        )));
+    }
+    let size = u64::try_from(tx_serialized_size_in_block(entry.tx_size)).map_err(|error| {
+        ApiError::internal(format!(
+            "invalid transaction size in block={block_number} tx_index={tx_index}: {error}"
+        ))
+    })?;
+    FeeRate::new(fee, size).map_err(|error| {
+        ApiError::internal(format!("block={block_number} tx_index={tx_index}: {error}"))
+    })
 }
 
 async fn get_block_fee_stats(
@@ -748,47 +777,41 @@ async fn get_block_fee_stats(
     }
 
     let mut total_size: i64 = 0;
-    let mut fee_rates: Vec<f64> = Vec::new();
+    let mut fee_rates: Vec<FeeRate> = Vec::new();
     let mut non_cellbase_count: i32 = 0;
 
-    // Determine cycles: use header if available, otherwise sum from txs
-    let (total_cycles, cycles_pending) = if let Some(c) = header_cycles {
-        // Header has pre-computed total — all tx cycles are resolved
-        // Still need to iterate txs for size/fee stats below
-        for (_tx_idx, entry) in &txs {
-            if entry.is_cellbase {
-                continue;
-            }
-            non_cellbase_count += 1;
-            total_size += tx_serialized_size_in_block(entry.tx_size) as i64;
-            if entry.tx_size > 0 {
-                let fee_rate =
-                    (entry.fee as f64 * 1000.0) / tx_serialized_size_in_block(entry.tx_size) as f64;
-                fee_rates.push(fee_rate);
-            }
+    let mut summed_cycles: i64 = 0;
+    let mut missing_cycles = false;
+    for (tx_idx, entry) in &txs {
+        if entry.is_cellbase {
+            continue;
         }
-        (c, false)
-    } else {
-        // Fallback: sum from individual tx entries
-        let mut sum_cycles: i64 = 0;
-        let mut any_missing = false;
-        for (_tx_idx, entry) in &txs {
-            if entry.is_cellbase {
-                continue;
-            }
-            non_cellbase_count += 1;
-            total_size += tx_serialized_size_in_block(entry.tx_size) as i64;
+        let fee_rate = indexed_block_fee_rate(entry, block_number, *tx_idx)?;
+        non_cellbase_count += 1;
+        total_size = total_size
+            .checked_add(fee_rate.size as i64)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "block {block_number} total transaction size overflows i64"
+                ))
+            })?;
+        if header_cycles.is_none() {
             match entry.cycles {
-                Some(c) if c > 0 => sum_cycles += c,
-                Some(_) | None => any_missing = true,
-            }
-            if entry.tx_size > 0 {
-                let fee_rate =
-                    (entry.fee as f64 * 1000.0) / tx_serialized_size_in_block(entry.tx_size) as f64;
-                fee_rates.push(fee_rate);
+                Some(c) if c > 0 => {
+                    summed_cycles = summed_cycles.checked_add(c).ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "block {block_number} total cycles overflow i64"
+                        ))
+                    })?;
+                }
+                Some(_) | None => missing_cycles = true,
             }
         }
-        (sum_cycles, any_missing)
+        fee_rates.push(fee_rate);
+    }
+    let (total_cycles, cycles_pending) = match header_cycles {
+        Some(cycles) => (cycles, false),
+        None => (summed_cycles, missing_cycles),
     };
 
     // Fire-and-forget block cycles request if pending
@@ -802,14 +825,9 @@ async fn get_block_fee_stats(
         });
     }
 
-    let (avg_fee_rate, min_fee_rate, max_fee_rate) = if fee_rates.is_empty() {
-        (0.0, 0.0, 0.0)
-    } else {
-        let avg = fee_rates.iter().sum::<f64>() / fee_rates.len() as f64;
-        let min = fee_rates.iter().copied().fold(f64::INFINITY, f64::min);
-        let max = fee_rates.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        (avg, min, max)
-    };
+    let avg_fee_rate = mean_rate(&fee_rates, 1000);
+    let min_fee_rate = fee_rates.iter().min().map(|rate| rate.format(1000));
+    let max_fee_rate = fee_rates.iter().max().map(|rate| rate.format(1000));
 
     ok(BlockFeeStatsResponse {
         block_number,
@@ -1124,9 +1142,9 @@ mod tests {
             block_number: 100,
             total_size: 5000,
             total_cycles: 1000000,
-            avg_fee_rate: 1.5,
-            min_fee_rate: 0.5,
-            max_fee_rate: 3.0,
+            avg_fee_rate: Some("1.50".to_string()),
+            min_fee_rate: Some("0.50".to_string()),
+            max_fee_rate: Some("3.00".to_string()),
             transaction_count: 10,
             cycles_pending: false,
         };
@@ -1142,17 +1160,20 @@ mod tests {
             block_number: 200,
             total_size: 3000,
             total_cycles: 0,
-            avg_fee_rate: 0.0,
-            min_fee_rate: 0.0,
-            max_fee_rate: 0.0,
+            avg_fee_rate: None,
+            min_fee_rate: None,
+            max_fee_rate: None,
             transaction_count: 5,
             cycles_pending: true,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["cyclesPending"], true);
+        assert!(json["avgFeeRate"].is_null());
+        assert!(json["minFeeRate"].is_null());
+        assert!(json["maxFeeRate"].is_null());
 
         // Deserialize without cyclesPending field should default to false
-        let without_pending = r#"{"blockNumber":300,"totalSize":100,"totalCycles":50,"avgFeeRate":1.0,"minFeeRate":0.5,"maxFeeRate":1.5,"transactionCount":2}"#;
+        let without_pending = r#"{"blockNumber":300,"totalSize":100,"totalCycles":50,"avgFeeRate":"1.00","minFeeRate":"0.50","maxFeeRate":"1.50","transactionCount":2}"#;
         let deserialized: BlockFeeStatsResponse = serde_json::from_str(without_pending).unwrap();
         assert!(!deserialized.cycles_pending);
     }
