@@ -592,7 +592,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                         memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
                     append_only_compaction_pending_mb =
                         memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
-                    running_compactions = memory_stats.num_running_compactions,
+                    running_compactions = ?memory_stats.num_running_compactions,
                     l0_files = memory_stats.l0_files_count,
                     l0_max = memory_stats.l0_files_max,
                     l0_worst_cf = memory_stats.l0_worst_cf,

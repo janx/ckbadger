@@ -2542,7 +2542,6 @@ impl CkbadgerStore {
         let mut block_headers_count = 0usize;
         let mut addr_balance_count = 0usize;
         let mut compaction_pending_bytes = 0u64;
-        let mut num_running_compactions_fallback = 0u64;
         let mut sst_files_size = 0u64;
         let mut l0_files_total = 0u64;
         let mut l0_files_max: u64 = 0;
@@ -2585,12 +2584,6 @@ impl CkbadgerStore {
                         CF_ADDR_BALANCE => addr_balance_count = v as usize,
                         _ => {}
                     }
-                }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.num-running-compactions")
-                {
-                    num_running_compactions_fallback = num_running_compactions_fallback.max(v);
                 }
                 if let Ok(Some(v)) = self
                     .db
@@ -2650,12 +2643,21 @@ impl CkbadgerStore {
             .expect("block_cache lock poisoned")
             .get_usage();
         let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
-        let num_running_compactions = self
+        let num_running_compactions = match self
             .db
             .property_int_value("rocksdb.num-running-compactions")
-            .ok()
-            .flatten()
-            .unwrap_or(num_running_compactions_fallback);
+        {
+            Ok(value) => {
+                if value.is_none() {
+                    warn!(path = %self.db_path.display(), "RocksDB global running-compactions property unavailable");
+                }
+                value
+            }
+            Err(error) => {
+                warn!(path = %self.db_path.display(), %error, "failed to read RocksDB global running-compactions property");
+                None
+            }
+        };
 
         MemoryStats {
             live_cells_count,
@@ -2836,6 +2838,15 @@ mod tests {
                 .to_string()
                 .contains("IO failed")
         );
+    }
+
+    #[test]
+    fn empty_domain_store_exposes_real_flush_properties() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let stats = store.flush_stats().unwrap();
+        assert_eq!(stats.num_running_flushes, 0);
+        assert!(stats.wbm_budget_bytes > 0);
     }
 
     // ── P3.3: live write buffers, flush storm, MANIFEST ────────────────
@@ -3406,9 +3417,7 @@ mod tests {
             .db
             .property_int_value("rocksdb.num-running-compactions")
             .unwrap();
-        if let Some(expected) = global {
-            assert_eq!(stats.num_running_compactions, expected);
-        }
+        assert_eq!(stats.num_running_compactions, global);
     }
 
     #[test]

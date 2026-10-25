@@ -478,7 +478,7 @@ pub struct MemoryStatsData {
     /// Append-only-store bytes pending compaction
     pub append_only_compaction_pending_bytes: u64,
     /// Number of currently running compactions
-    pub num_running_compactions: u64,
+    pub num_running_compactions: Option<u64>,
     /// Total SST file size on disk (all CFs)
     pub sst_files_size: u64,
     /// Total L0 files across all CFs (sum)
@@ -704,7 +704,7 @@ mod tests {
             compaction_pending_bytes: 500_000,
             domain_compaction_pending_bytes: 300_000,
             append_only_compaction_pending_bytes: 200_000,
-            num_running_compactions: 2,
+            num_running_compactions: Some(2),
             sst_files_size: 10_000_000_000,
             l0_files_count: 15,
             l0_files_max: 5,

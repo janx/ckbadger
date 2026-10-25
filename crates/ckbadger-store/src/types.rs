@@ -1932,7 +1932,7 @@ pub struct MemoryStats {
     /// Estimated bytes pending compaction across all CFs
     pub compaction_pending_bytes: u64,
     /// Number of currently running compactions
-    pub num_running_compactions: u64,
+    pub num_running_compactions: Option<u64>,
     /// Total SST file size on disk (all CFs)
     pub sst_files_size: u64,
     /// Total L0 files across all CFs (sum)

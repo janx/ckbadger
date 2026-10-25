@@ -71,7 +71,7 @@ pub struct ChainStoreMemorySnapshot {
     pub domain_compaction_pending_bytes: u64,
     pub append_only_compaction_pending_bytes: u64,
     pub total_compaction_pending_bytes: u64,
-    pub num_running_compactions: u64,
+    pub num_running_compactions: Option<u64>,
     pub sst_files_size: u64,
     pub l0_files_count: u64,
     pub l0_files_max: u64,
@@ -130,11 +130,17 @@ pub fn aggregate_chain_store_memory(
         domain.compaction_pending_bytes,
         append_only.compaction_pending_bytes,
     )?;
-    let num_running_compactions = checked_memory_add(
-        "num_running_compactions",
+    let num_running_compactions = match (
         domain.num_running_compactions,
         append_only.num_running_compactions,
-    )?;
+    ) {
+        (Some(domain), Some(append_only)) => Some(checked_memory_add(
+            "num_running_compactions",
+            domain,
+            append_only,
+        )?),
+        _ => None,
+    };
     let sst_files_size = checked_memory_add(
         "sst_files_size",
         domain.sst_files_size,
@@ -611,7 +617,7 @@ VmSwap:  1024 kB
             block_cache_bytes: 300,
             table_readers_bytes: 10,
             compaction_pending_bytes: 1_000,
-            num_running_compactions: 2,
+            num_running_compactions: Some(2),
             sst_files_size: 10_000,
             l0_files_count: 4,
             l0_files_max: 3,
@@ -629,7 +635,7 @@ VmSwap:  1024 kB
             block_cache_bytes: 300,
             table_readers_bytes: 20,
             compaction_pending_bytes: 2_000,
-            num_running_compactions: 1,
+            num_running_compactions: Some(1),
             sst_files_size: 20_000,
             l0_files_count: 6,
             l0_files_max: 6,
@@ -647,7 +653,16 @@ VmSwap:  1024 kB
         assert_eq!(snapshot.total_table_readers_bytes, 30);
         assert_eq!(snapshot.total_memory_bytes, 630);
         assert_eq!(snapshot.total_compaction_pending_bytes, 3_000);
-        assert_eq!(snapshot.num_running_compactions, 3);
+        assert_eq!(snapshot.num_running_compactions, Some(3));
+        let mut unavailable = domain.clone();
+        unavailable.num_running_compactions = None;
+        assert_eq!(
+            aggregate_chain_store_memory(&unavailable, &append_only)
+                .unwrap()
+                .num_running_compactions,
+            None,
+            "one unavailable store property makes the combined observation unknown"
+        );
         assert_eq!(snapshot.sst_files_size, 30_000);
         assert_eq!(snapshot.l0_files_count, 10);
         assert_eq!(snapshot.l0_files_max, 6);

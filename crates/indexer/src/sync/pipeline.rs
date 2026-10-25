@@ -2911,7 +2911,7 @@ impl Indexer {
                             domain_commit_ms = format!("{:.1}", write_metrics.domain_commit_ms),
                             tracker_state_bytes = write_metrics.tracker_state_bytes,
                             compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
-                            running_compactions = stats.num_running_compactions,
+                            running_compactions = ?stats.num_running_compactions,
                             l0_total = stats.l0_files_count,
                             l0_max = stats.l0_files_max,
                             l0_worst_cf = stats.l0_worst_cf,
