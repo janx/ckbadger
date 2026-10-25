@@ -135,12 +135,7 @@ pub async fn log_request(
     let latency_ms = latency.as_millis() as u64;
     // Absent from the line for the requests that never wait.
     let waited_ms = (!waited.is_zero()).then_some(waited.as_millis() as u64);
-    let size = response
-        .headers()
-        .get(axum::http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
+    let size = response_size(response.headers());
 
     match request_log_kind(latency, waited, threshold, polling) {
         Ok(RequestLogKind::Slow) => {
@@ -164,9 +159,26 @@ pub async fn log_request(
     response
 }
 
+fn response_size(headers: &axum::http::HeaderMap) -> Option<u64> {
+    headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_or_invalid_content_length_is_unknown_size() {
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(response_size(&headers), None);
+        headers.insert(axum::http::header::CONTENT_LENGTH, "bad".parse().unwrap());
+        assert_eq!(response_size(&headers), None);
+        headers.insert(axum::http::header::CONTENT_LENGTH, "0".parse().unwrap());
+        assert_eq!(response_size(&headers), Some(0));
+    }
 
     const THRESHOLD: Duration = Duration::from_millis(100);
 

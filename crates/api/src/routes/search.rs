@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::response::{ok, ApiError, ApiResult};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::routes::address_presence::{address_presence, AddressPresence};
 use crate::routes::tx_lookup::fetch_transaction_lookup;
 use crate::utils::address::{parse_address_to_script, script_to_address};
@@ -661,7 +661,7 @@ async fn search(
                     results.push(SearchResult {
                         result_type: "cell".to_string(),
                         id: outpoint.normalized.clone(),
-                        label: format!("Cell (Live, {} CKB)", format_capacity(cell.capacity)),
+                        label: format!("Cell (Live, {} CKB)", format_capacity(cell.capacity)?),
                         url: format!("/cell/{}", outpoint.normalized),
                         match_kind: "outpoint".to_string(),
                     });
@@ -670,7 +670,7 @@ async fn search(
                     results.push(SearchResult {
                         result_type: "cell".to_string(),
                         id: outpoint.normalized.clone(),
-                        label: format!("Cell (Dead, {} CKB)", format_capacity(cell.capacity)),
+                        label: format!("Cell (Dead, {} CKB)", format_capacity(cell.capacity)?),
                         url: format!("/cell/{}", outpoint.normalized),
                         match_kind: "outpoint".to_string(),
                     });
@@ -847,15 +847,25 @@ async fn search(
     })
 }
 
-fn format_capacity(capacity: i64) -> String {
-    let ckb = capacity as f64 / 1e8;
-    if ckb >= 1_000_000.0 {
-        format!("{:.2}M", ckb / 1_000_000.0)
-    } else if ckb >= 1_000.0 {
-        format!("{:.2}K", ckb / 1_000.0)
-    } else {
-        format!("{:.2}", ckb)
+fn format_capacity(capacity: i64) -> Result<String, ApiRouteError> {
+    if capacity < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cell capacity {capacity}"
+        )));
     }
+    let (unit, divisor) = if capacity >= 100_000_000_000_000 {
+        ("M", 100_000_000_000_000_i128)
+    } else if capacity >= 100_000_000_000 {
+        ("K", 100_000_000_000_i128)
+    } else {
+        ("", 100_000_000_i128)
+    };
+    let hundredths = (i128::from(capacity) * 100 + divisor / 2) / divisor;
+    Ok(format!(
+        "{}.{:02}{unit}",
+        hundredths / 100,
+        hundredths % 100
+    ))
 }
 
 #[cfg(test)]
@@ -897,7 +907,10 @@ mod tests {
 
     #[test]
     fn test_format_capacity_small() {
-        assert_eq!(format_capacity(10_000_000_000), "100.00");
+        assert_eq!(format_capacity(10_000_000_000).unwrap(), "100.00");
+        assert_eq!(format_capacity(100_000_000_000).unwrap(), "1.00K");
+        assert_eq!(format_capacity(i64::MAX).unwrap(), "92233.72M");
+        assert!(format_capacity(-1).is_err());
     }
 
     #[test]

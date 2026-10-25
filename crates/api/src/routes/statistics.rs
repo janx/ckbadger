@@ -4249,11 +4249,11 @@ pub struct ActivitySummary24hResponse {
     pub script_call_count: u32,
     pub unknown_count: u32,
     pub coinbase_count: u32,
-    /// Sum of per-hour unique address counts (approximate: overcounts cross-hour addresses)
+    /// Exact distinct Lock participants in the rolling chain-time window.
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
-    /// Number of hourly buckets aggregated (0-24)
+    /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
 }
 

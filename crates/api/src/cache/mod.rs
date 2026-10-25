@@ -4,7 +4,6 @@ mod mem_cache;
 pub use bounded::BoundedCache;
 pub use mem_cache::InMemoryCache;
 
-use ckbadger_store::CkbadgerStore;
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
@@ -32,41 +31,6 @@ impl CacheBackend {
 
     pub async fn delete(&self, key: &str) {
         self.inner.delete(key);
-    }
-
-    /// Get sync status from store queries (no Redis).
-    pub async fn get_sync_status_from_store(
-        &self,
-        store: &CkbadgerStore,
-    ) -> ckbadger_common::sync::SyncStatusData {
-        let sync = store.get_sync_status().unwrap_or_default();
-        let tip = sync.tip_block_number;
-        let total_tx = sync.total_transactions;
-        let total_cells = sync.total_cells_created;
-        let total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
-
-        ckbadger_common::sync::SyncStatusData {
-            tip_block_number: tip,
-            tip_block_hash: hex::encode(&sync.tip_block_hash),
-            total_transactions: total_tx,
-            total_cells,
-            total_live_cells,
-            total_addresses: 0,
-            last_synced_at: sync.last_synced_at,
-            sync_started_at: sync.sync_started_at,
-            sync_started_block: sync.sync_started_block,
-            sync_ema_rate: sync.sync_ema_rate,
-            bulk_sync_completed_at: sync.bulk_sync_completed_at,
-            bulk_sync_completed_block: sync.bulk_sync_completed_block,
-        }
-    }
-
-    /// Get sync status tip block from store.
-    pub async fn get_sync_tip_from_store(&self, store: &CkbadgerStore) -> i64 {
-        store
-            .get_sync_status()
-            .map(|s| s.tip_block_number)
-            .unwrap_or(0)
     }
 }
 
@@ -196,38 +160,5 @@ mod tests {
         assert!(CacheTtl::CHART > CacheTtl::BLOCK);
         assert!(CacheTtl::CHART > CacheTtl::TRANSACTION);
         assert!(CacheTtl::CHART > CacheTtl::NETWORK_STATS);
-    }
-
-    #[tokio::test]
-    async fn test_sync_status_fallback_uses_sync_totals() {
-        let cache = CacheBackend::new();
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
-
-        store
-            .set_sync_status(&ckbadger_store::types::SyncStatus {
-                tip_block_number: 42,
-                tip_block_hash: vec![0xab; 32],
-                total_transactions: 1234,
-                total_cells_created: 300,
-                total_cells_consumed: 120,
-                last_synced_at: 1_700_000_000,
-                sync_started_at: Some(1_699_999_000),
-                sync_started_block: 1,
-                sync_ema_rate: Some(66.6),
-                bulk_sync_completed_at: Some(1_700_000_100),
-                bulk_sync_completed_block: Some(42),
-                ..Default::default()
-            })
-            .unwrap();
-
-        let status = cache.get_sync_status_from_store(&store).await;
-        assert_eq!(status.tip_block_number, 42);
-        assert_eq!(status.total_transactions, 1234);
-        assert_eq!(status.total_cells, 300);
-        assert_eq!(status.total_live_cells, 180);
-        assert_eq!(status.sync_started_at, Some(1_699_999_000));
-        assert_eq!(status.sync_ema_rate, Some(66.6));
-        assert_eq!(status.bulk_sync_completed_block, Some(42));
     }
 }

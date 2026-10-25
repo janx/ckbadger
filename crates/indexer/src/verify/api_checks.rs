@@ -6742,6 +6742,10 @@ mod tests {
             "hash": hash,
             "parentHash": format!("0x{}", "00".repeat(32)),
             "transactionsCount": 0,
+            "proposalsCount": 0,
+            "unclesCount": 0,
+            "compactTarget": "0x190df964",
+            "difficulty": "1",
         })
     }
 

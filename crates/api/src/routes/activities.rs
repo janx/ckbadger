@@ -285,7 +285,7 @@ fn convert_item_delta(
 ) -> anyhow::Result<ItemDeltaResponse> {
     match item.kind {
         ItemKind::Token => {
-            let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
+            let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id)?;
             Ok(ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
                 delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
@@ -323,20 +323,24 @@ fn lookup_token_info(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
     type_script_hash: &[u8],
-) -> (Option<String>, Option<u8>) {
+) -> anyhow::Result<(Option<String>, Option<u8>)> {
     if let Some(cached) = cache.get(type_script_hash) {
-        return cached
+        return Ok(cached
             .as_ref()
             .map(|(s, d)| (s.clone(), *d))
-            .unwrap_or((None, None));
+            .unwrap_or((None, None)));
     }
     let result = store
         .get_token(type_script_hash)
-        .ok()
-        .flatten()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read token 0x{} for activity: {e}",
+                hex::encode(type_script_hash)
+            )
+        })?
         .map(|t| (t.symbol.clone(), t.decimals.map(|d| d as u8)));
     cache.insert(type_script_hash.to_vec(), result.clone());
-    result.unwrap_or((None, None))
+    Ok(result.unwrap_or((None, None)))
 }
 
 fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
@@ -1258,6 +1262,25 @@ mod tests {
         let err = discrete_item_delta(&item).unwrap_err().to_string();
         assert!(err.contains("magnitude=2"));
         assert!(err.contains("expected 1"));
+    }
+
+    #[test]
+    fn token_metadata_read_error_is_not_an_unnamed_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let token_id = [0xAA; 32];
+        store
+            .put_cf(store.cf_tokens(), &token_id, b"corrupt-token-row")
+            .unwrap();
+        let mut cache = HashMap::new();
+        let error = lookup_token_info(&store, &mut cache, &token_id)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&hex::encode(token_id)), "{error}");
+        assert!(
+            cache.is_empty(),
+            "failed reads must not poison the metadata cache"
+        );
     }
 
     #[test]

@@ -1342,18 +1342,12 @@ async fn decode_spore(
                 } else if let Some(cluster_id) = entry.collection_id.as_deref() {
                     let store = state.store.clone();
                     let cid = cluster_id.to_vec();
-                    tokio::task::spawn_blocking(move || {
-                        store
-                            .get_spore(&cid)
-                            .ok()
-                            .flatten()
-                            .and_then(|c| c.description)
-                            .and_then(|desc| serde_json::from_str::<serde_json::Value>(&desc).ok())
-                            .map(|meta| !extract_dob1_pattern(&meta).is_empty())
-                            .unwrap_or(false)
-                    })
-                    .await
-                    .unwrap_or(false)
+                    tokio::task::spawn_blocking(move || cluster_has_dob_pattern(&store, &cid))
+                        .await
+                        .map_err(|e| {
+                            ApiError::internal(format!("cluster metadata task failed: {e}"))
+                        })?
+                        .map_err(|e| ApiError::internal(e.to_string()))?
                 } else {
                     false
                 };
@@ -1402,6 +1396,22 @@ async fn decode_spore(
             ],
         }),
     }
+}
+
+fn cluster_has_dob_pattern(
+    store: &ckbadger_store::CkbadgerStore,
+    cluster_id: &[u8],
+) -> anyhow::Result<bool> {
+    let cluster = store.get_spore(cluster_id).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to read cluster 0x{} for DOB rendering: {e}",
+            hex::encode(cluster_id)
+        )
+    })?;
+    Ok(cluster
+        .and_then(|entry| entry.description)
+        .and_then(|desc| serde_json::from_str::<serde_json::Value>(&desc).ok())
+        .is_some_and(|meta| !extract_dob1_pattern(&meta).is_empty()))
 }
 
 /// Serve a content-addressed media blob for a decoded DOB spore.
@@ -1821,6 +1831,20 @@ async fn get_spores_by_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cluster_dob_metadata_read_error_is_not_absent_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        let id = [0xAC; 32];
+        store
+            .put_cf(store.cf_spore_data(), &id, b"invalid-cluster-row")
+            .unwrap();
+        let error = cluster_has_dob_pattern(&store, &id)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&hex::encode(id)), "{error}");
+    }
 
     #[test]
     fn test_format_ratio_4_preserves_large_counts_and_explicit_absence() {

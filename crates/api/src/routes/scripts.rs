@@ -1234,18 +1234,24 @@ async fn lookup_scripts(
             .as_ref()
             .and_then(|m| m.get(code_hash.as_slice()))
         {
-            let version_info = state
-                .store
-                .get_script_version(version_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .unwrap_or_else(|| {
-                    fallback_script_version_info(&state, code_hash, version_hash)
-                        .unwrap_or_default()
-                });
+            let version_info = match state.store.get_script_version(version_hash).map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to read script version 0x{} for tx lookup: {e}",
+                    hex::encode(version_hash)
+                ))
+            })? {
+                Some(info) => info,
+                None => fallback_script_version_info(&state, code_hash, version_hash)?,
+            };
 
             let code_cells =
                 list_version_code_cells(&state.store, &state.append_only_store, version_hash)
-                    .unwrap_or_default();
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "failed to list code cells for script version 0x{}: {e}",
+                            hex::encode(version_hash)
+                        ))
+                    })?;
 
             let info = build_lookup_info(
                 &state,
