@@ -439,9 +439,9 @@ function InventoryTable({
               className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
             >
               {asset.hMultiplier != null ? (
-                <span title={`HMul: \u00d7${asset.hMultiplier.toFixed(2)}`}>
+                <span title={`HMul: \u00d7${asset.hMultiplier}`}>
                   {'\u00d7'}
-                  {asset.hMultiplier.toFixed(2)}
+                  {asset.hMultiplier}
                 </span>
               ) : (
                 <span className="text-text-dim">-</span>

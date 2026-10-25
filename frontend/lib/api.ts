@@ -965,7 +965,7 @@ interface Asset {
     | 'unknown';
   fullyOnchainRatio?: string | null;
   fullyOnchainCount?: number | null;
-  hMultiplier: number | null;
+  hMultiplier: string | null;
 }
 
 interface AssetQueryParams {

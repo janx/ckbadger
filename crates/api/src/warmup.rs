@@ -190,8 +190,36 @@ impl PartialOrd for ActivityRank {
 }
 
 impl CachedAssetEntry {
-    pub fn to_asset_response(&self) -> AssetResponse {
-        AssetResponse {
+    pub fn to_asset_response(&self) -> anyhow::Result<AssetResponse> {
+        let h_multiplier = match (&self.owned_capacity, &self.owned_knowledge) {
+            (Some(cap), Some(used)) => {
+                let cap = cap.parse::<i128>().map_err(|error| {
+                    anyhow::anyhow!("asset {} invalid owned capacity {cap:?}: {error}", self.id)
+                })?;
+                let used = used.parse::<i128>().map_err(|error| {
+                    anyhow::anyhow!(
+                        "asset {} invalid owned knowledge {used:?}: {error}",
+                        self.id
+                    )
+                })?;
+                anyhow::ensure!(
+                    cap >= 0 && used >= 0 && used <= cap,
+                    "asset {} invalid capacity/knowledge {cap}/{used}",
+                    self.id
+                );
+                if used == 0 {
+                    None
+                } else {
+                    Some(
+                        crate::utils::exact_ratio::format_ratio(cap, used, 2)
+                            .map_err(anyhow::Error::msg)?,
+                    )
+                }
+            }
+            (None, None) => None,
+            _ => anyhow::bail!("asset {} has incomplete capacity/knowledge pair", self.id),
+        };
+        Ok(AssetResponse {
             id: self.id.clone(),
             asset_type: self.asset_type.clone(),
             standard: self.standard.clone(),
@@ -215,35 +243,13 @@ impl CachedAssetEntry {
             composition_tier: self.composition_tier.clone(),
             onchain_ratio: self.onchain_ratio.clone(),
             onchain_count: self.onchain_count,
-            h_multiplier: {
-                match (&self.owned_capacity, &self.owned_knowledge) {
-                    (Some(cap_str), Some(occ_str)) => {
-                        let cap: f64 = cap_str.parse().unwrap_or(0.0);
-                        let occ: f64 = occ_str.parse().unwrap_or(0.0);
-                        if occ > 0.0 {
-                            Some(((cap / occ) * 100.0).round() / 100.0)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            },
-        }
+            h_multiplier,
+        })
     }
 }
 
-fn format_ratio_4(numerator: i64, denominator: i64) -> String {
-    if denominator <= 0 {
-        return "0.0000".to_string();
-    }
-    let scaled = numerator
-        .saturating_mul(10_000)
-        .checked_div(denominator)
-        .unwrap_or(0);
-    let whole = scaled / 10_000;
-    let frac = (scaled % 10_000).abs();
-    format!("{whole}.{frac:04}")
+fn format_ratio_4(numerator: i64, denominator: i64) -> anyhow::Result<Option<String>> {
+    crate::utils::exact_ratio::format_share_4(numerator, denominator).map_err(anyhow::Error::msg)
 }
 
 fn resolve_composition_tier(
@@ -832,8 +838,16 @@ fn build_asset_caches_sync(
                 e
             )
         })?;
-        let total_onchain = agg.btc_ckb_count + agg.pure_ckb_count;
-        let onchain_ratio = format_ratio_4(total_onchain, agg.live_count);
+        let total_onchain = agg
+            .btc_ckb_count
+            .checked_add(agg.pure_ckb_count)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cluster 0x{} onchain count overflow",
+                    hex::encode(cluster_id_bytes)
+                )
+            })?;
+        let onchain_ratio = format_ratio_4(total_onchain, agg.live_count)?;
         let composition_tier = resolve_composition_tier(
             agg.btc_ckb_count,
             agg.pure_ckb_count,
@@ -862,7 +876,7 @@ fn build_asset_caches_sync(
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
             composition_tier: Some(composition_tier),
-            onchain_ratio: Some(onchain_ratio),
+            onchain_ratio,
             onchain_count: Some(total_onchain),
             type_code_hash: None,
             type_hash_type: None,
@@ -911,13 +925,20 @@ fn build_asset_caches_sync(
                 .to_string()
         };
         let onchain_count = if has_tier_counts {
-            agg.pure_ckb_count + agg.btc_ckb_count
+            agg.pure_ckb_count
+                .checked_add(agg.btc_ckb_count)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "object collection 0x{} onchain count overflow",
+                        hex::encode(collection_id_bytes)
+                    )
+                })?
         } else if matches!(composition_tier.as_str(), "btc_ckb" | "pure_ckb") {
             agg.live_count
         } else {
             0
         };
-        let onchain_ratio = format_ratio_4(onchain_count, agg.live_count);
+        let onchain_ratio = format_ratio_4(onchain_count, agg.live_count)?;
         let nft_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             nft_daily
@@ -952,7 +973,7 @@ fn build_asset_caches_sync(
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
             composition_tier: Some(composition_tier),
-            onchain_ratio: Some(onchain_ratio),
+            onchain_ratio,
             onchain_count: Some(onchain_count),
             type_code_hash: None,
             type_hash_type: None,
@@ -985,7 +1006,7 @@ fn build_asset_caches_sync(
         } else {
             0
         };
-        let onchain_ratio = format_ratio_4(onchain_count, agg.live_count);
+        let onchain_ratio = format_ratio_4(onchain_count, agg.live_count)?;
         let id_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             id_daily
@@ -1020,7 +1041,7 @@ fn build_asset_caches_sync(
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
             composition_tier: Some(composition_tier),
-            onchain_ratio: Some(onchain_ratio),
+            onchain_ratio,
             onchain_count: Some(onchain_count),
             type_code_hash: None,
             type_hash_type: None,
@@ -1345,6 +1366,62 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_collection_ratio_does_not_saturate() {
+        assert_eq!(
+            format_ratio_4(i64::MAX, i64::MAX).unwrap(),
+            Some("1.0000".to_string())
+        );
+        assert_eq!(format_ratio_4(0, 0).unwrap(), None);
+        assert!(format_ratio_4(1, 0).is_err());
+        assert!(format_ratio_4(2, 1).is_err());
+    }
+
+    #[test]
+    fn cached_asset_h_multiplier_keeps_integer_precision() {
+        let asset = CachedAssetEntry {
+            id: "test".to_string(),
+            asset_type: "token".to_string(),
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            icon_url: None,
+            holders_count: 0,
+            transfers_count: 0,
+            transfers_24h: 0,
+            decimals: None,
+            total_supply: None,
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: None,
+            cluster_name: None,
+            owned_capacity: Some("9007199254740993".to_string()),
+            owned_knowledge: Some("1".to_string()),
+            composition_tier: None,
+            onchain_ratio: None,
+            onchain_count: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
+        };
+        assert_eq!(
+            serde_json::to_value(asset.to_asset_response().unwrap()).unwrap()["hMultiplier"],
+            "9007199254740993.00"
+        );
+        let mut broken = asset.clone();
+        broken.owned_capacity = Some("bad".to_string());
+        assert!(broken
+            .to_asset_response()
+            .unwrap_err()
+            .to_string()
+            .contains("invalid owned capacity"));
+        broken.owned_capacity = Some("0".to_string());
+        broken.owned_knowledge = Some("0".to_string());
+        assert!(broken.to_asset_response().unwrap().h_multiplier.is_none());
+    }
     use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
     use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskKind};
     use ckbadger_store::{ObjectEntry, ObjectExtra, ObjectStandard, SporeMediaProfile};

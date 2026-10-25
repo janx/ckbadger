@@ -290,7 +290,7 @@ pub struct AssetResponse {
     pub composition_tier: Option<String>,
     pub onchain_ratio: Option<String>,
     pub onchain_count: Option<i64>,
-    pub h_multiplier: Option<f64>,
+    pub h_multiplier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -601,8 +601,11 @@ fn fetch_assets_cached(
 
     let assets: Vec<AssetResponse> = all_cached
         .into_iter()
-        .map(|e| e.to_asset_response())
-        .collect();
+        .map(|e| {
+            e.to_asset_response()
+                .map_err(|error| ApiError::internal(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     Ok((total, assets))
 }
@@ -776,26 +779,7 @@ fn parse_ratio_1e4(value: Option<&str>) -> Option<i64> {
 }
 
 fn format_ratio_4(numerator: i64, denominator: i64) -> anyhow::Result<Option<String>> {
-    anyhow::ensure!(
-        numerator >= 0 && denominator >= 0,
-        "negative collection composition ratio: {numerator}/{denominator}"
-    );
-    if denominator == 0 {
-        anyhow::ensure!(
-            numerator == 0,
-            "collection composition has positive onchain count with zero total"
-        );
-        return Ok(None);
-    }
-    anyhow::ensure!(
-        numerator <= denominator,
-        "collection composition onchain count {numerator} exceeds total {denominator}"
-    );
-    let scaled =
-        (i128::from(numerator) * 10_000 + i128::from(denominator) / 2) / i128::from(denominator);
-    let whole = scaled / 10_000;
-    let frac = scaled % 10_000;
-    Ok(Some(format!("{whole}.{frac:04}")))
+    crate::utils::exact_ratio::format_share_4(numerator, denominator).map_err(anyhow::Error::msg)
 }
 
 fn resolve_composition_tier(
