@@ -809,6 +809,8 @@ pub struct CkbadgerStore {
     /// Keep block cache alive for the lifetime of the store.
     /// Mutex because `set_capacity()` requires `&mut` (rare mode-transition calls only).
     block_cache: Mutex<rocksdb::Cache>,
+    /// Serializes conditional cycles updates with canonical domain batch commits.
+    domain_write_gate: Mutex<()>,
     /// Global memtable memory budget — controls WHEN flushes happen across all CFs.
     /// With many CFs, per-CF triggers cause unpredictable I/O storms. WBM replaces
     /// that with a single threshold: flush oldest CF when total memtable memory
@@ -1012,6 +1014,7 @@ impl CkbadgerStore {
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
+            domain_write_gate: Mutex::new(()),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             is_secondary: false,
@@ -1100,6 +1103,7 @@ impl CkbadgerStore {
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
+            domain_write_gate: Mutex::new(()),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             is_secondary: true,
@@ -1785,6 +1789,10 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
         }
+        let _guard = self
+            .domain_write_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("store write gate poisoned"))?;
         Ok(self.db.put_cf(cf, key, value)?)
     }
 
@@ -1793,7 +1801,32 @@ impl CkbadgerStore {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
         }
+        let _guard = self
+            .domain_write_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("store write gate poisoned"))?;
         Ok(self.db.delete_cf(cf, key)?)
+    }
+
+    /// Perform a read-check-write against canonical domain state without an
+    /// intervening indexer batch commit. The closure must use the supplied DB
+    /// for its final write rather than calling `put_cf` (which takes this gate).
+    pub(crate) fn with_domain_write_gate<T>(
+        &self,
+        operation: impl FnOnce(&DB) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        anyhow::ensure!(
+            matches!(
+                self.store_class,
+                StoreClass::Domain | StoreClass::TestUnified
+            ),
+            "conditional cycles write requires a domain store"
+        );
+        let _guard = self
+            .domain_write_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("store write gate poisoned"))?;
+        operation(&self.db)
     }
 
     pub fn multi_get_cf(
@@ -1846,6 +1879,10 @@ impl CkbadgerStore {
     }
 
     fn write_batch_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        let _guard = self
+            .domain_write_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("store write gate poisoned"))?;
         Ok(self.db.write(batch)?)
     }
 
@@ -1853,6 +1890,10 @@ impl CkbadgerStore {
     /// Durable across an unclean/host-level shutdown, unlike the default
     /// (page-cache-buffered) WAL write. Used by [`StoreBatch::commit_synced`].
     fn write_batch_synced_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        let _guard = self
+            .domain_write_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("store write gate poisoned"))?;
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);
         Ok(self.db.write_opt(batch, &opts)?)
@@ -1911,6 +1952,10 @@ impl CkbadgerStore {
     /// Write a batch with WAL disabled. Use during bulk sync where crash recovery
     /// re-syncs from the last committed block header.
     fn write_batch_no_wal_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        let _guard = self
+            .domain_write_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("store write gate poisoned"))?;
         let mut opts = rocksdb::WriteOptions::default();
         opts.disable_wal(true);
         Ok(self.db.write_opt(batch, &opts)?)

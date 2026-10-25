@@ -67,7 +67,7 @@ pub struct ReportEntry {
     /// HTTP status code histogram for error responses (status != expect_status).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub error_statuses: BTreeMap<u16, u32>,
-    pub avg_body_size: usize,
+    pub avg_body_size: Option<usize>,
     pub throughput_rps: f64,
     pub skipped: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,7 +211,7 @@ pub fn print_table(report: &BenchmarkReport) {
                 entry.p95_ms,
                 entry.p99_ms,
                 entry.error_rate * 100.0,
-                format_size(entry.avg_body_size),
+                format_optional_size(entry.avg_body_size),
                 flag,
             );
         }
@@ -282,6 +282,10 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &s[..max_len - 3])
     }
+}
+
+fn format_optional_size(bytes: Option<usize>) -> String {
+    bytes.map(format_size).unwrap_or_else(|| "n/a".to_string())
 }
 
 fn format_size(bytes: usize) -> String {
@@ -454,12 +458,14 @@ mod tests {
             samples: vec![Sample {
                 latency_ms: p95,
                 status: if error_rate > 0.0 { error_status } else { 200 },
-                body_size: 1024,
+                body_size: Some(1024),
                 error: if error_rate > 0.0 {
                     Some(format!("expected status 200, got {error_status}"))
                 } else {
                     None
                 },
+                failure_kind: (error_rate > 0.0)
+                    .then_some(crate::metrics::SampleFailureKind::UnexpectedStatus),
             }],
             metrics: ComputedMetrics {
                 p50_ms: p95 * 0.8,
@@ -470,7 +476,7 @@ mod tests {
                 mean_ms: p95 * 0.9,
                 std_dev_ms: 1.0,
                 error_rate,
-                avg_body_size: 1024,
+                avg_body_size: Some(1024),
                 throughput_rps: 100.0,
             },
             wall_clock: Duration::from_millis(100),
@@ -509,6 +515,19 @@ mod tests {
         assert_eq!(report.summary.tested, 0);
         assert_eq!(report.summary.skipped, 0);
         assert_eq!(report.results.len(), 0);
+    }
+
+    #[test]
+    fn incomplete_body_is_unknown_in_report_instead_of_zero_bytes() {
+        let mut result = make_result("blocks", "GET", "/blocks/latest", 5.0, 0.0, false);
+        result.samples[0].body_size = None;
+        result.samples[0].error = Some("response body truncated".to_string());
+        result.samples[0].failure_kind = Some(crate::metrics::SampleFailureKind::BodyRead);
+        result.metrics = ComputedMetrics::from_samples(&result.samples, Duration::from_secs(1));
+        let report = build_report(&[result], "http://localhost", 1, 1, 0);
+        assert_eq!(report.results[0].avg_body_size, None);
+        assert_eq!(format_optional_size(report.results[0].avg_body_size), "n/a");
+        assert!(serde_json::to_value(&report).unwrap()["results"][0]["avgBodySize"].is_null());
     }
 
     #[test]

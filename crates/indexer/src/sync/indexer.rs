@@ -850,9 +850,9 @@ impl Indexer {
         &self,
         current_block: u64,
         target_block: u64,
-        compaction_pending_mb: u64,
-        l0_files: u64,
-        imm_memtables: u64,
+        compaction_pending_mb: Option<u64>,
+        l0_files: Option<u64>,
+        imm_memtables: Option<u64>,
     ) {
         let mut guard = self.bulk_sync_perf_run.lock().unwrap();
         let Some(run) = guard.as_mut() else {

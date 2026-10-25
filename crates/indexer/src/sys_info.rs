@@ -19,8 +19,8 @@ pub struct EnvironmentSnapshot {
 pub struct BatchEnvironment {
     pub load_avg_1m: Option<f64>,
     pub mem_available_mb: Option<u64>,
-    pub disk_read_mb: f64,
-    pub disk_write_mb: f64,
+    pub disk_read_mb: Option<f64>,
+    pub disk_write_mb: Option<f64>,
     pub disk_read_mb_s: Option<f64>,
     pub disk_write_mb_s: Option<f64>,
     pub disk_read_iops: Option<f64>,
@@ -992,8 +992,8 @@ fn batch_environment_from_disk_sample(
         DiskWindowSample::Warmup => BatchEnvironment {
             load_avg_1m,
             mem_available_mb,
-            disk_read_mb: 0.0,
-            disk_write_mb: 0.0,
+            disk_read_mb: None,
+            disk_write_mb: None,
             disk_read_mb_s: None,
             disk_write_mb_s: None,
             disk_read_iops: None,
@@ -1007,8 +1007,8 @@ fn batch_environment_from_disk_sample(
         DiskWindowSample::Sample(metrics) => BatchEnvironment {
             load_avg_1m,
             mem_available_mb,
-            disk_read_mb: metrics.read_mb,
-            disk_write_mb: metrics.write_mb,
+            disk_read_mb: Some(metrics.read_mb),
+            disk_write_mb: Some(metrics.write_mb),
             disk_read_mb_s: Some(metrics.read_mb_s),
             disk_write_mb_s: Some(metrics.write_mb_s),
             disk_read_iops: Some(metrics.read_iops),
@@ -1030,8 +1030,8 @@ fn batch_environment_from_disk_sample(
         DiskWindowSample::Unavailable { .. } => BatchEnvironment {
             load_avg_1m,
             mem_available_mb,
-            disk_read_mb: 0.0,
-            disk_write_mb: 0.0,
+            disk_read_mb: None,
+            disk_write_mb: None,
             disk_read_mb_s: None,
             disk_write_mb_s: None,
             disk_read_iops: None,
@@ -1400,8 +1400,8 @@ MemAvailable:   45000000 kB
             batch_environment_from_disk_sample(Some(12.5), Some(4096), DiskWindowSample::Warmup);
         assert_eq!(warmup.load_avg_1m, Some(12.5));
         assert_eq!(warmup.mem_available_mb, Some(4096));
-        assert_eq!(warmup.disk_read_mb, 0.0);
-        assert_eq!(warmup.disk_write_mb, 0.0);
+        assert_eq!(warmup.disk_read_mb, None);
+        assert_eq!(warmup.disk_write_mb, None);
         assert_eq!(warmup.disk_read_mb_s, None);
         assert_eq!(warmup.disk_write_mb_s, None);
         assert_eq!(warmup.disk_read_iops, None);

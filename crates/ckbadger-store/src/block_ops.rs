@@ -18,17 +18,58 @@ impl CkbadgerStore {
         }
     }
 
-    /// Update the cycles field of a block header. Used by the cycles worker
-    /// after all transaction cycles in the block have been calculated.
-    pub fn update_block_cycles(&self, block_number: i64, cycles: i64) -> anyhow::Result<()> {
-        let key = keys::encode_block_num(block_number);
-        let mut header = self
-            .get_block_header(block_number)?
-            .ok_or_else(|| anyhow::anyhow!("block header not found: {}", block_number))?;
-        header.cycles = Some(cycles);
-        let value = bincode::serialize(&header)?;
-        self.put_cf(self.cf_block_headers(), &key, &value)?;
-        Ok(())
+    /// Publish a total only if the exact canonical block and every indexed
+    /// transaction are still present and all non-cellbase cycles are known.
+    pub fn update_block_cycles_if_complete(
+        &self,
+        block_number: i64,
+        expected_block_hash: &[u8],
+        expected_txs: &[(i32, [u8; 32])],
+    ) -> anyhow::Result<i64> {
+        self.with_domain_write_gate(|db| {
+            let key = keys::encode_block_num(block_number);
+            let mut header = self.get_block_header(block_number)?.ok_or_else(|| anyhow::anyhow!(
+                "canonical block header disappeared before cycles write: block={block_number}"
+            ))?;
+            anyhow::ensure!(header.hash == expected_block_hash,
+                "canonical block identity changed before cycles write: block={block_number}, expected=0x{}, actual=0x{}",
+                crate::bytes_to_hex(expected_block_hash), crate::bytes_to_hex(&header.hash));
+            let txs = self.list_block_txs(block_number)?;
+            anyhow::ensure!(header.transactions_count >= 0 && txs.len() == header.transactions_count as usize,
+                "canonical block tx index incomplete: block={block_number}, header_count={}, indexed_count={}",
+                header.transactions_count, txs.len());
+            anyhow::ensure!(txs.len() == expected_txs.len(),
+                "canonical block tx count changed before cycles write: block={block_number}, expected={}, actual={}",
+                expected_txs.len(), txs.len());
+            let mut total = 0i64;
+            for (position, ((idx, entry), (expected_idx, expected_hash))) in txs.iter().zip(expected_txs).enumerate() {
+                anyhow::ensure!(*idx == position as i32,
+                    "canonical block tx index gap: block={block_number}, position={position}, index={idx}");
+                anyhow::ensure!(idx == expected_idx && entry.tx_hash == *expected_hash,
+                    "canonical block tx identity changed before cycles write: block={block_number}, index={idx}, expected_index={expected_idx}, expected_hash=0x{}, actual_hash=0x{}",
+                    crate::bytes_to_hex(expected_hash), crate::bytes_to_hex(&entry.tx_hash));
+                if entry.is_cellbase {
+                    anyhow::ensure!(entry.cycles.is_none_or(|cycles| cycles == 0),
+                        "invalid cellbase cycles: block={block_number}, index={idx}, hash=0x{}, cycles={:?}",
+                        crate::bytes_to_hex(&entry.tx_hash), entry.cycles);
+                } else {
+                    let cycles = entry.cycles.ok_or_else(|| anyhow::anyhow!(
+                        "missing non-cellbase tx cycles: block={block_number}, index={idx}, hash=0x{}",
+                        crate::bytes_to_hex(&entry.tx_hash)
+                    ))?;
+                    anyhow::ensure!(cycles >= 0,
+                        "failed non-cellbase tx cycles: block={block_number}, index={idx}, hash=0x{}, cycles={cycles}",
+                        crate::bytes_to_hex(&entry.tx_hash));
+                    total = total.checked_add(cycles).ok_or_else(|| anyhow::anyhow!(
+                        "block cycles total overflow: block={block_number}, index={idx}, running_total={total}, cycles={cycles}"
+                    ))?;
+                }
+            }
+            header.cycles = Some(total);
+            let value = bincode::serialize(&header)?;
+            db.put_cf(self.cf_block_headers(), key, &value)?;
+            Ok(total)
+        })
     }
 
     pub fn get_block_number_by_hash(&self, hash: &[u8]) -> anyhow::Result<Option<i64>> {
@@ -319,6 +360,7 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use crate::batch::StoreBatch;
+    use crate::types::TxIndexEntry;
     use tempfile::tempdir;
 
     fn make_header(block_number: i64) -> CachedBlockHeader {
@@ -340,6 +382,142 @@ mod tests {
             cycles: None,
             chain_time_ms: block_number,
         }
+    }
+
+    #[test]
+    fn block_cycles_require_complete_canonical_non_cellbase_transactions() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut header = make_header(42);
+        header.transactions_count = 2;
+        let hash = header.hash.clone();
+        let cellbase = TxIndexEntry {
+            tx_hash: [1; 32],
+            is_cellbase: true,
+            timestamp: 0,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let tx = TxIndexEntry {
+            tx_hash: [2; 32],
+            is_cellbase: false,
+            timestamp: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(42, &header);
+        batch.put_tx_index(42, 0, &cellbase);
+        batch.put_tx_index(42, 1, &tx);
+        batch.commit().unwrap();
+        let identities = [(0, [1; 32]), (1, [2; 32])];
+        let error = store
+            .update_block_cycles_if_complete(42, &hash, &identities)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("missing non-cellbase"),
+            "{error:#}"
+        );
+        assert_eq!(store.get_block_header(42).unwrap().unwrap().cycles, None);
+
+        let mut completed = tx.clone();
+        completed.cycles = Some(77);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(42, 1, &completed);
+        batch.commit().unwrap();
+        assert_eq!(
+            store
+                .update_block_cycles_if_complete(42, &hash, &identities)
+                .unwrap(),
+            77
+        );
+        assert_eq!(
+            store.get_block_header(42).unwrap().unwrap().cycles,
+            Some(77)
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(
+            42,
+            0,
+            &TxIndexEntry {
+                cycles: Some(5),
+                ..cellbase
+            },
+        );
+        batch.put_tx_index(
+            42,
+            1,
+            &TxIndexEntry {
+                cycles: Some(1),
+                ..tx
+            },
+        );
+        batch.commit().unwrap();
+        let error = store
+            .update_block_cycles_if_complete(42, &hash, &identities)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid cellbase cycles"),
+            "{error:#}"
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(42, 0, &cellbase);
+        batch.put_tx_index(42, 1, &completed);
+        batch.commit().unwrap();
+
+        let replacement = [3; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(
+            42,
+            1,
+            &TxIndexEntry {
+                tx_hash: replacement,
+                ..completed
+            },
+        );
+        batch.commit().unwrap();
+        let error = store
+            .update_block_cycles_if_complete(42, &hash, &identities)
+            .unwrap_err();
+        assert!(error.to_string().contains("identity changed"), "{error:#}");
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(
+            42,
+            0,
+            &TxIndexEntry {
+                is_cellbase: false,
+                cycles: Some(i64::MAX),
+                ..cellbase
+            },
+        );
+        batch.put_tx_index(
+            42,
+            1,
+            &TxIndexEntry {
+                cycles: Some(1),
+                ..tx
+            },
+        );
+        batch.commit().unwrap();
+        let error = store
+            .update_block_cycles_if_complete(42, &hash, &identities)
+            .unwrap_err();
+        assert!(error.to_string().contains("overflow"), "{error:#}");
+        assert_eq!(
+            store.get_block_header(42).unwrap().unwrap().cycles,
+            Some(77)
+        );
     }
 
     #[test]

@@ -568,19 +568,19 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             // (stall detection, queue pressure, progress logging) still runs
             // every 3 s.
             if let Some(memory_stats) = memory_stats.as_ref() {
-                if let (Some(pending), Some(l0), Some(immutable)) = (
-                    memory_stats.compaction_pending_bytes,
+                indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
+                    progress.current(),
+                    progress.target(),
+                    memory_stats
+                        .compaction_pending_bytes
+                        .map(|bytes| bytes / (1024 * 1024)),
                     memory_stats.l0_files_count,
                     memory_stats.immutable_memtables,
-                ) {
-                    indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
-                        progress.current(),
-                        progress.target(),
-                        pending / (1024 * 1024),
-                        l0,
-                        immutable,
-                    );
-                } else {
+                );
+                if memory_stats.compaction_pending_bytes.is_none()
+                    || memory_stats.l0_files_count.is_none()
+                    || memory_stats.immutable_memtables.is_none()
+                {
                     warn!("bulk-sync perf heartbeat lacks complete RocksDB pressure observation");
                 }
 

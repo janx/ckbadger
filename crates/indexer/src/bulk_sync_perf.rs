@@ -108,8 +108,8 @@ pub struct BatchSample {
     pub rocksdb_append_only_compaction_pending_bytes: Option<u64>,
     pub rocksdb_shared_wbm_usage_bytes: u64,
     pub rocksdb_shared_wbm_budget_bytes: u64,
-    pub disk_read_mb: f64,
-    pub disk_write_mb: f64,
+    pub disk_read_mb: Option<f64>,
+    pub disk_write_mb: Option<f64>,
     pub disk_read_mb_s: Option<f64>,
     pub disk_write_mb_s: Option<f64>,
     pub disk_read_iops: Option<f64>,
@@ -139,8 +139,8 @@ impl BatchSample {
         timestamp_utc: String,
         load_avg_1m: impl Into<Option<f64>>,
         mem_available_mb: impl Into<Option<u64>>,
-        disk_read_mb: f64,
-        disk_write_mb: f64,
+        disk_read_mb: impl Into<Option<f64>>,
+        disk_write_mb: impl Into<Option<f64>>,
     ) -> Self {
         Self {
             engine: "pipeline".to_string(),
@@ -213,8 +213,8 @@ impl BatchSample {
             rocksdb_append_only_compaction_pending_bytes: None,
             rocksdb_shared_wbm_usage_bytes: 0,
             rocksdb_shared_wbm_budget_bytes: 0,
-            disk_read_mb,
-            disk_write_mb,
+            disk_read_mb: disk_read_mb.into(),
+            disk_write_mb: disk_write_mb.into(),
             disk_read_mb_s: None,
             disk_write_mb_s: None,
             disk_read_iops: None,
@@ -238,25 +238,25 @@ impl BatchSample {
 pub struct HeartbeatSample {
     pub current_block: u64,
     pub target_block: u64,
-    pub compaction_pending_mb: u64,
-    pub l0_files: u64,
-    pub imm_memtables: u64,
+    pub compaction_pending_mb: Option<u64>,
+    pub l0_files: Option<u64>,
+    pub imm_memtables: Option<u64>,
 }
 
 impl HeartbeatSample {
     pub fn new(
         current_block: u64,
         target_block: u64,
-        compaction_pending_mb: u64,
-        l0_files: u64,
-        imm_memtables: u64,
+        compaction_pending_mb: impl Into<Option<u64>>,
+        l0_files: impl Into<Option<u64>>,
+        imm_memtables: impl Into<Option<u64>>,
     ) -> Self {
         Self {
             current_block,
             target_block,
-            compaction_pending_mb,
-            l0_files,
-            imm_memtables,
+            compaction_pending_mb: compaction_pending_mb.into(),
+            l0_files: l0_files.into(),
+            imm_memtables: imm_memtables.into(),
         }
     }
 }
@@ -480,7 +480,7 @@ impl BulkSyncPerfRun {
             .chain(
                 self.heartbeat_samples
                     .iter()
-                    .map(|sample| Some(sample.compaction_pending_mb)),
+                    .map(|sample| sample.compaction_pending_mb),
             )
             .collect::<Option<Vec<_>>>()
             .and_then(|values| values.into_iter().max());
@@ -488,11 +488,7 @@ impl BulkSyncPerfRun {
             .batch_samples
             .iter()
             .map(|sample| sample.l0_files)
-            .chain(
-                self.heartbeat_samples
-                    .iter()
-                    .map(|sample| Some(sample.l0_files)),
-            )
+            .chain(self.heartbeat_samples.iter().map(|sample| sample.l0_files))
             .collect::<Option<Vec<_>>>()
             .and_then(|values| values.into_iter().max());
         let max_imm_memtables = self
@@ -502,7 +498,7 @@ impl BulkSyncPerfRun {
             .chain(
                 self.heartbeat_samples
                     .iter()
-                    .map(|sample| Some(sample.imm_memtables)),
+                    .map(|sample| sample.imm_memtables),
             )
             .collect::<Option<Vec<_>>>()
             .and_then(|values| values.into_iter().max());
@@ -523,8 +519,12 @@ impl BulkSyncPerfRun {
             .map(|s| s.mem_available_mb)
             .collect::<Option<Vec<u64>>>()
             .and_then(|values| values.into_iter().min());
-        let disk_writes: Vec<f64> = self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
-        let avg_disk_write_mb_per_batch = (!disk_writes.is_empty()).then(|| average(&disk_writes));
+        let disk_writes: Option<Vec<f64>> =
+            self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
+        let avg_disk_write_mb_per_batch = disk_writes
+            .as_ref()
+            .filter(|values| !values.is_empty())
+            .map(|values| average(values));
         let disk_util_pct: Vec<Option<f64>> =
             self.batch_samples.iter().map(|s| s.disk_util_pct).collect();
         let disk_await_ms: Vec<Option<f64>> =
@@ -2588,6 +2588,50 @@ mod tests {
         assert!(metrics.contains("max_load_avg_1m=8.500"));
         assert!(metrics.contains("min_mem_available_mb=60000"));
         assert!(metrics.contains("avg_disk_write_mb_per_batch=300.000"));
+    }
+
+    #[test]
+    fn disk_write_average_requires_every_batch_observation() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        let observed = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        let mut missing = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        missing.disk_read_mb = None;
+        missing.disk_write_mb = None;
+        run.record_batch_sample(observed).unwrap();
+        run.record_batch_sample(missing).unwrap();
+
+        let metrics = run.build_metrics_for_test("completed");
+        assert_eq!(metrics.avg_disk_write_mb_per_batch, None);
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"disk_read_mb\":null"), "{samples}");
+        assert!(samples.contains("\"disk_write_mb\":null"), "{samples}");
+    }
+
+    #[test]
+    fn partial_heartbeat_makes_pressure_diagnosis_inconclusive() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_heartbeat_sample(HeartbeatSample::new(5, 10, None, Some(7), None))
+            .unwrap();
+
+        let metrics = run.build_metrics_for_test("completed");
+        assert_eq!(metrics.max_compaction_pending_mb, None);
+        assert_eq!(metrics.max_l0_files, Some(7));
+        assert_eq!(metrics.max_imm_memtables, None);
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(
+            samples.contains("\"compaction_pending_mb\":null"),
+            "{samples}"
+        );
+        assert!(samples.contains("\"l0_files\":7"), "{samples}");
+        assert!(build_diagnosis(&metrics, None)
+            .iter()
+            .any(|finding| finding.contains("inconclusive")));
     }
 
     #[test]

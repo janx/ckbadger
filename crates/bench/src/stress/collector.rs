@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::metrics::percentile;
+use crate::metrics::SampleFailureKind;
 
 // ---------------------------------------------------------------------------
 // Sample — sent by each VU after every request
@@ -18,8 +19,9 @@ pub struct StressSample {
     pub latency_ms: f64,
     pub status: u16,
     #[allow(dead_code)] // used by report module (Task 6)
-    pub body_size: usize,
+    pub body_size: Option<usize>,
     pub error: Option<String>,
+    pub failure_kind: Option<SampleFailureKind>,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +127,7 @@ impl StageResult {
                 *error_status_codes.entry(s.status).or_insert(0) += 1;
                 if s.status == 429 {
                     rate_limited_count += 1;
-                } else if is_server_error(s.status) {
+                } else if is_server_failure(s) {
                     server_error_count += 1;
                 } else if is_client_error(s.status) {
                     client_error_count += 1;
@@ -170,10 +172,7 @@ impl StageResult {
                 .iter()
                 .filter(|s| s.error.is_some() && s.status != 429)
                 .count();
-            let ep_server_errors = group
-                .iter()
-                .filter(|s| s.error.is_some() && is_server_error(s.status))
-                .count();
+            let ep_server_errors = group.iter().filter(|s| is_server_failure(s)).count();
             let ep_error_rate = if group.is_empty() {
                 0.0
             } else {
@@ -315,6 +314,14 @@ fn is_server_error(status: u16) -> bool {
     status == 0 || (500..600).contains(&status)
 }
 
+fn is_server_failure(sample: &StressSample) -> bool {
+    sample.error.is_some()
+        && (matches!(
+            sample.failure_kind,
+            Some(SampleFailureKind::Transport | SampleFailureKind::BodyRead)
+        ) || is_server_error(sample.status))
+}
+
 /// Client error: 4xx status.
 fn is_client_error(status: u16) -> bool {
     (400..500).contains(&status)
@@ -349,8 +356,9 @@ mod tests {
             read_pattern: pattern.to_string(),
             latency_ms,
             status: if error.is_some() { 500 } else { 200 },
-            body_size: 100,
+            body_size: Some(100),
             error: error.map(|e| e.to_string()),
+            failure_kind: None,
         }
     }
 
@@ -368,8 +376,9 @@ mod tests {
             read_pattern: pattern.to_string(),
             latency_ms,
             status,
-            body_size: 100,
+            body_size: Some(100),
             error: error.map(|e| e.to_string()),
+            failure_kind: None,
         }
     }
 
@@ -533,8 +542,9 @@ mod tests {
             read_pattern: "KeyLookup".to_string(),
             latency_ms,
             status,
-            body_size: 100,
+            body_size: Some(100),
             error,
+            failure_kind: None,
         }
     }
 

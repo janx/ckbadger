@@ -214,11 +214,17 @@ impl CkbadgerStore {
 
     /// Update cycles for a transaction identified by tx hash.
     pub fn update_tx_cycles_by_hash(&self, tx_hash: &[u8], cycles: i64) -> anyhow::Result<()> {
+        let expected_hash: [u8; 32] = tx_hash.try_into().map_err(|_| {
+            anyhow!(
+                "invalid canonical tx hash length for cycles update: {}",
+                tx_hash.len()
+            )
+        })?;
         let (block_num, tx_idx) = self
             .get_tx_location(tx_hash)?
             .ok_or_else(|| anyhow!("transaction location not found"))?;
 
-        self.update_tx_cycles(block_num, tx_idx, cycles)
+        self.update_tx_cycles(block_num, tx_idx, &expected_hash, cycles)
             .with_context(|| {
                 format!(
                     "failed to update tx cycles for block {} tx {}",
@@ -227,33 +233,43 @@ impl CkbadgerStore {
             })
     }
 
-    /// Update cycles for a transaction at a known location.
-    // SAFETY: Called only from the cycles worker after batch commit completes for
-    // the target block. No concurrent batch can write the same tx_index key.
-    pub fn update_tx_cycles(&self, block_num: i64, tx_idx: i32, cycles: i64) -> anyhow::Result<()> {
-        let mut entry = self
-            .get_tx_index(block_num, tx_idx)?
-            .ok_or_else(|| anyhow!("transaction index entry not found"))?;
-        entry.cycles = Some(cycles);
-
-        let key = keys::encode_composite(&[
-            &keys::encode_block_num(block_num),
-            &keys::encode_tx_idx(tx_idx),
-        ]);
-        let value = bincode::serialize(&entry).with_context(|| {
-            format!(
-                "failed to serialize tx index entry {}:{}",
-                block_num, tx_idx
-            )
-        })?;
-
-        self.put_cf(self.cf_tx_index(), &key, &value)
-            .with_context(|| {
-                format!(
-                    "failed to write tx index entry for block {} tx {}",
-                    block_num, tx_idx
-                )
-            })
+    /// Atomically verify canonical identity and persist cycles at a known slot.
+    /// The write gate excludes every domain batch commit, including reorg cleanup.
+    pub fn update_tx_cycles(
+        &self,
+        block_num: i64,
+        tx_idx: i32,
+        expected_hash: &[u8; 32],
+        cycles: i64,
+    ) -> anyhow::Result<()> {
+        self.with_domain_write_gate(|db| {
+            let mapped = self.get_tx_location(expected_hash)?.ok_or_else(|| anyhow!(
+                "canonical tx identity disappeared: hash=0x{}, block={block_num}, index={tx_idx}",
+                bytes_to_hex(expected_hash)
+            ))?;
+            anyhow::ensure!(mapped == (block_num, tx_idx),
+                "canonical tx identity moved: hash=0x{}, expected={block_num}:{tx_idx}, actual={}:{}",
+                bytes_to_hex(expected_hash), mapped.0, mapped.1);
+            let mut entry = self.get_tx_index(block_num, tx_idx)?.ok_or_else(|| anyhow!(
+                "canonical tx index disappeared: hash=0x{}, block={block_num}, index={tx_idx}",
+                bytes_to_hex(expected_hash)
+            ))?;
+            anyhow::ensure!(entry.tx_hash == *expected_hash,
+                "canonical tx identity changed: expected=0x{}, actual=0x{}, block={block_num}, index={tx_idx}",
+                bytes_to_hex(expected_hash), bytes_to_hex(&entry.tx_hash));
+            entry.cycles = Some(cycles);
+            let key = keys::encode_composite(&[
+                &keys::encode_block_num(block_num),
+                &keys::encode_tx_idx(tx_idx),
+            ]);
+            let value = bincode::serialize(&entry).with_context(|| format!(
+                "failed to serialize tx index entry {block_num}:{tx_idx}"
+            ))?;
+            db.put_cf(self.cf_tx_index(), &key, &value).with_context(|| format!(
+                "failed to write canonical tx cycles: hash=0x{}, block={block_num}, index={tx_idx}",
+                bytes_to_hex(expected_hash)
+            ))
+        })
     }
 
     /// List transactions for a block, ordered by tx_index.
@@ -422,6 +438,106 @@ mod tests {
         let tx_hash = [0x22u8; 32];
         let err = store.update_tx_cycles_by_hash(&tx_hash, 9_999).unwrap_err();
         assert!(err.to_string().contains("transaction location not found"));
+    }
+
+    #[test]
+    fn stale_tx_hash_mapping_cannot_overwrite_replacement_at_same_position() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let old_hash = [0x11; 32];
+        let replacement_hash = [0x22; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&old_hash, 12, 1);
+        batch.put_tx_index(
+            12,
+            1,
+            &TxIndexEntry {
+                tx_hash: replacement_hash,
+                is_cellbase: false,
+                timestamp: 0,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().unwrap();
+
+        let error = format!(
+            "{:#}",
+            store.update_tx_cycles_by_hash(&old_hash, 99).unwrap_err()
+        );
+        assert!(error.contains("identity"), "{error}");
+        assert_eq!(store.get_tx_index(12, 1).unwrap().unwrap().cycles, None);
+    }
+
+    #[test]
+    fn cycles_update_waits_for_canonical_batch_and_rechecks_identity() {
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let old_hash = [0x31; 32];
+        let replacement_hash = [0x32; 32];
+        let old_entry = TxIndexEntry {
+            tx_hash: old_hash,
+            is_cellbase: false,
+            timestamp: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let mut initial = StoreBatch::new(&store);
+        initial.put_tx_hash_map(&old_hash, 12, 1);
+        initial.put_tx_index(12, 1, &old_entry);
+        initial.commit().unwrap();
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker_store = Arc::clone(&store);
+        store
+            .with_domain_write_gate(|db| {
+                let worker = std::thread::spawn(move || {
+                    started_tx.send(()).unwrap();
+                    finished_tx
+                        .send(worker_store.update_tx_cycles(12, 1, &old_hash, 99))
+                        .unwrap();
+                });
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                assert!(finished_rx.recv_timeout(Duration::from_millis(30)).is_err());
+                let mut replacement = rocksdb::WriteBatch::default();
+                let key =
+                    keys::encode_composite(&[&keys::encode_block_num(12), &keys::encode_tx_idx(1)]);
+                replacement.put_cf(
+                    store.cf_tx_index(),
+                    key,
+                    bincode::serialize(&TxIndexEntry {
+                        tx_hash: replacement_hash,
+                        ..old_entry
+                    })
+                    .unwrap(),
+                );
+                db.write(replacement)?;
+                // The worker can finish only after this gate is released.
+                drop(worker);
+                Ok(())
+            })
+            .unwrap();
+        let error = finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("identity changed"),
+            "{error:#}"
+        );
+        assert_eq!(store.get_tx_index(12, 1).unwrap().unwrap().cycles, None);
     }
 
     #[test]

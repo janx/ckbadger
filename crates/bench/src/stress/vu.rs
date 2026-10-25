@@ -170,6 +170,7 @@ pub fn spawn_vu(
                         status: sample.status,
                         body_size: sample.body_size,
                         error: sample.error,
+                        failure_kind: sample.failure_kind,
                     }
                 }
                 ResolvedTarget::Frontend { idx, route, url } => {
@@ -189,6 +190,7 @@ pub fn spawn_vu(
                                 status: sample.status,
                                 body_size: sample.body_size,
                                 error: sample.error,
+                                failure_kind: sample.failure_kind,
                             }
                         }
                         Err(e) => StressSample {
@@ -197,8 +199,9 @@ pub fn spawn_vu(
                             read_pattern: "Frontend".to_string(),
                             latency_ms,
                             status: 0,
-                            body_size: 0,
+                            body_size: None,
                             error: Some(e.to_string()),
+                            failure_kind: Some(crate::metrics::SampleFailureKind::Transport),
                         },
                     }
                 }

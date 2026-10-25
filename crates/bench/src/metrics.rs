@@ -2,14 +2,24 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SampleFailureKind {
+    UnexpectedStatus,
+    Transport,
+    BodyRead,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
     pub latency_ms: f64,
     pub status: u16,
-    pub body_size: usize,
+    pub body_size: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<SampleFailureKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +33,7 @@ pub struct ComputedMetrics {
     pub mean_ms: f64,
     pub std_dev_ms: f64,
     pub error_rate: f64,
-    pub avg_body_size: usize,
+    pub avg_body_size: Option<usize>,
     pub throughput_rps: f64,
 }
 
@@ -39,7 +49,7 @@ impl ComputedMetrics {
                 mean_ms: 0.0,
                 std_dev_ms: 0.0,
                 error_rate: 0.0,
-                avg_body_size: 0,
+                avg_body_size: None,
                 throughput_rps: 0.0,
             };
         }
@@ -53,7 +63,13 @@ impl ComputedMetrics {
         let variance = latencies.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / n as f64;
         let std_dev = variance.sqrt();
         let errors = samples.iter().filter(|s| s.error.is_some()).count();
-        let total_body: usize = samples.iter().map(|s| s.body_size).sum();
+        let body_sizes: Option<Vec<usize>> = samples.iter().map(|s| s.body_size).collect();
+        let avg_body_size = body_sizes.as_ref().and_then(|sizes| {
+            sizes
+                .iter()
+                .try_fold(0u128, |total, size| total.checked_add(*size as u128))
+                .and_then(|total| usize::try_from(total / sizes.len() as u128).ok())
+        });
         let wall_secs = wall_clock.as_secs_f64();
         let throughput = if wall_secs > 0.0 {
             n as f64 / wall_secs
@@ -70,7 +86,7 @@ impl ComputedMetrics {
             mean_ms: mean,
             std_dev_ms: std_dev,
             error_rate: errors as f64 / n as f64,
-            avg_body_size: total_body / n,
+            avg_body_size,
             throughput_rps: throughput,
         }
     }
@@ -116,20 +132,23 @@ mod tests {
             Sample {
                 latency_ms: 10.0,
                 status: 200,
-                body_size: 100,
+                body_size: Some(100),
                 error: None,
+                failure_kind: None,
             },
             Sample {
                 latency_ms: 20.0,
                 status: 200,
-                body_size: 200,
+                body_size: Some(200),
                 error: None,
+                failure_kind: None,
             },
             Sample {
                 latency_ms: 30.0,
                 status: 200,
-                body_size: 300,
+                body_size: Some(300),
                 error: None,
+                failure_kind: None,
             },
         ];
         let m = ComputedMetrics::from_samples(&samples, Duration::from_secs(1));
@@ -140,19 +159,56 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_body_cannot_halve_the_reported_average() {
+        let samples = vec![
+            Sample {
+                latency_ms: 1.0,
+                status: 200,
+                body_size: Some(100),
+                error: None,
+                failure_kind: None,
+            },
+            Sample {
+                latency_ms: 1.0,
+                status: 200,
+                body_size: None,
+                error: Some("truncated body".into()),
+                failure_kind: Some(SampleFailureKind::BodyRead),
+            },
+        ];
+        let metrics = ComputedMetrics::from_samples(&samples, Duration::from_secs(1));
+        assert_eq!(metrics.avg_body_size, None);
+    }
+
+    #[test]
+    fn completed_empty_body_is_zero_bytes() {
+        let sample = Sample {
+            latency_ms: 1.0,
+            status: 204,
+            body_size: Some(0),
+            error: None,
+            failure_kind: None,
+        };
+        let metrics = ComputedMetrics::from_samples(&[sample], Duration::from_secs(1));
+        assert_eq!(metrics.avg_body_size, Some(0));
+    }
+
+    #[test]
     fn test_computed_metrics_with_errors() {
         let samples = vec![
             Sample {
                 latency_ms: 10.0,
                 status: 200,
-                body_size: 100,
+                body_size: Some(100),
                 error: None,
+                failure_kind: None,
             },
             Sample {
                 latency_ms: 20.0,
                 status: 500,
-                body_size: 0,
+                body_size: None,
                 error: Some("timeout".to_string()),
+                failure_kind: Some(SampleFailureKind::Transport),
             },
         ];
         let m = ComputedMetrics::from_samples(&samples, Duration::from_secs(1));
@@ -166,7 +222,7 @@ mod tests {
         assert_eq!(m.min_ms, 0.0);
         assert_eq!(m.max_ms, 0.0);
         assert_eq!(m.error_rate, 0.0);
-        assert_eq!(m.avg_body_size, 0);
+        assert_eq!(m.avg_body_size, None);
         assert_eq!(m.throughput_rps, 0.0);
     }
 }

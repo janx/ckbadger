@@ -38,11 +38,6 @@ async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, reque
         entry.message = Some("Polling for requests".to_string());
     });
 
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("failed to build HTTP client for cycles worker");
-
     loop {
         let requests = read_requests(&request_dir).await;
 
@@ -71,9 +66,7 @@ async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, reque
                     processed += 1;
                 }
                 CyclesRequest::Block { number, path } => {
-                    let count =
-                        process_block_request(store.as_ref(), &ckb_rpc_url, &http_client, number)
-                            .await;
+                    let count = process_block_request(store.as_ref(), &ckb_rpc_url, number).await;
                     let _ = tokio::fs::remove_file(&path).await;
                     processed += count;
                 }
@@ -143,17 +136,11 @@ async fn read_requests(dir: &Path) -> Vec<CyclesRequest> {
     requests
 }
 
-/// Expand a block request: find txs with missing cycles, calculate each, then write block total.
-///
+/// Expand a block request using the persisted canonical transaction identities.
 /// Returns the number of individual tx tasks processed.
-async fn process_block_request(
-    store: &CkbadgerStore,
-    ckb_rpc_url: &str,
-    http_client: &reqwest::Client,
-    block_number: u64,
-) -> u64 {
+async fn process_block_request(store: &CkbadgerStore, ckb_rpc_url: &str, block_number: u64) -> u64 {
     let block_num = match i64::try_from(block_number) {
-        Ok(n) => n,
+        Ok(number) => number,
         Err(_) => {
             warn!(
                 "Cycles worker: block_number exceeds i64 range: {}",
@@ -162,188 +149,55 @@ async fn process_block_request(
             return 0;
         }
     };
-
-    // 1. List all txs in this block.
+    let block_header = match store.get_block_header(block_num) {
+        Ok(Some(header)) => header,
+        Ok(None) => {
+            warn!("Cycles worker: canonical block header missing: block={block_number}");
+            return 0;
+        }
+        Err(error) => {
+            warn!("Cycles worker: failed to read block {block_number} header: {error}");
+            return 0;
+        }
+    };
     let block_txs = match store.list_block_txs(block_num) {
         Ok(txs) => txs,
-        Err(e) => {
-            warn!(
-                "Cycles worker: failed to list block txs for block {}: {}",
-                block_number, e
-            );
+        Err(error) => {
+            warn!("Cycles worker: failed to list block {block_number} txs: {error}");
             return 0;
         }
     };
-
-    // 2. Find which txs need cycles (cycles == None and not cellbase).
-    let missing_indices: Vec<i32> = block_txs
+    let expected_txs: Vec<(i32, [u8; 32])> = block_txs
         .iter()
-        .filter(|(_, entry)| entry.cycles.is_none() && !entry.is_cellbase)
-        .map(|(tx_idx, _)| *tx_idx)
+        .map(|(index, entry)| (*index, entry.tx_hash))
         .collect();
-
-    if missing_indices.is_empty() {
-        // All txs already have cycles — compute block total from existing data.
-        let any_negative = block_txs
-            .iter()
-            .any(|(_, entry)| matches!(entry.cycles, Some(c) if c < 0));
-        if any_negative {
-            warn!(
-                "Cycles worker: block {} has failed tx cycles (early exit), skipping block total",
-                block_number
-            );
-        } else {
-            let total: i64 = block_txs.iter().filter_map(|(_, entry)| entry.cycles).sum();
-            if let Err(e) = store.update_block_cycles(block_num, total) {
-                warn!(
-                    "Cycles worker: failed to write block cycles for block {}: {}",
-                    block_number, e
-                );
-            }
-        }
-        return 0;
-    }
-
-    // 3. Fetch block from CKB RPC to get tx hashes.
-    let tx_hashes = match fetch_block_tx_hashes(http_client, ckb_rpc_url, block_number).await {
-        Ok(hashes) => hashes,
-        Err(e) => {
-            warn!(
-                "Cycles worker: failed to fetch block {} tx hashes from RPC: {}",
-                block_number, e
-            );
-            return 0;
-        }
-    };
-
-    // 4. Calculate cycles for each missing tx.
+    let mut processed = 0;
     let mut all_ok = true;
-    let mut count = 0u64;
-
-    for tx_idx in &missing_indices {
-        let idx = *tx_idx as usize;
-        if idx >= tx_hashes.len() {
-            warn!(
-                "Cycles worker: tx_idx {} out of range for block {} (has {} txs from RPC)",
-                tx_idx,
-                block_number,
-                tx_hashes.len()
-            );
-            all_ok = false;
+    for (_, entry) in &block_txs {
+        if entry.is_cellbase || entry.cycles.is_some_and(|cycles| cycles >= 0) {
             continue;
         }
-
-        let tx_hash = &tx_hashes[idx];
-        let result = process_cycles_task(store, ckb_rpc_url, tx_hash).await;
-        count += 1;
-
-        if result.status == CyclesTaskStatus::Failed {
+        let hash = format!("0x{}", hex::encode(entry.tx_hash));
+        let result = process_cycles_task(store, ckb_rpc_url, &hash).await;
+        processed += 1;
+        if result.status != CyclesTaskStatus::Done {
             all_ok = false;
+            warn!(
+                "Cycles worker: block {block_number} tx {hash} cycles unavailable: {:?}",
+                result.error
+            );
         }
     }
-
-    // 5. If all txs succeeded, write block total.
     if all_ok {
-        // Re-read to get updated cycles values.
-        match store.list_block_txs(block_num) {
-            Ok(updated_txs) => {
-                let any_negative = updated_txs
-                    .iter()
-                    .any(|(_, entry)| matches!(entry.cycles, Some(c) if c < 0));
-
-                if any_negative {
-                    warn!(
-                        "Cycles worker: block {} has failed tx cycles, skipping block total",
-                        block_number
-                    );
-                } else {
-                    let total: i64 = updated_txs
-                        .iter()
-                        .filter_map(|(_, entry)| entry.cycles)
-                        .sum();
-                    if let Err(e) = store.update_block_cycles(block_num, total) {
-                        warn!(
-                            "Cycles worker: failed to write block cycles for block {}: {}",
-                            block_number, e
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "Cycles worker: failed to re-read block txs for block {}: {}",
-                    block_number, e
-                );
-            }
+        if let Err(error) =
+            store.update_block_cycles_if_complete(block_num, &block_header.hash, &expected_txs)
+        {
+            warn!(
+                "Cycles worker: cannot publish complete cycles for block {block_number}: {error}"
+            );
         }
     }
-
-    count
-}
-
-/// Fetch tx hashes for a block from the CKB RPC node.
-///
-/// Uses verbosity `0x1` (hex format) and `with_cycles=false` since we only need hashes.
-async fn fetch_block_tx_hashes(
-    client: &reqwest::Client,
-    rpc_url: &str,
-    block_number: u64,
-) -> anyhow::Result<Vec<String>> {
-    let hex_number = format!("0x{:x}", block_number);
-    let body = serde_json::json!({
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "get_block_by_number",
-        "params": [hex_number, "0x2", false]
-    });
-
-    let resp = client
-        .post(rpc_url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("RPC request failed: {}", e))?;
-
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("RPC response parse failed: {}", e))?;
-
-    if let Some(err) = json.get("error") {
-        return Err(anyhow::anyhow!("RPC error: {}", err));
-    }
-
-    parse_block_tx_hashes(&json, block_number)
-}
-
-fn parse_block_tx_hashes(
-    json: &serde_json::Value,
-    block_number: u64,
-) -> anyhow::Result<Vec<String>> {
-    // Verbosity 0x2 returns { header, transactions, uncles, proposals } at result level.
-    let txs = json["result"]["transactions"].as_array().ok_or_else(|| {
-        anyhow::anyhow!("RPC block {block_number} response missing transactions array")
-    })?;
-
-    txs.iter()
-        .enumerate()
-        .map(|(index, tx)| {
-            let hash = tx["hash"].as_str().ok_or_else(|| {
-                anyhow::anyhow!("RPC block {block_number} transaction {index} missing hash")
-            })?;
-            let raw = hash.strip_prefix("0x").ok_or_else(|| {
-                anyhow::anyhow!(
-                    "RPC block {block_number} transaction {index} hash lacks 0x prefix: {hash}"
-                )
-            })?;
-            if raw.len() != 64 || hex::decode(raw).is_err() {
-                anyhow::bail!(
-                    "RPC block {block_number} transaction {index} has invalid hash: {hash}"
-                );
-            }
-            Ok(hash.to_string())
-        })
-        .collect()
+    processed
 }
 
 async fn process_cycles_task(
@@ -352,8 +206,16 @@ async fn process_cycles_task(
     tx_hash: &str,
 ) -> CyclesTaskResult {
     let updated_at = chrono::Utc::now().timestamp();
-    let hash_bytes = match hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)) {
-        Ok(bytes) => bytes,
+    let hash_bytes: [u8; 32] = match hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)) {
+        Ok(bytes) if bytes.len() == 32 => bytes.try_into().expect("validated length"),
+        Ok(bytes) => {
+            return CyclesTaskResult {
+                status: CyclesTaskStatus::Failed,
+                cycles: None,
+                error: Some(format!("invalid tx hash length: {}", bytes.len())),
+                updated_at,
+            };
+        }
         Err(e) => {
             return CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
@@ -385,7 +247,7 @@ async fn process_cycles_task(
     };
 
     if entry.is_cellbase {
-        if let Err(e) = store.update_tx_cycles(block_num, tx_idx, 0) {
+        if let Err(e) = store.update_tx_cycles(block_num, tx_idx, &hash_bytes, 0) {
             return CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
                 cycles: None,
@@ -414,7 +276,7 @@ async fn process_cycles_task(
 
     match ckbadger_common::cycles::calculate_cycles(ckb_rpc_url, tx_hash).await {
         Ok(cycles) => {
-            if let Err(e) = store.update_tx_cycles(block_num, tx_idx, cycles) {
+            if let Err(e) = store.update_tx_cycles(block_num, tx_idx, &hash_bytes, cycles) {
                 return CyclesTaskResult {
                     status: CyclesTaskStatus::Failed,
                     cycles: None,
@@ -431,7 +293,7 @@ async fn process_cycles_task(
         }
         Err(e) => {
             let marker_err = store
-                .update_tx_cycles(block_num, tx_idx, -1)
+                .update_tx_cycles(block_num, tx_idx, &hash_bytes, -1)
                 .err()
                 .map(|write_err| format!(" (failed to persist failure marker: {})", write_err))
                 .unwrap_or_default();
@@ -448,32 +310,53 @@ async fn process_cycles_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ckbadger_store::{StoreBatch, TxIndexEntry};
+    use ckbadger_store::{CachedBlockHeader, StoreBatch, TxIndexEntry};
 
-    #[test]
-    fn rpc_transaction_hashes_require_a_valid_hash_for_every_transaction() {
-        let good = format!("0x{}", "ab".repeat(32));
-        let response = serde_json::json!({
-            "result": {"transactions": [{"hash": good}, {}]}
-        });
-        let error = parse_block_tx_hashes(&response, 123)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("block 123 transaction 1 missing hash"),
-            "{error}"
+    #[tokio::test]
+    async fn block_request_does_not_publish_zero_when_canonical_tx_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let hash = [0x44; 32];
+        let header = CachedBlockHeader {
+            hash: vec![0x42; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(123, &header);
+        batch.put_tx_index(
+            123,
+            0,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp: 1,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
         );
-        let response = serde_json::json!({
-            "result": {"transactions": [{"hash": "0xwrong"}]}
-        });
-        let error = parse_block_tx_hashes(&response, 123)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("invalid hash"), "{error}");
-        let response = serde_json::json!({
-            "result": {"transactions": [{"hash": format!("0x{}", "ab".repeat(32))}]}
-        });
-        assert_eq!(parse_block_tx_hashes(&response, 123).unwrap().len(), 1);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            process_block_request(&store, "http://127.0.0.1:1", 123).await,
+            1
+        );
+        assert_eq!(store.get_block_header(123).unwrap().unwrap().cycles, None);
     }
 
     fn insert_tx_with_cycles(store: &CkbadgerStore, tx_hash: &[u8; 32], cycles: Option<i64>) {

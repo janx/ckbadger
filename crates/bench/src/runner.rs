@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-use crate::metrics::{ComputedMetrics, Sample};
+use crate::metrics::{ComputedMetrics, Sample, SampleFailureKind};
 use crate::registry::{DiscoveredParams, EndpointEntry, Method, ResolvedRequest};
 
 /// Result of benchmarking one endpoint.
@@ -46,15 +46,17 @@ pub async fn sample_response(
         Ok(body) => Sample {
             latency_ms,
             status,
-            body_size: body.len(),
+            body_size: Some(body.len()),
             error: (status != expect_status)
                 .then(|| format!("expected status {}, got {}", expect_status, status)),
+            failure_kind: (status != expect_status).then_some(SampleFailureKind::UnexpectedStatus),
         },
         Err(error) => Sample {
             latency_ms,
             status,
-            body_size: 0,
+            body_size: None,
             error: Some(format!("response body read failed: {error}")),
+            failure_kind: Some(SampleFailureKind::BodyRead),
         },
     }
 }
@@ -88,8 +90,9 @@ pub async fn execute_request(
         Err(e) => Sample {
             latency_ms,
             status: 0,
-            body_size: 0,
+            body_size: None,
             error: Some(e.to_string()),
+            failure_kind: Some(SampleFailureKind::Transport),
         },
     }
 }
@@ -240,10 +243,38 @@ mod tests {
         .await;
         server.await.unwrap();
         assert_eq!(sample.status, 200);
+        assert_eq!(sample.body_size, None);
         assert!(
             sample.error.is_some(),
             "body read error must fail the sample"
         );
+        let stress_sample = crate::stress::collector::StressSample {
+            endpoint_idx: 0,
+            endpoint_path: "/truncated".to_string(),
+            read_pattern: "KeyLookup".to_string(),
+            latency_ms: sample.latency_ms,
+            status: sample.status,
+            body_size: sample.body_size,
+            error: sample.error.clone(),
+            failure_kind: sample.failure_kind,
+        };
+        let baseline =
+            crate::stress::collector::StageResult::from_samples(0, 1, Duration::from_secs(1), &[]);
+        let stage = crate::stress::collector::StageResult::from_samples(
+            1,
+            1,
+            Duration::from_secs(1),
+            &[stress_sample],
+        );
+        assert_eq!(stage.server_error_count, 1);
+        assert_eq!(stage.server_error_rate, 1.0);
+        assert_eq!(
+            crate::stress::collector::detect_degradation(&baseline, &stage),
+            crate::stress::collector::DegradationSignal::HardFailure
+        );
+        let metrics =
+            crate::metrics::ComputedMetrics::from_samples(&[sample], Duration::from_secs(1));
+        assert_eq!(metrics.avg_body_size, None);
     }
 
     #[tokio::test]

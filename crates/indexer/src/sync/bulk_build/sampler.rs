@@ -14,8 +14,8 @@ pub(crate) struct SamplerSnapshot {
     pub imm_memtables: Option<u64>,
     pub load_avg_1m: Option<f64>,
     pub mem_available_mb: Option<u64>,
-    pub disk_read_mb: f64,
-    pub disk_write_mb: f64,
+    pub disk_read_mb: Option<f64>,
+    pub disk_write_mb: Option<f64>,
     #[allow(dead_code)]
     pub disk_read_mb_s: Option<f64>,
     pub disk_write_mb_s: Option<f64>,
@@ -39,8 +39,8 @@ impl Default for SamplerSnapshot {
             imm_memtables: None,
             load_avg_1m: None,
             mem_available_mb: None,
-            disk_read_mb: 0.0,
-            disk_write_mb: 0.0,
+            disk_read_mb: None,
+            disk_write_mb: None,
             disk_read_mb_s: None,
             disk_write_mb_s: None,
             disk_read_iops: None,
@@ -167,8 +167,8 @@ mod tests {
         assert_eq!(snap.compaction_pending_mb, None);
         assert_eq!(snap.load_avg_1m, None);
         assert_eq!(snap.mem_available_mb, None);
-        assert_eq!(snap.disk_read_mb, 0.0);
-        assert_eq!(snap.disk_write_mb, 0.0);
+        assert_eq!(snap.disk_read_mb, None);
+        assert_eq!(snap.disk_write_mb, None);
         assert_eq!(snap.disk_read_mb_s, None);
         assert_eq!(snap.disk_write_mb_s, None);
         assert_eq!(snap.disk_read_iops, None);
