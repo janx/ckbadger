@@ -1313,6 +1313,7 @@ fn publish_completed_round(
             )
             .find_map(addr_ip)
             .map(|ip| geoip.lookup(ip))
+            .transpose()?
             .unwrap_or((None, None));
         let geo = lookup.0.filter(|geo| !geo.country.is_empty());
         next_nodes.insert(

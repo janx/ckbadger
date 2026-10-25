@@ -1354,8 +1354,8 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
         geo: Some(ckbadger_store::Geo {
             country: "US".into(),
             city: "NYC".into(),
-            lat: 0.0,
-            lon: 0.0,
+            lat: Some(0.0),
+            lon: Some(0.0),
         }),
         asn: Some(ckbadger_store::Asn {
             number: 65000,

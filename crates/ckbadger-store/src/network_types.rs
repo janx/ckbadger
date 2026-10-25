@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct Geo {
     pub country: String, // ISO code; never stored empty — use None on the record instead
     pub city: String,
-    pub lat: f64,
-    pub lon: f64,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1678,8 +1678,8 @@ mod tests {
             geo: Some(Geo {
                 country: "US".into(),
                 city: "NYC".into(),
-                lat: 40.0,
-                lon: -74.0,
+                lat: Some(40.0),
+                lon: Some(-74.0),
             }),
             asn: Some(Asn {
                 number: 65000,
