@@ -1,6 +1,57 @@
 mod common;
 use common::*;
 
+#[tokio::test]
+async fn dao_calculator_annualizes_using_header_chain_time_not_block_distance() {
+    const YEAR_MS: i64 = 31_557_600_000;
+    async fn apc_for_span(span_ms: i64) -> serde_json::Value {
+        let store = test_store();
+        let mut batch = StoreBatch::new(store.as_ref());
+        for (number, ar, chain_time_ms) in [
+            (10, 1u64, 1_700_000_000_000),
+            (20, 2u64, 1_700_000_000_000 + span_ms),
+        ] {
+            let mut dao = vec![0u8; 32];
+            dao[8..16].copy_from_slice(&ar.to_le_bytes());
+            batch.put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![number as u8; 32],
+                    parent_hash: vec![0u8; 32],
+                    timestamp: 1_700_000_000_000,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1,
+                    dao,
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(
+            &app,
+            "/dao/calculator?capacity=20000000000&deposit_block=10&withdraw_block=20",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        json
+    }
+
+    let year = apc_for_span(YEAR_MS).await;
+    let half_year = apc_for_span(YEAR_MS / 2).await;
+    let zero = apc_for_span(0).await;
+    assert_eq!(year["apc"], "100.00%");
+    assert_eq!(half_year["apc"], "200.00%");
+    assert!(zero["apc"].is_null());
+}
+
 /// An empty DB has no `dao_latest_stats` singleton yet. That is a startup state
 /// that resolves itself, so it must report 503 `initializing` (the contract the
 /// SPA retries behind its banner) instead of a fault or a fabricated zero row.

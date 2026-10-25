@@ -254,7 +254,7 @@ pub struct CalculatorResponse {
     pub estimated_compensation_ckb: String,
     pub total_withdrawable: String,
     pub total_withdrawable_ckb: String,
-    /// Realized annualized return; absent when the two blocks have the same chain time.
+    /// Realized annualized return; absent for a zero chain-time span or no free capacity.
     pub apc: Option<String>,
 }
 
@@ -976,7 +976,11 @@ async fn calculate_compensation(
 
     let total = capacity + compensation;
 
-    let apc = realized_apc(compensation, free, duration_ms).map_err(ApiError::internal)?;
+    let apc = realized_apc(compensation, free, duration_ms).map_err(|error| {
+        ApiError::internal(format!(
+            "DAO calculator deposit_block={deposit_block} withdraw_block={withdraw_block}: {error}"
+        ))
+    })?;
 
     ok(CalculatorResponse {
         capacity: capacity.to_string(),
