@@ -925,9 +925,6 @@ fn asset_display_name(entry: &CachedAssetEntry) -> String {
 }
 
 fn parse_h_multiplier_ratio(entry: &CachedAssetEntry) -> anyhow::Result<Option<(u128, u128)>> {
-    let (Some(capacity), Some(knowledge)) = (&entry.owned_capacity, &entry.owned_knowledge) else {
-        return Ok(None);
-    };
     let parse = |field: &str, raw: &str| -> anyhow::Result<u128> {
         raw.parse::<u128>().map_err(|error| {
             anyhow::anyhow!(
@@ -937,9 +934,20 @@ fn parse_h_multiplier_ratio(entry: &CachedAssetEntry) -> anyhow::Result<Option<(
             )
         })
     };
-    let capacity = parse("owned_capacity", capacity)?;
-    let knowledge = parse("owned_knowledge", knowledge)?;
-    Ok((knowledge != 0).then_some((capacity, knowledge)))
+    let capacity = entry
+        .owned_capacity
+        .as_deref()
+        .map(|raw| parse("owned_capacity", raw))
+        .transpose()?;
+    let knowledge = entry
+        .owned_knowledge
+        .as_deref()
+        .map(|raw| parse("owned_knowledge", raw))
+        .transpose()?;
+    Ok(match (capacity, knowledge) {
+        (Some(capacity), Some(knowledge)) if knowledge != 0 => Some((capacity, knowledge)),
+        _ => None,
+    })
 }
 
 fn compare_h_multiplier_ratios(
@@ -3242,6 +3250,26 @@ mod tests {
             compare_h_multiplier_ratios(Some((base, base)), Some((base + 1, base))),
             Ordering::Less
         );
+    }
+
+    #[test]
+    fn h_multiplier_rejects_bad_present_data_even_when_other_operand_is_missing() {
+        let mut entry: CachedAssetEntry = serde_json::from_value(serde_json::json!({
+            "id": "0x01", "asset_type": "token", "standard": "udt",
+            "holders_count": 0, "transfers_count": 0, "transfers_24h": 0
+        }))
+        .unwrap();
+        entry.owned_capacity = Some("not-a-number".into());
+        let error = parse_h_multiplier_ratio(&entry).unwrap_err().to_string();
+        assert!(error.contains("owned_capacity") && error.contains("0x01"), "{error}");
+        entry.owned_capacity = None;
+        entry.owned_knowledge = Some("invalid".into());
+        assert!(parse_h_multiplier_ratio(&entry).unwrap_err().to_string().contains("owned_knowledge"));
+        entry.owned_knowledge = None;
+        assert_eq!(parse_h_multiplier_ratio(&entry).unwrap(), None);
+        entry.owned_capacity = Some("42".into());
+        entry.owned_knowledge = Some("0".into());
+        assert_eq!(parse_h_multiplier_ratio(&entry).unwrap(), None);
     }
 
     /// Identity ids contain a colon, so only the first one separates the type.
