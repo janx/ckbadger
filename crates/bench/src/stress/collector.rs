@@ -38,7 +38,7 @@ pub struct EndpointStageMetrics {
     pub p95_ms: f64,
     pub p99_ms: f64,
     pub error_rate: f64,
-    /// Error rate counting only 5xx and network errors (not 4xx).
+    /// Error rate counting 5xx, transport, and body-read failures (not intact 4xx).
     pub server_error_rate: f64,
 }
 
@@ -73,11 +73,11 @@ pub struct StageResult {
     pub p99_ms: f64,
     pub error_rate: f64,
     pub error_count: u64,
-    /// Errors from 5xx responses and network failures (status == 0).
+    /// Errors from 5xx, transport, and body-read failures regardless of status.
     pub server_error_count: u64,
     /// Errors from 4xx responses excluding 429 (test data / client issues).
     pub client_error_count: u64,
-    /// Responses with HTTP 429 Too Many Requests (rate limiting).
+    /// Complete HTTP 429 responses (rate limiting); truncated bodies are server failures.
     pub rate_limited_count: u64,
     /// Server error rate: server_error_count / total_requests.
     pub server_error_rate: f64,
@@ -122,15 +122,14 @@ impl StageResult {
         let mut error_status_codes: HashMap<u16, u64> = HashMap::new();
 
         for s in samples {
-            if s.error.is_some() {
+            if let Some(class) = classify_error(s) {
                 error_count += 1;
                 *error_status_codes.entry(s.status).or_insert(0) += 1;
-                if s.status == 429 {
-                    rate_limited_count += 1;
-                } else if is_server_failure(s) {
-                    server_error_count += 1;
-                } else if is_client_error(s.status) {
-                    client_error_count += 1;
+                match class {
+                    ErrorClass::Server => server_error_count += 1,
+                    ErrorClass::Client => client_error_count += 1,
+                    ErrorClass::RateLimited => rate_limited_count += 1,
+                    ErrorClass::Other => {}
                 }
             }
             if let Some(ref err) = s.error {
@@ -143,8 +142,8 @@ impl StageResult {
             }
         }
 
-        // error_rate excludes rate-limited (429) responses — those are expected
-        // API behavior under load, not failures.
+        // Only complete 429 responses are expected rate limiting. A truncated
+        // 429 body remains a failure, even though its status was received.
         let real_errors = error_count - rate_limited_count;
         let error_rate = if total_requests > 0 {
             real_errors as f64 / total_requests as f64
@@ -170,9 +169,12 @@ impl StageResult {
 
             let ep_errors = group
                 .iter()
-                .filter(|s| s.error.is_some() && s.status != 429)
+                .filter(|s| matches!(classify_error(s), Some(class) if class != ErrorClass::RateLimited))
                 .count();
-            let ep_server_errors = group.iter().filter(|s| is_server_failure(s)).count();
+            let ep_server_errors = group
+                .iter()
+                .filter(|s| classify_error(s) == Some(ErrorClass::Server))
+                .count();
             let ep_error_rate = if group.is_empty() {
                 0.0
             } else {
@@ -309,17 +311,34 @@ fn serialize_duration_secs<S: serde::Serializer>(d: &Duration, s: S) -> Result<S
     s.serialize_f64(d.as_secs_f64())
 }
 
-/// Server error: 5xx status or network failure (status == 0).
+/// Server error: 5xx status or transport failure (status == 0).
 fn is_server_error(status: u16) -> bool {
     status == 0 || (500..600).contains(&status)
 }
 
-fn is_server_failure(sample: &StressSample) -> bool {
-    sample.error.is_some()
-        && (matches!(
-            sample.failure_kind,
-            Some(SampleFailureKind::Transport | SampleFailureKind::BodyRead)
-        ) || is_server_error(sample.status))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorClass {
+    Server,
+    Client,
+    RateLimited,
+    Other,
+}
+
+fn classify_error(sample: &StressSample) -> Option<ErrorClass> {
+    sample.error.as_ref()?;
+    if matches!(
+        sample.failure_kind,
+        Some(SampleFailureKind::Transport | SampleFailureKind::BodyRead)
+    ) || is_server_error(sample.status)
+    {
+        Some(ErrorClass::Server)
+    } else if sample.status == 429 {
+        Some(ErrorClass::RateLimited)
+    } else if is_client_error(sample.status) {
+        Some(ErrorClass::Client)
+    } else {
+        Some(ErrorClass::Other)
+    }
 }
 
 /// Client error: 4xx status.

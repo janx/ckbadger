@@ -278,6 +278,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncated_429_is_a_server_failure_but_complete_429_is_rate_limited() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for response in [
+                &b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 20\r\nConnection: close\r\n\r\nshort"[..],
+                &b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"[..],
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket.write_all(response).await.unwrap();
+            }
+        });
+        let client = reqwest::Client::new();
+        let resolved = ResolvedRequest {
+            url: format!("http://{address}/rate-limited"),
+            method: Method::Get,
+            body: None,
+        };
+        let truncated = execute_request(&client, &resolved, 200).await;
+        let complete = execute_request(&client, &resolved, 200).await;
+        server.await.unwrap();
+        assert_eq!(truncated.status, 429);
+        assert_eq!(truncated.failure_kind, Some(SampleFailureKind::BodyRead));
+        assert_eq!(truncated.body_size, None);
+        assert_eq!(complete.status, 429);
+        assert_eq!(
+            complete.failure_kind,
+            Some(SampleFailureKind::UnexpectedStatus)
+        );
+        assert_eq!(complete.body_size, Some(5));
+
+        let into_stress = |sample: Sample| crate::stress::collector::StressSample {
+            endpoint_idx: 0,
+            endpoint_path: "/rate-limited".to_string(),
+            read_pattern: "KeyLookup".to_string(),
+            latency_ms: sample.latency_ms,
+            status: sample.status,
+            body_size: sample.body_size,
+            error: sample.error,
+            failure_kind: sample.failure_kind,
+        };
+        let baseline =
+            crate::stress::collector::StageResult::from_samples(0, 1, Duration::from_secs(1), &[]);
+        let broken = crate::stress::collector::StageResult::from_samples(
+            1,
+            1,
+            Duration::from_secs(1),
+            &[into_stress(truncated)],
+        );
+        let endpoint = &broken.per_endpoint[&0];
+        assert_eq!(broken.error_count, 1);
+        assert_eq!(broken.server_error_count, 1);
+        assert_eq!(broken.rate_limited_count, 0);
+        assert_eq!(broken.error_rate, 1.0);
+        assert_eq!(broken.server_error_rate, 1.0);
+        assert_eq!(endpoint.error_rate, 1.0);
+        assert_eq!(endpoint.server_error_rate, 1.0);
+        assert_eq!(
+            crate::stress::collector::detect_degradation(&baseline, &broken),
+            crate::stress::collector::DegradationSignal::HardFailure
+        );
+
+        let limited = crate::stress::collector::StageResult::from_samples(
+            1,
+            1,
+            Duration::from_secs(1),
+            &[into_stress(complete)],
+        );
+        let endpoint = &limited.per_endpoint[&0];
+        assert_eq!(limited.error_count, 1);
+        assert_eq!(limited.server_error_count, 0);
+        assert_eq!(limited.rate_limited_count, 1);
+        assert_eq!(limited.error_rate, 0.0);
+        assert_eq!(limited.server_error_rate, 0.0);
+        assert_eq!(endpoint.error_rate, 0.0);
+        assert_eq!(endpoint.server_error_rate, 0.0);
+    }
+
+    #[tokio::test]
     async fn test_bench_endpoint_skip_on_unresolvable() {
         let client = reqwest::Client::new();
         let entry = EndpointEntry {
