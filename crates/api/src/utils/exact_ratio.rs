@@ -4,22 +4,54 @@ pub fn format_ratio(numerator: i128, denominator: i128, decimals: u32) -> Result
     if numerator < 0 || denominator <= 0 {
         return Err(format!("invalid ratio {numerator}/{denominator}"));
     }
-    let scale = 10u128
-        .checked_pow(decimals)
-        .ok_or_else(|| format!("decimal scale 10^{decimals} exceeds u128"))?;
-    let scaled = (numerator as u128).checked_mul(scale).ok_or_else(|| {
-        format!("ratio {numerator}/{denominator} at {decimals} decimals overflows u128")
-    })?;
-    let rounded = ckbadger_common::work::rounded_ratio(scaled, denominator as u128)
-        .map_err(str::to_string)?;
-    if decimals == 0 {
-        Ok(rounded.to_string())
+    if decimals > 18 {
+        return Err(format!("unsupported ratio precision {decimals}"));
+    }
+    let divisor = denominator as u128;
+    let mut whole = numerator as u128 / divisor;
+    let mut remainder = numerator as u128 % divisor;
+    let mut digits = Vec::with_capacity(decimals as usize);
+    for _ in 0..decimals {
+        // Ten modular additions produce one decimal digit without ever
+        // multiplying a large numerator or denominator.
+        let prior_remainder = remainder;
+        let mut next_remainder = 0u128;
+        let mut digit = 0u8;
+        for _ in 0..10 {
+            if next_remainder >= divisor - prior_remainder {
+                next_remainder -= divisor - prior_remainder;
+                digit += 1;
+            } else {
+                next_remainder += prior_remainder;
+            }
+        }
+        digits.push(digit);
+        remainder = next_remainder;
+    }
+    if remainder >= divisor / 2 + divisor % 2 {
+        let mut carry = true;
+        for digit in digits.iter_mut().rev() {
+            if *digit == 9 {
+                *digit = 0;
+            } else {
+                *digit += 1;
+                carry = false;
+                break;
+            }
+        }
+        if carry {
+            whole += 1;
+        }
+    }
+    if digits.is_empty() {
+        Ok(whole.to_string())
     } else {
         Ok(format!(
-            "{}.{:0width$}",
-            rounded / scale,
-            rounded % scale,
-            width = decimals as usize
+            "{whole}.{}",
+            digits
+                .into_iter()
+                .map(|digit| char::from(b'0' + digit))
+                .collect::<String>()
         ))
     }
 }
@@ -48,6 +80,14 @@ mod tests {
         assert_eq!(format_ratio(1, 8, 2).unwrap(), "0.13");
         assert_eq!(format_ratio(0, 8, 4).unwrap(), "0.0000");
         assert_eq!(format_ratio(3, 2, 0).unwrap(), "2");
+        assert_eq!(
+            format_ratio(i128::MAX, 1, 2).unwrap(),
+            format!("{}.00", i128::MAX)
+        );
+        assert_eq!(
+            format_ratio(i128::MAX - 1, i128::MAX, 6).unwrap(),
+            "1.000000"
+        );
         assert!(format_ratio(1, 0, 2).is_err());
         assert!(format_ratio(-1, 2, 2).is_err());
     }
