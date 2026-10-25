@@ -179,22 +179,16 @@ pub fn spawn_vu(
 
                     match result {
                         Ok(response) => {
-                            let status = response.status().as_u16();
-                            let body_bytes = response.bytes().await.unwrap_or_default();
-                            let body_size = body_bytes.len();
-                            let error = if status != 200 {
-                                Some(format!("expected status 200, got {}", status))
-                            } else {
-                                None
-                            };
+                            let sample =
+                                crate::runner::sample_response(response, 200, latency_ms).await;
                             StressSample {
                                 endpoint_idx: *idx,
                                 endpoint_path: route.clone(),
                                 read_pattern: "Frontend".to_string(),
-                                latency_ms,
-                                status,
-                                body_size,
-                                error,
+                                latency_ms: sample.latency_ms,
+                                status: sample.status,
+                                body_size: sample.body_size,
+                                error: sample.error,
                             }
                         }
                         Err(e) => StressSample {

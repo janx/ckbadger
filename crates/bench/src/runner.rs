@@ -34,6 +34,31 @@ pub struct RunConfig {
     pub warmup: u32,
 }
 
+/// Read the whole response before counting a request as successful. A truncated
+/// HTTP body may arrive after a valid status line and must fail the sample.
+pub async fn sample_response(
+    response: reqwest::Response,
+    expect_status: u16,
+    latency_ms: f64,
+) -> Sample {
+    let status = response.status().as_u16();
+    match response.bytes().await {
+        Ok(body) => Sample {
+            latency_ms,
+            status,
+            body_size: body.len(),
+            error: (status != expect_status)
+                .then(|| format!("expected status {}, got {}", expect_status, status)),
+        },
+        Err(error) => Sample {
+            latency_ms,
+            status,
+            body_size: 0,
+            error: Some(format!("response body read failed: {error}")),
+        },
+    }
+}
+
 /// Execute a single HTTP request and record a `Sample`.
 pub async fn execute_request(
     client: &reqwest::Client,
@@ -59,23 +84,7 @@ pub async fn execute_request(
     let latency_ms = latency.as_secs_f64() * 1000.0;
 
     match result {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let body_bytes = response.bytes().await.unwrap_or_default();
-            let body_size = body_bytes.len();
-            let error = if status != expect_status {
-                Some(format!("expected status {}, got {}", expect_status, status))
-            } else {
-                None
-            };
-
-            Sample {
-                latency_ms,
-                status,
-                body_size,
-                error,
-            }
-        }
+        Ok(response) => sample_response(response, expect_status, latency_ms).await,
         Err(e) => Sample {
             latency_ms,
             status: 0,
@@ -202,6 +211,40 @@ mod duration_millis {
 mod tests {
     use super::*;
     use crate::registry;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn truncated_success_body_is_a_failed_sample() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\nshort",
+                )
+                .await
+                .unwrap();
+        });
+        let sample = execute_request(
+            &reqwest::Client::new(),
+            &ResolvedRequest {
+                url: format!("http://{address}/truncated"),
+                method: Method::Get,
+                body: None,
+            },
+            200,
+        )
+        .await;
+        server.await.unwrap();
+        assert_eq!(sample.status, 200);
+        assert!(
+            sample.error.is_some(),
+            "body read error must fail the sample"
+        );
+    }
 
     #[tokio::test]
     async fn test_bench_endpoint_skip_on_unresolvable() {
