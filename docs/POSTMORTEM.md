@@ -3517,7 +3517,7 @@ still before midnight. Meanwhile the bulk indexer already sealed activity bucket
 median-time watermark (`bulk_build/mod.rs`), so the API and the indexer held two different
 definitions of "complete".
 
-**Current status**: The median-time completion rule and raw-time day assignment below were superseded by STATS-017's monotone chain-time bucket rule. This section records the earlier fix and its limits.
+**Current status**: Resolved by STATS-017. The median-time completion rule, raw-time day assignment, and open DAO defect described below are historical; current writers, rollback, and API completion all use the persisted monotone chain-time bucket rule. This section records the earlier fix and why it was superseded.
 
 **Fix**: one definition for the API and the bulk sealer, `ckbadger_common::stats_bucket`: a bucket (an hour or a
 UTC+8 day) is complete when its end is at or below the median time of the newest 37 indexed blocks
@@ -3541,7 +3541,7 @@ UTC+8 day) is complete when its end is at or below the median time of the newest
   rollover replaces them at once. Regression:
   `test_daily_chart_cache_drops_a_day_that_a_rollback_reopened` (a real `rollback_to_block`).
 
-**Not routed, open defect (review B)**: the live DAO daily-snapshot writer (`sync/batch.rs`,
+**Historical defect later resolved by STATS-017 (review B)**: the live DAO daily-snapshot writer (`sync/batch.rs`,
 `completed_dao_snapshot_boundaries`) still treats every date in a batch except the newest as
 complete. That is correct only while timestamps never step back across midnight, and it is wrong
 when one does. Take block N dated D following block N−1 dated D+1:
