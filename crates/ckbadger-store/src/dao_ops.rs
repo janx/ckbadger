@@ -465,29 +465,14 @@ impl CkbadgerStore {
         end_block: i64,
         end_ar: u64,
     ) -> anyhow::Result<DaoHistoricalState> {
-        let mut state = DaoHistoricalState::default();
-        let mut depositors = HashSet::new();
-        self.scan_dao_deposits(|outpoint, entry| {
-            if entry.deposit_block_number <= end_block {
-                let requested = entry.withdraw_request_block
-                    .is_some_and(|block| block <= end_block);
-                if !requested {
-                    state.total_deposited = state.total_deposited
-                        .checked_add(i128::from(entry.capacity))
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "historical DAO deposited capacity overflow at block {end_block}: outpoint=0x{}",
-                            bytes_to_hex(outpoint)
-                        ))?;
-                    depositors.insert(entry.lock_script_hash.clone());
-                }
-            }
-            let contribution = dao_compensation_for_entry_at(entry, end_block, end_ar)?;
-            add_dao_compensation(&mut state.compensation, contribution, end_block).map_err(|e|
-                anyhow::anyhow!("{e}: outpoint=0x{}", bytes_to_hex(outpoint)))?;
-            Ok(())
-        })?;
-        state.depositors_count = depositors.len();
-        Ok(state)
+        let (_, historical) = self.compute_dao_observations_at_with_staged(
+            end_block,
+            end_ar,
+            Some((end_block, end_ar)),
+            &StagedDaoEntries::new(),
+            &StagedDaoCompletions::new(),
+        )?;
+        Ok(historical.expect("historical observation was requested"))
     }
     fn load_dao_entry_for_index(
         &self,
@@ -743,10 +728,84 @@ impl CkbadgerStore {
         staged_entries: &StagedDaoEntries,
         staged_completions: &StagedDaoCompletions,
     ) -> anyhow::Result<DaoCompensationBreakdown> {
+        Ok(self
+            .compute_dao_observations_at_with_staged(
+                end_block,
+                end_ar,
+                None,
+                staged_entries,
+                staged_completions,
+            )?
+            .0)
+    }
+
+    /// Compute current and historical exact DAO views from one committed
+    /// lifecycle scan. Both observations use the same per-entry calculator;
+    /// the historical view additionally counts still-active deposits and
+    /// distinct depositors at its block.
+    pub fn compute_dao_compensation_and_historical_state_at(
+        &self,
+        end_block: i64,
+        end_ar: u64,
+        historical_block: i64,
+        historical_ar: u64,
+    ) -> anyhow::Result<(DaoCompensationBreakdown, DaoHistoricalState)> {
+        let (current, historical) = self.compute_dao_observations_at_with_staged(
+            end_block,
+            end_ar,
+            Some((historical_block, historical_ar)),
+            &StagedDaoEntries::new(),
+            &StagedDaoCompletions::new(),
+        )?;
+        Ok((
+            current,
+            historical.expect("historical observation was requested"),
+        ))
+    }
+
+    fn compute_dao_observations_at_with_staged(
+        &self,
+        end_block: i64,
+        end_ar: u64,
+        historical: Option<(i64, u64)>,
+        staged_entries: &StagedDaoEntries,
+        staged_completions: &StagedDaoCompletions,
+    ) -> anyhow::Result<(DaoCompensationBreakdown, Option<DaoHistoricalState>)> {
         let mut total = DaoCompensationBreakdown::default();
-        let mut accumulate = |entry: &DaoDepositCacheEntry| -> anyhow::Result<()> {
+        let mut historical = historical
+            .map(|(block, ar)| (block, ar, DaoHistoricalState::default(), HashSet::new()));
+        let mut accumulate = |outpoint: &[u8],
+                              entry: &DaoDepositCacheEntry|
+         -> anyhow::Result<()> {
             let contribution = dao_compensation_for_entry_at(entry, end_block, end_ar)?;
-            add_dao_compensation(&mut total, contribution, end_block)
+            add_dao_compensation(&mut total, contribution, end_block)?;
+            if let Some((block, ar, state, depositors)) = historical.as_mut() {
+                if entry.deposit_block_number <= *block
+                    && !entry
+                        .withdraw_request_block
+                        .is_some_and(|request| request <= *block)
+                {
+                    state.total_deposited = state
+                        .total_deposited
+                        .checked_add(i128::from(entry.capacity))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                            "historical DAO deposited capacity overflow at block {}: outpoint=0x{}",
+                            block,
+                            bytes_to_hex(outpoint)
+                        )
+                        })?;
+                    depositors.insert(entry.lock_script_hash.clone());
+                }
+                let historical_contribution = if *block == end_block && *ar == end_ar {
+                    contribution
+                } else {
+                    dao_compensation_for_entry_at(entry, *block, *ar)?
+                };
+                add_dao_compensation(&mut state.compensation, historical_contribution, *block)
+                    .map_err(|e| anyhow::anyhow!("{e}: outpoint=0x{}", bytes_to_hex(outpoint)))?;
+            }
+            Ok(())
         };
 
         // A withdraw request and its completion CAN fall in one batch: the
@@ -778,9 +837,9 @@ impl CkbadgerStore {
                 completions_observed += 1;
                 let completed =
                     dao_entry_with_staged_completion(entry, *withdraw_block, withdraw_tx)?;
-                return accumulate(&completed);
+                return accumulate(key, &completed);
             }
-            accumulate(entry)
+            accumulate(key, entry)
         })?;
         if completions_observed != staged_completions.len() {
             anyhow::bail!(
@@ -790,10 +849,14 @@ impl CkbadgerStore {
                 end_block
             );
         }
-        for entry in staged_entries.values() {
-            accumulate(entry)?;
+        for (outpoint, entry) in staged_entries {
+            accumulate(outpoint, entry)?;
         }
-        Ok(total)
+        let historical = historical.map(|(_, _, mut state, depositors)| {
+            state.depositors_count = depositors.len();
+            state
+        });
+        Ok((total, historical))
     }
 
     /// Number of DAO lifecycle entries currently at `status`, counted from the
@@ -1237,6 +1300,45 @@ mod tests {
         let completed = store.compute_dao_historical_state_at(30, 99_999).unwrap();
         assert_eq!(completed.compensation.claimed, 15_80000000);
         assert_eq!(completed.compensation.unclaimed, 0);
+    }
+
+    #[test]
+    fn combined_tip_and_baseline_observation_matches_independent_exact_views() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(&keys::encode_outpoint(&[0xA1; 32], 0), &lifecycle_entry());
+        let mut active = lifecycle_entry();
+        active.status = 0;
+        active.withdraw_request_tx = None;
+        active.withdraw_request_output_index = None;
+        active.withdraw_request_block = None;
+        active.withdraw_request_ar = None;
+        active.withdraw_block = None;
+        active.withdraw_tx = None;
+        active.withdraw_request_occupied_capacity = None;
+        active.withdraw_to_output_index = None;
+        active.compensation = None;
+        batch.put_dao_deposit(&keys::encode_outpoint(&[0xA2; 32], 0), &active);
+        batch.commit().unwrap();
+
+        let (tip, baseline) = store
+            .compute_dao_compensation_and_historical_state_at(30, 12_000, 15, 10_500)
+            .unwrap();
+        assert_eq!(
+            tip,
+            store
+                .compute_dao_compensation_breakdown_at(30, 12_000)
+                .unwrap()
+        );
+        assert_eq!(
+            baseline,
+            store.compute_dao_historical_state_at(15, 10_500).unwrap()
+        );
+        assert_eq!(baseline.total_deposited, 600_00000000);
+        assert_eq!(baseline.depositors_count, 1);
+        assert_eq!(tip.claimed, 15_80000000);
+        assert_eq!(tip.unclaimed, 31_60000000);
     }
 
     /// Real mainnet vector: deposit consumed by phase-1 at block 6012563,

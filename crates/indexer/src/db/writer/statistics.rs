@@ -107,6 +107,34 @@ struct ExactDaoSnapshotCompensation {
 }
 
 impl ExactDaoSnapshotCompensation {
+    fn from_breakdown(
+        breakdown: DaoCompensationBreakdown,
+        secondary_pool: i128,
+        observation_block: i64,
+    ) -> Result<Self> {
+        let total = breakdown.total().ok_or_else(|| {
+            anyhow!(
+                "DAO total compensation overflow at observation block {}: claimed={}, unclaimed={}",
+                observation_block,
+                breakdown.claimed,
+                breakdown.unclaimed
+            )
+        })?;
+        let treasury = breakdown
+            .treasury(secondary_pool)
+            .with_context(|| format!("at observation block {observation_block}"))?;
+        let frozen_phase1 = breakdown
+            .frozen_phase1()
+            .with_context(|| format!("at observation block {observation_block}"))?;
+        Ok(Self {
+            breakdown,
+            total,
+            treasury,
+            frozen_phase1,
+            secondary_pool,
+        })
+    }
+
     #[cfg(test)]
     fn apply_to_input(self, input: &mut DaoSnapshotInput) {
         input.total_compensation = self.breakdown.claimed;
@@ -1190,6 +1218,7 @@ impl BatchWriter {
     /// Exact DAO lifecycle values at `observation_block`, observing deposit
     /// mutations staged in an uncommitted batch. Post-commit callers pass empty
     /// overlays.
+    #[cfg(test)]
     fn exact_dao_snapshot_compensation_with_staged(
         &self,
         observation_block: i64,
@@ -1206,28 +1235,7 @@ impl BatchWriter {
                 staged_entries,
                 staged_completions,
             )?;
-        let total = breakdown.total().ok_or_else(|| {
-            anyhow!(
-                "DAO total compensation overflow at observation block {}: claimed={}, unclaimed={}",
-                observation_block,
-                breakdown.claimed,
-                breakdown.unclaimed
-            )
-        })?;
-        let treasury = breakdown
-            .treasury(secondary_pool)
-            .with_context(|| format!("at observation block {observation_block}"))?;
-        let frozen_phase1 = breakdown
-            .frozen_phase1()
-            .with_context(|| format!("at observation block {observation_block}"))?;
-
-        Ok(ExactDaoSnapshotCompensation {
-            breakdown,
-            total,
-            treasury,
-            frozen_phase1,
-            secondary_pool,
-        })
+        ExactDaoSnapshotCompensation::from_breakdown(breakdown, secondary_pool, observation_block)
     }
 
     /// Refresh the DAO singleton statistics and verify the tip daily row.
@@ -1375,12 +1383,56 @@ impl BatchWriter {
                 })?;
         }
 
-        let exact_tip = self.exact_dao_snapshot_compensation_with_staged(
-            tip_block_number,
-            tip_ar,
+        let cutoff_chain_time_ms =
+            header
+                .chain_time_ms
+                .checked_sub(86_400_000)
+                .ok_or_else(|| {
+                    anyhow!(
+                "DAO 24h cutoff underflow at tip block {tip_block_number}: chain_time_ms={}",
+                header.chain_time_ms
+            )
+                })?;
+        let baseline_observation = match self
+            .store
+            .find_last_block_at_or_before_chain_time_ms(cutoff_chain_time_ms)?
+        {
+            None => None,
+            Some(block_number) => {
+                let baseline_header = self.store.get_block_header(block_number)?.ok_or_else(|| {
+                        anyhow!("missing DAO 24h baseline header at block {block_number}, tip={tip_block_number}")
+                    })?;
+                let ar = extract_ar_from_dao_field(&baseline_header.dao).ok_or_else(|| {
+                    anyhow!(
+                        "invalid DAO field at 24h baseline block {block_number}: dao_len={}",
+                        baseline_header.dao.len()
+                    )
+                })?;
+                Some((block_number, ar))
+            }
+        };
+        let (breakdown, baseline_state) = match baseline_observation {
+            Some((block_number, ar)) => {
+                let (current, historical) = self
+                    .store
+                    .compute_dao_compensation_and_historical_state_at(
+                        tip_block_number,
+                        tip_ar,
+                        block_number,
+                        ar,
+                    )?;
+                (current, Some(historical))
+            }
+            None => (
+                self.store
+                    .compute_dao_compensation_breakdown_at(tip_block_number, tip_ar)?,
+                None,
+            ),
+        };
+        let exact_tip = ExactDaoSnapshotCompensation::from_breakdown(
+            breakdown,
             i128::from(tip_s),
-            &HashMap::new(),
-            &HashMap::new(),
+            tip_block_number,
         )?;
         let total_compensation_paid = exact_tip.breakdown.claimed;
         let unclaimed_compensation = exact_tip.breakdown.unclaimed;
@@ -1422,29 +1474,9 @@ impl BatchWriter {
 
         let total_depositors = i32::try_from(unique_depositors.len())
             .context("DAO depositor count exceeds i32 at latest tip")?;
-        let cutoff_chain_time_ms =
-            header
-                .chain_time_ms
-                .checked_sub(86_400_000)
-                .ok_or_else(|| {
-                    anyhow!(
-                    "DAO 24h cutoff underflow at tip block {tip_block_number}: chain_time_ms={}",
-                    header.chain_time_ms
-                )
-                })?;
-        let rolling_24h = match self
-            .store
-            .find_last_block_at_or_before_chain_time_ms(cutoff_chain_time_ms)?
-        {
-            None => None,
-            Some(baseline_block_number) => {
-                let baseline_header = self.store.get_block_header(baseline_block_number)?
-                    .ok_or_else(|| anyhow!("missing DAO 24h baseline header at block {baseline_block_number}, tip={tip_block_number}"))?;
-                let baseline_ar = extract_ar_from_dao_field(&baseline_header.dao)
-                    .ok_or_else(|| anyhow!("invalid DAO field at 24h baseline block {baseline_block_number}: dao_len={}", baseline_header.dao.len()))?;
-                let baseline = self
-                    .store
-                    .compute_dao_historical_state_at(baseline_block_number, baseline_ar)?;
+        let rolling_24h = match (baseline_observation, baseline_state) {
+            (None, None) => None,
+            (Some((baseline_block_number, _)), Some(baseline)) => {
                 let baseline_depositors = i32::try_from(baseline.depositors_count)
                     .context("DAO baseline depositor count exceeds i32")?;
                 Some(DaoRolling24h {
@@ -1460,6 +1492,7 @@ impl BatchWriter {
                         .ok_or_else(|| anyhow!("DAO 24h unclaimed compensation delta overflow at tip {tip_block_number}"))?,
                 })
             }
+            _ => unreachable!("baseline observation and result are paired"),
         };
 
         let latest = DaoLatestStatistics {

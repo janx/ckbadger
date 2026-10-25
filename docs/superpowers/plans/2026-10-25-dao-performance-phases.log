@@ -1,0 +1,16 @@
+   Compiling ckbadger-indexer v0.8.2 (/home/f0rk/projects/ckbadger/.worktrees/dao-perf-current/crates/indexer)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.32s
+     Running unittests src/lib.rs (target/debug/deps/ckbadger_indexer-d244bd0a1728f67f)
+
+running 1 test
+DAO_PHASE header_keys=2 status_scan_ms=50.793901 exact_ms=63.619372 rolling_ms=68.774878 post_ms=0.381970
+DAO_PHASE header_keys=2 status_scan_ms=51.362532 exact_ms=65.898398 rolling_ms=71.867938 post_ms=0.414752
+DAO_PHASE header_keys=2 status_scan_ms=46.445635 exact_ms=73.004941 rolling_ms=77.438888 post_ms=0.454015
+DAO_PHASE header_keys=2 status_scan_ms=46.744669 exact_ms=63.536125 rolling_ms=67.546944 post_ms=0.439098
+DAO_PHASE header_keys=2 status_scan_ms=46.455244 exact_ms=62.592446 rolling_ms=66.603056 post_ms=0.276781
+DAO_PHASE header_keys=2 status_scan_ms=45.603037 exact_ms=64.736367 rolling_ms=80.372907 post_ms=0.386508
+DAO_PHASE header_keys=2 status_scan_ms=57.009915 exact_ms=73.668111 rolling_ms=78.884101 post_ms=0.287502
+DAO_PERF entries=8192 mixed=true runs=4 capacity=81920000000000 free=40140800000000 unclaimed=40140800000000 claimed=40140800000000 refresh_ms=[178.507139, 176.177598, 191.385471, 210.02236499999998] snapshot_ms=[74.386895, 73.44094299999999, 73.41457299999999, 73.342908]
+test db::writer::statistics::tests::test_dao_perf_nonempty_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1776 filtered out; finished in 2.33s
