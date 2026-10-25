@@ -3413,12 +3413,12 @@ fn build_controller_column_lines(
     let mut lines = controller_panel_lines(bb, dense_panel, deltas);
 
     // Overlap timeline (moved from draw_overlap_column)
-    let build_ms = bb.build_ms.unwrap_or(0.0);
-    let prefetch_recv_ms = bb.prefetch_recv_ms.unwrap_or(0.0);
-    let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
-    let fetch_ms = bb.fetch_ms.unwrap_or(0.0);
-    let flush_ms = bb.flush_ms.unwrap_or(0.0);
-    let batch_count = bb.batch_count.unwrap_or(0);
+    let Some(((build_ms, prefetch_recv_ms), flush_wait_ms)) =
+        bb.build_ms.zip(bb.prefetch_recv_ms).zip(bb.flush_wait_ms)
+    else {
+        lines.push(Line::from("Overlap —"));
+        return lines;
+    };
     let iteration_ms = build_ms + prefetch_recv_ms + flush_wait_ms;
     let wait_ms = prefetch_recv_ms + flush_wait_ms;
 
@@ -3445,7 +3445,12 @@ fn build_controller_column_lines(
 
         lines.push(Line::from(vec![
             Span::styled(
-                format!("Batch #{} ", batch_count),
+                format!(
+                    "Batch #{} ",
+                    bb.batch_count
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "—".to_string())
+                ),
                 Style::default().fg(FOREGROUND),
             ),
             Span::styled(
@@ -3462,18 +3467,19 @@ fn build_controller_column_lines(
             format!(" {:.0}ms", build_ms)
         };
 
-        if show_build_subphases {
-            let sub_phases: &[(f64, Color)] = &[
-                (bb.facts_ms.unwrap_or(0.0), AMBER),
-                (bb.resolve_ms.unwrap_or(0.0), Color::Magenta),
-                (bb.reduce_ms.unwrap_or(0.0), Color::Blue),
-                (bb.history_ms.unwrap_or(0.0), TERMINAL_GREEN),
-                (bb.address_reduce_ms.unwrap_or(0.0), CYAN),
-                (bb.activity_stats_ms.unwrap_or(0.0), FOREGROUND),
-            ];
+        let sub_phases = [
+            (bb.facts_ms, AMBER),
+            (bb.resolve_ms, Color::Magenta),
+            (bb.reduce_ms, Color::Blue),
+            (bb.history_ms, TERMINAL_GREEN),
+            (bb.address_reduce_ms, CYAN),
+            (bb.activity_stats_ms, FOREGROUND),
+        ];
+        if show_build_subphases && sub_phases.iter().all(|(duration, _)| duration.is_some()) {
             let mut spans = vec![Span::styled("Build", Style::default().fg(AMBER))];
             let mut offset = 0.0;
-            for &(dur, color) in sub_phases {
+            for &(duration, color) in &sub_phases {
+                let dur = duration.expect("all subphase durations checked above");
                 let s = col(offset);
                 let e = col(offset + dur);
                 let len = e.saturating_sub(s);
@@ -3508,11 +3514,14 @@ fn build_controller_column_lines(
                 ));
             }
             spans.push(Span::styled(cpu_annotation, Style::default().fg(SLATE_500)));
+            if show_build_subphases {
+                spans.push(Span::styled(" subphases —", Style::default().fg(SLATE_500)));
+            }
             lines.push(Line::from(spans));
         }
 
         // I/O row
-        {
+        if let (Some(fetch_ms), Some(flush_ms)) = (bb.fetch_ms, bb.flush_ms) {
             let fetch_cols = col(fetch_ms.min(iteration_ms));
             let (flush_start, flush_end) = if flush_wait_ms > 0.5 {
                 (col((iteration_ms - flush_ms).max(0.0)), col(iteration_ms))
@@ -3555,6 +3564,8 @@ fn build_controller_column_lines(
                 spans.push(Span::styled("ms", Style::default().fg(SLATE_500)));
             }
             lines.push(Line::from(spans));
+        } else {
+            lines.push(Line::from("I/O  —"));
         }
     }
 
@@ -4922,14 +4933,7 @@ fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("OOM ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format!(
-                    "{}/{}",
-                    format_num_u64(diag.heartbeat_oom_events.unwrap_or(0)),
-                    format_num_u64(diag.heartbeat_oom_kill_events.unwrap_or(0))
-                ),
-                Style::default().fg(AMBER),
-            ),
+            Span::styled(runtime_oom_text(diag), Style::default().fg(AMBER)),
             Span::styled("  (events/kill)", Style::default().fg(SLATE_500)),
         ]),
         Line::from(vec![
@@ -4965,6 +4969,18 @@ fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
     }
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn runtime_oom_text(diag: &RuntimeDiagData) -> String {
+    let events = diag
+        .heartbeat_oom_events
+        .map(format_num_u64)
+        .unwrap_or_else(|| "—".to_string());
+    let kills = diag
+        .heartbeat_oom_kill_events
+        .map(format_num_u64)
+        .unwrap_or_else(|| "—".to_string());
+    format!("{events}/{kills}")
 }
 
 fn api_health_state(info: &ApiServiceInfo) -> (&'static str, Color) {
@@ -8018,6 +8034,53 @@ mod tests {
     fn iteration_budget_readout_distinguishes_missing_from_zero() {
         assert_eq!(super::iteration_budget_value(None), "—");
         assert_eq!(super::iteration_budget_value(Some(0.0)), "0");
+    }
+
+    #[test]
+    fn runtime_oom_readout_keeps_missing_counters_unknown() {
+        let diag = RuntimeDiagData::default();
+        assert_eq!(super::runtime_oom_text(&diag), "—/—");
+    }
+
+    #[test]
+    fn overlap_timeline_requires_complete_observations() {
+        let bb = BulkBuildProgressData {
+            build_ms: Some(3000.0),
+            ..Default::default()
+        };
+        let text = build_controller_column_lines(&bb, false, None, true, 80)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            text.contains("Overlap —"),
+            "missing waits became zero: {text}"
+        );
+        assert!(
+            !text.contains("wall 3.0s"),
+            "incomplete wall time was fabricated: {text}"
+        );
+    }
+
+    #[test]
+    fn overlap_subphase_bar_does_not_replace_missing_stage_with_zero() {
+        let bb = BulkBuildProgressData {
+            build_ms: Some(3000.0),
+            prefetch_recv_ms: Some(100.0),
+            flush_wait_ms: Some(50.0),
+            facts_ms: Some(100.0),
+            ..Default::default()
+        };
+        let text = build_controller_column_lines(&bb, false, None, true, 80)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            text.contains("subphases —"),
+            "missing stage became zero: {text}"
+        );
     }
 
     #[test]
