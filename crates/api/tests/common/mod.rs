@@ -978,6 +978,9 @@ pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) 
         321,
         0,
         &TxIndexEntry {
+            tx_hash: tx_hash
+                .try_into()
+                .expect("fixture transaction hash is 32 bytes"),
             is_cellbase: false,
             timestamp: 1_700_000_123_456,
             inputs_count: 1,
@@ -1044,6 +1047,7 @@ pub fn seed_committed_activity(
         block_number,
         tx_index,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp,
             inputs_count: 1,

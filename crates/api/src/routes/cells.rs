@@ -5186,6 +5186,7 @@ mod tests {
         let canonical_tx_old = vec![0x10; 32];
 
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,

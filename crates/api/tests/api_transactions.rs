@@ -2,6 +2,148 @@ mod common;
 use common::*;
 
 #[tokio::test]
+async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
+    let store = test_store();
+    let hash = [0xA7u8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        7,
+        &CachedBlockHeader {
+            hash: vec![0xB7; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1e083126,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_hash_map(&hash, 7, 0);
+    batch.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash: hash,
+            is_cellbase: true,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/transactions?block_number=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["hash"], format!("0x{}", hex::encode(hash)));
+}
+
+#[tokio::test]
+async fn block_transaction_list_rejects_missing_indexed_header() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash: [0xA7; 32],
+            is_cellbase: true,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/transactions?block_number=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn block_transaction_list_rejects_invalid_stored_timestamp() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        7,
+        &CachedBlockHeader {
+            hash: vec![0xB7; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1e083126,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash: [0xA7; 32],
+            is_cellbase: true,
+            timestamp: i64::MAX,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/transactions?block_number=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn test_transaction_detail_returns_pending_mempool_transaction() {
     let store = test_store();
     // The tx-output builder reads `baseline.virtual_occupied` once per request
@@ -739,6 +881,9 @@ fn seed_lifecycle_fixture(
         commit_block,
         0,
         &TxIndexEntry {
+            tx_hash: tx_hash
+                .try_into()
+                .expect("fixture transaction hash is 32 bytes"),
             is_cellbase: false,
             timestamp: 1_700_000_000_000 + commit_block,
             inputs_count: 1,
@@ -1193,6 +1338,7 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
         block_number,
         0,
         &TxIndexEntry {
+            tx_hash,
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 3,
@@ -1346,6 +1492,7 @@ fn seed_tx_awaiting_cycles(store: &Arc<CkbadgerStore>, tx_hash: &[u8; 32], cycle
         321,
         1,
         &TxIndexEntry {
+            tx_hash: *tx_hash,
             is_cellbase: false,
             timestamp: 1_700_000_123_456,
             inputs_count: 1,

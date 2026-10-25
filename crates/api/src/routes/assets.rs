@@ -3292,6 +3292,7 @@ mod tests {
         let canonical_tx_old = vec![0x10; 32];
 
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -3335,11 +3336,24 @@ mod tests {
                 AssetAction::Mint,
             ),
         );
-        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
-        domain_batch.put_tx_index(20, 0, &tx_index);
-        domain_batch.put_tx_index(10, 0, &tx_index);
+        domain_batch.put_tx_index(
+            20,
+            0,
+            &TxIndexEntry {
+                tx_hash: canonical_tx_new.as_slice().try_into().unwrap(),
+                ..tx_index.clone()
+            },
+        );
+        domain_batch.put_tx_index(
+            10,
+            0,
+            &TxIndexEntry {
+                tx_hash: canonical_tx_old.as_slice().try_into().unwrap(),
+                ..tx_index
+            },
+        );
         domain_batch.put_block_header(30, &make_header(0x30));
         domain_batch.put_block_header(20, &make_header(0x20));
         domain_batch.put_block_header(10, &make_header(0x10));
@@ -3397,6 +3411,7 @@ mod tests {
         let tx_hash = vec![0x55; 32];
 
         let tx_index = TxIndexEntry {
+            tx_hash: tx_hash.as_slice().try_into().unwrap(),
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,

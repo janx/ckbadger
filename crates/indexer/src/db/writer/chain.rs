@@ -68,6 +68,7 @@ impl BatchWriter {
 
         for tx in txs {
             let entry = TxIndexEntry {
+                tx_hash: tx.hash,
                 is_cellbase: tx.is_cellbase,
                 timestamp: tx.timestamp.timestamp_millis(),
                 inputs_count: tx.inputs_count,

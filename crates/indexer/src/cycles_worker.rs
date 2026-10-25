@@ -483,6 +483,7 @@ mod tests {
             123,
             0,
             &TxIndexEntry {
+                tx_hash: *tx_hash,
                 is_cellbase: false,
                 timestamp: 1_700_000_000_000,
                 inputs_count: 1,

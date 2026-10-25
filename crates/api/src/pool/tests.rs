@@ -596,6 +596,7 @@ async fn test_committed_record_is_kept_until_the_store_has_indexed_it() {
         4_242,
         0,
         &TxIndexEntry {
+            tx_hash: [0x01; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,

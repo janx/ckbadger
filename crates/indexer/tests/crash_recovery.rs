@@ -48,6 +48,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
 
 fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
     TxIndexEntry {
+        tx_hash: [0u8; 32],
         is_cellbase,
         timestamp: 1_600_000_000,
         inputs_count: if is_cellbase { 0 } else { 1 },

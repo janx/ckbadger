@@ -5346,6 +5346,7 @@ mod tests {
             block_num,
             tx_idx,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: false,
                 timestamp: 1_700_000_000 + block_num,
                 inputs_count: 1,
@@ -7081,6 +7082,7 @@ mod tests {
         };
 
         let block1_tx = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header1.timestamp,
             inputs_count: 1,
@@ -7091,6 +7093,7 @@ mod tests {
             semantic_tags: 0,
         };
         let block2_tx_a = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 3,
@@ -7101,6 +7104,7 @@ mod tests {
             semantic_tags: 0,
         };
         let block2_tx_b = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 2,
@@ -7563,6 +7567,7 @@ mod tests {
         };
 
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -7720,6 +7725,7 @@ mod tests {
             1,
             0,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: true,
                 timestamp: header1.timestamp,
                 inputs_count: 0,
@@ -7734,6 +7740,7 @@ mod tests {
             2,
             0,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: true,
                 timestamp: header2.timestamp,
                 inputs_count: 0,
@@ -7748,6 +7755,7 @@ mod tests {
             2,
             1,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: false,
                 timestamp: header2.timestamp,
                 inputs_count: 1,
@@ -7946,6 +7954,7 @@ mod tests {
             chain_time_ms: 1_700_000_000_000 + i64::from(n) * 10_000,
         };
         let cellbase_index = |timestamp: i64| TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: true,
             timestamp,
             inputs_count: 0,
@@ -8360,6 +8369,7 @@ mod tests {
         };
 
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -9158,6 +9168,7 @@ mod tests {
         };
 
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -9306,6 +9317,7 @@ mod tests {
         let keep_tx = vec![0x11; 32];
         let drop_tx = vec![0x22; 32];
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -9373,6 +9385,7 @@ mod tests {
         let keep_tx = vec![0x11; 32];
         let drop_tx = vec![0x22; 32];
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -9453,6 +9466,7 @@ mod tests {
 
         let cellbase_tx = vec![0x22; 32];
         let tx_index = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: true,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -11187,6 +11201,7 @@ mod tests {
                 b,
                 0,
                 &TxIndexEntry {
+                    tx_hash: [0u8; 32],
                     is_cellbase: true,
                     timestamp: base_ts_ms + b * 3_600_000,
                     inputs_count: 0,
@@ -11202,6 +11217,7 @@ mod tests {
                 b,
                 1,
                 &TxIndexEntry {
+                    tx_hash: [0u8; 32],
                     is_cellbase: false,
                     timestamp: base_ts_ms + b * 3_600_000,
                     inputs_count: 2,

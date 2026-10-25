@@ -14,6 +14,7 @@ async fn test_address_activities_reads_from_store() {
         10,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -99,6 +100,7 @@ async fn address_activities_response(
         88,
         1,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_123,
             inputs_count: 1,
@@ -389,6 +391,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         88,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_888_000,
             inputs_count: 1,
@@ -539,6 +542,7 @@ async fn test_latest_activities_return_type_calls() {
         99,
         1,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_999,
             inputs_count: 1,
@@ -610,6 +614,7 @@ async fn test_global_activities_basic() {
         200,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -651,6 +656,7 @@ async fn test_address_transactions_reads_from_derived_store() {
         10,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -756,6 +762,7 @@ fn seed_activity_with_txs_count(
         10,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -863,6 +870,7 @@ async fn test_address_activities_omits_total_for_missing_addr_balance() {
         10,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -1264,6 +1272,7 @@ fn seed_named_tx(
         block_number,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -1704,6 +1713,7 @@ async fn address_transactions_missing_block_header_is_a_500_naming_the_block() {
         4242,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,

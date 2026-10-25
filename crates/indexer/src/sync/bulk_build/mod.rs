@@ -4238,6 +4238,7 @@ fn build_history_rows_for_block(
             stags |= semantic_tag_to_bit(input.semantic_tag);
         }
         let entry = TxIndexEntry {
+            tx_hash: tx.hash,
             is_cellbase: tx.is_cellbase,
             timestamp: tx.timestamp_ms,
             inputs_count: tx.inputs_count,
@@ -7945,6 +7946,7 @@ mod tests {
     #[test]
     fn test_bincode_serialize_presized_small_struct() {
         let entry = TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1710000000000,
             inputs_count: 3,

@@ -53,9 +53,14 @@ impl CkbadgerStore {
         tx_hash: &[u8],
     ) -> anyhow::Result<Option<(i64, i32, TxIndexEntry)>> {
         if let Some((block_num, tx_idx)) = self.get_tx_location(tx_hash)? {
-            if let Some(entry) = self.get_tx_index(block_num, tx_idx)? {
-                return Ok(Some((block_num, tx_idx, entry)));
-            }
+            let entry = self.get_tx_index(block_num, tx_idx)?.ok_or_else(|| anyhow!(
+                "tx_hash_map points to missing tx_index: hash=0x{}, block={block_num}, index={tx_idx}",
+                bytes_to_hex(tx_hash)
+            ))?;
+            anyhow::ensure!(entry.tx_hash.as_slice() == tx_hash,
+                "tx_hash_map/index hash mismatch: requested=0x{}, indexed=0x{}, block={block_num}, index={tx_idx}",
+                bytes_to_hex(tx_hash), bytes_to_hex(&entry.tx_hash));
+            return Ok(Some((block_num, tx_idx, entry)));
         }
         Ok(None)
     }
@@ -128,9 +133,19 @@ impl CkbadgerStore {
                             e
                         )
                     })?;
+                    anyhow::ensure!(
+                        entry.tx_hash.as_slice() == tx_hashes[out_idx].as_slice(),
+                        "tx_hash_map/index hash mismatch: requested=0x{}, indexed=0x{}",
+                        bytes_to_hex(&tx_hashes[out_idx]),
+                        bytes_to_hex(&entry.tx_hash)
+                    );
                     tx_entries.insert(out_idx, entry);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    let (block_num, tx_idx) =
+                        locations[out_idx].expect("location recorded for present index");
+                    return Err(anyhow!("tx_hash_map points to missing tx_index: hash=0x{}, block={block_num}, index={tx_idx}", bytes_to_hex(&tx_hashes[out_idx])));
+                }
                 Err(e) => {
                     return Err(anyhow!(
                         "rocksdb multi_get failed while reading tx_index in get_txs_by_hash_batch: tx_hash=0x{}, error={}",
@@ -379,6 +394,7 @@ mod tests {
             block_num,
             tx_idx,
             &TxIndexEntry {
+                tx_hash,
                 is_cellbase: false,
                 timestamp: 1_700_000_000_000,
                 inputs_count: 1,
@@ -395,6 +411,7 @@ mod tests {
 
         let (_, _, updated) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
         assert_eq!(updated.cycles, Some(12_345));
+        assert_eq!(updated.tx_hash, tx_hash);
     }
 
     #[test]
@@ -408,6 +425,41 @@ mod tests {
     }
 
     #[test]
+    fn tx_hash_map_cannot_resolve_a_different_indexed_transaction() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let requested = [0x11u8; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&requested, 7, 0);
+        batch.put_tx_index(
+            7,
+            0,
+            &TxIndexEntry {
+                tx_hash: [0x22; 32],
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 1,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().unwrap();
+        assert!(store
+            .get_tx_by_hash(&requested)
+            .unwrap_err()
+            .to_string()
+            .contains("hash mismatch"));
+        assert!(store
+            .get_txs_by_hash_batch(&[requested.to_vec()])
+            .unwrap_err()
+            .to_string()
+            .contains("hash mismatch"));
+    }
+
+    #[test]
     fn test_get_txs_by_hash_batch_reads_multiple_entries() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -417,6 +469,7 @@ mod tests {
         let tx_hash_missing = [0x33u8; 32];
 
         let entry_a = TxIndexEntry {
+            tx_hash: tx_hash_a,
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,
@@ -427,6 +480,7 @@ mod tests {
             semantic_tags: 0,
         };
         let entry_b = TxIndexEntry {
+            tx_hash: tx_hash_b,
             is_cellbase: false,
             timestamp: 1_700_000_000_111,
             inputs_count: 2,
@@ -492,6 +546,7 @@ mod tests {
                 block_num,
                 i,
                 &TxIndexEntry {
+                    tx_hash: [0u8; 32],
                     is_cellbase: i == 0,
                     timestamp: 1_700_000_000_000,
                     inputs_count: 1,
@@ -547,6 +602,7 @@ mod tests {
                 block_num,
                 i,
                 &TxIndexEntry {
+                    tx_hash: [0u8; 32],
                     is_cellbase: i == 0,
                     timestamp: 1_700_000_000_000,
                     inputs_count: 1,
@@ -597,6 +653,7 @@ mod tests {
             200,
             3,
             &TxIndexEntry {
+                tx_hash,
                 is_cellbase: false,
                 timestamp: 1_700_000_000_000,
                 inputs_count: 1,

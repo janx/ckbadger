@@ -1598,6 +1598,7 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
         11,
         0,
         &ckbadger_store::types::TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_000_011,
             inputs_count: 1,

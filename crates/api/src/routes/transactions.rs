@@ -7,9 +7,11 @@ use ckb_store_reader::RpcTransactionView;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration as StdDuration;
 use tokio::time::Instant;
 
+#[cfg(test)]
 use crate::cache::InMemoryCache;
 use crate::consensus::ProposalWindow;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
@@ -30,7 +32,7 @@ use std::convert::Infallible;
 use tracing::instrument;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
-type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry, Vec<u8>);
+type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry);
 type TxIoBundle = (
     Vec<TransactionInputResponse>,
     Vec<TransactionOutputResponse>,
@@ -56,6 +58,7 @@ struct PendingTxIoBundle {
     witnesses_available: bool,
     dotcell_names: Vec<DotCellNameWitnessResponse>,
 }
+#[cfg(test)]
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 
 /// A transaction's size as CKB counts it: the molecule size plus the 4-byte
@@ -163,23 +166,21 @@ fn derive_cycles_status(cycles: Option<i64>, is_cellbase: bool) -> Option<String
     }
 }
 
-/// Helper: get all tx hashes in a block from the CKB node's RocksDB.
-fn get_block_tx_hashes_from_ckb_store(
-    ckb_store: &Option<Arc<ckb_store_reader::CkbChainReader>>,
-    block_num: i64,
-) -> Option<Vec<Vec<u8>>> {
-    let store = ckb_store.as_ref()?;
-    let block_hash_bytes = store.get_block_hash(block_num as u64)?;
-    let block = store.get_block(&block_hash_bytes)?;
-    Some(
-        block
-            .transactions()
-            .into_iter()
-            .map(|tx| tx.hash().raw_data().to_vec())
-            .collect(),
-    )
+fn required_tx_timestamp(
+    timestamp_ms: i64,
+    block_number: i64,
+    tx_index: i32,
+) -> Result<String, ApiRouteError> {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|timestamp| timestamp.to_rfc3339())
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+            "transaction block={block_number} index={tx_index} has invalid timestamp {timestamp_ms}"
+        ))
+        })
 }
 
+#[cfg(test)]
 fn tx_hash_from_prefetched_hashes(
     block_tx_hashes: &Option<Vec<Vec<u8>>>,
     tx_idx: i32,
@@ -188,10 +189,12 @@ fn tx_hash_from_prefetched_hashes(
     block_tx_hashes.as_ref()?.get(idx).cloned()
 }
 
+#[cfg(test)]
 fn tx_block_hashes_cache_key(block_num: i64) -> String {
     format!("transactions:block_tx_hashes:{block_num}")
 }
 
+#[cfg(test)]
 fn get_block_tx_hashes_cached_with_fetch<F>(
     mem_cache: &InMemoryCache,
     block_num: i64,
@@ -209,16 +212,6 @@ where
     Some(fetched)
 }
 
-fn get_block_tx_hashes_cached(
-    mem_cache: &InMemoryCache,
-    ckb_store: &Option<Arc<ckb_store_reader::CkbChainReader>>,
-    block_num: i64,
-) -> Option<Vec<Vec<u8>>> {
-    get_block_tx_hashes_cached_with_fetch(mem_cache, block_num, |bn| {
-        get_block_tx_hashes_from_ckb_store(ckb_store, bn)
-    })
-}
-
 async fn list_transactions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
@@ -234,32 +227,47 @@ async fn list_transactions(
         .transpose()?;
 
     // Get total count
-    let total: i64 = if let Some(block_number) = block_number {
-        let store = state.store.clone();
-        tokio::task::spawn_blocking(move || {
-            store
+    let (total, selected_block_hash): (i64, Option<Vec<u8>>) =
+        if let Some(block_number) = block_number {
+            match state
+                .store
                 .get_block_header(block_number)
-                .map(|header| header.map(|h| h.transactions_count as i64).unwrap_or(0))
-        })
-        .await
-        .map_err(|e| ApiError::internal(format!("block header lookup failed: {}", e)))?
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "block header unavailable for block_number={}: {}",
-                block_number, e
-            ))
-        })?
-    } else {
-        state
-            .store
-            .get_sync_status()
-            .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
-            .total_transactions
-    };
+                .map_err(|error| {
+                    ApiError::internal(format!("block {block_number} header read: {error}"))
+                })? {
+                Some(header) => (i64::from(header.transactions_count), Some(header.hash)),
+                None => {
+                    let has_index = !state
+                        .store
+                        .list_block_txs_after(block_number, -1, 1)
+                        .map_err(|error| {
+                            ApiError::internal(format!(
+                                "block {block_number} transaction index read: {error}"
+                            ))
+                        })?
+                        .is_empty();
+                    if has_index {
+                        return Err(ApiError::internal(format!(
+                            "block {block_number} transaction index exists without header"
+                        )));
+                    }
+                    return Err(ApiError::not_found(format!(
+                        "block {block_number} not found"
+                    )));
+                }
+            }
+        } else {
+            (
+                state
+                    .store
+                    .get_sync_status()
+                    .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
+                    .total_transactions,
+                None,
+            )
+        };
 
     let store = state.store.clone();
-    let ckb_store = state.ckb_store.clone();
-    let mem_cache = state.mem_cache.clone();
 
     if let Some(block_number) = block_number {
         // List transactions for a specific block (ascending order)
@@ -270,30 +278,15 @@ async fn list_transactions(
         let fetch_limit = (limit + 1) as usize;
 
         let store_c = store.clone();
-        let ckb_store_c = ckb_store.clone();
-        let mem_cache_c = mem_cache.clone();
-        let (page_txs, block_tx_hashes) = tokio::task::spawn_blocking(move || {
-            let page_txs = store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)?;
-            let block_tx_hashes =
-                get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, block_number);
-            Ok::<_, anyhow::Error>((page_txs, block_tx_hashes))
+        let page_txs = tokio::task::spawn_blocking(move || {
+            store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
         // Get block hash for responses
-        let store_c = store.clone();
-        let block_hash = tokio::task::spawn_blocking(move || {
-            store_c
-                .get_block_header(block_number)
-                .ok()
-                .flatten()
-                .map(|h| h.hash)
-                .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default();
+        let block_hash = selected_block_hash.expect("block filter established header");
 
         let has_more = page_txs.len() as i64 > limit;
         let page: Vec<_> = page_txs.into_iter().take(limit as usize).collect();
@@ -307,16 +300,12 @@ async fn list_transactions(
 
         let txs: Vec<TransactionResponse> = page
             .into_iter()
-            .map(|(tx_idx, entry)| {
-                let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
-                    .map(|h| format!("0x{}", hex::encode(&h)))
-                    .unwrap_or_else(|| "0x".to_string());
+            .map(|(tx_idx, entry)| -> Result<_, ApiRouteError> {
+                let tx_hash = format!("0x{}", hex::encode(entry.tx_hash));
 
-                let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default();
+                let timestamp = required_tx_timestamp(entry.timestamp, block_number, tx_idx)?;
 
-                TransactionResponse {
+                Ok(TransactionResponse {
                     hash: tx_hash,
                     block_number,
                     block_hash: format!("0x{}", hex::encode(&block_hash)),
@@ -329,9 +318,9 @@ async fn list_transactions(
                     cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                     is_cellbase: entry.is_cellbase,
                     timestamp,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
     } else {
@@ -340,8 +329,6 @@ async fn list_transactions(
         let (cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
 
         let store_c = store.clone();
-        let ckb_store_c = ckb_store.clone();
-        let mem_cache_c = mem_cache.clone();
         let fetch_limit = (limit + 1) as usize;
 
         let txs_result =
@@ -377,12 +364,8 @@ async fn list_transactions(
                         } else {
                             store_c.list_block_txs(*block_num)?
                         };
-                        let block_tx_hashes =
-                            get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, *block_num);
                         for (tx_idx, entry) in block_txs.into_iter().rev() {
-                            let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
-                                .unwrap_or_default();
-                            results.push((*block_num, header.hash.clone(), tx_idx, entry, tx_hash));
+                            results.push((*block_num, header.hash.clone(), tx_idx, entry));
                             if results.len() >= fetch_limit {
                                 break;
                             }
@@ -403,38 +386,34 @@ async fn list_transactions(
 
         let next_cursor = if has_more {
             page.last()
-                .map(|(block_num, _, tx_idx, _, _)| encode_cursor(*block_num, *tx_idx))
+                .map(|(block_num, _, tx_idx, _)| encode_cursor(*block_num, *tx_idx))
         } else {
             None
         };
 
         let txs: Vec<TransactionResponse> = page
             .into_iter()
-            .map(|(block_num, block_hash, tx_idx, entry, tx_hash)| {
-                let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default();
+            .map(
+                |(block_num, block_hash, tx_idx, entry)| -> Result<_, ApiRouteError> {
+                    let timestamp = required_tx_timestamp(entry.timestamp, block_num, tx_idx)?;
 
-                TransactionResponse {
-                    hash: if tx_hash.is_empty() {
-                        "0x".to_string()
-                    } else {
-                        format!("0x{}", hex::encode(&tx_hash))
-                    },
-                    block_number: block_num,
-                    block_hash: format!("0x{}", hex::encode(&block_hash)),
-                    index: tx_idx,
-                    inputs_count: entry.inputs_count as i32,
-                    outputs_count: entry.outputs_count as i32,
-                    fee: entry.fee.to_string(),
-                    tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
-                    cycles: entry.cycles,
-                    cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
-                    is_cellbase: entry.is_cellbase,
-                    timestamp,
-                }
-            })
-            .collect();
+                    Ok(TransactionResponse {
+                        hash: format!("0x{}", hex::encode(entry.tx_hash)),
+                        block_number: block_num,
+                        block_hash: format!("0x{}", hex::encode(&block_hash)),
+                        index: tx_idx,
+                        inputs_count: entry.inputs_count as i32,
+                        outputs_count: entry.outputs_count as i32,
+                        fee: entry.fee.to_string(),
+                        tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
+                        cycles: entry.cycles,
+                        cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
+                        is_cellbase: entry.is_cellbase,
+                        timestamp,
+                    })
+                },
+            )
+            .collect::<Result<_, _>>()?;
 
         ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
     }

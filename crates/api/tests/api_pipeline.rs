@@ -284,6 +284,7 @@ fn put_block_rows(batch: &mut StoreBatch, chain: &FixtureChain, number: u64, see
             number as i64,
             index as i32,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: index == 0 && seed.no_cellbase != Some(number),
                 timestamp: block.timestamp() as i64,
                 inputs_count: 1,

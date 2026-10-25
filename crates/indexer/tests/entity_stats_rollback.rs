@@ -1752,6 +1752,7 @@ async fn startup_cleanup_below_coverage_floor_fails_fast() {
         3_001,
         0,
         &ckbadger_store::types::TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: true,
             timestamp: TS_DAY,
             inputs_count: 0,

@@ -296,6 +296,8 @@ pub struct CachedBlockHeader {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxIndexEntry {
+    /// Canonical transaction identity for this (block number, transaction index).
+    pub tx_hash: [u8; 32],
     pub is_cellbase: bool,
     pub timestamp: i64,
     pub inputs_count: i16,

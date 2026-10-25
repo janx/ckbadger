@@ -1212,6 +1212,7 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
         300,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_753_000_000,
             inputs_count: 0,
@@ -1227,6 +1228,7 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
         400,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_753_000_100,
             inputs_count: 1,
@@ -1318,6 +1320,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         100,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -1333,6 +1336,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         200,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -1677,6 +1681,7 @@ async fn test_assets_bit_cell_item_activities() {
         100,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -1692,6 +1697,7 @@ async fn test_assets_bit_cell_item_activities() {
         200,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -2345,6 +2351,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         100,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -2360,6 +2367,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         200,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -2375,6 +2383,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 1,
@@ -2698,6 +2707,7 @@ async fn test_assets_nft_item_activities_mnft() {
         100,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -2713,6 +2723,7 @@ async fn test_assets_nft_item_activities_mnft() {
         300,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 1,
@@ -2887,6 +2898,7 @@ async fn test_assets_nft_item_activities_dotbit() {
         300,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 0,
@@ -2902,6 +2914,7 @@ async fn test_assets_nft_item_activities_dotbit() {
         320,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_320,
             inputs_count: 1,
@@ -2917,6 +2930,7 @@ async fn test_assets_nft_item_activities_dotbit() {
         340,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_340,
             inputs_count: 1,
@@ -3080,6 +3094,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         100,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -3095,6 +3110,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         200,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -3110,6 +3126,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         260,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_700_000_260,
             inputs_count: 1,
@@ -4309,6 +4326,7 @@ async fn dotcell_collection_activities_are_served_from_the_identity_cf() {
             700,
             0,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: false,
                 timestamp: 1_700_000_700,
                 inputs_count: 1,
@@ -4484,6 +4502,7 @@ async fn dotcell_item_ref_is_case_insensitive() {
             20_518_306,
             0,
             &TxIndexEntry {
+                tx_hash: [0u8; 32],
                 is_cellbase: false,
                 timestamp: 1_700_000_000_000,
                 inputs_count: 1,

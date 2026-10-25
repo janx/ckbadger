@@ -97,6 +97,7 @@ fn seed_epoch_rows<I: IntoIterator<Item = i64>>(store: &CkbadgerStore, blocks: I
 
 fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
     TxIndexEntry {
+        tx_hash: [0u8; 32],
         is_cellbase,
         timestamp: 1_000_000,
         inputs_count: if is_cellbase { 0 } else { 2 },
@@ -2074,6 +2075,7 @@ fn test_rollback_bails_when_prefix_participant_row_is_missing() {
         3,
         0,
         &TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_003_000,
             inputs_count: 0,

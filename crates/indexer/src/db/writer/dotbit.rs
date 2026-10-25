@@ -1003,6 +1003,7 @@ mod tests {
 
     fn make_tx_entry(outputs_count: i16) -> TxIndexEntry {
         TxIndexEntry {
+            tx_hash: [0u8; 32],
             is_cellbase: false,
             timestamp: 1_000_000,
             inputs_count: 0,
