@@ -66,6 +66,18 @@ describe('StatsCards', () => {
     expect(screen.getByText('TPS (24H)')).toBeInTheDocument();
   });
 
+  it('shows an em dash when average block time is undefined', async () => {
+    server.use(
+      http.get(`${API_BASE}/statistics/network`, () =>
+        HttpResponse.json({ ...createNetworkResponse(), avgBlockTime: null })
+      )
+    );
+    render(<StatsCards />, { wrapper: createWrapper() });
+    await waitFor(() =>
+      expect(screen.getByText('AVG BLOCK TIME').parentElement).toHaveTextContent('—')
+    );
+  });
+
   it('shows bulk sync progress details when available', async () => {
     server.use(
       http.get(`${API_BASE}/statistics/network`, () => {

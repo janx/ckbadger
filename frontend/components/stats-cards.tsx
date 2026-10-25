@@ -79,7 +79,7 @@ export function StatsCards() {
       value: stats?.latestBlock?.toLocaleString() ?? '-',
       glow: 'strong' as const,
     },
-    { label: 'AVG BLOCK TIME', value: stats?.avgBlockTime ?? '-', glow: 'subtle' as const },
+    { label: 'AVG BLOCK TIME', value: stats?.avgBlockTime ?? '—', glow: 'subtle' as const },
     { label: 'HASH RATE', value: stats?.hashRate ?? '—', glow: 'subtle' as const },
     { label: 'DIFFICULTY', value: stats?.difficulty ?? '-', glow: 'subtle' as const },
     { label: 'CURRENT EPOCH', value: stats?.epoch ?? '-', glow: 'subtle' as const },

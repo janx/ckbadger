@@ -53,6 +53,20 @@ function stats(overrides: Partial<NetworkStats> = {}): NetworkStats {
 }
 
 describe('VitalsStrip', () => {
+  it('shows unavailable block time and epoch estimate explicitly', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(
+      stats({ avgBlockTime: null, estimatedEpochTime: null })
+    );
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('Block time—'));
+    expect(screen.getByTestId('vitals-epoch')).toHaveTextContent('—');
+    expect(screen.getByTestId('vitals-epoch')).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('remaining time unavailable')
+    );
+  });
+
   it('shows undefined network hash rate as an em dash', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats({ hashRate: null }));
     render(<VitalsStrip />);

@@ -209,12 +209,12 @@ interface SyncStatus {
 
 interface NetworkStats {
   latestBlock: number;
-  avgBlockTime: string;
+  avgBlockTime: string | null;
   hashRate: string | null;
   difficulty: string;
   epoch: string;
   tps: string;
-  estimatedEpochTime: string;
+  estimatedEpochTime: string | null;
   transactionsPerMinute: string;
   transactionsPerDay: string;
   syncStatus: SyncStatus;

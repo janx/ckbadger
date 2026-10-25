@@ -89,7 +89,7 @@ function Vitals({ stats, connected }: { stats: NetworkStats; connected: boolean 
         </Vital>
       </Lead>
       <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
-      <Vital label="Block time">{stats.avgBlockTime}</Vital>
+      <Vital label="Block time">{stats.avgBlockTime ?? '—'}</Vital>
       <Vital label="Hash rate" href="/charts/hash-rate">
         {stats.hashRate ?? '—'}
       </Vital>
@@ -109,7 +109,7 @@ function readEpoch(raw: string): { epoch: EpochInfo } | { error: string } {
 }
 
 /** Epoch number, a neutral progress bar, `index / length` and the time left — or why it can't. */
-function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string }) {
+function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string | null }) {
   const read = readEpoch(raw);
   if ('error' in read) {
     return (
@@ -127,7 +127,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
     <Link
       href="/charts/epoch-time-length"
       data-testid="vitals-epoch"
-      aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, block ${index} of ${length}, about ${estimatedLeft} left`}
+      aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, block ${index} of ${length}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
       className="group flex flex-wrap items-center gap-x-1.5 gap-y-1 md:gap-x-2"
     >
       <span className={LABEL}>Epoch</span>
@@ -145,7 +145,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
       <span className="text-text text-[11px] tabular-nums md:text-xs">
         {index} / {length}
       </span>
-      <span className={LABEL}>≈ {estimatedLeft} left</span>
+      <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
     </Link>
   );
 }
