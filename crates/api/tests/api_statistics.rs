@@ -52,10 +52,16 @@ async fn network_transaction_window_uses_effective_time_when_raw_tip_moves_backw
     let effective_ms = raw_earlier_ms + 5_400_000; // next hour + 30 minutes
     seed_block_headers_at(
         &store,
-        &[(0, raw_earlier_ms + 3_600_000), (1, raw_earlier_ms)],
+        &[
+            (0, raw_earlier_ms),
+            (1, effective_ms),
+            (2, raw_earlier_ms + 1_800_000),
+        ],
     );
     let mut batch = StoreBatch::new(store.as_ref());
-    for (number, chain_time_ms) in [(0, raw_earlier_ms + 3_600_000), (1, effective_ms)] {
+    // The tip's raw timestamp moves back an hour, so its effective time stays
+    // at the prior block's 21:30 prefix maximum.
+    for (number, chain_time_ms) in [(0, raw_earlier_ms), (1, effective_ms), (2, effective_ms)] {
         let mut header = store.get_block_header(number).unwrap().unwrap();
         header.compact_target = 0x190d_f964;
         header.chain_time_ms = chain_time_ms;
