@@ -225,7 +225,10 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
     let discovery = run_discovery(&api_url, &frontend_url, &client).await?;
     eprintln!(
         "Discovery complete: {} routes, params discovered.",
-        discovery.capabilities_route_count
+        discovery
+            .capabilities_route_count
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "unknown".into())
     );
 
     // 6. Build registry, pre-resolve, and validate API endpoints

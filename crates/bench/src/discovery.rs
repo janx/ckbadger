@@ -20,7 +20,7 @@ pub struct DataAvailability {
 /// Complete discovery result from all three phases.
 #[derive(Debug, Clone)]
 pub struct Discovery {
-    pub capabilities_route_count: usize,
+    pub capabilities_route_count: Option<usize>,
     pub availability: DataAvailability,
     pub params: DiscoveredParams,
 }
@@ -55,7 +55,13 @@ pub fn print_discovery(discovery: &Discovery) {
 
     // Phase 1
     println!("Phase 1 - Capabilities:");
-    println!("  Route count: {}", discovery.capabilities_route_count);
+    println!(
+        "  Route count: {}",
+        discovery
+            .capabilities_route_count
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    );
     println!();
 
     // Phase 2
@@ -173,7 +179,7 @@ pub fn print_discovery(discovery: &Discovery) {
 // Phase 1: Capabilities
 // ---------------------------------------------------------------------------
 
-async fn discover_capabilities(frontend_url: &str, client: &reqwest::Client) -> usize {
+async fn discover_capabilities(frontend_url: &str, client: &reqwest::Client) -> Option<usize> {
     let url = format!("{}/capabilities", frontend_url.trim_end_matches('/'));
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
@@ -182,35 +188,47 @@ async fn discover_capabilities(frontend_url: &str, client: &reqwest::Client) -> 
                 "  [warn] capabilities endpoint unreachable ({}): {}",
                 url, e
             );
-            return 0;
+            return None;
         }
     };
 
     if !resp.status().is_success() {
         eprintln!("  [warn] capabilities returned status {}", resp.status());
-        return 0;
+        return None;
     }
 
     let body: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => {
             eprintln!("  [warn] capabilities body parse failed: {}", e);
-            return 0;
+            return None;
         }
     };
 
-    let md_count = body
-        .pointer("/routes/markdown")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let raw_count = body
-        .pointer("/routes/raw")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+    match parse_capabilities_route_count(&body) {
+        Ok(count) => Some(count),
+        Err(error) => {
+            eprintln!("  [warn] capabilities shape invalid: {error}");
+            None
+        }
+    }
+}
 
-    md_count + raw_count
+fn parse_capabilities_route_count(body: &Value) -> Result<usize> {
+    let routes = body
+        .get("routes")
+        .context("/capabilities missing routes object")?;
+    let md = routes
+        .get("markdown")
+        .and_then(Value::as_array)
+        .context("/capabilities missing routes.markdown array")?;
+    let raw = routes
+        .get("raw")
+        .and_then(Value::as_array)
+        .context("/capabilities missing routes.raw array")?;
+    md.len()
+        .checked_add(raw.len())
+        .context("/capabilities route count overflow")
 }
 
 // ---------------------------------------------------------------------------
@@ -330,78 +348,57 @@ async fn discover_params(
 
     // sync_tip from /statistics/network -> latestBlock
     let network_stats = fetch_json(client, &format!("{}/statistics/network", base)).await?;
-    params.sync_tip = network_stats
-        .get("latestBlock")
-        .and_then(|v| v.as_i64())
-        .map(|n| n as u64)
-        .unwrap_or(0);
+    params.sync_tip = required_u64(&network_stats, "latestBlock", "/statistics/network")?;
 
     // latest_block_number, latest_block_hash from /blocks?limit=1
     let blocks = fetch_json(client, &format!("{}/blocks?limit=1", base)).await?;
-    if let Some(first) = data_array(&blocks).and_then(|arr| arr.first()) {
-        params.latest_block_number = first
-            .get("number")
-            .and_then(|v| v.as_i64())
-            .map(|n| n as u64)
-            .unwrap_or(0);
-        params.latest_block_hash = first
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-    }
+    let first_block = required_data_array(&blocks, "/blocks")?
+        .first()
+        .context("/blocks returned no tip row after /statistics/network reported a tip")?;
+    params.latest_block_number = required_u64(first_block, "number", "/blocks.data[0]")?;
+    params.latest_block_hash = required_string(first_block, "hash", "/blocks.data[0]")?.to_string();
 
     // mid_block_number
     params.mid_block_number = params.latest_block_number / 2;
 
     // tx_hashes from /transactions?limit=5
     let txs = fetch_json(client, &format!("{}/transactions?limit=5", base)).await?;
-    if let Some(arr) = data_array(&txs) {
-        params.tx_hashes = arr
-            .iter()
-            .filter_map(|item| item.get("hash").and_then(|v| v.as_str()).map(String::from))
-            .collect();
+    {
+        let arr = required_data_array(&txs, "/transactions")?;
+        params.tx_hashes = required_strings(arr, "hash", "/transactions.data")?;
     }
 
     // top_addresses, top_lock_hashes from /addresses/top?limit=5
     // This endpoint returns a bare Vec<TopAddressResponse>, not CursorPaginated.
     let top = fetch_json(client, &format!("{}/addresses/top?limit=5", base)).await?;
-    let top_items: &[Value] = if let Some(arr) = data_array(&top) {
-        arr
-    } else if let Some(arr) = top.as_array() {
-        arr.as_slice()
-    } else {
-        &[]
-    };
-    for item in top_items {
-        if let Some(hash) = item.get("lockScriptHash").and_then(|v| v.as_str()) {
-            params.top_lock_hashes.push(hash.to_string());
-            // address may be null
-            if let Some(addr) = item.get("address").and_then(|v| v.as_str()) {
-                params.top_addresses.push(addr.to_string());
-            }
+    let top_items = required_bare_array(&top, "/addresses/top")?;
+    for (index, item) in top_items.iter().enumerate() {
+        params.top_lock_hashes.push(
+            required_string(item, "lockScriptHash", &format!("/addresses/top[{index}]"))?
+                .to_string(),
+        );
+        // Address text is genuinely optional for a lock script not encoded by this network.
+        if let Some(addr) = item.get("address").and_then(|v| v.as_str()) {
+            params.top_addresses.push(addr.to_string());
         }
     }
 
     // busiest_lock_hashes: top 10 addresses by transaction count
     {
         let top_by_tx = fetch_json(client, &format!("{}/addresses/top?limit=50", base)).await?;
-        let top_tx_items: &[Value] = if let Some(arr) = data_array(&top_by_tx) {
-            arr
-        } else if let Some(arr) = top_by_tx.as_array() {
-            arr.as_slice()
-        } else {
-            &[]
-        };
+        let top_tx_items = required_bare_array(&top_by_tx, "/addresses/top")?;
         // Sort by transactionsCount descending to find busiest addresses
-        let mut with_counts: Vec<(&str, i64)> = top_tx_items
+        let mut with_counts: Vec<(&str, u64)> = top_tx_items
             .iter()
-            .filter_map(|item| {
-                let hash = item.get("lockScriptHash").and_then(|v| v.as_str())?;
-                let count = item.get("transactionsCount").and_then(|v| v.as_i64())?;
-                Some((hash, count))
+            .enumerate()
+            .map(|(index, item)| {
+                let context = format!("/addresses/top[{index}]");
+                Ok((
+                    required_string(item, "lockScriptHash", &context)?,
+                    required_u64(item, "transactionsCount", &context)?,
+                ))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         with_counts.sort_by_key(|item| std::cmp::Reverse(item.1));
         let candidates: Vec<String> = with_counts
             .into_iter()
@@ -417,68 +414,46 @@ async fn discover_params(
         let depositors =
             fetch_json(client, &format!("{}/dao/top-depositors?limit=3", base)).await?;
         // Response shape: {"depositors": [...]}
-        let dep_items = depositors
-            .get("depositors")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        for item in &dep_items {
-            if let Some(hash) = item.get("lockScriptHash").and_then(|v| v.as_str()) {
-                params.dao_lock_hashes.push(hash.to_string());
-            }
-        }
+        let dep_items = required_array_field(&depositors, "depositors", "/dao/top-depositors")?;
+        params.dao_lock_hashes = required_strings(
+            dep_items,
+            "lockScriptHash",
+            "/dao/top-depositors.depositors",
+        )?;
 
         // dao deposit params from /dao/deposits?limit=1
         let deposits = fetch_json(client, &format!("{}/dao/deposits?limit=1", base)).await?;
-        if let Some(first) = data_array(&deposits).and_then(|arr| arr.first()) {
-            let tx_hash = first
-                .get("txHash")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let output_index = first
-                .get("outputIndex")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as u32;
-            if !tx_hash.is_empty() {
-                params.dao_deposit_outpoint = Some((tx_hash, output_index));
-            }
+        if let Some(first) = required_data_array(&deposits, "/dao/deposits")?.first() {
+            let tx_hash = required_string(first, "txHash", "/dao/deposits.data[0]")?.to_string();
+            let output_index = required_u32(first, "outputIndex", "/dao/deposits.data[0]")?;
+            params.dao_deposit_outpoint = Some((tx_hash, output_index));
             // Extract capacity and deposit_block for /dao/calculator
-            if let (Some(capacity), Some(block)) = (
-                first.get("capacity").and_then(|v| v.as_str()),
-                first.get("depositBlockNumber").and_then(|v| v.as_i64()),
-            ) {
-                params.dao_deposit_capacity = Some(capacity.to_string());
-                params.dao_deposit_block = Some(block);
-            }
+            params.dao_deposit_capacity =
+                Some(required_string(first, "capacity", "/dao/deposits.data[0]")?.to_string());
+            params.dao_deposit_block = Some(
+                i64::try_from(required_u64(
+                    first,
+                    "depositBlockNumber",
+                    "/dao/deposits.data[0]",
+                )?)
+                .context("DAO deposit block exceeds i64")?,
+            );
         }
     }
 
     // token_type_hashes from /tokens?limit=3 (if has_tokens)
     if availability.has_tokens {
         let tokens = fetch_json(client, &format!("{}/tokens?limit=3", base)).await?;
-        if let Some(arr) = data_array(&tokens) {
-            params.token_type_hashes = arr
-                .iter()
-                .filter_map(|item| {
-                    item.get("typeScriptHash")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .collect();
+        {
+            let arr = required_data_array(&tokens, "/tokens")?;
+            params.token_type_hashes = required_strings(arr, "typeScriptHash", "/tokens.data")?;
         }
 
         // top_token_type_hashes: top 10 tokens by holders (default sort)
         let top_tokens = fetch_json(client, &format!("{}/tokens?limit=10", base)).await?;
-        if let Some(arr) = data_array(&top_tokens) {
-            let candidates: Vec<String> = arr
-                .iter()
-                .filter_map(|item| {
-                    item.get("typeScriptHash")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .collect();
+        {
+            let arr = required_data_array(&top_tokens, "/tokens")?;
+            let candidates = required_strings(arr, "typeScriptHash", "/tokens.data")?;
             params.top_token_type_hashes =
                 validate_ids(client, base, candidates, "tokens/{id}").await;
         }
@@ -487,27 +462,15 @@ async fn discover_params(
     // cluster_ids, spore_ids from spore endpoints (if has_spore)
     if availability.has_spore {
         let clusters = fetch_json(client, &format!("{}/spore/clusters?limit=3", base)).await?;
-        if let Some(arr) = data_array(&clusters) {
-            params.cluster_ids = arr
-                .iter()
-                .filter_map(|item| {
-                    item.get("clusterId")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .collect();
+        {
+            let arr = required_data_array(&clusters, "/spore/clusters")?;
+            params.cluster_ids = required_strings(arr, "clusterId", "/spore/clusters.data")?;
         }
 
         let spores = fetch_json(client, &format!("{}/spore/objects?limit=10", base)).await?;
-        if let Some(arr) = data_array(&spores) {
-            let candidate_ids: Vec<String> = arr
-                .iter()
-                .filter_map(|item| {
-                    item.get("sporeId")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .collect();
+        {
+            let arr = required_data_array(&spores, "/spore/objects")?;
+            let candidate_ids = required_strings(arr, "sporeId", "/spore/objects.data")?;
             let valid = validate_ids(client, base, candidate_ids, "spore/objects/{id}").await;
             params.spore_ids = valid.iter().take(3).cloned().collect();
             params.top_spore_ids = valid.clone();
@@ -524,18 +487,19 @@ async fn discover_params(
 
         // top_cluster_ids: top 10 clusters by spore count (heaviest cluster pages)
         let all_clusters = fetch_json(client, &format!("{}/spore/clusters?limit=50", base)).await?;
-        if let Some(arr) = data_array(&all_clusters) {
-            let mut with_counts: Vec<(&str, i64)> = arr
+        {
+            let arr = required_data_array(&all_clusters, "/spore/clusters")?;
+            let mut with_counts: Vec<(&str, u64)> = arr
                 .iter()
-                .filter_map(|item| {
-                    let id = item.get("clusterId").and_then(|v| v.as_str())?;
-                    let count = item
-                        .get("sporesCount")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    Some((id, count))
+                .enumerate()
+                .map(|(index, item)| {
+                    let context = format!("/spore/clusters.data[{index}]");
+                    Ok((
+                        required_string(item, "clusterId", &context)?,
+                        required_u64(item, "sporesCount", &context)?,
+                    ))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             with_counts.sort_by_key(|item| std::cmp::Reverse(item.1));
             let candidates: Vec<String> = with_counts
                 .into_iter()
@@ -549,11 +513,9 @@ async fn discover_params(
 
     // script_names from /scripts?limit=3 (use "name" for /scripts/{name} lookup)
     let scripts = fetch_json(client, &format!("{}/scripts?limit=3", base)).await?;
-    if let Some(arr) = data_array(&scripts) {
-        params.script_names = arr
-            .iter()
-            .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(String::from))
-            .collect();
+    {
+        let arr = required_data_array(&scripts, "/scripts")?;
+        params.script_names = required_strings(arr, "name", "/scripts.data")?;
     }
 
     // top_script_names: top 10 scripts by cell count (heaviest detail pages)
@@ -565,41 +527,28 @@ async fn discover_params(
         ),
     )
     .await?;
-    if let Some(arr) = data_array(&top_scripts) {
-        let candidates: Vec<String> = arr
-            .iter()
-            .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(String::from))
-            .collect();
+    {
+        let arr = required_data_array(&top_scripts, "/scripts")?;
+        let candidates = required_strings(arr, "name", "/scripts.data")?;
         params.top_script_names = validate_ids(client, base, candidates, "scripts/{id}").await;
     }
 
     // live_cell_outpoint from the first live cell of the top address
     if let Some(lock_hash) = params.top_lock_hashes.first() {
         let live_cells = fetch_json(client, &live_cell_discovery_url(base, lock_hash)).await?;
-        if let Some(first) = data_array(&live_cells).and_then(|arr| arr.first()) {
-            let tx_hash = first
-                .get("txHash")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let output_index = first
-                .get("outputIndex")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as u32;
-            if !tx_hash.is_empty() {
-                params.live_cell_outpoint = Some((tx_hash, output_index));
-            }
+        if let Some(first) = required_data_array(&live_cells, "/cells/live")?.first() {
+            let tx_hash = required_string(first, "txHash", "/cells/live.data[0]")?.to_string();
+            let output_index = required_u32(first, "outputIndex", "/cells/live.data[0]")?;
+            params.live_cell_outpoint = Some((tx_hash, output_index));
         }
     }
 
     // fiber_channel_id from /fiber/channels?limit=1 (if has_fiber)
     if availability.has_fiber {
         let channels = fetch_json(client, &format!("{}/fiber/channels?limit=1", base)).await?;
-        if let Some(first) = data_array(&channels).and_then(|arr| arr.first()) {
-            params.fiber_channel_id = first
-                .get("channelId")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+        if let Some(first) = required_data_array(&channels, "/fiber/channels")?.first() {
+            params.fiber_channel_id =
+                Some(required_string(first, "channelId", "/fiber/channels.data[0]")?.to_string());
         }
     }
 
@@ -610,11 +559,12 @@ async fn discover_params(
             &format!("{}/assets/identities/dotbit/items?limit=1", base),
         )
         .await?;
-        if let Some(first) = data_array(&items).and_then(|arr| arr.first()) {
-            params.dotbit_item_id = first
-                .get("nftId")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+        if let Some(first) = required_data_array(&items, "/assets/identities/dotbit/items")?.first()
+        {
+            params.dotbit_item_id = Some(
+                required_string(first, "nftId", "/assets/identities/dotbit/items.data[0]")?
+                    .to_string(),
+            );
         }
         params.identity_collection_id = Some("dotbit".to_string());
 
@@ -624,11 +574,10 @@ async fn discover_params(
             &format!("{}/assets/identities/dotbit/items?limit=10", base),
         )
         .await?;
-        if let Some(arr) = data_array(&top_items) {
-            let candidates: Vec<String> = arr
-                .iter()
-                .filter_map(|item| item.get("nftId").and_then(|v| v.as_str()).map(String::from))
-                .collect();
+        {
+            let arr = required_data_array(&top_items, "/assets/identities/dotbit/items")?;
+            let candidates =
+                required_strings(arr, "nftId", "/assets/identities/dotbit/items.data")?;
             params.top_dotbit_item_ids = validate_ids(
                 client,
                 base,
@@ -644,11 +593,13 @@ async fn discover_params(
             &format!("{}/assets/identities/did_ckb/items?limit=1", base),
         )
         .await?;
-        if let Some(first) = data_array(&did_items).and_then(|arr| arr.first()) {
-            params.did_item_id = first
-                .get("nftId")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+        if let Some(first) =
+            required_data_array(&did_items, "/assets/identities/did_ckb/items")?.first()
+        {
+            params.did_item_id = Some(
+                required_string(first, "nftId", "/assets/identities/did_ckb/items.data[0]")?
+                    .to_string(),
+            );
         }
 
         // `.cell` item discovery. The collection is absent on a network that
@@ -658,11 +609,13 @@ async fn discover_params(
             &format!("{}/assets/identities/dotcell/items?limit=1", base),
         )
         .await?;
-        if let Some(first) = data_array(&dotcell_items).and_then(|arr| arr.first()) {
-            params.dotcell_item_id = first
-                .get("nftId")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+        if let Some(first) =
+            required_data_array(&dotcell_items, "/assets/identities/dotcell/items")?.first()
+        {
+            params.dotcell_item_id = Some(
+                required_string(first, "nftId", "/assets/identities/dotcell/items.data[0]")?
+                    .to_string(),
+            );
         }
     }
 
@@ -670,28 +623,26 @@ async fn discover_params(
     // Try multiple candidates and validate each against the detail endpoint.
     if availability.has_assets {
         let assets = fetch_json(client, &format!("{}/assets?limit=10&type=object", base)).await?;
-        if let Some(arr) = data_array(&assets) {
-            let candidate_ids: Vec<String> = arr
-                .iter()
-                .filter_map(|item| item.get("id").and_then(|v| v.as_str()).map(String::from))
-                .collect();
+        {
+            let arr = required_data_array(&assets, "/assets")?;
+            let candidate_ids = required_strings(arr, "id", "/assets.data")?;
             let valid = validate_ids(client, base, candidate_ids, "assets/objects/{id}").await;
             params.object_collection_id = valid.first().cloned();
 
             // object_item_id from /assets/objects/{collection_id}/items?limit=1
             if let Some(cid) = &params.object_collection_id {
-                let items = fetch_json(
+                let items_val = fetch_json(
                     client,
                     &format!("{}/assets/objects/{}/items?limit=1", base, cid),
                 )
-                .await;
-                if let Ok(items_val) = items {
-                    if let Some(first_item) = data_array(&items_val).and_then(|arr| arr.first()) {
-                        params.object_item_id = first_item
-                            .get("nftId")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                    }
+                .await?;
+                if let Some(first_item) =
+                    required_data_array(&items_val, "/assets/objects/items")?.first()
+                {
+                    params.object_item_id = Some(
+                        required_string(first_item, "nftId", "/assets/objects/items.data[0]")?
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -700,11 +651,8 @@ async fn discover_params(
     // fork_id from /forks (if has_forks)
     if availability.has_forks {
         let forks = fetch_json(client, &format!("{}/forks", base)).await?;
-        if let Some(first) = data_array(&forks).and_then(|arr| arr.first()) {
-            params.fork_id = first
-                .get("id")
-                .and_then(|v| v.as_i64())
-                .map(|n| n.to_string());
+        if let Some(first) = required_data_array(&forks, "/forks")?.first() {
+            params.fork_id = Some(required_u64(first, "id", "/forks.data[0]")?.to_string());
         }
     }
 
@@ -735,6 +683,53 @@ async fn fetch_json(client: &reqwest::Client, url: &str) -> Result<Value> {
 /// Extract the `data` array from a CursorPaginatedResponse body.
 fn data_array(val: &Value) -> Option<&Vec<Value>> {
     val.get("data").and_then(|v| v.as_array())
+}
+
+fn required_data_array<'a>(value: &'a Value, endpoint: &str) -> Result<&'a [Value]> {
+    required_array_field(value, "data", endpoint)
+}
+
+fn required_array_field<'a>(value: &'a Value, field: &str, endpoint: &str) -> Result<&'a [Value]> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .with_context(|| format!("{endpoint}: required {field} array missing or invalid"))
+}
+
+fn required_bare_array<'a>(value: &'a Value, endpoint: &str) -> Result<&'a [Value]> {
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .with_context(|| format!("{endpoint}: required top-level array missing or invalid"))
+}
+
+fn required_u64(value: &Value, field: &str, context: &str) -> Result<u64> {
+    value.get(field).and_then(Value::as_u64).with_context(|| {
+        format!("{context}: required nonnegative {field} integer missing or invalid")
+    })
+}
+
+fn required_u32(value: &Value, field: &str, context: &str) -> Result<u32> {
+    let number = required_u64(value, field, context)?;
+    u32::try_from(number).with_context(|| format!("{context}: {field} exceeds u32: {number}"))
+}
+
+fn required_string<'a>(value: &'a Value, field: &str, context: &str) -> Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .with_context(|| format!("{context}: required nonempty {field} string missing or invalid"))
+}
+
+fn required_strings(rows: &[Value], field: &str, context: &str) -> Result<Vec<String>> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            required_string(row, field, &format!("{context}[{index}]")).map(str::to_string)
+        })
+        .collect()
 }
 
 /// Check API connectivity by hitting /statistics/network.
@@ -794,6 +789,61 @@ mod tests {
         let val: Value = serde_json::from_str(r#"{"data": []}"#).unwrap();
         let arr = data_array(&val).unwrap();
         assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn required_discovery_fields_reject_missing_invalid_and_narrowing_values() {
+        assert!(
+            required_u64(&serde_json::json!({}), "latestBlock", "/statistics/network")
+                .unwrap_err()
+                .to_string()
+                .contains("latestBlock")
+        );
+        assert!(required_u64(
+            &serde_json::json!({"latestBlock": -1}),
+            "latestBlock",
+            "/statistics/network"
+        )
+        .is_err());
+        assert!(required_data_array(&serde_json::json!({"data": null}), "/blocks").is_err());
+        assert!(required_bare_array(&serde_json::json!({"data": []}), "/addresses/top").is_err());
+        assert!(required_u32(
+            &serde_json::json!({"outputIndex": 4294967296u64}),
+            "outputIndex",
+            "/cells/live.data[0]"
+        )
+        .is_err());
+        assert!(required_string(
+            &serde_json::json!({"txHash": ""}),
+            "txHash",
+            "/cells/live.data[0]"
+        )
+        .is_err());
+        assert!(
+            required_data_array(&serde_json::json!({"data": []}), "/blocks")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(required_strings(
+            &[serde_json::json!({"hash":"0xab"}), serde_json::json!({})],
+            "hash",
+            "/transactions.data"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("[1]"));
+    }
+
+    #[test]
+    fn capabilities_unavailable_shape_cannot_report_zero_routes() {
+        assert!(
+            parse_capabilities_route_count(&serde_json::json!({"routes":{"markdown":[]}})).is_err()
+        );
+        assert_eq!(
+            parse_capabilities_route_count(&serde_json::json!({"routes":{"markdown":[],"raw":[]}}))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
