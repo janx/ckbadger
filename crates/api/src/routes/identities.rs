@@ -1398,7 +1398,7 @@ async fn get_dotcell_ring(State(state): State<Arc<AppState>>) -> ApiResult<DotCe
         Some(agg) => {
             return Err(ApiError::internal(format!(
                 ".cell ring aggregate has negative live_count: namespace=0x{} count={}",
-                hex::encode(&namespace_args),
+                hex::encode(namespace_args),
                 agg.live_count
             )))
         }
@@ -1415,7 +1415,7 @@ async fn get_dotcell_ring(State(state): State<Arc<AppState>>) -> ApiResult<DotCe
             if !members.is_empty() {
                 return Err(ApiError::internal(format!(
                     ".cell ring aggregate missing with indexed member: namespace=0x{} member=0x{}",
-                    hex::encode(&namespace_args),
+                    hex::encode(namespace_args),
                     hex::encode(&members[0])
                 )));
             }

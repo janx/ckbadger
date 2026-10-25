@@ -137,10 +137,11 @@ pub struct NetworkStats {
     pub hash_rate: Option<String>,
     pub difficulty: String,
     pub epoch: String,
-    pub tps: String,
+    /// Bucket-aligned transaction rate; absent without a measurable covered span.
+    pub tps: Option<String>,
     pub estimated_epoch_time: Option<String>,
-    pub transactions_per_minute: String,
-    pub transactions_per_day: String,
+    pub transactions_per_minute: Option<String>,
+    pub transactions_per_day: Option<String>,
     pub sync_status: SyncStatus,
     pub deep_fork_status: DeepForkStatus,
     // Hero metrics from latest DAO daily snapshot
@@ -436,27 +437,82 @@ fn estimate_hash_rate_from_window(
 
 /// Sum committed transactions over the trailing 24 hours of hourly buckets:
 /// buckets whose start falls in `(reference - 24h, reference]`, newest 24.
-/// Returns `(count, window_seconds)` where the window spans from the oldest
+/// Returns `(count, window_milliseconds)` where the window spans from the oldest
 /// included bucket's start to the reference timestamp — the exact span the
-/// count covers, for rate normalization. `(0, 0.0)` when no buckets qualify.
+/// count covers, for rate normalization. `None` when no buckets qualify.
 fn rolling_24h_tx_window(
     hourly: &[(String, ckbadger_store::HourlyStats)],
     reference_ts_ms: i64,
-) -> (i64, f64) {
-    let cutoff_ms = reference_ts_ms - 24 * 3600 * 1000;
-    let mut recent: Vec<&ckbadger_store::HourlyStats> = hourly
+) -> Result<Option<(i128, i128)>, String> {
+    let cutoff_ms = reference_ts_ms
+        .checked_sub(24 * 3600 * 1000)
+        .ok_or("transaction rate cutoff overflows i64")?;
+    let mut recent: Vec<(&ckbadger_store::HourlyStats, i64)> = hourly
         .iter()
-        .map(|(_, h)| h)
-        .filter(|h| h.hour * 1000 > cutoff_ms && h.hour * 1000 <= reference_ts_ms)
-        .collect();
-    recent.sort_by_key(|item| std::cmp::Reverse(item.hour));
+        .map(|(_, h)| {
+            h.hour
+                .checked_mul(1000)
+                .map(|start_ms| (h, start_ms))
+                .ok_or_else(|| format!("transaction rate bucket time overflows: hour={}", h.hour))
+        })
+        .collect::<Result<_, _>>()?;
+    recent.retain(|(_, start_ms)| *start_ms > cutoff_ms && *start_ms <= reference_ts_ms);
+    recent.sort_by_key(|(item, _)| std::cmp::Reverse(item.hour));
     recent.truncate(24);
-    let count = recent.iter().map(|h| h.transactions_count as i64).sum();
-    let window_secs = recent
-        .last()
-        .map(|oldest| (reference_ts_ms as f64 / 1000.0) - oldest.hour as f64)
-        .unwrap_or(0.0);
-    (count, window_secs)
+    let Some((_, oldest_start_ms)) = recent.last() else {
+        return Ok(None);
+    };
+    let mut count = 0i128;
+    for (hour, _) in &recent {
+        if hour.transactions_count < 0 {
+            return Err(format!(
+                "negative transaction count in hour {}: {}",
+                hour.hour, hour.transactions_count
+            ));
+        }
+        count = count
+            .checked_add(i128::from(hour.transactions_count))
+            .ok_or("transaction window count overflow")?;
+    }
+    let span_ms = reference_ts_ms
+        .checked_sub(*oldest_start_ms)
+        .ok_or("transaction rate span overflows i64")?;
+    Ok(Some((count, i128::from(span_ms))))
+}
+
+fn format_transaction_rates(
+    window: Option<(i128, i128)>,
+    latest_block: i64,
+) -> Result<(Option<String>, Option<String>, Option<String>), ApiRouteError> {
+    let Some((count, span_ms)) = window else {
+        return Ok((None, None, None));
+    };
+    if span_ms < 0 || count < 0 {
+        return Err(ApiError::internal(format!(
+            "invalid transaction rate window at block {latest_block}: count={count} span_ms={span_ms}"
+        )));
+    }
+    if span_ms == 0 {
+        return Ok((None, None, None));
+    }
+    let rate = |seconds: i128, decimals| {
+        let numerator = count
+            .checked_mul(1000)
+            .and_then(|n| n.checked_mul(seconds))
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "transaction rate numerator overflow at block {latest_block}"
+                ))
+            })?;
+        crate::utils::exact_ratio::format_ratio(numerator, span_ms, decimals).map_err(|e| {
+            ApiError::internal(format!("transaction rate at block {latest_block}: {e}"))
+        })
+    };
+    Ok((
+        Some(rate(1, 2)?),
+        Some(rate(60, 1)?),
+        Some(rate(86_400, 0)?),
+    ))
 }
 
 fn format_hash_rate(hash_rate: u128) -> String {
@@ -2566,6 +2622,10 @@ async fn fetch_tip_block_from_ckb(ckb_rpc_url: &str) -> Result<u64, String> {
     u64::from_str_radix(hex, 16).map_err(|e| e.to_string())
 }
 
+fn require_node_tip(result: Result<u64, String>) -> Result<u64, ApiRouteError> {
+    result.map_err(|error| ApiError::internal(format!("failed to read CKB node tip: {error}")))
+}
+
 async fn fetch_network_stats_from_db(
     state: &AppState,
 ) -> Result<
@@ -2643,20 +2703,13 @@ async fn fetch_network_stats_from_db(
     let hourly_stats = store
         .list_hourly_stats_with_keys()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (tx_count_24h, tx_window_secs) =
-        rolling_24h_tx_window(&hourly_stats, latest_timestamp.timestamp_millis());
+    let tx_window = rolling_24h_tx_window(&hourly_stats, latest_timestamp.timestamp_millis())
+        .map_err(|e| {
+            ApiError::internal(format!("transaction rate at block {latest_block}: {e}"))
+        })?;
 
     // Fetch tip block from CKB node
-    let tip_block_result = fetch_tip_block_from_ckb(&state.ckb_rpc_url).await;
-    let tip_block_u64 = match tip_block_result {
-        Ok(tip) => tip,
-        Err(_) => u64::try_from(latest_block).map_err(|_| {
-            ApiError::internal(format!(
-                "latest block below zero, cannot convert to u64 for tip fallback: {}",
-                latest_block
-            ))
-        })?,
-    };
+    let tip_block_u64 = require_node_tip(fetch_tip_block_from_ckb(&state.ckb_rpc_url).await)?;
     let tip_block = i64::try_from(tip_block_u64).map_err(|_| {
         ApiError::internal(format!(
             "tip block exceeds i64 range: {} (max={})",
@@ -2714,17 +2767,11 @@ async fn fetch_network_stats_from_db(
         })
         .transpose()?;
 
-    let tps = if tx_window_secs > 0.0 {
-        tx_count_24h as f64 / tx_window_secs
-    } else {
-        0.0
-    };
-    let tx_per_minute = tps * 60.0;
     // Normalized over the same rolling window as tps/perMinute — the three
     // fields are one rate at three scales and must agree. The raw bucket sum
     // previously served here covers a ~23h quantized window (and less while
     // the window is still filling after a rebuild), contradicting perMinute.
-    let tx_per_day = tps * 86400.0;
+    let (tps, tx_per_minute, tx_per_day) = format_transaction_rates(tx_window, latest_block)?;
 
     // Get sync status from store (single source of truth)
     let store_sync = store
@@ -2930,10 +2977,10 @@ async fn fetch_network_stats_from_db(
         hash_rate: hash_rate.map(format_hash_rate),
         difficulty: format_difficulty(difficulty),
         epoch: format!("{}({}/{})", epoch_number, epoch_index, epoch_length),
-        tps: format!("{:.2}", tps),
+        tps,
         estimated_epoch_time,
-        transactions_per_minute: format!("{:.1}", tx_per_minute),
-        transactions_per_day: format!("{:.0}", tx_per_day),
+        transactions_per_minute: tx_per_minute,
+        transactions_per_day: tx_per_day,
         sync_status,
         deep_fork_status,
         knowledge_size,
@@ -4837,16 +4884,67 @@ mod tests {
             hourly_bucket(reference_s - 23 * hour, 30), // inside (oldest kept)
             hourly_bucket(reference_s - 25 * hour, 40), // outside — excluded
         ];
-        let (count, window_secs) = rolling_24h_tx_window(&buckets, reference_ms);
+        let (count, window_ms) = rolling_24h_tx_window(&buckets, reference_ms)
+            .unwrap()
+            .unwrap();
         assert_eq!(count, 60);
-        assert_eq!(window_secs, (23 * hour) as f64);
+        assert_eq!(window_ms, i128::from(23 * hour * 1000));
     }
 
     #[test]
     fn test_rolling_24h_tx_window_empty() {
-        let (count, window_secs) = rolling_24h_tx_window(&[], 1_800_000_000_000);
-        assert_eq!(count, 0);
-        assert_eq!(window_secs, 0.0);
+        assert_eq!(rolling_24h_tx_window(&[], 1_800_000_000_000).unwrap(), None);
+    }
+
+    #[test]
+    fn transaction_rate_window_rejects_negative_counts_and_zero_span_is_not_a_rate() {
+        let reference_ms = 1_800_000_000_000i64;
+        let reference_s = reference_ms / 1000;
+        assert!(
+            rolling_24h_tx_window(&[hourly_bucket(reference_s - 3600, -1)], reference_ms)
+                .unwrap_err()
+                .contains("negative transaction count")
+        );
+        assert_eq!(
+            rolling_24h_tx_window(&[hourly_bucket(reference_s, 1)], reference_ms).unwrap(),
+            Some((1, 0))
+        );
+        assert_eq!(
+            format_transaction_rates(Some((1, 0)), 20).unwrap(),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn transaction_rates_use_exact_bucket_span_and_explicit_missing_sample() {
+        assert_eq!(
+            format_transaction_rates(None, 20).unwrap(),
+            (None, None, None)
+        );
+        assert_eq!(
+            format_transaction_rates(Some((1, 2_000)), 20).unwrap(),
+            (
+                Some("0.50".into()),
+                Some("30.0".into()),
+                Some("43200".into())
+            )
+        );
+        let count = 9_007_199_254_740_993i128;
+        assert_eq!(
+            format_transaction_rates(Some((count, 1_000)), 20)
+                .unwrap()
+                .0
+                .as_deref(),
+            Some("9007199254740993.00")
+        );
+        assert!(format_transaction_rates(Some((-1, 1_000)), 20).is_err());
+    }
+
+    #[test]
+    fn missing_node_tip_cannot_masquerade_as_fully_synced() {
+        let error = require_node_tip(Err("connection refused".to_string())).unwrap_err();
+        assert!(error.1 .0.message.contains("failed to read CKB node tip"));
+        assert!(error.1 .0.message.contains("connection refused"));
     }
 
     fn snapshot(

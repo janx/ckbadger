@@ -1,6 +1,50 @@
 mod common;
 use common::*;
 
+async fn mock_indexed_node_tip(config: &mut AppConfig) -> MockServer {
+    let tip = config.store.get_sync_tip_block().unwrap().unwrap().0;
+    let rpc = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({"method":"get_tip_block_number"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": format!("0x{tip:x}")
+        })))
+        .mount(&rpc)
+        .await;
+    config.ckb_rpc_url = rpc.uri();
+    rpc
+}
+
+#[tokio::test]
+async fn network_stats_does_not_report_synced_when_node_tip_rpc_fails() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000)]);
+    let mut header = store.get_block_header(0).unwrap().unwrap();
+    header.compact_target = 0x190d_f964;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.commit().unwrap();
+    let rpc = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({"method":"get_tip_block_number"}),
+        ))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&rpc)
+        .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = rpc.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/statistics/network").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("failed to read CKB node tip"));
+}
+
 #[tokio::test]
 async fn test_network_stats_reports_initializing_before_genesis() {
     let store = test_store();
@@ -30,7 +74,9 @@ async fn test_network_stats_rejects_zero_difficulty_for_existing_tip() {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(0, &header);
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -54,7 +100,9 @@ async fn test_network_stats_reports_unknown_averages_with_one_header() {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(0, &header);
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -69,6 +117,9 @@ async fn test_network_stats_reports_unknown_averages_with_one_header() {
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert!(json["avgBlockTime"].is_null(), "{json}");
     assert!(json["estimatedEpochTime"].is_null(), "{json}");
+    assert!(json["tps"].is_null(), "{json}");
+    assert!(json["transactionsPerMinute"].is_null(), "{json}");
+    assert!(json["transactionsPerDay"].is_null(), "{json}");
 }
 
 #[tokio::test]
@@ -81,7 +132,9 @@ async fn test_network_stats_rejects_corrupt_sync_progress() {
     batch.put_block_header(0, &header);
     batch.commit().unwrap();
     store.put_sync_progress(b"not-json").unwrap();
-    let app = create_router(test_config(store)).await;
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -107,7 +160,9 @@ async fn test_network_stats_allows_zero_chain_time_span_without_a_rate() {
         batch.put_block_header(number, &header);
     }
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -735,7 +790,8 @@ async fn test_network_stats_reads_derived_statistics() {
             .unwrap();
     }
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -751,8 +807,10 @@ async fn test_network_stats_reads_derived_statistics() {
     // window from the oldest included bucket start (now_hour - 3600) to the
     // tip timestamp, scaled to 86400s. The stale 999-tx bucket stays excluded
     // (a raw or wider window would inflate this far beyond the expectation).
-    let window_secs = (now_ms as f64 / 1000.0) - (now_hour - 3600) as f64;
-    let expected_per_day = format!("{:.0}", 200.0 / window_secs * 86400.0);
+    let window_ms = now_ms - (now_hour - 3600) * 1000;
+    let numerator = 200i128 * 86_400 * 1000;
+    let expected_per_day =
+        ((numerator + i128::from(window_ms) / 2) / i128::from(window_ms)).to_string();
     assert_eq!(json["transactionsPerDay"], expected_per_day);
     assert_eq!(json["difficulty"], "1.32 E");
     assert_eq!(json["avgBlockTime"], "8.00s");
@@ -903,7 +961,8 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         })
         .unwrap();
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -1006,7 +1065,8 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
         })
         .unwrap();
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -1087,7 +1147,8 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
         .unwrap();
 
     // Intentionally do NOT seed the genesis baseline.
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -2254,7 +2315,8 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
             .unwrap();
     }
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -2764,7 +2826,8 @@ async fn test_network_stats_knowledge_size_subtracts_genesis_virtual_occupied() 
     // Real mainnet tip U at the time this bug was found.
     seed_knowledge_size_fixture(&store, 519_967_746_700_000_000);
 
-    let config = test_config(store);
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -2819,7 +2882,8 @@ async fn test_network_stats_fails_fast_when_knowledge_size_is_negative() {
     // synced mainnet store.
     seed_knowledge_size_fixture(&store, 1_000_000_000_000_000);
 
-    let config = test_config(store);
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
     let app = create_router(config).await;
 
     let request = Request::builder()

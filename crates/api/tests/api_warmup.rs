@@ -125,7 +125,18 @@ async fn test_network_stats_includes_api_background_tasks() {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(0, &header);
     batch.commit().unwrap();
-    let config = test_config(store);
+    let mut config = test_config(store);
+    let rpc = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({"method":"get_tip_block_number"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x0"
+        })))
+        .mount(&rpc)
+        .await;
+    config.ckb_rpc_url = rpc.uri();
 
     // Build AppState through the shared helper so this test keeps compiling as
     // state fields are added, and holds a reference to the state it serves.
