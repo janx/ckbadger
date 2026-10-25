@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '../utils/test-utils';
+import { fireEvent, render, screen } from '@/__tests__/utils/test-utils';
 import { LineChart } from '@/components/ui/line-chart';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
@@ -23,6 +23,116 @@ describe('LineChart', () => {
     Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
     fireEvent.mouseMove(svg, { clientX: 580 });
     expect(screen.getByText('-30.00')).toBeInTheDocument();
+  });
+  it('rejects log scale for nonpositive values without flattening signed points', () => {
+    const { container } = render(
+      <LineChart
+        yAxisLabel="Net Flow"
+        data={[
+          { date: 'a', value: '0' },
+          { date: 'b', value: '-30' },
+        ]}
+      />
+    );
+    const logButton = screen.getByRole('button', { name: 'Log Scale' });
+    expect(logButton).toBeDisabled();
+    fireEvent.click(logButton);
+    const path = screen.getByTestId('line-series-primary').getAttribute('d')!;
+    expect(path).not.toMatch(/NaN|Infinity/);
+    const ys = [...path.matchAll(/[ML] \d+ ([-\d.]+)/g)].map((match) => Number(match[1]));
+    expect(ys).toHaveLength(2);
+    expect(ys[0]).not.toBe(ys[1]);
+    const svg = container.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    fireEvent.mouseMove(svg, { clientX: 580 });
+    expect(screen.getByText('-30.00')).toBeInTheDocument();
+  });
+
+  it('returns to a linear axis when an active log chart receives a zero value', () => {
+    const initial = [
+      { date: 'a', value: '10' },
+      { date: 'b', value: '100' },
+    ];
+    const { rerender } = render(<LineChart yAxisLabel="Count" data={initial} />);
+    const logButton = screen.getByRole('button', { name: 'Log Scale' });
+    fireEvent.click(logButton);
+    expect(logButton).toHaveAttribute('aria-pressed', 'true');
+    rerender(
+      <LineChart
+        yAxisLabel="Count"
+        data={[
+          { date: 'a', value: '0' },
+          { date: 'b', value: '100' },
+        ]}
+      />
+    );
+    expect(logButton).toBeDisabled();
+    expect(logButton).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('line-series-primary').getAttribute('d')).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('limits log scale to positive zoom slices and disables it again after reset', () => {
+    const data = Array.from({ length: 20 }, (_, i) => ({
+      date: String(i),
+      value: i < 10 ? String(i + 1) : '0',
+    }));
+    const { container } = render(<LineChart yAxisLabel="Count" data={data} />);
+    const logButton = screen.getByRole('button', { name: 'Log Scale' });
+    expect(logButton).toBeDisabled();
+    const svg = container.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    fireEvent.mouseDown(svg, { clientX: 60 });
+    fireEvent.mouseMove(svg, { clientX: 306 });
+    fireEvent.mouseUp(svg, { clientX: 306 });
+    expect(logButton).toBeEnabled();
+    fireEvent.click(logButton);
+    expect(logButton).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Zoom' }));
+    expect(logButton).toBeDisabled();
+    expect(logButton).toHaveAttribute('aria-pressed', 'false');
+  });
+  it('keeps positive fractions distinct on the log axis', () => {
+    render(
+      <LineChart
+        yAxisLabel="Rate"
+        defaultLogScale
+        data={[
+          { date: 'a', value: '0.01' },
+          { date: 'b', value: '0.1' },
+        ]}
+      />
+    );
+    const path = screen.getByTestId('line-series-primary').getAttribute('d')!;
+    const ys = [...path.matchAll(/[ML] \d+ ([-\d.]+)/g)].map((match) => Number(match[1]));
+    expect(ys).toHaveLength(2);
+    expect(ys[0]).not.toBe(ys[1]);
+    expect(screen.getByRole('button', { name: 'Log Scale' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+  it('draws positive fractional bars on a finite log axis', () => {
+    render(
+      <LineChart
+        chartType="bar"
+        yAxisLabel="Rate"
+        defaultLogScale
+        data={[
+          { date: 'a', value: '0.01' },
+          { date: 'b', value: '0.1' },
+        ]}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Log Scale' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    const bars = screen.getAllByTestId('bar-series-primary');
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect(bar.getAttribute('y')).not.toMatch(/NaN|Infinity/);
+      expect(bar.getAttribute('height')).not.toMatch(/NaN|Infinity/);
+    }
   });
   it('keeps exact primary and secondary decimals in hover readouts', () => {
     const { container } = render(

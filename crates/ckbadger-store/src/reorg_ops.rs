@@ -4384,6 +4384,28 @@ impl CkbadgerStore {
                     )
                 })?;
             }
+            // A first appearance in the orphaned suffix has no canonical
+            // address after rollback. Keeping its zero row would make replay
+            // reuse the orphan's first_seen_block and assign the new branch's
+            // balance to the wrong monthly cohort.
+            if ab.first_seen_block > rollback_to {
+                if ab.balance != 0
+                    || ab.used_capacity != 0
+                    || ab.live_cells_count != 0
+                    || ab.total_cells_count != 0
+                    || ab.txs_count != 0
+                {
+                    anyhow::bail!(
+                        "orphan-only addr_balance is nonempty after rollback: lock_hash=0x{}, first_seen_block={}, rollback_to={}, balance={}, used={}, live_cells={}, total_cells={}, txs={}",
+                        bytes_to_hex(lock_hash), ab.first_seen_block, rollback_to,
+                        ab.balance, ab.used_capacity, ab.live_cells_count,
+                        ab.total_cells_count, ab.txs_count
+                    );
+                }
+                batch.delete_cf(self.cf_addr_balance(), lock_hash);
+                addr_balances_updated += 1;
+                continue;
+            }
             // Repair last_activity from the latest surviving CELL participation.
             // Both forward paths set last_activity from cell participation
             // only, so the repair reads `addr_txs` alone — never the
@@ -8505,14 +8527,17 @@ mod tests {
         assert_eq!(ab_a.txs_count, 1);
         assert_eq!(ab_a.last_activity_block, 1);
         assert_eq!(ab_a.last_activity_tx, input_tx);
+        assert!(store.get_addr_balance(&addr_b).unwrap().is_none());
+        assert!(store.get_addr_balance(&addr_c).unwrap().is_none());
 
         // The point of the fix: cost tracks the rolled-back data, not the CF.
         // Exactly 3 deleted rows (A@2, B@2, C@2) + one last_activity seek for
-        // each of the 3 affected addresses. The old full scan read all
+        // surviving A. Orphan-only B and C are deleted without a history seek.
+        // The old full scan read all
         // `noise_count` unrelated entries on top of that, and on testnet that
         // meant 641M reads to delete a single row.
         assert_eq!(
-            result.addr_txs_scanned, 6,
+            result.addr_txs_scanned, 4,
             "addr_txs rollback read {} keys with {} unrelated entries in the CF — \
              cost must not scale with chain history",
             result.addr_txs_scanned, noise_count
@@ -10236,6 +10261,12 @@ mod tests {
         let keep_tx = vec![0x10; 32];
         let drop_live_tx = vec![0x20; 32];
         let drop_consumed_tx = vec![0x30; 32];
+        let historical_consumed_tx = vec![0x40; 32];
+        let orphan_consumed_tx = vec![0x50; 32];
+        let orphan_consumed_cell = LiveCellInfo {
+            lock_script_hash: vec![0xDD; 32],
+            ..drop_consumed_cell.clone()
+        };
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -10243,6 +10274,8 @@ mod tests {
         batch.put_cell(&keep_tx, 0, &keep_cell, 1);
         batch.put_cell(&drop_live_tx, 0, &drop_live_cell, 2);
         batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 2);
+        batch.put_cell(&historical_consumed_tx, 0, &drop_consumed_cell, 1);
+        batch.put_cell(&orphan_consumed_tx, 0, &orphan_consumed_cell, 2);
         // Seed derived CFs so inline delta application can find them.
         batch.put_addr_balance(
             &[0xAA; 32],
@@ -10260,13 +10293,23 @@ mod tests {
                 used_capacity: 200,
                 live_cells_count: 1,
                 total_cells_count: 1,
+                first_seen_block: 2,
                 ..Default::default()
             },
         );
         batch.put_addr_balance(
             &[0xCC; 32],
             &AddressBalance {
+                total_cells_count: 2,
+                first_seen_block: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_addr_balance(
+            &[0xDD; 32],
+            &AddressBalance {
                 total_cells_count: 1,
+                first_seen_block: 2,
                 ..Default::default()
             },
         );
@@ -10286,16 +10329,24 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell(&historical_consumed_tx, 0, &drop_consumed_cell, 1, 1);
+        batch.delete_cell(&historical_consumed_tx, 0);
         batch.put_consumed_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 2, 2);
         batch.delete_cell(&drop_consumed_tx, 0);
+        batch.put_consumed_cell(&orphan_consumed_tx, 0, &orphan_consumed_cell, 2, 2);
+        batch.delete_cell(&orphan_consumed_tx, 0);
         batch.commit().unwrap();
+
+        let orphan_payload_key = keys::encode_outpoint(&drop_live_tx, 0);
+        let orphan_payload = store.get_cf(store.cf_cells(), &orphan_payload_key).unwrap();
+        assert!(orphan_payload.is_some());
 
         rollback_fixture(&store, 1).unwrap();
 
         let script = store.get_script_info(&[0x11; 32]).unwrap().unwrap();
         assert_eq!(script.lock_live_cells_count, 1);
         assert_eq!(script.type_live_cells_count, 0);
-        assert_eq!(script.lock_cells_count, 1);
+        assert_eq!(script.lock_cells_count, 2);
         assert_eq!(script.type_cells_count, 0);
         let reference = store
             .get_script_reference_info(1, &[0x11; 32])
@@ -10303,11 +10354,15 @@ mod tests {
             .unwrap();
         assert_eq!(reference.lock_live_cells_count, 1);
         assert_eq!(reference.type_live_cells_count, 0);
-        assert_eq!(reference.lock_cells_count, 1);
+        assert_eq!(reference.lock_cells_count, 2);
         assert_eq!(reference.type_cells_count, 0);
 
         assert!(store.get_cell(&keep_tx, 0, &store).unwrap().is_some());
         assert!(store.get_cell(&drop_live_tx, 0, &store).unwrap().is_none());
+        assert!(
+            store.get_addr_balance(&[0xBB; 32]).unwrap().is_none(),
+            "an address first seen only in the orphaned suffix must not survive rollback"
+        );
         assert!(store
             .get_cell(&drop_consumed_tx, 0, &store)
             .unwrap()
@@ -10316,14 +10371,14 @@ mod tests {
             .get_consumed_cell(&drop_consumed_tx, 0, &store)
             .unwrap()
             .is_none());
+        let historical = store.get_addr_balance(&[0xCC; 32]).unwrap().unwrap();
+        assert_eq!(historical.first_seen_block, 1);
+        assert_eq!(historical.total_cells_count, 1);
+        assert_eq!(historical.balance, 0);
+        assert!(store.get_addr_balance(&[0xDD; 32]).unwrap().is_none());
         assert_eq!(
-            store
-                .get_addr_balance(&[0xCC; 32])
-                .unwrap()
-                .unwrap()
-                .total_cells_count,
-            0,
-            "a cell created and consumed in the removed suffix has no surviving creation"
+            store.get_cf(store.cf_cells(), &orphan_payload_key).unwrap(),
+            orphan_payload
         );
     }
 

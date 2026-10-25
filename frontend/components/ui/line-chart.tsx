@@ -126,6 +126,9 @@ export function LineChart({
         : [],
     [data, y2AxisLabel]
   );
+  // A logarithmic axis is defined only when every visible primary value is positive.
+  const canUseLogScale = values.length > 0 && values.every((value) => value > 0);
+  const logScaleActive = useLogScale && canUseLogScale;
 
   const { minVal, maxVal, minVal2, maxVal2 } = useMemo(() => {
     let min = Infinity;
@@ -137,7 +140,7 @@ export function LineChart({
     if (!isFinite(min)) min = 0;
     if (!isFinite(max) || max === 0) max = 1;
 
-    if (chartType === 'bar') {
+    if (chartType === 'bar' && !logScaleActive) {
       min = 0;
     }
 
@@ -147,9 +150,7 @@ export function LineChart({
     }
     if (!isFinite(max2) || max2 === 0) max2 = 1;
 
-    // For log scale, ensure min is at least 1 (log(0) is undefined)
-    if (useLogScale) {
-      min = Math.max(1, min);
+    if (logScaleActive) {
       return { minVal: min, maxVal: max * 1.1, minVal2: 0, maxVal2: max2 * 1.1 };
     }
 
@@ -159,7 +160,7 @@ export function LineChart({
       minVal2: 0,
       maxVal2: max2 * 1.1,
     };
-  }, [values, values2, useLogScale, chartType]);
+  }, [values, values2, logScaleActive, chartType]);
 
   const xScale = useCallback(
     (i: number) => {
@@ -174,15 +175,15 @@ export function LineChart({
 
   const yScale = useCallback(
     (v: number) => {
-      if (useLogScale) {
-        const logMin = Math.log10(Math.max(1, minVal));
+      if (logScaleActive) {
+        const logMin = Math.log10(minVal);
         const logMax = Math.log10(maxVal);
-        const logV = Math.log10(Math.max(1, v));
+        const logV = Math.log10(v);
         return padding.top + chartHeight - ((logV - logMin) / (logMax - logMin || 1)) * chartHeight;
       }
       return padding.top + chartHeight - ((v - minVal) / (maxVal - minVal || 1)) * chartHeight;
     },
-    [padding.top, chartHeight, minVal, maxVal, useLogScale]
+    [padding.top, chartHeight, minVal, maxVal, logScaleActive]
   );
 
   const y2Scale = useCallback(
@@ -408,13 +409,13 @@ export function LineChart({
   }, [chartType, chartWidth, data.length]);
 
   const barBaseline = useMemo(
-    () => (chartType === 'bar' ? yScale(useLogScale ? 1 : 0) : 0),
-    [chartType, yScale, useLogScale]
+    () => (chartType === 'bar' ? yScale(logScaleActive ? minVal : 0) : 0),
+    [chartType, yScale, logScaleActive, minVal]
   );
 
   const yTicks = useMemo(() => {
-    if (useLogScale) {
-      const logMin = Math.floor(Math.log10(Math.max(1, minVal)));
+    if (logScaleActive) {
+      const logMin = Math.floor(Math.log10(minVal));
       const logMax = Math.ceil(Math.log10(maxVal));
       const ticks: number[] = [];
       for (let exp = logMin; exp <= logMax && ticks.length < 6; exp++) {
@@ -423,7 +424,7 @@ export function LineChart({
       return ticks.length >= 2 ? ticks : [minVal, maxVal];
     }
     return Array.from({ length: 5 }, (_, i) => minVal + ((maxVal - minVal) / 4) * i);
-  }, [minVal, maxVal, useLogScale]);
+  }, [minVal, maxVal, logScaleActive]);
 
   const handleToggleLogScale = useCallback(() => {
     setUseLogScale((prev) => !prev);
@@ -470,8 +471,13 @@ export function LineChart({
       <div className="absolute right-2 top-2 z-10 flex gap-2">
         <button
           onClick={handleToggleLogScale}
+          disabled={!canUseLogScale}
+          aria-pressed={logScaleActive}
+          title={
+            canUseLogScale ? undefined : 'Log scale requires positive values in the visible range'
+          }
           className={`rounded border px-2 py-1 font-mono text-xs transition-colors ${
-            useLogScale
+            logScaleActive
               ? 'border-jade text-jade bg-jade/10'
               : 'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text'
           }`}
@@ -613,7 +619,7 @@ export function LineChart({
         )}
         {chartType === 'bar' &&
           data.map((_, i) => {
-            const value = Math.max(values[i] ?? 0, useLogScale ? 1 : 0);
+            const value = logScaleActive ? values[i] : Math.max(values[i] ?? 0, 0);
             const barTop = yScale(value);
             const y = Math.min(barTop, barBaseline);
             const barHeight = Math.max(1, Math.abs(barBaseline - barTop));
@@ -677,11 +683,17 @@ export function LineChart({
             {chartType === 'bar' && (
               <rect
                 x={xScale(hoverIndex) - barWidth / 2}
-                y={Math.min(yScale(Math.max(values[hoverIndex], useLogScale ? 1 : 0)), barBaseline)}
+                y={Math.min(
+                  yScale(logScaleActive ? values[hoverIndex] : Math.max(values[hoverIndex], 0)),
+                  barBaseline
+                )}
                 width={barWidth}
                 height={Math.max(
                   1,
-                  Math.abs(barBaseline - yScale(Math.max(values[hoverIndex], useLogScale ? 1 : 0)))
+                  Math.abs(
+                    barBaseline -
+                      yScale(logScaleActive ? values[hoverIndex] : Math.max(values[hoverIndex], 0))
+                  )
                 )}
                 fill="transparent"
                 stroke="#ffffff"

@@ -10834,5 +10834,136 @@ mod tests {
             assert_stats_dao_rows_eq(stats_dao_rows(&multi), &expected, "bulk vs rollback/replay");
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
+
+        #[tokio::test]
+        async fn orphan_first_seen_at_month_end_replays_into_new_month_like_fresh_sync() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let mut canonical = continuous_chain_with_dao_token_and_name();
+            for (block, time) in canonical.iter_mut().zip([
+                1_706_716_780_000_u64,
+                1_706_716_790_000,
+                1_706_716_799_000,
+                1_706_716_810_000,
+            ]) {
+                block.block.header.timestamp = format!("0x{time:x}");
+            }
+            let mut orphan = canonical[2].clone();
+            let orphan_hash = [0xd2; 32];
+            orphan.block.header.hash = format!("0x{}", hex::encode(orphan_hash));
+            orphan.block.transactions[0].hash = format!("0x{}", hex::encode([0xd3; 32]));
+            let mut new_lock = super::live_dao_fee::lock_script();
+            new_lock.args = format!("0x{}", "77".repeat(20));
+            let lock_hash = crate::parser::ScriptParser::compute_script_hash(&new_lock);
+            orphan.block.transactions[0].outputs[0].lock = new_lock.clone();
+            canonical[3].block.transactions[0].outputs[0].lock = new_lock;
+
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (replayed, replay_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &replay_indexer,
+                canonical[..2].to_vec(),
+            )
+            .await
+            .unwrap();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &replay_indexer,
+                vec![orphan],
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                replayed
+                    .get_addr_balance(&lock_hash)
+                    .unwrap()
+                    .unwrap()
+                    .first_seen_block,
+                2
+            );
+            let immutable_before = cell_payload_rows(&replayed);
+            replay_indexer
+                .writer
+                .cleanup_batch_range(replayed.as_ref(), 2, 2)
+                .unwrap();
+            replay_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
+            replay_indexer
+                .reconcile_cell_dist_tracker_with_tip(1)
+                .unwrap();
+            replay_indexer.cell_cache.clear();
+            assert!(replayed.get_addr_balance(&lock_hash).unwrap().is_none());
+            assert_eq!(cell_payload_rows(&replayed), immutable_before);
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &replay_indexer,
+                canonical[2..].to_vec(),
+            )
+            .await
+            .unwrap();
+
+            let (fresh, fresh_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &fresh_indexer,
+                canonical,
+            )
+            .await
+            .unwrap();
+            let replay_balance = replayed.get_addr_balance(&lock_hash).unwrap().unwrap();
+            let fresh_balance = fresh.get_addr_balance(&lock_hash).unwrap().unwrap();
+            assert_eq!(replay_balance.first_seen_block, 3);
+            assert_eq!(
+                bincode::serialize(&replay_balance).unwrap(),
+                bincode::serialize(&fresh_balance).unwrap()
+            );
+            for date in ["20240131", "20240201"] {
+                assert_eq!(
+                    bincode::serialize(&replayed.get_address_cohort(date).unwrap()).unwrap(),
+                    bincode::serialize(&fresh.get_address_cohort(date).unwrap()).unwrap(),
+                    "cohort snapshot for {date} differs after replay"
+                );
+            }
+            let replay_cohort = replay_indexer
+                .cell_dist_tracker
+                .lock()
+                .unwrap()
+                .cohort_snapshot();
+            let fresh_cohort = fresh_indexer
+                .cell_dist_tracker
+                .lock()
+                .unwrap()
+                .cohort_snapshot();
+            assert_eq!(
+                bincode::serialize(&replay_cohort).unwrap(),
+                bincode::serialize(&fresh_cohort).unwrap()
+            );
+            assert_eq!(
+                replay_cohort
+                    .cohorts
+                    .iter()
+                    .find(|c| c.cohort_month == "2024-02")
+                    .unwrap()
+                    .total_balance,
+                replay_balance.balance
+            );
+            let replay_index = replayed.list_addr_txs_recent(&lock_hash, 10, None).unwrap();
+            let fresh_index = fresh.list_addr_txs_recent(&lock_hash, 10, None).unwrap();
+            assert!(
+                !fresh_index.is_empty(),
+                "fixture must exercise the address index"
+            );
+            assert_eq!(
+                bincode::serialize(&replay_index).unwrap(),
+                bincode::serialize(&fresh_index).unwrap(),
+                "replayed address index differs from fresh sync"
+            );
+        }
     }
 }
