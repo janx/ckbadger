@@ -252,7 +252,12 @@ async fn test_network_stats_rejects_invalid_tip_timestamp() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert!(String::from_utf8_lossy(&body).contains("invalid latest block timestamp: block=0"));
+    assert!(
+        String::from_utf8_lossy(&body)
+            .contains("invalid timestamp on sync tip block 0: 9223372036854775807 ms"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
 }
 
 #[tokio::test]
