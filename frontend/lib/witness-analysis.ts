@@ -491,9 +491,12 @@ export function buildScriptGroupLens(tx: WitnessLensTransactionLike): ScriptGrou
 
   const groups = new Map<string, ScriptGroupLens>();
   const addGroup = (script: TxScriptRef | undefined, kind: 'lock' | 'type', inputIndex: number) => {
-    if (!script?.codeHash) return;
-    const hashType = script.hashType ?? 'unknown';
-    const args = script.args ?? '0x';
+    if (!script) return;
+    if (!script.codeHash) throw new Error(`input ${inputIndex} ${kind}: missing codeHash`);
+    if (!script.hashType) throw new Error(`input ${inputIndex} ${kind}: missing hashType`);
+    if (script.args === undefined) throw new Error(`input ${inputIndex} ${kind}: missing args`);
+    const hashType = script.hashType;
+    const args = script.args;
     const key = `${kind}:${script.codeHash}:${hashType}:${args}`;
     const existing = groups.get(key);
     if (existing) {

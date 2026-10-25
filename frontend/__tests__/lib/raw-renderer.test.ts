@@ -86,6 +86,39 @@ describe('renderRawPage', () => {
     ).toBe(true);
   });
 
+  it('does not report a zero witness count when witness bytes are unavailable', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      hash: `0x${'a'.repeat(64)}`,
+      status: 'committed',
+      pendingSince: null,
+      blockNumber: 123,
+      blockHash: `0x${'b'.repeat(64)}`,
+      index: 0,
+      inputsCount: 1,
+      outputsCount: 0,
+      fee: '0',
+      confirmations: 1,
+      isCellbase: false,
+      timestamp: '2026-02-23T00:00:00Z',
+      inputsCapacity: null,
+      outputsCapacity: null,
+      inputsCommonKnowledgeSize: null,
+      outputsCommonKnowledgeSize: null,
+      inputs: [],
+      outputs: [],
+      witnesses: [],
+      witnessesAvailable: false,
+    });
+    const result = await renderRawPage({
+      page: parseRawSourcePath(`/tx/0x${'a'.repeat(64)}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(result.body.data?.txWitness?.available).toBe(false);
+    expect(result.body.data?.txWitness?.witnessesCount).toBeNull();
+    expect(result.body.data?.txWitness?.inference).toEqual([]);
+  });
+
   it('renders tx raw with debugger profile', async () => {
     const txHash = `0x${'a'.repeat(64)}`;
     const inputTxHash = `0x${'1'.repeat(64)}`;

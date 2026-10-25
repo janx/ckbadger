@@ -382,8 +382,8 @@ interface TransactionDetail extends Omit<
     type?: Script;
     address?: string;
   }>;
-  witnesses?: string[];
-  witnessesAvailable?: boolean;
+  witnesses: string[];
+  witnessesAvailable: boolean;
   /**
    * The `.cell` names this transaction creates, each with the records payload
    * decoded (server-side, hash-verified) from the witness at its own output

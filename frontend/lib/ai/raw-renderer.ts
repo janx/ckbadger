@@ -237,7 +237,7 @@ interface TxDebuggerData {
 
 interface TxWitnessData {
   available: boolean;
-  witnessesCount: number;
+  witnessesCount: number | null;
   inputCount: number;
   analyses: WitnessAnalysis[];
   scriptGroupLens: ScriptGroupLens[];
@@ -792,16 +792,21 @@ async function renderTxDebuggerPayload(hash: string): Promise<TxDebuggerData> {
 }
 
 function buildTxWitnessData(tx: TransactionDetail): TxWitnessData {
-  const witnesses = tx.witnesses ?? [];
+  const witnesses = tx.witnesses;
+  if (!tx.witnessesAvailable && witnesses.length > 0) {
+    throw new Error(`transaction ${tx.hash}: unavailable witness bytes must have no payload`);
+  }
   const analyses = witnesses.map((witness, index) =>
     analyzeWitness(witness, index, tx.inputsCount)
   );
   const scriptGroupLens = buildScriptGroupLens(tx);
-  const inference = inferWitnessInsights(tx, analyses, scriptGroupLens);
+  const inference = tx.witnessesAvailable
+    ? inferWitnessInsights(tx, analyses, scriptGroupLens)
+    : [];
 
   return {
-    available: tx.witnessesAvailable ?? witnesses.length > 0,
-    witnessesCount: witnesses.length,
+    available: tx.witnessesAvailable,
+    witnessesCount: tx.witnessesAvailable ? witnesses.length : null,
     inputCount: tx.inputsCount,
     analyses,
     scriptGroupLens,

@@ -52,7 +52,6 @@ const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   ),
 });
 const WITNESS_BYTES_PER_ROW = 24;
-const EMPTY_WITNESSES: string[] = [];
 const WITNESS_SEGMENT_TONES = [
   {
     dot: 'bg-emphasis',
@@ -123,12 +122,6 @@ function parseNonNegativeInt(value: string | null): number | null {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) return null;
   return parsed;
-}
-function normalizeScriptHashType(hashType: string | undefined): string {
-  return hashType ?? 'unknown';
-}
-function normalizeScriptArgs(args: string | undefined): string {
-  return args ?? '0x';
 }
 function getErrorMessage(error: unknown): string | null {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -381,11 +374,16 @@ export default function TransactionDetailPage() {
       tx.outputs.forEach((output, outputIndex) => {
         const isLinked = associatedGroups.some((group) => {
           const script = group.kind === 'lock' ? output.lock : output.type;
-          if (!script?.codeHash) return false;
+          if (!script) return false;
+          if (!script.codeHash || !script.hashType || script.args === undefined) {
+            throw new Error(
+              `transaction ${tx.hash} output ${outputIndex} ${group.kind}: incomplete script identity`
+            );
+          }
           return (
             script.codeHash === group.codeHash &&
-            normalizeScriptHashType(script.hashType) === group.hashType &&
-            normalizeScriptArgs(script.args) === group.args
+            script.hashType === group.hashType &&
+            script.args === group.args
           );
         });
         if (isLinked) highlightedOutputIndices.add(outputIndex);
@@ -868,7 +866,7 @@ export default function TransactionDetailPage() {
         </TerminalPanel>
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">
-            Witness ({tx.witnesses?.length ?? 0})
+            Witness ({tx.witnessesAvailable ? tx.witnesses.length : '—'})
           </TerminalPanelHeader>
           <TerminalPanelContent className="p-0">
             <WitnessTab
@@ -1082,8 +1080,8 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const witnesses = tx.witnesses ?? EMPTY_WITNESSES;
-  const witnessesAvailable = tx.witnessesAvailable ?? witnesses.length > 0;
+  const witnesses = tx.witnesses;
+  const witnessesAvailable = tx.witnessesAvailable;
   const witnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
   const scriptGroupFromQuery = searchParams.get('wg');
   const witnessAnalyses = useMemo(

@@ -50,6 +50,19 @@ describe('witness-analysis', () => {
     expect(typeGroup?.inputIndices).toEqual([1]);
   });
 
+  it('rejects a present script with missing identity fields instead of merging it with empty args', () => {
+    expect(() =>
+      buildScriptGroupLens({
+        inputs: [{ lock: { codeHash: '0xaaa' } }],
+      })
+    ).toThrow('input 0 lock: missing hashType');
+    expect(() =>
+      buildScriptGroupLens({
+        inputs: [{ lock: { codeHash: '0xaaa', hashType: 'type' } }],
+      })
+    ).toThrow('input 0 lock: missing args');
+  });
+
   it('infers witness coverage and extra witness payloads', () => {
     const tx = {
       inputsCount: 1,

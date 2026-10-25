@@ -549,8 +549,8 @@ function renderTxSummary(tx: TransactionDetail, lifecycle: TransactionLifecycle 
       ['feeRate', tx.feeRate ?? '-'],
       ['txSize', tx.txSize ?? '-'],
       ['cycles', tx.cycles ?? '-'],
-      ['witnessesCount', tx.witnesses?.length ?? 0],
-      ['witnessesAvailable', tx.witnessesAvailable ?? tx.witnesses?.length !== 0],
+      ['witnessesCount', tx.witnessesAvailable ? tx.witnesses.length : '—'],
+      ['witnessesAvailable', tx.witnessesAvailable],
       ['lifecyclePhase', lifecycle?.phase ?? '-'],
       ['commitmentDistance', lifecycle?.commitmentDistance ?? '-'],
     ]

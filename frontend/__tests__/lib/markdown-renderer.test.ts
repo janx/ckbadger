@@ -1068,5 +1068,18 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('DASWitness');
     expect(result.body).toContain('extra_witnesses');
     expect(result.body).toContain('| index | role | bytes | deterministicKind | heuristics |');
+
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...(await vi.mocked(api.getTransactionDetail).mock.results[0].value),
+      witnesses: [],
+      witnessesAvailable: false,
+    } as any);
+    const unavailable = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(`/tx/${hash}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(unavailable.body).toContain('| witnessesCount | — |');
+    expect(unavailable.body).toContain('| witnessesAvailable | false |');
   });
 });

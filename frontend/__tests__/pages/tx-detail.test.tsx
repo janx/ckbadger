@@ -472,6 +472,17 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
   });
 
+  it('labels unavailable witness bytes without claiming the transaction has zero witnesses', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...createCommittedTransactionDetail(),
+      witnesses: [],
+      witnessesAvailable: false,
+    });
+    render(<TransactionDetailPage />);
+    expect(await screen.findByText('Witness (—)')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-tab')).toHaveTextContent('Witness bytes are unavailable');
+  });
+
   it('decodes .cell records next to the witness that carries them', async () => {
     const address =
       'ckt1qrfrwcdnvssswdwpn3s9v8fp87emat306ctjwsm3nmlkjg8qyza2cqgqq9x75zu4l7gld606r6eyd00m4lzy3zkxkq4nywzu';
