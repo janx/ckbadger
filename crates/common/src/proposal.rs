@@ -42,9 +42,6 @@ pub struct CachedProposal {
     /// Transaction cycles consumed
     pub cycles: Option<u64>,
 
-    /// Fee rate (shannon per byte) = fee / size
-    pub fee_rate: Option<f64>,
-
     /// Unix timestamp when this proposal was cached
     pub cached_at: i64,
 }
@@ -64,7 +61,6 @@ impl CachedProposal {
             fee: None,
             size: None,
             cycles: None,
-            fee_rate: None,
             cached_at: chrono::Utc::now().timestamp(),
         }
     }
@@ -79,14 +75,9 @@ impl CachedProposal {
         fee: u64,
         size: u64,
         cycles: u64,
-    ) -> Self {
-        let fee_rate = if size > 0 {
-            Some(fee as f64 / size as f64)
-        } else {
-            None
-        };
-
-        Self {
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(size > 0, "proposal {proposal_id} has zero serialized size");
+        Ok(Self {
             proposal_id,
             full_tx_hash: Some(full_tx_hash),
             proposed_at_block,
@@ -94,9 +85,8 @@ impl CachedProposal {
             fee: Some(fee),
             size: Some(size),
             cycles: Some(cycles),
-            fee_rate,
             cached_at: chrono::Utc::now().timestamp(),
-        }
+        })
     }
 
     /// Calculate blocks remaining until the commit window closes.
@@ -158,8 +148,8 @@ pub struct PendingProposal {
     /// Blocks remaining until commit window closes (0 = can commit now, negative = expired)
     pub blocks_until_expiry: i64,
 
-    /// Transaction fee in shannons
-    pub fee: Option<u64>,
+    /// Transaction fee in shannons, encoded as an exact decimal integer.
+    pub fee: Option<String>,
 
     /// Transaction size in bytes
     pub size: Option<u64>,
@@ -167,27 +157,38 @@ pub struct PendingProposal {
     /// Transaction cycles
     pub cycles: Option<u64>,
 
-    /// Fee rate (shannon per byte)
-    pub fee_rate: Option<f64>,
+    /// Fee rate (shannon per byte), exact half-up to two decimal places.
+    pub fee_rate: Option<String>,
 }
 
 impl PendingProposal {
     /// Create from a cached proposal with the current tip
-    pub fn from_cached(cached: &CachedProposal, current_tip: i64) -> Self {
+    pub fn from_cached(cached: &CachedProposal, current_tip: i64) -> anyhow::Result<Self> {
         let expiry_block = cached.proposed_at_block + PROPOSAL_WINDOW_FARTHEST as i64;
         let blocks_until_expiry = expiry_block - current_tip;
 
-        Self {
+        let fee_rate = match (cached.fee, cached.size) {
+            (Some(fee), Some(size)) if size > 0 => {
+                let scaled = (u128::from(fee) * 100 + u128::from(size) / 2) / u128::from(size);
+                Some(format!("{}.{:02}", scaled / 100, scaled % 100))
+            }
+            (None, None) => None,
+            _ => anyhow::bail!(
+                "proposal {} has incomplete fee/size or zero size",
+                cached.proposal_id
+            ),
+        };
+        Ok(Self {
             proposal_id: format!("0x{}", cached.proposal_id),
             full_tx_hash: cached.full_tx_hash.clone(),
             proposed_at_block: cached.proposed_at_block,
             proposed_at_index: cached.proposed_at_index,
             blocks_until_expiry,
-            fee: cached.fee,
+            fee: cached.fee.map(|fee| fee.to_string()),
             size: cached.size,
             cycles: cached.cycles,
-            fee_rate: cached.fee_rate,
-        }
+            fee_rate,
+        })
     }
 }
 
@@ -216,12 +217,52 @@ mod tests {
             1000000, // 0.01 CKB fee
             500,     // 500 bytes
             100000,  // 100k cycles
-        );
+        )
+        .unwrap();
 
         assert!(proposal.full_tx_hash.is_some());
         assert_eq!(proposal.fee, Some(1000000));
         assert_eq!(proposal.size, Some(500));
-        assert!((proposal.fee_rate.unwrap() - 2000.0).abs() < 0.01); // 1000000 / 500 = 2000
+        assert_eq!(
+            PendingProposal::from_cached(&proposal, 1000)
+                .unwrap()
+                .fee_rate
+                .as_deref(),
+            Some("2000.00")
+        );
+    }
+
+    #[test]
+    fn fee_rate_above_javascript_safe_integer_is_exact() {
+        let cached = CachedProposal::new_with_details(
+            "abcd1234567890abcdef".to_string(),
+            "0x01".to_string(),
+            1,
+            0,
+            9_007_199_254_740_993,
+            1,
+            0,
+        )
+        .unwrap();
+        let pending = PendingProposal::from_cached(&cached, 1).unwrap();
+        let json = serde_json::to_value(pending).unwrap();
+        assert_eq!(json["feeRate"], "9007199254740993.00");
+        assert_eq!(json["fee"], "9007199254740993");
+    }
+
+    #[test]
+    fn detailed_proposal_rejects_zero_size() {
+        let error = CachedProposal::new_with_details(
+            "abcd1234567890abcdef".to_string(),
+            "0x01".to_string(),
+            1,
+            0,
+            1,
+            0,
+            0,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("zero serialized size"));
     }
 
     #[test]
@@ -273,9 +314,10 @@ mod tests {
             1000000,
             500,
             100000,
-        );
+        )
+        .unwrap();
 
-        let pending = PendingProposal::from_cached(&cached, 1005);
+        let pending = PendingProposal::from_cached(&cached, 1005).unwrap();
 
         assert_eq!(pending.proposal_id, "0xabcd1234567890abcdef");
         assert_eq!(pending.full_tx_hash, Some("0xfull_hash".to_string()));
@@ -292,7 +334,8 @@ mod tests {
             1000000,
             500,
             100000,
-        );
+        )
+        .unwrap();
 
         let json = serde_json::to_string(&proposal).unwrap();
         let parsed: CachedProposal = serde_json::from_str(&json).unwrap();

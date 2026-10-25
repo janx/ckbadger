@@ -103,8 +103,8 @@ function proposalToItem(proposal: PendingProposal): FlowTxItem {
   return {
     id: proposal.fullTxHash || proposal.proposalId,
     size: toSafePositive(proposal.size, 200),
-    fee: proposal.fee,
-    feeRate: proposal.feeRate,
+    fee: proposal.fee == null ? null : Number(BigInt(proposal.fee)),
+    feeRate: proposal.feeRate == null ? null : Number(proposal.feeRate),
     cycles: proposal.cycles,
     category: 'normal',
   };

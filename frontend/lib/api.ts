@@ -1839,10 +1839,11 @@ interface PendingProposal {
   proposedAtBlock: number;
   proposedAtIndex: number;
   blocksUntilExpiry: number;
-  fee: number | null;
+  fee: string | null;
   size: number | null;
   cycles: number | null;
-  feeRate: number | null;
+  /** Shannon per byte, rounded half-up to two decimal places. */
+  feeRate: string | null;
 }
 
 interface PendingProposalsResponse {

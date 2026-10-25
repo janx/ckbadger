@@ -602,7 +602,7 @@ impl Indexer {
                     parse_prefixed_hex_u64(&entry.size),
                     parse_prefixed_hex_u64(&entry.cycles),
                 ) {
-                    cached_proposals.push(CachedProposal::new_with_details(
+                    let proposal = match CachedProposal::new_with_details(
                         proposal_id,
                         String::new(),
                         *block_number,
@@ -610,7 +610,14 @@ impl Indexer {
                         fee,
                         size,
                         cycles,
-                    ));
+                    ) {
+                        Ok(proposal) => proposal,
+                        Err(error) => {
+                            tracing::error!(%error, "invalid mempool proposal metadata");
+                            return;
+                        }
+                    };
+                    cached_proposals.push(proposal);
                 } else {
                     warn!(
                         proposal_id = %proposal_id,

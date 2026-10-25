@@ -470,7 +470,8 @@ async fn get_pending_proposals(
         .iter()
         .filter(|p| !p.is_expired(tip))
         .map(|p| PendingProposal::from_cached(p, tip))
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     proposals.sort_by(|a, b| {
         b.proposed_at_block

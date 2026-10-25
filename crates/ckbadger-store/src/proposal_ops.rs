@@ -120,7 +120,8 @@ mod tests {
             5000,
             200,
             10000,
-        );
+        )
+        .unwrap();
         store.put_pending_proposal(&p1_enriched).unwrap();
         let all = store.get_all_pending_proposals().unwrap();
         assert_eq!(all.len(), 1);
