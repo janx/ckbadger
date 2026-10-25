@@ -180,6 +180,8 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
             total_count: 10,
             live_count: 8,
             owner_count: 2,
+            owned_capacity: 800_000_000_000,
+            owned_knowledge: 80_000_000_000,
             ..Default::default()
         },
     );
@@ -191,10 +193,36 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
             total_count: 20,
             live_count: 16,
             owner_count: 4,
+            owned_capacity: 1_600_000_000_000,
+            owned_knowledge: 160_000_000_000,
             ..Default::default()
         },
     );
     batch.commit().unwrap();
+    // Ten and twenty synthetic mints, followed by two and four melts. The
+    // daily history sums to the eight and sixteen live spores in each agg.
+    for (id, minted, melted) in [(&cluster_id, 10i128, 2i128), (&popular_cluster_id, 20, 4)] {
+        store
+            .put_cluster_daily_delta(
+                id,
+                20240115,
+                &ClusterDailyDelta {
+                    owned_capacity_delta: minted * 100_000_000_000,
+                    owned_knowledge_delta: minted * 10_000_000_000,
+                },
+            )
+            .unwrap();
+        store
+            .put_cluster_daily_delta(
+                id,
+                20240116,
+                &ClusterDailyDelta {
+                    owned_capacity_delta: -(melted * 100_000_000_000),
+                    owned_knowledge_delta: -(melted * 10_000_000_000),
+                },
+            )
+            .unwrap();
+    }
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -698,6 +726,18 @@ async fn dotcell_collection_hit_links_to_the_identities_route() {
             },
         );
         batch.commit().unwrap();
+        // Three live names minted on one day. The indexer persists identity
+        // collection capacity history in OBJECT_DAILY.
+        store
+            .put_mnft_daily_delta(
+                &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+                20240115,
+                &MnftDailyDelta {
+                    owned_capacity_delta: 300_000_000_000,
+                    owned_knowledge_delta: 30_000_000_000,
+                },
+            )
+            .unwrap();
     }
     let config = test_config(store);
     let app = create_router(config).await;

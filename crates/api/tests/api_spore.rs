@@ -72,10 +72,22 @@ async fn test_inferred_cluster_without_cluster_cell_has_null_creation_block() {
             total_count: 1,
             live_count: 1,
             owner_count: 1,
+            owned_capacity: 100_000_000_000,
+            owned_knowledge: 10_000_000_000,
             ..Default::default()
         },
     );
     batch.commit().unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 100_000_000_000,
+                owned_knowledge_delta: 10_000_000_000,
+            },
+        )
+        .unwrap();
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(
         &app,
@@ -980,10 +992,22 @@ async fn test_spore_clusters_pagination_walks_same_block_group_completely() {
                 total_count: 1,
                 live_count: 1,
                 owner_count: 1,
+                owned_capacity: 100_000_000_000,
+                owned_knowledge: 10_000_000_000,
                 ..Default::default()
             },
         );
         batch.commit().unwrap();
+        store
+            .put_cluster_daily_delta(
+                &cluster_id,
+                20240115,
+                &ClusterDailyDelta {
+                    owned_capacity_delta: 100_000_000_000,
+                    owned_knowledge_delta: 10_000_000_000,
+                },
+            )
+            .unwrap();
         expected.push(format!("0x{}", hex::encode(cluster_id)));
     }
 
@@ -1112,10 +1136,22 @@ async fn test_spore_objects_and_owner_lists_exclude_cluster_cells() {
             total_count: 1,
             live_count: 1,
             owner_count: 1,
+            owned_capacity: 100_000_000_000,
+            owned_knowledge: 10_000_000_000,
             ..Default::default()
         },
     );
     batch.commit().unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 100_000_000_000,
+                owned_knowledge_delta: 10_000_000_000,
+            },
+        )
+        .unwrap();
 
     let app = create_router(test_config(store)).await;
     let spore_hex = format!("0x{}", hex::encode(spore_id));
@@ -1176,10 +1212,34 @@ async fn test_cluster_spores_count_is_live_count_on_detail_and_list() {
             total_count: 5,
             live_count: 2,
             owner_count: 2,
+            owned_capacity: 200_000_000_000,
+            owned_knowledge: 20_000_000_000,
             ..Default::default()
         },
     );
     batch.commit().unwrap();
+    // Five spores minted; three later melted. Only the two live spores retain
+    // owned capacity, matching the aggregate's live_count and capacity sums.
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 500_000_000_000,
+                owned_knowledge_delta: 50_000_000_000,
+            },
+        )
+        .unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240116,
+            &ClusterDailyDelta {
+                owned_capacity_delta: -300_000_000_000,
+                owned_knowledge_delta: -30_000_000_000,
+            },
+        )
+        .unwrap();
 
     let app = create_router(test_config(store)).await;
 
