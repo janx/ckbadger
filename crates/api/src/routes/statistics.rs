@@ -1491,6 +1491,37 @@ fn common_knowledge_size(
     knowledge_size_from_u(snapshot.occupied_capacity, virtual_occupied, &snapshot.date)
 }
 
+/// Percent rounded half-up to four decimal places, using exact shannons.
+fn knowledge_utilization_percent_4(
+    knowledge: i128,
+    circulating: i128,
+    date: &str,
+) -> Result<Option<String>, ApiRouteError> {
+    if knowledge < 0 || circulating < 0 || knowledge > circulating {
+        return Err(ApiError::internal(format!(
+            "invalid knowledge utilization on {date}: knowledge={knowledge}, circulating={circulating}"
+        )));
+    }
+    if circulating == 0 {
+        return Ok(None); // 0/0 has no ratio.
+    }
+    let scaled = knowledge.checked_mul(1_000_000).ok_or_else(|| {
+        ApiError::internal(format!(
+            "knowledge utilization numerator overflow on {date}: knowledge={knowledge}"
+        ))
+    })?;
+    let mut units = scaled / circulating;
+    if (scaled % circulating).checked_mul(2).ok_or_else(|| {
+        ApiError::internal(format!(
+            "knowledge utilization rounding overflow on {date}: circulating={circulating}"
+        ))
+    })? >= circulating
+    {
+        units += 1;
+    }
+    Ok(Some(format!("{}.{:04}", units / 10_000, units % 10_000)))
+}
+
 /// [`common_knowledge_size`] from a DAO `U` read anywhere; `at` names the
 /// snapshot date or block in the error.
 fn knowledge_size_from_u(
@@ -1630,24 +1661,22 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         if !is_complete_day_key(chain, "daily stats", &date_str)? {
             continue;
         }
-        let Some(ks) = stats.knowledge_size else {
-            continue;
-        };
+        let ks = stats.knowledge_size.ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing common knowledge size in complete daily stats for {date_str}"
+            ))
+        })?;
         let snapshot_date = format_chart_date(&date_str)?;
-        let utilization = liquid_by_date
-            .get(&snapshot_date)
-            .map(|circulating| {
-                if *circulating > 0 {
-                    format!("{:.4}", ks as f64 * 100.0 / *circulating as f64)
-                } else {
-                    "0.0000".to_string()
-                }
-            })
-            .unwrap_or_else(|| "0.0000".to_string());
+        let circulating = liquid_by_date.get(&snapshot_date).ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing DAO daily snapshot for complete knowledge-size date {snapshot_date}"
+            ))
+        })?;
+        let utilization = knowledge_utilization_percent_4(ks, *circulating, &snapshot_date)?;
         data.push(ChartDataPoint {
             date: snapshot_date,
             value: shannon_to_ckb_string(ks),
-            value2: Some(utilization),
+            value2: utilization,
         });
     }
 
@@ -2498,7 +2527,12 @@ async fn fetch_network_stats_from_db(
         tip_compact_target,
     ) = match latest {
         Some((block_num, header)) => {
-            let ts = DateTime::from_timestamp_millis(header.timestamp).unwrap_or_else(Utc::now);
+            let ts = DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid timestamp on sync tip block {block_num}: {} ms",
+                    header.timestamp
+                ))
+            })?;
             (
                 block_num,
                 header.epoch_number,
@@ -2957,11 +2991,19 @@ async fn get_uncle_rate_chart(
         if !is_complete_day_key(chain, "daily block stats", &date_str)? {
             continue;
         }
-        let uncle_rate = if stats.block_count > 0 {
-            stats.total_uncles as f64 / stats.block_count as f64
-        } else {
-            0.0
-        };
+        if stats.block_count <= 0 {
+            return Err(ApiError::internal(format!(
+                "daily block stats for {date_str} has invalid block_count={}",
+                stats.block_count
+            )));
+        }
+        if stats.total_uncles < 0 {
+            return Err(ApiError::internal(format!(
+                "daily block stats for {date_str} has negative total_uncles={}",
+                stats.total_uncles
+            )));
+        }
+        let uncle_rate = stats.total_uncles as f64 / stats.block_count as f64;
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
             value: format!("{:.6}", uncle_rate),
@@ -4149,15 +4191,21 @@ async fn get_daily_activity_stats(
 
     let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
     for code_hash_hex in &unique_code_hashes {
-        if let Ok(bytes) = hex::decode(code_hash_hex) {
-            let name = state
-                .store
-                .get_script_info(&bytes)
-                .ok()
-                .flatten()
-                .and_then(|info| info.name);
-            name_cache.insert(code_hash_hex.clone(), name);
-        }
+        let bytes = hex::decode(code_hash_hex).map_err(|e| {
+            ApiError::internal(format!(
+                "invalid daily activity script code hash {code_hash_hex}: {e}"
+            ))
+        })?;
+        let name = state
+            .store
+            .get_script_info(&bytes)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to read script info for code hash {code_hash_hex}: {e}"
+                ))
+            })?
+            .and_then(|info| info.name);
+        name_cache.insert(code_hash_hex.clone(), name);
     }
 
     let result: Vec<DailyActivityStatsResponse> = selected
@@ -4276,15 +4324,21 @@ async fn get_activity_summary_24h(
     // Resolve script names
     let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
     for code_hash_hex in agg_script_counts.keys() {
-        if let Ok(bytes) = hex::decode(code_hash_hex) {
-            let name = state
-                .store
-                .get_script_info(&bytes)
-                .ok()
-                .flatten()
-                .and_then(|info| info.name);
-            name_cache.insert(code_hash_hex.clone(), name);
-        }
+        let bytes = hex::decode(code_hash_hex).map_err(|e| {
+            ApiError::internal(format!(
+                "invalid 24h activity script code hash {code_hash_hex}: {e}"
+            ))
+        })?;
+        let name = state
+            .store
+            .get_script_info(&bytes)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to read script info for code hash {code_hash_hex}: {e}"
+                ))
+            })?
+            .and_then(|info| info.name);
+        name_cache.insert(code_hash_hex.clone(), name);
     }
 
     let mut script_counts: Vec<ScriptCountEntry> = agg_script_counts
@@ -4515,6 +4569,20 @@ async fn get_asset_ecosystem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knowledge_utilization_uses_exact_shannons_above_javascript_integer_limit() {
+        let base = 9_007_199_254_740_992_i128;
+        assert_eq!(
+            knowledge_utilization_percent_4(base + 1, (base + 1) * 2, "2026-01-01").unwrap(),
+            Some("50.0000".into())
+        );
+        assert_eq!(
+            knowledge_utilization_percent_4(0, 0, "2026-01-01").unwrap(),
+            None
+        );
+        assert!(knowledge_utilization_percent_4(1, 0, "2026-01-01").is_err());
+    }
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::types::CachedBlockHeader;
     use ckbadger_store::CkbadgerStore;

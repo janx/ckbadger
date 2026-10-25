@@ -56,6 +56,7 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
         json["outputsCommonKnowledgeSize"],
         serde_json::Value::from("61")
     );
+    assert_eq!(json["outputs"][0]["commonKnowledgeSize"], "61");
     assert_eq!(json["inputs"][0]["capacity"], "100000000372");
     assert_eq!(
         json["inputs"][0]["lock"]["codeHash"],

@@ -1308,13 +1308,15 @@ impl BatchWriter {
                     // Status-specific accounting
                     if entry.status == 1 {
                         pending_withdrawal_capacity += entry.capacity as i128;
-                        if let Some(request_block) = entry.withdraw_request_block {
-                            status1_for_avg.push((
-                                entry.capacity,
-                                entry.deposit_timestamp,
-                                request_block,
-                            ));
-                        }
+                        let request_block = entry.withdraw_request_block.ok_or_else(|| anyhow!(
+                            "phase-1 DAO entry missing request block while refreshing averages: deposit_outpoint=0x{}",
+                            hex::encode(outpoint)
+                        ))?;
+                        status1_for_avg.push((
+                            entry.capacity,
+                            entry.deposit_timestamp,
+                            request_block,
+                        ));
                     } else {
                         // Only status=0 deposits count toward total_deposited,
                         // unique_depositors, depositor_map, and avg deposit time —
@@ -1353,13 +1355,16 @@ impl BatchWriter {
 
         // Resolve status-1 deposit timestamps from block headers for capacity-weighted average.
         for &(capacity, deposit_ts, request_block) in &status1_for_avg {
-            if let Some(hdr) = self.store.get_block_header(request_block)? {
-                let frozen_days = (hdr.timestamp - deposit_ts) as f64 / 86_400_000.0;
-                if frozen_days >= 0.0 {
-                    weighted_deposit_days += capacity as f64 * frozen_days;
-                    avg_total_capacity += capacity as i128;
-                }
-            }
+            let hdr = self.store.get_block_header(request_block)?.ok_or_else(|| anyhow!(
+                "missing DAO withdraw-request block header while refreshing averages: tip_block={tip_block_number}, request_block={request_block}"
+            ))?;
+            let elapsed = hdr.timestamp.checked_sub(deposit_ts).filter(|v| *v >= 0)
+                .ok_or_else(|| anyhow!(
+                    "negative/overflow DAO deposit duration while refreshing averages: tip_block={tip_block_number}, request_block={request_block}, request_timestamp={}, deposit_timestamp={deposit_ts}",
+                    hdr.timestamp
+                ))?;
+            weighted_deposit_days += capacity as f64 * elapsed as f64 / 86_400_000.0;
+            avg_total_capacity += capacity as i128;
         }
 
         let latest_snapshot = match self.store.get_latest_dao_daily_snapshot()? {
@@ -1377,8 +1382,11 @@ impl BatchWriter {
                 );
             }
         };
-        let estimated_apc =
-            estimated_apc_from_header(&header, self.genesis_total_issuance()?).unwrap_or_default();
+        let estimated_apc = estimated_apc_from_header(&header, self.genesis_total_issuance()?)
+            .ok_or_else(|| anyhow!(
+                "invalid estimated APC inputs at tip block {tip_block_number}: epoch={}:{}/{}, genesis issuance unavailable or nonpositive APC",
+                header.epoch_number, header.epoch_index, header.epoch_length
+            ))?;
         if latest_snapshot.cum_miner_secondary < 0 {
             bail!(
                 "negative cum_miner_secondary in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
@@ -2325,6 +2333,71 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("withdraw_request_occupied_capacity"), "{err}");
+    }
+
+    #[test]
+    fn test_refresh_dao_statistics_fails_without_phase1_request_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let mut entry = dao_free_test_entry(300_00000000, 102_00000000, 1, Some(102_00000000));
+        entry.withdraw_request_block = None;
+        seed_dao_free_fixture(&store, &[entry]);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let err = writer
+            .refresh_latest_dao_statistics()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing request block"), "{err}");
+    }
+
+    #[test]
+    fn test_refresh_dao_statistics_fails_on_zero_epoch_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        seed_dao_free_fixture(&store, &[]);
+        let mut header = store.get_block_header(100).unwrap().unwrap();
+        header.epoch_length = 0;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(100, &header);
+        batch.commit().unwrap();
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let err = writer
+            .refresh_latest_dao_statistics()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid estimated APC inputs"), "{err}");
+    }
+
+    #[test]
+    fn test_refresh_dao_statistics_rejects_negative_phase1_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        seed_dao_free_fixture(
+            &store,
+            &[dao_free_test_entry(
+                300_00000000,
+                102_00000000,
+                1,
+                Some(102_00000000),
+            )],
+        );
+        let mut request = store.get_block_header(80).unwrap().unwrap();
+        request.timestamp = 1_700_000_000_000 - 2 * 86_400_000;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(80, &request);
+        batch.commit().unwrap();
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let err = writer
+            .refresh_latest_dao_statistics()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("negative/overflow DAO deposit duration"),
+            "{err}"
+        );
     }
 
     #[test]

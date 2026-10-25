@@ -17,6 +17,76 @@ async fn test_spore_list_empty_db() {
 }
 
 #[tokio::test]
+async fn test_cluster_detail_rejects_missing_aggregate_when_spore_index_exists() {
+    let store = test_store();
+    let cluster_id = [0xC9_u8; 32];
+    let spore_id = [0x51_u8; 32];
+    store
+        .put_spore_direct(&cluster_id, &live_cluster_entry(100, [0xAA; 32]))
+        .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_by_cluster(&cluster_id, &spore_id);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}", hex::encode(cluster_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing aggregate"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn test_cluster_detail_without_minted_spores_has_explicit_empty_ratio() {
+    let store = test_store();
+    let cluster_id = [0xCA_u8; 32];
+    store
+        .put_spore_direct(&cluster_id, &live_cluster_entry(100, [0xAA; 32]))
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}", hex::encode(cluster_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["sporesCount"], 0);
+    assert!(json["composition"]["onchainRatio"].is_null());
+}
+
+#[tokio::test]
+async fn test_inferred_cluster_without_cluster_cell_has_null_creation_block() {
+    let store = test_store();
+    let cluster_id = [0xCB_u8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 1,
+            owner_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}", hex::encode(cluster_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["createdAtBlock"].is_null());
+}
+
+#[tokio::test]
 async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let store = test_store();
     let cluster_id = [0x42u8; 32];

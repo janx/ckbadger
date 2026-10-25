@@ -529,6 +529,7 @@ async fn test_dao_deposits_cursor_pagination_descending() {
         );
     }
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -568,6 +569,47 @@ async fn test_dao_deposits_cursor_pagination_descending() {
 }
 
 #[tokio::test]
+async fn test_dao_deposit_listing_rejects_missing_deposit_header() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0xA1; 32], 0),
+        &DaoDepositCacheEntry {
+            capacity: 100_00000000,
+            occupied_capacity: 50_00000000,
+            deposit_block_number: 30,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x22; 32],
+            deposit_ar: 1,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dao/deposits?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("missing deposit header"));
+}
+
+#[tokio::test]
 async fn test_dao_deposits_cursor_pagination_keeps_same_block_rows() {
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
@@ -602,6 +644,7 @@ async fn test_dao_deposits_cursor_pagination_keeps_same_block_rows() {
         );
     }
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let app = create_router(test_config(store)).await;
     let request = Request::builder()
@@ -671,6 +714,7 @@ async fn test_dao_deposits_status_filter_uses_descending_order() {
         );
     }
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let app = create_router(test_config(store)).await;
     let request = Request::builder()
@@ -719,6 +763,7 @@ async fn test_dao_deposits_serve_frozen_compensation_for_pending_withdraw_reques
         },
     );
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let app = create_router(test_config(store)).await;
     let request = Request::builder()
@@ -773,6 +818,7 @@ async fn test_dao_deposits_status_cursor_mismatch_returns_bad_request() {
         );
     }
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let app = create_router(test_config(store)).await;
     let request = Request::builder()
@@ -839,6 +885,7 @@ async fn test_dao_deposits_by_lock_hash_cursor_pagination() {
         );
     }
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let app = create_router(test_config(store)).await;
     let request = Request::builder()
@@ -912,6 +959,7 @@ async fn test_dao_deposits_by_lock_hash_cursor_mismatch_returns_bad_request() {
         );
     }
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(10, 0), (20, 0), (30, 0)]);
 
     let app = create_router(test_config(store)).await;
     let request = Request::builder()

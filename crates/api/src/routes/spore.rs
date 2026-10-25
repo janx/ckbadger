@@ -191,7 +191,8 @@ pub struct ClusterCompositionResponse {
     pub decentralized_mixture_count: i64,
     pub centralized_mixture_count: i64,
     pub unknown_count: i64,
-    pub onchain_ratio: String,
+    /// None when the cluster has no live spores, so the ratio has no denominator.
+    pub onchain_ratio: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -200,12 +201,13 @@ pub struct ClusterResponse {
     pub cluster_id: String,
     pub name: Option<String>,
     pub description: Option<String>,
-    pub owner_lock_hash: String,
+    pub owner_lock_hash: Option<String>,
     pub owner_address: Option<String>,
     pub spores_count: i32,
     pub holders_count: i64,
     pub activities_count: i64,
-    pub created_at_block: i64,
+    /// None when spores reference an ID with no minted cluster cell.
+    pub created_at_block: Option<i64>,
     pub owned_capacity: Option<String>,
     pub owned_knowledge: Option<String>,
     pub composition: ClusterCompositionResponse,
@@ -238,7 +240,7 @@ pub struct SporeResponse {
     pub cluster_id: Option<String>,
     pub content_type: String,
     pub content_size: i32,
-    pub owner_lock_hash: String,
+    pub owner_lock_hash: Option<String>,
     pub owner_address: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
@@ -311,7 +313,17 @@ pub struct SporeDobDecodeResponse {
 }
 
 /// Convert an ObjectEntry from the store into a SporeResponse.
-fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::ObjectEntry) -> SporeResponse {
+fn spore_to_response(
+    spore_id: &[u8],
+    entry: &ckbadger_store::ObjectEntry,
+) -> Result<SporeResponse, ApiRouteError> {
+    if entry.is_live && entry.owner_lock_hash.is_none() {
+        return Err(ApiError::internal(format!(
+            "live spore 0x{} has no owner lock hash at creation block {}",
+            hex::encode(spore_id),
+            entry.created_at_block
+        )));
+    }
     let (content_type, content_size, media_profile) = match &entry.extra {
         ckbadger_store::ObjectExtra::Spore {
             content_type,
@@ -335,9 +347,14 @@ fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::ObjectEntry) -> Sp
                 issues: media_profile.issues.clone(),
             }),
         ),
-        _ => (String::new(), 0, None),
+        other => {
+            return Err(ApiError::internal(format!(
+                "spore 0x{} has non-Spore object extra: {other:?}",
+                hex::encode(spore_id)
+            )))
+        }
     };
-    SporeResponse {
+    Ok(SporeResponse {
         spore_id: format!("0x{}", hex::encode(spore_id)),
         tx_hash: format!("0x{}", hex::encode(&entry.created_at_tx)),
         output_index: None, // ObjectEntry does not store output_index; needs schema addition
@@ -351,13 +368,12 @@ fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::ObjectEntry) -> Sp
         owner_lock_hash: entry
             .owner_lock_hash
             .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h)))
-            .unwrap_or_default(),
+            .map(|h| format!("0x{}", hex::encode(h))),
         owner_address: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         media_profile,
-    }
+    })
 }
 
 fn format_yyyymmdd_for_chart(date: u32) -> String {
@@ -505,17 +521,19 @@ fn spore_owned_capacity(
     }
 }
 
-fn format_ratio_4(numerator: i64, denominator: i64) -> String {
-    if denominator <= 0 {
-        return "0.0000".to_string();
+fn format_ratio_4(numerator: i64, denominator: i64) -> Result<Option<String>, ApiRouteError> {
+    if denominator == 0 && numerator == 0 {
+        return Ok(None);
     }
-    let scaled = numerator
-        .saturating_mul(10_000)
-        .checked_div(denominator)
-        .unwrap_or(0);
+    if denominator <= 0 || numerator < 0 || numerator > denominator {
+        return Err(ApiError::internal(format!(
+            "invalid cluster composition ratio: numerator={numerator}, denominator={denominator}"
+        )));
+    }
+    let scaled = (numerator as i128) * 10_000 / denominator as i128;
     let whole = scaled / 10_000;
     let frac = (scaled % 10_000).abs();
-    format!("{whole}.{frac:04}")
+    Ok(Some(format!("{whole}.{frac:04}")))
 }
 
 fn resolve_composition_tier(
@@ -544,18 +562,25 @@ fn resolve_composition_tier(
 fn cluster_composition_from_aggregate(
     aggregate: Option<&ckbadger_store::types::ClusterAggregate>,
     spores_count: i64,
-) -> ClusterCompositionResponse {
+) -> Result<ClusterCompositionResponse, ApiRouteError> {
+    if spores_count < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live spore count in cluster composition: {spores_count}"
+        )));
+    }
     let btc_ckb_count = aggregate.map(|a| a.btc_ckb_count).unwrap_or(0);
     let pure_ckb_count = aggregate.map(|a| a.pure_ckb_count).unwrap_or(0);
     let decentralized_mixture_count = aggregate
         .map(|a| a.decentralized_mixture_count)
         .unwrap_or(0);
     let centralized_mixture_count = aggregate.map(|a| a.centralized_mixture_count).unwrap_or(0);
-    let unknown_count = aggregate
-        .map(|a| a.unknown_count)
-        .unwrap_or(spores_count.max(0));
-    let total_onchain = btc_ckb_count + pure_ckb_count;
-    ClusterCompositionResponse {
+    let unknown_count = aggregate.map(|a| a.unknown_count).unwrap_or(spores_count);
+    let total_onchain = btc_ckb_count.checked_add(pure_ckb_count).ok_or_else(|| {
+        ApiError::internal(format!(
+            "cluster composition count overflow: btc_ckb={btc_ckb_count}, pure_ckb={pure_ckb_count}"
+        ))
+    })?;
+    Ok(ClusterCompositionResponse {
         tier: resolve_composition_tier(
             btc_ckb_count,
             pure_ckb_count,
@@ -568,8 +593,8 @@ fn cluster_composition_from_aggregate(
         decentralized_mixture_count,
         centralized_mixture_count,
         unknown_count,
-        onchain_ratio: format_ratio_4(total_onchain, spores_count),
-    }
+        onchain_ratio: format_ratio_4(total_onchain, spores_count)?,
+    })
 }
 
 /// List clusters — use cached object assets (filtered to Spore) when available.
@@ -620,16 +645,41 @@ fn serve_clusters_from_cache(
         }
     }
 
+    // An absent aggregate means a cluster has never held a spore. Validate
+    // that against the domain membership index; a missing row for
+    // a minted spore is a writer invariant failure, not an empty cluster.
+    for cluster_id in &cluster_ids {
+        if !cluster_agg_map.contains_key(cluster_id) {
+            let ever_minted = state
+                .store
+                .count_spores_in_cluster(cluster_id)
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "failed to check cluster membership 0x{}: {e}",
+                        hex::encode(cluster_id)
+                    ))
+                })?;
+            if ever_minted > 0 {
+                return Err(ApiError::internal(format!(
+                    "missing aggregate for cluster 0x{} with {ever_minted} indexed spores",
+                    hex::encode(cluster_id)
+                )));
+            }
+        }
+    }
+
     let clusters =
-        build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map);
+        build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map)?;
 
     // clusters follow (created_at_block DESC, id ASC); resume strictly after
     // the cursor row so same-block groups larger than the limit stay listable.
+    // An inferred cluster has no creation block; cursor position 0 is an
+    // explicit pagination sentinel, while its JSON field remains null.
     let start = match &cursor {
         None => 0,
         Some(cur) => clusters
             .iter()
-            .position(|(id, c)| is_after_block_id_cursor(c.created_at_block, id, cur))
+            .position(|(id, c)| is_after_block_id_cursor(c.created_at_block.unwrap_or(0), id, cur))
             .unwrap_or(clusters.len()),
     };
 
@@ -639,7 +689,7 @@ fn serve_clusters_from_cache(
 
     let next_cursor = if has_more {
         page.last()
-            .map(|(id, c)| encode_block_id_cursor(c.created_at_block, id))
+            .map(|(id, c)| encode_block_id_cursor(c.created_at_block.unwrap_or(0), id))
     } else {
         None
     };
@@ -676,7 +726,7 @@ fn build_cluster_responses_from_cached_entries(
     cached: Vec<CachedAssetEntry>,
     spore_map: &HashMap<Vec<u8>, ckbadger_store::ObjectEntry>,
     cluster_agg_map: &HashMap<Vec<u8>, ckbadger_store::ClusterAggregate>,
-) -> Vec<(Vec<u8>, ClusterResponse)> {
+) -> Result<Vec<(Vec<u8>, ClusterResponse)>, ApiRouteError> {
     let mut clusters = Vec::new();
 
     for entry in cached {
@@ -686,7 +736,7 @@ fn build_cluster_responses_from_cached_entries(
 
         let cluster_entry = spore_map.get(&cluster_id);
         let cluster_aggregate = cluster_agg_map.get(&cluster_id);
-        let created_at_block = cluster_entry.map(|e| e.created_at_block).unwrap_or(0);
+        let created_at_block = cluster_entry.map(|e| e.created_at_block);
         let description = cluster_entry.and_then(|e| e.description.clone());
         let owner_lock_hash = cluster_entry.and_then(|e| e.owner_lock_hash.clone());
         // Live count, matching the live-based holders/composition next to it.
@@ -699,8 +749,7 @@ fn build_cluster_responses_from_cached_entries(
             description,
             owner_lock_hash: owner_lock_hash
                 .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h)))
-                .unwrap_or_default(),
+                .map(|h| format!("0x{}", hex::encode(h))),
             owner_address: None,
             spores_count: spores_count as i32,
             holders_count: cluster_aggregate.map(|a| a.owner_count).unwrap_or(0),
@@ -708,17 +757,18 @@ fn build_cluster_responses_from_cached_entries(
             created_at_block,
             owned_capacity: None,
             owned_knowledge: None,
-            composition: cluster_composition_from_aggregate(cluster_aggregate, spores_count),
+            composition: cluster_composition_from_aggregate(cluster_aggregate, spores_count)?,
         };
         clusters.push((cluster_id, response));
     }
 
     clusters.sort_by(|a, b| {
         b.1.created_at_block
-            .cmp(&a.1.created_at_block)
+            .unwrap_or(0)
+            .cmp(&a.1.created_at_block.unwrap_or(0))
             .then_with(|| a.0.cmp(&b.0))
     });
-    clusters
+    Ok(clusters)
 }
 
 pub(super) fn load_spore_cache(
@@ -968,7 +1018,7 @@ async fn get_spores_by_cluster(
     let spores: Vec<SporeResponse> = page
         .into_iter()
         .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         spores,
@@ -997,6 +1047,20 @@ async fn get_cluster(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    if cluster_aggregate.is_none() {
+        let ever_minted = state.store.count_spores_in_cluster(&id).map_err(|e| {
+            ApiError::internal(format!(
+                "failed to check cluster membership 0x{}: {e}",
+                hex::encode(&id)
+            ))
+        })?;
+        if ever_minted > 0 {
+            return Err(ApiError::internal(format!(
+                "missing aggregate for cluster 0x{} with {ever_minted} indexed spores",
+                hex::encode(&id)
+            )));
+        }
+    }
 
     // Existence is judged on ever-minted history: a fully-melted cluster
     // still exists, it just has zero live spores.
@@ -1035,7 +1099,7 @@ async fn get_cluster(
             Some("Sole Spores".to_string()),
             Some("Spores not belonging to any cluster".to_string()),
             None,
-            0i64,
+            None,
         )
     } else {
         let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
@@ -1043,10 +1107,7 @@ async fn get_cluster(
         let owner_lock_hash = cluster_entry
             .as_ref()
             .and_then(|e| e.owner_lock_hash.clone());
-        let created_at_block = cluster_entry
-            .as_ref()
-            .map(|e| e.created_at_block)
-            .unwrap_or(0);
+        let created_at_block = cluster_entry.as_ref().map(|e| e.created_at_block);
         (name, description, owner_lock_hash, created_at_block)
     };
     let owned_capacity = cluster_aggregate
@@ -1062,8 +1123,7 @@ async fn get_cluster(
         description,
         owner_lock_hash: owner_lock_hash
             .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h)))
-            .unwrap_or_default(),
+            .map(|h| format!("0x{}", hex::encode(h))),
         owner_address: None,
         spores_count: spores_count as i32,
         holders_count,
@@ -1071,7 +1131,7 @@ async fn get_cluster(
         created_at_block,
         owned_capacity,
         owned_knowledge,
-        composition: cluster_composition_from_aggregate(cluster_aggregate.as_ref(), spores_count),
+        composition: cluster_composition_from_aggregate(cluster_aggregate.as_ref(), spores_count)?,
     })
 }
 
@@ -1119,7 +1179,7 @@ async fn list_spores(
     let spores: Vec<SporeResponse> = page
         .iter()
         .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         spores,
@@ -1151,7 +1211,7 @@ async fn get_spore(
             let (owned_capacity, owned_knowledge) =
                 spore_owned_capacity(&id, entry.is_live, daily)?;
             ok(SporeDetailResponse {
-                spore: spore_to_response(&id, &entry),
+                spore: spore_to_response(&id, &entry)?,
                 owned_capacity: owned_capacity.to_string(),
                 owned_knowledge: owned_knowledge.to_string(),
             })
@@ -1749,7 +1809,7 @@ async fn get_spores_by_owner(
     let spores: Vec<SporeResponse> = page
         .iter()
         .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         spores,
@@ -1761,6 +1821,42 @@ async fn get_spores_by_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_ratio_4_preserves_large_counts_and_explicit_absence() {
+        assert_eq!(format_ratio_4(0, 0).unwrap(), None);
+        assert_eq!(
+            format_ratio_4((i64::MAX - 1) / 2, i64::MAX - 1).unwrap(),
+            Some("0.5000".into())
+        );
+        assert!(format_ratio_4(1, 0).is_err());
+        assert!(format_ratio_4(2, 1).is_err());
+    }
+
+    #[test]
+    fn test_spore_response_rejects_non_spore_extra() {
+        let mut entry = make_spore_entry(123, Some(vec![0x11; 32]));
+        entry.extra = ckbadger_store::ObjectExtra::SporeCluster;
+        let error = spore_to_response(&[0xAA; 32], &entry).unwrap_err();
+        assert!(error.1 .0.message.contains("non-Spore object extra"));
+    }
+
+    #[test]
+    fn test_spore_response_represents_missing_owner_as_null() {
+        let mut entry = make_spore_entry(123, None);
+        entry.is_live = false;
+        let response = spore_to_response(&[0xAA; 32], &entry).unwrap();
+        assert_eq!(response.owner_lock_hash, None);
+        let json = serde_json::to_value(response).unwrap();
+        assert!(json["ownerLockHash"].is_null());
+    }
+
+    #[test]
+    fn test_live_spore_requires_owner() {
+        let entry = make_spore_entry(123, None);
+        let error = spore_to_response(&[0xAA; 32], &entry).unwrap_err();
+        assert!(error.1 .0.message.contains("live spore"));
+    }
 
     fn make_spore_entry(
         created_at_block: i64,
@@ -1978,14 +2074,15 @@ mod tests {
         );
 
         let clusters =
-            build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map);
+            build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map)
+                .unwrap();
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters[0].0, second_cluster);
         assert_eq!(
             clusters[0].1.cluster_id,
             format!("0x{}", hex::encode(&second_cluster))
         );
-        assert_eq!(clusters[0].1.created_at_block, 200);
+        assert_eq!(clusters[0].1.created_at_block, Some(200));
         assert_eq!(clusters[0].1.holders_count, 34);
         assert_eq!(clusters[0].1.spores_count, 3);
         assert_eq!(clusters[1].0, first_cluster);
@@ -1993,7 +2090,7 @@ mod tests {
             clusters[1].1.cluster_id,
             format!("0x{}", hex::encode(&first_cluster))
         );
-        assert_eq!(clusters[1].1.created_at_block, 100);
+        assert_eq!(clusters[1].1.created_at_block, Some(100));
         assert_eq!(clusters[1].1.holders_count, 12);
         // The list row count is the LIVE count (4), never the cached
         // transfers_count masquerade (7) or the ever-minted total (9).
@@ -2057,7 +2154,8 @@ mod tests {
         }
 
         let clusters =
-            build_cluster_responses_from_cached_entries(cached, &spore_map, &HashMap::new());
+            build_cluster_responses_from_cached_entries(cached, &spore_map, &HashMap::new())
+                .unwrap();
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters[0].0, cluster_lo);
         assert_eq!(clusters[1].0, cluster_hi);

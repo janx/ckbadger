@@ -1643,7 +1643,13 @@ impl Check for ChartTxCountPositive {
         let mut prev_date = String::new();
 
         for point in &chart.data {
-            let value: i64 = point.value.parse().unwrap_or(0);
+            let value: i64 = point.value.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid transaction count chart value on {}: {:?}: {e}",
+                    point.date,
+                    point.value
+                )
+            })?;
             if value <= 0 {
                 findings.push(Finding {
                     entity: point.date.clone(),

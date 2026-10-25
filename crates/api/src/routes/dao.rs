@@ -270,34 +270,41 @@ fn deposit_to_response(
 ) -> Result<DaoDepositResponse, ApiRouteError> {
     let (tx_hash_bytes, output_index) = keys::decode_outpoint(outpoint_key);
 
-    // Try to resolve the block header for timestamp
-    let deposit_timestamp = state
-        .store
-        .get_block_header(entry.deposit_block_number)
-        .ok()
-        .flatten()
-        .map(|h| {
-            chrono::DateTime::from_timestamp_millis(h.timestamp)
-                .unwrap_or_default()
-                .to_rfc3339()
-        })
-        .unwrap_or_default();
-
-    let withdraw_request_timestamp = entry.withdraw_request_block.and_then(|bn| {
-        state.store.get_block_header(bn).ok()?.map(|h| {
-            chrono::DateTime::from_timestamp_millis(h.timestamp)
-                .unwrap_or_default()
-                .to_rfc3339()
-        })
-    });
-
-    let withdraw_timestamp = entry.withdraw_block.and_then(|bn| {
-        state.store.get_block_header(bn).ok()?.map(|h| {
-            chrono::DateTime::from_timestamp_millis(h.timestamp)
-                .unwrap_or_default()
-                .to_rfc3339()
-        })
-    });
+    let timestamp_at = |block: i64, event: &str| -> Result<String, ApiRouteError> {
+        let header = state
+            .store
+            .get_block_header(block)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to read {event} header for DAO deposit 0x{} at block {block}: {e}",
+                    hex::encode(outpoint_key)
+                ))
+            })?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing {event} header for DAO deposit 0x{} at block {block}",
+                    hex::encode(outpoint_key)
+                ))
+            })?;
+        chrono::DateTime::from_timestamp_millis(header.timestamp)
+            .map(|time| time.to_rfc3339())
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid {event} timestamp for DAO deposit 0x{} at block {block}: {} ms",
+                    hex::encode(outpoint_key),
+                    header.timestamp
+                ))
+            })
+    };
+    let deposit_timestamp = timestamp_at(entry.deposit_block_number, "deposit")?;
+    let withdraw_request_timestamp = entry
+        .withdraw_request_block
+        .map(|block| timestamp_at(block, "withdraw request"))
+        .transpose()?;
+    let withdraw_timestamp = entry
+        .withdraw_block
+        .map(|block| timestamp_at(block, "withdraw completion"))
+        .transpose()?;
 
     let withdraw_request_tx_hash = entry
         .withdraw_request_tx
@@ -321,18 +328,21 @@ fn deposit_to_response(
                 &cell_info.lock_args,
                 &state.ckb_network,
             )
-            .ok();
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to encode address for DAO deposit 0x{}: {e}",
+                    hex::encode(outpoint_key)
+                ))
+            })?;
             let code_hash = format!("0x{}", hex::encode(&cell_info.lock_code_hash));
-            (addr, Some(code_hash))
+            (Some(addr), Some(code_hash))
         }
         Ok(None) => (None, None),
         Err(e) => {
-            tracing::warn!(
-                "failed to resolve address for DAO deposit outpoint=0x{}: {}",
-                hex::encode(outpoint_key),
-                e
-            );
-            (None, None)
+            return Err(ApiError::internal(format!(
+                "failed to read append-only cell for DAO deposit 0x{}: {e}",
+                hex::encode(outpoint_key)
+            )))
         }
     };
 

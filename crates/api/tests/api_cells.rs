@@ -192,7 +192,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
 
     assert_eq!(
         json["commonKnowledgeSize"],
-        serde_json::Value::from(138_00000000i64)
+        serde_json::Value::from("13800000000")
     );
     assert_eq!(json["type"]["args"], serde_json::Value::from("0xaabb"));
     assert_eq!(

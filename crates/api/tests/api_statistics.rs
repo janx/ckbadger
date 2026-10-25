@@ -24,6 +24,85 @@ async fn test_network_stats_returns_ok() {
 }
 
 #[tokio::test]
+async fn test_network_stats_rejects_invalid_tip_timestamp() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, i64::MAX)]);
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/statistics/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("invalid timestamp on sync tip block 0"));
+}
+
+#[tokio::test]
+async fn test_knowledge_size_chart_rejects_missing_complete_day_dao_snapshot() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    store
+        .put_daily_stats(
+            "20260101",
+            &DailyStats {
+                knowledge_size: Some(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 40, "2026-01-03");
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/knowledge-size")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body)
+        .contains("missing DAO daily snapshot for complete knowledge-size date 2026-01-01"));
+}
+
+#[tokio::test]
+async fn test_uncle_rate_rejects_zero_block_daily_row() {
+    let store = test_store();
+    store
+        .put_daily_block_stats(
+            "20260101",
+            &DailyBlockStats {
+                avg_difficulty: 0.0,
+                block_count: 0,
+                total_uncles: 1,
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 40, "2026-01-03");
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/uncle-rate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body)
+        .contains("daily block stats for 20260101 has invalid block_count=0"));
+}
+
+#[tokio::test]
 async fn test_hardforks_endpoint_returns_default_timeline() {
     let store = test_store();
     let config = test_config(store);
@@ -2322,6 +2401,39 @@ async fn test_knowledge_size_chart_excludes_a_lagging_tip_day() {
         .unwrap();
     store
         .put_daily_stats("20240116", &knowledge_size_day(100_100_000_000))
+        .unwrap();
+    // A complete knowledge-size row must have the matching DAO supply row.
+    // The incomplete tip day is deliberately left without one.
+    let snapshot = DaoDailySnapshot {
+        date: "2024-01-15".to_string(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 0,
+        total_issuance: 1_000_000_000_000_000_000,
+        secondary_pool: 0,
+        occupied_capacity: 0,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20240115",
+    );
+    store
+        .put_cf(
+            store.cf_stats_dao(),
+            &snapshot_key,
+            &bincode::serialize(&snapshot).unwrap(),
+        )
         .unwrap();
     // The tip block is years before the wall-clock day.
     seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");

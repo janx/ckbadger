@@ -1360,7 +1360,11 @@ impl Check for ExplorerTxCount {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                let ours: i64 = our_val.parse().unwrap_or(0);
+                let ours: i64 = our_val.parse().map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid transaction count chart value on {date}: {our_val:?}: {e}"
+                    )
+                })?;
                 if let Some(f) = compare_exact_i64(ours, explorer_val, date, "transactions_count") {
                     findings.push(f);
                 }
@@ -2063,7 +2067,18 @@ impl Check for BlockTimeDistributionConsistency {
         let has_nonzero = distribution
             .data
             .iter()
-            .any(|p| p.value.parse::<f64>().unwrap_or(0.0) > 0.0);
+            .map(|p| {
+                p.value.parse::<f64>().map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid block-time distribution value for {}: {:?}: {e}",
+                        p.date,
+                        p.value
+                    )
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .any(|value| value > 0.0);
         if distribution.data.is_empty() || !has_nonzero {
             return Ok(CheckResult::fail(
                 1,

@@ -519,7 +519,7 @@ pub struct PreviousOutput {
 pub struct TransactionOutputResponse {
     pub capacity: String,
     #[serde(rename = "commonKnowledgeSize")]
-    pub used_capacity: i64,
+    pub used_capacity: String,
     #[serde(
         rename = "virtualCommonKnowledgeSize",
         skip_serializing_if = "Option::is_none"
@@ -1353,7 +1353,7 @@ fn build_inputs_outputs_from_pool_tx(
 
             Ok(TransactionOutputResponse {
                 capacity: cell.capacity.to_string(),
-                used_capacity: occupied as i64,
+                used_capacity: occupied.to_string(),
                 virtual_used_capacity: virtual_occupied_capacity,
                 cell_type,
                 lock: Some(ScriptResponse {
@@ -1639,7 +1639,7 @@ fn build_inputs_outputs_from_ckb(
 
                 Ok(TransactionOutputResponse {
                     capacity: cap.to_string(),
-                    used_capacity: occ as i64,
+                    used_capacity: occ.to_string(),
                     virtual_used_capacity: virtual_occupied_capacity,
                     cell_type,
                     lock: Some(lock_resp),

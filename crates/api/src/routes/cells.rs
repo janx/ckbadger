@@ -1852,7 +1852,7 @@ pub struct CellDetailResponse {
     pub output_index: i32,
     pub capacity: String,
     #[serde(rename = "commonKnowledgeSize")]
-    pub used_capacity: i64,
+    pub used_capacity: String,
     #[serde(rename = "commonKnowledgeSizeBreakdown")]
     pub used_capacity_breakdown: OccupiedCapacityBreakdown,
     #[serde(
@@ -3249,7 +3249,7 @@ async fn get_cell(
         tx_hash: format!("0x{}", hex::encode(&hash_bytes)),
         output_index: output_idx as i32,
         capacity: info.capacity.to_string(),
-        used_capacity: occupied_capacity,
+        used_capacity: occupied_capacity.to_string(),
         used_capacity_breakdown: occupied_capacity_breakdown,
         virtual_used_capacity: virtual_occupied_capacity,
         cell_type,
