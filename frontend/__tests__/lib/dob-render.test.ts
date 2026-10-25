@@ -167,6 +167,30 @@ describe('dob-render helpers', () => {
     expect(decoded?.issues.join(' ')).toMatch(/Bad.*pattern/);
   });
 
+  it('does not coerce null, empty, or boolean coordinates into DNA offsets', () => {
+    for (const offset of [null, '', false, true]) {
+      const decoded = decodeDobContent({
+        sporeContentType: 'dob/0',
+        contentText: '{ "dna": "01" }',
+        clusterDescription: JSON.stringify({
+          dob: {
+            ver: 0,
+            pattern: [
+              {
+                traitName: 'Coerced',
+                dnaOffset: offset,
+                dnaLength: 1,
+                patternType: 'rawNumber',
+              },
+            ],
+          },
+        }),
+      });
+      expect(decoded?.traits).toEqual([]);
+      expect(decoded?.issues.join(' ')).toMatch(/Coerced.*pattern/);
+    }
+  });
+
   it('decodes a wide safe range with BigInt modulo and rejects unsafe JSON bounds', () => {
     const pattern = (max: number) =>
       JSON.stringify({

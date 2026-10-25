@@ -207,13 +207,15 @@ function normalizeDob0PatternElement(value: unknown): Dob0PatternElement | null 
   }
   if (
     typeof record.traitName !== 'string' ||
-    !Number.isSafeInteger(Number(record.dnaOffset)) ||
-    !Number.isSafeInteger(Number(record.dnaLength))
+    typeof record.dnaOffset !== 'number' ||
+    typeof record.dnaLength !== 'number' ||
+    !Number.isSafeInteger(record.dnaOffset) ||
+    !Number.isSafeInteger(record.dnaLength)
   ) {
     return null;
   }
-  const dnaOffset = Number(record.dnaOffset);
-  const dnaLength = Number(record.dnaLength);
+  const dnaOffset = record.dnaOffset;
+  const dnaLength = record.dnaLength;
   return {
     traitName: record.traitName,
     dnaOffset,
