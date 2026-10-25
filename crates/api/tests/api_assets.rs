@@ -4274,6 +4274,43 @@ async fn test_assets_dotcell_ring_endpoint() {
 }
 
 #[tokio::test]
+async fn dotcell_root_without_names_is_empty_but_missing_member_aggregate_is_corrupt() {
+    async fn ring_status(with_member: bool) -> (StatusCode, serde_json::Value) {
+        let store = test_store();
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_dotcell_ring(
+            &hex20(DOTCELL_NAMESPACE_MAINNET),
+            &ckbadger_store::types::DotCellRingRoot {
+                root_tx_hash: vec![0xA0; 32],
+                root_output_index: 0,
+                first_id: hex20(SUPPORT_ID),
+                created_at_block: 20_515_882,
+            },
+        );
+        if with_member {
+            batch.put_identity_by_collection(
+                &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+                &hex20(SUPPORT_ID),
+            );
+        }
+        batch.commit().unwrap();
+        let app = create_router(test_config(store)).await;
+        dotcell_get(app, "/api/v1/assets/identities/dotcell/ring").await
+    }
+
+    let (empty_status, empty) = ring_status(false).await;
+    assert_eq!(empty_status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["liveCount"], 0);
+
+    let (broken_status, broken) = ring_status(true).await;
+    assert_eq!(broken_status, StatusCode::INTERNAL_SERVER_ERROR, "{broken}");
+    assert!(broken["message"]
+        .as_str()
+        .unwrap()
+        .contains("aggregate missing"));
+}
+
+#[tokio::test]
 async fn test_assets_dotcell_item_not_found_and_bad_name() {
     let store = test_store();
     let config = test_config(store);

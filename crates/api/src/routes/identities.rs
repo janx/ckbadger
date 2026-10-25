@@ -1389,12 +1389,39 @@ async fn get_dotcell_ring(State(state): State<Arc<AppState>>) -> ApiResult<DotCe
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(".cell ring root not indexed on this network"))?;
-    let live_count = state
+    let aggregate = state
         .store
         .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map(|agg| agg.live_count)
-        .unwrap_or(0);
+        .map_err(|e| ApiError::internal(format!(".cell ring aggregate read failed: {e}")))?;
+    let live_count = match aggregate {
+        Some(agg) if agg.live_count >= 0 => agg.live_count,
+        Some(agg) => {
+            return Err(ApiError::internal(format!(
+                ".cell ring aggregate has negative live_count: namespace=0x{} count={}",
+                hex::encode(&namespace_args),
+                agg.live_count
+            )))
+        }
+        None => {
+            // A root may be committed before the first name; the writer does
+            // not create an aggregate for that root-only state. A membership
+            // row proves names exist, so an absent aggregate is then corrupt.
+            let members = state
+                .store
+                .list_identity_ids_by_collection(&DOTCELL_SENTINEL_COLLECTION, None, 1)
+                .map_err(|e| {
+                    ApiError::internal(format!(".cell ring membership read failed: {e}"))
+                })?;
+            if !members.is_empty() {
+                return Err(ApiError::internal(format!(
+                    ".cell ring aggregate missing with indexed member: namespace=0x{} member=0x{}",
+                    hex::encode(&namespace_args),
+                    hex::encode(&members[0])
+                )));
+            }
+            0
+        }
+    };
 
     ok(DotCellRingResponse {
         namespace_args: format!("0x{}", hex::encode(namespace_args)),
