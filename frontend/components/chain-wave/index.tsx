@@ -1,5 +1,11 @@
 'use client';
 
+import {
+  exactFeeRate,
+  formatExactFeeRate,
+  medianExactFeeRate,
+  type ExactFeeRate,
+} from '@/lib/exact-fee';
 import { useMemo } from 'react';
 import Link from '@/components/ui/link';
 import { useQueries, useQuery } from '@tanstack/react-query';
@@ -25,7 +31,8 @@ interface FlowTxItem {
   id: string;
   size: number;
   fee?: number | null;
-  feeRate?: number | null;
+  feeRate?: number | null; // scatter geometry only
+  feeRateExact?: ExactFeeRate | null;
   cycles?: number | null;
   category: 'normal' | 'cellbase';
 }
@@ -46,11 +53,6 @@ function toSafePositive(value: number | null | undefined, fallback: number): num
   }
 
   return value;
-}
-
-function formatFeeRate(value: number | null | undefined): string {
-  if (!value || value <= 0) return 'N/A';
-  return `${value.toFixed(2)} sh/B`;
 }
 
 function formatCycles(value: number | null | undefined): string {
@@ -89,22 +91,29 @@ function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): stri
 }
 
 function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
+  const rate = exactFeeRate(tx.fee, tx.size, `mempool transaction ${tx.txHash}`);
   return {
     id: tx.txHash,
     size: toSafePositive(tx.size, 200),
-    fee: tx.fee,
-    feeRate: tx.feeRate,
+    fee: Number(rate.fee), // scatter geometry only
+    feeRate: Number(tx.feeRate), // scatter geometry only
+    feeRateExact: rate,
     cycles: tx.cycles,
     category: 'normal',
   };
 }
 
 function proposalToItem(proposal: PendingProposal): FlowTxItem {
+  const rate =
+    proposal.fee != null && proposal.size != null
+      ? exactFeeRate(proposal.fee, proposal.size, `proposal ${proposal.proposalId}`)
+      : null;
   return {
     id: proposal.fullTxHash || proposal.proposalId,
     size: toSafePositive(proposal.size, 200),
-    fee: proposal.fee == null ? null : Number(BigInt(proposal.fee)),
-    feeRate: proposal.feeRate == null ? null : Number(proposal.feeRate),
+    fee: rate == null ? null : Number(rate.fee), // scatter geometry only
+    feeRate: proposal.feeRate == null ? null : Number(proposal.feeRate), // scatter geometry only
+    feeRateExact: rate,
     cycles: proposal.cycles,
     category: 'normal',
   };
@@ -113,14 +122,19 @@ function proposalToItem(proposal: PendingProposal): FlowTxItem {
 function blockTxToItem(tx: Transaction): FlowTxItem {
   if (!/^(0|[1-9]\d*)$/.test(tx.fee))
     throw new Error(`transaction ${tx.hash}: invalid fee ${tx.fee}`);
+  const rate =
+    tx.txSize != null && tx.txSize > 0
+      ? exactFeeRate(tx.fee, tx.txSize, `transaction ${tx.hash}`)
+      : null;
   const feeNum = Number(BigInt(tx.fee)); // flow geometry only
-  const feeRate = tx.txSize && tx.txSize > 0 ? feeNum / tx.txSize : null;
+  const feeRate = rate == null ? null : Number(rate.fee) / Number(rate.size);
 
   return {
     id: tx.hash,
     size: toSafePositive(tx.txSize, 200),
     fee: feeNum,
     feeRate,
+    feeRateExact: rate,
     cycles: tx.cycles ?? null,
     category: tx.isCellbase ? 'cellbase' : 'normal',
   };
@@ -204,7 +218,7 @@ function TxMetricScatter({
             const title = [
               `TX: ${item.id.slice(0, 10)}...${item.id.slice(-6)}`,
               `Size: ${item.size.toLocaleString()} B`,
-              `Fee Rate: ${formatFeeRate(item.feeRate)}`,
+              `Fee Rate: ${formatExactFeeRate(item.feeRateExact)}`,
               `Cycles: ${formatCycles(item.cycles)}`,
             ].join('\n');
 
@@ -267,7 +281,10 @@ function StageScatterCard({
   totalCount: number;
   emptyText: string;
 }) {
-  const medianFeeRate = useMemo(() => median(items.map((item) => item.feeRate)), [items]);
+  const medianFeeRate = useMemo(
+    () => medianExactFeeRate(items.map((item) => item.feeRateExact)),
+    [items]
+  );
   const medianCycles = useMemo(() => median(items.map((item) => item.cycles)), [items]);
 
   return (
@@ -286,7 +303,7 @@ function StageScatterCard({
       <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
         <div className="border-base-border/50 bg-base-bg/60 rounded-lg border px-2 py-1.5">
           <div className="text-text-dim">Median fee rate</div>
-          <div className="text-text-bright font-medium">{formatFeeRate(medianFeeRate)}</div>
+          <div className="text-text-bright font-medium">{medianFeeRate}</div>
         </div>
         <div className="border-base-border/50 bg-base-bg/60 rounded-lg border px-2 py-1.5">
           <div className="text-text-dim">Median cycles</div>

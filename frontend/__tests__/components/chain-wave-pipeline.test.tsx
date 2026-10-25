@@ -49,16 +49,56 @@ afterEach(() => {
 });
 
 describe('ChainWave pipeline view', () => {
+  it('shows an exact median fee rate above the safe integer range', async () => {
+    vi.spyOn(api, 'getMempoolTransactions').mockResolvedValue([
+      {
+        txHash: '0xlower',
+        fee: '9007199254740992',
+        size: 1,
+        cycles: 1,
+        feeRate: '9007199254740992.00',
+        ancestorsCount: 0,
+        timestamp: 1,
+        status: 'pending',
+      },
+      {
+        txHash: '0xhigher',
+        fee: '9007199254740993',
+        size: 1,
+        cycles: 1,
+        feeRate: '9007199254740993.00',
+        ancestorsCount: 0,
+        timestamp: 1,
+        status: 'pending',
+      },
+    ]);
+    vi.spyOn(api, 'getPendingProposals').mockResolvedValue({
+      proposals: [],
+      tipBlockNumber: 0,
+      totalCount: 0,
+    });
+    vi.spyOn(api, 'getBlocks').mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 4,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<ChainWave initialBlocks={[]} />);
+    expect(await screen.findByText('9007199254740992.50 sh/B')).toBeInTheDocument();
+    expect(screen.getByTitle(/Fee Rate: 9007199254740993.00 sh\/B/)).toBeInTheDocument();
+  });
+
   it('renders pipeline and tri-metric legend', async () => {
     const blocks = [mockBlock(100), mockBlock(99)];
 
     vi.spyOn(api, 'getMempoolTransactions').mockResolvedValue([
       {
         txHash: '0xmempool1',
-        fee: 1000,
+        fee: '1000',
         size: 420,
         cycles: 1_500_000,
-        feeRate: 2.38,
+        feeRate: '2.38',
         ancestorsCount: 0,
         timestamp: 1_700_000_000,
         status: 'pending',

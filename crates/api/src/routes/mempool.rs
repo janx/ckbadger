@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::cache::CacheTtl;
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
+use crate::utils::exact_fee::{median_rate, FeeRate};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -35,10 +36,11 @@ pub struct MempoolInfo {
 #[serde(rename_all = "camelCase")]
 pub struct MempoolTransaction {
     pub tx_hash: String,
-    pub fee: u64,
+    pub fee: String,
     pub size: u64,
     pub cycles: u64,
-    pub fee_rate: f64,
+    /// Shannon per byte, rounded half-up to two decimals.
+    pub fee_rate: String,
     pub ancestors_count: u64,
     pub timestamp: u64,
     pub status: String,
@@ -57,18 +59,18 @@ pub struct MempoolBlock {
     pub index: u32,
     pub transaction_count: u32,
     pub total_size: u64,
-    pub total_fee: u64,
+    pub total_fee: String,
     pub total_cycles: u64,
     pub fee_rate_range: FeeRateRange,
-    pub median_fee_rate: f64,
+    pub median_fee_rate: Option<String>,
     pub estimated_time_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeeRateRange {
-    pub min: f64,
-    pub max: f64,
+    pub min: Option<String>,
+    pub max: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,57 +236,37 @@ async fn get_mempool_transactions(
         .await
         .map_err(ApiError::internal)?;
 
-    let mut transactions: Vec<MempoolTransaction> = Vec::new();
+    let mut transactions: Vec<(FeeRate, MempoolTransaction)> = Vec::new();
 
-    for (hash, entry) in pool.pending.iter() {
-        let size = parse_hex(&entry.size)?;
-        let fee = parse_hex(&entry.fee)?;
-        let fee_rate = if size > 0 {
-            fee as f64 / size as f64
-        } else {
-            0.0
-        };
-
-        transactions.push(MempoolTransaction {
-            tx_hash: hash.clone(),
-            fee,
-            size,
-            cycles: parse_hex(&entry.cycles)?,
-            fee_rate,
-            ancestors_count: parse_hex(&entry.ancestors_count)?,
-            timestamp: parse_hex(&entry.timestamp)?,
-            status: "pending".to_string(),
-        });
+    for (status, entries) in [("pending", &pool.pending), ("proposed", &pool.proposed)] {
+        for (hash, entry) in entries {
+            let size = parse_hex(&entry.size)?;
+            let fee = parse_hex(&entry.fee)?;
+            let rate = FeeRate::new(fee, size)
+                .map_err(|error| ApiError::internal(format!("mempool tx {hash}: {error}")))?;
+            transactions.push((
+                rate,
+                MempoolTransaction {
+                    tx_hash: hash.clone(),
+                    fee: fee.to_string(),
+                    size,
+                    cycles: parse_hex(&entry.cycles)?,
+                    fee_rate: rate.format(1),
+                    ancestors_count: parse_hex(&entry.ancestors_count)?,
+                    timestamp: parse_hex(&entry.timestamp)?,
+                    status: status.to_string(),
+                },
+            ));
+        }
     }
 
-    for (hash, entry) in pool.proposed.iter() {
-        let size = parse_hex(&entry.size)?;
-        let fee = parse_hex(&entry.fee)?;
-        let fee_rate = if size > 0 {
-            fee as f64 / size as f64
-        } else {
-            0.0
-        };
-
-        transactions.push(MempoolTransaction {
-            tx_hash: hash.clone(),
-            fee,
-            size,
-            cycles: parse_hex(&entry.cycles)?,
-            fee_rate,
-            ancestors_count: parse_hex(&entry.ancestors_count)?,
-            timestamp: parse_hex(&entry.timestamp)?,
-            status: "proposed".to_string(),
-        });
-    }
-
-    transactions.sort_by(|a, b| b.fee_rate.total_cmp(&a.fee_rate));
+    transactions.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.tx_hash.cmp(&b.1.tx_hash)));
 
     let total_count = transactions.len();
     transactions.truncate(MAX_MEMPOOL_RESPONSE);
 
     let result = MempoolTransactionsResponse {
-        transactions,
+        transactions: transactions.into_iter().map(|(_, tx)| tx).collect(),
         total: total_count,
     };
 
@@ -315,30 +297,36 @@ async fn get_mempool_blocks(
         .await
         .map_err(ApiError::internal)?;
 
-    let mut all_txs: Vec<(String, u64, u64, u64, f64)> = Vec::new();
+    let mut all_txs: Vec<(String, u64, u64, u64, FeeRate)> = Vec::new();
 
     for (hash, entry) in pool.pending.iter().chain(pool.proposed.iter()) {
         let size = parse_hex(&entry.size)?;
         let fee = parse_hex(&entry.fee)?;
         let cycles = parse_hex(&entry.cycles)?;
-        let fee_rate = if size > 0 {
-            fee as f64 / size as f64
-        } else {
-            0.0
-        };
+        let fee_rate = FeeRate::new(fee, size)
+            .map_err(|error| ApiError::internal(format!("mempool tx {hash}: {error}")))?;
         all_txs.push((hash.clone(), size, fee, cycles, fee_rate));
     }
 
-    all_txs.sort_by(|a, b| b.4.total_cmp(&a.4));
+    all_txs.sort_by(|a, b| b.4.cmp(&a.4).then_with(|| a.0.cmp(&b.0)));
 
     let mut pending_blocks: Vec<MempoolBlock> = Vec::new();
-    let mut current_block_txs: Vec<(u64, u64, u64, f64)> = Vec::new();
+    let mut current_block_txs: Vec<(u64, u64, u64, FeeRate)> = Vec::new();
     let mut current_size: u64 = 0;
     let mut current_cycles: u64 = 0;
 
-    for (_hash, size, fee, cycles, fee_rate) in all_txs {
-        let would_exceed_size = current_size + size > max_block_bytes;
-        let would_exceed_cycles = current_cycles + cycles > max_block_cycles;
+    for (hash, size, fee, cycles, fee_rate) in all_txs {
+        if size > max_block_bytes || cycles > max_block_cycles {
+            return Err(ApiError::internal(format!(
+                "mempool tx {hash} exceeds block limits: size={size}/{max_block_bytes}, cycles={cycles}/{max_block_cycles}"
+            )));
+        }
+        let would_exceed_size = current_size.checked_add(size).ok_or_else(|| {
+            ApiError::internal(format!("mempool block size overflow before tx {hash}"))
+        })? > max_block_bytes;
+        let would_exceed_cycles = current_cycles.checked_add(cycles).ok_or_else(|| {
+            ApiError::internal(format!("mempool block cycles overflow before tx {hash}"))
+        })? > max_block_cycles;
 
         if would_exceed_size || would_exceed_cycles {
             if !current_block_txs.is_empty() {
@@ -347,7 +335,7 @@ async fn get_mempool_blocks(
                     &current_block_txs,
                     current_size,
                     current_cycles,
-                );
+                )?;
                 pending_blocks.push(block);
             }
             current_block_txs.clear();
@@ -356,8 +344,12 @@ async fn get_mempool_blocks(
         }
 
         current_block_txs.push((size, fee, cycles, fee_rate));
-        current_size += size;
-        current_cycles += cycles;
+        current_size = current_size.checked_add(size).ok_or_else(|| {
+            ApiError::internal(format!("mempool block size overflow at tx {hash}"))
+        })?;
+        current_cycles = current_cycles.checked_add(cycles).ok_or_else(|| {
+            ApiError::internal(format!("mempool block cycles overflow at tx {hash}"))
+        })?;
 
         if pending_blocks.len() >= 8 {
             break;
@@ -370,7 +362,7 @@ async fn get_mempool_blocks(
             &current_block_txs,
             current_size,
             current_cycles,
-        );
+        )?;
         pending_blocks.push(block);
     }
 
@@ -394,44 +386,34 @@ async fn get_mempool_blocks(
 
 fn create_mempool_block(
     index: u32,
-    txs: &[(u64, u64, u64, f64)],
+    txs: &[(u64, u64, u64, FeeRate)],
     total_size: u64,
     total_cycles: u64,
-) -> MempoolBlock {
-    let total_fee: u64 = txs.iter().map(|(_, fee, _, _)| fee).sum();
-    let fee_rates: Vec<f64> = txs.iter().map(|(_, _, _, rate)| *rate).collect();
-
-    let min_rate = fee_rates.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_rate = fee_rates.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-    let median_fee_rate = if !fee_rates.is_empty() {
-        let mut sorted = fee_rates.clone();
-        sorted.sort_by(|a, b| a.total_cmp(b));
-        let mid = sorted.len() / 2;
-        if sorted.len() % 2 == 0 {
-            (sorted[mid - 1] + sorted[mid]) / 2.0
-        } else {
-            sorted[mid]
-        }
-    } else {
-        0.0
+) -> Result<MempoolBlock, ApiRouteError> {
+    let total_fee = txs.iter().try_fold(0u128, |total, (_, fee, _, _)| {
+        total
+            .checked_add(*fee as u128)
+            .ok_or_else(|| ApiError::internal(format!("mempool block {index} total fee overflow")))
+    })?;
+    let mut sorted_rates: Vec<FeeRate> = txs.iter().map(|(_, _, _, rate)| *rate).collect();
+    sorted_rates.sort();
+    let fee_rate_range = FeeRateRange {
+        min: sorted_rates.first().map(|rate| rate.format(1)),
+        max: sorted_rates.last().map(|rate| rate.format(1)),
     };
-
+    let median_fee_rate = median_rate(&sorted_rates, 1);
     let estimated_time_minutes = ((index + 1) * CKB_AVG_BLOCK_TIME_SECONDS) / 60;
 
-    MempoolBlock {
+    Ok(MempoolBlock {
         index,
         transaction_count: txs.len() as u32,
         total_size,
-        total_fee,
+        total_fee: total_fee.to_string(),
         total_cycles,
-        fee_rate_range: FeeRateRange {
-            min: if min_rate.is_finite() { min_rate } else { 0.0 },
-            max: if max_rate.is_finite() { max_rate } else { 0.0 },
-        },
+        fee_rate_range,
         median_fee_rate,
         estimated_time_minutes,
-    }
+    })
 }
 
 fn create_empty_block(index: u32) -> MempoolBlock {
@@ -440,10 +422,13 @@ fn create_empty_block(index: u32) -> MempoolBlock {
         index,
         transaction_count: 0,
         total_size: 0,
-        total_fee: 0,
+        total_fee: "0".to_string(),
         total_cycles: 0,
-        fee_rate_range: FeeRateRange { min: 0.0, max: 0.0 },
-        median_fee_rate: 0.0,
+        fee_rate_range: FeeRateRange {
+            min: None,
+            max: None,
+        },
+        median_fee_rate: None,
         estimated_time_minutes,
     }
 }
@@ -455,10 +440,7 @@ async fn get_pending_proposals(
 
     let store = state.store.clone();
     let (tip, cached_proposals) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let tip = store
-            .get_sync_status()
-            .map(|s| s.tip_block_number)
-            .unwrap_or(0);
+        let tip = store.get_sync_status().map(|s| s.tip_block_number)?;
         let cached_proposals = store.get_all_pending_proposals()?;
         Ok((tip, cached_proposals))
     })

@@ -1802,28 +1802,29 @@ interface MempoolInfo {
 
 interface MempoolTransaction {
   txHash: string;
-  fee: number;
+  fee: string;
   size: number;
   cycles: number;
-  feeRate: number;
+  /** Shannon per byte, rounded half-up to two decimals. */
+  feeRate: string;
   ancestorsCount: number;
   timestamp: number;
   status: string;
 }
 
 interface FeeRateRange {
-  min: number;
-  max: number;
+  min: string | null;
+  max: string | null;
 }
 
 interface MempoolBlock {
   index: number;
   transactionCount: number;
   totalSize: number;
-  totalFee: number;
+  totalFee: string;
   totalCycles: number;
   feeRateRange: FeeRateRange;
-  medianFeeRate: number;
+  medianFeeRate: string | null;
   estimatedTimeMinutes: number;
 }
 
