@@ -396,17 +396,13 @@ pub fn parse_cpu_cores(cpuinfo: &str) -> u32 {
 }
 
 /// Extract MemTotal in MB from /proc/meminfo.
-pub fn parse_mem_total_mb(meminfo: &str) -> u64 {
-    parse_meminfo_field(meminfo, "MemTotal")
+pub fn parse_mem_total_mb(meminfo: &str) -> Option<u64> {
+    parse_meminfo_field_optional(meminfo, "MemTotal")
 }
 
 /// Extract MemAvailable in MB from /proc/meminfo.
 pub fn parse_mem_available_mb(meminfo: &str) -> Option<u64> {
     parse_meminfo_field_optional(meminfo, "MemAvailable")
-}
-
-fn parse_meminfo_field(meminfo: &str, field: &str) -> u64 {
-    parse_meminfo_field_optional(meminfo, field).unwrap_or(0)
 }
 
 fn parse_meminfo_field_optional(meminfo: &str, field: &str) -> Option<u64> {
@@ -1094,7 +1090,8 @@ MemTotal:       97613824 kB
 MemFree:         1234567 kB
 MemAvailable:   45000000 kB
 ";
-        assert_eq!(parse_mem_total_mb(meminfo), 95326);
+        assert_eq!(parse_mem_total_mb(meminfo), Some(95326));
+        assert_eq!(parse_mem_total_mb("MemTotal: broken kB"), None);
     }
 
     #[test]
