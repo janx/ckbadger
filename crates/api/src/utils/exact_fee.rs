@@ -4,6 +4,7 @@
 use num_bigint::BigUint;
 use num_integer::Integer;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FeeRate {
@@ -78,17 +79,25 @@ pub fn median_rate(sorted_rates: &[FeeRate], bytes_per_unit: u64) -> Option<Stri
 }
 
 fn sum_rates(rates: &[FeeRate]) -> (BigUint, BigUint) {
-    // Keep a common denominator as the LCM of transaction sizes. Multiplying
-    // all denominators, then reducing a giant fraction on every step, costs
-    // far more while representing the same exact sum.
-    let mut numerator = BigUint::from(0u8);
-    let mut denominator = BigUint::from(1u8);
+    // Sum fees by serialized size, then expand each group against one LCM.
+    // The exact rational is the arithmetic sum of per-transaction rates.
+    let mut fees_by_size = BTreeMap::<u64, BigUint>::new();
     for rate in rates {
-        let size = BigUint::from(rate.size);
-        let common = denominator.gcd(&size);
-        let new_factor = &size / &common;
-        numerator = numerator * &new_factor + BigUint::from(rate.fee) * (&denominator / &common);
-        denominator *= new_factor;
+        *fees_by_size.entry(rate.size).or_default() += rate.fee;
+    }
+    let mut denominator = BigUint::from(1u8);
+    for &size in fees_by_size.keys() {
+        // The remainder is strictly below size, so Euclid's GCD stays u64.
+        let remainder = (&denominator % size)
+            .to_u64_digits()
+            .first()
+            .copied()
+            .unwrap_or(0);
+        denominator *= size / size.gcd(&remainder);
+    }
+    let mut numerator = BigUint::from(0u8);
+    for (size, fees) in fees_by_size {
+        numerator += fees * (&denominator / size);
     }
     (numerator, denominator)
 }
@@ -126,6 +135,16 @@ mod tests {
         let rates = [FeeRate::new(1, 3).unwrap(), FeeRate::new(1, 2).unwrap()];
         assert_eq!(mean_rate(&rates, 1000), Some("416.67".to_string()));
         assert_eq!(median_rate(&rates, 1), Some("0.42".to_string()));
+    }
+
+    #[test]
+    fn mean_groups_equal_sizes_without_weighting_by_bytes() {
+        let rates = [
+            FeeRate::new(10, 2).unwrap(),
+            FeeRate::new(20, 2).unwrap(),
+            FeeRate::new(1, 3).unwrap(),
+        ];
+        assert_eq!(mean_rate(&rates, 1), Some("5.11".to_string()));
     }
 
     #[test]
