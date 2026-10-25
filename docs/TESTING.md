@@ -222,8 +222,11 @@ from the chain and compares it against the index, with **zero tolerance** —
 - **Expected values are independent.** The oracle enumerates the entity's full
   `[0, H]` history through the CKB node's own indexer (`get_transactions`,
   exact script match, ungrouped, cursor-paged), resolves every input's prevout,
-  and recomputes capacity and occupied capacity from the cells. It never calls
-  the production writer, parser or `PROTOCOL_REGISTRY`.
+  and recomputes capacity and occupied capacity from the cells. It reads every
+  canonical node header from genesis through H to reconstruct monotone chain
+  time before assigning UTC+8 days. Sparse entity-touch headers cannot prove
+  that running maximum. It never calls the production writer, parser,
+  `PROTOCOL_REGISTRY`, or ckbadger's persisted chain-time field.
 - **Three facets, one scan.** Per-day deltas and running prefix totals are
   compared against the exported rows; the **current** facet compares the
   chain's _live cell set_ — outputs in `[0, H]` whose outpoint is never
@@ -272,10 +275,14 @@ from the chain and compares it against the index, with **zero tolerance** —
   budget and the spend. Every node call is charged, source qualification and
   the post-walk anchor re-verification included, so the manifest's
   `rpcRequests` is exactly the number of requests the node received.
-  Calibration on mainnet at anchor 20,553,546 (2026-09-25): all eight default
-  candidates matched across 1,418,527 records and 566,896 RPC requests in 267 s.
-  The limits leave headroom over this measurement; larger future histories or
-  slower nodes may still require an explicit increase.
+  The independent chain-time pass alone requires at least H+1 header RPCs.
+  With the default 1M-request budget, a mainnet anchor near 20.8M blocks is
+  explicitly `inconclusive` before the entity scan and reports the required
+  minimum; raise the request and wall-clock budgets for a full verification.
+  The earlier mainnet measurement at anchor 20,553,546 (2026-09-25) covered
+  eight entities, 1,418,527 records and 566,896 RPC requests in 267 s, but
+  predates the full-prefix chain-time requirement and no longer calibrates
+  the complete oracle workload.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
   fully covered and why.

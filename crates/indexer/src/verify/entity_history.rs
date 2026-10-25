@@ -12,8 +12,8 @@
 //!   why a code hash the registry has never seen produces the same numbers;
 //! * it reuses only shared primitives: `ckb_types` for the script hash,
 //!   `ckbadger_common::dao::occupied_capacity_shannons` for the one definition
-//!   of occupied capacity, and `ckbadger_common::block_date_from_ms` for the
-//!   one definition of the UTC+8 day boundary;
+//!   of occupied capacity, the node's complete header prefix for monotone
+//!   chain time, and `ckbadger_common::stats_bucket::stats_day` for UTC+8;
 //! * arithmetic is checked `i128` throughout, compared with zero tolerance.
 //!   `--tolerance` belongs to the explorer comparisons and is not inherited
 //!   here: one shannon is a failure.
@@ -482,16 +482,29 @@ pub struct TokenExpectationOutcome {
 pub(crate) struct Collector<'a> {
     client: &'a CkbRpcClient,
     txs: HashMap<String, crate::rpc::TransactionView>,
-    headers: HashMap<u64, i64>,
+    chain_times: Vec<i64>,
+    last_header_hash: Option<String>,
     budget: &'a mut RunBudget,
 }
+
+#[derive(Debug)]
+struct PrefixBudgetExhausted(String);
+
+impl std::fmt::Display for PrefixBudgetExhausted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PrefixBudgetExhausted {}
 
 impl<'a> Collector<'a> {
     pub(crate) fn new(client: &'a CkbRpcClient, budget: &'a mut RunBudget) -> Self {
         Self {
             client,
             txs: HashMap::new(),
-            headers: HashMap::new(),
+            chain_times: Vec::new(),
+            last_header_hash: None,
             budget,
         }
     }
@@ -516,25 +529,59 @@ impl<'a> Collector<'a> {
         Ok(Some(tx))
     }
 
-    /// Committed timestamp of a block, in milliseconds.
-    async fn timestamp_ms(&mut self, block: u64) -> anyhow::Result<Option<i64>> {
-        if let Some(ts) = self.headers.get(&block) {
-            return Ok(Some(*ts));
+    /// Reconstruct `t*(b)` from the node's complete canonical header prefix.
+    /// Sparse entity-touch blocks alone cannot determine this running maximum.
+    async fn chain_time_ms(&mut self, block: u64) -> anyhow::Result<Option<i64>> {
+        let block_index = usize::try_from(block).context("block height does not fit usize")?;
+        while self.chain_times.len() <= block_index {
+            let next = u64::try_from(self.chain_times.len())?;
+            if let Some(reason) = self.budget.exhausted() {
+                return Err(PrefixBudgetExhausted(format!(
+                    "independent chain-time header prefix incomplete at block {next}: {reason}"
+                ))
+                .into());
+            }
+            self.budget.charge_request();
+            let Some(header) = self.client.get_header_by_number(next).await? else {
+                return Ok(None);
+            };
+            let header_number = u64::from_str_radix(header.number.trim_start_matches("0x"), 16)
+                .with_context(|| {
+                    format!(
+                        "invalid node header number '{}' at requested block {next}",
+                        header.number
+                    )
+                })?;
+            if header_number != next {
+                anyhow::bail!(
+                    "node returned header block {header_number} for requested block {next}"
+                );
+            }
+            if let Some(previous_hash) = &self.last_header_hash {
+                if !header.parent_hash.eq_ignore_ascii_case(previous_hash) {
+                    anyhow::bail!(
+                        "node header linkage differs at block {next}: parent={} previous={previous_hash}",
+                        header.parent_hash
+                    );
+                }
+            }
+            let raw = i64::from_str_radix(header.timestamp.trim_start_matches("0x"), 16)
+                .with_context(|| {
+                    format!(
+                        "invalid node header timestamp '{}' at block {next}",
+                        header.timestamp
+                    )
+                })?;
+            let chain_time = next_chain_time(self.chain_times.last().copied(), raw);
+            self.chain_times.push(chain_time);
+            self.last_header_hash = Some(header.hash);
         }
-        self.budget.charge_request();
-        let Some(header) = self.client.get_header_by_number(block).await? else {
-            return Ok(None);
-        };
-        let raw = header.timestamp.trim_start_matches("0x");
-        let ts = i64::from_str_radix(raw, 16).with_context(|| {
-            format!(
-                "block {block} header timestamp '{}' is not a hex integer",
-                header.timestamp
-            )
-        })?;
-        self.headers.insert(block, ts);
-        Ok(Some(ts))
+        Ok(Some(self.chain_times[block_index]))
     }
+}
+
+fn next_chain_time(previous: Option<i64>, raw_timestamp_ms: i64) -> i64 {
+    previous.map_or(raw_timestamp_ms, |value| value.max(raw_timestamp_ms))
 }
 
 /// Exact occupied capacity of one output, in shannons.
@@ -572,12 +619,8 @@ fn parse_capacity_shannons(raw: &str) -> anyhow::Result<i128> {
     Ok(i128::from(value))
 }
 
-/// The UTC+8 day key a block's timestamp falls in.
-///
-/// The shared helper answers 1970-01-01 for a timestamp it cannot represent,
-/// which would quietly fold a whole entity's history into one bogus day. The
-/// range is checked here first, because the helper is shared read-path code
-/// this verifier must not change.
+/// The UTC+8 day key for independently reconstructed monotone chain time.
+/// The explicit range check also rejects zero or negative node timestamps.
 fn date_key(timestamp_ms: i64) -> anyhow::Result<u32> {
     if timestamp_ms <= 0 {
         anyhow::bail!(
@@ -589,7 +632,7 @@ fn date_key(timestamp_ms: i64) -> anyhow::Result<u32> {
     if chrono::DateTime::from_timestamp(seconds, 0).is_none() {
         anyhow::bail!("block timestamp {timestamp_ms} ms is outside the representable date range");
     }
-    ckbadger_common::block_date_from_ms(timestamp_ms)
+    ckbadger_common::stats_bucket::stats_day(timestamp_ms)?
         .format("%Y%m%d")
         .to_string()
         .parse()
@@ -668,7 +711,7 @@ pub(crate) async fn collect_token_expectation(
             continue;
         }
 
-        let Some(timestamp_ms) = collector.timestamp_ms(record.block_number).await? else {
+        let Some(timestamp_ms) = collector.chain_time_ms(record.block_number).await? else {
             complete = false;
             uncovered.push(format!(
                 "no header for block {} (record {})",
@@ -942,6 +985,24 @@ struct ChainWork {
     history_records: usize,
 }
 
+fn prefix_budget_gap(anchor_height: u64, budget: &RunBudget) -> anyhow::Result<Option<String>> {
+    let prefix_requests = anchor_height
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("anchor height {anchor_height} has no successor for prefix scan"))?;
+    let remaining = budget
+        .max_rpc_requests()
+        .checked_sub(budget.rpc_requests)
+        .ok_or_else(|| anyhow!("RPC budget counter exceeded configured maximum"))?;
+    // Reserve the final anchor recheck; transaction/indexer requests need
+    // additional room, so this is only a lower-bound admission test.
+    if prefix_requests >= u64::try_from(remaining)? {
+        return Ok(Some(format!(
+            "independent monotone chain-time oracle requires at least {prefix_requests} canonical header RPCs for prefix 0..={anchor_height}, but only {remaining} requests remain in this run's budget; raise the explicit budget to verify this anchor"
+        )));
+    }
+    Ok(None)
+}
+
 async fn qualify_and_collect(
     client: &CkbRpcClient,
     declaration: Option<&SourceDeclaration>,
@@ -962,9 +1023,43 @@ async fn qualify_and_collect(
         });
     }
 
+    if let Some(reason) = prefix_budget_gap(anchor.block_number, budget)? {
+        return Ok(ChainWork {
+            qualification: SourceQualification::Inconclusive(reason),
+            outcomes: Vec::new(),
+            rpc_requests: budget.rpc_requests,
+            history_records: budget.records,
+        });
+    }
+
     let mut outcomes = Vec::with_capacity(scripts.len());
     {
         let mut collector = Collector::new(client, budget);
+        match collector.chain_time_ms(anchor.block_number).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Ok(ChainWork {
+                    qualification: SourceQualification::Inconclusive(format!(
+                        "node lacks a canonical header in the complete prefix 0..={} needed for independent chain time",
+                        anchor.block_number
+                    )),
+                    outcomes: Vec::new(),
+                    rpc_requests: collector.budget.rpc_requests,
+                    history_records: collector.budget.records,
+                });
+            }
+            Err(error) if error.downcast_ref::<PrefixBudgetExhausted>().is_some() => {
+                return Ok(ChainWork {
+                    qualification: SourceQualification::Inconclusive(format!(
+                        "independent chain-time prefix scan could not finish: {error:#}"
+                    )),
+                    outcomes: Vec::new(),
+                    rpc_requests: collector.budget.rpc_requests,
+                    history_records: collector.budget.records,
+                });
+            }
+            Err(error) => return Err(error),
+        }
         for (_, script) in scripts {
             outcomes.push(
                 collect_token_expectation(&mut collector, script, anchor.block_number).await?,
@@ -1661,13 +1756,21 @@ mod tests {
                 }
                 "get_header_by_number" => {
                     self.header_calls.fetch_add(1, Ordering::SeqCst);
+                    let requested = params[0].as_str().unwrap();
+                    let number =
+                        u64::from_str_radix(requested.trim_start_matches("0x"), 16).unwrap();
+                    let raw_time = if number >= 5 {
+                        1_789_146_000_000u64 - 86_400_000
+                    } else {
+                        1_789_146_000_000u64
+                    };
                     serde_json::json!({
                         "version": "0x0", "compact_target": "0x1a08a97e",
-                        "timestamp": "0x1a0a8b0b880", "number": "0xa", "epoch": "0x0",
-                        "parent_hash": test_hash(0), "transactions_root": test_hash(0),
+                        "timestamp": format!("0x{raw_time:x}"), "number": requested, "epoch": "0x0",
+                        "parent_hash": test_hash(number.saturating_sub(1)), "transactions_root": test_hash(0),
                         "proposals_hash": test_hash(0), "extra_hash": test_hash(0),
                         "dao": format!("0x{}", "00".repeat(32)), "nonce": "0x0",
-                        "hash": test_hash(9)
+                        "hash": test_hash(number)
                     })
                 }
                 other => panic!("unexpected RPC {other}"),
@@ -1746,9 +1849,23 @@ mod tests {
         );
         assert_eq!(
             fixture.header_calls.load(Ordering::SeqCst),
-            1,
-            "the block header is the same chain fact for both entities"
+            11,
+            "the canonical prefix is fetched once across both entities"
         );
+    }
+
+    #[tokio::test]
+    async fn sparse_entity_event_uses_full_header_prefix_for_chain_time() {
+        let fixture = shared_tx_fixture().await;
+        let client = CkbRpcClient::new(fixture.server.uri());
+        let mut budget = RunBudget::new(1_000, 100, Duration::from_secs(60));
+        let mut collector = Collector::new(&client, &mut budget);
+        let previous = collector.chain_time_ms(4).await.unwrap().unwrap();
+        let backward = collector.chain_time_ms(5).await.unwrap().unwrap();
+        let sparse_touch = collector.chain_time_ms(10).await.unwrap().unwrap();
+        assert_eq!(backward, previous, "raw block 5 is before block 4");
+        assert_eq!(sparse_touch, previous, "block 10 inherits prefix maximum");
+        assert_eq!(fixture.header_calls.load(Ordering::SeqCst), 11);
     }
 
     /// Pagination used to run before the collector existed, so its requests
@@ -1770,8 +1887,8 @@ mod tests {
         let pages = fixture.page_calls.load(Ordering::SeqCst);
         assert_eq!(pages, 2, "one page of records plus the terminating page");
         assert_eq!(
-            budget.rpc_requests, 4,
-            "2 pages + 1 header + 1 transaction all spend the same budget"
+            budget.rpc_requests, 14,
+            "2 pages + 11 canonical headers + 1 transaction all spend the same budget"
         );
     }
 
@@ -1783,7 +1900,7 @@ mod tests {
         let fixture = shared_tx_fixture().await;
         let client = CkbRpcClient::new(fixture.server.uri());
         // Enough for the first entity's walk, not for a second.
-        let mut budget = RunBudget::new(MAX_HISTORY_RECORDS, 4, Duration::from_secs(600));
+        let mut budget = RunBudget::new(MAX_HISTORY_RECORDS, 14, Duration::from_secs(600));
         let mut collector = Collector::new(&client, &mut budget);
 
         let first = collect_token_expectation(&mut collector, &fixture.script_a, 100)
@@ -1805,8 +1922,7 @@ mod tests {
         );
     }
 
-    /// The shared date helper answers 1970-01-01 for a timestamp it cannot
-    /// represent, which would fold a whole entity's history into one bogus day.
+    /// Invalid node timestamps cannot silently acquire a plausible day.
     #[test]
     fn a_timestamp_the_shared_helper_cannot_represent_is_refused() {
         assert!(date_key(0).is_err(), "no CKB block predates the epoch");
@@ -1850,6 +1966,16 @@ mod tests {
         let budget = raised.to_run_budget();
         assert_eq!(budget.max_rpc_requests(), 400_000);
         assert_eq!(budget.max_records(), 1_000_000);
+    }
+
+    #[test]
+    fn full_prefix_over_budget_is_explicitly_inconclusive() {
+        let mut budget = RunBudget::new(1_000, 100, Duration::from_secs(60));
+        budget.charge_request(); // source qualification
+        let reason = prefix_budget_gap(100, &budget).unwrap().unwrap();
+        assert!(reason.contains("101 canonical header RPCs"), "{reason}");
+        assert!(reason.contains("99 requests remain"), "{reason}");
+        assert!(prefix_budget_gap(10, &budget).unwrap().is_none());
     }
 
     /// Mainnet's unchanged eight-candidate selection at anchor 20,553,546
