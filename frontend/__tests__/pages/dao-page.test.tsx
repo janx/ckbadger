@@ -94,6 +94,14 @@ describe('DaoPage', () => {
     await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThan(0));
   });
 
+  it('does not append days to the already formatted average deposit time', async () => {
+    render(<DaoPage />);
+    expect(await screen.findByText('1.3K days+')).toBeInTheDocument();
+    expect(screen.getByText('Average Deposit Time').parentElement).not.toHaveTextContent(
+      '1.3K days+days'
+    );
+  });
+
   it('distinguishes unavailable 24-hour DAO changes from exact zero changes', async () => {
     vi.mocked(api.getDaoStatistics).mockResolvedValue({
       ...daoStatistics,

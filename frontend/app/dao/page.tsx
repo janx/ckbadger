@@ -453,10 +453,7 @@ export default function DaoPage() {
                 label="Average Deposit Time"
                 value={
                   stats?.averageDepositDays !== undefined && stats.averageDepositDays !== null ? (
-                    <>
-                      {stats.averageDepositDays}
-                      <span className="text-text-dim ml-1 text-[0.7em] font-normal">days</span>
-                    </>
+                    stats.averageDepositDays
                   ) : stats ? (
                     '—'
                   ) : (
