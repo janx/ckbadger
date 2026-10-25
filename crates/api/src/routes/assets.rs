@@ -126,6 +126,45 @@ fn get_collection_aggregate(
     Ok(None)
 }
 
+/// Object/identity daily rows share CF_STATS_MNFT; Spore clusters use their
+/// own CF_STATS_SPORE family. Keep the detail and chart on the same source.
+fn collection_capacity_deltas(
+    store: &CkbadgerStore,
+    collection_id: &[u8],
+    source: ObjectCollectionSource,
+    from_date: Option<u32>,
+    to_date: Option<u32>,
+) -> anyhow::Result<Vec<(u32, i128, i128)>> {
+    match source {
+        ObjectCollectionSource::Identity | ObjectCollectionSource::Mnft => store
+            .list_mnft_daily_deltas_in_range(collection_id, from_date, to_date)
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(date, delta)| {
+                        (
+                            date,
+                            delta.owned_capacity_delta,
+                            delta.owned_knowledge_delta,
+                        )
+                    })
+                    .collect()
+            }),
+        ObjectCollectionSource::SporeCluster => store
+            .list_cluster_daily_deltas_in_range(collection_id, from_date, to_date)
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(date, delta)| {
+                        (
+                            date,
+                            delta.owned_capacity_delta,
+                            delta.owned_knowledge_delta,
+                        )
+                    })
+                    .collect()
+            }),
+    }
+}
+
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(300);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -1943,44 +1982,38 @@ async fn get_object_collection(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg
-        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
-        .aggregate;
+    let resolved = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = resolved.aggregate;
 
-    let daily = state
-        .store
-        .list_mnft_daily_deltas(&collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let chart = build_capacity_history_chart(
-        daily
-            .into_iter()
-            .map(|(date, delta)| {
-                (
-                    date,
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                )
-            })
-            .collect(),
-        "Object Collection Capacity History".to_string(),
+    let daily = collection_capacity_deltas(
+        state.store.as_ref(),
+        &collection_id_bytes,
+        resolved.source,
+        None,
+        None,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
+    let chart =
+        build_capacity_history_chart(daily, "Object Collection Capacity History".to_string())
+            .map_err(|e| ApiError::internal(e.to_string()))?;
     let owned = latest_capacity_from_chart(&chart).map_err(|error| {
         ApiError::internal(format!(
             "object collection 0x{}: {error}",
             hex::encode(&collection_id_bytes)
         ))
     })?;
-    if owned.is_none() && agg.total_count > 0 {
+    if owned.is_none() && agg.live_count > 0 {
         return Err(ApiError::internal(format!(
-            "object collection 0x{} has {} historical items but no daily capacity history",
+            "object collection 0x{} has {} live items but no daily capacity history",
             hex::encode(&collection_id_bytes),
-            agg.total_count
+            agg.live_count
         )));
     }
     let (owned_capacity, owned_knowledge) = match owned {
         Some((capacity, knowledge)) => (Some(capacity), Some(knowledge)),
-        None => (None, None),
+        // A same-day mint and burn deletes its net-zero daily row. With no
+        // live items and no remaining deltas, the exact owned totals are zero.
+        None => (Some("0".to_string()), Some("0".to_string())),
     };
 
     let raw_standard = agg.standard.asset_standard().to_string();
@@ -3146,31 +3179,34 @@ async fn get_object_collection_capacity_chart(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg
-        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
-        .aggregate;
+    let resolved = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = resolved.aggregate;
 
-    let daily = state
-        .store
-        .list_mnft_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let daily = collection_capacity_deltas(
+        state.store.as_ref(),
+        &collection_id_bytes,
+        resolved.source,
+        from_date,
+        to_date,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_used: i128 = 0;
-        let baseline = state
-            .store
-            .list_mnft_daily_deltas_in_range(
-                &collection_id_bytes,
-                None,
-                Some(from.saturating_sub(1)),
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        for (_, delta) in baseline {
+        let baseline = collection_capacity_deltas(
+            state.store.as_ref(),
+            &collection_id_bytes,
+            resolved.source,
+            None,
+            Some(from.saturating_sub(1)),
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (_, capacity_delta, knowledge_delta) in baseline {
             (base_capacity, base_used) = apply_owned_capacity_delta(
                 base_capacity,
                 base_used,
-                delta.owned_capacity_delta,
-                delta.owned_knowledge_delta,
+                capacity_delta,
+                knowledge_delta,
                 "building object baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -3185,16 +3221,7 @@ async fn get_object_collection_capacity_chart(
         .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
 
     ok(build_capacity_history_chart_with_initial(
-        daily
-            .into_iter()
-            .map(|(date, delta)| {
-                (
-                    date,
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                )
-            })
-            .collect(),
+        daily,
         format!("{title} Capacity History"),
         initial_capacity,
         initial_used,

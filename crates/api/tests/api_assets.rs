@@ -33,6 +33,16 @@ async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing
         },
     );
     batch.commit().unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 300,
+                owned_knowledge_delta: 180,
+            },
+        )
+        .unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -151,6 +161,26 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
         },
     );
     batch.commit().unwrap();
+    store
+        .put_cluster_daily_delta(
+            &spore_cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_mnft_daily_delta(
+            &dotbit_collection_id,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -225,6 +255,20 @@ async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sor
         },
     );
     batch.commit().unwrap();
+    for (collection_id, capacity, knowledge) in
+        [(cluster_onchain, 500, 300), (cluster_centralized, 400, 240)]
+    {
+        store
+            .put_cluster_daily_delta(
+                &collection_id,
+                20240115,
+                &ClusterDailyDelta {
+                    owned_capacity_delta: capacity,
+                    owned_knowledge_delta: knowledge,
+                },
+            )
+            .unwrap();
+    }
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -288,6 +332,16 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
         },
     );
     batch.commit().unwrap();
+    store
+        .put_mnft_daily_delta(
+            &did_collection_id,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -878,6 +932,7 @@ async fn test_assets_nonempty_collection_missing_daily_history_is_error() {
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/assets/objects/dotbit")
@@ -887,6 +942,175 @@ async fn test_assets_nonempty_collection_missing_daily_history_is_error() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets?type=identity")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("live names but no daily capacity history"));
+}
+
+#[tokio::test]
+async fn test_burned_out_collection_with_zero_net_daily_delta_has_exact_zero_capacity() {
+    let store = test_store();
+    let collection_id = [0x39u8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &collection_id,
+        &MnftCollectionAggregate {
+            standard: ObjectStandard::MnftToken,
+            total_count: 1,
+            live_count: 0,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    // The writer removes a daily row when same-day mint and burn net to zero.
+    assert!(store
+        .list_mnft_daily_deltas(&collection_id)
+        .unwrap()
+        .is_empty());
+
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/assets/objects/0x{}",
+                    hex::encode(collection_id)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["totalCount"], 1);
+    assert_eq!(json["liveCount"], 0);
+    assert_eq!(json["ownedCapacity"], "0");
+    assert_eq!(json["ownedKnowledge"], "0");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets?type=object")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["ownedCapacity"], "0");
+    assert_eq!(json["data"][0]["ownedKnowledge"], "0");
+}
+
+#[tokio::test]
+async fn test_spore_collection_detail_reads_cluster_daily_history() {
+    let store = test_store();
+    let collection_id = [0x3au8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &collection_id,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 1,
+            owner_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    store
+        .put_cluster_daily_delta(
+            &collection_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 150,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let path = format!("/api/v1/assets/objects/0x{}", hex::encode(collection_id));
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ownedCapacity"], "150");
+    assert_eq!(json["ownedKnowledge"], "60");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("{path}/charts/capacity-history"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["values"]["used"], "60");
+    assert_eq!(json["data"][0]["values"]["unused"], "90");
+}
+
+#[tokio::test]
+async fn test_live_spore_collection_without_cluster_daily_history_is_error() {
+    let store = test_store();
+    let collection_id = [0x3bu8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &collection_id,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 1,
+            owner_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/assets/objects/0x{}",
+                    hex::encode(collection_id)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("live items but no daily capacity history"));
 }
 
 #[tokio::test]
@@ -1442,6 +1666,16 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
         },
     );
     batch.commit().unwrap();
+    store
+        .put_mnft_daily_delta(
+            &collection_id,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 1200,
+                owned_knowledge_delta: 720,
+            },
+        )
+        .unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -3371,6 +3605,16 @@ async fn test_object_collection_items_serves_spore_cluster_rows_matching_totals(
         },
     );
     batch.commit().unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
 
     // Three member spores: two live, one melted; distinct creation blocks so
     // the (created_at_block DESC, id ASC) order is observable.

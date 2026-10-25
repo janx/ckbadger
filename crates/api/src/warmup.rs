@@ -826,6 +826,12 @@ fn build_asset_caches_sync(
             .copied()
             .unwrap_or(0);
         let cluster_daily = state.store.list_cluster_daily_deltas(cluster_id_bytes)?;
+        anyhow::ensure!(
+            agg.live_count == 0 || !cluster_daily.is_empty(),
+            "cluster 0x{} has {} live spores but no daily capacity history",
+            hex::encode(cluster_id_bytes),
+            agg.live_count
+        );
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             cluster_daily
                 .into_iter()
@@ -940,6 +946,12 @@ fn build_asset_caches_sync(
         };
         let onchain_ratio = format_ratio_4(onchain_count, agg.live_count)?;
         let nft_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
+        anyhow::ensure!(
+            agg.live_count == 0 || !nft_daily.is_empty(),
+            "object collection 0x{} has {} live items but no daily capacity history",
+            hex::encode(collection_id_bytes),
+            agg.live_count
+        );
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             nft_daily
                 .into_iter()
@@ -1008,6 +1020,12 @@ fn build_asset_caches_sync(
         };
         let onchain_ratio = format_ratio_4(onchain_count, agg.live_count)?;
         let id_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
+        anyhow::ensure!(
+            agg.live_count == 0 || !id_daily.is_empty(),
+            "identity collection 0x{} has {} live names but no daily capacity history",
+            hex::encode(collection_id_bytes),
+            agg.live_count
+        );
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             id_daily
                 .into_iter()
