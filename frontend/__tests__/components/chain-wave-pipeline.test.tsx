@@ -49,6 +49,38 @@ afterEach(() => {
 });
 
 describe('ChainWave pipeline view', () => {
+  it('does not label an unknown proposal size as the geometry placeholder', async () => {
+    vi.spyOn(api, 'getMempoolTransactions').mockResolvedValue([]);
+    vi.spyOn(api, 'getPendingProposals').mockResolvedValue({
+      proposals: [
+        {
+          proposalId: '0xunknown-size',
+          fullTxHash: null,
+          proposedAtBlock: 1,
+          proposedAtIndex: 0,
+          blocksUntilExpiry: 1,
+          fee: null,
+          size: null,
+          cycles: null,
+          feeRate: null,
+        },
+      ],
+      tipBlockNumber: 1,
+      totalCount: 1,
+    });
+    vi.spyOn(api, 'getBlocks').mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 4,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<ChainWave initialBlocks={[]} />);
+    const bubble = await screen.findByTitle(/TX: 0xunknown/);
+    expect(bubble).toHaveAttribute('title', expect.stringContaining('Size: N/A'));
+    expect(bubble).not.toHaveAttribute('title', expect.stringContaining('Size: 200 B'));
+  });
+
   it('shows an exact median fee rate above the safe integer range', async () => {
     vi.spyOn(api, 'getMempoolTransactions').mockResolvedValue([
       {

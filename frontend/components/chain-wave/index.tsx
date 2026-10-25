@@ -29,7 +29,8 @@ type FlowStage = 'mempool' | 'proposed' | 'committed';
 
 interface FlowTxItem {
   id: string;
-  size: number;
+  size: number; // scatter geometry, including a placeholder for unknown sizes
+  sizeExact: number | null;
   fee?: number | null;
   feeRate?: number | null; // scatter geometry only
   feeRateExact?: ExactFeeRate | null;
@@ -52,6 +53,14 @@ function toSafePositive(value: number | null | undefined, fallback: number): num
     return fallback;
   }
 
+  return value;
+}
+
+function checkedTxSize(value: number | null | undefined, context: string): number | null {
+  if (value == null) return null;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${context}: invalid transaction size ${value}`);
+  }
   return value;
 }
 
@@ -91,10 +100,13 @@ function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): stri
 }
 
 function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
-  const rate = exactFeeRate(tx.fee, tx.size, `mempool transaction ${tx.txHash}`);
+  const size = checkedTxSize(tx.size, `mempool transaction ${tx.txHash}`);
+  if (size == null) throw new Error(`mempool transaction ${tx.txHash}: missing size`);
+  const rate = exactFeeRate(tx.fee, size, `mempool transaction ${tx.txHash}`);
   return {
     id: tx.txHash,
-    size: toSafePositive(tx.size, 200),
+    size,
+    sizeExact: size,
     fee: Number(rate.fee), // scatter geometry only
     feeRate: Number(tx.feeRate), // scatter geometry only
     feeRateExact: rate,
@@ -104,13 +116,15 @@ function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
 }
 
 function proposalToItem(proposal: PendingProposal): FlowTxItem {
+  const size = checkedTxSize(proposal.size, `proposal ${proposal.proposalId}`);
   const rate =
-    proposal.fee != null && proposal.size != null
-      ? exactFeeRate(proposal.fee, proposal.size, `proposal ${proposal.proposalId}`)
+    proposal.fee != null && size != null
+      ? exactFeeRate(proposal.fee, size, `proposal ${proposal.proposalId}`)
       : null;
   return {
     id: proposal.fullTxHash || proposal.proposalId,
-    size: toSafePositive(proposal.size, 200),
+    size: toSafePositive(size, 200),
+    sizeExact: size,
     fee: rate == null ? null : Number(rate.fee), // scatter geometry only
     feeRate: proposal.feeRate == null ? null : Number(proposal.feeRate), // scatter geometry only
     feeRateExact: rate,
@@ -122,16 +136,15 @@ function proposalToItem(proposal: PendingProposal): FlowTxItem {
 function blockTxToItem(tx: Transaction): FlowTxItem {
   if (!/^(0|[1-9]\d*)$/.test(tx.fee))
     throw new Error(`transaction ${tx.hash}: invalid fee ${tx.fee}`);
-  const rate =
-    tx.txSize != null && tx.txSize > 0
-      ? exactFeeRate(tx.fee, tx.txSize, `transaction ${tx.hash}`)
-      : null;
+  const size = checkedTxSize(tx.txSize, `transaction ${tx.hash}`);
+  const rate = size == null ? null : exactFeeRate(tx.fee, size, `transaction ${tx.hash}`);
   const feeNum = Number(BigInt(tx.fee)); // flow geometry only
   const feeRate = rate == null ? null : Number(rate.fee) / Number(rate.size);
 
   return {
     id: tx.hash,
-    size: toSafePositive(tx.txSize, 200),
+    size: toSafePositive(size, 200),
+    sizeExact: size,
     fee: feeNum,
     feeRate,
     feeRateExact: rate,
@@ -217,7 +230,7 @@ function TxMetricScatter({
           {points.map(({ item, point }) => {
             const title = [
               `TX: ${item.id.slice(0, 10)}...${item.id.slice(-6)}`,
-              `Size: ${item.size.toLocaleString()} B`,
+              `Size: ${item.sizeExact == null ? 'N/A' : `${item.sizeExact.toLocaleString()} B`}`,
               `Fee Rate: ${formatExactFeeRate(item.feeRateExact)}`,
               `Cycles: ${formatCycles(item.cycles)}`,
             ].join('\n');
