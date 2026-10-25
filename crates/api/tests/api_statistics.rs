@@ -79,7 +79,7 @@ async fn test_uncle_rate_rejects_zero_block_daily_row() {
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
-                avg_difficulty: 0.0,
+                difficulty_sum: 0,
                 block_count: 0,
                 total_uncles: 1,
             },
