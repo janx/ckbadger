@@ -425,6 +425,27 @@ mod tests {
     }
 
     #[test]
+    fn tx_hash_map_cannot_resolve_a_missing_indexed_transaction() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let requested = [0x31u8; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&requested, 7, 0);
+        batch.commit().unwrap();
+        for error in [
+            store.get_tx_by_hash(&requested).unwrap_err(),
+            store
+                .get_txs_by_hash_batch(&[requested.to_vec()])
+                .unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(message.contains("missing tx_index"), "{message}");
+            assert!(message.contains("block=7"), "{message}");
+            assert!(message.contains("index=0"), "{message}");
+        }
+    }
+
+    #[test]
     fn tx_hash_map_cannot_resolve_a_different_indexed_transaction() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
