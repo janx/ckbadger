@@ -4468,6 +4468,7 @@ impl CkbadgerStore {
                 );
             }
         }
+        let mut staged_script_infos: HashMap<Vec<u8>, ScriptInfo> = HashMap::new();
         for (
             (code_hash, is_type),
             (cells_delta, live_delta, cap_delta, owned_delta, used_delta, knowledge_delta),
@@ -4484,13 +4485,20 @@ impl CkbadgerStore {
             {
                 continue;
             }
-            let mut si = self.get_script_info(code_hash)?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing script_info during rollback delta application: code_hash=0x{}, is_type={}",
-                    bytes_to_hex(code_hash),
-                    is_type
-                )
-            })?;
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                staged_script_infos.entry(code_hash.clone())
+            {
+                let info = self.get_script_info(code_hash)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing script_info during rollback delta application: code_hash=0x{}, is_type={}",
+                        bytes_to_hex(code_hash), is_type
+                    )
+                })?;
+                entry.insert(info);
+            }
+            let si = staged_script_infos
+                .get_mut(code_hash)
+                .expect("staged script info");
             if *is_type {
                 si.type_cells_count = checked_rollback_script_i64(
                     si.type_cells_count,
@@ -4566,6 +4574,8 @@ impl CkbadgerStore {
                     "lock_owned_knowledge_sum",
                 )?;
             }
+        }
+        for (code_hash, si) in staged_script_infos {
             batch.put_cf(
                 self.cf_script_info(),
                 code_hash,
@@ -4577,6 +4587,7 @@ impl CkbadgerStore {
         // 9b2. script_reference_info — apply reference deltas so version/family rollups
         //      re-derive correctly after rollback.
         let mut script_refs_updated = 0u64;
+        let mut staged_script_refs: HashMap<[u8; 33], ScriptReferenceInfo> = HashMap::new();
         for ((code_hash, hash_type, is_type), (cells_d, live_d, cap_d, own_d, used_d, know_d)) in
             &script_reference_deltas
         {
@@ -4590,55 +4601,96 @@ impl CkbadgerStore {
                 continue;
             }
             let key = keys::encode_script_reference_key(*hash_type, code_hash);
-            let mut sri = match self.get_script_reference_info(*hash_type, code_hash)? {
-                Some(v) => v,
-                None => {
-                    // Reference info may not exist yet (e.g. script only appeared in
-                    // rolled-back blocks). Skip — nothing to adjust.
-                    continue;
-                }
-            };
-            if *is_type {
-                sri.type_cells_count += cells_d;
-                sri.type_live_cells_count += live_d;
-                sri.type_capacity_sum += cap_d;
-                sri.type_owned_capacity_sum += own_d;
-                sri.type_used_capacity_sum += used_d;
-                sri.type_owned_knowledge_sum += know_d;
-                if sri.type_live_cells_count < 0
-                    || sri.type_owned_capacity_sum < 0
-                    || sri.type_owned_knowledge_sum < 0
-                {
-                    anyhow::bail!(
-                        "script_reference_info type underflow during rollback: code_hash=0x{}, hash_type={}, live={}, own_cap={}, own_know={}",
-                        bytes_to_hex(code_hash),
-                        hash_type,
-                        sri.type_live_cells_count,
-                        sri.type_owned_capacity_sum,
-                        sri.type_owned_knowledge_sum
-                    );
-                }
-            } else {
-                sri.lock_cells_count += cells_d;
-                sri.lock_live_cells_count += live_d;
-                sri.lock_capacity_sum += cap_d;
-                sri.lock_owned_capacity_sum += own_d;
-                sri.lock_used_capacity_sum += used_d;
-                sri.lock_owned_knowledge_sum += know_d;
-                if sri.lock_live_cells_count < 0
-                    || sri.lock_owned_capacity_sum < 0
-                    || sri.lock_owned_knowledge_sum < 0
-                {
-                    anyhow::bail!(
-                        "script_reference_info lock underflow during rollback: code_hash=0x{}, hash_type={}, live={}, own_cap={}, own_know={}",
-                        bytes_to_hex(code_hash),
-                        hash_type,
-                        sri.lock_live_cells_count,
-                        sri.lock_owned_capacity_sum,
-                        sri.lock_owned_knowledge_sum
-                    );
-                }
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                staged_script_refs.entry(key)
+            {
+                let info = self.get_script_reference_info(*hash_type, code_hash)?
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "missing script_reference_info during rollback: code_hash=0x{}, hash_type={}, is_type={}",
+                        bytes_to_hex(code_hash), hash_type, is_type
+                    ))?;
+                entry.insert(info);
             }
+            let sri = staged_script_refs
+                .get_mut(&key)
+                .expect("staged script reference");
+            if *is_type {
+                sri.type_cells_count = checked_rollback_script_i64(
+                    sri.type_cells_count,
+                    *cells_d,
+                    code_hash,
+                    "reference.type_cells_count",
+                )?;
+                sri.type_live_cells_count = checked_rollback_script_i64(
+                    sri.type_live_cells_count,
+                    *live_d,
+                    code_hash,
+                    "reference.type_live_cells_count",
+                )?;
+                sri.type_capacity_sum = checked_rollback_script_i128(
+                    sri.type_capacity_sum,
+                    *cap_d,
+                    code_hash,
+                    "reference.type_capacity_sum",
+                )?;
+                sri.type_owned_capacity_sum = checked_rollback_script_i128(
+                    sri.type_owned_capacity_sum,
+                    *own_d,
+                    code_hash,
+                    "reference.type_owned_capacity_sum",
+                )?;
+                sri.type_used_capacity_sum = checked_rollback_script_i128(
+                    sri.type_used_capacity_sum,
+                    *used_d,
+                    code_hash,
+                    "reference.type_used_capacity_sum",
+                )?;
+                sri.type_owned_knowledge_sum = checked_rollback_script_i128(
+                    sri.type_owned_knowledge_sum,
+                    *know_d,
+                    code_hash,
+                    "reference.type_owned_knowledge_sum",
+                )?;
+            } else {
+                sri.lock_cells_count = checked_rollback_script_i64(
+                    sri.lock_cells_count,
+                    *cells_d,
+                    code_hash,
+                    "reference.lock_cells_count",
+                )?;
+                sri.lock_live_cells_count = checked_rollback_script_i64(
+                    sri.lock_live_cells_count,
+                    *live_d,
+                    code_hash,
+                    "reference.lock_live_cells_count",
+                )?;
+                sri.lock_capacity_sum = checked_rollback_script_i128(
+                    sri.lock_capacity_sum,
+                    *cap_d,
+                    code_hash,
+                    "reference.lock_capacity_sum",
+                )?;
+                sri.lock_owned_capacity_sum = checked_rollback_script_i128(
+                    sri.lock_owned_capacity_sum,
+                    *own_d,
+                    code_hash,
+                    "reference.lock_owned_capacity_sum",
+                )?;
+                sri.lock_used_capacity_sum = checked_rollback_script_i128(
+                    sri.lock_used_capacity_sum,
+                    *used_d,
+                    code_hash,
+                    "reference.lock_used_capacity_sum",
+                )?;
+                sri.lock_owned_knowledge_sum = checked_rollback_script_i128(
+                    sri.lock_owned_knowledge_sum,
+                    *know_d,
+                    code_hash,
+                    "reference.lock_owned_knowledge_sum",
+                )?;
+            }
+        }
+        for (key, sri) in staged_script_refs {
             batch.put_cf(
                 self.cf_script_reference_info(),
                 key,
@@ -5640,17 +5692,32 @@ mod tests {
     }
 
     /// Older hand-built rollback fixtures seeded only live script metrics.
-    /// Their immutable cell payloads are the exact creation ledger: establish
-    /// the cumulative ScriptInfo fields the normal forward writer would have
-    /// written before invoking the production rollback path.
+    /// Their canonical live/consumed cell payloads are the exact creation
+    /// ledger: establish the script fields the normal forward writer would
+    /// have written before invoking the production rollback path. Immutable
+    /// payloads with neither marker are rollback orphans and are excluded.
     fn seed_fixture_script_creation_totals(store: &CkbadgerStore) -> anyhow::Result<()> {
         if !store.has_cf(CF_CELLS) {
             return Ok(());
         }
         type FixtureScriptTotals = (i64, i128, i128, i64, i128, i128);
         let mut totals: HashMap<Vec<u8>, FixtureScriptTotals> = HashMap::new();
+        let mut references: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> = HashMap::new();
         for row in store.iterator_cf(store.cf_cells(), IteratorMode::Start) {
             let (outpoint, payload) = row?;
+            let live = store.get_cf(store.cf_live_cells(), &outpoint)?.is_some();
+            let consumed = store
+                .get_cf(store.cf_consumed_cells(), &outpoint)?
+                .is_some();
+            if live && consumed {
+                anyhow::bail!(
+                    "fixture cell has both live and consumed markers: outpoint=0x{}",
+                    bytes_to_hex(&outpoint)
+                );
+            }
+            if !live && !consumed {
+                continue;
+            }
             let cell: LiveCellInfo = bincode::deserialize(&payload).map_err(|e| {
                 anyhow::anyhow!(
                     "invalid fixture cell payload: outpoint=0x{}, error={e}",
@@ -5670,6 +5737,58 @@ mod tests {
                 .2
                 .checked_add(i128::from(cell.occupied_capacity))
                 .ok_or_else(|| anyhow::anyhow!("fixture lock occupied overflow"))?;
+            let lock_hash_type = u8::try_from(cell.lock_hash_type).map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid fixture lock hash type: outpoint=0x{} hash_type={}",
+                    bytes_to_hex(&outpoint),
+                    cell.lock_hash_type
+                )
+            })?;
+            let lock_ref = references
+                .entry((cell.lock_code_hash.clone(), lock_hash_type))
+                .or_insert_with(|| ScriptReferenceInfo {
+                    reference_hash: cell.lock_code_hash.clone(),
+                    hash_type: lock_hash_type,
+                    ..Default::default()
+                });
+            lock_ref.lock_cells_count = checked_rollback_script_i64(
+                lock_ref.lock_cells_count,
+                1,
+                &cell.lock_code_hash,
+                "fixture.reference.lock_cells_count",
+            )?;
+            lock_ref.lock_capacity_sum = checked_rollback_script_i128(
+                lock_ref.lock_capacity_sum,
+                i128::from(cell.capacity),
+                &cell.lock_code_hash,
+                "fixture.reference.lock_capacity_sum",
+            )?;
+            lock_ref.lock_used_capacity_sum = checked_rollback_script_i128(
+                lock_ref.lock_used_capacity_sum,
+                i128::from(cell.occupied_capacity),
+                &cell.lock_code_hash,
+                "fixture.reference.lock_used_capacity_sum",
+            )?;
+            if live {
+                lock_ref.lock_live_cells_count = checked_rollback_script_i64(
+                    lock_ref.lock_live_cells_count,
+                    1,
+                    &cell.lock_code_hash,
+                    "fixture.reference.lock_live_cells_count",
+                )?;
+                lock_ref.lock_owned_capacity_sum = checked_rollback_script_i128(
+                    lock_ref.lock_owned_capacity_sum,
+                    i128::from(cell.capacity),
+                    &cell.lock_code_hash,
+                    "fixture.reference.lock_owned_capacity_sum",
+                )?;
+                lock_ref.lock_owned_knowledge_sum = checked_rollback_script_i128(
+                    lock_ref.lock_owned_knowledge_sum,
+                    i128::from(cell.occupied_capacity),
+                    &cell.lock_code_hash,
+                    "fixture.reference.lock_owned_knowledge_sum",
+                )?;
+            }
             if let Some(code_hash) = &cell.type_code_hash {
                 let type_total = totals.entry(code_hash.clone()).or_default();
                 type_total.3 = type_total
@@ -5684,6 +5803,63 @@ mod tests {
                     .5
                     .checked_add(i128::from(cell.occupied_capacity))
                     .ok_or_else(|| anyhow::anyhow!("fixture type occupied overflow"))?;
+                let hash_type = u8::try_from(cell.type_hash_type.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "fixture type cell missing hash type: outpoint=0x{}",
+                        bytes_to_hex(&outpoint)
+                    )
+                })?)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "invalid fixture type hash type: outpoint=0x{}",
+                        bytes_to_hex(&outpoint)
+                    )
+                })?;
+                let type_ref = references
+                    .entry((code_hash.clone(), hash_type))
+                    .or_insert_with(|| ScriptReferenceInfo {
+                        reference_hash: code_hash.clone(),
+                        hash_type,
+                        ..Default::default()
+                    });
+                type_ref.type_cells_count = checked_rollback_script_i64(
+                    type_ref.type_cells_count,
+                    1,
+                    code_hash,
+                    "fixture.reference.type_cells_count",
+                )?;
+                type_ref.type_capacity_sum = checked_rollback_script_i128(
+                    type_ref.type_capacity_sum,
+                    i128::from(cell.capacity),
+                    code_hash,
+                    "fixture.reference.type_capacity_sum",
+                )?;
+                type_ref.type_used_capacity_sum = checked_rollback_script_i128(
+                    type_ref.type_used_capacity_sum,
+                    i128::from(cell.occupied_capacity),
+                    code_hash,
+                    "fixture.reference.type_used_capacity_sum",
+                )?;
+                if live {
+                    type_ref.type_live_cells_count = checked_rollback_script_i64(
+                        type_ref.type_live_cells_count,
+                        1,
+                        code_hash,
+                        "fixture.reference.type_live_cells_count",
+                    )?;
+                    type_ref.type_owned_capacity_sum = checked_rollback_script_i128(
+                        type_ref.type_owned_capacity_sum,
+                        i128::from(cell.capacity),
+                        code_hash,
+                        "fixture.reference.type_owned_capacity_sum",
+                    )?;
+                    type_ref.type_owned_knowledge_sum = checked_rollback_script_i128(
+                        type_ref.type_owned_knowledge_sum,
+                        i128::from(cell.occupied_capacity),
+                        code_hash,
+                        "fixture.reference.type_owned_knowledge_sum",
+                    )?;
+                }
             }
         }
         let mut batch = StoreBatch::new(store);
@@ -5703,6 +5879,9 @@ mod tests {
             info.type_capacity_sum = type_cap;
             info.type_used_capacity_sum = type_used;
             batch.put_script_info(&code_hash, &info);
+        }
+        for ((code_hash, hash_type), reference) in references {
+            batch.put_script_reference_info(hash_type, &code_hash, &reference);
         }
         batch.commit()
     }
@@ -10030,10 +10209,10 @@ mod tests {
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
+            type_script_hash: Some(vec![0x22; 32]),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: 200,
             udt_amount: None,
@@ -10099,6 +10278,9 @@ mod tests {
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 300,
                 lock_owned_knowledge_sum: 300,
+                type_live_cells_count: 1,
+                type_owned_capacity_sum: 200,
+                type_owned_knowledge_sum: 200,
                 ..Default::default()
             },
         );
@@ -10110,6 +10292,20 @@ mod tests {
         batch.commit().unwrap();
 
         rollback_fixture(&store, 1).unwrap();
+
+        let script = store.get_script_info(&[0x11; 32]).unwrap().unwrap();
+        assert_eq!(script.lock_live_cells_count, 1);
+        assert_eq!(script.type_live_cells_count, 0);
+        assert_eq!(script.lock_cells_count, 1);
+        assert_eq!(script.type_cells_count, 0);
+        let reference = store
+            .get_script_reference_info(1, &[0x11; 32])
+            .unwrap()
+            .unwrap();
+        assert_eq!(reference.lock_live_cells_count, 1);
+        assert_eq!(reference.type_live_cells_count, 0);
+        assert_eq!(reference.lock_cells_count, 1);
+        assert_eq!(reference.type_cells_count, 0);
 
         assert!(store.get_cell(&keep_tx, 0, &store).unwrap().is_some());
         assert!(store.get_cell(&drop_live_tx, 0, &store).unwrap().is_none());
