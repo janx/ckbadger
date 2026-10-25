@@ -276,10 +276,54 @@ async fn mock_node(fixture: &ChainFixture) -> MockServer {
 
 async fn mock_node_with_reorg(fixture: &ChainFixture, reorg_at_anchor: Option<u64>) -> MockServer {
     let server = MockServer::start().await;
+    // The independent chain-time oracle must see every canonical header, not
+    // just blocks where this entity had a transaction. A quiet block can move
+    // the running maximum and therefore change a later entity's day.
+    let anchor = fixture.headers.keys().copied().max().unwrap_or(0).max(100);
+    let mut headers = HashMap::new();
+    let mut last_timestamp = fixture
+        .headers
+        .iter()
+        .min_by_key(|(height, _)| *height)
+        .map(|(_, header)| header["timestamp"].clone())
+        .unwrap_or_else(|| json!(hex(day_ms(0) as u64)));
+    let template = fixture.headers.values().next().cloned().unwrap_or_else(|| {
+        json!({
+            "version": "0x0", "compact_target": "0x1a08a97e", "epoch": "0x0",
+            "transactions_root": hash_of(0), "proposals_hash": hash_of(0),
+            "extra_hash": hash_of(0), "dao": format!("0x{}", "00".repeat(32)),
+            "nonce": "0x0",
+        })
+    });
+    for number in 0..=anchor {
+        if let Some(header) = fixture.headers.get(&number) {
+            last_timestamp = header["timestamp"].clone();
+        }
+        let hash = if number == 0 {
+            GENESIS.to_string()
+        } else {
+            format!("0xb{number:063x}")
+        };
+        let parent_hash = if number <= 1 {
+            GENESIS.to_string()
+        } else {
+            format!("0xb{:063x}", number - 1)
+        };
+        let mut header = fixture
+            .headers
+            .get(&number)
+            .cloned()
+            .unwrap_or_else(|| template.clone());
+        header["number"] = json!(hex(number));
+        header["timestamp"] = last_timestamp.clone();
+        header["hash"] = json!(hash);
+        header["parent_hash"] = json!(parent_hash);
+        headers.insert(number, header);
+    }
     Mock::given(method("POST"))
         .respond_with(NodeResponder {
             txs: fixture.txs.clone(),
-            headers: fixture.headers.clone(),
+            headers,
             records: fixture.records.clone(),
             calls: Arc::new(Mutex::new(0)),
             reorg_at_anchor,

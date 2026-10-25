@@ -9245,7 +9245,17 @@ mod tests {
         async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
             let _guard =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
-            let blocks = blocks();
+            let mut blocks = blocks();
+            // The mint's raw timestamp falls back across an hour, while its
+            // canonical t* remains at block 100's hour. The transfer advances
+            // to the next hour; both CF_STATS_TOKEN paths must agree.
+            for (block, raw_ms) in
+                blocks
+                    .iter_mut()
+                    .zip([1_700_000_001_000u64, 1_699_996_400_000, 1_700_003_601_000])
+            {
+                block.block.header.timestamp = format!("0x{raw_ms:x}");
+            }
             let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
 
             let dir = tempfile::tempdir().unwrap();

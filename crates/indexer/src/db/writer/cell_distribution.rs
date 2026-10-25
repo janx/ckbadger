@@ -89,11 +89,15 @@ impl CellDistributionTracker {
             })
             .transpose()?;
 
-        let cohort_accum: BTreeMap<String, (i128, i128)> = state
-            .cohort_accum
-            .into_iter()
-            .map(|(month, used, bal)| (month, (used, bal)))
-            .collect();
+        let mut cohort_accum = BTreeMap::new();
+        for (month, used, bal) in state.cohort_accum {
+            if used < 0 || bal < 0 {
+                bail!("negative cohort accumulator in stored cell_dist tracker: month={month}, used={used}, balance={bal}");
+            }
+            if cohort_accum.insert(month.clone(), (used, bal)).is_some() {
+                bail!("duplicate cohort month in stored cell_dist tracker: month={month}");
+            }
+        }
 
         Ok(Self {
             count_by_bucket: state.count_by_bucket,
@@ -250,26 +254,34 @@ impl CellDistributionTracker {
             )
         })?;
         let cohort_month = cohort_date.format("%Y-%m").to_string();
-        let entry = self
+        let current = self
             .cohort_accum
-            .entry(cohort_month.clone())
-            .or_insert((0, 0));
-        entry.0 = entry.0.checked_add(used_capacity_delta).ok_or_else(|| {
+            .get(&cohort_month)
+            .copied()
+            .unwrap_or((0, 0));
+        if current.0 < 0 || current.1 < 0 {
+            bail!("negative cohort accumulator before delta: cohort_month={cohort_month}, used={}, balance={}", current.0, current.1);
+        }
+        let used = current.0.checked_add(used_capacity_delta).ok_or_else(|| {
             anyhow::anyhow!(
                 "address cohort used_capacity overflow: cohort_month={}, current={}, delta={}",
                 cohort_month,
-                entry.0,
+                current.0,
                 used_capacity_delta
             )
         })?;
-        entry.1 = entry.1.checked_add(balance_delta).ok_or_else(|| {
+        let balance = current.1.checked_add(balance_delta).ok_or_else(|| {
             anyhow::anyhow!(
                 "address cohort balance overflow: cohort_month={}, current={}, delta={}",
                 cohort_month,
-                entry.1,
+                current.1,
                 balance_delta
             )
         })?;
+        if used < 0 || balance < 0 {
+            bail!("address cohort accumulator underflow: cohort_month={cohort_month}, used={used}, balance={balance}, used_delta={used_capacity_delta}, balance_delta={balance_delta}");
+        }
+        self.cohort_accum.insert(cohort_month, (used, balance));
         Ok(())
     }
 
@@ -279,7 +291,7 @@ impl CellDistributionTracker {
         let entries: Vec<AddressCohortEntry> = self
             .cohort_accum
             .iter()
-            .filter(|(_, (used, bal))| *used > 0 || *bal > 0)
+            .filter(|(_, (used, bal))| *used != 0 || *bal != 0)
             .map(|(month, (used, bal))| AddressCohortEntry {
                 cohort_month: month.clone(),
                 used_capacity: *used,
@@ -626,5 +638,24 @@ mod tests {
         let snapshot = tracker.cohort_snapshot();
         // Both used_capacity=0 and balance=0 means entry is filtered out
         assert_eq!(snapshot.cohorts.len(), 0);
+        // Persisted tracker state retains zero months, including ones that a
+        // rollback later revisits; both directions use the same representation.
+        assert_eq!(
+            tracker.to_state().cohort_accum,
+            vec![("2024-01".to_string(), 0, 0)]
+        );
+    }
+
+    #[test]
+    fn cohort_delta_rejects_negative_prior_and_result() {
+        let mut tracker = CellDistributionTracker::new();
+        tracker.record_block_date(1, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+        let error = tracker.apply_cohort_delta(1, -1, 0).unwrap_err();
+        assert!(error.to_string().contains("underflow"), "{error}");
+
+        let mut state = tracker.to_state();
+        state.cohort_accum = vec![("2024-01".to_string(), -1, 0)];
+        let error = CellDistributionTracker::from_state(state).unwrap_err();
+        assert!(error.to_string().contains("negative cohort"), "{error}");
     }
 }

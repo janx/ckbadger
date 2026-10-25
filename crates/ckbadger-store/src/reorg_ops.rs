@@ -1795,11 +1795,15 @@ fn truncate_cell_dist_tracker_state_for_rollback(
 
     // Each affected address's first-seen block supplies its immutable cohort
     // month. Apply the exact inverse of its balance/used-capacity change.
-    let mut cohorts = state
-        .cohort_accum
-        .iter()
-        .map(|(month, used, balance)| (month.clone(), (*used, *balance)))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut cohorts = std::collections::BTreeMap::new();
+    for (month, used, balance) in &state.cohort_accum {
+        if *used < 0 || *balance < 0 {
+            anyhow::bail!("negative cohort accumulator before rollback repair: month={month}, used={used}, balance={balance}");
+        }
+        if cohorts.insert(month.clone(), (*used, *balance)).is_some() {
+            anyhow::bail!("duplicate cohort month before rollback repair: month={month}");
+        }
+    }
     for (month, (used_delta, balance_delta)) in cohort_deltas {
         let entry = cohorts.entry(month.clone()).or_insert((0, 0));
         if entry.0 < 0 || entry.1 < 0 {
@@ -1823,7 +1827,6 @@ fn truncate_cell_dist_tracker_state_for_rollback(
     if changed {
         state.cohort_accum = cohorts
             .into_iter()
-            .filter(|(_, (used, balance))| *used != 0 || *balance != 0)
             .map(|(month, (used, balance))| (month, used, balance))
             .collect();
     }
@@ -4228,9 +4231,10 @@ impl CkbadgerStore {
                                 ab.first_seen_block
                             )
                         })?;
-                        let month = ckbadger_common::stats_bucket::stats_day(first_seen.chain_time_ms)?
-                            .format("%Y-%m")
-                            .to_string();
+                        let month =
+                            ckbadger_common::stats_bucket::stats_day(first_seen.chain_time_ms)?
+                                .format("%Y-%m")
+                                .to_string();
                         cohort_month_by_first_seen.insert(ab.first_seen_block, month.clone());
                         month
                     }
@@ -11224,6 +11228,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("cohort accumulator underflow"));
+    }
+
+    #[test]
+    fn test_cell_dist_rollback_preserves_preexisting_zero_cohort_month() {
+        let mut state = CellDistributionTrackerState {
+            count_by_bucket: [1, 0, 0, 0, 0, 0],
+            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
+            date_transitions: vec![(1, "20231115".to_string())],
+            last_snapshot_date: Some("20231115".to_string()),
+            cohort_accum: vec![
+                ("2023-10".to_string(), 0, 0),
+                ("2023-11".to_string(), 50, 300),
+            ],
+            last_processed_block: Some(3),
+        };
+        let deltas = HashMap::from([("2023-11".to_string(), (-50, -300))]);
+        assert!(truncate_cell_dist_tracker_state_for_rollback(
+            &mut state, 2, &[0; 6], &[0; 6], &deltas,
+        )
+        .unwrap());
+        assert_eq!(
+            state.cohort_accum,
+            vec![("2023-10".to_string(), 0, 0), ("2023-11".to_string(), 0, 0)]
+        );
     }
 
     #[test]
