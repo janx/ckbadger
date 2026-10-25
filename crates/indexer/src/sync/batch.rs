@@ -6301,14 +6301,12 @@ mod tests {
         ) -> Result<(
             ScriptUsageChanges,
             ScriptReferenceUsageChanges,
-            EntityDailyChanges<ScriptDailyKey>,
+            EntityDailyChanges<UndatedScriptKey>,
         )> {
             let mut usage = ScriptUsageChanges::new();
             let mut references = ScriptReferenceUsageChanges::new();
             let mut daily = EntityDailyChanges::new();
             for tx in all_tx_data {
-                let date =
-                    ckbadger_store::keys::timestamp_ms_to_date(tx.timestamp.timestamp_millis());
                 let mut apply = |code_hash: &[u8],
                                  hash_type: i16,
                                  is_type: bool,
@@ -6343,7 +6341,7 @@ mod tests {
                     reference.5 += i128::from(sign) * i128::from(occupied);
                     daily.add(
                         tx.block_number,
-                        (code_hash.to_vec(), hash_type, is_type, date),
+                        (code_hash.to_vec(), hash_type, is_type),
                         i128::from(sign) * i128::from(capacity),
                         i128::from(sign) * i128::from(occupied),
                     )?;
