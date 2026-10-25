@@ -2986,73 +2986,78 @@ fn lookup_dao_info(
     store: &ckbadger_store::CkbadgerStore,
     tx_hash: &[u8],
     output_index: i16,
-) -> Option<DaoInfo> {
+) -> anyhow::Result<Option<DaoInfo>> {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
+    let context = format!("DAO cell 0x{}:{output_index}", hex::encode(tx_hash));
 
-    let entry = store.get_dao_deposit(&outpoint_key).ok()?;
+    let entry = store
+        .get_dao_deposit(&outpoint_key)
+        .map_err(|error| anyhow::anyhow!("{context} deposit read: {error}"))?;
 
     // If not found by outpoint, try by withdraw-request/withdraw-complete tx hash
     let entry = if entry.is_none() {
         let outpoint_key_data = store
             .get_dao_deposit_by_withdraw_tx(tx_hash, output_index)
-            .ok()?;
+            .map_err(|error| anyhow::anyhow!("{context} withdraw index read: {error}"))?;
         if let Some(key_data) = outpoint_key_data {
-            let candidate = store.get_dao_deposit(&key_data).ok()??;
+            let candidate = store
+                .get_dao_deposit(&key_data)
+                .map_err(|error| anyhow::anyhow!("{context} indexed deposit read: {error}"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{context} withdraw index points to missing deposit")
+                })?;
             let matches_withdraw_request =
                 candidate.withdraw_request_output_index == Some(output_index);
             let matches_withdraw_to = candidate.withdraw_to_output_index == Some(output_index);
             if matches_withdraw_request || matches_withdraw_to {
                 Some(candidate)
             } else {
-                None
+                anyhow::bail!("{context} withdraw index points to mismatched output index")
             }
         } else {
             None
         }
     } else {
         entry
-    }?;
+    };
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
 
     let dao_status = match entry.status {
         0 => "deposited",
         1 => "withdrawing",
         2 => "withdrawn",
-        _ => "unknown",
+        _ => anyhow::bail!("{context} has invalid DAO status {}", entry.status),
     }
     .to_string();
 
     // Get block header for deposit timestamp
-    let deposit_timestamp = store
-        .get_block_header(entry.deposit_block_number)
-        .ok()
-        .flatten()
-        .map(|h| {
-            chrono::DateTime::from_timestamp(h.timestamp / 1000, 0)
-                .unwrap_or_default()
-                .to_rfc3339()
-        })
-        .unwrap_or_default();
-
-    let withdraw_request_timestamp = entry.withdraw_request_block.and_then(|bn| {
-        store.get_block_header(bn).ok().flatten().map(|h| {
-            chrono::DateTime::from_timestamp(h.timestamp / 1000, 0)
-                .unwrap_or_default()
-                .to_rfc3339()
-        })
-    });
-
-    let withdraw_timestamp = entry.withdraw_block.and_then(|bn| {
-        store.get_block_header(bn).ok().flatten().map(|h| {
-            chrono::DateTime::from_timestamp(h.timestamp / 1000, 0)
-                .unwrap_or_default()
-                .to_rfc3339()
-        })
-    });
+    let timestamp_for_block = |bn: i64| -> anyhow::Result<String> {
+        let header = store
+            .get_block_header(bn)
+            .map_err(|error| anyhow::anyhow!("{context} block {bn} header read: {error}"))?
+            .ok_or_else(|| anyhow::anyhow!("{context} missing block {bn} header"))?;
+        let timestamp =
+            chrono::DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{context} block {bn} invalid timestamp {}",
+                    header.timestamp
+                )
+            })?;
+        Ok(timestamp.to_rfc3339())
+    };
+    let deposit_timestamp = timestamp_for_block(entry.deposit_block_number)?;
+    let withdraw_request_timestamp = entry
+        .withdraw_request_block
+        .map(&timestamp_for_block)
+        .transpose()?;
+    let withdraw_timestamp = entry.withdraw_block.map(&timestamp_for_block).transpose()?;
 
     let compensation = entry.compensation.map(|c| c.to_string());
     let compensation_ckb = compensation.as_ref().map(|c| shannon_to_ckb(c));
 
-    Some(DaoInfo {
+    Ok(Some(DaoInfo {
         is_dao_cell: true,
         dao_status,
         deposit_block_number: entry.deposit_block_number,
@@ -3064,7 +3069,7 @@ fn lookup_dao_info(
         compensation,
         compensation_ckb,
         estimated_apc: None,
-    })
+    }))
 }
 
 async fn get_cell(
@@ -3243,7 +3248,8 @@ async fn get_cell(
         (None, None)
     };
 
-    let dao_info = lookup_dao_info(&state.store, &hash_bytes, output_idx);
+    let dao_info = lookup_dao_info(&state.store, &hash_bytes, output_idx)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
 
     ok(CellDetailResponse {
         tx_hash: format!("0x{}", hex::encode(&hash_bytes)),

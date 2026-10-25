@@ -217,6 +217,58 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     );
 }
 
+#[tokio::test]
+async fn test_dao_cell_missing_deposit_header_is_error() {
+    let store = test_store();
+    let tx_hash = vec![0xD1; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 20_000_000_000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 6_100_000_000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        123,
+    );
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
+        &DaoDepositCacheEntry {
+            capacity: 20_000_000_000,
+            occupied_capacity: 6_100_000_000,
+            deposit_block_number: 123,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 1,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, _) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx_hash))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 /// `.cell` Cells Account type script, mainnet (docs/metadata/scripts/dotcell-account.toml;
 /// `ACCOUNT_TYPE_CODE_HASH_MAINNET` in the indexer's dotcell fixtures).
 const DOTCELL_ACCOUNT_TYPE_MAINNET: &str =
