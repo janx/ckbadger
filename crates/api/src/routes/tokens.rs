@@ -328,15 +328,27 @@ fn serve_tokens_from_cache(
     let tokens: Vec<TokenResponse> = page
         .into_iter()
         .map(|entry| {
-            let decoded_type_args = entry
-                .type_args
-                .as_deref()
-                .and_then(|hex| hex::decode(hex.strip_prefix("0x").unwrap_or(hex)).ok());
-            TokenResponse {
+            let required = |value: &Option<String>, field: &str| {
+                value.clone().ok_or_else(|| {
+                    ApiError::internal(format!("token cache {}: missing {field}", entry.id))
+                })
+            };
+            let type_code_hash = required(&entry.type_code_hash, "type_code_hash")?;
+            let type_hash_type = required(&entry.type_hash_type, "type_hash_type")?;
+            let type_args = required(&entry.type_args, "type_args")?;
+            let total_supply = required(&entry.total_supply, "total_supply")?;
+            let decoded_type_args = hex::decode(type_args.strip_prefix("0x").unwrap_or(&type_args))
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "token cache {}: invalid type_args: {error}",
+                        entry.id
+                    ))
+                })?;
+            Ok(TokenResponse {
                 type_script_hash: entry.id.clone(),
-                type_code_hash: entry.type_code_hash.clone().unwrap_or_default(),
-                type_hash_type: entry.type_hash_type.clone().unwrap_or_default(),
-                type_args: entry.type_args.clone().unwrap_or_default(),
+                type_code_hash,
+                type_hash_type,
+                type_args,
                 standard: entry.standard.clone(),
                 name: entry.name.clone(),
                 symbol: entry.symbol.clone(),
@@ -350,12 +362,12 @@ fn serve_tokens_from_cache(
                 manager: None,
                 email: None,
                 operator_website: None,
-                total_supply: entry.total_supply.clone().unwrap_or_default(),
+                total_supply,
                 maximum_supply: entry.maximum_supply.clone(),
                 maximum_supply_status: max_supply_status(
                     &entry.standard,
                     entry.maximum_supply.as_deref(),
-                    decoded_type_args.as_deref(),
+                    Some(&decoded_type_args),
                 )
                 .to_string(),
                 holders_count: entry.holders_count,
@@ -364,9 +376,9 @@ fn serve_tokens_from_cache(
                 cells_count: None,
                 total_capacity: None,
                 total_used_capacity: None,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         tokens,
@@ -1116,6 +1128,62 @@ mod tests {
         let sd = by_symbol.get("SD").unwrap();
         assert!(sd.maximum_supply.is_none());
         assert_eq!(sd.maximum_supply_status, "unlimited");
+    }
+
+    #[test]
+    fn token_cache_missing_required_fields_must_not_serialize_as_empty_values() {
+        let valid = CachedAssetEntry {
+            id: "0x01".to_string(),
+            asset_type: "token".to_string(),
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            icon_url: None,
+            holders_count: 1,
+            transfers_count: 0,
+            transfers_24h: 0,
+            decimals: Some(8),
+            total_supply: Some("0".to_string()),
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: None,
+            cluster_name: None,
+            owned_capacity: None,
+            owned_knowledge: None,
+            composition_tier: None,
+            onchain_ratio: None,
+            onchain_count: None,
+            type_code_hash: Some("0x11".to_string()),
+            type_hash_type: Some("type".to_string()),
+            type_args: Some("0x".to_string()),
+            description: None,
+        };
+        let params = super::ListParams {
+            limit: 20,
+            standard: None,
+            cursor: None,
+            search: None,
+        };
+        let mut cases = Vec::new();
+        let mut missing = valid.clone();
+        missing.type_code_hash = None;
+        cases.push(missing);
+        let mut missing = valid.clone();
+        missing.type_hash_type = None;
+        cases.push(missing);
+        let mut missing = valid.clone();
+        missing.type_args = None;
+        cases.push(missing);
+        let mut missing = valid.clone();
+        missing.total_supply = None;
+        cases.push(missing);
+        let mut invalid = valid;
+        invalid.type_args = Some("0xzz".to_string());
+        cases.push(invalid);
+        for entry in cases {
+            assert!(super::serve_tokens_from_cache(vec![entry], &params, 20).is_err());
+        }
     }
 
     #[test]
