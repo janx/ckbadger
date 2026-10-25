@@ -1662,8 +1662,27 @@ pub fn commit_token_daily_blocks(
         .update_token_daily_deltas_batch(&changes, &mut overlay, &mut undo_seq, &mut batch)
         .unwrap();
     overlay.stage_final(&mut batch).unwrap();
-    for (block, ..) in blocks {
-        batch.put_block_header(*block, &writer_fixture_header(*block));
+    // This fixture starts at block 1. Materialize its genesis predecessor and
+    // the exact one-second histogram contributions that the real chain writer
+    // would have persisted; rollback checks and subtracts those rows.
+    if store.get_block_header(0).unwrap().is_none() {
+        batch.put_block_header(0, &writer_fixture_header(0));
+    }
+    let distinct_blocks: std::collections::BTreeSet<i64> =
+        blocks.iter().map(|(block, ..)| *block).collect();
+    let histogram_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+        &1i32.to_be_bytes(),
+    );
+    let existing_count = store
+        .get_stats_key(&histogram_key)
+        .unwrap()
+        .map(|value| i32::from_le_bytes(value.as_slice().try_into().unwrap()))
+        .unwrap_or(0);
+    let count = existing_count + i32::try_from(distinct_blocks.len()).unwrap();
+    batch.put_stats(&histogram_key, &count.to_le_bytes());
+    for block in distinct_blocks {
+        batch.put_block_header(block, &writer_fixture_header(block));
     }
     batch.commit().unwrap();
     seed_writer_fixture_epoch(store, blocks);

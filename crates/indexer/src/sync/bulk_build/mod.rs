@@ -2266,29 +2266,37 @@ impl Default for BulkBuildRuntimeState {
     }
 }
 
+/// Assign the canonical running-maximum clock to every block and transaction.
+/// The bulk runtime and direct reducer fixtures share this exact path.
+pub(crate) fn assign_chain_times_to_facts(
+    arena: &mut facts::FactsArena,
+    previous_chain_time_ms: &mut Option<i64>,
+) -> Result<()> {
+    for block in &mut arena.blocks {
+        if block.timestamp_ms < 0 {
+            anyhow::bail!(
+                "negative header timestamp in bulk build: block={} timestamp_ms={}",
+                block.number,
+                block.timestamp_ms
+            );
+        }
+        let chain_time_ms = previous_chain_time_ms
+            .map_or(block.timestamp_ms, |prior| prior.max(block.timestamp_ms));
+        block.chain_time_ms = chain_time_ms;
+        for tx in &mut arena.txs[block.tx_range.clone()] {
+            if tx.block_number != block.number {
+                bail!("bulk tx/block alignment mismatch while assigning chain time: tx_block={} block={}", tx.block_number, block.number);
+            }
+            tx.chain_time_ms = chain_time_ms;
+        }
+        *previous_chain_time_ms = Some(chain_time_ms);
+    }
+    Ok(())
+}
+
 impl BulkBuildRuntimeState {
     fn assign_chain_times(&mut self, arena: &mut facts::FactsArena) -> Result<()> {
-        for block in &mut arena.blocks {
-            if block.timestamp_ms < 0 {
-                anyhow::bail!(
-                    "negative header timestamp in bulk build: block={} timestamp_ms={}",
-                    block.number,
-                    block.timestamp_ms
-                );
-            }
-            let chain_time_ms = self
-                .previous_chain_time_ms
-                .map_or(block.timestamp_ms, |prior| prior.max(block.timestamp_ms));
-            block.chain_time_ms = chain_time_ms;
-            for tx in &mut arena.txs[block.tx_range.clone()] {
-                if tx.block_number != block.number {
-                    bail!("bulk tx/block alignment mismatch while assigning chain time: tx_block={} block={}", tx.block_number, block.number);
-                }
-                tx.chain_time_ms = chain_time_ms;
-            }
-            self.previous_chain_time_ms = Some(chain_time_ms);
-        }
-        Ok(())
+        assign_chain_times_to_facts(arena, &mut self.previous_chain_time_ms)
     }
 
     fn memory_breakdown_bytes(&self) -> HashMap<String, u64> {

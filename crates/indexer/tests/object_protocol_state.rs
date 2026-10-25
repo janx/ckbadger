@@ -587,7 +587,10 @@ fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
         },
         BlockResponseWithCycles {
             block: BlockView {
-                header: fixture_header(14_002_001, 0x92, 1_700_100_010_000),
+                // The transfer's raw clock falls two seconds before the hour,
+                // but its parent already reached the new hour. Its persisted
+                // hourly transfer must stay in the parent's t* hour.
+                header: fixture_header(14_002_001, 0x92, 1_700_099_998_000),
                 uncles: vec![],
                 transactions: vec![transfer_tx],
                 proposals: vec![],
@@ -896,7 +899,7 @@ fn bulk_build_object_owner_materializes_mnft_state_without_db_reads() {
     let transfer_tx_hash = vec![0xd1; 32];
     let token_type_hash =
         ScriptParser::compute_script_hash(&create_mnft_token_type_script(&class_id, 9));
-    let transfer_hour_bucket = 1_700_100_010_000_i64 / 3_600_000;
+    let transfer_hour_bucket = 1_700_100_000_000_i64 / 3_600_000;
 
     let snapshot = materialize_object_state_for_test(&bulk_build_mnft_object_fixture())
         .expect("mnft object snapshot");
