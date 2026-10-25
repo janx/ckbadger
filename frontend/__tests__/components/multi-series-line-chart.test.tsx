@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { fireEvent, render, screen } from '../utils/test-utils';
 import userEvent from '@testing-library/user-event';
 import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 
 describe('MultiSeriesLineChart', () => {
+  it('rounds tooltip counts from the exact API integer', () => {
+    const { container } = render(
+      <MultiSeriesLineChart
+        data={[{ date: '2026-02-23', values: { holders: '1005' } }]}
+        series={[{ key: 'holders', label: 'Holder Count', color: '#00c389' }]}
+      />
+    );
+    const svg = container.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', {
+      value: () => ({ left: 0, width: 600 }),
+    });
+    fireEvent.mouseMove(svg, { clientX: 60 });
+    expect(screen.getByText('1.01K')).toBeInTheDocument();
+  });
   it('rejects a missing required series value with date and series context', () => {
     expect(() =>
       render(

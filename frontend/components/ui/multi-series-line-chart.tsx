@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { StackedAreaDataPoint, StackedAreaSeries } from '@/lib/api';
+import { formatCompactInteger } from '@/lib/exact-integer';
 import {
   CHART_PRIMARY_COLOR,
   CHART_GRID_COLOR,
@@ -15,14 +16,6 @@ interface MultiSeriesLineChartProps {
   series: StackedAreaSeries[];
   height?: number;
   defaultVisibleSeries?: string[];
-}
-
-function formatValue(val: number | undefined): string {
-  if (val === undefined || val === null || isNaN(val)) return '-';
-  if (val >= 1_000_000_000) return `${(val / 1_000_000_000).toFixed(2)}B`;
-  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(2)}M`;
-  if (val >= 1_000) return `${(val / 1_000).toFixed(2)}K`;
-  return val.toFixed(0);
 }
 
 function formatAxisValue(val: number): string {
@@ -68,6 +61,7 @@ export function MultiSeriesLineChart({
       result[s.key] = data.map((d) => {
         const raw = d.values[s.key];
         if (raw === undefined) throw new Error(`${d.date}: missing ${s.key} value`);
+        formatCompactInteger(raw, `${d.date}: ${s.key}`);
         const value = Number(raw);
         if (!Number.isFinite(value)) throw new Error(`${d.date}: invalid ${s.key} value ${raw}`);
         return value;
@@ -476,7 +470,10 @@ export function MultiSeriesLineChart({
                 >
                   <tspan fill={s.color}>{s.label}: </tspan>
                   <tspan className="fill-text-bright">
-                    {formatValue(seriesValues[s.key][hoverIndex])}
+                    {formatCompactInteger(
+                      data[hoverIndex].values[s.key],
+                      `${data[hoverIndex].date}: ${s.key}`
+                    )}
                   </tspan>
                 </text>
               ))}
