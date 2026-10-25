@@ -213,10 +213,10 @@ interface NetworkStats {
   hashRate: string | null;
   difficulty: string;
   epoch: string;
-  tps: string;
+  tps: string | null;
   estimatedEpochTime: string | null;
-  transactionsPerMinute: string;
-  transactionsPerDay: string;
+  transactionsPerMinute: string | null;
+  transactionsPerDay: string | null;
   syncStatus: SyncStatus;
   deepForkStatus: DeepForkStatus;
   knowledgeSize: string | null;

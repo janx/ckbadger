@@ -16,12 +16,12 @@ use std::time::Instant;
 #[serde(rename_all = "camelCase")]
 struct ApiNetworkStats {
     pub latest_block: i64,
-    pub avg_block_time: String,
-    pub hash_rate: String,
+    pub avg_block_time: Option<String>,
+    pub hash_rate: Option<String>,
     pub difficulty: String,
     pub epoch: String,
-    pub tps: String,
-    pub transactions_per_day: String,
+    pub tps: Option<String>,
+    pub transactions_per_day: Option<String>,
     #[serde(default)]
     pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
 }
@@ -103,10 +103,11 @@ pub struct ChainInfoData {
     pub epoch_index: i32,
     pub epoch_length: i32,
     pub difficulty: String,
-    pub hash_rate: String,
-    pub avg_block_time: String,
-    pub tps: String,
-    pub tx_24h: i64,
+    pub hash_rate: Option<String>,
+    pub avg_block_time: Option<String>,
+    pub tps: Option<String>,
+    /// Bucket-aligned daily-equivalent rate, not a raw rolling 24h count.
+    pub tx_per_day: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -121,12 +122,19 @@ pub struct ApiServiceInfo {
 }
 
 fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> Result<ChainInfoData> {
-    let tx_24h = stats.transactions_per_day.parse::<i64>().with_context(|| {
-        format!(
-            "invalid transactionsPerDay {:?} at block {}",
-            stats.transactions_per_day, stats.latest_block
-        )
-    })?;
+    let tx_per_day = stats
+        .transactions_per_day
+        .as_deref()
+        .map(|value| {
+            value.parse::<u128>().with_context(|| {
+                format!(
+                    "invalid transactionsPerDay {value:?} at block {}",
+                    stats.latest_block
+                )
+            })
+        })
+        .transpose()?
+        .map(|value| value.to_string());
     let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch)?;
 
     Ok(ChainInfoData {
@@ -138,7 +146,7 @@ fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> Result<ChainInfoData> {
         hash_rate: stats.hash_rate.clone(),
         avg_block_time: stats.avg_block_time.clone(),
         tps: stats.tps.clone(),
-        tx_24h,
+        tx_per_day,
     })
 }
 
@@ -657,8 +665,8 @@ impl TuiDb {
         match response.json::<ApiNetworkStats>().await {
             Ok(stats) => {
                 api_info.latest_block = Some(stats.latest_block);
-                api_info.tps = Some(stats.tps.clone());
-                api_info.avg_block_time = Some(stats.avg_block_time.clone());
+                api_info.tps = stats.tps.clone();
+                api_info.avg_block_time = stats.avg_block_time.clone();
                 let chain_info = match chain_info_from_api_stats(&stats) {
                     Ok(info) => info,
                     Err(error) => {
@@ -1008,6 +1016,18 @@ mod tests {
             .to_string();
         assert!(error.contains("transactionsPerDay"));
         assert!(error.contains("block 42"));
+    }
+
+    #[test]
+    fn unmeasurable_network_rates_remain_absent() {
+        let stats: super::ApiNetworkStats = serde_json::from_str(
+            r#"{"latestBlock":0,"avgBlockTime":null,"hashRate":null,"difficulty":"1","epoch":"0(0/1800)","tps":null,"transactionsPerDay":null}"#,
+        ).unwrap();
+        let info = super::chain_info_from_api_stats(&stats).unwrap();
+        assert!(info.hash_rate.is_none());
+        assert!(info.avg_block_time.is_none());
+        assert!(info.tps.is_none());
+        assert!(info.tx_per_day.is_none());
     }
 
     #[test]

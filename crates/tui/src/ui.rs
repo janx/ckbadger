@@ -1992,11 +1992,17 @@ fn draw_chain_info(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("Hash Rate:  ", Style::default().fg(SLATE_500)),
-            Span::styled(&info.hash_rate, Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(
+                info.hash_rate.as_deref().unwrap_or("—"),
+                Style::default().fg(TERMINAL_GREEN),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Avg Block:  ", Style::default().fg(SLATE_500)),
-            Span::styled(&info.avg_block_time, Style::default().fg(FOREGROUND)),
+            Span::styled(
+                info.avg_block_time.as_deref().unwrap_or("—"),
+                Style::default().fg(FOREGROUND),
+            ),
         ]),
     ];
     f.render_widget(Paragraph::new(mid_lines), cols[1]);
@@ -2004,11 +2010,17 @@ fn draw_chain_info(f: &mut Frame, app: &App, area: Rect) {
     let right_lines = vec![
         Line::from(vec![
             Span::styled("TPS (24h): ", Style::default().fg(SLATE_500)),
-            Span::styled(&info.tps, Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(
+                info.tps.as_deref().unwrap_or("—"),
+                Style::default().fg(TERMINAL_GREEN),
+            ),
         ]),
         Line::from(vec![
-            Span::styled("Txns (24h): ", Style::default().fg(SLATE_500)),
-            Span::styled(format_num(info.tx_24h), Style::default().fg(FOREGROUND)),
+            Span::styled("Txns/day: ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                info.tx_per_day.as_deref().unwrap_or("—"),
+                Style::default().fg(FOREGROUND),
+            ),
         ]),
     ];
     f.render_widget(Paragraph::new(right_lines), cols[2]);
@@ -4756,7 +4768,7 @@ fn draw_api_health(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(latest_block, Style::default().fg(TERMINAL_GREEN)),
             Span::styled("  TPS ", Style::default().fg(SLATE_500)),
             Span::styled(
-                info.tps.clone().unwrap_or_else(|| "-".to_string()),
+                info.tps.clone().unwrap_or_else(|| "—".to_string()),
                 Style::default().fg(TERMINAL_DIM),
             ),
         ]),
@@ -4765,7 +4777,7 @@ fn draw_api_health(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 info.avg_block_time
                     .clone()
-                    .unwrap_or_else(|| "-".to_string()),
+                    .unwrap_or_else(|| "—".to_string()),
                 Style::default().fg(FOREGROUND),
             ),
         ]),

@@ -83,7 +83,7 @@ export function StatsCards() {
     { label: 'HASH RATE', value: stats?.hashRate ?? '—', glow: 'subtle' as const },
     { label: 'DIFFICULTY', value: stats?.difficulty ?? '-', glow: 'subtle' as const },
     { label: 'CURRENT EPOCH', value: stats?.epoch ?? '-', glow: 'subtle' as const },
-    { label: 'TPS (24H)', value: stats?.tps ?? '-', glow: 'subtle' as const },
+    { label: 'TPS (24H)', value: stats?.tps ?? '—', glow: 'subtle' as const },
   ];
 
   return (

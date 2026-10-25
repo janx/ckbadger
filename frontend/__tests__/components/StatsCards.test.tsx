@@ -78,6 +78,19 @@ describe('StatsCards', () => {
     );
   });
 
+  it('shows an em dash for an unavailable transaction rate', async () => {
+    server.use(
+      http.get(`${API_BASE}/statistics/network`, () =>
+        HttpResponse.json({
+          ...createNetworkResponse({ isSyncing: false, syncMode: 'synced' }),
+          tps: null,
+        })
+      )
+    );
+    render(<StatsCards />, { wrapper: createWrapper() });
+    await waitFor(() => expect(screen.getByText('TPS (24H)').parentElement).toHaveTextContent('—'));
+  });
+
   it('shows bulk sync progress details when available', async () => {
     server.use(
       http.get(`${API_BASE}/statistics/network`, () => {
