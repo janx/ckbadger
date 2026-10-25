@@ -206,7 +206,7 @@ fn insert_full_block(
     seed_epoch_rows(domain_store, [block_num]);
 }
 
-/// Write the derived CF records (addr_balance + script_info) that forward sync
+/// Write the derived CF records (address and both script rollups) that forward sync
 /// would have produced. Rollback's inline delta code reads these CFs, so they
 /// must exist before `rollback_to_block_with_append_only_store` is called.
 fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i64) {
@@ -231,11 +231,26 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
     let lock_si = ScriptInfo {
         code_hash: lock_code_hash.clone(),
         hash_type: 1,
+        lock_cells_count: block_count,
         lock_live_cells_count: block_count,
+        lock_capacity_sum: block_count as i128 * cap_per_cell,
         lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
+    batch.put_script_reference_info(
+        1,
+        &lock_code_hash,
+        &ScriptReferenceInfo {
+            reference_hash: lock_code_hash.clone(),
+            hash_type: 1,
+            lock_cells_count: block_count,
+            lock_live_cells_count: block_count,
+            lock_capacity_sum: block_count as i128 * cap_per_cell,
+            lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
+            ..Default::default()
+        },
+    );
 
     batch.commit().unwrap();
 }
@@ -636,23 +651,59 @@ fn test_rollback_updates_derived_cfs_inline() {
     let lock_si = ScriptInfo {
         code_hash: lock_code_hash.clone(),
         hash_type: 1,
+        lock_cells_count: 6,
         lock_live_cells_count: 6,
+        lock_capacity_sum: 4 * reg_cap + 2 * udt_cap,
         lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
+        lock_used_capacity_sum: 2 * udt_cap,
         lock_owned_knowledge_sum: 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
+    batch.put_script_reference_info(
+        1,
+        &lock_code_hash,
+        &ScriptReferenceInfo {
+            reference_hash: lock_code_hash.clone(),
+            hash_type: 1,
+            lock_cells_count: 6,
+            lock_live_cells_count: 6,
+            lock_capacity_sum: 4 * reg_cap + 2 * udt_cap,
+            lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
+            lock_used_capacity_sum: 2 * udt_cap,
+            lock_owned_knowledge_sum: 2 * udt_cap,
+            ..Default::default()
+        },
+    );
 
     // script_info for type_code_hash [0xDD;32]
     let type_si = ScriptInfo {
         code_hash: type_code_hash.clone(),
         hash_type: 1,
+        type_cells_count: 2,
         type_live_cells_count: 2,
+        type_capacity_sum: 2 * udt_cap,
         type_owned_capacity_sum: 2 * udt_cap,
+        type_used_capacity_sum: 2 * udt_cap,
         type_owned_knowledge_sum: 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&type_code_hash, &type_si);
+    batch.put_script_reference_info(
+        1,
+        &type_code_hash,
+        &ScriptReferenceInfo {
+            reference_hash: type_code_hash.clone(),
+            hash_type: 1,
+            type_cells_count: 2,
+            type_live_cells_count: 2,
+            type_capacity_sum: 2 * udt_cap,
+            type_owned_capacity_sum: 2 * udt_cap,
+            type_used_capacity_sum: 2 * udt_cap,
+            type_owned_knowledge_sum: 2 * udt_cap,
+            ..Default::default()
+        },
+    );
 
     // token_holder: (type_script_hash, lock_hash) -> balance = 2 * udt_amount
     batch.put_token_holder(&type_script_hash, &lock_hash, 2 * udt_amount);
@@ -709,6 +760,9 @@ fn test_rollback_updates_derived_cfs_inline() {
         lock_si.lock_live_cells_count, 2,
         "lock script_info: 6 - 4 = 2 live cells"
     );
+    assert_eq!(lock_si.lock_cells_count, 2);
+    assert_eq!(lock_si.lock_capacity_sum, 2 * reg_cap);
+    assert_eq!(lock_si.lock_used_capacity_sum, 0);
     assert_eq!(
         lock_si.lock_owned_capacity_sum,
         2 * reg_cap,
@@ -721,6 +775,9 @@ fn test_rollback_updates_derived_cfs_inline() {
         type_si.type_live_cells_count, 0,
         "type script_info: 2 - 2 = 0 live cells"
     );
+    assert_eq!(type_si.type_cells_count, 0);
+    assert_eq!(type_si.type_capacity_sum, 0);
+    assert_eq!(type_si.type_used_capacity_sum, 0);
     assert_eq!(
         type_si.type_owned_capacity_sum, 0,
         "type script_info: capacity 0 after all UDT cells removed"
@@ -1399,6 +1456,26 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     let mut domain_batch = StoreBatch::new(&domain);
     domain_batch.put_consumed_cell_meta(&normal_tx_hash(4), 1, 4, 5, Some(&normal_tx_hash(5)));
     domain_batch.put_consumed_cell_meta(&normal_tx_hash(2), 1, 2, 5, Some(&normal_tx_hash(5)));
+    // Both extra cells were created, then consumed before the fork tip. The
+    // base fixture already recorded five live standard cells; the two extra
+    // creations increase cumulative script counts/capacity and used capacity,
+    // while their net live ownership is zero.
+    let lock_code_hash = vec![0xAA; 32];
+    let total_capacity = 5 * CAP_STD as i128 + CAP_PAIR as i128 + CAP_RST as i128;
+    let total_used = (OCC_PAIR + OCC_RST) as i128;
+    let mut script = domain.get_script_info(&lock_code_hash).unwrap().unwrap();
+    script.lock_cells_count = 7;
+    script.lock_capacity_sum = total_capacity;
+    script.lock_used_capacity_sum = total_used;
+    domain_batch.put_script_info(&lock_code_hash, &script);
+    let mut reference = domain
+        .get_script_reference_info(1, &lock_code_hash)
+        .unwrap()
+        .unwrap();
+    reference.lock_cells_count = 7;
+    reference.lock_capacity_sum = total_capacity;
+    reference.lock_used_capacity_sum = total_used;
+    domain_batch.put_script_reference_info(1, &lock_code_hash, &reference);
     domain_batch.commit().unwrap();
 
     // Seed the cutoff-hour and cutoff-day stats rows exactly as forward sync
@@ -1455,6 +1532,41 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "std cells of blocks 4-5 removed");
     assert_eq!(result.cells_restored, 1, "restore cell returns to live");
+    let script = domain.get_script_info(&lock_code_hash).unwrap().unwrap();
+    assert_eq!(script.lock_cells_count, 4);
+    assert_eq!(script.lock_live_cells_count, 4);
+    assert_eq!(
+        script.lock_capacity_sum,
+        3 * CAP_STD as i128 + CAP_RST as i128
+    );
+    assert_eq!(
+        script.lock_owned_capacity_sum,
+        3 * CAP_STD as i128 + CAP_RST as i128
+    );
+    assert_eq!(script.lock_used_capacity_sum, OCC_RST as i128);
+    assert_eq!(script.lock_owned_knowledge_sum, OCC_RST as i128);
+    let reference = domain
+        .get_script_reference_info(1, &lock_code_hash)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference.lock_cells_count, script.lock_cells_count);
+    assert_eq!(
+        reference.lock_live_cells_count,
+        script.lock_live_cells_count
+    );
+    assert_eq!(reference.lock_capacity_sum, script.lock_capacity_sum);
+    assert_eq!(
+        reference.lock_owned_capacity_sum,
+        script.lock_owned_capacity_sum
+    );
+    assert_eq!(
+        reference.lock_used_capacity_sum,
+        script.lock_used_capacity_sum
+    );
+    assert_eq!(
+        reference.lock_owned_knowledge_sum,
+        script.lock_owned_knowledge_sum
+    );
 
     // Recompute the expected cutoff-hour row directly from the surviving
     // chain (blocks 1..=3): 2 txs per block, cellbase outputs 3 + normal
