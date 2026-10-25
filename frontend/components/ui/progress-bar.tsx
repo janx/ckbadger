@@ -1,6 +1,18 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { formatScaledInteger } from '@/lib/exact-integer';
+
+function barRatio(value: number, max: number): { width: number; text: string } {
+  if (!Number.isSafeInteger(value) || value < 0 || !Number.isSafeInteger(max) || max < 0) {
+    throw new Error(`invalid capacity bar ratio ${value}/${max}`);
+  }
+  if (max === 0) return { width: 0, text: '—' };
+  return {
+    width: Math.min((value / max) * 100, 100),
+    text: `${formatScaledInteger(BigInt(value) * BigInt(100), BigInt(max), 1)}%`,
+  };
+}
 
 interface ProgressBarProps {
   value: number;
@@ -21,7 +33,8 @@ export function ProgressBar({
   color = 'auto',
   className,
 }: ProgressBarProps) {
-  const percent = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  const ratio = barRatio(value, max);
+  const percent = ratio.width;
 
   const getColor = () => {
     if (color !== 'auto') return color;
@@ -55,11 +68,11 @@ export function ProgressBar({
   const formatLabel = () => {
     switch (labelFormat) {
       case 'percent':
-        return `${percent.toFixed(1)}%`;
+        return ratio.text;
       case 'value':
         return `${value.toLocaleString()} / ${max.toLocaleString()}`;
       case 'both':
-        return `${value.toLocaleString()} / ${max.toLocaleString()} (${percent.toFixed(1)}%)`;
+        return `${value.toLocaleString()} / ${max.toLocaleString()} (${ratio.text})`;
     }
   };
 
@@ -95,7 +108,8 @@ interface UsageBarProps {
 }
 
 export function UsageBar({ value, max, unit = '', className }: UsageBarProps) {
-  const percent = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  const ratio = barRatio(value, max);
+  const percent = ratio.width;
 
   const getColorClass = () => {
     if (percent < 33) return 'bg-positive/30';
@@ -116,7 +130,7 @@ export function UsageBar({ value, max, unit = '', className }: UsageBarProps) {
       />
       <span className="relative tabular-nums">
         {value.toLocaleString()} / {max.toLocaleString()}
-        {unit && ` ${unit}`} ({percent.toFixed(1)}%)
+        {unit && ` ${unit}`} ({ratio.text})
       </span>
     </span>
   );
