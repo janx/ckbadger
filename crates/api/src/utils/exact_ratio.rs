@@ -56,6 +56,30 @@ pub fn format_ratio(numerator: i128, denominator: i128, decimals: u32) -> Result
     }
 }
 
+/// Format a nonnegative ratio as a percentage without multiplying an i128
+/// numerator by 100 (which would overflow for valid chain-sized aggregates).
+pub fn format_percent(numerator: i128, denominator: i128, decimals: u32) -> Result<String, String> {
+    let ratio = format_ratio(
+        numerator,
+        denominator,
+        decimals
+            .checked_add(2)
+            .ok_or("percentage precision overflow")?,
+    )?;
+    let (whole, fraction) = ratio
+        .split_once('.')
+        .ok_or("percentage requires fractional digits")?;
+    let (integer_tail, decimal_tail) = fraction.split_at(2);
+    let integer = format!("{whole}{integer_tail}");
+    let integer = integer.trim_start_matches('0');
+    let integer = if integer.is_empty() { "0" } else { integer };
+    if decimals == 0 {
+        Ok(integer.to_string())
+    } else {
+        Ok(format!("{integer}.{decimal_tail}"))
+    }
+}
+
 /// A bounded share, with a genuinely empty set represented as absent.
 pub fn format_share_4(numerator: i64, denominator: i64) -> Result<Option<String>, String> {
     if numerator < 0 || denominator < 0 || numerator > denominator {
@@ -90,6 +114,16 @@ mod tests {
         );
         assert!(format_ratio(1, 0, 2).is_err());
         assert!(format_ratio(-1, 2, 2).is_err());
+    }
+
+    #[test]
+    fn exact_percent_handles_full_i128_without_scaled_numerator() {
+        assert_eq!(format_percent(1, 8, 6).unwrap(), "12.500000");
+        assert_eq!(
+            format_percent(i128::MAX, i128::MAX, 6).unwrap(),
+            "100.000000"
+        );
+        assert_eq!(format_percent(1, 2, 0).unwrap(), "50");
     }
 
     #[test]

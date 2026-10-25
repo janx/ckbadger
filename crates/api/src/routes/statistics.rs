@@ -2112,10 +2112,9 @@ async fn get_capacity_turnover_ratio_chart(
     let mut data = Vec::with_capacity(daily_stats.len());
 
     for (date, stats) in daily_stats {
-        let live = match stats.knowledge_size {
-            Some(v) => v,
-            None => continue,
-        };
+        let live = stats.knowledge_size.ok_or_else(|| {
+            ApiError::internal(format!("missing knowledge_size in daily_stats for {date}"))
+        })?;
         if live <= 0 {
             return Err(ApiError::internal(format!(
                 "nonpositive knowledge_size in daily_stats for {}: {}",
@@ -2131,31 +2130,35 @@ async fn get_capacity_turnover_ratio_chart(
         }
 
         rolling.push_back((consumed, live));
-        rolling_consumed_sum += consumed;
-        rolling_live_sum += live;
+        rolling_consumed_sum = rolling_consumed_sum.checked_add(consumed).ok_or_else(|| {
+            ApiError::internal(format!("weekly consumed-capacity sum overflows for {date}"))
+        })?;
+        rolling_live_sum = rolling_live_sum.checked_add(live).ok_or_else(|| {
+            ApiError::internal(format!("weekly knowledge-size sum overflows for {date}"))
+        })?;
         if rolling.len() > 7 {
             if let Some((old_consumed, old_live)) = rolling.pop_front() {
-                rolling_consumed_sum -= old_consumed;
-                rolling_live_sum -= old_live;
+                rolling_consumed_sum =
+                    rolling_consumed_sum
+                        .checked_sub(old_consumed)
+                        .ok_or_else(|| {
+                            ApiError::internal(format!(
+                                "weekly consumed-capacity subtraction overflows for {date}"
+                            ))
+                        })?;
+                rolling_live_sum = rolling_live_sum.checked_sub(old_live).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "weekly knowledge-size subtraction overflows for {date}"
+                    ))
+                })?;
             }
         }
 
-        let daily_turnover = crate::utils::exact_ratio::format_ratio(
-            consumed.checked_mul(100).ok_or_else(|| {
-                ApiError::internal(format!("daily turnover numerator overflows for {date}"))
-            })?,
-            live,
-            6,
-        )
-        .map_err(|e| ApiError::internal(format!("daily turnover for {date}: {e}")))?;
-        let weekly_turnover = crate::utils::exact_ratio::format_ratio(
-            rolling_consumed_sum.checked_mul(100).ok_or_else(|| {
-                ApiError::internal(format!("weekly turnover numerator overflows for {date}"))
-            })?,
-            rolling_live_sum,
-            6,
-        )
-        .map_err(|e| ApiError::internal(format!("weekly turnover for {date}: {e}")))?;
+        let daily_turnover = crate::utils::exact_ratio::format_percent(consumed, live, 6)
+            .map_err(|e| ApiError::internal(format!("daily turnover for {date}: {e}")))?;
+        let weekly_turnover =
+            crate::utils::exact_ratio::format_percent(rolling_consumed_sum, rolling_live_sum, 6)
+                .map_err(|e| ApiError::internal(format!("weekly turnover for {date}: {e}")))?;
 
         data.push(ChartDataPoint {
             date: format_chart_date(&date)?,

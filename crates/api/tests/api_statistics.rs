@@ -2558,6 +2558,33 @@ fn knowledge_size_day(knowledge_size: i128) -> DailyStats {
     }
 }
 
+#[tokio::test]
+async fn turnover_chart_rejects_complete_day_without_knowledge_size() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240115",
+            &DailyStats {
+                blocks_count: 1,
+                used_capacity_consumed: 5,
+                knowledge_size: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_block_headers_at(&store, &[(0, 1_705_363_200_000), (1, 1_705_449_600_000)]);
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, "/charts/capacity-turnover-ratio").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing knowledge_size in daily_stats for 20240115"),
+        "{body}"
+    );
+}
+
 /// Regression: the knowledge-size chart judged "today" by the wall clock. An
 /// indexer that lags the chain — catching up after a restart — still has the
 /// tip block's day only partly indexed after midnight has passed, and that day
