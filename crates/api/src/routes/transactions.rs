@@ -7,12 +7,8 @@ use ckb_store_reader::RpcTransactionView;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-#[cfg(test)]
-use std::time::Duration as StdDuration;
 use tokio::time::Instant;
 
-#[cfg(test)]
-use crate::cache::InMemoryCache;
 use crate::consensus::ProposalWindow;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
@@ -58,8 +54,6 @@ struct PendingTxIoBundle {
     witnesses_available: bool,
     dotcell_names: Vec<DotCellNameWitnessResponse>,
 }
-#[cfg(test)]
-const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 
 /// A transaction's size as CKB counts it: the molecule size plus the 4-byte
 /// offset slot the transaction occupies in the block's transactions table.
@@ -178,38 +172,6 @@ fn required_tx_timestamp(
             "transaction block={block_number} index={tx_index} has invalid timestamp {timestamp_ms}"
         ))
         })
-}
-
-#[cfg(test)]
-fn tx_hash_from_prefetched_hashes(
-    block_tx_hashes: &Option<Vec<Vec<u8>>>,
-    tx_idx: i32,
-) -> Option<Vec<u8>> {
-    let idx = usize::try_from(tx_idx).ok()?;
-    block_tx_hashes.as_ref()?.get(idx).cloned()
-}
-
-#[cfg(test)]
-fn tx_block_hashes_cache_key(block_num: i64) -> String {
-    format!("transactions:block_tx_hashes:{block_num}")
-}
-
-#[cfg(test)]
-fn get_block_tx_hashes_cached_with_fetch<F>(
-    mem_cache: &InMemoryCache,
-    block_num: i64,
-    fetch: F,
-) -> Option<Vec<Vec<u8>>>
-where
-    F: FnOnce(i64) -> Option<Vec<Vec<u8>>>,
-{
-    let cache_key = tx_block_hashes_cache_key(block_num);
-    if let Some(cached) = mem_cache.get::<Vec<Vec<u8>>>(&cache_key) {
-        return Some(cached);
-    }
-    let fetched = fetch(block_num)?;
-    mem_cache.set(&cache_key, &fetched, TX_BLOCK_HASHES_CACHE_TTL);
-    Some(fetched)
 }
 
 async fn list_transactions(
@@ -2272,7 +2234,6 @@ async fn get_transaction_lifecycle(
 mod tests {
     use super::*;
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     #[test]
@@ -2342,54 +2303,6 @@ mod tests {
         assert_eq!(params.limit, 50);
         assert!(params.block_number.is_none());
         assert!(params.cursor.is_none());
-    }
-
-    #[test]
-    fn test_tx_hash_from_prefetched_hashes_returns_hash_by_index() {
-        let hashes = Some(vec![vec![0x11; 32], vec![0x22; 32]]);
-        assert_eq!(
-            tx_hash_from_prefetched_hashes(&hashes, 1),
-            Some(vec![0x22; 32])
-        );
-    }
-
-    #[test]
-    fn test_tx_hash_from_prefetched_hashes_rejects_invalid_index() {
-        let hashes = Some(vec![vec![0x11; 32]]);
-        assert_eq!(tx_hash_from_prefetched_hashes(&hashes, -1), None);
-        assert_eq!(tx_hash_from_prefetched_hashes(&hashes, 3), None);
-        assert_eq!(tx_hash_from_prefetched_hashes(&None, 0), None);
-    }
-
-    #[test]
-    fn test_tx_block_hashes_cache_key_is_stable() {
-        assert_eq!(
-            tx_block_hashes_cache_key(42),
-            "transactions:block_tx_hashes:42"
-        );
-    }
-
-    #[test]
-    fn test_get_block_tx_hashes_cached_with_fetch_uses_cache() {
-        let cache = InMemoryCache::new();
-        let calls = Arc::new(AtomicUsize::new(0));
-
-        let first_calls = calls.clone();
-        let first = get_block_tx_hashes_cached_with_fetch(&cache, 99, move |_| {
-            first_calls.fetch_add(1, Ordering::SeqCst);
-            Some(vec![vec![0x11; 32]])
-        })
-        .unwrap();
-        assert_eq!(first, vec![vec![0x11; 32]]);
-
-        let second_calls = calls.clone();
-        let second = get_block_tx_hashes_cached_with_fetch(&cache, 99, move |_| {
-            second_calls.fetch_add(1, Ordering::SeqCst);
-            Some(vec![vec![0x22; 32]])
-        })
-        .unwrap();
-        assert_eq!(second, vec![vec![0x11; 32]]);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

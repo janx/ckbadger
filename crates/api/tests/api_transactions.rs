@@ -5,6 +5,7 @@ use common::*;
 async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
     let store = test_store();
     let hash = [0xA7u8; 32];
+    let second_hash = [0xA8u8; 32];
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(
         7,
@@ -16,7 +17,7 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
             epoch_index: 0,
             epoch_length: 1,
             dao: vec![0; 32],
-            transactions_count: 1,
+            transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
             compact_target: 0x1e083126,
@@ -26,6 +27,7 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
         },
     );
     batch.put_tx_hash_map(&hash, 7, 0);
+    batch.put_tx_hash_map(&second_hash, 7, 1);
     batch.put_tx_index(
         7,
         0,
@@ -41,12 +43,28 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
             semantic_tags: 0,
         },
     );
+    batch.put_tx_index(
+        7,
+        1,
+        &TxIndexEntry {
+            tx_hash: second_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 100,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/transactions?block_number=7")
+                .uri("/api/v1/transactions?block_number=7&limit=1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -56,6 +74,26 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["hash"], format!("0x{}", hex::encode(hash)));
+    let cursor = json["nextCursor"].as_str().expect("second page cursor");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/transactions?block_number=7&limit=1&cursor={cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["hash"],
+        format!("0x{}", hex::encode(second_hash))
+    );
+    assert!(json["nextCursor"].is_null());
 }
 
 #[tokio::test]
