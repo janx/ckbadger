@@ -9,7 +9,6 @@ pub const MEMORY_STATS_CACHE_KEY: &str = "memory:stats";
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatusData {
     pub tip_block_number: i64,
-    #[serde(default)]
     pub tip_block_hash: String,
     pub total_transactions: i64,
     pub total_cells: i64,
@@ -125,7 +124,6 @@ pub struct SyncProgressData {
     #[serde(default)]
     pub startup_phase: Option<String>,
     /// True when reading blocks directly from CKB's RocksDB instead of JSON-RPC.
-    #[serde(default)]
     pub is_direct_db_read: bool,
     /// DB write stage total time in ms for the last batch (from PerfStats).
     #[serde(default)]
@@ -457,16 +455,12 @@ pub struct MemoryStatsData {
     /// Total RocksDB memory usage
     pub rocksdb_total_bytes: u64,
     /// Domain-store share of RocksDB memtable memory
-    #[serde(default)]
     pub rocksdb_domain_memtable_bytes: u64,
     /// Append-only-store share of RocksDB memtable memory
-    #[serde(default)]
     pub rocksdb_append_only_memtable_bytes: u64,
     /// Domain-store share of RocksDB table-reader memory
-    #[serde(default)]
     pub rocksdb_domain_table_readers_bytes: u64,
     /// Append-only-store share of RocksDB table-reader memory
-    #[serde(default)]
     pub rocksdb_append_only_table_readers_bytes: u64,
 
     /// Number of block headers cached
@@ -478,65 +472,46 @@ pub struct MemoryStatsData {
     pub bulk_sync_mode: bool,
 
     /// Estimated bytes pending compaction
-    #[serde(default)]
     pub compaction_pending_bytes: u64,
     /// Domain-store bytes pending compaction
-    #[serde(default)]
     pub domain_compaction_pending_bytes: u64,
     /// Append-only-store bytes pending compaction
-    #[serde(default)]
     pub append_only_compaction_pending_bytes: u64,
     /// Number of currently running compactions
-    #[serde(default)]
     pub num_running_compactions: u64,
     /// Total SST file size on disk (all CFs)
-    #[serde(default)]
     pub sst_files_size: u64,
     /// Total L0 files across all CFs (sum)
-    #[serde(default)]
     pub l0_files_count: u64,
     /// Max L0 files in any single CF (the actual write stall trigger)
-    #[serde(default)]
     pub l0_files_max: u64,
     /// Name of the CF with the most L0 files
-    #[serde(default)]
     pub l0_worst_cf: String,
     /// Total immutable memtables across all CFs (waiting for flush)
-    #[serde(default)]
     pub immutable_memtables: u64,
     /// SST files across every level of both chain stores. With atomic flush
     /// one flush round writes one file per written CF, so this is the standing
     /// cost of flush frequency.
-    #[serde(default)]
     pub sst_files_total: u64,
     /// MANIFEST bytes across both chain stores. A secondary replays the
     /// MANIFEST on open, so this is what a slow API secondary open costs.
     /// Flush ROUND counts come from `flush_started` in the RocksDB LOG, not
     /// from any sampled gauge: RocksDB has no cumulative flush counter.
-    #[serde(default)]
     pub manifest_bytes: u64,
     /// Domain-store MANIFEST bytes (the one the API secondary replays).
-    #[serde(default)]
     pub domain_manifest_bytes: u64,
     /// Top column families by estimated live data size: (name, bytes)
-    #[serde(default)]
     pub top_cf_sizes: Vec<(String, u64)>,
 
     /// WriteBufferManager current usage in bytes
-    #[serde(default)]
     pub wbm_usage_bytes: u64,
     /// WriteBufferManager budget (buffer_size) in bytes
-    #[serde(default)]
     pub wbm_budget_bytes: u64,
 
     /// Chain-level statistics (from SyncStatusData)
-    #[serde(default)]
     pub total_transactions: i64,
-    #[serde(default)]
     pub total_cells: i64,
-    #[serde(default)]
     pub total_live_cells: i64,
-    #[serde(default)]
     pub total_addresses: i64,
 
     /// Unix timestamp when this data was collected
@@ -592,6 +567,28 @@ mod tests {
 
         assert_eq!(parsed.tip_block_number, status.tip_block_number);
         assert_eq!(parsed.tip_block_hash, status.tip_block_hash);
+    }
+
+    #[test]
+    fn required_sync_and_memory_fields_cannot_disappear_from_json() {
+        let mut status = serde_json::to_value(SyncStatusData::new()).unwrap();
+        status.as_object_mut().unwrap().remove("tipBlockHash");
+        assert!(serde_json::from_value::<SyncStatusData>(status).is_err());
+
+        for field in [
+            "rocksdbDomainMemtableBytes",
+            "compactionPendingBytes",
+            "l0FilesCount",
+            "wbmUsageBytes",
+            "totalTransactions",
+        ] {
+            let mut memory = serde_json::to_value(MemoryStatsData::default()).unwrap();
+            memory.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<MemoryStatsData>(memory).is_err(),
+                "missing {field} cannot mean zero or empty"
+            );
+        }
     }
 
     #[test]

@@ -4704,6 +4704,16 @@ impl Check for DotCellRingIntegrity {
 
 pub struct DotCellIdIsLabelHash;
 
+fn required_dotcell_label<'a>(name: Option<&'a str>, nft_id: &str) -> anyhow::Result<&'a str> {
+    let name = name.ok_or_else(|| {
+        anyhow::anyhow!(
+            ".cell item {} is missing its name in dotcell_id_is_label_hash",
+            nft_id
+        )
+    })?;
+    Ok(name.strip_suffix(".cell").unwrap_or(name))
+}
+
 impl Check for DotCellIdIsLabelHash {
     fn name(&self) -> &'static str {
         "dotcell_id_is_label_hash"
@@ -4721,8 +4731,7 @@ impl Check for DotCellIdIsLabelHash {
         let mut findings = vec![];
         for item in &items {
             // The listing's `name` is the label plus ".cell".
-            let name = item.name.as_deref().unwrap_or_default();
-            let label = name.strip_suffix(".cell").unwrap_or(name);
+            let label = required_dotcell_label(item.name.as_deref(), &item.nft_id)?;
             let expected = ckbadger_store::types::derive_dotcell_id(label);
             let actual = parse_hex20("item id", &item.nft_id)?;
             if expected != actual {
@@ -6382,6 +6391,18 @@ mod tests {
                 "missing {field} must be a response error"
             );
         }
+    }
+
+    #[test]
+    fn dotcell_id_check_requires_the_name_it_hashes() {
+        assert_eq!(
+            required_dotcell_label(Some("alice.cell"), "0x01").unwrap(),
+            "alice"
+        );
+        let error = required_dotcell_label(None, "0x01")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("0x01") && error.contains("missing its name"));
     }
 
     #[test]
