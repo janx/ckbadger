@@ -52,11 +52,11 @@ struct Sample {
     l0_files: u64,
     l0_max: u64,
     sst_size_gb: f64,
-    chunks_delta: u64,
-    slow_chunks_delta: u64,
-    timeouts_delta: u64,
-    keys_delta: u64,
-    elapsed_us_delta: u64,
+    chunks_delta: Option<u64>,
+    slow_chunks_delta: Option<u64>,
+    timeouts_delta: Option<u64>,
+    keys_delta: Option<u64>,
+    elapsed_us_delta: Option<u64>,
     current_block: u64,
     target_block: u64,
     // Flush-side signals — added to verify WBM tuning actually reduces
@@ -129,7 +129,13 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
         ticker.tick().await;
 
         let curr_lookup = indexer.parser_cell_lookup_snapshot();
-        let lookup_delta = delta(&last_lookup_snap, &curr_lookup);
+        let lookup_delta = match delta(&last_lookup_snap, &curr_lookup) {
+            Ok(delta) => Some(delta),
+            Err(error) => {
+                warn!(%error, "parser lookup counter regressed; current health sample is unavailable");
+                None
+            }
+        };
 
         let (_fetch_ms, db_stage_ms, db_commit_ms) = indexer.perf_snapshot_ms();
         let (precompute_ms, build_ms, finalize_ms) = indexer.perf_write_phase_snapshot_ms();
@@ -152,11 +158,11 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             l0_files: memory.l0_files_count,
             l0_max: memory.l0_files_max,
             sst_size_gb: memory.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0),
-            chunks_delta: lookup_delta.chunks_total,
-            slow_chunks_delta: lookup_delta.slow_chunks_total,
-            timeouts_delta: lookup_delta.timeouts_total,
-            keys_delta: lookup_delta.keys_total,
-            elapsed_us_delta: lookup_delta.elapsed_us_total,
+            chunks_delta: lookup_delta.map(|value| value.chunks_total),
+            slow_chunks_delta: lookup_delta.map(|value| value.slow_chunks_total),
+            timeouts_delta: lookup_delta.map(|value| value.timeouts_total),
+            keys_delta: lookup_delta.map(|value| value.keys_total),
+            elapsed_us_delta: lookup_delta.map(|value| value.elapsed_us_total),
             current_block: progress.current(),
             target_block: progress.target(),
             num_running_flushes: flush.map(|value| value.num_running_flushes),
@@ -191,16 +197,29 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
 fn delta(
     prev: &ParserCellLookupSnapshot,
     curr: &ParserCellLookupSnapshot,
-) -> ParserCellLookupSnapshot {
-    ParserCellLookupSnapshot {
-        chunks_total: curr.chunks_total.saturating_sub(prev.chunks_total),
-        slow_chunks_total: curr
-            .slow_chunks_total
-            .saturating_sub(prev.slow_chunks_total),
-        timeouts_total: curr.timeouts_total.saturating_sub(prev.timeouts_total),
-        keys_total: curr.keys_total.saturating_sub(prev.keys_total),
-        elapsed_us_total: curr.elapsed_us_total.saturating_sub(prev.elapsed_us_total),
-    }
+) -> anyhow::Result<ParserCellLookupSnapshot> {
+    let checked_delta = |field: &str, current: u64, previous: u64| {
+        current.checked_sub(previous).ok_or_else(|| {
+            anyhow::anyhow!(
+                "parser lookup {field} counter regressed: previous={previous} current={current}"
+            )
+        })
+    };
+    Ok(ParserCellLookupSnapshot {
+        chunks_total: checked_delta("chunks_total", curr.chunks_total, prev.chunks_total)?,
+        slow_chunks_total: checked_delta(
+            "slow_chunks_total",
+            curr.slow_chunks_total,
+            prev.slow_chunks_total,
+        )?,
+        timeouts_total: checked_delta("timeouts_total", curr.timeouts_total, prev.timeouts_total)?,
+        keys_total: checked_delta("keys_total", curr.keys_total, prev.keys_total)?,
+        elapsed_us_total: checked_delta(
+            "elapsed_us_total",
+            curr.elapsed_us_total,
+            prev.elapsed_us_total,
+        )?,
+    })
 }
 
 fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
@@ -211,14 +230,16 @@ fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
             sample.db_stage_write_ms, DEGRADATION_DB_STAGE_WARN_MS
         ));
     }
-    if sample.slow_chunks_delta > DEGRADATION_SLOW_CHUNK_PER_MIN {
+    if let Some(slow_chunks) = sample
+        .slow_chunks_delta
+        .filter(|value| *value > DEGRADATION_SLOW_CHUNK_PER_MIN)
+    {
         reasons.push(format!(
-            "slow_chunks_per_min={} > {}",
-            sample.slow_chunks_delta, DEGRADATION_SLOW_CHUNK_PER_MIN
+            "slow_chunks_per_min={slow_chunks} > {DEGRADATION_SLOW_CHUNK_PER_MIN}",
         ));
     }
-    if sample.timeouts_delta > 0 {
-        reasons.push(format!("parser_timeouts_per_min={}", sample.timeouts_delta));
+    if let Some(timeouts) = sample.timeouts_delta.filter(|value| *value > 0) {
+        reasons.push(format!("parser_timeouts_per_min={timeouts}"));
     }
     if reasons.is_empty() {
         return;
@@ -253,13 +274,13 @@ fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
 /// in the RocksDB LOG; `sst_files_last` and `manifest_mb_last` are the exact
 /// standing consequences of flush frequency, and `flush_pending_peak` /
 /// `flush_observed_in_window` remain the sampled activity signals.
-const CSV_SCHEMA_VERSION: u32 = 4;
+const CSV_SCHEMA_VERSION: u32 = 5;
 
 /// The one definition of the column set. Every row is produced by
 /// [`format_hourly_row`] from the same list, and a unit test pins the two to
 /// the same column count.
 fn csv_header() -> &'static str {
-    "schema=4,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
+    "schema=5,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
      block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,\
      chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
      keys_per_hour,avg_us_per_chunk,\
@@ -379,15 +400,14 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let avg_l0 = buffer.iter().map(|s| s.l0_files).sum::<u64>() as f64 / n;
     let peak_l0_max = buffer.iter().map(|s| s.l0_max).max().unwrap_or(0);
     let last_sst_gb = buffer.last().map(|s| s.sst_size_gb).unwrap_or(0.0);
-    let chunks_per_hour: u64 = buffer.iter().map(|s| s.chunks_delta).sum();
-    let slow_per_hour: u64 = buffer.iter().map(|s| s.slow_chunks_delta).sum();
-    let timeouts_per_hour: u64 = buffer.iter().map(|s| s.timeouts_delta).sum();
-    let keys_per_hour: u64 = buffer.iter().map(|s| s.keys_delta).sum();
-    let elapsed_us_per_hour: u64 = buffer.iter().map(|s| s.elapsed_us_delta).sum();
-    let avg_us_per_chunk = if chunks_per_hour > 0 {
-        elapsed_us_per_hour as f64 / chunks_per_hour as f64
-    } else {
-        0.0
+    let chunks_per_hour = sum_complete(buffer.iter().map(|s| s.chunks_delta));
+    let slow_per_hour = sum_complete(buffer.iter().map(|s| s.slow_chunks_delta));
+    let timeouts_per_hour = sum_complete(buffer.iter().map(|s| s.timeouts_delta));
+    let keys_per_hour = sum_complete(buffer.iter().map(|s| s.keys_delta));
+    let elapsed_us_per_hour = sum_complete(buffer.iter().map(|s| s.elapsed_us_delta));
+    let avg_us_per_chunk = match (chunks_per_hour, elapsed_us_per_hour) {
+        (Some(chunks), Some(elapsed)) if chunks > 0 => Some(elapsed as f64 / chunks as f64),
+        _ => None,
     };
     let flush_pending_peak = buffer
         .iter()
@@ -428,7 +448,7 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let avg_domain_commit = buffer.iter().map(|s| s.domain_commit_ms).sum::<f64>() / n;
     let last = buffer.last().expect("buffer is non-empty");
     format!(
-        "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{},{},{},{},\
+        "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{},{},{},{},{},{},\
          {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}\n",
         CSV_SCHEMA_VERSION,
         Utc::now().to_rfc3339(),
@@ -440,11 +460,11 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         avg_l0,
         peak_l0_max,
         last_sst_gb,
-        chunks_per_hour,
-        slow_per_hour,
-        timeouts_per_hour,
-        keys_per_hour,
-        avg_us_per_chunk,
+        display_u64(chunks_per_hour),
+        display_u64(slow_per_hour),
+        display_u64(timeouts_per_hour),
+        display_u64(keys_per_hour),
+        avg_us_per_chunk.map_or_else(|| "n/a".to_string(), |value| format!("{value:.0}")),
         flush_pending_peak.map_or_else(|| "n/a".to_string(), |value| value.to_string()),
         avg_active_mt.map_or_else(|| "n/a".to_string(), |value| format!("{value:.0}")),
         avg_wbm_usage.map_or_else(|| "n/a".to_string(), |value| format!("{value:.0}")),
@@ -460,6 +480,17 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         last.sst_files_total,
         last.manifest_bytes / (1024 * 1024),
     )
+}
+
+fn sum_complete(values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
+    values
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .try_fold(0u64, u64::checked_add)
+}
+
+fn display_u64(value: Option<u64>) -> String {
+    value.map_or_else(|| "n/a".to_string(), |value| value.to_string())
 }
 
 #[cfg(test)]
@@ -497,11 +528,11 @@ mod tests {
             l0_files: 4,
             l0_max: 5,
             sst_size_gb: 6.0,
-            chunks_delta: 7,
-            slow_chunks_delta: 8,
-            timeouts_delta: 9,
-            keys_delta: 10,
-            elapsed_us_delta: 11,
+            chunks_delta: Some(7),
+            slow_chunks_delta: Some(8),
+            timeouts_delta: Some(9),
+            keys_delta: Some(10),
+            elapsed_us_delta: Some(11),
             current_block: 12,
             target_block: 13,
             num_running_flushes: Some(14),
@@ -538,6 +569,15 @@ mod tests {
         let columns: Vec<_> = row.trim_end().split(',').collect();
         assert_eq!(columns[10], "420");
         assert_eq!(&columns[15..20], &["n/a", "n/a", "n/a", "18", "n/a"]);
+
+        samples[17].chunks_delta = None;
+        samples[17].slow_chunks_delta = None;
+        samples[17].timeouts_delta = None;
+        samples[17].keys_delta = None;
+        samples[17].elapsed_us_delta = None;
+        let row = format_hourly_row(&samples);
+        let columns: Vec<_> = row.trim_end().split(',').collect();
+        assert_eq!(&columns[10..15], &["n/a"; 5]);
     }
 
     /// An existing file written by an older column set must never gain rows
@@ -563,9 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn delta_handles_counter_resets_safely() {
-        // saturating_sub guards against the (unlikely) case of a fresh
-        // counter going backwards; we should never panic.
+    fn delta_rejects_counter_regression_with_context() {
         let prev = ParserCellLookupSnapshot {
             chunks_total: 100,
             slow_chunks_total: 5,
@@ -580,8 +618,15 @@ mod tests {
             keys_total: 60_000,
             elapsed_us_total: 1_500_000,
         };
-        let d = delta(&prev, &curr);
-        assert_eq!(d.chunks_total, 0);
+        let error = delta(&prev, &curr).unwrap_err().to_string();
+        assert!(error.contains("chunks_total"), "{error}");
+        assert!(error.contains("previous=100 current=50"), "{error}");
+        let curr = ParserCellLookupSnapshot {
+            chunks_total: 110,
+            ..curr
+        };
+        let d = delta(&prev, &curr).unwrap();
+        assert_eq!(d.chunks_total, 10);
         assert_eq!(d.slow_chunks_total, 5);
         assert_eq!(d.timeouts_total, 1);
         assert_eq!(d.keys_total, 10_000);
