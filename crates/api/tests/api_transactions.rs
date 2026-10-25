@@ -97,6 +97,183 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
 }
 
 #[tokio::test]
+async fn committed_detail_uses_transaction_output_data_without_cell_data_cf() {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x11; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::new().pack())
+        .build();
+    let output = packed::CellOutput::new_builder()
+        .capacity(10_000_000_000u64.pack())
+        .lock(lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .output(output)
+        .output_data(Bytes::from(vec![1u8, 2, 3]).pack())
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = BlockBuilder::default()
+        .number(7u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        7,
+        &CachedBlockHeader {
+            hash: block_hash.to_vec(),
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1e083126,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_hash_map(&tx_hash, 7, 0);
+    batch.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["outputs"][0]["commonKnowledgeSize"], "44", "{json}");
+}
+
+#[tokio::test]
+async fn committed_detail_rejects_missing_indexed_input_cell() {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x11; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::new().pack())
+        .build();
+    let output = packed::CellOutput::new_builder()
+        .capacity(10_000_000_000u64.pack())
+        .lock(lock)
+        .build();
+    let prev = packed::OutPoint::new_builder()
+        .tx_hash(packed::Byte32::new([0x44; 32]))
+        .index(0u32.pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(packed::CellInput::new(prev, 0))
+        .output(output)
+        .output_data(Bytes::from(vec![1u8, 2, 3]).pack())
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = BlockBuilder::default()
+        .number(7u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        7,
+        &CachedBlockHeader {
+            hash: block_hash.to_vec(),
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1e083126,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_hash_map(&tx_hash, 7, 0);
+    batch.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing indexed input cell"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
 async fn block_transaction_list_rejects_missing_indexed_header() {
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
@@ -1432,6 +1609,45 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
             semantic_tags: 0,
         },
     );
+    // The committed transaction's three inputs resolve through the domain
+    // consumed markers and immutable cell payloads, as they do after indexing.
+    let input_cell = LiveCellInfo {
+        capacity: 10_000_000_000,
+        lock_script_hash: vec![0x11; 32],
+        lock_code_hash: vec![0x22; 32],
+        lock_hash_type: 1,
+        lock_args: vec![],
+        type_script_hash: None,
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        occupied_capacity: 41,
+        udt_amount: None,
+        data_hash: None,
+    };
+    for (hash_hex, output_index) in [
+        (
+            "974fc983a62a6f7b977c6e2170695cc4aafc5a7544c1aa2513574f1563fa0fad",
+            0,
+        ),
+        (
+            "b1745c34666bed64ec8654b16ca3d34af815576ad8cad7330957b3a54c9b34ae",
+            0,
+        ),
+        (
+            "b1745c34666bed64ec8654b16ca3d34af815576ad8cad7330957b3a54c9b34ae",
+            1,
+        ),
+    ] {
+        batch.put_consumed_cell(
+            &hex::decode(hash_hex).unwrap(),
+            output_index,
+            &input_cell,
+            block_number - 1,
+            block_number,
+        );
+    }
     batch.commit().unwrap();
     store
         .update_sync_status(|s| {

@@ -1325,6 +1325,39 @@ fn build_inputs_outputs_from_pool_tx(
     })
 }
 
+fn required_committed_input_cell(
+    domain_store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
+    tx_hash: &[u8],
+    output_index: i16,
+    context: &str,
+) -> Result<ckbadger_store::types::PositionedCellInfo, ApiRouteError> {
+    if let Some(cell) = domain_store
+        .get_cell(tx_hash, output_index, cells_store)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "live input cell read failed while {context}: {error}"
+            ))
+        })?
+    {
+        return Ok(cell);
+    }
+    domain_store
+        .get_consumed_cell(tx_hash, output_index, cells_store)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "consumed input cell read failed while {context}: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing indexed input cell while {context}: outpoint=0x{}:{}",
+                hex::encode(tx_hash),
+                output_index
+            ))
+        })
+}
+
 fn required_output_data_size(
     outputs_data: &[String],
     output_index: usize,
@@ -1403,75 +1436,68 @@ fn build_inputs_outputs_from_ckb(
                         prev_index, input_context
                     ))
                 })?;
-                let cell_info = core_store
-                    .get_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
-                    .ok()
-                    .flatten()
-                    .or_else(|| {
-                        core_store
-                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
-                            .ok()
-                            .flatten()
-                    });
+                let cell_info = required_committed_input_cell(
+                    core_store,
+                    cells_store,
+                    &prev_tx_hash_bytes,
+                    prev_index_i16,
+                    &input_context,
+                )?;
 
-                match cell_info {
-                    Some(info) => {
-                        let cap = info.capacity as u128;
-                        inputs_capacity += cap;
+                let info = cell_info;
+                let cap = info.capacity as u128;
+                inputs_capacity += cap;
 
-                        let occ = occupied_capacity_bytes(
-                            info.lock_args.len(),
-                            info.type_code_hash
-                                .as_ref()
-                                .map(|_| info.type_args.as_deref().unwrap_or(&[]).len()),
-                            info.data_size as usize,
-                        );
-                        inputs_occupied_capacity += occ as u128;
+                let occ = occupied_capacity_bytes(
+                    info.lock_args.len(),
+                    info.type_code_hash
+                        .as_ref()
+                        .map(|_| info.type_args.as_deref().unwrap_or(&[]).len()),
+                    info.data_size as usize,
+                );
+                inputs_occupied_capacity += occ as u128;
 
-                        let lock_hash_type_str =
-                            hash_type_to_str(info.lock_hash_type).ok_or_else(|| {
-                                ApiError::internal(format!(
-                                    "unknown lock hash_type {} for input cell",
-                                    info.lock_hash_type
-                                ))
-                            })?;
-                        let lock_resp = ScriptResponse {
-                            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                            hash_type: lock_hash_type_str.to_string(),
-                            args: format!("0x{}", hex::encode(&info.lock_args)),
-                        };
-                        let type_resp = info
-                            .type_code_hash
-                            .as_ref()
-                            .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
-                                Ok(ScriptResponse {
-                                    code_hash: format!("0x{}", hex::encode(type_code_hash)),
-                                    hash_type: resolve_stored_input_type_hash_type(
-                                        core_store,
-                                        store,
-                                        info.type_script_hash.as_deref(),
-                                        type_code_hash,
-                                    )?,
-                                    args: format!(
-                                        "0x{}",
-                                        hex::encode(info.type_args.as_deref().unwrap_or(&[]))
-                                    ),
-                                })
-                            })
-                            .transpose()?;
+                let lock_hash_type_str =
+                    hash_type_to_str(info.lock_hash_type).ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "unknown lock hash_type {} for input cell",
+                            info.lock_hash_type
+                        ))
+                    })?;
+                let lock_resp = ScriptResponse {
+                    code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+                    hash_type: lock_hash_type_str.to_string(),
+                    args: format!("0x{}", hex::encode(&info.lock_args)),
+                };
+                let type_resp = info
+                    .type_code_hash
+                    .as_ref()
+                    .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
+                        Ok(ScriptResponse {
+                            code_hash: format!("0x{}", hex::encode(type_code_hash)),
+                            hash_type: resolve_stored_input_type_hash_type(
+                                core_store,
+                                store,
+                                info.type_script_hash.as_deref(),
+                                type_code_hash,
+                            )?,
+                            args: format!(
+                                "0x{}",
+                                hex::encode(info.type_args.as_deref().unwrap_or(&[]))
+                            ),
+                        })
+                    })
+                    .transpose()?;
 
-                        let addr = script_to_address(
-                            &info.lock_code_hash,
-                            info.lock_hash_type,
-                            &info.lock_args,
-                            network,
-                        )
-                        .ok();
+                let addr = script_to_address(
+                    &info.lock_code_hash,
+                    info.lock_hash_type,
+                    &info.lock_args,
+                    network,
+                )
+                .ok();
 
-                        (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
-                    }
-                    None => (None, None, None, None),
-                }
+                (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
             };
 
             Ok(TransactionInputResponse {
@@ -2280,6 +2306,16 @@ mod tests {
         assert_eq!(params.limit, 50);
         assert!(params.block_number.is_none());
         assert!(params.cursor.is_none());
+    }
+
+    #[test]
+    fn committed_input_requires_indexed_cell_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let error =
+            required_committed_input_cell(&store, &store, &[0x11; 32], 0, "tx=0x22 input=0")
+                .unwrap_err();
+        assert!(error.1 .0.message.contains("missing indexed input cell"));
     }
 
     #[test]
