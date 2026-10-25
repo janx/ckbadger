@@ -479,61 +479,50 @@ impl App {
     }
 
     fn sample_rates(&mut self) {
-        let block_rate = self
-            .sync_status
-            .as_ref()
-            .and_then(|s| s.rate_realtime)
-            .unwrap_or(0.0);
-        push_history_sample(&mut self.rate_history, block_rate);
-        let tx_rate = self
-            .sync_status
-            .as_ref()
-            .and_then(|s| s.tx_rate_realtime)
-            .unwrap_or(0.0);
-        push_history_sample(&mut self.tx_rate_history, tx_rate);
+        sample_optional_history(
+            &mut self.rate_history,
+            self.sync_status.as_ref().and_then(|s| s.rate_realtime),
+        );
+        sample_optional_history(
+            &mut self.tx_rate_history,
+            self.sync_status.as_ref().and_then(|s| s.tx_rate_realtime),
+        );
+        sample_optional_history(
+            &mut self.db_write_history,
+            self.sync_status.as_ref().and_then(|s| s.db_write_ms),
+        );
+        let db_commit_ms = self.sync_status.as_ref().and_then(|s| match &s.pipeline {
+            Some(pipeline) => pipeline.commit_ms,
+            None => s.db_commit_ms,
+        });
+        sample_optional_history(&mut self.db_commit_history, db_commit_ms);
 
-        let db_ms = self
-            .sync_status
-            .as_ref()
-            .and_then(|s| s.db_write_ms)
-            .unwrap_or(0.0);
-        push_history_sample(&mut self.db_write_history, db_ms);
-        let db_commit_ms = self
-            .sync_status
-            .as_ref()
-            .and_then(|s| {
-                s.pipeline
-                    .as_ref()
-                    .and_then(|p| p.commit_ms)
-                    .or(s.db_commit_ms)
-            })
-            .unwrap_or(0.0);
-        push_history_sample(&mut self.db_commit_history, db_commit_ms);
+        let pipeline = self.sync_status.as_ref().and_then(|s| s.pipeline.as_ref());
+        sample_optional_history(
+            &mut self.fetch_stage_history,
+            pipeline.and_then(|p| p.fetch_ms),
+        );
+        sample_optional_history(
+            &mut self.parse_stage_history,
+            pipeline.and_then(|p| p.parse_ms),
+        );
+        sample_optional_history(
+            &mut self.write_stage_history,
+            pipeline.and_then(|p| p.write_ms),
+        );
 
-        let (fetch_ms, parse_ms, write_ms) = self
+        let bulk = self
             .sync_status
             .as_ref()
-            .and_then(|s| s.pipeline.as_ref())
-            .map(|p| {
-                (
-                    p.fetch_ms.unwrap_or(0.0),
-                    p.parse_ms.unwrap_or(0.0),
-                    p.write_ms.unwrap_or(0.0),
-                )
-            })
-            .unwrap_or((0.0, 0.0, 0.0));
-        push_history_sample(&mut self.fetch_stage_history, fetch_ms);
-        push_history_sample(&mut self.parse_stage_history, parse_ms);
-        push_history_sample(&mut self.write_stage_history, write_ms);
-
-        let (bulk_build_ms, bulk_fetch_ms) = self
-            .sync_status
-            .as_ref()
-            .and_then(|s| s.bulk_build.as_ref())
-            .map(|bb| (bb.build_ms.unwrap_or(0.0), bb.fetch_ms.unwrap_or(0.0)))
-            .unwrap_or((0.0, 0.0));
-        push_history_sample(&mut self.bulk_build_ms_history, bulk_build_ms);
-        push_history_sample(&mut self.bulk_fetch_ms_history, bulk_fetch_ms);
+            .and_then(|s| s.bulk_build.as_ref());
+        sample_optional_history(
+            &mut self.bulk_build_ms_history,
+            bulk.and_then(|bb| bb.build_ms),
+        );
+        sample_optional_history(
+            &mut self.bulk_fetch_ms_history,
+            bulk.and_then(|bb| bb.fetch_ms),
+        );
 
         // Sample iteration budget (deduped per batch).
         if let Some(bb) = self
@@ -541,29 +530,36 @@ impl App {
             .as_ref()
             .and_then(|s| s.bulk_build.as_ref())
         {
-            let batch_count = bb.batch_count.unwrap_or(0);
-            if batch_count > 0 && batch_count != self.last_overlap_batch_count {
-                let build_ms = bb.build_ms.unwrap_or(0.0);
-                let prefetch_recv_ms = bb.prefetch_recv_ms.unwrap_or(0.0);
-                let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
-
-                push_history_sample(&mut self.build_cpu_ms_history, build_ms);
-                push_history_sample(&mut self.fetch_wait_ms_history, prefetch_recv_ms);
-                push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
+            if let Some(batch_count) = bb
+                .batch_count
+                .filter(|count| *count > 0 && *count != self.last_overlap_batch_count)
+            {
+                sample_optional_history(&mut self.build_cpu_ms_history, bb.build_ms);
+                sample_optional_history(&mut self.fetch_wait_ms_history, bb.prefetch_recv_ms);
+                sample_optional_history(&mut self.flush_wait_ms_history, bb.flush_wait_ms);
                 // Compute controller knob deltas.
-                let current_knobs = ControllerKnobs {
-                    target_cells: bb.target_cells.unwrap_or(0),
-                    fetch_threads: bb.controller_fetch_threads.unwrap_or(0),
-                    bg_jobs: bb.controller_bg_jobs.unwrap_or(0),
+                let current_knobs = match (
+                    bb.target_cells.filter(|value| *value > 0),
+                    bb.controller_fetch_threads,
+                    bb.controller_bg_jobs,
+                ) {
+                    (Some(target_cells), Some(fetch_threads), Some(bg_jobs)) => {
+                        Some(ControllerKnobs {
+                            target_cells,
+                            fetch_threads,
+                            bg_jobs,
+                        })
+                    }
+                    _ => None,
                 };
-                if let Some(prev) = self.prev_controller_knobs {
-                    let budget_delta_pct = if prev.target_cells > 0 {
-                        (current_knobs.target_cells as f64 - prev.target_cells as f64)
-                            / prev.target_cells as f64
-                            * 100.0
-                    } else {
-                        0.0
-                    };
+                self.controller_deltas = None;
+                if let (Some(prev), Some(current_knobs)) =
+                    (self.prev_controller_knobs, current_knobs)
+                {
+                    let budget_delta_pct = (current_knobs.target_cells as f64
+                        - prev.target_cells as f64)
+                        / prev.target_cells as f64
+                        * 100.0;
                     self.controller_deltas = Some(ControllerDeltas {
                         budget_delta_pct,
                         threads_delta: current_knobs.fetch_threads as i32
@@ -571,22 +567,24 @@ impl App {
                         bg_delta: current_knobs.bg_jobs - prev.bg_jobs,
                     });
                 }
-                self.prev_controller_knobs = Some(current_knobs);
+                self.prev_controller_knobs = current_knobs;
 
                 self.last_overlap_batch_count = batch_count;
             }
         }
 
-        let l0_files = self.memory_stats.as_ref().and_then(|m| m.l0_files_count);
-        if let Some(count) = l0_files {
-            push_history_sample(&mut self.l0_files_history, count as f64);
-        } else {
-            self.l0_files_history.clear();
-        }
+        sample_optional_history(
+            &mut self.l0_files_history,
+            self.memory_stats
+                .as_ref()
+                .and_then(|m| m.l0_files_count)
+                .map(|count| count as f64),
+        );
 
         let mut block_rate_alerted = false;
         if self.rate_history.len() >= 2 {
             let prev = self.rate_history[self.rate_history.len() - 2];
+            let block_rate = self.rate_history[self.rate_history.len() - 1];
             if is_rate_drop(prev, block_rate) {
                 let should_alert = self
                     .last_rate_drop_alert
@@ -608,6 +606,7 @@ impl App {
 
         if self.tx_rate_history.len() >= 2 {
             let prev = self.tx_rate_history[self.tx_rate_history.len() - 2];
+            let tx_rate = self.tx_rate_history[self.tx_rate_history.len() - 1];
             if !block_rate_alerted && is_rate_drop(prev, tx_rate) {
                 let should_alert = self
                     .last_tx_rate_drop_alert
@@ -5188,6 +5187,14 @@ fn push_history_sample(history: &mut VecDeque<f64>, sample: f64) {
     history.push_back(sample);
 }
 
+fn sample_optional_history(history: &mut VecDeque<f64>, sample: Option<f64>) {
+    if let Some(sample) = sample {
+        push_history_sample(history, sample);
+    } else {
+        history.clear();
+    }
+}
+
 fn is_rate_drop(previous: f64, current: f64) -> bool {
     previous > 0.0 && current > 0.0 && current < previous * RATE_DROP_RATIO_THRESHOLD
 }
@@ -8398,6 +8405,25 @@ mod tests {
             is_direct_db_read: false,
             bulk_build: None,
         }
+    }
+
+    #[tokio::test]
+    async fn sample_rates_does_not_turn_missing_telemetry_into_zero() {
+        let db = single_network_db(
+            "http://127.0.0.1:9/api/v1",
+            "/tmp/ckbadger-store",
+            "/tmp/ckbadger-store-append-only",
+        )
+        .await;
+        let mut app = App::new(db, "test".to_string());
+        app.sync_status = Some(stub_sync_row(0.5, 100, 10.0));
+        app.sample_rates();
+        assert_eq!(app.rate_history.back().copied(), Some(10.0));
+        assert!(app.tx_rate_history.is_empty());
+        assert!(app.fetch_stage_history.is_empty());
+        app.sync_status = None;
+        app.sample_rates();
+        assert!(app.rate_history.is_empty());
     }
 
     #[test]
