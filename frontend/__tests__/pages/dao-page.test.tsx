@@ -94,6 +94,19 @@ describe('DaoPage', () => {
     await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThan(0));
   });
 
+  it('distinguishes unavailable 24-hour DAO changes from exact zero changes', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({
+      ...daoStatistics,
+      depositChange24h: null,
+      depositorsChange24h: 0,
+      claimedCompensationChange24h: null,
+      unclaimedCompensationChange24h: null,
+    });
+    render(<DaoPage />);
+    await waitFor(() => expect(screen.getAllByText('24h: —')).toHaveLength(3));
+    expect(screen.getByText('→ 0')).toBeInTheDocument();
+  });
+
   it('renders withdraw request tx as reference for withdrawing rows', async () => {
     vi.mocked(api.getDaoDeposits).mockResolvedValueOnce({
       data: [

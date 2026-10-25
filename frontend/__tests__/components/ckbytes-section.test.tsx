@@ -160,7 +160,7 @@ describe('CkbytesSection', () => {
   });
 
   it('shows a dash, not a zero, when there is no previous day to compare with', async () => {
-    const { depositChange24h: _a, depositorsChange24h: _b, ...first } = daoStatistics;
+    const first = { ...daoStatistics, depositChange24h: null, depositorsChange24h: null };
     server.use(http.get(`${API}/dao/statistics`, () => HttpResponse.json(first)));
     render(<CkbytesSection />);
     const dao = screen.getByTestId('home-dao');

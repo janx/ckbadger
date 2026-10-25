@@ -402,7 +402,7 @@ interface DaoView {
   change: bigint | null;
 }
 
-/** The DAO block's figures; the 24 h changes are absent until a previous day's snapshot exists. */
+/** The DAO block's figures; the 24 h changes are null until chain history spans 24 hours. */
 export function daoView(stats: DaoStatistics): DaoView {
   return {
     deposited: parseShannons(stats.totalDeposited, 'totalDeposited'),
@@ -410,7 +410,7 @@ export function daoView(stats: DaoStatistics): DaoView {
     depositors: stats.totalDepositors,
     depositorsChange: stats.depositorsChange24h ?? null,
     activeDeposits: stats.activeDeposits,
-    change: stats.depositChange24h === undefined ? null : parseCkbDecimal(stats.depositChange24h),
+    change: stats.depositChange24h === null ? null : parseCkbDecimal(stats.depositChange24h),
   };
 }
 

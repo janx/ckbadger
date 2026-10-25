@@ -166,6 +166,8 @@ export const daoStatistics: DaoStatistics = {
   burntCkb: '6747311364.45379763',
   depositChange24h: '-2578825.48689593',
   depositorsChange24h: -3,
+  claimedCompensationChange24h: '0',
+  unclaimedCompensationChange24h: '0',
 };
 
 const SCRIPT_COUNTS = [

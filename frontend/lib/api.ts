@@ -1080,10 +1080,10 @@ interface DaoStatistics {
   depositCompensationCkb: string;
   burnt: string;
   burntCkb: string;
-  depositChange24h?: string;
-  depositorsChange24h?: number;
-  claimedCompensationChange24h?: string;
-  unclaimedCompensationChange24h?: string;
+  depositChange24h: string | null;
+  depositorsChange24h: number | null;
+  claimedCompensationChange24h: string | null;
+  unclaimedCompensationChange24h: string | null;
 }
 
 interface DaoTopDepositor {

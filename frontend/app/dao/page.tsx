@@ -402,8 +402,9 @@ export default function DaoPage() {
               <StatCard
                 label="Deposit"
                 value={stats ? formatStatCkb(stats.totalDepositedCkb) : '...'}
+                subValue={stats && stats.depositChange24h === null ? '24h: —' : undefined}
                 trend={
-                  stats?.depositChange24h
+                  stats && stats.depositChange24h !== null
                     ? (() => {
                         const d = formatCompactCkbDelta(stats.depositChange24h);
                         return { direction: d.direction, value: d.compact };
@@ -414,8 +415,11 @@ export default function DaoPage() {
               <StatCard
                 label="Claimed Compensation"
                 value={stats ? formatStatCkb(stats.totalCompensationPaidCkb) : '...'}
+                subValue={
+                  stats && stats.claimedCompensationChange24h === null ? '24h: —' : undefined
+                }
                 trend={
-                  stats?.claimedCompensationChange24h
+                  stats && stats.claimedCompensationChange24h !== null
                     ? (() => {
                         const d = formatCompactCkbDelta(stats.claimedCompensationChange24h);
                         return { direction: d.direction, value: d.compact };
@@ -430,8 +434,9 @@ export default function DaoPage() {
               <StatCard
                 label="Addresses"
                 value={stats ? formatNumber(stats.totalDepositors) : '...'}
+                subValue={stats && stats.depositorsChange24h === null ? '24h: —' : undefined}
                 trend={
-                  stats?.depositorsChange24h
+                  stats && stats.depositorsChange24h !== null
                     ? {
                         direction:
                           stats.depositorsChange24h > 0
@@ -462,8 +467,11 @@ export default function DaoPage() {
               <StatCard
                 label="Unclaimed Compensation"
                 value={stats ? formatStatCkb(stats.unclaimedCompensationCkb) : '...'}
+                subValue={
+                  stats && stats.unclaimedCompensationChange24h === null ? '24h: —' : undefined
+                }
                 trend={
-                  stats?.unclaimedCompensationChange24h
+                  stats && stats.unclaimedCompensationChange24h !== null
                     ? (() => {
                         const d = formatCompactCkbDelta(stats.unclaimedCompensationChange24h);
                         return { direction: d.direction, value: d.compact };
