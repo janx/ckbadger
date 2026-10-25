@@ -6011,6 +6011,28 @@ mod tests {
                 );
                 batch.commit().expect("seed parent block header");
             }
+            make_test_indexer(store, 99, Some(block_hash(99).to_vec()))
+        }
+
+        /// A clean store for a continuous genesis-to-tip parity chain. The
+        /// baseline is network configuration; all headers, transactions,
+        /// cells, and statistics are supplied by the fixture's block 0 onward.
+        pub(super) fn indexer_for_genesis_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
+            store
+                .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+                    total_issuance: 3_360_000_000_000_000_000,
+                    burnt: 840_000_000_000_000_000,
+                    virtual_occupied: 504_000_000_000_000_000,
+                })
+                .expect("seed synthetic network genesis baseline");
+            make_test_indexer(store, 0, None)
+        }
+
+        fn make_test_indexer(
+            store: Arc<CkbadgerStore>,
+            startup_tip: i64,
+            startup_hash: Option<Vec<u8>>,
+        ) -> Indexer {
             let config = Config {
                 domain_data_path: "unused-domain".to_string(),
                 append_only_data_path: "unused-append".to_string(),
@@ -6053,8 +6075,8 @@ mod tests {
                 bulk_sync_allowed: AtomicBool::new(false),
                 startup_decision: crate::sync::decide_startup_sync(
                     0,
-                    99,
-                    &Some(vec![0x99; 32]),
+                    startup_tip,
+                    &startup_hash,
                     72,
                 )
                 .expect("live-write fixture startup decision"),
@@ -6205,7 +6227,7 @@ mod tests {
             .await
         }
 
-        async fn write_live_blocks_with_parser_script_deltas(
+        pub(super) async fn write_live_blocks_with_parser_script_deltas(
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
@@ -6291,6 +6313,89 @@ mod tests {
                 }
             }
             Ok(changes)
+        }
+
+        /// Mirror the parser's object collection membership for a fixture
+        /// that contains actual `.cell` outputs and spends.
+        fn object_daily_from_cells(
+            all_tx_data: &[TxData],
+            input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        ) -> Result<(
+            HashMap<Vec<u8>, MnftTypeIndex>,
+            EntityDailyChanges<UndatedEntityKey>,
+        )> {
+            let mut indexes = HashMap::new();
+            let mut changes = EntityDailyChanges::new();
+            for tx in all_tx_data {
+                for cell in &tx.cells {
+                    if let (Some(type_hash), Some(code_hash), Some(args)) = (
+                        cell.type_script_hash.as_ref(),
+                        cell.type_code_hash.as_ref(),
+                        cell.type_args.as_ref(),
+                    ) {
+                        if let Some(collection_id) =
+                            crate::sync::dao_helpers::classify_object_collection_id(code_hash, args)
+                        {
+                            indexes.insert(
+                                type_hash.clone(),
+                                MnftTypeIndex {
+                                    collection_id: collection_id.clone(),
+                                },
+                            );
+                            let occupied = occupied_capacity_shannons_i64(
+                                cell.lock_args.len(),
+                                cell.type_args.as_ref().map(|args| args.len()),
+                                cell.data_size,
+                            );
+                            changes.add(
+                                tx.block_number,
+                                collection_id,
+                                i128::from(cell.capacity),
+                                i128::from(occupied),
+                            )?;
+                        }
+                    }
+                }
+                if tx.is_cellbase {
+                    continue;
+                }
+                for input in &tx.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "fixture object daily",
+                        )?,
+                    );
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "fixture object input cell missing: outpoint=0x{}:{}",
+                                hex::encode(&key.0),
+                                key.1
+                            )
+                        })?;
+                    if let Some(code_hash) = info.type_code_hash.as_ref() {
+                        if let Some(collection_id) =
+                            crate::sync::dao_helpers::classify_object_collection_id(
+                                code_hash,
+                                info.type_args.as_deref().unwrap_or(&[]),
+                            )
+                        {
+                            changes.add(
+                                tx.block_number,
+                                collection_id,
+                                -i128::from(info.capacity),
+                                -i128::from(info.occupied_capacity),
+                            )?;
+                        }
+                    }
+                }
+            }
+            Ok((indexes, changes))
         }
 
         fn fixture_script_deltas_from_cells(
@@ -6479,6 +6584,8 @@ mod tests {
                     &input_cell_info,
                     &batch_cell_infos,
                 )?;
+            let (object_type_index_changes, object_daily_changes) =
+                object_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?;
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
             let metrics = indexer
@@ -6496,8 +6603,8 @@ mod tests {
                     HashMap::new(),
                     EntityDailyChanges::new(),
                     EntityDailyChanges::new(),
-                    HashMap::new(),
-                    EntityDailyChanges::new(),
+                    object_type_index_changes,
+                    object_daily_changes,
                     chain_tip,
                 )
                 .await?;
@@ -6849,7 +6956,7 @@ mod tests {
         }
 
         /// Blocks 100-102: funding cellbase, DAO deposit, withdraw request.
-        fn phase_setup_blocks() -> Vec<BlockResponseWithCycles> {
+        pub(super) fn phase_setup_blocks() -> Vec<BlockResponseWithCycles> {
             // Block 100: funding cellbase (0xc0) with 3000 CKB.
             let block_100 = block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
 
@@ -7076,7 +7183,7 @@ mod tests {
 
         /// Block 103: the completion tx (0xd3) spends the request cell
         /// `0xd2:0` into one plain output paying `expected_fee`.
-        fn completion_block(expected_fee: i64) -> BlockResponseWithCycles {
+        pub(super) fn completion_block(expected_fee: i64) -> BlockResponseWithCycles {
             let output_capacity =
                 i64::try_from(DEPOSIT_CAPACITY).unwrap() + DAO_COMPENSATION - expected_fee;
             let completion_tx = TransactionView {
@@ -9390,7 +9497,7 @@ mod tests {
 
         /// 100 funds lock A; 101 mints 1000 units to A beside an owner-mode
         /// cell of the same token; 102 moves both to B.
-        fn blocks() -> Vec<BlockResponseWithCycles> {
+        pub(super) fn blocks() -> Vec<BlockResponseWithCycles> {
             let mint = TransactionView {
                 hash: format!("0x{}", hex::encode([0xf1u8; 32])),
                 version: "0x0".to_string(),
@@ -10520,6 +10627,212 @@ mod tests {
             );
             assert_eq!(live.symbol.as_deref(), Some("RGB++"));
             assert_eq!(live.decimals, Some(8));
+        }
+    }
+    mod all_stats_dao_parity {
+        use super::*;
+
+        fn continuous_chain_with_dao_token_and_name() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = super::live_dao_fee::phase_setup_blocks();
+            blocks.push(super::live_dao_fee::completion_block(527));
+            let names = super::dotcell_live::dotcell_registration_blocks();
+            let tokens = super::token_daily_parity::blocks();
+
+            // Block 0 supplies three independent outpoints; every later
+            // protocol event spends a canonical output from this one genesis.
+            let funding = &mut blocks[0].block.transactions[0];
+            funding
+                .outputs
+                .push(names[0].block.transactions[0].outputs[0].clone());
+            funding.outputs_data.push("0x".to_string());
+            funding
+                .outputs
+                .push(tokens[0].block.transactions[0].outputs[0].clone());
+            funding.outputs_data.push("0x".to_string());
+
+            let mut create_name = names[1].block.transactions[1].clone();
+            create_name.hash = format!("0x{}", hex::encode([0xe1; 32]));
+            create_name.inputs[0].previous_output.index = "0x1".to_string();
+            let mut mint = tokens[1].block.transactions[1].clone();
+            mint.inputs[0].previous_output.index = "0x2".to_string();
+            blocks[1].block.transactions.extend([create_name, mint]);
+
+            let mut register_name = names[2].block.transactions[1].clone();
+            register_name.hash = format!("0x{}", hex::encode([0xe2; 32]));
+            for input in &mut register_name.inputs {
+                input.previous_output.tx_hash = format!("0x{}", hex::encode([0xe1; 32]));
+            }
+            blocks[2]
+                .block
+                .transactions
+                .extend([register_name, tokens[2].block.transactions[1].clone()]);
+            // The DAO request encodes the exact deposit block number.
+            blocks[2].block.transactions[1].outputs_data[0] =
+                format!("0x{}", hex::encode(1_u64.to_le_bytes()));
+
+            for (number, block) in blocks.iter_mut().enumerate() {
+                let number = number as u64;
+                let header = &mut block.block.header;
+                header.number = format!("0x{number:x}");
+                header.hash = format!("0x{}", hex::encode(super::live_dao_fee::block_hash(number)));
+                header.parent_hash = if number == 0 {
+                    format!("0x{}", "00".repeat(32))
+                } else {
+                    format!(
+                        "0x{}",
+                        hex::encode(super::live_dao_fee::block_hash(number - 1))
+                    )
+                };
+                header.epoch = format!("0x{:x}", (1800_u64 << 40) | (number << 24));
+                let raw_ms = [
+                    1_700_063_999_000_u64,
+                    1_700_063_998_000,
+                    1_700_064_001_000,
+                    1_700_063_997_000,
+                ][number as usize];
+                header.timestamp = format!("0x{raw_ms:x}");
+            }
+            blocks
+        }
+
+        fn stats_dao_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+            let mut rows = Vec::new();
+            for &name in ckbadger_store::DOMAIN_CFS {
+                if name.starts_with("stats_") || name.starts_with("dao_") {
+                    for row in store.iterator_cf(store.cf(name), rocksdb::IteratorMode::Start) {
+                        let (key, value) = row.unwrap();
+                        rows.push((name, key.to_vec(), value.to_vec()));
+                    }
+                }
+            }
+            rows
+        }
+
+        fn cell_payload_rows(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
+            store
+                .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        }
+
+        fn assert_stats_dao_rows_eq(
+            actual: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
+            expected: &[(&'static str, Vec<u8>, Vec<u8>)],
+            phase: &str,
+        ) {
+            for (actual_row, expected_row) in actual.iter().zip(expected) {
+                assert_eq!(
+                    actual_row,
+                    expected_row,
+                    "{phase}: first row mismatch: actual={}:0x{} ({} bytes), expected={}:0x{} ({} bytes)",
+                    actual_row.0,
+                    hex::encode(&actual_row.1),
+                    actual_row.2.len(),
+                    expected_row.0,
+                    hex::encode(&expected_row.1),
+                    expected_row.2.len(),
+                );
+            }
+            assert_eq!(actual.len(), expected.len(), "{phase}: stats/DAO row count");
+        }
+
+        #[tokio::test]
+        async fn bulk_live_batch_shapes_and_replay_match_every_stats_and_dao_row() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_dao_token_and_name();
+            let raw_times = blocks
+                .iter()
+                .map(|block| u64::from_str_radix(&block.block.header.timestamp[2..], 16).unwrap())
+                .collect::<Vec<_>>();
+            assert!(raw_times[1] < raw_times[0] && raw_times[3] < raw_times[2]);
+            assert_ne!(
+                ckbadger_common::stats_bucket::stats_day(raw_times[1] as i64).unwrap(),
+                ckbadger_common::stats_bucket::stats_day(raw_times[2] as i64).unwrap(),
+            );
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+
+            let expected = bulk.stats_dao_rows;
+            assert!(expected
+                .iter()
+                .any(|(cf, _, _)| *cf == ckbadger_store::CF_STATS_DAO));
+            assert!(expected
+                .iter()
+                .any(|(cf, _, _)| *cf == ckbadger_store::CF_STATS_TOKEN));
+            assert!(expected
+                .iter()
+                .any(|(cf, _, _)| *cf == ckbadger_store::store::CF_STATS_IDENTITY));
+            assert!(expected.iter().any(|(cf, _, _)| cf.starts_with("dao_")));
+            assert!(!bulk.token_rows.tokens.is_empty());
+            assert!(!bulk.dotcell.identity_data.is_empty());
+            assert_stats_dao_rows_eq(stats_dao_rows(&single), &expected, "bulk vs single live");
+            assert_stats_dao_rows_eq(stats_dao_rows(&multi), &expected, "bulk vs multi live");
+
+            let immutable_before = cell_payload_rows(&multi);
+            assert!(!immutable_before.is_empty());
+            assert_eq!(immutable_before.len(), bulk.cell_payloads.len());
+            for (key, value) in &immutable_before {
+                assert_eq!(
+                    value,
+                    &bincode::serialize(
+                        bulk.cell_payloads
+                            .get(key)
+                            .expect("bulk append-only cell payload")
+                    )
+                    .unwrap(),
+                    "bulk and live append-only payload: outpoint=0x{}",
+                    hex::encode(key),
+                );
+            }
+            multi_indexer
+                .writer
+                .cleanup_batch_range(multi.as_ref(), 2, 3)
+                .unwrap();
+            multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(1)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[2..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_stats_dao_rows_eq(stats_dao_rows(&multi), &expected, "bulk vs rollback/replay");
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
     }
 }

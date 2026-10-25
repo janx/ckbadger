@@ -139,6 +139,22 @@ impl BulkReducer for ObjectOwner {
         for cell in tx.cells.iter() {
             if let Some(collection_id) = classify_nft_collection_from_protocol(&cell.protocol_facts)
             {
+                let type_hash = cell
+                    .type_script_hash_id
+                    .map(|id| ctx.resolve_identity(id).to_vec())
+                    .ok_or_else(|| anyhow!(
+                        "object collection cell missing type_script_hash: collection_id=0x{}, outpoint=0x{}:{}, block={}",
+                        hex::encode(&collection_id),
+                        hex::encode(cell.outpoint.tx_hash),
+                        cell.outpoint.index,
+                        tx.block_number,
+                    ))?;
+                self.insert_mnft_type_index(
+                    type_hash,
+                    &collection_id,
+                    &cell.outpoint.tx_hash,
+                    tx.block_number,
+                )?;
                 let entry = self
                     .object_daily_deltas
                     .entry((collection_id, date_yyyymmdd))
@@ -3592,6 +3608,7 @@ mod tests {
         did_id: Vec<u8>,
         tx_hash: [u8; 32],
         lock: InternId,
+        type_hash: InternId,
     ) -> ResolvedTxFacts<'static> {
         ResolvedTxFacts {
             tx_hash,
@@ -3611,7 +3628,7 @@ mod tests {
                 lock_code_hash_id: InternId::new(16),
                 lock_hash_type: 1,
                 lock_args_id: InternId::new(17),
-                type_script_hash_id: Some(InternId::new(18)),
+                type_script_hash_id: Some(type_hash),
                 type_code_hash_id: Some(InternId::new(19)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(20)),
@@ -3636,6 +3653,7 @@ mod tests {
 
         let interner = IdentityInterner::default();
         let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let type_hash = interner.intern_bytes(vec![0x18; 32]);
         let frozen = interner.snapshot_for_reads();
         let ctx = ReducerContext::new(&frozen);
 
@@ -3645,7 +3663,7 @@ mod tests {
             .try_into()
             .expect("32-byte tx hash");
 
-        let tx = did_ckb_tx_facts(did_id.clone(), tx_hash, lock);
+        let tx = did_ckb_tx_facts(did_id.clone(), tx_hash, lock, type_hash);
         let mut owner = ObjectOwner::default();
         owner
             .apply_tx(&tx, &ctx)
@@ -3673,11 +3691,12 @@ mod tests {
     fn object_owner_rejects_did_ckb_item_id_outside_indexable_width() {
         let interner = IdentityInterner::default();
         let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let type_hash = interner.intern_bytes(vec![0x18; 32]);
         let frozen = interner.snapshot_for_reads();
         let ctx = ReducerContext::new(&frozen);
 
         for bad_id in [Vec::new(), vec![0x01u8; 33]] {
-            let tx = did_ckb_tx_facts(bad_id.clone(), [0x7A; 32], lock);
+            let tx = did_ckb_tx_facts(bad_id.clone(), [0x7A; 32], lock, type_hash);
             let mut owner = ObjectOwner::default();
             let err = owner
                 .apply_tx(&tx, &ctx)
@@ -4435,6 +4454,8 @@ mod tests {
         let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
         let owner_a = interner.intern_bytes(vec![0xa1; 32]);
         let owner_b = interner.intern_bytes(vec![0xb2; 32]);
+        let type_hash_a = interner.intern_bytes(vec![0xcb; 32]);
+        let type_hash_b = interner.intern_bytes(vec![0xcc; 32]);
         let frozen = interner.snapshot_for_reads();
         let ctx = ReducerContext::new(&frozen);
 
@@ -4458,7 +4479,7 @@ mod tests {
                 lock_code_hash_id: InternId::new(201),
                 lock_hash_type: 1,
                 lock_args_id: InternId::new(202),
-                type_script_hash_id: Some(InternId::new(203)),
+                type_script_hash_id: Some(type_hash_a),
                 type_code_hash_id: Some(InternId::new(204)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(205)),
@@ -4500,7 +4521,7 @@ mod tests {
                 lock_code_hash_id: InternId::new(201),
                 lock_hash_type: 1,
                 lock_args_id: InternId::new(202),
-                type_script_hash_id: Some(InternId::new(203)),
+                type_script_hash_id: Some(type_hash_a),
                 type_code_hash_id: Some(InternId::new(204)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(205)),
@@ -4523,7 +4544,7 @@ mod tests {
                 lock_code_hash_id: InternId::new(206),
                 lock_hash_type: 1,
                 lock_args_id: InternId::new(207),
-                type_script_hash_id: Some(InternId::new(208)),
+                type_script_hash_id: Some(type_hash_b),
                 type_code_hash_id: Some(InternId::new(209)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(210)),
@@ -4565,7 +4586,7 @@ mod tests {
                 lock_code_hash_id: InternId::new(206),
                 lock_hash_type: 1,
                 lock_args_id: InternId::new(207),
-                type_script_hash_id: Some(InternId::new(208)),
+                type_script_hash_id: Some(type_hash_b),
                 type_code_hash_id: Some(InternId::new(209)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(210)),

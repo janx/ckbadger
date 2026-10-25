@@ -3352,6 +3352,8 @@ pub struct BulkArtifactSnapshot {
     pub dotcell: DotCellArtifacts,
     /// `CF_TOKENS` and `CF_STATS_TOKEN`, raw, for the same comparison.
     pub token_rows: TokenRawRows,
+    /// Exact persisted bytes of every statistics and DAO domain CF.
+    pub stats_dao_rows: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
@@ -3777,6 +3779,15 @@ fn collect_bulk_artifact_snapshot(
     report: materialize::MaterializationReport,
     sync_status: SyncStatus,
 ) -> Result<BulkArtifactSnapshot> {
+    let mut stats_dao_rows = Vec::new();
+    for &name in ckbadger_store::DOMAIN_CFS {
+        if name.starts_with("stats_") || name.starts_with("dao_") {
+            for row in domain_store.iterator_cf(domain_store.cf(name), IteratorMode::Start) {
+                let (key, value) = row?;
+                stats_dao_rows.push((name, key.to_vec(), value.to_vec()));
+            }
+        }
+    }
     let core = collect_core_owner_state_snapshot(domain_store)?;
     let (block_headers, block_numbers_by_hash, txs_by_hash, tx_actions_map) =
         collect_history_snapshot(domain_store)?;
@@ -3825,6 +3836,7 @@ fn collect_bulk_artifact_snapshot(
         addr_prefix_stats,
         dotcell,
         token_rows,
+        stats_dao_rows,
         daily_activity_stats,
         hourly_activity_stats,
         hourly_chain_stats,
