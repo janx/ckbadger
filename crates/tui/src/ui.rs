@@ -5719,7 +5719,8 @@ fn render_gauge(filled: usize, total: usize) -> String {
 
 fn format_num_compact(value: u64) -> String {
     if value >= 1_000_000 {
-        format!("{:.1}M", value as f64 / 1_000_000.0)
+        let tenths = (u128::from(value) + 50_000) / 100_000;
+        format!("{}.{}M", tenths / 10, tenths % 10)
     } else if value >= 1_000 {
         format!("{}K", value / 1_000)
     } else {
@@ -7664,6 +7665,8 @@ mod tests {
         assert_eq!(format_num_compact(1_000_000), "1.0M");
         assert_eq!(format_num_compact(1_500_000), "1.5M");
         assert_eq!(format_num_compact(12_300_000), "12.3M");
+        assert_eq!(format_num_compact(1_250_000), "1.3M");
+        assert_eq!(format_num_compact(u64::MAX), "18446744073709.6M");
     }
 
     #[test]
