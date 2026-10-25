@@ -2,7 +2,7 @@ mod common;
 use common::*;
 
 #[tokio::test]
-async fn test_network_stats_returns_ok() {
+async fn test_network_stats_reports_initializing_before_genesis() {
     let store = test_store();
     let mut config = test_config(store);
     config.ckb_network = "testnet".to_string();
@@ -14,13 +14,110 @@ async fn test_network_stats_returns_ok() {
         .unwrap();
 
     let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        json["hashRate"].is_null(),
-        "an empty chain has no defined hash rate: {json}"
-    );
+    assert_eq!(json["error"], "initializing");
+    assert!(json["message"].as_str().unwrap().contains("block header"));
+}
+
+#[tokio::test]
+async fn test_network_stats_rejects_zero_difficulty_for_existing_tip() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000)]);
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/statistics/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("zero difficulty"));
+}
+
+#[tokio::test]
+async fn test_network_stats_reports_unknown_averages_with_one_header() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000)]);
+    let mut header = store.get_block_header(0).unwrap().unwrap();
+    header.compact_target = 0x190df964;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/statistics/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(json["avgBlockTime"].is_null(), "{json}");
+    assert!(json["estimatedEpochTime"].is_null(), "{json}");
+}
+
+#[tokio::test]
+async fn test_network_stats_rejects_corrupt_sync_progress() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000)]);
+    let mut header = store.get_block_header(0).unwrap().unwrap();
+    header.compact_target = 0x190df964;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.commit().unwrap();
+    store.put_sync_progress(b"not-json").unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/statistics/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("invalid sync progress"));
+}
+
+#[tokio::test]
+async fn test_network_stats_allows_zero_chain_time_span_without_a_rate() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000), (1, 1_700_000_000_000)]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    for number in 0..=1 {
+        let mut header = store.get_block_header(number).unwrap().unwrap();
+        header.compact_target = 0x190df964;
+        batch.put_block_header(number, &header);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/statistics/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(json["avgBlockTime"], "0.00s");
+    assert_eq!(json["estimatedEpochTime"], "0s");
+    assert!(json["hashRate"].is_null());
 }
 
 #[tokio::test]
@@ -39,7 +136,7 @@ async fn test_network_stats_rejects_invalid_tip_timestamp() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert!(String::from_utf8_lossy(&body).contains("invalid timestamp on sync tip block 0"));
+    assert!(String::from_utf8_lossy(&body).contains("invalid latest block timestamp: block=0"));
 }
 
 #[tokio::test]
@@ -680,7 +777,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x190df964,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: now_ms,
@@ -846,7 +943,7 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x190df964,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: now_ms,
@@ -942,7 +1039,7 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x190df964,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: now_ms,
@@ -2606,7 +2703,7 @@ fn seed_knowledge_size_fixture(store: &Arc<CkbadgerStore>, occupied_capacity: i1
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x190df964,
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: chrono::Utc::now().timestamp_millis(),

@@ -132,13 +132,13 @@ pub struct DeepForkStatus {
 #[serde(rename_all = "camelCase")]
 pub struct NetworkStats {
     pub latest_block: i64,
-    pub avg_block_time: String,
+    pub avg_block_time: Option<String>,
     /// Human-readable H/s, absent until a measurable block span exists.
     pub hash_rate: Option<String>,
     pub difficulty: String,
     pub epoch: String,
     pub tps: String,
-    pub estimated_epoch_time: String,
+    pub estimated_epoch_time: Option<String>,
     pub transactions_per_minute: String,
     pub transactions_per_day: String,
     pub sync_status: SyncStatus,
@@ -2570,7 +2570,7 @@ async fn fetch_network_stats_from_db(
                 header.compact_target,
             )
         }
-        None => (0i64, 0i64, 0i32, 1800i32, Utc::now(), 0u32),
+        None => return Err(ApiError::initializing("no synced block header yet")),
     };
 
     // Recent-window average block time with millisecond precision.
@@ -2580,18 +2580,22 @@ async fn fetch_network_stats_from_db(
     let window_headers = store
         .list_blocks_desc(Some(latest_block), NETWORK_STATS_BLOCK_TIME_WINDOW + 1)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let avg_block_time_secs: Option<f64> = if window_headers.len() >= 2 {
+    let avg_block_span: Option<(u64, u64)> = if window_headers.len() >= 2 {
         let newest_ms = window_headers.first().expect("len >= 2").1.chain_time_ms;
         let oldest_ms = window_headers.last().expect("len >= 2").1.chain_time_ms;
-        let gaps = (window_headers.len() - 1) as f64;
-        let span_ms = newest_ms - oldest_ms;
+        let gaps = (window_headers.len() - 1) as u64;
+        let span_ms = newest_ms.checked_sub(oldest_ms).ok_or_else(|| {
+            ApiError::internal(format!(
+                "chain-time span overflow in avg-block-time window ending at block {latest_block}"
+            ))
+        })?;
         if span_ms < 0 {
             return Err(ApiError::internal(format!(
                 "chain time regressed across avg-block-time window: tip_block={}, newest_chain_ms={}, oldest_chain_ms={}",
                 latest_block, newest_ms, oldest_ms
             )));
         }
-        Some(span_ms as f64 / gaps / 1000.0)
+        Some((span_ms as u64, gaps))
     } else {
         None
     };
@@ -2629,7 +2633,9 @@ async fn fetch_network_stats_from_db(
     // node/explorer semantics, NOT a daily average. Zero only while the store
     // is empty (no tip header yet).
     let difficulty: u64 = if tip_compact_target == 0 {
-        0
+        return Err(ApiError::internal(format!(
+            "zero difficulty from compact target 0 on sync tip block {latest_block}"
+        )));
     } else {
         let difficulty_u256 = ckb_compact_to_difficulty(tip_compact_target);
         difficulty_u256.to_string().parse().map_err(|_| {
@@ -2640,9 +2646,37 @@ async fn fetch_network_stats_from_db(
         })?
     };
 
-    let remaining_blocks = epoch_length - epoch_index;
-    let estimated_epoch_seconds =
-        (remaining_blocks as f64 * avg_block_time_secs.unwrap_or(0.0)) as i64;
+    if epoch_length <= 0 || epoch_index < 0 || epoch_index >= epoch_length {
+        return Err(ApiError::internal(format!("invalid epoch progress on block {latest_block}: index={epoch_index}, length={epoch_length}")));
+    }
+    let remaining_blocks = (epoch_length - epoch_index) as u128;
+    let avg_block_time = avg_block_span
+        .map(|(span_ms, gaps)| {
+            crate::utils::exact_ratio::format_ratio(span_ms as i128, gaps as i128 * 1_000, 2)
+                .map(|value| format!("{value}s"))
+                .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
+        })
+        .transpose()?;
+    let estimated_epoch_time = avg_block_span
+        .map(|(span_ms, gaps)| {
+            let numerator = remaining_blocks
+                .checked_mul(span_ms as u128)
+                .ok_or_else(|| {
+                    ApiError::internal(format!("epoch estimate overflows at block {latest_block}"))
+                })?;
+            let denominator = gaps as u128 * 1_000;
+            let seconds =
+                ckbadger_common::work::rounded_ratio(numerator, denominator).map_err(|e| {
+                    ApiError::internal(format!("epoch estimate at {latest_block}: {e}"))
+                })?;
+            let seconds = u64::try_from(seconds).map_err(|_| {
+                ApiError::internal(format!(
+                    "epoch estimate exceeds u64 at block {latest_block}"
+                ))
+            })?;
+            Ok(format_duration(seconds))
+        })
+        .transpose()?;
 
     let tps = if tx_window_secs > 0.0 {
         tx_count_24h as f64 / tx_window_secs
@@ -2718,9 +2752,19 @@ async fn fetch_network_stats_from_db(
 
     let sync_progress_from_store: Option<SyncProgressData> = store
         .get_sync_progress()
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "failed to read sync progress at block {latest_block}: {e}"
+            ))
+        })?
+        .map(|bytes| {
+            serde_json::from_slice(&bytes).map_err(|e| {
+                ApiError::internal(format!(
+                    "invalid sync progress at block {latest_block}: {e}"
+                ))
+            })
+        })
+        .transpose()?;
 
     let (
         progress,
@@ -2846,13 +2890,12 @@ async fn fetch_network_stats_from_db(
 
     Ok(NetworkStats {
         latest_block,
-        // "0.00s" only while the store holds fewer than 2 blocks.
-        avg_block_time: format!("{:.2}s", avg_block_time_secs.unwrap_or(0.0)),
+        avg_block_time,
         hash_rate: hash_rate.map(format_hash_rate),
         difficulty: format_difficulty(difficulty),
         epoch: format!("{}({}/{})", epoch_number, epoch_index, epoch_length),
         tps: format!("{:.2}", tps),
-        estimated_epoch_time: format_duration(estimated_epoch_seconds as u64),
+        estimated_epoch_time,
         transactions_per_minute: format!("{:.1}", tx_per_minute),
         transactions_per_day: format!("{:.0}", tx_per_day),
         sync_status,
