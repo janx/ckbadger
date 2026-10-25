@@ -26,20 +26,19 @@ struct ApiNetworkStats {
     pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
 }
 
-fn parse_epoch_string(epoch: &str) -> (i64, i32, i32) {
-    let parts: Vec<&str> = epoch.splitn(2, '(').collect();
-    let epoch_number = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-    if let Some(inner) = parts.get(1).and_then(|s| s.strip_suffix(')')) {
-        let idx_parts: Vec<&str> = inner.splitn(2, '/').collect();
-        let epoch_index = idx_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let epoch_length = idx_parts
-            .get(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1800);
-        (epoch_number, epoch_index, epoch_length)
-    } else {
-        (epoch_number, 0, 1800)
+fn parse_epoch_string(epoch: &str) -> Result<(i64, i32, i32)> {
+    let invalid =
+        || anyhow::anyhow!("invalid network epoch {epoch:?}; expected number(index/length)");
+    let (number, rest) = epoch.split_once('(').ok_or_else(invalid)?;
+    let inner = rest.strip_suffix(')').ok_or_else(invalid)?;
+    let (index, length) = inner.split_once('/').ok_or_else(invalid)?;
+    let epoch_number: i64 = number.parse().map_err(|_| invalid())?;
+    let epoch_index: i32 = index.parse().map_err(|_| invalid())?;
+    let epoch_length: i32 = length.parse().map_err(|_| invalid())?;
+    if epoch_number < 0 || epoch_index < 0 || epoch_length <= 0 || epoch_index >= epoch_length {
+        return Err(invalid());
     }
+    Ok((epoch_number, epoch_index, epoch_length))
 }
 
 #[derive(Debug, Clone)]
@@ -121,11 +120,16 @@ pub struct ApiServiceInfo {
     pub error: Option<String>,
 }
 
-fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
-    let tx_24h = stats.transactions_per_day.parse::<i64>().unwrap_or(0);
-    let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch);
+fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> Result<ChainInfoData> {
+    let tx_24h = stats.transactions_per_day.parse::<i64>().with_context(|| {
+        format!(
+            "invalid transactionsPerDay {:?} at block {}",
+            stats.transactions_per_day, stats.latest_block
+        )
+    })?;
+    let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch)?;
 
-    ChainInfoData {
+    Ok(ChainInfoData {
         latest_block: stats.latest_block,
         epoch_number,
         epoch_index,
@@ -135,7 +139,7 @@ fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
         avg_block_time: stats.avg_block_time.clone(),
         tps: stats.tps.clone(),
         tx_24h,
-    }
+    })
 }
 
 const LEGACY_BULK_SYNC_THRESHOLD_BLOCKS: i64 = 1000;
@@ -655,7 +659,13 @@ impl TuiDb {
                 api_info.latest_block = Some(stats.latest_block);
                 api_info.tps = Some(stats.tps.clone());
                 api_info.avg_block_time = Some(stats.avg_block_time.clone());
-                let chain_info = chain_info_from_api_stats(&stats);
+                let chain_info = match chain_info_from_api_stats(&stats) {
+                    Ok(info) => info,
+                    Err(error) => {
+                        api_info.error = Some(error.to_string());
+                        return (None, api_info, None);
+                    }
+                };
                 let api_bg_tasks = stats.api_background_tasks;
                 (Some(chain_info), api_info, api_bg_tasks)
             }
@@ -970,17 +980,34 @@ mod tests {
 
     #[test]
     fn parse_epoch_full() {
-        assert_eq!(parse_epoch_string("100(800/1800)"), (100, 800, 1800));
+        assert_eq!(
+            parse_epoch_string("100(800/1800)").unwrap(),
+            (100, 800, 1800)
+        );
     }
 
     #[test]
     fn parse_epoch_without_details() {
-        assert_eq!(parse_epoch_string("101"), (101, 0, 1800));
+        assert!(parse_epoch_string("101").is_err());
     }
 
     #[test]
     fn parse_epoch_invalid() {
-        assert_eq!(parse_epoch_string("bad"), (0, 0, 1800));
+        assert!(parse_epoch_string("bad").is_err());
+        assert!(parse_epoch_string("100(1800/1800)").is_err());
+        assert!(parse_epoch_string("100(1/0)").is_err());
+    }
+
+    #[test]
+    fn invalid_transactions_per_day_is_reported_with_tip_context() {
+        let stats: super::ApiNetworkStats = serde_json::from_str(
+            r#"{"latestBlock":42,"avgBlockTime":"8","hashRate":"1","difficulty":"1","epoch":"1(0/1800)","tps":"1","transactionsPerDay":"broken"}"#,
+        ).unwrap();
+        let error = super::chain_info_from_api_stats(&stats)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("transactionsPerDay"));
+        assert!(error.contains("block 42"));
     }
 
     #[test]
