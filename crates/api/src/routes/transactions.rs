@@ -1010,7 +1010,6 @@ async fn get_transaction_detail(
             if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
                 build_inputs_outputs_from_ckb(
                     &tx_view,
-                    ckb_store,
                     &state.store,
                     &state.append_only_store,
                     &state.store,
@@ -1326,11 +1325,23 @@ fn build_inputs_outputs_from_pool_tx(
     })
 }
 
+fn required_output_data_size(
+    outputs_data: &[String],
+    output_index: usize,
+    context: &str,
+) -> Result<usize, ApiRouteError> {
+    let data = outputs_data.get(output_index).ok_or_else(|| {
+        ApiError::internal(format!(
+            "missing output data for {context}, output_index={output_index}"
+        ))
+    })?;
+    decode_hex_bytes_with_context(data, "output.data", context, None).map(|bytes| bytes.len())
+}
+
 /// Build inputs/outputs from CKB node's RocksDB transaction view.
 #[allow(clippy::too_many_arguments)]
 fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
-    ckb_store: &ckb_store_reader::CkbChainReader,
     core_store: &ckbadger_store::CkbadgerStore,
     cells_store: &ckbadger_store::CkbadgerStore,
     store: &ckbadger_store::CkbadgerStore,
@@ -1540,17 +1551,8 @@ fn build_inputs_outputs_from_ckb(
                     })
                     .transpose()?;
 
-                // Get data size from CKB store
-                let data_size = if tx_hash.len() == 32 {
-                    let mut th = [0u8; 32];
-                    th.copy_from_slice(&tx_hash);
-                    ckb_store
-                        .get_cell_data(&th, output_idx as u32)
-                        .map(|d| d.len())
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
+                let data_size =
+                    required_output_data_size(&rpc_tx.outputs_data, output_idx, &output_context)?;
 
                 let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
                 outputs_occupied_capacity += occ as u128;
@@ -2210,7 +2212,6 @@ async fn get_transaction_lifecycle(
 mod tests {
     use super::*;
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
-    use std::sync::Arc;
 
     #[test]
     fn test_parse_out_point_index_valid_and_malformed() {
@@ -2279,6 +2280,24 @@ mod tests {
         assert_eq!(params.limit, 50);
         assert!(params.block_number.is_none());
         assert!(params.cursor.is_none());
+    }
+
+    #[test]
+    fn committed_output_data_is_required_and_may_be_empty() {
+        assert_eq!(
+            required_output_data_size(&["0x".to_string()], 0, "tx 0x01").unwrap(),
+            0
+        );
+        assert_eq!(
+            required_output_data_size(&["0x1234".to_string()], 0, "tx 0x01").unwrap(),
+            2
+        );
+        assert!(required_output_data_size(&[], 0, "tx 0x01")
+            .unwrap_err()
+            .1
+             .0
+            .message
+            .contains("missing output data"));
     }
 
     #[test]
