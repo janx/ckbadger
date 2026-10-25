@@ -55,6 +55,20 @@ impl Default for SamplerSnapshot {
     }
 }
 
+impl SamplerSnapshot {
+    fn from_store_memory(store_memory: ChainStoreMemorySnapshot) -> Self {
+        Self {
+            compaction_pending_mb: store_memory
+                .total_compaction_pending_bytes
+                .map(|value| value / (1024 * 1024)),
+            l0_files: store_memory.l0_files_count,
+            imm_memtables: store_memory.immutable_memtables,
+            store_memory,
+            ..Self::default()
+        }
+    }
+}
+
 pub(crate) struct BackgroundSampler {
     latest_rx: tokio::sync::watch::Receiver<SamplerSnapshot>,
     shutdown: Arc<AtomicBool>,
@@ -75,10 +89,8 @@ impl BackgroundSampler {
         .unwrap_or_else(|err| {
             panic!("failed to aggregate initial chain store memory snapshot: {err}")
         });
-        let (tx, rx) = tokio::sync::watch::channel(SamplerSnapshot {
-            store_memory: initial_store_memory,
-            ..SamplerSnapshot::default()
-        });
+        let (tx, rx) =
+            tokio::sync::watch::channel(SamplerSnapshot::from_store_memory(initial_store_memory));
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
 
@@ -96,11 +108,6 @@ impl BackgroundSampler {
                             });
                     let env = sys_info::read_batch_environment(&mut disk_tracker);
                     let snapshot = SamplerSnapshot {
-                        compaction_pending_mb: store_memory
-                            .total_compaction_pending_bytes
-                            .map(|value| value / (1024 * 1024)),
-                        l0_files: store_memory.l0_files_count,
-                        imm_memtables: store_memory.immutable_memtables,
                         load_avg_1m: env.load_avg_1m,
                         mem_available_mb: env.mem_available_mb,
                         disk_read_mb: env.disk_read_mb,
@@ -114,7 +121,7 @@ impl BackgroundSampler {
                         disk_avg_queue_depth: env.disk_avg_queue_depth,
                         disk_in_flight: env.disk_in_flight,
                         disk_state: env.disk_state,
-                        store_memory,
+                        ..SamplerSnapshot::from_store_memory(store_memory)
                     };
                     if tx.send(snapshot).is_err() {
                         break;
@@ -172,6 +179,21 @@ mod tests {
         assert_eq!(snap.disk_in_flight, None);
         assert_eq!(snap.disk_state.as_deref(), Some("unavailable"));
         assert_eq!(snap.store_memory, ChainStoreMemorySnapshot::default());
+    }
+
+    #[test]
+    fn initial_snapshot_carries_control_properties_before_worker_sample() {
+        let memory = ChainStoreMemorySnapshot {
+            total_compaction_pending_bytes: Some(3 * 1024 * 1024),
+            l0_files_count: Some(7),
+            immutable_memtables: Some(2),
+            ..Default::default()
+        };
+        let snapshot = SamplerSnapshot::from_store_memory(memory);
+        assert_eq!(snapshot.compaction_pending_mb, Some(3));
+        assert_eq!(snapshot.l0_files, Some(7));
+        assert_eq!(snapshot.imm_memtables, Some(2));
+        assert_eq!(snapshot.store_memory.l0_files_count, Some(7));
     }
 
     #[test]
