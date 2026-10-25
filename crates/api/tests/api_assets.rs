@@ -969,7 +969,7 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
         .unwrap();
 
     // Hit the endpoint
-    let config = test_config(store);
+    let config = test_config(store.clone());
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -1024,6 +1024,28 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
     let owner_hash = json["ownerLockHash"].as_str().unwrap();
     assert!(owner_hash.starts_with("0x"));
     assert_eq!(owner_hash, format!("0x{}", hex::encode(vec![0x02u8; 32])));
+
+    // A class has an issuer by construction. A missing pointer is corrupted
+    // index state, not an empty issuer ID for clients to display.
+    let mut broken_class = store.get_mnft(&class_id).unwrap().unwrap();
+    broken_class.collection_id = None;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft(&class_id, &broken_class);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/assets/objects/0x{}",
+                    hex::encode(class_id)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]

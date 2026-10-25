@@ -2001,7 +2001,16 @@ async fn get_object_collection(
                     }
                 };
 
-                let issuer_id = class_entry.collection_id.clone().unwrap_or_default();
+                let issuer_id = class_entry
+                    .collection_id
+                    .clone()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "mNFT class missing issuer_id: collection_id=0x{}",
+                            hex::encode(&collection_id_bytes)
+                        ))
+                    })?;
 
                 let issuer_detail = if !issuer_id.is_empty() {
                     match state
