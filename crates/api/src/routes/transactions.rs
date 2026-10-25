@@ -160,6 +160,23 @@ fn derive_cycles_status(cycles: Option<i64>, is_cellbase: bool) -> Option<String
     }
 }
 
+fn required_tx_block_hash(state: &AppState, block_number: i64) -> Result<Vec<u8>, ApiRouteError> {
+    state
+        .store
+        .get_block_header(block_number)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "transaction block {block_number} header read: {error}"
+            ))
+        })?
+        .map(|header| header.hash)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "transaction block {block_number} is missing its indexed header"
+            ))
+        })
+}
+
 fn required_tx_timestamp(
     timestamp_ms: i64,
     block_number: i64,
@@ -397,22 +414,8 @@ async fn get_transaction(
 
     match tx_result {
         Some((block_num, tx_idx, entry)) => {
-            // Get block hash
-            let store = state.store.clone();
-            let block_hash = tokio::task::spawn_blocking(move || {
-                store
-                    .get_block_header(block_num)
-                    .ok()
-                    .flatten()
-                    .map(|h| h.hash)
-                    .unwrap_or_default()
-            })
-            .await
-            .unwrap_or_default();
-
-            let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default();
+            let block_hash = required_tx_block_hash(&state, block_num)?;
+            let timestamp = required_tx_timestamp(entry.timestamp, block_num, tx_idx)?;
 
             ok(TransactionResponse {
                 hash: format!("0x{}", hex::encode(&hash_bytes)),
@@ -962,22 +965,8 @@ async fn get_transaction_detail(
     let inputs_count = entry.inputs_count as i32;
     let outputs_count = entry.outputs_count as i32;
 
-    // Get block hash
-    let store = state.store.clone();
-    let block_hash = tokio::task::spawn_blocking(move || {
-        store
-            .get_block_header(block_number)
-            .ok()
-            .flatten()
-            .map(|h| h.hash)
-            .unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default();
-
-    let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default();
+    let block_hash = required_tx_block_hash(&state, block_number)?;
+    let timestamp = required_tx_timestamp(entry.timestamp, block_number, tx_idx)?;
 
     // Get tip block for confirmations
     let tip_block = state
@@ -2080,25 +2069,12 @@ async fn get_transaction_lifecycle(
         }
     };
 
-    // Get block hash
-    let store = state.store.clone();
-    let commit_block_hash = tokio::task::spawn_blocking(move || {
-        store
-            .get_block_header(commit_block_number)
-            .ok()
-            .flatten()
-            .map(|h| h.hash)
-            .unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default();
+    let commit_block_hash = required_tx_block_hash(&state, commit_block_number)?;
 
     let hash_hex = format!("0x{}", hex::encode(&hash_bytes));
     let proposal_id_hex = format!("0x{}", hex::encode(&short_hash));
 
-    let commit_ts_str = chrono::DateTime::from_timestamp_millis(commit_timestamp)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default();
+    let commit_ts_str = required_tx_timestamp(commit_timestamp, commit_block_number, 0)?;
 
     // Get sync tip
     let tip = state

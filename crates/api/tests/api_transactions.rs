@@ -130,6 +130,51 @@ async fn block_transaction_list_rejects_missing_indexed_header() {
 }
 
 #[tokio::test]
+async fn indexed_transaction_rejects_missing_header_on_detail_and_lifecycle() {
+    let store = test_store();
+    let hash = [0x91; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(&hash, 7, 0);
+    batch.put_tx_index(
+        7,
+        0,
+        &TxIndexEntry {
+            tx_hash: hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 100,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    for suffix in ["", "/lifecycle"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/transactions/0x{}{suffix}",
+                        hex::encode(hash)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{suffix}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn block_transaction_list_rejects_invalid_stored_timestamp() {
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
