@@ -1268,7 +1268,10 @@ async fn get_circulation_ratio_chart(
         };
         let circulating = supply.circulating;
         if circulating <= 0 {
-            continue;
+            return Err(ApiError::internal(format!(
+                "DAO daily snapshot {} has nonpositive circulating supply: {circulating}",
+                s.date
+            )));
         }
         if s.total_deposited < 0 {
             return Err(ApiError::internal(format!(
@@ -1276,11 +1279,17 @@ async fn get_circulation_ratio_chart(
                 s.date, s.total_deposited
             )));
         }
-        let deposited = s.total_deposited as f64;
-        let ratio = (deposited / circulating as f64) * 100.0;
+        let ratio = crate::utils::exact_ratio::format_ratio(
+            s.total_deposited.checked_mul(100).ok_or_else(|| {
+                ApiError::internal(format!("DAO deposited percentage overflows for {}", s.date))
+            })?,
+            circulating,
+            4,
+        )
+        .map_err(|e| ApiError::internal(format!("DAO circulation ratio for {}: {e}", s.date)))?;
         data.push(ChartDataPoint {
             date: s.date.clone(),
-            value: format!("{:.4}", ratio),
+            value: ratio,
             value2: None,
         });
     }

@@ -487,21 +487,22 @@ fn format_difficulty(difficulty: u64) -> String {
     const PETA: u64 = 1_000_000_000_000_000;
     const EXA: u64 = 1_000_000_000_000_000_000;
 
-    if difficulty >= EXA {
-        format!("{:.2} E", difficulty as f64 / EXA as f64)
-    } else if difficulty >= PETA {
-        format!("{:.2} P", difficulty as f64 / PETA as f64)
-    } else if difficulty >= TERA {
-        format!("{:.2} T", difficulty as f64 / TERA as f64)
-    } else if difficulty >= GIGA {
-        format!("{:.2} G", difficulty as f64 / GIGA as f64)
-    } else if difficulty >= MEGA {
-        format!("{:.2} M", difficulty as f64 / MEGA as f64)
-    } else if difficulty >= KILO {
-        format!("{:.2} K", difficulty as f64 / KILO as f64)
-    } else {
-        format!("{}", difficulty)
-    }
+    let scale = [
+        (EXA, "E"),
+        (PETA, "P"),
+        (TERA, "T"),
+        (GIGA, "G"),
+        (MEGA, "M"),
+        (KILO, "K"),
+    ]
+    .into_iter()
+    .find(|(scale, _)| difficulty >= *scale);
+    let Some((scale, unit)) = scale else {
+        return difficulty.to_string();
+    };
+    let hundredths = ckbadger_common::work::rounded_ratio(difficulty as u128 * 100, scale as u128)
+        .expect("u64 difficulty times 100 fits u128 and scale is nonzero");
+    format!("{}.{:02} {unit}", hundredths / 100, hundredths % 100)
 }
 
 /// Hourly buckets in `/statistics/tx-stats`: the newest one and those starting
@@ -2037,32 +2038,38 @@ pub(crate) fn empty_cell_size_response() -> ChartResponse {
 }
 
 /// Build the address-cohort-retention chart response from a materialized snapshot.
-pub(crate) fn build_address_cohort_response(cohort: &DailyAddressCohort) -> ChartResponse {
+pub(crate) fn build_address_cohort_response(
+    cohort: &DailyAddressCohort,
+) -> Result<ChartResponse, String> {
     let mut sorted_cohorts: Vec<_> = cohort.cohorts.iter().collect();
     sorted_cohorts.sort_by(|a, b| a.cohort_month.cmp(&b.cohort_month));
 
     let data = sorted_cohorts
         .into_iter()
         .map(|entry| {
-            let retention = if entry.total_balance > 0 {
-                entry.used_capacity as f64 * 100.0 / entry.total_balance as f64
-            } else {
-                0.0
-            };
-            ChartDataPoint {
+            let retention = entry.used_capacity.checked_mul(100).ok_or_else(|| {
+                format!(
+                    "cohort {} retention numerator overflows",
+                    entry.cohort_month
+                )
+            })?;
+            let retention =
+                crate::utils::exact_ratio::format_ratio(retention, entry.total_balance, 6)
+                    .map_err(|e| format!("cohort {} retention: {e}", entry.cohort_month))?;
+            Ok(ChartDataPoint {
                 date: entry.cohort_month.clone(),
-                value: format!("{retention:.6}"),
+                value: retention,
                 value2: Some(shannon_to_ckb_string(entry.used_capacity)),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
 
-    ChartResponse {
+    Ok(ChartResponse {
         data,
         title: "Address Cohort Retention".to_string(),
         y_axis_label: "Common Knowledge / Balance (%)".to_string(),
         y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
-    }
+    })
 }
 
 pub(crate) fn empty_address_cohort_response() -> ChartResponse {
@@ -2109,9 +2116,9 @@ async fn get_capacity_turnover_ratio_chart(
             Some(v) => v,
             None => continue,
         };
-        if live < 0 {
+        if live <= 0 {
             return Err(ApiError::internal(format!(
-                "negative knowledge_size in daily_stats for {}: {}",
+                "nonpositive knowledge_size in daily_stats for {}: {}",
                 date, live
             )));
         }
@@ -2133,21 +2140,27 @@ async fn get_capacity_turnover_ratio_chart(
             }
         }
 
-        let daily_turnover = if live > 0 {
-            consumed as f64 * 100.0 / live as f64
-        } else {
-            0.0
-        };
-        let weekly_turnover = if rolling_live_sum > 0 {
-            rolling_consumed_sum as f64 * 100.0 / rolling_live_sum as f64
-        } else {
-            0.0
-        };
+        let daily_turnover = crate::utils::exact_ratio::format_ratio(
+            consumed.checked_mul(100).ok_or_else(|| {
+                ApiError::internal(format!("daily turnover numerator overflows for {date}"))
+            })?,
+            live,
+            6,
+        )
+        .map_err(|e| ApiError::internal(format!("daily turnover for {date}: {e}")))?;
+        let weekly_turnover = crate::utils::exact_ratio::format_ratio(
+            rolling_consumed_sum.checked_mul(100).ok_or_else(|| {
+                ApiError::internal(format!("weekly turnover numerator overflows for {date}"))
+            })?,
+            rolling_live_sum,
+            6,
+        )
+        .map_err(|e| ApiError::internal(format!("weekly turnover for {date}: {e}")))?;
 
         data.push(ChartDataPoint {
             date: format_chart_date(&date)?,
-            value: format!("{daily_turnover:.6}"),
-            value2: Some(format!("{weekly_turnover:.6}")),
+            value: daily_turnover,
+            value2: Some(weekly_turnover),
         });
     }
 
@@ -2199,7 +2212,7 @@ async fn get_address_cohort_retention_chart(
         return ok(empty_address_cohort_response());
     };
 
-    let response = build_address_cohort_response(&snapshot);
+    let response = build_address_cohort_response(&snapshot).map_err(ApiError::internal)?;
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
     ok(response)
 }
@@ -3020,10 +3033,15 @@ async fn get_uncle_rate_chart(
                 stats.total_uncles
             )));
         }
-        let uncle_rate = stats.total_uncles as f64 / stats.block_count as f64;
+        let uncle_rate = crate::utils::exact_ratio::format_ratio(
+            stats.total_uncles as i128,
+            stats.block_count as i128,
+            6,
+        )
+        .map_err(|e| ApiError::internal(format!("uncle rate for {date_str}: {e}")))?;
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
-            value: format!("{:.6}", uncle_rate),
+            value: uncle_rate,
             value2: None,
         });
     }
@@ -4005,31 +4023,49 @@ async fn get_hodl_wave_chart(
     let data: Vec<StackedAreaDataPoint> = waves
         .iter()
         .map(|(date, w)| {
-            let total = (w.band_24h
-                + w.band_1d_1w
-                + w.band_1w_1m
-                + w.band_1m_3m
-                + w.band_3m_6m
-                + w.band_6m_1y
-                + w.band_1y_3y
-                + w.band_gt_3y) as f64;
-            let pct = |v: i128| -> String {
-                if total > 0.0 {
-                    format!("{:.2}", v as f64 / total * 100.0)
-                } else {
-                    "0".to_string()
-                }
+            let bands = [
+                w.band_24h,
+                w.band_1d_1w,
+                w.band_1w_1m,
+                w.band_1m_3m,
+                w.band_3m_6m,
+                w.band_6m_1y,
+                w.band_1y_3y,
+                w.band_gt_3y,
+            ];
+            if bands.iter().any(|band| *band < 0) {
+                return Err(ApiError::internal(format!(
+                    "negative HODL band capacity for {date}"
+                )));
+            }
+            let total = bands
+                .into_iter()
+                .try_fold(0i128, |sum, band| sum.checked_add(band))
+                .ok_or_else(|| {
+                    ApiError::internal(format!("HODL band capacity overflows for {date}"))
+                })?;
+            if total == 0 {
+                return Err(ApiError::internal(format!(
+                    "zero HODL band capacity for {date}"
+                )));
+            }
+            let pct = |v: i128| -> Result<String, ApiRouteError> {
+                let scaled = v.checked_mul(100).ok_or_else(|| {
+                    ApiError::internal(format!("HODL percentage overflows for {date}"))
+                })?;
+                crate::utils::exact_ratio::format_ratio(scaled, total, 2)
+                    .map_err(|e| ApiError::internal(format!("HODL percentage for {date}: {e}")))
             };
 
             let mut values = std::collections::HashMap::new();
-            values.insert("24h".to_string(), pct(w.band_24h));
-            values.insert("1d1w".to_string(), pct(w.band_1d_1w));
-            values.insert("1w1m".to_string(), pct(w.band_1w_1m));
-            values.insert("1m3m".to_string(), pct(w.band_1m_3m));
-            values.insert("3m6m".to_string(), pct(w.band_3m_6m));
-            values.insert("6m1y".to_string(), pct(w.band_6m_1y));
-            values.insert("1y3y".to_string(), pct(w.band_1y_3y));
-            values.insert("gt3y".to_string(), pct(w.band_gt_3y));
+            values.insert("24h".to_string(), pct(w.band_24h)?);
+            values.insert("1d1w".to_string(), pct(w.band_1d_1w)?);
+            values.insert("1w1m".to_string(), pct(w.band_1w_1m)?);
+            values.insert("1m3m".to_string(), pct(w.band_1m_3m)?);
+            values.insert("3m6m".to_string(), pct(w.band_3m_6m)?);
+            values.insert("6m1y".to_string(), pct(w.band_6m_1y)?);
+            values.insert("1y3y".to_string(), pct(w.band_1y_3y)?);
+            values.insert("gt3y".to_string(), pct(w.band_gt_3y)?);
             values.insert("holderCount".to_string(), w.holder_count.to_string());
 
             Ok(StackedAreaDataPoint {
@@ -4641,6 +4677,13 @@ async fn get_asset_ecosystem(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn difficulty_display_rounds_exactly_above_f64_integer_precision() {
+        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.01 P");
+        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.01 P");
+        assert_eq!(super::format_difficulty(9_004_999_999_999_999), "9.00 P");
+        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.01 P");
+    }
     use super::*;
 
     #[test]
@@ -5987,7 +6030,7 @@ mod tests {
                 },
             ],
         };
-        let response = build_address_cohort_response(&cohort);
+        let response = build_address_cohort_response(&cohort).unwrap();
         assert_eq!(response.title, "Address Cohort Retention");
         assert_eq!(response.data.len(), 2);
         // Should be sorted by cohort_month
@@ -5997,6 +6040,31 @@ mod tests {
         // 2024-01: 100/500 * 100 = 20.0
         assert_eq!(response.data[0].value, "20.000000");
         assert_eq!(response.data[0].value2.as_deref(), Some("100"));
+    }
+
+    #[test]
+    fn cohort_retention_rejects_zero_balance_and_rounds_exactly() {
+        let cohort = DailyAddressCohort {
+            cohorts: vec![ckbadger_store::AddressCohortEntry {
+                cohort_month: "2024-01".to_string(),
+                used_capacity: 1,
+                total_balance: 0,
+            }],
+        };
+        assert!(build_address_cohort_response(&cohort)
+            .unwrap_err()
+            .contains("2024-01"));
+        let cohort = DailyAddressCohort {
+            cohorts: vec![ckbadger_store::AddressCohortEntry {
+                cohort_month: "2024-02".to_string(),
+                used_capacity: 9_007_199_254_740_993,
+                total_balance: 18_014_398_509_481_986,
+            }],
+        };
+        assert_eq!(
+            build_address_cohort_response(&cohort).unwrap().data[0].value,
+            "50.000000"
+        );
     }
 
     #[test]
