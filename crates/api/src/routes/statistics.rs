@@ -2257,19 +2257,38 @@ fn block_time_ms_to_bucket_index(diff_ms: i64) -> Option<usize> {
 fn build_block_time_distribution_data(
     bucket_counts: &[u64],
     total_blocks: u64,
-) -> Vec<ChartDataPoint> {
+) -> Result<Vec<ChartDataPoint>, String> {
+    if bucket_counts.len() != BLOCK_TIME_DIST_BUCKET_COUNT {
+        return Err(format!(
+            "block time histogram has {} buckets, expected {}",
+            bucket_counts.len(),
+            BLOCK_TIME_DIST_BUCKET_COUNT
+        ));
+    }
+    let actual_total = bucket_counts
+        .iter()
+        .try_fold(0u64, |sum, count| sum.checked_add(*count))
+        .ok_or("block time histogram count overflow")?;
+    if actual_total != total_blocks {
+        return Err(format!(
+            "block time histogram sum={actual_total} differs from total_blocks={total_blocks}"
+        ));
+    }
+    if total_blocks == 0 {
+        return Ok(Vec::new());
+    }
     (0..BLOCK_TIME_DIST_BUCKET_COUNT)
         .map(|idx| {
-            let ratio = if total_blocks > 0 {
-                (bucket_counts[idx] as f64 / total_blocks as f64) * 100.0
-            } else {
-                0.0
-            };
-            ChartDataPoint {
-                date: format!("{:.1}", idx as f64 / 10.0),
-                value: format!("{:.3}", ratio),
+            let ratio = crate::utils::exact_ratio::format_ratio(
+                bucket_counts[idx] as i128 * 100,
+                total_blocks as i128,
+                3,
+            )?;
+            Ok(ChartDataPoint {
+                date: format!("{}.{:01}", idx / 10, idx % 10),
+                value: ratio,
                 value2: None,
-            }
+            })
         })
         .collect()
 }
@@ -2306,7 +2325,7 @@ pub(crate) fn build_block_time_distribution_response(
 
     if tip_header.epoch_number < 1 {
         return Ok(ChartResponse {
-            data: build_block_time_distribution_data(&vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT], 0),
+            data: Vec::new(),
             title: "Block Time Distribution (Last 0 Epochs)".to_string(),
             y_axis_label: "Block Ratio (%)".to_string(),
             y2_axis_label: None,
@@ -2360,7 +2379,7 @@ pub(crate) fn build_block_time_distribution_response(
     }
 
     Ok(ChartResponse {
-        data: build_block_time_distribution_data(&bucket_counts, total_blocks),
+        data: build_block_time_distribution_data(&bucket_counts, total_blocks)?,
         title: format!("Block Time Distribution (Last {} Epochs)", actual_epochs),
         y_axis_label: "Block Ratio (%)".to_string(),
         y2_axis_label: None,
@@ -2381,17 +2400,23 @@ async fn get_epoch_time_distribution_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<ChartDataPoint> = dist
-        .into_iter()
-        .map(|(bucket_minutes, count)| {
-            let hours_decimal = bucket_minutes as f64 / 60.0;
-            ChartDataPoint {
-                date: format!("{:.2}", hours_decimal),
-                value: count.to_string(),
-                value2: None,
-            }
-        })
-        .collect();
+    let data: Vec<ChartDataPoint> =
+        dist.into_iter()
+            .map(|(bucket_minutes, count)| {
+                let hours_decimal =
+                    crate::utils::exact_ratio::format_ratio(bucket_minutes as i128, 60, 2)
+                        .map_err(|e| {
+                            ApiError::internal(format!(
+                                "epoch time bucket {bucket_minutes} minutes: {e}"
+                            ))
+                        })?;
+                Ok(ChartDataPoint {
+                    date: hours_decimal,
+                    value: count.to_string(),
+                    value2: None,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,
@@ -2421,17 +2446,23 @@ async fn get_epoch_time_length_chart(
 
     let data: Vec<ChartDataPoint> = epochs
         .into_iter()
-        .filter_map(|e| {
-            let end = e.end_timestamp?;
-            let duration_secs = end.signed_duration_since(e.start_timestamp).num_seconds() as f64;
-            let duration_hours = duration_secs / 3600.0;
-            Some(ChartDataPoint {
+        .filter_map(|e| e.end_timestamp.map(|end| (e, end)))
+        .map(|(e, end)| {
+            let duration_ms = end
+                .signed_duration_since(e.start_timestamp)
+                .num_milliseconds();
+            let duration_hours =
+                crate::utils::exact_ratio::format_ratio(duration_ms as i128, 3_600_000, 2)
+                    .map_err(|error| {
+                        ApiError::internal(format!("epoch {} duration: {error}", e.epoch_number))
+                    })?;
+            Ok(ChartDataPoint {
                 date: e.epoch_number.to_string(),
-                value: format!("{:.2}", duration_hours),
+                value: duration_hours,
                 value2: Some(e.blocks_count.to_string()),
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,
@@ -2474,7 +2505,9 @@ async fn get_average_block_time_chart(
         };
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
-            value: format!("{:.2}", avg_time_ms as f64 / 1000.0),
+            value: crate::utils::exact_ratio::format_ratio(avg_time_ms as i128, 1_000, 2).map_err(
+                |e| ApiError::internal(format!("average block time for {date_str}: {e}")),
+            )?,
             value2: None,
         });
     }
@@ -4563,45 +4596,76 @@ fn build_capacity_breakdown(
     token_capacity: i128,
     object_capacity: i128,
 ) -> Result<Vec<CapacityCategory>, ApiRouteError> {
-    let other_capacity = live_capacity - dao_capacity - token_capacity - object_capacity;
+    if live_capacity <= 0
+        || [dao_capacity, token_capacity, object_capacity]
+            .iter()
+            .any(|value| *value < 0)
+    {
+        return Err(ApiError::internal(format!(
+            "invalid asset capacity breakdown: live_capacity={live_capacity}, dao={dao_capacity}, tokens={token_capacity}, objects={object_capacity}"
+        )));
+    }
+    let categorized = dao_capacity
+        .checked_add(token_capacity)
+        .and_then(|sum| sum.checked_add(object_capacity))
+        .ok_or_else(|| ApiError::internal("asset categorized capacity overflows i128"))?;
+    let other_capacity = live_capacity
+        .checked_sub(categorized)
+        .ok_or_else(|| ApiError::internal("asset other capacity underflows i128"))?;
     if other_capacity < 0 {
         return Err(ApiError::internal(format!(
             "categorized capacity exceeds total live capacity: live_capacity={live_capacity}, dao={dao_capacity}, tokens={token_capacity}, objects={object_capacity}"
         )));
     }
-    let pct = |value: i128| -> String {
-        if live_capacity <= 0 {
-            return "0.00".to_string();
-        }
-        // value ≤ live_capacity < 2^64 shannons, so value × 10_000 is far
-        // from i128 overflow, and live_capacity > 0 here.
-        let scaled = value * 10_000 / live_capacity;
-        let whole = scaled / 100;
-        let frac = (scaled % 100).abs();
-        format!("{whole}.{frac:02}")
+    let pct = |value: i128| -> Result<String, ApiRouteError> {
+        crate::utils::exact_ratio::format_ratio(
+            value
+                .checked_mul(100)
+                .ok_or_else(|| ApiError::internal("asset percentage numerator overflows i128"))?,
+            live_capacity,
+            2,
+        )
+        .map_err(ApiError::internal)
     };
     Ok(vec![
         CapacityCategory {
             category: "dao".to_string(),
             capacity_ckb: shannon_to_ckb_string(dao_capacity),
-            percentage: pct(dao_capacity),
+            percentage: pct(dao_capacity)?,
         },
         CapacityCategory {
             category: "tokens".to_string(),
             capacity_ckb: shannon_to_ckb_string(token_capacity),
-            percentage: pct(token_capacity),
+            percentage: pct(token_capacity)?,
         },
         CapacityCategory {
             category: "objects".to_string(),
             capacity_ckb: shannon_to_ckb_string(object_capacity),
-            percentage: pct(object_capacity),
+            percentage: pct(object_capacity)?,
         },
         CapacityCategory {
             category: "other".to_string(),
             capacity_ckb: shannon_to_ckb_string(other_capacity),
-            percentage: pct(other_capacity),
+            percentage: pct(other_capacity)?,
         },
     ])
+}
+
+fn parse_asset_owned_capacity(id: &str, value: Option<&str>) -> Result<i128, ApiRouteError> {
+    let value = value.ok_or_else(|| {
+        ApiError::internal(format!("asset {id} missing owned_capacity in warmup cache"))
+    })?;
+    let capacity = value.parse::<i128>().map_err(|e| {
+        ApiError::internal(format!(
+            "asset {id} has invalid owned_capacity={value}: {e}"
+        ))
+    })?;
+    if capacity < 0 {
+        return Err(ApiError::internal(format!(
+            "asset {id} has negative owned_capacity={capacity}"
+        )));
+    }
+    Ok(capacity)
 }
 
 #[instrument(skip(state), level = "debug")]
@@ -4622,44 +4686,34 @@ async fn get_asset_ecosystem(
         .iter()
         .take(5)
         .map(|t| {
-            let capacity_shannon: i128 = t
-                .owned_capacity
-                .as_deref()
-                .and_then(|s| s.parse::<i128>().ok())
-                .unwrap_or(0);
-            TopTokenEntry {
+            let capacity_shannon = parse_asset_owned_capacity(&t.id, t.owned_capacity.as_deref())?;
+            Ok(TopTokenEntry {
                 type_script_hash: t.id.clone(),
                 name: t.name.clone(),
                 symbol: t.symbol.clone(),
                 holders_count: t.holders_count,
                 total_capacity_ckb: shannon_to_ckb_string(capacity_shannon),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     // Sum total token capacity
-    let total_token_capacity: i128 = token_assets
-        .iter()
-        .filter_map(|t| {
-            t.owned_capacity
-                .as_deref()
-                .and_then(|s| s.parse::<i128>().ok())
-        })
-        .sum();
+    let total_token_capacity: i128 = token_assets.iter().try_fold(0i128, |sum, t| {
+        let capacity = parse_asset_owned_capacity(&t.id, t.owned_capacity.as_deref())?;
+        sum.checked_add(capacity)
+            .ok_or_else(|| ApiError::internal("token owned capacity sum overflows i128"))
+    })?;
 
     // Get total object capacity
     let object_assets = state.load_object_cache().ok_or_else(|| {
         state.asset_cache_unavailable("object cache unavailable; warmup in progress")
     })?;
 
-    let total_object_capacity: i128 = object_assets
-        .iter()
-        .filter_map(|n| {
-            n.owned_capacity
-                .as_deref()
-                .and_then(|s| s.parse::<i128>().ok())
-        })
-        .sum();
+    let total_object_capacity: i128 = object_assets.iter().try_fold(0i128, |sum, n| {
+        let capacity = parse_asset_owned_capacity(&n.id, n.owned_capacity.as_deref())?;
+        sum.checked_add(capacity)
+            .ok_or_else(|| ApiError::internal("object owned capacity sum overflows i128"))
+    })?;
 
     // Tip live capacity (the breakdown denominator) + latest DAO snapshot.
     let store = state.store.clone();
@@ -4674,15 +4728,17 @@ async fn get_asset_ecosystem(
     let tip = tip.map_err(|e| ApiError::internal(e.to_string()))?;
     let dao_snapshot = dao_snapshot.map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Zero only while the store is empty (no tip header ⇒ no cells at all);
-    // any nonzero categorized capacity then fails the breakdown invariant.
     let live_capacity: i128 = match tip {
         Some((tip_block, header)) => live_capacity_from_dao(&header.dao).map_err(|e| {
             ApiError::internal(format!(
                 "invalid DAO field on tip header: tip_block={tip_block}: {e}"
             ))
         })?,
-        None => 0,
+        None => {
+            return Err(ApiError::initializing(
+                "no synced block header for asset ecosystem yet",
+            ))
+        }
     };
 
     let (dao_locked, knowledge_size) = match dao_snapshot.as_ref() {
@@ -4693,7 +4749,11 @@ async fn get_asset_ecosystem(
                 common_knowledge_size(s, virtual_occupied)?,
             )
         }
-        None => (0, 0),
+        None => {
+            return Err(ApiError::initializing(
+                "DAO daily snapshot unavailable for asset ecosystem yet",
+            ))
+        }
     };
 
     let capacity_breakdown = build_capacity_breakdown(
@@ -5717,6 +5777,30 @@ mod tests {
     }
 
     #[test]
+    fn capacity_breakdown_rejects_zero_or_negative_denominator_and_rounds_half_up() {
+        assert!(build_capacity_breakdown(0, 0, 0, 0).is_err());
+        assert!(build_capacity_breakdown(100, -1, 0, 0).is_err());
+        let categories = build_capacity_breakdown(201, 1, 0, 0).unwrap();
+        assert_eq!(categories[0].percentage, "0.50");
+    }
+
+    #[test]
+    fn asset_capacity_cache_field_is_required_and_exact() {
+        assert_eq!(
+            parse_asset_owned_capacity("token-a", Some("9007199254740993")).unwrap(),
+            9_007_199_254_740_993
+        );
+        assert!(parse_asset_owned_capacity("token-a", None)
+            .unwrap_err()
+            .1
+             .0
+            .message
+            .contains("token-a"));
+        assert!(parse_asset_owned_capacity("token-a", Some("bad")).is_err());
+        assert!(parse_asset_owned_capacity("token-a", Some("-1")).is_err());
+    }
+
+    #[test]
     fn test_hodl_wave_cache_has_holder_count_true_when_all_present() {
         let mut values = std::collections::HashMap::new();
         values.insert("24h".to_string(), "1.00".to_string());
@@ -5800,13 +5884,27 @@ mod tests {
         let mut counts = vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT];
         counts[10] = 1;
         counts[20] = 3;
-        let data = build_block_time_distribution_data(&counts, 4);
+        let data = build_block_time_distribution_data(&counts, 4).unwrap();
         assert_eq!(data.len(), BLOCK_TIME_DIST_BUCKET_COUNT);
         assert_eq!(data[0].date, "0.0");
         assert_eq!(data[10].date, "1.0");
         assert_eq!(data[20].date, "2.0");
         assert_eq!(data[10].value, "25.000");
         assert_eq!(data[20].value, "75.000");
+    }
+
+    #[test]
+    fn block_time_histogram_has_no_percentages_without_samples() {
+        let empty = vec![0; BLOCK_TIME_DIST_BUCKET_COUNT];
+        assert!(build_block_time_distribution_data(&empty, 0)
+            .unwrap()
+            .is_empty());
+        let mut counts = empty;
+        counts[1] = 9_007_199_254_740_993;
+        counts[2] = 9_007_199_254_740_993;
+        let data = build_block_time_distribution_data(&counts, 18_014_398_509_481_986).unwrap();
+        assert_eq!(data[1].value, "50.000");
+        assert!(build_block_time_distribution_data(&counts, 1).is_err());
     }
 
     #[test]

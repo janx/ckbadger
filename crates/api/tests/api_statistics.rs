@@ -1771,33 +1771,9 @@ async fn test_hodl_wave_chart_with_data() {
 #[tokio::test]
 async fn test_asset_ecosystem_returns_expected_structure() {
     let store = test_store();
-
-    // Tip header supplies the live-capacity denominator (C − S = 100k CKB),
-    // consistent with the 500 CKB token seeded below (cells cannot exist
-    // without blocks; a categorized capacity above live capacity fails fast).
-    let mut dao_field = vec![0u8; 32];
-    dao_field[0..8].copy_from_slice(&10_000_000_000_000u64.to_le_bytes());
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_block_header(
-        100,
-        &CachedBlockHeader {
-            hash: vec![0x11; 32],
-            parent_hash: vec![0u8; 32],
-            timestamp: 1_800_000_000_000,
-            epoch_number: 1,
-            epoch_index: 0,
-            epoch_length: 1800,
-            dao: dao_field,
-            transactions_count: 1,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: 1_800_000_000_000,
-        },
-    );
-    batch.commit().unwrap();
+    // A complete header, DAO snapshot and genesis baseline are all required
+    // for the asset percentages and Common Knowledge Size.
+    seed_knowledge_size_fixture(&store, 519_967_746_700_000_000);
 
     // Seed one token so the warmup cache populates CACHE_KEY_ASSETS_TOKEN.
     store
