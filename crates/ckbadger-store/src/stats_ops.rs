@@ -465,6 +465,42 @@ impl CkbadgerStore {
         }
     }
 
+    /// Last persisted DAO snapshot strictly before `date` (YYYYMMDD).
+    /// Empty calendar days have no row, so the immediately preceding date is
+    /// not necessarily the correct cumulative baseline.
+    pub fn get_dao_daily_snapshot_before(
+        &self,
+        date: &str,
+    ) -> anyhow::Result<Option<DaoDailySnapshot>> {
+        anyhow::ensure!(
+            date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()),
+            "invalid DAO snapshot date key: {date}"
+        );
+        let target = keys::encode_stats_key(stats_prefix::DAO_DAILY_SNAPSHOT, date.as_bytes());
+        for item in self.iterator_cf(
+            self.cf_stats_dao(),
+            rocksdb::IteratorMode::From(&target, rocksdb::Direction::Reverse),
+        ) {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to seek prior DAO snapshot before {date}: {e}")
+            })?;
+            if !key.starts_with(&[stats_prefix::DAO_DAILY_SNAPSHOT]) {
+                break;
+            }
+            if key.as_ref() >= target.as_slice() {
+                continue;
+            }
+            let snapshot = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid prior DAO snapshot before {date}: key=0x{}: {e}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            return Ok(Some(snapshot));
+        }
+        Ok(None)
+    }
+
     pub fn get_latest_dao_daily_snapshot(&self) -> anyhow::Result<Option<DaoDailySnapshot>> {
         let prefix = [stats_prefix::DAO_DAILY_SNAPSHOT];
         let seek_key = [stats_prefix::DAO_DAILY_SNAPSHOT + 1];
@@ -1153,7 +1189,9 @@ impl CkbadgerStore {
         end_block_inclusive: i64,
         batch: &mut crate::batch::StoreBatch,
     ) -> anyhow::Result<()> {
-        use crate::types::DaoDailySnapshot;
+        use crate::dao_snapshot::{
+            reduce_dao_daily_snapshot, DaoObservationKind, DaoSnapshotDelta, DaoSnapshotObservation,
+        };
         use chrono::{FixedOffset, TimeZone};
         use ckbadger_common::CKB_UTC8_OFFSET;
         use std::collections::{HashMap, HashSet};
@@ -1203,10 +1241,12 @@ impl CkbadgerStore {
         }
 
         // 3. Load previous day's snapshot as the starting baseline.
-        let prev_date = date - chrono::Duration::days(1);
-        let prev_date_key = prev_date.format("%Y%m%d").to_string();
-        let prev_snap = self.get_dao_daily_snapshot(&prev_date_key)?;
+        let prev_snap = self.get_dao_daily_snapshot_before(&date.format("%Y%m%d").to_string())?;
+        anyhow::ensure!(prev_snap.is_some() || day_start_block == 0,
+            "missing prior DAO snapshot while recomputing {date}: first block on day={day_start_block}; only a genesis-start recomputation may use the zero baseline");
 
+        // Accumulate only this day's facts. The shared reducer applies the
+        // previous snapshot exactly once and owns all final totals.
         let (
             mut running_total_deposited,
             mut running_protocol_deposited,
@@ -1216,19 +1256,7 @@ impl CkbadgerStore {
             mut running_cum_miner,
             mut running_total_depositors,
             mut running_cumulative_depositors,
-        ) = match prev_snap.as_ref() {
-            Some(p) => (
-                p.total_deposited,
-                p.protocol_deposited.unwrap_or(p.total_deposited),
-                p.new_deposits,
-                p.withdrawals,
-                p.cumulative_deposit_amount,
-                p.cum_miner_secondary,
-                p.depositors_count,
-                p.cumulative_depositors,
-            ),
-            None => (0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i64, 0i64),
-        };
+        ) = (0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i64, 0i64);
 
         // The per-block miner secondary split needs the consensus secondary
         // issuance per epoch. It is persisted from the node's `get_consensus`
@@ -1309,9 +1337,8 @@ impl CkbadgerStore {
 
         // 5. Walk blocks day_start_block..=day_end_block, applying deltas.
         let mut last_header_ar: u64 = 0;
-        let mut last_header_c: i128 = 0;
-        let mut last_header_s: i128 = 0;
-        let mut last_header_u: i128 = 0;
+        let mut last_header_dao = Vec::new();
+        let mut last_header_chain_time_ms = 0;
         for block_num in day_start_block..=day_end_block {
             let header = self.get_block_header(block_num)?.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1319,7 +1346,7 @@ impl CkbadgerStore {
                     block_num
                 )
             })?;
-            let (c, s, u) = extract_dao_csu(&header.dao).ok_or_else(|| {
+            let (c, _s, u) = extract_dao_csu(&header.dao).ok_or_else(|| {
                 anyhow::anyhow!(
                     "invalid DAO field during recompute: block_num={}, dao_len={}",
                     block_num,
@@ -1334,9 +1361,8 @@ impl CkbadgerStore {
                 )
             })?;
             last_header_ar = ar;
-            last_header_c = c;
-            last_header_s = s;
-            last_header_u = u;
+            last_header_dao = header.dao.clone();
+            last_header_chain_time_ms = header.chain_time_ms;
 
             // 5a. Deposits created in this block.
             if let Some(deposits) = by_deposit_block.get(&block_num) {
@@ -1474,47 +1500,34 @@ impl CkbadgerStore {
         }
 
         // 6. Exact end-of-day compensation from the normalized DAO lifecycle.
-        let compensation = if last_header_ar > 0 {
-            self.compute_dao_compensation_breakdown_at(day_end_block, last_header_ar)?
-        } else {
-            crate::types::DaoCompensationBreakdown::default()
-        };
-        let total_compensation = compensation.total().ok_or_else(|| {
-            anyhow::anyhow!(
-                "DAO total compensation overflow during recompute: target_date={}, claimed={}, unclaimed={}",
-                date,
-                compensation.claimed,
-                compensation.unclaimed
-            )
-        })?;
-        let cumulative_treasury = compensation
-            .treasury(last_header_s)
-            .with_context(|| format!("during DAO recompute for target_date={date}"))?;
-        let frozen_phase1_compensation = compensation
-            .frozen_phase1()
-            .with_context(|| format!("during DAO recompute for target_date={date}"))?;
+        let compensation =
+            self.compute_dao_compensation_breakdown_at(day_end_block, last_header_ar)?;
 
         // 7. Write the rebuilt snapshot.
-        let snapshot = DaoDailySnapshot {
-            date: date.format("%Y-%m-%d").to_string(),
-            total_deposited: running_total_deposited,
-            depositors_count: running_total_depositors,
-            new_deposits: running_new_deposits,
-            withdrawals: running_withdrawals,
-            compensation: compensation.claimed,
-            cumulative_deposit_amount: running_cumulative_deposit,
-            total_issuance: last_header_c,
-            secondary_pool: last_header_s,
-            occupied_capacity: last_header_u,
-            cum_miner_secondary: running_cum_miner,
-            cum_dao_compensation: total_compensation,
-            cum_treasury: cumulative_treasury,
-            unclaimed_compensation: compensation.unclaimed,
-            frozen_phase1_compensation,
-            cumulative_depositors: running_cumulative_depositors,
-            daily_depositor_addresses: daily_depositor_locks.len() as i64,
-            protocol_deposited: Some(running_protocol_deposited),
-        };
+        let snapshot = reduce_dao_daily_snapshot(
+            prev_snap.as_ref(),
+            DaoSnapshotDelta {
+                active_capacity: running_total_deposited,
+                protocol_capacity: running_protocol_deposited,
+                gross_deposits: running_cumulative_deposit,
+                deposits: running_new_deposits,
+                withdrawals: running_withdrawals,
+                active_deposits: running_total_depositors,
+                cumulative_depositors: running_cumulative_depositors,
+                miner_secondary: running_cum_miner,
+            },
+            DaoSnapshotObservation {
+                kind: DaoObservationKind::IncompleteTip,
+                date,
+                block_number: day_end_block,
+                chain_time_ms: last_header_chain_time_ms,
+                dao_field: &last_header_dao,
+                daily_depositor_addresses: i64::try_from(daily_depositor_locks.len())
+                    .context("DAO daily depositor count exceeds i64 during recompute")?,
+                compensation,
+            },
+        )
+        .with_context(|| format!("recomputing DAO snapshot for {date}"))?;
         let key = keys::encode_stats_key(
             keys::stats_prefix::DAO_DAILY_SNAPSHOT,
             date.format("%Y%m%d").to_string().as_bytes(),
@@ -1943,6 +1956,27 @@ mod tests {
 
         let latest = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
         assert_eq!(latest.date, "2024-01-16");
+        assert_eq!(
+            store
+                .get_dao_daily_snapshot_before("20240116")
+                .unwrap()
+                .unwrap()
+                .date,
+            "2024-01-15"
+        );
+        assert_eq!(
+            store
+                .get_dao_daily_snapshot_before("20240120")
+                .unwrap()
+                .unwrap()
+                .date,
+            "2024-01-16",
+            "empty calendar dates must not erase the cumulative baseline"
+        );
+        assert!(store
+            .get_dao_daily_snapshot_before("20240115")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -2606,6 +2640,32 @@ mod dao_daily_snapshot_recompute_tests {
                 dao_field(TEST_C, ar_deposit, s0, TEST_U),
             ),
         );
+        // A non-genesis day must have the cumulative row from its last
+        // preceding block. The empty DAO lifecycle on block 0 is exact.
+        let prior = DaoDailySnapshot {
+            date: prev_date.format("%Y-%m-%d").to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance: i128::from(TEST_C),
+            secondary_pool: i128::from(s0),
+            occupied_capacity: i128::from(TEST_U),
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: i128::from(s0),
+            unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
+            cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
+            protocol_deposited: Some(0),
+        };
+        batch.put_stats(
+            &keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260309"),
+            &bincode::serialize(&prior).unwrap(),
+        );
         batch.put_block_header(
             1,
             &header_with_dao(
@@ -2706,7 +2766,7 @@ mod dao_daily_snapshot_recompute_tests {
         assert!(
             error
                 .to_string()
-                .contains("missing previous block header during DAO snapshot recompute"),
+                .contains("missing canonical header during chain-time binary search"),
             "unexpected error: {error}"
         );
     }

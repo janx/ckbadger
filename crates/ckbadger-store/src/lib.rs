@@ -21,6 +21,7 @@
 //! ```
 
 pub mod batch;
+pub mod dao_snapshot;
 pub mod keys;
 pub mod network_keys;
 pub mod network_types;

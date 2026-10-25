@@ -45,6 +45,8 @@ pub(crate) struct BatchStats {
     pub(crate) dao_snapshot_dates: std::collections::HashSet<NaiveDate>,
     pub(crate) daily_block_times: HashMap<NaiveDate, (i64, i32)>,
     pub(crate) daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
+    /// Chain time of the end header supplying each day's DAO field.
+    pub(crate) daily_dao_end_chain_time_ms: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_active_delta: HashMap<NaiveDate, i128>,
     pub(crate) dao_daily_protocol_delta: HashMap<NaiveDate, i128>,
     pub(crate) dao_daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
@@ -120,7 +122,13 @@ pub(crate) fn count_new_addresses(
             .as_ref()
             .map(|balance| balance.live_cells_count)
             .unwrap_or(0);
-        if prev_live <= 0 {
+        if prev_live < 0 {
+            anyhow::bail!(
+                "negative live_cells_count in prefetched address balance: lock_hash=0x{}, live_cells_count={prev_live}",
+                hex::encode(lock_hash)
+            );
+        }
+        if prev_live == 0 {
             count = count
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("new-address count overflow"))?;
@@ -276,6 +284,7 @@ pub(crate) fn extract_ar_i64_from_dao(dao: &[u8], block_number: i64) -> Result<i
     i64::try_from(ar).map_err(|_| anyhow!("DAO AR exceeds i64 at block {}: {}", block_number, ar))
 }
 
+#[cfg(test)]
 pub(crate) fn dao_csu_for_snapshot_date(
     stats: &BatchStats,
     date: NaiveDate,
@@ -344,6 +353,7 @@ pub(crate) fn checked_tx_fee(
 // DAO depositor derivation
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 pub(crate) fn derive_running_depositors(
     previous_depositors: i64,
     daily_unique_depositors_delta: i64,
@@ -935,6 +945,37 @@ mod tests {
         );
 
         assert_eq!(count_new_addresses(&changes, &existing).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_count_new_addresses_rejects_negative_prefetched_live_count() {
+        let lock = vec![0x73; 32];
+        let changes = HashMap::from([(
+            lock.clone(),
+            crate::sync::types::AddressBalanceDelta {
+                balance_delta: 0,
+                live_delta: 1,
+                total_delta: 1,
+                tx_delta: 1,
+                used_delta: 0,
+                first_seen_block: 1,
+                first_seen_tx: vec![0x44; 32],
+                last_activity_block: 1,
+                last_activity_tx: vec![0x44; 32],
+            },
+        )]);
+        let existing = HashMap::from([(
+            lock.clone(),
+            Some(AddressBalance {
+                live_cells_count: -1,
+                ..Default::default()
+            }),
+        )]);
+        let error = count_new_addresses(&changes, &existing)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("negative live_cells_count"), "{error}");
+        assert!(error.contains(&hex::encode(lock)), "{error}");
     }
 
     #[test]

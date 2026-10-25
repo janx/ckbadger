@@ -230,7 +230,6 @@ pub(crate) use dao::LiveDaoBatch;
 pub use reorg::ReorgResult;
 pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;
-pub use statistics::DaoSnapshotInput;
 
 #[cfg(test)]
 mod undo_seq_tests {

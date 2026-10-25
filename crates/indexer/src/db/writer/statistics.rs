@@ -48,6 +48,7 @@ fn accumulate_tx_actions_stats(tx_actions: &TxActions, stats: &mut DailyActivity
 
 /// Pre-computed DAO deposit statistics for daily snapshots.
 /// Computed from tracked deposit/withdrawal events rather than block header fields.
+#[cfg(test)]
 pub struct DaoSnapshotInput {
     pub total_deposited: i128,
     pub depositors_count: i64,
@@ -106,15 +107,7 @@ struct ExactDaoSnapshotCompensation {
 }
 
 impl ExactDaoSnapshotCompensation {
-    fn apply_to(self, snapshot: &mut DaoDailySnapshot) {
-        snapshot.compensation = self.breakdown.claimed;
-        snapshot.cum_dao_compensation = self.total;
-        snapshot.unclaimed_compensation = self.breakdown.unclaimed;
-        snapshot.frozen_phase1_compensation = self.frozen_phase1;
-        snapshot.secondary_pool = self.secondary_pool;
-        snapshot.cum_treasury = self.treasury;
-    }
-
+    #[cfg(test)]
     fn apply_to_input(self, input: &mut DaoSnapshotInput) {
         input.total_compensation = self.breakdown.claimed;
         input.cum_dao_compensation = self.total;
@@ -616,6 +609,7 @@ impl BatchWriter {
         Ok(None)
     }
 
+    #[cfg(test)]
     pub fn update_dao_daily_snapshot(
         &self,
         date: NaiveDate,
@@ -1165,6 +1159,7 @@ impl BatchWriter {
     /// a completed day's row existed with carried-forward placeholder
     /// cumulative values (DAO-026) and makes the completion marker — the sync
     /// tip — land in the same write as the values it certifies (IDX-001).
+    #[cfg(test)]
     pub(crate) fn apply_exact_completed_dao_snapshot(
         &self,
         boundary: DaoSnapshotBoundary,
@@ -1235,14 +1230,9 @@ impl BatchWriter {
         })
     }
 
-    /// Re-derive the DAO singleton statistics and patch the live tip's daily
-    /// snapshot from the committed lifecycle state.
-    ///
-    /// Completed days are NOT touched here: they are materialized exact inside
-    /// the atomic batch that writes them (see
-    /// `exact_dao_snapshot_compensation_with_staged`). This pass only owns the
-    /// incomplete tip day, which every subsequent batch rewrites anyway, plus
-    /// the tip-scoped `DaoLatestStatistics` / `DaoTopDepositors` singletons.
+    /// Refresh the DAO singleton statistics and verify the tip daily row.
+    /// The forward writer owns every daily snapshot, including the incomplete
+    /// tip; refresh must never repair a row after its sync-tip commit.
     pub fn refresh_latest_dao_statistics(&self) -> Result<()> {
         self.refresh_dao_statistics()
     }
@@ -1527,17 +1517,26 @@ impl BatchWriter {
             dao_batch.put_stats(&top_key, &top_value);
         }
 
-        // Re-evaluate the incomplete tip day at the committed sync tip. The tip
-        // day is still accumulating, so every subsequent batch rewrites it; when
-        // it finally completes, the batch that crosses the day boundary writes
-        // its exact end-of-day values atomically and this pass never revisits it.
-        let mut today_snapshot = latest_snapshot;
-        exact_tip.apply_to(&mut today_snapshot);
-        let date_key = today_snapshot.date.replace('-', "");
-        let snap_key =
-            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
-        let snap_value = bincode::serialize(&today_snapshot)?;
-        dao_batch.put_stats(&snap_key, &snap_value);
+        // The forward writer has already persisted the exact snapshot in the
+        // same commit as the sync tip. A disagreement is a writer bug, never
+        // a reason to patch the historical row after the fact.
+        if latest_snapshot.compensation != exact_tip.breakdown.claimed
+            || latest_snapshot.unclaimed_compensation != exact_tip.breakdown.unclaimed
+            || latest_snapshot.cum_dao_compensation != exact_tip.total
+            || latest_snapshot.cum_treasury != exact_tip.treasury
+            || latest_snapshot.frozen_phase1_compensation != exact_tip.frozen_phase1
+            || latest_snapshot.secondary_pool != exact_tip.secondary_pool
+        {
+            bail!(
+                "DAO tip daily snapshot disagrees with exact lifecycle at block {} date {}: snapshot claimed={} unclaimed={} total={} treasury={} frozen={} S={}, exact claimed={} unclaimed={} total={} treasury={} frozen={} S={}",
+                tip_block_number, latest_snapshot.date,
+                latest_snapshot.compensation, latest_snapshot.unclaimed_compensation,
+                latest_snapshot.cum_dao_compensation, latest_snapshot.cum_treasury,
+                latest_snapshot.frozen_phase1_compensation, latest_snapshot.secondary_pool,
+                exact_tip.breakdown.claimed, exact_tip.breakdown.unclaimed,
+                exact_tip.total, exact_tip.treasury, exact_tip.frozen_phase1, exact_tip.secondary_pool,
+            );
+        }
 
         dao_batch.commit()?;
 
@@ -1643,6 +1642,32 @@ mod tests {
                 virtual_occupied: 504_000_000_000_000_000,
             })
             .unwrap();
+    }
+
+    /// Singleton refresh tests seed synthetic DAO lifecycles directly. Their
+    /// daily tip row must already contain the exact lifecycle partition,
+    /// because production writes it atomically before singleton refresh.
+    fn seed_exact_tip_daily_partition(store: &Arc<CkbadgerStore>) {
+        let (tip_block, header) = store.get_sync_tip_block().unwrap().unwrap();
+        let ar = extract_ar_from_dao_field(&header.dao).unwrap();
+        let s = extract_s_from_dao(&header.dao).unwrap();
+        let breakdown = store
+            .compute_dao_compensation_breakdown_at(tip_block, ar)
+            .unwrap();
+        let mut snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        snapshot.compensation = breakdown.claimed;
+        snapshot.unclaimed_compensation = breakdown.unclaimed;
+        snapshot.cum_dao_compensation = breakdown.total().unwrap();
+        snapshot.cum_treasury = breakdown.treasury(i128::from(s)).unwrap();
+        snapshot.frozen_phase1_compensation = breakdown.frozen_phase1().unwrap();
+        snapshot.secondary_pool = i128::from(s);
+        let key = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            snapshot.date.replace('-', "").as_bytes(),
+        );
+        let mut batch = StoreBatch::new(store);
+        batch.put_stats(&key, &bincode::serialize(&snapshot).unwrap());
+        batch.commit().unwrap();
     }
 
     #[test]
@@ -1874,6 +1899,14 @@ mod tests {
         seed.put_stats(&snapshot_key, &snapshot_val);
         seed.commit().unwrap();
 
+        let mismatch = writer.refresh_latest_dao_statistics().unwrap_err();
+        assert!(
+            mismatch
+                .to_string()
+                .contains("snapshot disagrees with exact lifecycle"),
+            "{mismatch:#}"
+        );
+        seed_exact_tip_daily_partition(&store);
         writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
@@ -1889,13 +1922,13 @@ mod tests {
         assert_eq!(latest.deposit_compensation, 296_00000000);
         assert_eq!(latest.burnt, 32_00000000);
 
-        // Verify snapshot's unclaimed_compensation and secondary_pool were patched
-        // to the live tip values, ensuring chart and stats agree.
-        let patched_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
-        assert_eq!(patched_snapshot.compensation, 198_00000000);
-        assert_eq!(patched_snapshot.cum_dao_compensation, 296_00000000);
-        assert_eq!(patched_snapshot.unclaimed_compensation, 98_00000000);
-        assert_eq!(patched_snapshot.secondary_pool, 130_00000000); // tip_s
+        // Refresh only verifies the already exact daily row; it must leave
+        // the chart's snapshot unchanged.
+        let exact_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(exact_snapshot.compensation, 198_00000000);
+        assert_eq!(exact_snapshot.cum_dao_compensation, 296_00000000);
+        assert_eq!(exact_snapshot.unclaimed_compensation, 98_00000000);
+        assert_eq!(exact_snapshot.secondary_pool, 130_00000000); // tip_s
     }
 
     #[test]
@@ -1997,9 +2030,8 @@ mod tests {
         }
         seed.commit().unwrap();
 
-        // One atomic batch, exactly as the live cross-day path builds it: the
-        // completed day is materialized from the exact lifecycle before the
-        // commit, the tip day keeps its carried-forward placeholders.
+        // Exercise a staged completed-day observation and an intentionally
+        // stale tip row; refresh must reject the stale row rather than patch it.
         let mut batch = StoreBatch::new(&store);
         let mut completed_input = placeholder_snapshot_input();
         writer
@@ -2034,12 +2066,20 @@ mod tests {
         assert_eq!(previous.cum_treasury, 200_00000000);
         assert_eq!(previous.secondary_pool, 300_00000000);
 
+        let stale = writer.refresh_latest_dao_statistics().unwrap_err();
+        assert!(
+            stale
+                .to_string()
+                .contains("snapshot disagrees with exact lifecycle"),
+            "{stale:#}"
+        );
+        seed_exact_tip_daily_partition(&store);
         writer.refresh_latest_dao_statistics().unwrap();
 
         let latest = store.get_dao_daily_snapshot("20260725").unwrap().unwrap();
         assert_eq!(
             latest.cum_dao_compensation, 200_00000000,
-            "the current day must still be refreshed at the live tip"
+            "the current day must already be exact before singleton refresh"
         );
 
         let previous_after_refresh = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
@@ -2404,6 +2444,7 @@ mod tests {
         );
         let writer = BatchWriter::new(store.clone(), store.clone());
 
+        seed_exact_tip_daily_partition(&store);
         writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
@@ -2535,6 +2576,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(80, &request);
         batch.commit().unwrap();
+        seed_exact_tip_daily_partition(&store);
         BatchWriter::new(store.clone(), store.clone())
             .refresh_latest_dao_statistics()
             .unwrap();
@@ -2757,6 +2799,7 @@ mod tests {
         seed.put_stats(&snapshot_key, &snapshot_val);
         seed.commit().unwrap();
 
+        seed_exact_tip_daily_partition(&store);
         writer.refresh_latest_dao_statistics().unwrap();
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 

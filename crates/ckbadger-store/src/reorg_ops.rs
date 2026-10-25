@@ -12040,8 +12040,8 @@ mod tests {
 
     /// Fixture layout shared by the skip tests: no block 0, so any DAO snapshot
     /// recompute of the fork-point date would fail fast on the missing previous
-    /// block header. `last_block_date` decides whether the final rolled-back
-    /// block lands back on the fork-point date.
+    /// block header. A backward raw time on the final block remains in the
+    /// cutoff date under the monotone chain-time contract.
     fn seed_truncated_cross_day_fixture(
         store: &CkbadgerStore,
         fork_date: chrono::NaiveDate,
@@ -12054,6 +12054,7 @@ mod tests {
             cross_day_utc8_ms(cutoff_date, 0, 20)
         };
         let mut batch = StoreBatch::new(store);
+        let mut chain_time_ms = i64::MIN;
         for (block, ts) in [
             (1i64, cross_day_utc8_ms(fork_date, 0, 10)),
             (2, cross_day_utc8_ms(fork_date, 12, 0)),
@@ -12061,18 +12062,26 @@ mod tests {
             (4, cross_day_utc8_ms(cutoff_date, 0, 5)),
             (5, last_block_ts),
         ] {
-            batch.put_block_header(
+            chain_time_ms = chain_time_ms.max(ts);
+            let mut header = cross_day_header(
                 block,
-                &cross_day_header(
-                    block,
-                    ts,
-                    cross_day_dao_field(
-                        CROSS_DAY_C,
-                        CROSS_DAY_AR_DEPOSIT,
-                        CROSS_DAY_S,
-                        CROSS_DAY_U,
-                    ),
-                ),
+                ts,
+                cross_day_dao_field(CROSS_DAY_C, CROSS_DAY_AR_DEPOSIT, CROSS_DAY_S, CROSS_DAY_U),
+            );
+            header.chain_time_ms = chain_time_ms;
+            batch.put_block_header(block, &header);
+        }
+        // Every non-genesis header in this truncated fixture still has a
+        // persisted chain-wide inter-block histogram contribution. Rollback
+        // must subtract the orphan contributions, not invent the buckets.
+        batch.put_stats(
+            &keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &30i32.to_be_bytes()),
+            &(if last_block_on_fork_date { 3i32 } else { 4i32 }).to_le_bytes(),
+        );
+        if last_block_on_fork_date {
+            batch.put_stats(
+                &keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &0i32.to_be_bytes()),
+                &1i32.to_le_bytes(),
             );
         }
         batch.commit().unwrap();
@@ -12236,8 +12245,8 @@ mod tests {
 
         let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
         let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
-        // Block 5 rolls back onto the fork-point date, so that date IS touched
-        // by the rollback — but the store holds no DAO aggregate state for it.
+        // Block 5's raw timestamp moves backwards, but its chain-time date
+        // remains the cutoff date. Neither date has a DAO aggregate row.
         seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, true);
 
         store.rollback_to_block(3).expect(
