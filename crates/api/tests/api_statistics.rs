@@ -46,6 +46,49 @@ async fn network_stats_does_not_report_synced_when_node_tip_rpc_fails() {
 }
 
 #[tokio::test]
+async fn network_transaction_window_uses_effective_time_when_raw_tip_moves_backward() {
+    let store = test_store();
+    let raw_earlier_ms = 1_700_337_600_000i64; // exact UTC hour
+    let effective_ms = raw_earlier_ms + 5_400_000; // next hour + 30 minutes
+    seed_block_headers_at(
+        &store,
+        &[(0, raw_earlier_ms + 3_600_000), (1, raw_earlier_ms)],
+    );
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, chain_time_ms) in [(0, raw_earlier_ms + 3_600_000), (1, effective_ms)] {
+        let mut header = store.get_block_header(number).unwrap().unwrap();
+        header.compact_target = 0x190d_f964;
+        header.chain_time_ms = chain_time_ms;
+        batch.put_block_header(number, &header);
+    }
+    batch.commit().unwrap();
+    for (hour_ms, count) in [(raw_earlier_ms, 13), (raw_earlier_ms + 3_600_000, 7)] {
+        store
+            .put_hourly_stats(
+                &chrono::DateTime::from_timestamp_millis(hour_ms)
+                    .unwrap()
+                    .format("%Y%m%d%H")
+                    .to_string(),
+                &HourlyStats {
+                    hour: hour_ms / 1000,
+                    blocks_count: 1,
+                    transactions_count: count,
+                    cells_created: 0,
+                    cells_consumed: 0,
+                    capacity_transferred: 0,
+                },
+            )
+            .unwrap();
+    }
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/statistics/network").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["transactionsPerDay"], "320");
+}
+
+#[tokio::test]
 async fn test_network_stats_reports_initializing_before_genesis() {
     let store = test_store();
     let mut config = test_config(store);

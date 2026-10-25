@@ -2647,7 +2647,8 @@ async fn fetch_network_stats_from_db(
         epoch_number,
         epoch_index,
         epoch_length,
-        latest_timestamp,
+        _latest_timestamp,
+        tip_chain_time_ms,
         tip_compact_target,
     ) = match latest {
         Some((block_num, header)) => {
@@ -2663,6 +2664,7 @@ async fn fetch_network_stats_from_db(
                 header.epoch_index,
                 header.epoch_length,
                 ts,
+                header.chain_time_ms,
                 header.compact_target,
             )
         }
@@ -2703,10 +2705,9 @@ async fn fetch_network_stats_from_db(
     let hourly_stats = store
         .list_hourly_stats_with_keys()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let tx_window = rolling_24h_tx_window(&hourly_stats, latest_timestamp.timestamp_millis())
-        .map_err(|e| {
-            ApiError::internal(format!("transaction rate at block {latest_block}: {e}"))
-        })?;
+    let tx_window = rolling_24h_tx_window(&hourly_stats, tip_chain_time_ms).map_err(|e| {
+        ApiError::internal(format!("transaction rate at block {latest_block}: {e}"))
+    })?;
 
     // Fetch tip block from CKB node
     let tip_block_u64 = require_node_tip(fetch_tip_block_from_ckb(&state.ckb_rpc_url).await)?;
