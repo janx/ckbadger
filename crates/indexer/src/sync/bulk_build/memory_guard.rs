@@ -236,7 +236,10 @@ mod tests {
         assert!(error.contains("block=42"), "{error}");
         assert!(error.contains("swap_bytes:2147483648"), "{error}");
         assert!(error.contains("domain_memtable_bytes:Some(101)"), "{error}");
-        assert!(error.contains("append_only_memtable_bytes:Some(202)"), "{error}");
+        assert!(
+            error.contains("append_only_memtable_bytes:Some(202)"),
+            "{error}"
+        );
         assert!(error.contains("live_cells:123"), "{error}");
     }
 
@@ -272,7 +275,10 @@ mod tests {
         assert!(error.contains("jemalloc_stats_available:true"), "{error}");
         assert!(error.contains("jemalloc_allocated_bytes:13"), "{error}");
         assert!(error.contains("jemalloc_resident_bytes:15"), "{error}");
-        assert!(error.contains("append_only_memtable_bytes:Some(202)"), "{error}");
+        assert!(
+            error.contains("append_only_memtable_bytes:Some(202)"),
+            "{error}"
+        );
         assert!(error.contains("shared_wbm_usage_bytes:808"), "{error}");
         assert!(error.contains("pipeline.flush_reserved:19"), "{error}");
     }

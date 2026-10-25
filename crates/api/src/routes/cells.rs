@@ -3320,9 +3320,13 @@ async fn get_active_addresses(
     let limit = params.limit.clamp(1, 500) as usize;
     let days = params.days.clamp(1, 365);
 
-    let tip_block = sync_status.tip_block_number;
-    let blocks_per_day: i64 = 8640;
-    let min_block = tip_block.saturating_sub(days * blocks_per_day);
+    let store = state.store.clone();
+    let min_block = tokio::task::spawn_blocking(move || {
+        active_addresses_min_block(&store, sync_status.tip_block_number, days)
+    })
+    .await
+    .map_err(|error| ApiError::internal(error.to_string()))?
+    .map_err(|error| ApiError::internal(error.to_string()))?;
 
     if let Some(cached) = state
         .mem_cache
@@ -3333,6 +3337,28 @@ async fn get_active_addresses(
     Err(ApiError::warmup_pending(
         "active addresses cache unavailable; warmup in progress",
     ))
+}
+
+fn active_addresses_min_block(
+    store: &ckbadger_store::CkbadgerStore,
+    tip_block: i64,
+    days: i64,
+) -> anyhow::Result<i64> {
+    let tip = store.get_block_header(tip_block)?.ok_or_else(|| {
+        anyhow::anyhow!("missing canonical tip header for active addresses: block={tip_block}")
+    })?;
+    let window_ms = days
+        .checked_mul(86_400_000)
+        .ok_or_else(|| anyhow::anyhow!("active-address window overflow: days={days}"))?;
+    let boundary_ms = tip.chain_time_ms.checked_sub(window_ms).ok_or_else(|| {
+        anyhow::anyhow!(
+            "active-address boundary overflow: tip={tip_block} chain_time_ms={} days={days}",
+            tip.chain_time_ms
+        )
+    })?;
+    Ok(store
+        .find_last_block_at_or_before_chain_time_ms(boundary_ms)?
+        .map_or(0, |block| block + 1))
 }
 
 fn top_addresses_from_cache(
@@ -5282,6 +5308,36 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].lock_script_hash, "0x01");
         assert_eq!(rows[0].last_activity_block, 100);
+    }
+
+    #[test]
+    fn active_address_window_uses_effective_chain_time_not_assumed_block_rate() {
+        let root = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for (number, chain_time_ms) in [(0, 0), (1, 86_400_000), (2, 172_800_000)] {
+            batch.put_block_header(
+                number,
+                &ckbadger_store::types::CachedBlockHeader {
+                    hash: vec![number as u8; 32],
+                    parent_hash: vec![0; 32],
+                    timestamp: chain_time_ms,
+                    chain_time_ms,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        assert_eq!(active_addresses_min_block(&store, 2, 1).unwrap(), 2);
     }
 
     #[test]

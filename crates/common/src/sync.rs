@@ -592,7 +592,10 @@ mod tests {
             memory.as_object_mut().unwrap().remove(field);
             let decoded: MemoryStatsData = serde_json::from_value(memory).unwrap();
             let encoded = serde_json::to_value(decoded).unwrap();
-            assert!(encoded[field].is_null(), "missing {field} is unknown, not zero");
+            assert!(
+                encoded[field].is_null(),
+                "missing {field} is unknown, not zero"
+            );
         }
     }
 

@@ -680,11 +680,6 @@ async fn fetch_json(client: &reqwest::Client, url: &str) -> Result<Value> {
         .with_context(|| format!("parsing JSON from {}", url))
 }
 
-/// Extract the `data` array from a CursorPaginatedResponse body.
-fn data_array(val: &Value) -> Option<&Vec<Value>> {
-    val.get("data").and_then(|v| v.as_array())
-}
-
 fn required_data_array<'a>(value: &'a Value, endpoint: &str) -> Result<&'a [Value]> {
     required_array_field(value, "data", endpoint)
 }
@@ -774,20 +769,20 @@ mod tests {
     fn test_data_array_extracts_from_cursor_paginated() {
         let val: Value =
             serde_json::from_str(r#"{"data": [{"id": 1}, {"id": 2}], "total": 5}"#).unwrap();
-        let arr = data_array(&val).unwrap();
+        let arr = required_data_array(&val, "/test").unwrap();
         assert_eq!(arr.len(), 2);
     }
 
     #[test]
-    fn test_data_array_returns_none_for_bare_object() {
+    fn test_data_array_rejects_bare_object() {
         let val: Value = serde_json::from_str(r#"{"latestBlock": 100}"#).unwrap();
-        assert!(data_array(&val).is_none());
+        assert!(required_data_array(&val, "/test").is_err());
     }
 
     #[test]
     fn test_data_array_returns_none_for_empty() {
         let val: Value = serde_json::from_str(r#"{"data": []}"#).unwrap();
-        let arr = data_array(&val).unwrap();
+        let arr = required_data_array(&val, "/test").unwrap();
         assert!(arr.is_empty());
     }
 
@@ -850,10 +845,10 @@ mod tests {
     fn test_probe_has_data_parses_various_shapes() {
         // CursorPaginated with data
         let val: Value = serde_json::from_str(r#"{"data": [{"x": 1}]}"#).unwrap();
-        assert!(data_array(&val).map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(!required_data_array(&val, "/test").unwrap().is_empty());
 
         // Empty data
         let val: Value = serde_json::from_str(r#"{"data": []}"#).unwrap();
-        assert!(!data_array(&val).map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(required_data_array(&val, "/test").unwrap().is_empty());
     }
 }

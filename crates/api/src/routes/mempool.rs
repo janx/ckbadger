@@ -440,7 +440,7 @@ async fn get_pending_proposals(
 
     let store = state.store.clone();
     let (tip, cached_proposals) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let tip = store.get_sync_status().map(|s| s.tip_block_number)?;
+        let tip = store.get_sync_status()?.tip_block_number;
         let cached_proposals = store.get_all_pending_proposals()?;
         Ok((tip, cached_proposals))
     })

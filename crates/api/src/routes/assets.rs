@@ -3,6 +3,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use ckb_types::U256;
 use ckbadger_common::TokenBalance;
 use ckbadger_store::{
     types::{
@@ -227,7 +228,7 @@ enum AssetFilterType {
     Identity,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AssetSortKey {
     Name,
@@ -575,8 +576,31 @@ fn fetch_assets_cached(
 
     let total = all_cached.len() as i64;
 
-    all_cached
-        .sort_by(|a, b| compare_asset_entries(a, b, request.sort_key, request.sort_direction));
+    if request.sort_key == AssetSortKey::HMultiplier {
+        let ratios: Vec<Option<(u128, u128)>> = all_cached
+            .iter()
+            .map(parse_h_multiplier_ratio)
+            .collect::<anyhow::Result<_>>()
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        let mut keyed: Vec<_> = all_cached.into_iter().zip(ratios).collect();
+        keyed.sort_by(|(left, left_ratio), (right, right_ratio)| {
+            (if left_ratio.is_some() && right_ratio.is_some() {
+                apply_direction(
+                    compare_h_multiplier_ratios(*left_ratio, *right_ratio),
+                    request.sort_direction,
+                )
+            } else {
+                compare_h_multiplier_ratios(*left_ratio, *right_ratio)
+            })
+            .then_with(|| asset_display_name(left).cmp(&asset_display_name(right)))
+            .then_with(|| left.asset_type.cmp(&right.asset_type))
+            .then_with(|| left.id.cmp(&right.id))
+        });
+        all_cached = keyed.into_iter().map(|(entry, _)| entry).collect();
+    } else {
+        all_cached
+            .sort_by(|a, b| compare_asset_entries(a, b, request.sort_key, request.sort_direction));
+    }
 
     // Apply cursor-based pagination: skip items up to and including the cursor
     // item. A cursor that names no row in this result set is an error, not a
@@ -900,18 +924,36 @@ fn asset_display_name(entry: &CachedAssetEntry) -> String {
     }
 }
 
-fn compute_h_multiplier(entry: &CachedAssetEntry) -> f64 {
-    match (&entry.owned_capacity, &entry.owned_knowledge) {
-        (Some(cap_str), Some(occ_str)) => {
-            let cap: f64 = cap_str.parse().unwrap_or(0.0);
-            let occ: f64 = occ_str.parse().unwrap_or(0.0);
-            if occ > 0.0 {
-                cap / occ
-            } else {
-                0.0
-            }
+fn parse_h_multiplier_ratio(entry: &CachedAssetEntry) -> anyhow::Result<Option<(u128, u128)>> {
+    let (Some(capacity), Some(knowledge)) = (&entry.owned_capacity, &entry.owned_knowledge) else {
+        return Ok(None);
+    };
+    let parse = |field: &str, raw: &str| -> anyhow::Result<u128> {
+        raw.parse::<u128>().map_err(|error| {
+            anyhow::anyhow!(
+                "invalid H multiplier {field}: asset_type={} asset_id={} value={raw:?}: {error}",
+                entry.asset_type,
+                entry.id
+            )
+        })
+    };
+    let capacity = parse("owned_capacity", capacity)?;
+    let knowledge = parse("owned_knowledge", knowledge)?;
+    Ok((knowledge != 0).then_some((capacity, knowledge)))
+}
+
+fn compare_h_multiplier_ratios(
+    left: Option<(u128, u128)>,
+    right: Option<(u128, u128)>,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some((left_capacity, left_knowledge)), Some((right_capacity, right_knowledge))) => {
+            (U256::from(left_capacity) * U256::from(right_knowledge))
+                .cmp(&(U256::from(right_capacity) * U256::from(left_knowledge)))
         }
-        _ => 0.0,
     }
 }
 
@@ -957,12 +999,7 @@ fn compare_asset_entries(
             direction,
         ),
         AssetSortKey::HMultiplier => {
-            let left_hm = compute_h_multiplier(left);
-            let right_hm = compute_h_multiplier(right);
-            apply_direction(
-                left_hm.partial_cmp(&right_hm).unwrap_or(Ordering::Equal),
-                direction,
-            )
+            unreachable!("H multiplier uses prevalidated rational sorting")
         }
     };
 
@@ -3192,6 +3229,19 @@ mod tests {
             title: "test".to_string(),
         };
         assert!(latest_capacity_from_chart(&chart).is_err());
+    }
+
+    #[test]
+    fn h_multiplier_sort_distinguishes_ratios_beyond_f64_precision() {
+        let base = 1_000_000_000_000_000_000_000_000_000_000u128;
+        assert_eq!(
+            compare_h_multiplier_ratios(Some((base + 1, base)), Some((base, base))),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_h_multiplier_ratios(Some((base, base)), Some((base + 1, base))),
+            Ordering::Less
+        );
     }
 
     /// Identity ids contain a colon, so only the first one separates the type.
