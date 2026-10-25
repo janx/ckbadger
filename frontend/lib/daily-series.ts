@@ -66,14 +66,14 @@ export function dailyDeltas(points: ChartDataPoint[], days: number): DailyDelta[
 export interface CompletenessSplit<T> {
   /** The buckets that are over, oldest first. */
   complete: T[];
-  /** The trailing buckets still in progress — usually one, two in the first minutes of a new one. */
+  /** The trailing buckets whose end is beyond the canonical chain-time watermark. */
   inProgress: T[];
 }
 
 /**
  * Split a `/statistics/tx-stats` series by its `complete` flags. The endpoint's contract: complete
- * buckets come first, then the in-progress ones, and the newest bucket is always in progress (more
- * than one can be, while a new hour or day is younger than the median time of the last 37 blocks).
+ * buckets come first, then the in-progress ones, and the newest bucket is always in progress.
+ * Completeness comes from the canonical tip's monotone chain-time watermark.
  * An empty series is allowed — before any block, or before a fresh build has its stats. A series
  * that breaks the order is an API contract violation and throws.
  */
