@@ -1246,7 +1246,7 @@ impl BatchWriter {
                 header.dao.len()
             )
         })?;
-        let tip_timestamp = header.timestamp;
+        let tip_timestamp = header.chain_time_ms;
         let (tip_total_issuance, tip_secondary_pool, tip_occupied_capacity) =
             ckbadger_common::dao::extract_dao_csu(&header.dao).ok_or_else(|| {
                 anyhow!(
@@ -1269,10 +1269,21 @@ impl BatchWriter {
         let mut dao_free_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
-        let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
-        let mut weighted_deposit_days: f64 = 0.0;
+        let mut depositor_map: HashMap<Vec<u8>, (i128, i32, i128)> = HashMap::new();
+        let mut weighted_deposit_ms: i128 = 0;
         let mut avg_total_capacity: i128 = 0;
-        let mut status1_for_avg: Vec<(i64, i64, i64)> = Vec::new();
+        let mut chain_time_cache: HashMap<i64, (i64, i64)> = HashMap::new();
+        let mut chain_time_for = |block_number: i64| -> Result<(i64, i64)> {
+            if let Some(cached) = chain_time_cache.get(&block_number) {
+                return Ok(*cached);
+            }
+            let block = self.store.get_block_header(block_number)?.ok_or_else(|| anyhow!(
+                "missing DAO lifecycle block header while refreshing holding time: tip={tip_block_number}, block={block_number}"
+            ))?;
+            let value = (block.chain_time_ms, block.timestamp);
+            chain_time_cache.insert(block_number, value);
+            Ok(value)
+        };
 
         for scan_status in [0i16, 1] {
             self.store
@@ -1312,11 +1323,19 @@ impl BatchWriter {
                             "phase-1 DAO entry missing request block while refreshing averages: deposit_outpoint=0x{}",
                             hex::encode(outpoint)
                         ))?;
-                        status1_for_avg.push((
-                            entry.capacity,
-                            entry.deposit_timestamp,
-                            request_block,
-                        ));
+                        let (deposit_time, deposit_raw_time) = chain_time_for(entry.deposit_block_number)?;
+                        if deposit_raw_time != entry.deposit_timestamp {
+                            bail!("DAO deposit timestamp disagrees with header: deposit_outpoint=0x{}, deposit_block={}, cached={}, header={}", hex::encode(outpoint), entry.deposit_block_number, entry.deposit_timestamp, deposit_raw_time);
+                        }
+                        let (request_time, _) = chain_time_for(request_block)?;
+                        let elapsed = request_time.checked_sub(deposit_time).filter(|v| *v >= 0)
+                            .ok_or_else(|| anyhow!("negative/overflow DAO deposit duration while refreshing averages: deposit_outpoint=0x{}, deposit_block={}, request_block={request_block}, deposit_chain_time={deposit_time}, request_chain_time={request_time}", hex::encode(outpoint), entry.deposit_block_number))?;
+                        let weighted = i128::from(entry.capacity).checked_mul(i128::from(elapsed))
+                            .ok_or_else(|| anyhow!("DAO weighted holding duration overflow: deposit_outpoint=0x{}", hex::encode(outpoint)))?;
+                        weighted_deposit_ms = weighted_deposit_ms.checked_add(weighted)
+                            .ok_or_else(|| anyhow!("DAO weighted holding duration sum overflow at tip {tip_block_number}"))?;
+                        avg_total_capacity = avg_total_capacity.checked_add(i128::from(entry.capacity))
+                            .ok_or_else(|| anyhow!("DAO average capacity sum overflow at tip {tip_block_number}"))?;
                     } else {
                         // Only status=0 deposits count toward total_deposited,
                         // unique_depositors, depositor_map, and avg deposit time —
@@ -1325,17 +1344,28 @@ impl BatchWriter {
                         total_deposited += entry.capacity as i128;
                         unique_depositors.insert(entry.lock_script_hash.clone());
 
+                        let (deposit_time, deposit_raw_time) = chain_time_for(entry.deposit_block_number)?;
+                        if deposit_raw_time != entry.deposit_timestamp {
+                            bail!("DAO deposit timestamp disagrees with header: deposit_outpoint=0x{}, deposit_block={}, cached={}, header={}", hex::encode(outpoint), entry.deposit_block_number, entry.deposit_timestamp, deposit_raw_time);
+                        }
+                        let held_ms = tip_timestamp.checked_sub(deposit_time).filter(|v| *v >= 0)
+                            .ok_or_else(|| anyhow!("negative/overflow DAO live deposit duration: deposit_outpoint=0x{}, deposit_block={}, tip={tip_block_number}, deposit_chain_time={deposit_time}, tip_chain_time={tip_timestamp}", hex::encode(outpoint), entry.deposit_block_number))?;
                         let dm = depositor_map
                             .entry(entry.lock_script_hash.clone())
-                            .or_insert((0, 0, 0.0));
-                        dm.0 += entry.capacity as i128;
-                        dm.1 += 1;
-                        dm.2 += (tip_timestamp - entry.deposit_timestamp) as f64;
+                            .or_insert((0, 0, 0));
+                        dm.0 = dm.0.checked_add(i128::from(entry.capacity))
+                            .ok_or_else(|| anyhow!("DAO top depositor capacity overflow: lock=0x{}", hex::encode(&entry.lock_script_hash)))?;
+                        dm.1 = dm.1.checked_add(1)
+                            .ok_or_else(|| anyhow!("DAO top depositor count overflow: lock=0x{}", hex::encode(&entry.lock_script_hash)))?;
+                        dm.2 = dm.2.checked_add(i128::from(held_ms))
+                            .ok_or_else(|| anyhow!("DAO top depositor duration overflow: lock=0x{}", hex::encode(&entry.lock_script_hash)))?;
 
-                        let held_ms = tip_timestamp - entry.deposit_timestamp;
-                        let days_held = held_ms as f64 / 86_400_000.0;
-                        weighted_deposit_days += entry.capacity as f64 * days_held;
-                        avg_total_capacity += entry.capacity as i128;
+                        let weighted = i128::from(entry.capacity).checked_mul(i128::from(held_ms))
+                            .ok_or_else(|| anyhow!("DAO weighted holding duration overflow: deposit_outpoint=0x{}", hex::encode(outpoint)))?;
+                        weighted_deposit_ms = weighted_deposit_ms.checked_add(weighted)
+                            .ok_or_else(|| anyhow!("DAO weighted holding duration sum overflow at tip {tip_block_number}"))?;
+                        avg_total_capacity = avg_total_capacity.checked_add(i128::from(entry.capacity))
+                            .ok_or_else(|| anyhow!("DAO average capacity sum overflow at tip {tip_block_number}"))?;
                     }
 
                     Ok(())
@@ -1352,20 +1382,6 @@ impl BatchWriter {
         let total_compensation_paid = exact_tip.breakdown.claimed;
         let unclaimed_compensation = exact_tip.breakdown.unclaimed;
         let deposit_compensation_total = exact_tip.total;
-
-        // Resolve status-1 deposit timestamps from block headers for capacity-weighted average.
-        for &(capacity, deposit_ts, request_block) in &status1_for_avg {
-            let hdr = self.store.get_block_header(request_block)?.ok_or_else(|| anyhow!(
-                "missing DAO withdraw-request block header while refreshing averages: tip_block={tip_block_number}, request_block={request_block}"
-            ))?;
-            let elapsed = hdr.timestamp.checked_sub(deposit_ts).filter(|v| *v >= 0)
-                .ok_or_else(|| anyhow!(
-                    "negative/overflow DAO deposit duration while refreshing averages: tip_block={tip_block_number}, request_block={request_block}, request_timestamp={}, deposit_timestamp={deposit_ts}",
-                    hdr.timestamp
-                ))?;
-            weighted_deposit_days += capacity as f64 * elapsed as f64 / 86_400_000.0;
-            avg_total_capacity += capacity as i128;
-        }
 
         let latest_snapshot = match self.store.get_latest_dao_daily_snapshot()? {
             Some(snapshot) => snapshot,
@@ -1398,20 +1414,59 @@ impl BatchWriter {
         let mining_reward = latest_snapshot.cum_miner_secondary;
         let deposit_compensation = deposit_compensation_total;
 
-        let avg_days = if avg_total_capacity > 0 {
-            weighted_deposit_days / avg_total_capacity as f64
-        } else {
-            0.0
+        let average_deposit_days =
+            format_weighted_deposit_days(weighted_deposit_ms, avg_total_capacity)?;
+
+        let total_depositors = i32::try_from(unique_depositors.len())
+            .context("DAO depositor count exceeds i32 at latest tip")?;
+        let cutoff_chain_time_ms =
+            header
+                .chain_time_ms
+                .checked_sub(86_400_000)
+                .ok_or_else(|| {
+                    anyhow!(
+                    "DAO 24h cutoff underflow at tip block {tip_block_number}: chain_time_ms={}",
+                    header.chain_time_ms
+                )
+                })?;
+        let rolling_24h = match self
+            .store
+            .find_last_block_at_or_before_chain_time_ms(cutoff_chain_time_ms)?
+        {
+            None => None,
+            Some(baseline_block_number) => {
+                let baseline_header = self.store.get_block_header(baseline_block_number)?
+                    .ok_or_else(|| anyhow!("missing DAO 24h baseline header at block {baseline_block_number}, tip={tip_block_number}"))?;
+                let baseline_ar = extract_ar_from_dao_field(&baseline_header.dao)
+                    .ok_or_else(|| anyhow!("invalid DAO field at 24h baseline block {baseline_block_number}: dao_len={}", baseline_header.dao.len()))?;
+                let baseline = self
+                    .store
+                    .compute_dao_historical_state_at(baseline_block_number, baseline_ar)?;
+                let baseline_depositors = i32::try_from(baseline.depositors_count)
+                    .context("DAO baseline depositor count exceeds i32")?;
+                Some(DaoRolling24h {
+                    baseline_block_number,
+                    cutoff_chain_time_ms,
+                    deposited_change: total_deposited.checked_sub(baseline.total_deposited)
+                        .ok_or_else(|| anyhow!("DAO 24h deposited delta overflow at tip {tip_block_number}"))?,
+                    depositors_change: total_depositors.checked_sub(baseline_depositors)
+                        .ok_or_else(|| anyhow!("DAO 24h depositor delta overflow at tip {tip_block_number}"))?,
+                    claimed_compensation_change: total_compensation_paid.checked_sub(baseline.compensation.claimed)
+                        .ok_or_else(|| anyhow!("DAO 24h claimed compensation delta overflow at tip {tip_block_number}"))?,
+                    unclaimed_compensation_change: unclaimed_compensation.checked_sub(baseline.compensation.unclaimed)
+                        .ok_or_else(|| anyhow!("DAO 24h unclaimed compensation delta overflow at tip {tip_block_number}"))?,
+                })
+            }
         };
 
         let latest = DaoLatestStatistics {
             tip_block_number,
             total_deposited,
-            total_depositors: unique_depositors.len() as i32,
+            total_depositors,
             active_deposits,
             total_compensation_paid,
             unclaimed_compensation,
-            average_deposit_days: format_days(avg_days),
+            average_deposit_days,
             estimated_apc,
             mining_reward,
             deposit_compensation,
@@ -1422,6 +1477,7 @@ impl BatchWriter {
             tip_total_issuance,
             tip_secondary_pool,
             tip_occupied_capacity,
+            rolling_24h,
         };
 
         // Batch all DAO stats writes atomically
@@ -1440,16 +1496,11 @@ impl BatchWriter {
             let depositors = sorted
                 .into_iter()
                 .map(|(lock_hash, (total_capacity, deposit_count, total_ms))| {
-                    let avg_ms = if deposit_count > 0 {
-                        total_ms / deposit_count as f64
-                    } else {
-                        0.0
-                    };
                     DaoTopDepositorEntry {
                         lock_script_hash: lock_hash,
                         total_capacity,
                         deposit_count,
-                        average_deposit_ms: avg_ms,
+                        total_deposit_ms: total_ms,
                     }
                 })
                 .collect();
@@ -1502,13 +1553,42 @@ fn estimated_apc_from_header(header: &CachedBlockHeader, genesis_issuance: i128)
     (apc > 0.0).then(|| format!("{:.2}", apc))
 }
 
-fn format_days(days: f64) -> String {
-    if days >= 1000.0 {
-        format!("{:.1}K days+", days / 1000.0)
-    } else if days < 1.0 && days > 0.0 {
-        format!("{:.1} days", days)
+fn format_weighted_deposit_days(weighted_ms: i128, total_capacity: i128) -> Result<Option<String>> {
+    if weighted_ms < 0 || total_capacity < 0 {
+        bail!("negative DAO weighted holding inputs: weighted_ms={weighted_ms}, total_capacity={total_capacity}");
+    }
+    if total_capacity == 0 {
+        if weighted_ms != 0 {
+            bail!("DAO weighted holding time is nonzero without deposit capacity: weighted_ms={weighted_ms}");
+        }
+        return Ok(None);
+    }
+    let denominator = total_capacity
+        .checked_mul(86_400_000)
+        .context("DAO weighted holding denominator overflow")?;
+    let round_scaled = |denominator: i128, scale: i128| -> Result<i128> {
+        let scaled = weighted_ms
+            .checked_mul(scale)
+            .and_then(|v| v.checked_add(denominator / 2))
+            .context("DAO weighted holding display overflow")?;
+        Ok(scaled / denominator)
+    };
+    if weighted_ms
+        >= denominator
+            .checked_mul(1000)
+            .context("DAO thousand-day threshold overflow")?
+    {
+        let thousand_denominator = denominator
+            .checked_mul(1000)
+            .context("DAO thousand-day denominator overflow")?;
+        let tenths = round_scaled(thousand_denominator, 10)?;
+        Ok(Some(format!("{}.{}K days+", tenths / 10, tenths % 10)))
+    } else if weighted_ms > 0 && weighted_ms < denominator {
+        let tenths = round_scaled(denominator, 10)?;
+        Ok(Some(format!("{}.{} days", tenths / 10, tenths % 10)))
     } else {
-        format!("{:.0} days", days)
+        let days = round_scaled(denominator, 1)?;
+        Ok(Some(format!("{days} days")))
     }
 }
 
@@ -1689,25 +1769,29 @@ mod tests {
         dao[8..16].copy_from_slice(&2u64.to_le_bytes());
         dao[16..24].copy_from_slice(&130_00000000u64.to_le_bytes());
         let mut seed = StoreBatch::new(&store);
-        seed.put_block_header(
-            10,
-            &CachedBlockHeader {
-                hash: vec![0x11; 32],
-                parent_hash: vec![0u8; 32],
-                timestamp: 1_700_000_000_000,
-                epoch_number: 0,
-                epoch_index: 0,
-                epoch_length: 1,
-                dao,
-                transactions_count: 1,
-                uncles_count: 0,
-                proposals_count: 0,
-                compact_target: 0,
-                miner_lock_hash: None,
-                cycles: None,
-                chain_time_ms: 1_700_000_000_000,
-            },
-        );
+        let tip_header = CachedBlockHeader {
+            hash: vec![0x11; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        };
+        for block in 0..10 {
+            let mut earlier = tip_header.clone();
+            earlier.timestamp = 1_699_998_500_000 + block * 100_000;
+            earlier.chain_time_ms = earlier.timestamp;
+            seed.put_block_header(block, &earlier);
+        }
+        seed.put_block_header(10, &tip_header);
         seed.put_dao_deposit(
             &keys::encode_outpoint(&[0xAA; 32], 0),
             &DaoDepositCacheEntry {
@@ -1786,7 +1870,7 @@ mod tests {
         assert_eq!(latest.active_deposits, 1);
         assert_eq!(latest.total_compensation_paid, 198_00000000);
         assert_eq!(latest.unclaimed_compensation, 98_00000000);
-        assert_eq!(latest.average_deposit_days, "0 days");
+        assert_eq!(latest.average_deposit_days.as_deref(), Some("0 days"));
         assert!(!latest.estimated_apc.is_empty());
         assert_eq!(latest.mining_reward, 10_00000000);
         assert_eq!(latest.deposit_compensation, 296_00000000);
@@ -1861,6 +1945,10 @@ mod tests {
         };
 
         let mut seed = StoreBatch::new(&store);
+        for block in 0..10 {
+            let timestamp = previous_timestamp - 86_400_000 + (block - 1) * 1_000;
+            seed.put_block_header(block, &header(block, timestamp, dao_field(100, 0)));
+        }
         seed.put_block_header(
             10,
             &header(10, previous_timestamp, dao_field(200, 300_00000000)),
@@ -2240,8 +2328,17 @@ mod tests {
             }
         };
         let mut seed = StoreBatch::new(store);
-        seed.put_block_header(100, &header(0x11, 1_700_000_000_000));
-        seed.put_block_header(80, &header(0x22, 1_700_000_000_000 - 3_600_000));
+        let tip = 1_700_000_000_000i64;
+        for n in 0..=100i64 {
+            let time = if n <= 50 {
+                tip - 2 * 86_400_000 + n * 86_400_000 / 50
+            } else if n <= 80 {
+                tip - 86_400_000 + (n - 50) * (86_400_000 - 3_600_000) / 30
+            } else {
+                tip - 3_600_000 + (n - 80) * 3_600_000 / 20
+            };
+            seed.put_block_header(n, &header(n as u8, time));
+        }
         for (i, entry) in entries.iter().enumerate() {
             seed.put_dao_deposit(&keys::encode_outpoint(&[0xA0 + i as u8; 32], 0), entry);
         }
@@ -2389,6 +2486,7 @@ mod tests {
         );
         let mut request = store.get_block_header(80).unwrap().unwrap();
         request.timestamp = 1_700_000_000_000 - 2 * 86_400_000;
+        request.chain_time_ms = request.timestamp;
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(80, &request);
         batch.commit().unwrap();
@@ -2400,6 +2498,48 @@ mod tests {
         assert!(
             err.contains("negative/overflow DAO deposit duration"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn test_refresh_dao_statistics_uses_effective_chain_time_for_raw_timestamp_regression() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        seed_dao_free_fixture(
+            &store,
+            &[dao_free_test_entry(
+                300_00000000,
+                102_00000000,
+                1,
+                Some(102_00000000),
+            )],
+        );
+        let mut request = store.get_block_header(80).unwrap().unwrap();
+        request.timestamp = 1_700_000_000_000 - 2 * 86_400_000;
+        // The canonical effective time remains monotone despite the raw
+        // timestamp regression in the request header.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(80, &request);
+        batch.commit().unwrap();
+        BatchWriter::new(store.clone(), store.clone())
+            .refresh_latest_dao_statistics()
+            .unwrap();
+        let latest = store.get_latest_dao_statistics().unwrap().unwrap();
+        assert_eq!(latest.average_deposit_days.as_deref(), Some("1.0 days"));
+    }
+
+    #[test]
+    fn test_weighted_holding_display_uses_exact_integer_ratio_and_null_without_capacity() {
+        assert_eq!(format_weighted_deposit_days(0, 0).unwrap(), None);
+        assert!(format_weighted_deposit_days(1, 0).is_err());
+        let capacity = 9_007_199_254_740_993i128;
+        let weighted = capacity * 86_400_000 + capacity * 43_200_000;
+        assert_eq!(
+            format_weighted_deposit_days(weighted, capacity)
+                .unwrap()
+                .as_deref(),
+            Some("2 days")
         );
     }
 
@@ -2416,6 +2556,46 @@ mod tests {
         dao[8..16].copy_from_slice(&4u64.to_le_bytes());
         dao[16..24].copy_from_slice(&200_00000000u64.to_le_bytes());
         let mut seed = StoreBatch::new(&store);
+        // A rolling baseline searches a canonical contiguous header history.
+        for n in 0..100i64 {
+            let time = if n <= 20 {
+                tip_timestamp - 10 * 86_400_000 + n * 5 * 86_400_000 / 20
+            } else if n <= 50 {
+                tip_timestamp - 5 * 86_400_000 + (n - 20) * 3 * 86_400_000 / 30
+            } else if n <= 80 {
+                tip_timestamp - 2 * 86_400_000 + (n - 50) * 86_400_000 / 30
+            } else {
+                tip_timestamp - 86_400_000 + (n - 80) * 86_400_000 / 20
+            };
+            let mut historical_dao = dao.clone();
+            let ar = if n < 20 {
+                1u64
+            } else if n < 80 {
+                2
+            } else {
+                3
+            };
+            historical_dao[8..16].copy_from_slice(&ar.to_le_bytes());
+            seed.put_block_header(
+                n,
+                &CachedBlockHeader {
+                    hash: vec![n as u8; 32],
+                    parent_hash: vec![0; 32],
+                    timestamp: time,
+                    chain_time_ms: time,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 100,
+                    dao: historical_dao,
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
         seed.put_block_header(
             100,
             &CachedBlockHeader {
@@ -2425,7 +2605,7 @@ mod tests {
                 epoch_number: 1,
                 epoch_index: 0,
                 epoch_length: 100,
-                dao,
+                dao: dao.clone(),
                 transactions_count: 1,
                 uncles_count: 0,
                 proposals_count: 0,
@@ -2446,7 +2626,11 @@ mod tests {
                 epoch_number: 0,
                 epoch_index: 0,
                 epoch_length: 100,
-                dao: vec![0u8; 32],
+                dao: {
+                    let mut request_dao = dao.clone();
+                    request_dao[8..16].copy_from_slice(&3u64.to_le_bytes());
+                    request_dao
+                },
                 transactions_count: 1,
                 uncles_count: 0,
                 proposals_count: 0,
@@ -2579,7 +2763,16 @@ mod tests {
         assert_eq!(latest.pending_withdrawal_capacity, 300_00000000);
         // Capacity-weighted average: status-0 (200 CKB * 2 days) + status-1 (300 CKB * 4 days frozen)
         // = (400_00000000 + 1200_00000000) / 500_00000000 = 3.2 → "3 days"
-        assert_eq!(latest.average_deposit_days, "3 days");
+        assert_eq!(latest.average_deposit_days.as_deref(), Some("3 days"));
+        let rolling = latest
+            .rolling_24h
+            .as_ref()
+            .expect("complete 24h chain history");
+        assert_eq!(rolling.baseline_block_number, 80);
+        assert_eq!(rolling.deposited_change, 0);
+        assert_eq!(rolling.depositors_change, 0);
+        assert_eq!(rolling.claimed_compensation_change, 0);
+        assert_eq!(rolling.unclaimed_compensation_change, 49_00000000);
         assert_eq!(latest.tip_block_number, 100);
 
         let snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
@@ -3767,25 +3960,25 @@ mod activity_stats_tests {
     fn test_refresh_dao_statistics_computes_top_depositors() {
         use std::collections::HashMap;
 
-        let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
+        let mut depositor_map: HashMap<Vec<u8>, (i128, i32, i128)> = HashMap::new();
         let lock_a = vec![0xAA; 32];
         let lock_b = vec![0xBB; 32];
 
         // Depositor A: two deposits
-        let e = depositor_map.entry(lock_a.clone()).or_insert((0, 0, 0.0));
+        let e = depositor_map.entry(lock_a.clone()).or_insert((0, 0, 0));
         e.0 += 500_00000000i128;
         e.1 += 1;
-        e.2 += 1000.0;
-        let e = depositor_map.entry(lock_a.clone()).or_insert((0, 0, 0.0));
+        e.2 += 1000;
+        let e = depositor_map.entry(lock_a.clone()).or_insert((0, 0, 0));
         e.0 += 300_00000000i128;
         e.1 += 1;
-        e.2 += 500.0;
+        e.2 += 500;
 
         // Depositor B: one deposit, larger
-        let e = depositor_map.entry(lock_b.clone()).or_insert((0, 0, 0.0));
+        let e = depositor_map.entry(lock_b.clone()).or_insert((0, 0, 0));
         e.0 += 1000_00000000i128;
         e.1 += 1;
-        e.2 += 2000.0;
+        e.2 += 2000;
 
         let mut sorted: Vec<_> = depositor_map.into_iter().collect();
         sorted.sort_by_key(|item| std::cmp::Reverse(item.1 .0));

@@ -313,17 +313,37 @@ async fn fetch_block_tx_hashes(
         return Err(anyhow::anyhow!("RPC error: {}", err));
     }
 
-    // Verbosity 0x2 returns { header, transactions, uncles, proposals } at result level
-    let txs = json["result"]["transactions"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("RPC response missing transactions array"))?;
+    parse_block_tx_hashes(&json, block_number)
+}
 
-    let hashes: Vec<String> = txs
-        .iter()
-        .map(|tx| tx["hash"].as_str().unwrap_or_default().to_string())
-        .collect();
+fn parse_block_tx_hashes(
+    json: &serde_json::Value,
+    block_number: u64,
+) -> anyhow::Result<Vec<String>> {
+    // Verbosity 0x2 returns { header, transactions, uncles, proposals } at result level.
+    let txs = json["result"]["transactions"].as_array().ok_or_else(|| {
+        anyhow::anyhow!("RPC block {block_number} response missing transactions array")
+    })?;
 
-    Ok(hashes)
+    txs.iter()
+        .enumerate()
+        .map(|(index, tx)| {
+            let hash = tx["hash"].as_str().ok_or_else(|| {
+                anyhow::anyhow!("RPC block {block_number} transaction {index} missing hash")
+            })?;
+            let raw = hash.strip_prefix("0x").ok_or_else(|| {
+                anyhow::anyhow!(
+                    "RPC block {block_number} transaction {index} hash lacks 0x prefix: {hash}"
+                )
+            })?;
+            if raw.len() != 64 || hex::decode(raw).is_err() {
+                anyhow::bail!(
+                    "RPC block {block_number} transaction {index} has invalid hash: {hash}"
+                );
+            }
+            Ok(hash.to_string())
+        })
+        .collect()
 }
 
 async fn process_cycles_task(
@@ -429,6 +449,32 @@ async fn process_cycles_task(
 mod tests {
     use super::*;
     use ckbadger_store::{StoreBatch, TxIndexEntry};
+
+    #[test]
+    fn rpc_transaction_hashes_require_a_valid_hash_for_every_transaction() {
+        let good = format!("0x{}", "ab".repeat(32));
+        let response = serde_json::json!({
+            "result": {"transactions": [{"hash": good}, {}]}
+        });
+        let error = parse_block_tx_hashes(&response, 123)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("block 123 transaction 1 missing hash"),
+            "{error}"
+        );
+        let response = serde_json::json!({
+            "result": {"transactions": [{"hash": "0xwrong"}]}
+        });
+        let error = parse_block_tx_hashes(&response, 123)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid hash"), "{error}");
+        let response = serde_json::json!({
+            "result": {"transactions": [{"hash": format!("0x{}", "ab".repeat(32))}]}
+        });
+        assert_eq!(parse_block_tx_hashes(&response, 123).unwrap().len(), 1);
+    }
 
     fn insert_tx_with_cycles(store: &CkbadgerStore, tx_hash: &[u8; 32], cycles: Option<i64>) {
         let mut batch = StoreBatch::new(store);

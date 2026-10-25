@@ -4259,67 +4259,117 @@ async fn get_daily_activity_stats(
 // Activity Summary (24h rolling window)
 // ============================================
 
+fn scan_rolling_activity_24h(
+    store: &ckbadger_store::CkbadgerStore,
+    tip: Option<(i64, CachedBlockHeader)>,
+) -> anyhow::Result<(ckbadger_store::DailyActivityStats, u32)> {
+    use ckbadger_store::types::ParticipantId;
+
+    let mut stats = ckbadger_store::DailyActivityStats::default();
+    let Some((tip_number, tip_header)) = tip else {
+        return Ok((stats, 0));
+    };
+    let cutoff_ms = tip_header
+        .chain_time_ms
+        .checked_sub(86_400_000)
+        .ok_or_else(|| {
+            anyhow::anyhow!("activity 24h cutoff underflow at tip block {tip_number}")
+        })?;
+    let mut addresses = HashSet::new();
+    let mut hours = HashSet::new();
+    let mut cursor = None;
+    const PAGE_SIZE: usize = 512;
+    loop {
+        let page = store.list_tx_actions_recent(PAGE_SIZE, cursor)?;
+        if page.is_empty() {
+            break;
+        }
+        let block_numbers: Vec<i64> = page
+            .iter()
+            .map(|tx| tx.block_number)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let headers = store.get_block_headers_batch(&block_numbers)?;
+        let page_len = page.len();
+        for tx in &page {
+            if tx.block_number > tip_number {
+                anyhow::bail!(
+                    "activity row above sync tip: tx=0x{}, block={}, tip={tip_number}",
+                    hex::encode(&tx.tx_hash),
+                    tx.block_number
+                );
+            }
+            let header = headers.get(&tx.block_number).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing block header for activity row: tx=0x{}, block={}",
+                    hex::encode(&tx.tx_hash),
+                    tx.block_number
+                )
+            })?;
+            if header.hash != tx.block_hash {
+                anyhow::bail!(
+                    "activity row block hash mismatch: tx=0x{}, block={}",
+                    hex::encode(&tx.tx_hash),
+                    tx.block_number
+                );
+            }
+            if header.chain_time_ms <= cutoff_ms {
+                stats.unique_address_count = u32::try_from(addresses.len()).map_err(|_| {
+                    anyhow::anyhow!(
+                        "activity 24h unique address count exceeds u32 at tip {tip_number}"
+                    )
+                })?;
+                return Ok((stats, u32::try_from(hours.len())?));
+            }
+            stats.accumulate_from_tx_actions(tx);
+            hours.insert(header.chain_time_ms.div_euclid(3_600_000));
+            if !tx.is_cellbase {
+                for participant in &tx.participants {
+                    if let ParticipantId::Lock(hash) = participant.id {
+                        addresses.insert(hash);
+                    }
+                }
+            }
+        }
+        let last = page.last().expect("nonempty page");
+        cursor = Some((last.block_number, last.tx_index));
+        if page_len < PAGE_SIZE {
+            break;
+        }
+    }
+    stats.unique_address_count = u32::try_from(addresses.len()).map_err(|_| {
+        anyhow::anyhow!("activity 24h unique address count exceeds u32 at tip {tip_number}")
+    })?;
+    Ok((stats, u32::try_from(hours.len())?))
+}
+
 async fn get_activity_summary_24h(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ActivitySummary24hResponse> {
-    let cache_key = "stats:activity-summary-24h";
-
-    if let Some(cached) = state
-        .cache
-        .get::<ActivitySummary24hResponse>(cache_key)
-        .await
-    {
-        return ok(cached);
+    let tip = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
+    let cache_key = tip.as_ref().map(|(_, header)| {
+        format!(
+            "stats:activity-summary-24h:tip:{}",
+            hex::encode(&header.hash)
+        )
+    });
+    if let Some(key) = &cache_key {
+        if let Some(cached) = state.cache.get::<ActivitySummary24hResponse>(key).await {
+            return ok(cached);
+        }
     }
 
-    // Activity hourly buckets are keyed by UTC+8 hour strings (the
-    // `block_datetime_from_ms` convention shared by the live and bulk write
-    // paths), so the cutoff must come from the same UTC+8 clock — a UTC
-    // cutoff sits 8 hours too early in key space and widens the window to
-    // ~33 buckets. The rolling window is exactly the last 24 buckets — the
-    // current partial hour plus the 23 full hours before it — so the
-    // inclusive `since` key is now-23h; an inclusive now-24h cutoff would
-    // add a 25th bucket and span up to 25 hours.
-    let cutoff = ckbadger_common::now_datetime_utc8() - chrono::Duration::hours(23);
-    let since_hour = cutoff.format("%Y%m%d%H").to_string();
-
     let store = state.store.clone();
-    let since_hour_c = since_hour.clone();
-    let hourly_stats =
-        tokio::task::spawn_blocking(move || store.list_hourly_activity_stats_since(&since_hour_c))
+    let (agg, hours_covered) =
+        tokio::task::spawn_blocking(move || scan_rolling_activity_24h(&store, tip))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Aggregate all hourly buckets
-    let mut agg = ckbadger_store::DailyActivityStats::default();
-    let mut agg_script_counts: HashMap<String, u32> = HashMap::new();
-    let hours_covered = hourly_stats.len() as u32;
-
-    for (_hour, s) in &hourly_stats {
-        agg.transfer_count += s.transfer_count;
-        agg.dao_deposit_count += s.dao_deposit_count;
-        agg.dao_withdraw_request_count += s.dao_withdraw_request_count;
-        agg.dao_withdraw_complete_count += s.dao_withdraw_complete_count;
-        agg.token_count += s.token_count;
-        agg.object_count += s.object_count;
-        agg.identity_count += s.identity_count;
-        agg.script_call_count += s.script_call_count;
-        agg.unknown_count += s.unknown_count;
-        agg.coinbase_count += s.coinbase_count;
-        agg.unique_address_count += s.unique_address_count;
-        agg.total_ckb_moved = agg
-            .total_ckb_moved
-            .checked_add(s.total_ckb_moved)
-            .ok_or_else(|| {
-                ApiError::internal(
-                    "total_ckb_moved overflow aggregating 24h activity stats".to_string(),
-                )
-            })?;
-        for (code_hash, count) in &s.script_counts {
-            *agg_script_counts.entry(code_hash.clone()).or_insert(0) += count;
-        }
-    }
+    let agg_script_counts = &agg.script_counts;
 
     // Resolve script names
     let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
@@ -4368,10 +4418,12 @@ async fn get_activity_summary_24h(
         hours_covered,
     };
 
-    state
-        .cache
-        .set(cache_key, &result, CacheTtl::NETWORK_STATS)
-        .await;
+    if let Some(key) = cache_key {
+        state
+            .cache
+            .set(&key, &result, CacheTtl::NETWORK_STATS)
+            .await;
+    }
     ok(result)
 }
 

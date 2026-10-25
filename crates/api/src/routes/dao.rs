@@ -200,7 +200,7 @@ pub struct DaoStatisticsResponse {
     pub total_compensation_paid_ckb: String,
     pub unclaimed_compensation: String,
     pub unclaimed_compensation_ckb: String,
-    pub average_deposit_days: String,
+    pub average_deposit_days: Option<String>,
     pub estimated_apc: String,
     pub mining_reward: String,
     pub mining_reward_ckb: String,
@@ -210,13 +210,9 @@ pub struct DaoStatisticsResponse {
     pub burnt_ckb: String,
     pub pending_withdrawal_capacity: String,
     pub pending_withdrawal_capacity_ckb: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub deposit_change_24h: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub depositors_change_24h: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_compensation_change_24h: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub unclaimed_compensation_change_24h: Option<String>,
 }
 
@@ -531,29 +527,19 @@ struct DaoDeltas {
     unclaimed_compensation_change: Option<String>,
 }
 
-fn compute_dao_24h_deltas(state: &AppState) -> DaoDeltas {
-    let Ok(Some(latest)) = state.store.get_latest_dao_daily_snapshot() else {
+fn compute_dao_24h_deltas(latest: &ckbadger_store::DaoLatestStatistics) -> DaoDeltas {
+    let Some(rolling) = &latest.rolling_24h else {
         return DaoDeltas::default();
     };
-    let Ok(latest_date) = chrono::NaiveDate::parse_from_str(&latest.date, "%Y-%m-%d") else {
-        return DaoDeltas::default();
-    };
-    let prev_date = latest_date - chrono::Duration::days(1);
-    let prev_key = prev_date.format("%Y%m%d").to_string();
-    let Ok(Some(prev)) = state.store.get_dao_daily_snapshot(&prev_key) else {
-        return DaoDeltas::default();
-    };
-
-    let deposit_delta = latest.total_deposited - prev.total_deposited;
-    let depositors_delta = latest.depositors_count - prev.depositors_count;
-    let claimed_delta = latest.compensation - prev.compensation;
-    let unclaimed_delta = latest.unclaimed_compensation - prev.unclaimed_compensation;
-
     DaoDeltas {
-        deposit_change: Some(shannon_to_ckb_signed(deposit_delta)),
-        depositors_change: Some(depositors_delta as i32),
-        claimed_compensation_change: Some(shannon_to_ckb_signed(claimed_delta)),
-        unclaimed_compensation_change: Some(shannon_to_ckb_signed(unclaimed_delta)),
+        deposit_change: Some(shannon_to_ckb_signed(rolling.deposited_change)),
+        depositors_change: Some(rolling.depositors_change),
+        claimed_compensation_change: Some(shannon_to_ckb_signed(
+            rolling.claimed_compensation_change,
+        )),
+        unclaimed_compensation_change: Some(shannon_to_ckb_signed(
+            rolling.unclaimed_compensation_change,
+        )),
     }
 }
 
@@ -786,7 +772,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         return Err(dao_singleton_missing(&state, "dao_latest_stats"));
     };
 
-    let deltas = compute_dao_24h_deltas(&state);
+    let deltas = compute_dao_24h_deltas(&latest);
     ok(dao_latest_to_response(&latest, deltas))
 }
 
@@ -846,20 +832,24 @@ async fn get_top_depositors(
         .iter()
         .zip(addresses)
         .enumerate()
-        .map(|(i, (d, address))| {
-            let capacity_str = d.total_capacity.to_string();
-            let avg_days = d.average_deposit_ms / 86_400_000.0;
-            DaoTopDepositorResponse {
-                rank: (i + 1) as i32,
-                lock_script_hash: format!("0x{}", hex::encode(&d.lock_script_hash)),
-                address,
-                total_capacity: capacity_str.clone(),
-                total_capacity_ckb: shannon_to_ckb(&capacity_str),
-                deposit_count: d.deposit_count,
-                average_deposit_days: format_deposit_days(avg_days),
-            }
-        })
-        .collect();
+        .map(
+            |(i, (d, address))| -> Result<DaoTopDepositorResponse, ApiRouteError> {
+                let capacity_str = d.total_capacity.to_string();
+                Ok(DaoTopDepositorResponse {
+                    rank: (i + 1) as i32,
+                    lock_script_hash: format!("0x{}", hex::encode(&d.lock_script_hash)),
+                    address,
+                    total_capacity: capacity_str.clone(),
+                    total_capacity_ckb: shannon_to_ckb(&capacity_str),
+                    deposit_count: d.deposit_count,
+                    average_deposit_days: format_deposit_days_exact(
+                        d.total_deposit_ms,
+                        d.deposit_count,
+                    )?,
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
 
     let response = DaoTopDepositorsResponse {
         tip_block_number: top.tip_block_number,
@@ -871,13 +861,28 @@ async fn get_top_depositors(
     ok(response)
 }
 
-fn format_deposit_days(days: f64) -> String {
-    if days >= 1000.0 {
-        format!("{:.1}K", days / 1000.0)
-    } else if days < 0.1 {
-        "0".to_string()
+fn format_deposit_days_exact(total_ms: i128, deposit_count: i32) -> Result<String, ApiRouteError> {
+    if total_ms < 0 || deposit_count <= 0 {
+        return Err(ApiError::internal(format!(
+            "invalid top DAO depositor duration: total_ms={total_ms}, deposit_count={deposit_count}"
+        )));
+    }
+    let denominator = i128::from(deposit_count) * 86_400_000;
+    let rounded_tenths = |denominator: i128| -> Result<i128, ApiRouteError> {
+        let scaled = total_ms
+            .checked_mul(10)
+            .and_then(|v| v.checked_add(denominator / 2))
+            .ok_or_else(|| ApiError::internal("top DAO duration formatting overflow"))?;
+        Ok(scaled / denominator)
+    };
+    if total_ms >= denominator * 1000 {
+        let tenths = rounded_tenths(denominator * 1000)?;
+        Ok(format!("{}.{}K", tenths / 10, tenths % 10))
+    } else if total_ms * 10 < denominator {
+        Ok("0".to_string())
     } else {
-        format!("{:.1}", days)
+        let tenths = rounded_tenths(denominator)?;
+        Ok(format!("{}.{}", tenths / 10, tenths % 10))
     }
 }
 
@@ -1298,6 +1303,19 @@ mod tests {
     use crate::cache::InMemoryCache;
     use ckbadger_store::types::CachedBlockHeader;
     use std::time::Duration;
+
+    #[test]
+    fn top_depositor_duration_uses_exact_ms_and_rejects_zero_count() {
+        let beyond_js_integer = 9_007_199_254_740_993i128;
+        assert_eq!(
+            format_deposit_days_exact(beyond_js_integer, 1).unwrap(),
+            "104250.0K"
+        );
+        assert_eq!(format_deposit_days_exact(129_600_000, 1).unwrap(), "1.5");
+        assert_eq!(format_deposit_days_exact(0, 1).unwrap(), "0");
+        assert!(format_deposit_days_exact(1, 0).is_err());
+        assert!(format_deposit_days_exact(-1, 1).is_err());
+    }
 
     fn snapshot(
         total_issuance: i128,

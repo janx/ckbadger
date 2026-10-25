@@ -1949,80 +1949,162 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
 }
 
 // ============================================================
-// B2a regression: /stats/activity-summary-24h window timezone
+// Exact activity summary: chain-time window and cross-hour address dedup
 // ============================================================
 
 #[tokio::test]
-async fn test_activity_summary_24h_window_uses_utc8_bucket_clock() {
-    // Activity hourly buckets are keyed by UTC+8 hour strings (the
-    // `block_datetime_from_ms` convention shared by both write paths). A
-    // cutoff computed on the UTC clock sits 8 hours too early in key space,
-    // silently widening the "24h" window to 32-33 buckets (+~33% on every
-    // aggregated field).
-    let core_store = test_store();
-    let append_only_store = test_append_only_store();
+async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addresses() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TxActions};
+    use ckbadger_store::StoreBatch;
 
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    // Seed 40 consecutive UTC+8-keyed hourly buckets ending at the current hour.
-    for i in 0..40i64 {
-        let hour_key = ckbadger_common::block_datetime_from_ms(now_ms - i * 3_600_000)
-            .format("%Y%m%d%H")
-            .to_string();
-        core_store
+    let store = test_store();
+    let tip_time = 1_700_000_000_000i64;
+    let cutoff = tip_time - 86_400_000;
+    let mut batch = StoreBatch::new(&store);
+    for (number, chain_time, raw_time) in [
+        (0, cutoff - 1, cutoff - 1),
+        (1, cutoff, cutoff),
+        // Raw header time is older, but monotone effective chain time is in-window.
+        (2, cutoff + 1, cutoff - 1),
+        (3, tip_time, tip_time),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                parent_hash: vec![0; 32],
+                timestamp: raw_time,
+                chain_time_ms: chain_time,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+    }
+    for (number, participants) in [
+        (0, vec![(0xDD, 300)]),
+        (1, vec![(0xCC, 200)]),
+        (2, vec![(0xAA, 100)]),
+        (3, vec![(0xAA, -50), (0xBB, 25)]),
+    ] {
+        batch.put_tx_actions(&TxActions {
+            tx_hash: vec![number as u8 + 0x10; 32],
+            block_hash: vec![number as u8; 32],
+            block_number: number,
+            tx_index: 1,
+            timestamp: tip_time,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: participants
+                .into_iter()
+                .map(|(hash, ckb_delta)| ParticipantDelta {
+                    id: ParticipantId::Lock([hash; 32]),
+                    ckb_delta,
+                    used_delta: 0,
+                    item_deltas: vec![],
+                    tags: 0,
+                    roles: 0,
+                })
+                .collect(),
+        });
+    }
+    // Cross the 512-row page boundary. Every extra transaction reuses A, so
+    // a paginated scan must count transactions while deduplicating addresses.
+    for tx_index in 2..=521i32 {
+        batch.put_tx_actions(&TxActions {
+            tx_hash: vec![tx_index as u8; 32],
+            block_hash: vec![2; 32],
+            block_number: 2,
+            tx_index,
+            timestamp: tip_time,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([0xAA; 32]),
+                ckb_delta: 1,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            }],
+        });
+    }
+    batch.commit().unwrap();
+    for hour in 0..24 {
+        store
             .put_hourly_activity_stats(
-                &hour_key,
-                &ckbadger_store::types::DailyActivityStats {
+                &format!("20231115{hour:02}"),
+                &ckbadger_store::DailyActivityStats {
                     transfer_count: 1,
-                    script_counts: std::collections::HashMap::from([
-                        ("11".repeat(32), 2),
-                        ("22".repeat(32), 5),
-                    ]),
                     ..Default::default()
                 },
             )
             .unwrap();
     }
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-
-    let request = Request::builder()
-        .uri("/api/v1/stats/activity-summary-24h")
-        .body(Body::empty())
+    let old_started = std::time::Instant::now();
+    let old_rows = store
+        .list_hourly_activity_stats_since("2023111500")
         .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let old_elapsed = old_started.elapsed();
+    assert_eq!(old_rows.len(), 24);
+    let app = create_router(test_config(store.clone())).await;
+    let fresh_started = std::time::Instant::now();
+    let (status, json) = get_json(&app, "/stats/activity-summary-24h").await;
+    let fresh_elapsed = fresh_started.elapsed();
+    let cached_started = std::time::Instant::now();
+    let (cached_status, cached) = get_json(&app, "/stats/activity-summary-24h").await;
+    let cached_elapsed = cached_started.elapsed();
+    assert_eq!(cached_status, StatusCode::OK);
+    assert_eq!(cached, json);
+    eprintln!(
+        "activity24h fixture: old 24-bucket read={}us, exact fresh 524-tx/4-block response={}us, tip-hash cache hit={}us",
+        old_elapsed.as_micros(), fresh_elapsed.as_micros(), cached_elapsed.as_micros()
+    );
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["transferCount"], 522,
+        "all pages in (cutoff,tip] count"
+    );
+    assert_eq!(
+        json["uniqueAddressCount"], 2,
+        "same lock across hours counts once"
+    );
+    assert_eq!(json["totalCkbMoved"], "695");
+    assert_eq!(json["hoursCovered"], 2);
 
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let hours_covered = json["hoursCovered"].as_u64().unwrap();
-    // A rolling 24h window is exactly the last 24 hour buckets: the current
-    // partial hour plus the 23 full hours before it (offsets 0..=23). An
-    // inclusive cutoff at now-24h would silently include a 25th bucket and
-    // span up to 25 hours of data.
-    assert_eq!(
-        hours_covered, 24,
-        "24h window must cover exactly 24 UTC+8 hour buckets, got {}",
-        hours_covered
-    );
-    assert_eq!(
-        json["transferCount"].as_u64().unwrap(),
-        hours_covered,
-        "aggregate must sum exactly the covered buckets"
-    );
-
-    let script_counts = json["scriptCounts"].as_array().unwrap();
-    assert_eq!(script_counts.len(), 2);
-    assert_eq!(
-        script_counts[0]["codeHash"],
-        format!("0x{}", "22".repeat(32))
-    );
-    assert_eq!(script_counts[0]["count"], 5 * hours_covered);
-    assert_eq!(
-        script_counts[1]["codeHash"],
-        format!("0x{}", "11".repeat(32))
-    );
-    assert_eq!(script_counts[1]["count"], 2 * hours_covered);
+    // A shallow reorg can replace the same-number tip before the TTL expires.
+    // Its new hash must force a fresh window scan and address set.
+    let mut new_tip = store.get_block_header(3).unwrap().unwrap();
+    new_tip.hash = vec![0xF3; 32];
+    let mut new_tx = store.get_tx_actions(3, 1, &[0x13; 32]).unwrap().unwrap();
+    new_tx.block_hash = new_tip.hash.clone();
+    new_tx.participants.push(ParticipantDelta {
+        id: ParticipantId::Lock([0xEE; 32]),
+        ckb_delta: 1,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags: 0,
+        roles: 0,
+    });
+    let mut reorg_batch = StoreBatch::new(&store);
+    reorg_batch.put_block_header(3, &new_tip);
+    reorg_batch.put_tx_actions(&new_tx);
+    reorg_batch.commit().unwrap();
+    let (status, after_reorg) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{after_reorg}");
+    assert_eq!(after_reorg["uniqueAddressCount"], 3);
+    assert_eq!(after_reorg["totalCkbMoved"], "696");
 }
 
 // ============================================================
@@ -3072,7 +3154,7 @@ fn seed_dao_latest(
         active_deposits: 1,
         total_compensation_paid: 0,
         unclaimed_compensation: 0,
-        average_deposit_days: "1 days".to_string(),
+        average_deposit_days: Some("1 days".to_string()),
         estimated_apc: "2.00".to_string(),
         mining_reward: 0,
         deposit_compensation: 0,
@@ -3083,6 +3165,7 @@ fn seed_dao_latest(
         tip_total_issuance,
         tip_secondary_pool,
         tip_occupied_capacity,
+        rolling_24h: None,
     };
     store
         .put_stats_key(

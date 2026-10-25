@@ -93,13 +93,9 @@ struct BlockResponse {
     hash: String,
     parent_hash: String,
     transactions_count: i32,
-    #[serde(default)]
     proposals_count: i32,
-    #[serde(default)]
     uncles_count: i32,
-    #[serde(default)]
     compact_target: String,
-    #[serde(default)]
     difficulty: String,
     #[serde(default)]
     miner_address: Option<String>,
@@ -318,17 +314,21 @@ fn fetch_network_stats(ctx: &CheckContext) -> anyhow::Result<NetworkStats> {
     api_get(ctx, "statistics/network")
 }
 
-fn sampling_tip_from_stats(stats: &NetworkStats) -> u64 {
+fn sampling_tip_from_stats(stats: &NetworkStats) -> anyhow::Result<u64> {
     let candidates = [
         stats.latest_block,
         stats.sync_status.synced_block,
         stats.sync_status.tip_block,
     ];
-    candidates
+    let tip = candidates
         .into_iter()
         .filter(|v| *v >= 0)
         .min()
-        .unwrap_or(0) as u64
+        .ok_or_else(|| anyhow::anyhow!(
+            "cannot sample API checks before genesis: latest_block={}, synced_block={}, tip_block={}",
+            stats.latest_block, stats.sync_status.synced_block, stats.sync_status.tip_block
+        ))?;
+    Ok(tip as u64)
 }
 
 fn exceeds_drift_limit(chart_value: i128, stats_value: i128, max_drift: i128) -> bool {
@@ -1233,7 +1233,7 @@ impl Check for BlockHashRoundtrip {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let stats = fetch_network_stats(ctx)?;
-        let tip = sampling_tip_from_stats(&stats);
+        let tip = sampling_tip_from_stats(&stats)?;
         if tip == 0 {
             return Ok(CheckResult::pass(0));
         }
@@ -1292,7 +1292,7 @@ impl Check for BlockParentChain {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let stats = fetch_network_stats(ctx)?;
-        let tip = sampling_tip_from_stats(&stats);
+        let tip = sampling_tip_from_stats(&stats)?;
         if tip <= 1 {
             return Ok(CheckResult::pass(0));
         }
@@ -1544,7 +1544,7 @@ impl Check for AddressBalanceSpotCheck {
         // The three reads below (candidates, address detail, paginated live
         // cells) are independent and race a live-syncing tip. Bracket the check
         // so a mismatch can be classified as a real bug or as a straddled block.
-        let tip_before = sampling_tip_from_stats(&fetch_network_stats(ctx)?);
+        let tip_before = sampling_tip_from_stats(&fetch_network_stats(ctx)?)?;
 
         let mut findings = vec![];
         let mut skipped: Vec<String> = vec![];
@@ -1572,7 +1572,7 @@ impl Check for AddressBalanceSpotCheck {
                         })?;
 
                 if !retry.details.is_empty() {
-                    tip_after = sampling_tip_from_stats(&fetch_network_stats(ctx)?);
+                    tip_after = sampling_tip_from_stats(&fetch_network_stats(ctx)?)?;
                     if tip_after > tip_before {
                         // The chain moved under the check. A stored-vs-actual
                         // difference is expected here and proves nothing.
@@ -2967,7 +2967,7 @@ impl Check for RpcBlockSpotCheck {
             .ok_or_else(|| anyhow::anyhow!("RPC URL not available"))?;
 
         let stats = fetch_network_stats(ctx)?;
-        let tip = sampling_tip_from_stats(&stats);
+        let tip = sampling_tip_from_stats(&stats)?;
         if tip == 0 {
             return Ok(CheckResult::pass(0));
         }
@@ -6340,7 +6340,48 @@ mod tests {
             },
             deep_fork_status: DeepForkStatus { detected: false },
         };
-        assert_eq!(sampling_tip_from_stats(&stats), 100);
+        assert_eq!(sampling_tip_from_stats(&stats).unwrap(), 100);
+        let empty = NetworkStats {
+            latest_block: -1,
+            sync_status: SyncStatus {
+                is_syncing: true,
+                synced_block: -1,
+                tip_block: -1,
+            },
+            deep_fork_status: DeepForkStatus { detected: false },
+        };
+        assert!(sampling_tip_from_stats(&empty)
+            .unwrap_err()
+            .to_string()
+            .contains("before genesis"));
+    }
+
+    #[test]
+    fn block_response_requires_all_reported_chain_fields() {
+        let complete = serde_json::json!({
+            "number": 1,
+            "hash": "0x01",
+            "parentHash": "0x00",
+            "transactionsCount": 0,
+            "proposalsCount": 0,
+            "unclesCount": 0,
+            "compactTarget": "0x190df964",
+            "difficulty": "1"
+        });
+        assert!(serde_json::from_value::<BlockResponse>(complete.clone()).is_ok());
+        for field in [
+            "proposalsCount",
+            "unclesCount",
+            "compactTarget",
+            "difficulty",
+        ] {
+            let mut missing = complete.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<BlockResponse>(missing).is_err(),
+                "missing {field} must be a response error"
+            );
+        }
     }
 
     #[test]

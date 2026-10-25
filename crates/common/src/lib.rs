@@ -48,16 +48,18 @@ pub fn block_date(ts: DateTime<Utc>) -> NaiveDate {
 
 /// Convert a UTC timestamp in milliseconds to a NaiveDate using UTC+8.
 pub fn block_date_from_ms(timestamp_ms: i64) -> NaiveDate {
-    let secs = timestamp_ms / 1000;
-    let dt = DateTime::from_timestamp(secs, 0).unwrap_or_default();
+    let secs = timestamp_ms.div_euclid(1000);
+    let dt = DateTime::from_timestamp(secs, 0)
+        .unwrap_or_else(|| panic!("invalid block timestamp milliseconds: {timestamp_ms}"));
     block_date(dt)
 }
 
 /// Convert a UTC timestamp in milliseconds to a NaiveDateTime using UTC+8.
 /// Use this when you need hour-level (or finer) formatting (e.g. `%H`).
 pub fn block_datetime_from_ms(timestamp_ms: i64) -> NaiveDateTime {
-    let secs = timestamp_ms / 1000;
-    let dt = DateTime::from_timestamp(secs, 0).unwrap_or_default();
+    let secs = timestamp_ms.div_euclid(1000);
+    let dt = DateTime::from_timestamp(secs, 0)
+        .unwrap_or_else(|| panic!("invalid block timestamp milliseconds: {timestamp_ms}"));
     let utc8 = FixedOffset::east_opt(CKB_UTC8_OFFSET).unwrap();
     dt.with_timezone(&utc8).naive_local()
 }
@@ -88,7 +90,7 @@ pub fn now_datetime_utc8() -> NaiveDateTime {
 pub fn utc_hour_key_from_ms(timestamp_ms: i64) -> String {
     let secs = timestamp_ms.div_euclid(1000);
     DateTime::from_timestamp(secs, 0)
-        .unwrap_or_default()
+        .unwrap_or_else(|| panic!("invalid UTC hour timestamp milliseconds: {timestamp_ms}"))
         .format("%Y%m%d%H")
         .to_string()
 }
@@ -109,6 +111,29 @@ mod tests {
                 .to_string(),
             "2023111904"
         );
+    }
+
+    #[test]
+    fn negative_subsecond_timestamps_floor_to_the_previous_second() {
+        assert_eq!(
+            block_datetime_from_ms(-1)
+                .format("%Y%m%d%H%M%S")
+                .to_string(),
+            "19700101075959"
+        );
+        assert_eq!(utc_hour_key_from_ms(-1), "1969123123");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid block timestamp milliseconds: 9223372036854775807")]
+    fn out_of_range_block_time_does_not_become_the_epoch() {
+        let _ = block_date_from_ms(i64::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid UTC hour timestamp milliseconds: 9223372036854775807")]
+    fn out_of_range_hour_time_does_not_become_the_epoch() {
+        let _ = utc_hour_key_from_ms(i64::MAX);
     }
 
     #[test]

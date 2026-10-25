@@ -634,7 +634,7 @@ fn build_tx_actions<'a>(
     }
 
     // Process outputs
-    for cell in &tx.outputs {
+    for (output_index, cell) in tx.outputs.iter().enumerate() {
         let accum = owners.entry(cell.lock_script_hash).or_default();
         record_owner_lock_script(
             accum,
@@ -647,7 +647,18 @@ fn build_tx_actions<'a>(
 
         // Compute occupied for output
         let type_args_len = if cell.type_code_hash.is_some() {
-            Some(cell.type_args.map(|a| a.len()).unwrap_or(0))
+            Some(
+                cell.type_args
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing type script args in block {}, tx {}, output {}",
+                            tx.block_number,
+                            hex::encode(tx.tx_hash),
+                            output_index
+                        )
+                    })?
+                    .len(),
+            )
         } else {
             None
         };
@@ -2012,7 +2023,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dotbit_output_falls_back_to_account_id_in_cell_data_when_type_args_missing() {
+    fn test_dotbit_output_falls_back_to_account_id_in_cell_data_when_type_args_empty() {
         let owner = 0xAA;
         let dotbit_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
@@ -2026,7 +2037,7 @@ mod tests {
             100_00000000,
             Some(dotbit_code_hash),
             Some(vec![0x11; 32]),
-            None,
+            Some(vec![]),
             dotbit_data,
         )];
 
@@ -2214,7 +2225,7 @@ mod tests {
                 deposit_capacity,
                 Some(dao_code_hash.clone()),
                 None,
-                None,
+                Some(vec![]),
                 vec![0u8; 8], // 8 zero bytes: deposit_block == 0 => deposit
             );
             output.lock_script_hash = owner_lock_hash.clone();
@@ -2276,7 +2287,7 @@ mod tests {
                 capacity,
                 Some(dao_code_hash.clone()),
                 None,
-                None,
+                Some(vec![]),
                 deposit_block.to_le_bytes().to_vec(),
             ));
         }
@@ -3643,5 +3654,20 @@ mod tests {
                 ParticipantId::Lock([0x22; 32])
             ]
         );
+    }
+
+    #[test]
+    fn output_type_script_requires_its_args_even_when_empty() {
+        let input = make_input(0x11, 1000, 61);
+        let mut output = make_output(0x22, 990, None, None, None, vec![]);
+        output.type_code_hash = Some(vec![0x77; 32]);
+        output.type_hash_type = Some(1);
+        output.type_args = None;
+        let tx = one_transfer_tx(&input, &output);
+        let error = build_tx_actions_for_block(&[tx], &[]).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("type script args"), "{message}");
+        assert!(message.contains("output 0"), "{message}");
+        assert!(message.contains("block 7"), "{message}");
     }
 }

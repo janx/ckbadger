@@ -1850,7 +1850,7 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
                 lock_script_hash: lock_hash.clone(),
                 total_capacity: 10_200_000_000,
                 deposit_count: 1,
-                average_deposit_ms: 86_400_000.0,
+                total_deposit_ms: 86_400_000,
             }],
         })
         .unwrap();
@@ -1862,7 +1862,7 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
         active_deposits: 1,
         total_compensation_paid: 0,
         unclaimed_compensation: 0,
-        average_deposit_days: "1 days".to_string(),
+        average_deposit_days: Some("1 days".to_string()),
         estimated_apc: "2.00".to_string(),
         mining_reward: 0,
         deposit_compensation: 0,
@@ -1874,6 +1874,7 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,
+        rolling_24h: None,
     };
     let latest_key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,

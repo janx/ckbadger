@@ -103,6 +103,38 @@ impl CkbadgerStore {
         Ok(result)
     }
 
+    /// Find the last canonical block at or before an effective chain-time
+    /// boundary. The right-biased search includes every tied block.
+    pub fn find_last_block_at_or_before_chain_time_ms(
+        &self,
+        boundary_ms: i64,
+    ) -> anyhow::Result<Option<i64>> {
+        let Some((tip, _)) = self.get_sync_tip_block()? else {
+            return Ok(None);
+        };
+        let mut low = 0i64;
+        let mut high = tip;
+        let mut result = None;
+        while low <= high {
+            let middle = low + (high - low) / 2;
+            let header = self.get_block_header(middle)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing block header in chain-time search: block={}, tip={}, boundary_ms={}",
+                    middle,
+                    tip,
+                    boundary_ms
+                )
+            })?;
+            if header.chain_time_ms <= boundary_ms {
+                result = Some(middle);
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
+        }
+        Ok(result)
+    }
+
     /// List blocks in descending order.
     pub fn list_blocks_desc(
         &self,
@@ -322,6 +354,47 @@ mod tests {
     }
 
     #[test]
+    fn chain_time_search_includes_all_tied_blocks() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        assert_eq!(
+            store
+                .find_last_block_at_or_before_chain_time_ms(100)
+                .unwrap(),
+            None
+        );
+        let mut batch = StoreBatch::new(&store);
+        for (number, chain_time) in [(0, 10), (1, 20), (2, 20), (3, 20), (4, 30)] {
+            let mut header = make_header(number);
+            header.chain_time_ms = chain_time;
+            batch.put_block_header(number, &header);
+        }
+        batch.commit().unwrap();
+        assert_eq!(
+            store.find_last_block_at_or_before_chain_time_ms(9).unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .find_last_block_at_or_before_chain_time_ms(20)
+                .unwrap(),
+            Some(3)
+        );
+        assert_eq!(
+            store
+                .find_last_block_at_or_before_chain_time_ms(25)
+                .unwrap(),
+            Some(3)
+        );
+        assert_eq!(
+            store
+                .find_last_block_at_or_before_chain_time_ms(30)
+                .unwrap(),
+            Some(4)
+        );
+    }
+
+    #[test]
     fn test_old_header_layout_requires_resync_with_block_context() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -345,7 +418,11 @@ mod tests {
         ))
         .unwrap();
         store
-            .put_cf(store.cf_block_headers(), &keys::encode_block_num(42), &old_bytes)
+            .put_cf(
+                store.cf_block_headers(),
+                &keys::encode_block_num(42),
+                &old_bytes,
+            )
             .unwrap();
 
         let error = store.get_block_header(42).unwrap_err().to_string();

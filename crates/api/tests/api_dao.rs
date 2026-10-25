@@ -67,7 +67,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         active_deposits: 9,
         total_compensation_paid: 11_00000000,
         unclaimed_compensation: 13_00000000,
-        average_deposit_days: "950 days".to_string(),
+        average_deposit_days: Some("950 days".to_string()),
         estimated_apc: "2.74".to_string(),
         mining_reward: 17_00000000,
         deposit_compensation: 19_00000000,
@@ -78,6 +78,14 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,
+        rolling_24h: Some(ckbadger_store::types::DaoRolling24h {
+            baseline_block_number: 9,
+            cutoff_chain_time_ms: 1_699_913_600_000,
+            deposited_change: -3_00000000,
+            depositors_change: 2,
+            claimed_compensation_change: 5_00000000,
+            unclaimed_compensation_change: -7_00000000,
+        }),
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -100,6 +108,10 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     assert_eq!(json["activeDeposits"], 9);
     assert_eq!(json["estimatedApc"], "2.74");
     assert_eq!(json["tipBlockNumber"], 10);
+    assert_eq!(json["depositChange24h"], "-3");
+    assert_eq!(json["depositorsChange24h"], 2);
+    assert_eq!(json["claimedCompensationChange24h"], "5");
+    assert_eq!(json["unclaimedCompensationChange24h"], "-7");
 }
 
 /// The singleton trails the sync tip by at most one batch commit, so a tip
@@ -176,7 +188,7 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         active_deposits: 999,
         total_compensation_paid: 0,
         unclaimed_compensation: 0,
-        average_deposit_days: "999 days".to_string(),
+        average_deposit_days: Some("999 days".to_string()),
         estimated_apc: "9.99".to_string(),
         mining_reward: 0,
         deposit_compensation: 0,
@@ -187,6 +199,7 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,
+        rolling_24h: None,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -207,6 +220,8 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
 
     assert_eq!(json["totalDeposited"], "99900000000");
     assert_eq!(json["totalDepositors"], 999);
+    assert!(json["depositChange24h"].is_null());
+    assert!(json["depositorsChange24h"].is_null());
     assert_eq!(
         json["tipBlockNumber"], 9,
         "the response must state the block the singleton was computed at"
@@ -287,7 +302,7 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
         active_deposits: 1,
         total_compensation_paid: 0,
         unclaimed_compensation: 0,
-        average_deposit_days: "1 days".to_string(),
+        average_deposit_days: Some("1 days".to_string()),
         estimated_apc: "2.00".to_string(),
         mining_reward: 0,
         deposit_compensation: 0,
@@ -298,6 +313,7 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,
+        rolling_24h: None,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -1026,7 +1042,7 @@ async fn test_top_depositors_resolves_address_from_lock_script() {
                 lock_script_hash: lock_hash.clone(),
                 total_capacity: 100_000_000_000,
                 deposit_count: 2,
-                average_deposit_ms: 86_400_000.0,
+                total_deposit_ms: 172_800_000,
             }],
         })
         .unwrap();
@@ -1063,7 +1079,7 @@ async fn test_top_depositors_address_null_when_lock_script_unknown() {
                 lock_script_hash: vec![0xCDu8; 32],
                 total_capacity: 42,
                 deposit_count: 1,
-                average_deposit_ms: 0.0,
+                total_deposit_ms: 0,
             }],
         })
         .unwrap();

@@ -314,40 +314,43 @@ fn fetch_from_explorer_api(
 
     let body: serde_json::Value = resp.json()?;
 
+    parse_explorer_daily_response(&body, indicator, field)
+}
+
+fn parse_explorer_daily_response(
+    body: &serde_json::Value,
+    indicator: &str,
+    field: &str,
+) -> anyhow::Result<HashMap<String, String>> {
     let mut result = HashMap::new();
-    if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
-        for item in data {
-            let attrs = match item.get("attributes") {
-                Some(a) => a,
-                None => continue,
-            };
-            let ts_val = match attrs.get("created_at_unixtimestamp").and_then(|v| {
+    let data = body.get("data").and_then(|d| d.as_array()).ok_or_else(|| {
+        anyhow::anyhow!("Explorer daily_statistics/{indicator} response missing data array")
+    })?;
+    for (index, item) in data.iter().enumerate() {
+        let attrs = item.get("attributes").ok_or_else(|| {
+            anyhow::anyhow!("Explorer daily_statistics/{indicator} row {index} missing attributes")
+        })?;
+        let ts_val = attrs.get("created_at_unixtimestamp").and_then(|v| {
                 v.as_str()
                     .and_then(|s| s.parse::<i64>().ok())
                     .or_else(|| v.as_i64())
-            }) {
-                Some(ts) if ts > 0 => ts,
-                _ => continue,
+            }).filter(|ts| *ts > 0).ok_or_else(|| anyhow::anyhow!(
+                "Explorer daily_statistics/{indicator} row {index} has invalid created_at_unixtimestamp"
+            ))?;
+        let date = explorer_timestamp_to_date(ts_val).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Explorer daily_statistics/{indicator} row {index} timestamp out of range: {ts_val}"
+            )
+        })?;
+        let value = match attrs.get(field) {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+                Some(serde_json::Value::Number(n)) => n.to_string(),
+                _ => anyhow::bail!(
+                    "Explorer daily_statistics/{indicator} row {index} missing or invalid {field} for {date}"
+                ),
             };
-
-            let date = explorer_timestamp_to_date(ts_val).unwrap_or_default();
-
-            if date.is_empty() {
-                continue;
-            }
-
-            let value = attrs
-                .get(field)
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    _ => v.to_string(),
-                })
-                .unwrap_or_default();
-
-            if !value.is_empty() {
-                result.insert(date, value);
-            }
+        if result.insert(date.clone(), value).is_some() {
+            anyhow::bail!("Explorer daily_statistics/{indicator} duplicates date {date}");
         }
     }
 
@@ -2741,6 +2744,27 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn explorer_daily_parser_rejects_partial_or_corrupt_rows() {
+        for body in [
+            json!({"data": [{"attributes": {"created_at_unixtimestamp": "not-a-time", "value": "1"}}]}),
+            json!({"data": [{"attributes": {"created_at_unixtimestamp": "1700000000"}}]}),
+            json!({"data": [{}]}),
+        ] {
+            assert!(
+                parse_explorer_daily_response(&body, "test", "value").is_err(),
+                "{body}"
+            );
+        }
+        let valid = json!({"data": [{"attributes": {"created_at_unixtimestamp": "1700000000", "value": "42"}}]});
+        assert_eq!(
+            parse_explorer_daily_response(&valid, "test", "value")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 
     fn explorer_test_context_for_network(
         server: &MockServer,

@@ -107,7 +107,7 @@ impl CacheInvalidator {
     where
         F: FnOnce(&mut SyncStatusData),
     {
-        let mut status = self.get_sync_status().await.unwrap_or_default();
+        let mut status = self.get_sync_status().await?;
         updater(&mut status);
         // Note: the actual sync status is managed via store.update_sync_status().
         // This just returns the updated copy for the caller.
@@ -166,6 +166,24 @@ impl CacheInvalidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn corrupt_sync_status_does_not_fabricate_a_zero_status_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
+                b"corrupt",
+            )
+            .unwrap();
+        let cache = CacheInvalidator::new(store);
+        assert!(cache
+            .update_sync_status(|status| status.tip_block_number = 1)
+            .await
+            .is_none());
+    }
 
     fn sync_progress_fixture() -> SyncProgressData {
         SyncProgressData {

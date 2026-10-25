@@ -525,7 +525,8 @@ pub struct DaoLatestStatistics {
     pub active_deposits: i32,
     pub total_compensation_paid: i128,
     pub unclaimed_compensation: i128,
-    pub average_deposit_days: String,
+    /// None when no DAO cell contributes a deposit duration.
+    pub average_deposit_days: Option<String>,
     pub estimated_apc: String,
     pub mining_reward: i128,
     pub deposit_compensation: i128,
@@ -548,6 +549,19 @@ pub struct DaoLatestStatistics {
     pub tip_total_issuance: i128,
     pub tip_secondary_pool: i128,
     pub tip_occupied_capacity: i128,
+    /// Exact state change over `(tip chain time - 24h, tip chain time]`.
+    /// None before the chain contains a complete 24h baseline.
+    pub rolling_24h: Option<DaoRolling24h>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaoRolling24h {
+    pub baseline_block_number: i64,
+    pub cutoff_chain_time_ms: i64,
+    pub deposited_change: i128,
+    pub depositors_change: i32,
+    pub claimed_compensation_change: i128,
+    pub unclaimed_compensation_change: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -555,8 +569,9 @@ pub struct DaoTopDepositorEntry {
     pub lock_script_hash: Vec<u8>,
     pub total_capacity: i128,
     pub deposit_count: i32,
-    #[serde(alias = "average_deposit_blocks")]
-    pub average_deposit_ms: f64,
+    /// Exact sum of effective chain-time holding durations for this depositor.
+    /// Divide by `deposit_count` only when presenting the average.
+    pub total_deposit_ms: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
