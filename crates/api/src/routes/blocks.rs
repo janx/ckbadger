@@ -156,7 +156,7 @@ async fn list_blocks(
                 },
             )
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     let response = CursorPaginatedResponse::new(blocks, total, limit, next_cursor);
 
@@ -235,7 +235,7 @@ fn cached_header_to_block_response(
     header: ckbadger_store::CachedBlockHeader,
     header_info: Option<ckb_store_reader::BlockHeaderInfo>,
     extra: BlockExtra,
-) -> BlockResponse {
+) -> Result<BlockResponse, ApiRouteError> {
     let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
     let (nonce, transactions_root, version) = match header_info {
         Some(ref info) => (
@@ -252,10 +252,16 @@ fn cached_header_to_block_response(
 
     // Format timestamp from millis to RFC3339
     let timestamp = chrono::DateTime::from_timestamp_millis(header.timestamp)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cached block {block_num} (0x{}): invalid timestamp {} ms",
+                hex::encode(&header.hash),
+                header.timestamp
+            ))
+        })?
+        .to_rfc3339();
 
-    BlockResponse {
+    Ok(BlockResponse {
         number: block_num,
         hash: format!("0x{}", hex::encode(&header.hash)),
         parent_hash,
@@ -279,7 +285,7 @@ fn cached_header_to_block_response(
         hardfork_activation: extra.hardfork_activation,
         compact_target,
         version,
-    }
+    })
 }
 
 fn resolve_hardfork_activation(
@@ -432,7 +438,7 @@ async fn get_block(
                     mining_reward_tx_hash,
                     hardfork_activation: activation,
                 },
-            ))
+            )?)
         }
         None => Err(ApiError::not_found("Block not found")),
     }
@@ -987,7 +993,8 @@ mod tests {
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
             },
-        );
+        )
+        .unwrap();
         assert_eq!(resp.compact_target, "0x190df964");
         assert_eq!(resp.difficulty, "1320058941807520729");
         assert_eq!(resp.proposals_count, 3);
@@ -1032,9 +1039,45 @@ mod tests {
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(response.nonce, "0x8a4c8eb51d72599e0000000120280402");
+    }
+
+    #[test]
+    fn invalid_cached_block_timestamp_is_an_error() {
+        let header = ckbadger_store::CachedBlockHeader {
+            hash: vec![0x22; 32],
+            parent_hash: vec![0x11; 32],
+            timestamp: i64::MAX,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 100,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x190d_f964,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: i64::MAX,
+        };
+        let error = cached_header_to_block_response(
+            42,
+            header,
+            None,
+            BlockExtra {
+                miner_address: None,
+                miner_message: None,
+                mining_reward: None,
+                mining_reward_tx_hash: None,
+                hardfork_activation: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.1 .0.message.contains("cached block 42"));
+        assert!(error.1 .0.message.contains("invalid timestamp"));
     }
 
     /// Convert compact target to difficulty string (in human-readable format like "1.49 EH")

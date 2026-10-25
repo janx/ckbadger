@@ -87,7 +87,8 @@ fn sum_rates(rates: &[FeeRate]) -> (BigUint, BigUint) {
     }
     let mut denominator = BigUint::from(1u8);
     for &size in fees_by_size.keys() {
-        // The remainder is strictly below size, so Euclid's GCD stays u64.
+        // The remainder is strictly below size (u64), so it has at most one
+        // u64 digit; BigUint represents zero with an empty digit vector.
         let remainder = (&denominator % size)
             .to_u64_digits()
             .first()
