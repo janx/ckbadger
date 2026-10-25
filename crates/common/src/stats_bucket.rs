@@ -24,7 +24,7 @@
 //! [`is_bucket_complete`].
 
 use anyhow::{anyhow, bail, Result};
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::CKB_UTC8_OFFSET;
 
@@ -33,6 +33,25 @@ pub const MEDIAN_TIME_BLOCK_COUNT: usize = 37;
 pub const HOUR_MS: i64 = 60 * 60 * 1_000;
 pub const DAY_MS: i64 = 24 * HOUR_MS;
 const UTC8_OFFSET_MS: i64 = CKB_UTC8_OFFSET as i64 * 1_000;
+
+/// The canonical stats day of a block's running-maximum chain time.
+pub fn stats_day(chain_time_ms: i64) -> Result<NaiveDate> {
+    let instant = DateTime::from_timestamp_millis(chain_time_ms).ok_or_else(|| {
+        anyhow!("chain time cannot be represented as a date: chain_time_ms={chain_time_ms}")
+    })?;
+    Ok(crate::block_date(instant))
+}
+
+/// The canonical UTC hour start of a block's running-maximum chain time.
+pub fn stats_hour(chain_time_ms: i64) -> Result<DateTime<Utc>> {
+    let hour_ms = chain_time_ms
+        .div_euclid(HOUR_MS)
+        .checked_mul(HOUR_MS)
+        .ok_or_else(|| anyhow!("chain hour overflow: chain_time_ms={chain_time_ms}"))?;
+    DateTime::from_timestamp_millis(hour_ms).ok_or_else(|| {
+        anyhow!("chain hour cannot be represented as a date: chain_time_ms={chain_time_ms}")
+    })
+}
 
 /// CKB's median time of a window of consecutive block timestamps: the upper
 /// median (index `len / 2` of the sorted window), at most
@@ -136,6 +155,18 @@ pub fn bucket_end_from_utc8_key(bucket: &str, hourly: bool) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backward_raw_timestamp_keeps_next_day_and_hour_at_chain_time() {
+        let forward = utc_ms("2026-10-23T16:00:02Z");
+        let backward = utc_ms("2026-10-23T15:59:58Z");
+        let chain_time = forward.max(backward);
+        assert_eq!(stats_day(chain_time).unwrap().to_string(), "2026-10-24");
+        assert_eq!(
+            stats_hour(chain_time).unwrap().timestamp_millis(),
+            utc_ms("2026-10-23T16:00:00Z")
+        );
+    }
 
     fn utc_ms(rfc3339: &str) -> i64 {
         chrono::DateTime::parse_from_rfc3339(rfc3339)

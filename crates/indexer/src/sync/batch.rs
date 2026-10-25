@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, NaiveDate, Timelike, Utc};
+#[cfg(test)]
+use chrono::DateTime;
+use chrono::{NaiveDate, Utc};
 use dashmap::DashMap;
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -1370,13 +1372,6 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
     collected
 }
 
-fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
-    dt.with_minute(0)
-        .and_then(|d| d.with_second(0))
-        .and_then(|d| d.with_nanosecond(0))
-        .unwrap_or(dt)
-}
-
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
 pub(super) type ScriptReferenceUsageChanges =
     HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;
@@ -1636,6 +1631,38 @@ impl Indexer {
         // Safe: early return on empty guarantees .first()/.last() are Some.
         let first_block = all_parsed_blocks.first().unwrap().number;
         let last_block = all_parsed_blocks.last().unwrap().number;
+        let mut previous_chain_time = if first_block > 0 {
+            self.writer
+                .store()
+                .get_block_header(first_block - 1)?
+                .map(|header| header.chain_time_ms)
+        } else {
+            None
+        };
+        let parent_chain_time_ms = previous_chain_time;
+        let mut chain_times_ms = Vec::with_capacity(all_parsed_blocks.len());
+        let mut chain_time_by_block = HashMap::with_capacity(all_parsed_blocks.len());
+        for parsed in all_parsed_blocks {
+            let raw_time = parsed.timestamp.timestamp_millis();
+            if raw_time < 0 {
+                anyhow::bail!(
+                    "negative header timestamp: block={} timestamp_ms={raw_time}",
+                    parsed.number
+                );
+            }
+            let chain_time = previous_chain_time.map_or(raw_time, |prior| prior.max(raw_time));
+            chain_times_ms.push(chain_time);
+            if chain_time_by_block
+                .insert(parsed.number, chain_time)
+                .is_some()
+            {
+                anyhow::bail!(
+                    "duplicate block number in live batch: block={}",
+                    parsed.number
+                );
+            }
+            previous_chain_time = Some(chain_time);
+        }
         let end_block = u64::try_from(last_block).map_err(|_| {
             anyhow!(
                 "negative last_block in write_parsed_batch: last_block={}",
@@ -2039,7 +2066,7 @@ impl Indexer {
                 });
             if let Some(existing) = existing_balances {
                 let existing = existing?;
-                batch_new_addresses = count_new_addresses(&address_balance_changes, &existing);
+                batch_new_addresses = count_new_addresses(&address_balance_changes, &existing)?;
                 self.writer.apply_address_balance_deltas(
                     &existing,
                     &address_balance_changes,
@@ -2065,6 +2092,28 @@ impl Indexer {
         // through it, so each key is read once, carries one undo pre-image per
         // block that moves it, and is written exactly once in `stage_final`.
         let entity_stats = SharedEntityStatsOverlay::new();
+        let chain_day_key = |block: i64| -> Result<u32> {
+            let chain_time = *chain_time_by_block.get(&block).ok_or_else(|| {
+                anyhow!("entity daily delta references block outside live batch: block={block}")
+            })?;
+            ckbadger_common::stats_bucket::stats_day(chain_time)?
+                .format("%Y%m%d")
+                .to_string()
+                .parse::<u32>()
+                .map_err(|e| anyhow!("invalid canonical stats day for block={block}: {e}"))
+        };
+        let script_daily_changes =
+            script_daily_changes.remap_keys(|block, (code, hash_type, is_type, _)| {
+                Ok((code, hash_type, is_type, chain_day_key(block)?))
+            })?;
+        let token_daily_changes =
+            token_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+        let spore_daily_changes =
+            spore_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+        let cluster_daily_changes =
+            cluster_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+        let object_daily_changes =
+            object_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
         entity_stats.with(|overlay| -> Result<()> {
             batch_undo_seq.with(|undo_seq| {
                 self.writer.update_script_daily_deltas_batch(
@@ -3212,7 +3261,16 @@ impl Indexer {
                     }
 
                     // Accumulate daily activity stats
-                    let date = ckbadger_common::block_date_from_ms(tx_actions.timestamp)
+                    let chain_time = *chain_time_by_block
+                        .get(&tx_actions.block_number)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "missing chain time for activity action: block={} tx_index={}",
+                                tx_actions.block_number,
+                                tx_actions.tx_index
+                            )
+                        })?;
+                    let date = ckbadger_common::stats_bucket::stats_day(chain_time)?
                         .format("%Y%m%d")
                         .to_string();
                     let day_stats = daily_activity_accum.entry(date.clone()).or_default();
@@ -3221,9 +3279,10 @@ impl Indexer {
                     // Accumulate hourly activity stats. Activity hour keys
                     // are UTC+8 (`block_datetime_from_ms`) — unlike the
                     // chain-level hourly stats, whose keys are UTC.
-                    let hour = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp)
-                        .format("%Y%m%d%H")
-                        .to_string();
+                    let hour = (ckbadger_common::stats_bucket::stats_hour(chain_time)?
+                        + chrono::Duration::hours(8))
+                    .format("%Y%m%d%H")
+                    .to_string();
                     let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
                     BatchWriter::accumulate_tx_activity_stats(tx_actions, hour_stats);
 
@@ -3323,13 +3382,16 @@ impl Indexer {
 
         // Stats accumulation for live sync (serial — before finalize)
         batch_stats = BatchStats::default();
-        let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
-            if let Some(first_block) = all_parsed_blocks.first() {
-                self.writer
-                    .get_previous_block_timestamp(first_block.number)?
-            } else {
-                None
-            };
+        let mut prev_timestamp: Option<chrono::DateTime<Utc>> = parent_chain_time_ms
+            .map(|ms| {
+                chrono::DateTime::from_timestamp_millis(ms).ok_or_else(|| {
+                    anyhow!(
+                        "invalid parent chain time: block={} chain_time_ms={ms}",
+                        first_block - 1
+                    )
+                })
+            })
+            .transpose()?;
         let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 self.writer
@@ -3439,9 +3501,17 @@ impl Indexer {
         }
 
         let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
+        for (block_idx, parsed) in all_parsed_blocks.iter().enumerate() {
             self.perf.mark_writer_phase();
-            let block_date = ckbadger_common::block_date(parsed.timestamp);
+            let chain_time_ms = chain_times_ms[block_idx];
+            let chain_time =
+                chrono::DateTime::from_timestamp_millis(chain_time_ms).ok_or_else(|| {
+                    anyhow!(
+                        "invalid chain time: block={} chain_time_ms={chain_time_ms}",
+                        parsed.number
+                    )
+                })?;
+            let block_date = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
             let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             // The miner secondary series is the protocol's direct split and
@@ -3564,7 +3634,7 @@ impl Indexer {
                 // activity hourly family below is UTC+8 instead). The tx
                 // count includes the cellbase. Reorg rollback and the bulk
                 // ChainStatsAccumulator must mirror these semantics exactly.
-                let block_hour = truncate_to_hour(parsed.timestamp);
+                let block_hour = ckbadger_common::stats_bucket::stats_hour(chain_time_ms)?;
                 let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
                 entry.0 += 1;
                 entry.1 += parsed.transactions_count;
@@ -3628,37 +3698,44 @@ impl Indexer {
                         start_block: parsed.number,
                         end_block: parsed.number,
                         length: parsed.epoch_length,
-                        start_ts: parsed.timestamp,
-                        end_ts: parsed.timestamp,
+                        start_ts: chain_time,
+                        end_ts: chain_time,
                         tx_count: 0,
                         is_new: parsed.epoch_index == 0,
                     });
                 entry.end_block = parsed.number;
-                entry.end_ts = parsed.timestamp;
+                entry.end_ts = chain_time;
                 entry.tx_count += parsed.transactions_count;
             }
 
             if let Some(prev_ts) = prev_timestamp {
-                batch_stats.accumulate_block_time(prev_ts, parsed.timestamp, block_date);
+                batch_stats.accumulate_block_time(prev_ts, chain_time, block_date)?;
             }
-            prev_timestamp = Some(parsed.timestamp);
+            prev_timestamp = Some(chain_time);
 
             if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
                 if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
                     if prev_epoch_num == parsed.epoch_number - 1 {
-                        let duration_secs = (parsed.timestamp - prev_start_ts).num_seconds();
-                        let epoch_duration_minutes = duration_secs as f64 / 60.0;
-                        let bucket_minutes = i32::try_from(epoch_duration_minutes.round() as i64)
-                            .unwrap_or(i32::MAX);
+                        let duration_ms = chain_time_ms.checked_sub(prev_start_ts.timestamp_millis()).ok_or_else(|| anyhow!(
+                            "epoch duration overflow: block={} epoch={} previous_start_ms={} current_ms={chain_time_ms}",
+                            parsed.number, parsed.epoch_number, prev_start_ts.timestamp_millis()
+                        ))?;
+                        let duration_ms = u128::try_from(duration_ms).map_err(|_| anyhow!(
+                            "negative epoch duration: block={} epoch={} previous_start_ms={} current_ms={chain_time_ms}",
+                            parsed.number, parsed.epoch_number, prev_start_ts.timestamp_millis()
+                        ))?;
+                        let bucket_minutes = i32::try_from(ckbadger_common::work::rounded_ratio(duration_ms, 60_000)
+                            .map_err(|e| anyhow!("epoch minute rounding failed: block={}: {e}", parsed.number))?)
+                            .map_err(|_| anyhow!("epoch minute bucket exceeds i32: block={} duration_ms={duration_ms}", parsed.number))?;
                         if bucket_minutes <= 0 {
                             anyhow::bail!(
                                 "epoch time distribution: invalid bucket_minutes={} \
-                                 for epoch {} (prev_epoch={}, duration_secs={}, \
+                                 for epoch {} (prev_epoch={}, duration_ms={}, \
                                  block={})",
                                 bucket_minutes,
                                 parsed.epoch_number,
                                 prev_epoch_num,
-                                duration_secs,
+                                duration_ms,
                                 parsed.number,
                             );
                         }
@@ -3670,7 +3747,7 @@ impl Indexer {
                 }
             }
             if parsed.epoch_index == 0 {
-                prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
+                prev_epoch = Some((parsed.epoch_number, chain_time, 0.0));
             }
 
             // DAO per-day deltas for snapshot accumulation (mirrors T7 bulk path)
@@ -3710,7 +3787,7 @@ impl Indexer {
         {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
-                .insert_blocks_batch(&block_refs, &mut core_batch)?;
+                .insert_blocks_batch(&block_refs, &chain_times_ms, &mut core_batch)?;
             let mut stats_batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(
                 &batch_stats,
@@ -3859,6 +3936,7 @@ impl Indexer {
             };
             let (prepared_hodl_tracker, hodl_state_bytes) = self.prepare_hodl_wave_batch(
                 all_parsed_blocks,
+                &chain_times_ms,
                 &all_tx_data,
                 &input_cell_info,
                 &batch_cell_infos,
@@ -3868,6 +3946,7 @@ impl Indexer {
             let (prepared_cell_dist_tracker, cell_dist_state_bytes) = self
                 .prepare_cell_distribution_batch(
                     all_parsed_blocks,
+                    &chain_times_ms,
                     &all_tx_data,
                     &input_cell_info,
                     &batch_cell_infos,
@@ -4309,24 +4388,34 @@ impl Indexer {
                     // current batch depositors to get the full daily unique count.
                     let daily_depositor_addresses = {
                         let batch_blocks = stats.dao_block_numbers_by_date.get(date);
+                        let first_batch_block = stats
+                            .dao_block_numbers_by_date
+                            .values()
+                            .flat_map(|blocks| blocks.iter())
+                            .min()
+                            .copied()
+                            .ok_or_else(|| {
+                                anyhow!("missing DAO batch block while snapshotting {date}")
+                            })?;
                         // Find earlier blocks on the same date from the store.
                         let mut all_blocks_on_date: Vec<i64> = Vec::new();
                         if let Some(blocks) = batch_blocks {
-                            if let Some(&first_batch_block) = blocks.first() {
+                            if !blocks.is_empty() {
                                 // Scan backwards for blocks on the same date before this batch
                                 let mut check_block = first_batch_block - 1;
                                 while check_block >= 0 {
-                                    if let Ok(Some(hdr)) =
-                                        self.writer.store().get_block_header(check_block)
-                                    {
-                                        let hdr_date =
-                                            ckbadger_common::block_date_from_ms(hdr.timestamp);
-                                        if hdr_date == *date {
-                                            all_blocks_on_date.push(check_block);
-                                            check_block -= 1;
-                                        } else {
-                                            break;
-                                        }
+                                    let hdr = self.writer.store().get_block_header(check_block)?
+                                        .ok_or_else(|| anyhow!(
+                                            "missing block header {} while collecting DAO depositors for date {}",
+                                            check_block,
+                                            date
+                                        ))?;
+                                    let hdr_date = ckbadger_common::stats_bucket::stats_day(
+                                        hdr.chain_time_ms,
+                                    )?;
+                                    if hdr_date == *date {
+                                        all_blocks_on_date.push(check_block);
+                                        check_block -= 1;
                                     } else {
                                         break;
                                     }
@@ -7077,6 +7166,103 @@ mod tests {
             );
             assert_eq!(stored_fee(&batched, [0xd3; 32]), expected_fee);
             assert_eq!(stored_fee(&unbatched, [0xd3; 32]), expected_fee);
+        }
+
+        #[tokio::test]
+        async fn test_backward_midnight_live_stats_are_batch_independent() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let mut blocks = phase_setup_blocks();
+            blocks.push(completion_block(527));
+            let midnight = chrono::DateTime::parse_from_rfc3339("2026-10-23T16:00:00Z")
+                .unwrap()
+                .timestamp_millis();
+            for (block, offset) in blocks.iter_mut().zip([-10_000i64, 2_000, -2_000, 10_000]) {
+                block.block.header.timestamp = format!("0x{:x}", midnight + offset);
+            }
+
+            let (single_store, single_indexer) = live_dao_fixture_store();
+            for block in blocks.clone() {
+                write_live_block(&single_indexer, block).await.unwrap();
+            }
+            let (batch_store, batch_indexer) = live_dao_fixture_store();
+            write_live_blocks_with_entity_changes(
+                &batch_indexer,
+                blocks,
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            let rows = |store: &CkbadgerStore| {
+                [
+                    (
+                        ckbadger_store::CF_STATS_CHAIN,
+                        store.cf(ckbadger_store::CF_STATS_CHAIN),
+                    ),
+                    (
+                        ckbadger_store::CF_STATS_DAO,
+                        store.cf(ckbadger_store::CF_STATS_DAO),
+                    ),
+                ]
+                .into_iter()
+                .flat_map(|(name, cf)| {
+                    store
+                        .iterator_cf(cf, rocksdb::IteratorMode::Start)
+                        .map(|row| {
+                            let (key, value) = row.unwrap();
+                            ((name, key.to_vec()), value.to_vec())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+            };
+            let single_rows = rows(&single_store)
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let batch_rows = rows(&batch_store)
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            for (key, single_value) in &single_rows {
+                if Some(single_value) != batch_rows.get(key)
+                    && key.0 == ckbadger_store::CF_STATS_DAO
+                {
+                    panic!(
+                        "DAO differential at key 0x{}: per_block={:?} one_batch={:?}",
+                        hex::encode(&key.1),
+                        single_store.get_dao_daily_snapshot("20261024").unwrap(),
+                        batch_store.get_dao_daily_snapshot("20261024").unwrap()
+                    );
+                }
+                assert_eq!(
+                    Some(single_value),
+                    batch_rows.get(key),
+                    "different stats row: cf={} key=0x{}",
+                    key.0,
+                    hex::encode(&key.1)
+                );
+            }
+            assert_eq!(
+                single_rows.len(),
+                batch_rows.len(),
+                "different stats row count"
+            );
+            assert_eq!(
+                single_store
+                    .get_daily_block_stats("20261023")
+                    .unwrap()
+                    .unwrap()
+                    .block_count,
+                1
+            );
+            assert_eq!(
+                single_store
+                    .get_daily_block_stats("20261024")
+                    .unwrap()
+                    .unwrap()
+                    .block_count,
+                3
+            );
         }
 
         // ---- Phase 1a: participant-derived addr_txs rows ----

@@ -104,21 +104,29 @@ pub(crate) type DaoSameBatchMap = HashMap<(Vec<u8>, i16), DaoSameBatchDeposit>;
 pub(crate) fn count_new_addresses(
     changes: &HashMap<Vec<u8>, crate::sync::types::AddressBalanceDelta>,
     existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
-) -> i64 {
-    changes
-        .iter()
-        .filter(|(lock_hash, delta)| {
-            if delta.live_delta <= 0 {
-                return false;
-            }
-            let prev_live = existing
-                .get(*lock_hash)
-                .and_then(|entry| entry.as_ref())
-                .map(|balance| balance.live_cells_count)
-                .unwrap_or(0);
-            prev_live <= 0
-        })
-        .count() as i64
+) -> anyhow::Result<i64> {
+    let mut count = 0i64;
+    for (lock_hash, delta) in changes {
+        if delta.live_delta <= 0 {
+            continue;
+        }
+        let prefetched = existing.get(lock_hash).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing prefetched address balance while counting new addresses: lock_hash=0x{}",
+                hex::encode(lock_hash)
+            )
+        })?;
+        let prev_live = prefetched
+            .as_ref()
+            .map(|balance| balance.live_cells_count)
+            .unwrap_or(0);
+        if prev_live <= 0 {
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("new-address count overflow"))?;
+        }
+    }
+    Ok(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,8 +201,9 @@ pub(crate) fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
 }
 
 impl BatchStats {
-    /// Accumulate one inter-block time delta into both the per-day sum and the
-    /// per-second bucket histogram. Negative deltas (clock skew) are dropped.
+    /// Accumulate one monotonic chain-time interval into the per-day sum and
+    /// per-second bucket histogram. A negative interval violates the writer's
+    /// canonical chain-time invariant.
     ///
     /// The per-day sum stores full millisecond precision so that the daily
     /// average matches the on-the-fly average derived from raw block headers.
@@ -203,16 +212,23 @@ impl BatchStats {
         prev_ts: chrono::DateTime<chrono::Utc>,
         curr_ts: chrono::DateTime<chrono::Utc>,
         block_date: NaiveDate,
-    ) {
+    ) -> anyhow::Result<()> {
         let delta_ms = (curr_ts - prev_ts).num_milliseconds();
         if delta_ms < 0 {
-            return;
+            anyhow::bail!("chain time regressed while accumulating block interval: previous_ms={} current_ms={} date={}", prev_ts.timestamp_millis(), curr_ts.timestamp_millis(), block_date);
         }
         let bucket = block_time_to_bucket(delta_ms / 1000);
         *self.block_time_dist.entry(bucket).or_default() += 1;
         let entry = self.daily_block_times.entry(block_date).or_insert((0, 0));
-        entry.0 += delta_ms;
-        entry.1 += 1;
+        entry.0 = entry
+            .0
+            .checked_add(delta_ms)
+            .ok_or_else(|| anyhow!("daily block-time sum overflow: date={block_date}"))?;
+        entry.1 = entry
+            .1
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("daily block-time count overflow: date={block_date}"))?;
+        Ok(())
     }
 }
 
@@ -833,6 +849,30 @@ mod tests {
     // -- count_new_addresses ------------------------------------------------
 
     #[test]
+    fn test_count_new_addresses_rejects_missing_prefetch_key() {
+        let lock = vec![0x66; 32];
+        let tx_hash = vec![0xaa; 32];
+        let changes = HashMap::from([(
+            lock.clone(),
+            crate::sync::types::AddressBalanceDelta {
+                balance_delta: 100,
+                live_delta: 1,
+                total_delta: 1,
+                tx_delta: 1,
+                used_delta: 10,
+                first_seen_block: 1,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 1,
+                last_activity_tx: tx_hash,
+            },
+        )]);
+        let error = count_new_addresses(&changes, &HashMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&hex::encode(lock)), "{error}");
+    }
+
+    #[test]
     fn test_count_new_addresses_counts_only_first_live_transitions() {
         use crate::sync::types::AddressBalanceDelta;
 
@@ -886,6 +926,7 @@ mod tests {
         );
 
         let mut existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
+        existing.insert(addr_new, None);
         existing.insert(
             addr_existing_live,
             Some(AddressBalance {
@@ -901,7 +942,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(count_new_addresses(&changes, &existing), 2);
+        assert_eq!(count_new_addresses(&changes, &existing).unwrap(), 2);
     }
 
     #[test]
@@ -940,7 +981,7 @@ mod tests {
         );
 
         let existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
-        assert_eq!(count_new_addresses(&changes, &existing), 0);
+        assert_eq!(count_new_addresses(&changes, &existing).unwrap(), 0);
     }
 
     // -- classify_object_collection_id -----------------------------------------
@@ -2131,7 +2172,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
 
         let mut stats = BatchStats::default();
-        stats.accumulate_block_time(prev_ts, curr_ts, date);
+        stats.accumulate_block_time(prev_ts, curr_ts, date).unwrap();
 
         let (sum_ms, count) = stats.daily_block_times[&date];
         assert_eq!(count, 1);
@@ -2144,14 +2185,17 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_block_time_drops_negative_delta() {
+    fn test_accumulate_block_time_rejects_negative_delta() {
         let curr_ts = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
         // Clock skew: curr is earlier than prev.
         let prev_ts = curr_ts + chrono::Duration::milliseconds(500);
         let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
 
         let mut stats = BatchStats::default();
-        stats.accumulate_block_time(prev_ts, curr_ts, date);
+        let err = stats
+            .accumulate_block_time(prev_ts, curr_ts, date)
+            .unwrap_err();
+        assert!(err.to_string().contains("chain time regressed"));
 
         assert!(stats.daily_block_times.is_empty());
         assert!(stats.block_time_dist.is_empty());
@@ -2164,17 +2208,23 @@ mod tests {
 
         let mut stats = BatchStats::default();
         // Three deltas: 7945ms, 8123ms, 9999ms = 26067ms total.
-        stats.accumulate_block_time(base, base + chrono::Duration::milliseconds(7945), date);
-        stats.accumulate_block_time(
-            base + chrono::Duration::milliseconds(7945),
-            base + chrono::Duration::milliseconds(7945 + 8123),
-            date,
-        );
-        stats.accumulate_block_time(
-            base + chrono::Duration::milliseconds(7945 + 8123),
-            base + chrono::Duration::milliseconds(7945 + 8123 + 9999),
-            date,
-        );
+        stats
+            .accumulate_block_time(base, base + chrono::Duration::milliseconds(7945), date)
+            .unwrap();
+        stats
+            .accumulate_block_time(
+                base + chrono::Duration::milliseconds(7945),
+                base + chrono::Duration::milliseconds(7945 + 8123),
+                date,
+            )
+            .unwrap();
+        stats
+            .accumulate_block_time(
+                base + chrono::Duration::milliseconds(7945 + 8123),
+                base + chrono::Duration::milliseconds(7945 + 8123 + 9999),
+                date,
+            )
+            .unwrap();
 
         let (sum_ms, count) = stats.daily_block_times[&date];
         assert_eq!(count, 3);

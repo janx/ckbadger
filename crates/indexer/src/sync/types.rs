@@ -310,6 +310,22 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
         &self.by_block
     }
 
+    /// Reassign every per-block contribution to its canonical stats key.
+    /// Preserve block boundaries so the entity-stats undo log can restore
+    /// exact pre-images across a mid-batch reorg.
+    pub fn remap_keys(
+        self,
+        mut map_key: impl FnMut(i64, K) -> anyhow::Result<K>,
+    ) -> anyhow::Result<Self> {
+        let mut remapped = Self::new();
+        for (block, keys) in self.by_block {
+            for (key, (capacity, knowledge)) in keys {
+                remapped.add(block, map_key(block, key)?, capacity, knowledge)?;
+            }
+        }
+        Ok(remapped)
+    }
+
     /// Whole-batch totals, for downstream aggregates (cluster capacity, …)
     /// that are batch-scoped. Folded from the same per-block collection — never
     /// a second, independently accumulated copy.
@@ -346,6 +362,25 @@ mod entity_daily_changes_tests {
 
     fn key(byte: u8) -> EntityDateKey {
         (vec![byte; 32], 20_260_922)
+    }
+
+    #[test]
+    fn remap_keys_reassigns_date_without_losing_block_undo_boundaries() {
+        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        changes.add(10, key(0x22), 100, 5).unwrap();
+        changes.add(11, key(0x22), -20, -1).unwrap();
+        let remapped = changes
+            .remap_keys(|_, (id, _)| Ok((id, 20_260_923)))
+            .unwrap();
+        assert_eq!(remapped.by_block().len(), 2);
+        assert_eq!(
+            remapped.by_block()[0].1.get(&(vec![0x22; 32], 20_260_923)),
+            Some(&(100, 5))
+        );
+        assert_eq!(
+            remapped.by_block()[1].1.get(&(vec![0x22; 32], 20_260_923)),
+            Some(&(-20, -1))
+        );
     }
 
     #[test]

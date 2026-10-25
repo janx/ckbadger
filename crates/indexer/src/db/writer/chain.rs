@@ -13,13 +13,21 @@ impl BatchWriter {
     pub fn insert_blocks_batch(
         &self,
         blocks: &[&ParsedBlock],
+        chain_times_ms: &[i64],
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
         }
 
-        for block in blocks {
+        if blocks.len() != chain_times_ms.len() {
+            anyhow::bail!(
+                "chain-time/header count mismatch: blocks={} chain_times={}",
+                blocks.len(),
+                chain_times_ms.len()
+            );
+        }
+        for (block, &chain_time_ms) in blocks.iter().zip(chain_times_ms) {
             let compact_target = u32::try_from(block.compact_target).map_err(|_| {
                 anyhow::anyhow!(
                     "block compact_target out of u32 range: block={}, compact_target={}",
@@ -41,7 +49,7 @@ impl BatchWriter {
                 compact_target,
                 miner_lock_hash: block.miner_lock_hash.clone(),
                 cycles: None,
-                chain_time_ms: block.timestamp.timestamp_millis(),
+                chain_time_ms,
             };
             batch.put_block_header(block.number, &header);
         }

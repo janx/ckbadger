@@ -2,7 +2,7 @@
 //!
 //! All types use `bincode` serialization for compact binary storage.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ops::Deref;
 
 use chrono::{DateTime, Utc};
@@ -2260,10 +2260,10 @@ pub struct DailyActivityStats {
     pub total_ckb_moved: u128,
     /// Per-script activity counts: hex code_hash -> count
     #[serde(default)]
-    pub script_counts: HashMap<String, u32>,
+    pub script_counts: BTreeMap<String, u32>,
     /// Per-protocol action counts: "rgbpp:leap_to_ckb" -> count
     #[serde(default)]
-    pub protocol_action_counts: HashMap<String, u32>,
+    pub protocol_action_counts: BTreeMap<String, u32>,
 }
 
 impl DailyActivityStats {

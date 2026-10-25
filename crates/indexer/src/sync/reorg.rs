@@ -88,6 +88,7 @@ impl Indexer {
     pub(crate) fn prepare_hodl_wave_batch(
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
+        chain_times_ms: &[i64],
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -103,8 +104,15 @@ impl Indexer {
             .collect();
 
         let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
-            let block_date = ckbadger_common::block_date(parsed.timestamp);
+        if all_parsed_blocks.len() != chain_times_ms.len() {
+            anyhow::bail!(
+                "HODL tracker block/chain-time count mismatch: blocks={} times={}",
+                all_parsed_blocks.len(),
+                chain_times_ms.len()
+            );
+        }
+        for (parsed, &chain_time_ms) in all_parsed_blocks.iter().zip(chain_times_ms) {
+            let block_date = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
             if let Some((snapshot_date, snapshot)) =
                 begin_hodl_wave_block(&mut tracker, parsed.number, block_date)
             {
@@ -202,6 +210,7 @@ impl Indexer {
     pub(crate) fn prepare_cell_distribution_batch(
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
+        chain_times_ms: &[i64],
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -222,8 +231,15 @@ impl Indexer {
             .collect();
 
         let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
-            let block_date = ckbadger_common::block_date(parsed.timestamp);
+        if all_parsed_blocks.len() != chain_times_ms.len() {
+            anyhow::bail!(
+                "cell distribution block/chain-time count mismatch: blocks={} times={}",
+                all_parsed_blocks.len(),
+                chain_times_ms.len()
+            );
+        }
+        for (parsed, &chain_time_ms) in all_parsed_blocks.iter().zip(chain_times_ms) {
+            let block_date = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
             if let Some((snapshot_date, snapshot, cohort)) =
                 begin_cell_distribution_block(&mut tracker, parsed.number, block_date)
             {
