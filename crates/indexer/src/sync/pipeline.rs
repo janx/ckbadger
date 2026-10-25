@@ -45,8 +45,8 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, EntityDateKey, ReorgAction,
-    ScriptDailyKey, TxData,
+    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction, TxData, UndatedEntityKey,
+    UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -823,13 +823,13 @@ impl Indexer {
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
-            script_daily_changes: EntityDailyChanges<ScriptDailyKey>,
-            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+            script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
+            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-            spore_daily_changes: EntityDailyChanges<EntityDateKey>,
-            cluster_daily_changes: EntityDailyChanges<EntityDateKey>,
+            spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+            cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
-            object_daily_changes: EntityDailyChanges<EntityDateKey>,
+            object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             parser_perf_sample: ParserBatchPerfSample,
         }
 
@@ -1628,13 +1628,13 @@ impl Indexer {
                 // batch spans many blocks, and a shallow fork can land in the
                 // middle of one. Flattening them loses the block identity the
                 // undo log needs to restore a key's end-of-block-N value.
-                let mut script_daily_changes = EntityDailyChanges::<ScriptDailyKey>::new();
-                let mut token_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
+                let mut script_daily_changes = EntityDailyChanges::<UndatedScriptKey>::new();
+                let mut token_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
-                let mut spore_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
-                let mut cluster_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
+                let mut spore_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
+                let mut cluster_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
                 let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
-                let mut object_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
+                let mut object_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
                     HashMap::new();
                 let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> =
@@ -1660,9 +1660,6 @@ impl Indexer {
                 }
 
                 for tx_data in &all_tx_data {
-                    let date_yyyymmdd = ckbadger_store::keys::timestamp_ms_to_date(
-                        tx_data.timestamp.timestamp_millis(),
-                    );
                     // cell_cache update
                     for (output_index, _cell) in tx_data.cells.iter().enumerate() {
                         let output_index_i16 = match checked_usize_to_i16(
@@ -1781,12 +1778,7 @@ impl Indexer {
                         accumulate_daily!(
                             script_daily_changes,
                             tx_data.block_number,
-                            (
-                                cell.lock_code_hash.clone(),
-                                lock_hash_type,
-                                false,
-                                date_yyyymmdd,
-                            ),
+                            (cell.lock_code_hash.clone(), lock_hash_type, false),
                             i128::from(cell.capacity),
                             i128::from(cell_occupied)
                         );
@@ -1846,7 +1838,7 @@ impl Indexer {
                             accumulate_daily!(
                                 script_daily_changes,
                                 tx_data.block_number,
-                                (type_code_hash.clone(), type_hash_type, true, date_yyyymmdd,),
+                                (type_code_hash.clone(), type_hash_type, true),
                                 i128::from(cell.capacity),
                                 i128::from(cell_occupied)
                             );
@@ -1859,7 +1851,7 @@ impl Indexer {
                             accumulate_daily!(
                                 token_daily_changes,
                                 tx_data.block_number,
-                                (type_script_hash.to_vec(), date_yyyymmdd),
+                                type_script_hash.to_vec(),
                                 i128::from(cell.capacity),
                                 i128::from(cell_occupied)
                             );
@@ -1886,7 +1878,7 @@ impl Indexer {
                                 accumulate_daily!(
                                     spore_daily_changes,
                                     tx_data.block_number,
-                                    (spore_id, date_yyyymmdd),
+                                    spore_id,
                                     i128::from(cell.capacity),
                                     i128::from(cell_occupied)
                                 );
@@ -1898,7 +1890,7 @@ impl Indexer {
                                     accumulate_daily!(
                                         cluster_daily_changes,
                                         tx_data.block_number,
-                                        (effective_cluster_id, date_yyyymmdd),
+                                        effective_cluster_id,
                                         i128::from(cell.capacity),
                                         i128::from(cell_occupied)
                                     );
@@ -1923,7 +1915,7 @@ impl Indexer {
                                 accumulate_daily!(
                                     object_daily_changes,
                                     tx_data.block_number,
-                                    (collection_id, date_yyyymmdd),
+                                    collection_id,
                                     i128::from(cell.capacity),
                                     i128::from(cell_occupied)
                                 );
@@ -2003,12 +1995,7 @@ impl Indexer {
                                 accumulate_daily!(
                                     script_daily_changes,
                                     tx_data.block_number,
-                                    (
-                                        info.lock_code_hash.clone(),
-                                        lock_hash_type,
-                                        false,
-                                        date_yyyymmdd,
-                                    ),
+                                    (info.lock_code_hash.clone(), lock_hash_type, false),
                                     -i128::from(info.capacity),
                                     -i128::from(info.occupied_capacity)
                                 );
@@ -2062,12 +2049,7 @@ impl Indexer {
                                     accumulate_daily!(
                                         script_daily_changes,
                                         tx_data.block_number,
-                                        (
-                                            type_code_hash.clone(),
-                                            type_hash_type,
-                                            true,
-                                            date_yyyymmdd,
-                                        ),
+                                        (type_code_hash.clone(), type_hash_type, true),
                                         -i128::from(info.capacity),
                                         -i128::from(info.occupied_capacity)
                                     );
@@ -2080,7 +2062,7 @@ impl Indexer {
                                     accumulate_daily!(
                                         token_daily_changes,
                                         tx_data.block_number,
-                                        (type_script_hash.to_vec(), date_yyyymmdd),
+                                        type_script_hash.to_vec(),
                                         -i128::from(info.capacity),
                                         -i128::from(info.occupied_capacity)
                                     );
@@ -2121,7 +2103,7 @@ impl Indexer {
                                             accumulate_daily!(
                                                 spore_daily_changes,
                                                 tx_data.block_number,
-                                                (index.spore_id.clone(), date_yyyymmdd),
+                                                index.spore_id.clone(),
                                                 -i128::from(info.capacity),
                                                 -i128::from(info.occupied_capacity)
                                             );
@@ -2134,7 +2116,7 @@ impl Indexer {
                                                 accumulate_daily!(
                                                     cluster_daily_changes,
                                                     tx_data.block_number,
-                                                    (effective_cluster_id, date_yyyymmdd),
+                                                    effective_cluster_id,
                                                     -i128::from(info.capacity),
                                                     -i128::from(info.occupied_capacity)
                                                 );
@@ -2148,7 +2130,7 @@ impl Indexer {
                                         accumulate_daily!(
                                             object_daily_changes,
                                             tx_data.block_number,
-                                            (collection_id, date_yyyymmdd),
+                                            collection_id,
                                             -i128::from(info.capacity),
                                             -i128::from(info.occupied_capacity)
                                         );

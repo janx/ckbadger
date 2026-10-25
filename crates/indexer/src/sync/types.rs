@@ -228,17 +228,22 @@ impl UnresolvedRpcProbeSummary {
 
 /// `SCRIPT_DAILY` identity: `(code_hash, hash_type, is_type, date_yyyymmdd)`.
 pub type ScriptDailyKey = (Vec<u8>, u8, bool, u32);
+/// Parser-side script identity before the writer assigns a canonical chain day.
+pub type UndatedScriptKey = (Vec<u8>, u8, bool);
 /// `TOKEN_DAILY` / `CLUSTER_DAILY` / `SPORE_DAILY` / `OBJECT_DAILY` identity:
 /// `(entity_id, date_yyyymmdd)`.
 pub type EntityDateKey = (Vec<u8>, u32);
+/// Parser-side entity identity before the writer assigns a canonical chain day.
+pub type UndatedEntityKey = Vec<u8>;
 
 /// Entity daily deltas accumulated **per block**, in ascending block order.
 ///
 /// A committed batch can span thousands of blocks. Flattening every block's
-/// contribution into one `HashMap<(entity, date), (i128, i128)>` — which is
-/// what the parser used to hand the writer — destroys the block identity, and
-/// with it any possibility of recording what a key's value was at the end of
-/// block N. A shallow fork landing inside a batch then has nothing to restore.
+/// contribution into one map destroys block identity, and with it any
+/// possibility of recording a key's end-of-block-N value. A shallow fork
+/// landing inside a batch would then have nothing to restore. Parser keys
+/// contain only entity identity; the writer assigns each block's canonical
+/// chain-time day before persisting a dated key.
 ///
 /// Fail fast on out-of-order blocks: the parser walks `all_tx_data`, which is
 /// built block by block in ascending order. A block going backwards means that
@@ -313,11 +318,11 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
     /// Reassign every per-block contribution to its canonical stats key.
     /// Preserve block boundaries so the entity-stats undo log can restore
     /// exact pre-images across a mid-batch reorg.
-    pub fn remap_keys(
+    pub fn remap_keys<M: Eq + std::hash::Hash + Clone>(
         self,
-        mut map_key: impl FnMut(i64, K) -> anyhow::Result<K>,
-    ) -> anyhow::Result<Self> {
-        let mut remapped = Self::new();
+        mut map_key: impl FnMut(i64, K) -> anyhow::Result<M>,
+    ) -> anyhow::Result<EntityDailyChanges<M>> {
+        let mut remapped = EntityDailyChanges::<M>::new();
         for (block, keys) in self.by_block {
             for (key, (capacity, knowledge)) in keys {
                 remapped.add(block, map_key(block, key)?, capacity, knowledge)?;
@@ -365,16 +370,16 @@ mod entity_daily_changes_tests {
     }
 
     #[test]
-    fn remap_keys_reassigns_date_without_losing_block_undo_boundaries() {
-        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
-        changes.add(10, key(0x22), 100, 5).unwrap();
-        changes.add(11, key(0x22), -20, -1).unwrap();
+    fn remap_undated_identity_assigns_each_blocks_canonical_day() {
+        let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
+        changes.add(10, vec![0x22; 32], 100, 5).unwrap();
+        changes.add(11, vec![0x22; 32], -20, -1).unwrap();
         let remapped = changes
-            .remap_keys(|_, (id, _)| Ok((id, 20_260_923)))
+            .remap_keys(|block, id| Ok((id, if block == 10 { 20_260_922 } else { 20_260_923 })))
             .unwrap();
         assert_eq!(remapped.by_block().len(), 2);
         assert_eq!(
-            remapped.by_block()[0].1.get(&(vec![0x22; 32], 20_260_923)),
+            remapped.by_block()[0].1.get(&(vec![0x22; 32], 20_260_922)),
             Some(&(100, 5))
         );
         assert_eq!(

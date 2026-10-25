@@ -49,7 +49,7 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
     AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
-    EntityDailyChanges, EntityDateKey, ScriptDailyKey, TxData, UnresolvedLocalProbeSummary,
+    EntityDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey, UnresolvedLocalProbeSummary,
     UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
@@ -1621,13 +1621,13 @@ impl Indexer {
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
-        script_daily_changes: EntityDailyChanges<ScriptDailyKey>,
-        token_daily_changes: EntityDailyChanges<EntityDateKey>,
+        script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
+        token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-        spore_daily_changes: EntityDailyChanges<EntityDateKey>,
-        cluster_daily_changes: EntityDailyChanges<EntityDateKey>,
+        spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+        cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
-        object_daily_changes: EntityDailyChanges<EntityDateKey>,
+        object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
@@ -2109,17 +2109,17 @@ impl Indexer {
                 .map_err(|e| anyhow!("invalid canonical stats day for block={block}: {e}"))
         };
         let script_daily_changes =
-            script_daily_changes.remap_keys(|block, (code, hash_type, is_type, _)| {
+            script_daily_changes.remap_keys(|block, (code, hash_type, is_type)| {
                 Ok((code, hash_type, is_type, chain_day_key(block)?))
             })?;
         let token_daily_changes =
-            token_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+            token_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
         let spore_daily_changes =
-            spore_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+            spore_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
         let cluster_daily_changes =
-            cluster_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+            cluster_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
         let object_daily_changes =
-            object_daily_changes.remap_keys(|block, (id, _)| Ok((id, chain_day_key(block)?)))?;
+            object_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
         entity_stats.with(|overlay| -> Result<()> {
             batch_undo_seq.with(|undo_seq| {
                 self.writer.update_script_daily_deltas_batch(
@@ -6185,7 +6185,7 @@ mod tests {
         pub(super) async fn write_live_block_with_entity_changes(
             indexer: &Indexer,
             block: BlockResponseWithCycles,
-            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             write_live_blocks_with_entity_changes(indexer, vec![block], token_daily_changes).await
         }
@@ -6195,7 +6195,7 @@ mod tests {
         pub(super) async fn write_live_blocks_with_entity_changes(
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
-            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             write_live_blocks_inner(
                 indexer,
@@ -6224,7 +6224,7 @@ mod tests {
         }
 
         enum FixtureTokenDaily {
-            Given(EntityDailyChanges<EntityDateKey>),
+            Given(EntityDailyChanges<UndatedEntityKey>),
             FromCells,
         }
 
@@ -6234,12 +6234,9 @@ mod tests {
             all_tx_data: &[TxData],
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        ) -> Result<EntityDailyChanges<EntityDateKey>> {
-            let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        ) -> Result<EntityDailyChanges<UndatedEntityKey>> {
+            let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
             for tx_data in all_tx_data {
-                let date = ckbadger_store::keys::timestamp_ms_to_date(
-                    tx_data.timestamp.timestamp_millis(),
-                );
                 for cell in &tx_data.cells {
                     if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
                         cell.type_script_hash.as_deref(),
@@ -6253,7 +6250,7 @@ mod tests {
                         );
                         changes.add(
                             tx_data.block_number,
-                            (type_hash.to_vec(), date),
+                            type_hash.to_vec(),
                             i128::from(cell.capacity),
                             i128::from(occupied),
                         )?;
@@ -6287,7 +6284,7 @@ mod tests {
                     ) {
                         changes.add(
                             tx_data.block_number,
-                            (type_hash.to_vec(), date),
+                            type_hash.to_vec(),
                             -i128::from(info.capacity),
                             -i128::from(info.occupied_capacity),
                         )?;
@@ -6767,14 +6764,11 @@ mod tests {
                 witnesses: vec![],
             };
 
-            // Same timestamp the `header` fixture gives block 101.
-            let date =
-                ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000i64 + 101 * 1000);
-            let mut token_daily = EntityDailyChanges::<EntityDateKey>::new();
+            let mut token_daily = EntityDailyChanges::<UndatedEntityKey>::new();
             token_daily
                 .add(
                     101,
-                    (type_script_hash.clone(), date),
+                    type_script_hash.clone(),
                     20_000_000_000,
                     14_300_000_000,
                 )
@@ -6789,6 +6783,13 @@ mod tests {
             .unwrap();
 
             // The daily row reached RocksDB with the exact value.
+            let chain_time = store.get_block_header(101).unwrap().unwrap().chain_time_ms;
+            let date = ckbadger_common::stats_bucket::stats_day(chain_time)
+                .unwrap()
+                .format("%Y%m%d")
+                .to_string()
+                .parse::<u32>()
+                .unwrap();
             let daily = store
                 .get_token_daily_delta(&type_script_hash, date)
                 .unwrap()
@@ -9539,20 +9540,11 @@ mod tests {
             range.map(cellbase_block).collect()
         }
 
-        fn date_of(number: u64) -> u32 {
-            ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000 + number as i64 * 1000)
-        }
-
-        fn token_changes_at(blocks: &[u64]) -> EntityDailyChanges<EntityDateKey> {
-            let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        fn token_changes_at(blocks: &[u64]) -> EntityDailyChanges<UndatedEntityKey> {
+            let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
             for &block in blocks {
                 changes
-                    .add(
-                        block as i64,
-                        (TOKEN.to_vec(), date_of(block)),
-                        61_00000000,
-                        61_00000000,
-                    )
+                    .add(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000)
                     .unwrap();
             }
             changes
