@@ -1605,7 +1605,9 @@ impl Indexer {
     }
 
     fn bulk_completion_blocks_per_second(current: u64, elapsed: Option<i64>) -> Option<f64> {
-        elapsed.filter(|&seconds| seconds > 0).map(|seconds| current as f64 / seconds as f64)
+        elapsed
+            .filter(|&seconds| seconds > 0)
+            .map(|seconds| current as f64 / seconds as f64)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4475,8 +4477,14 @@ mod tests {
     #[test]
     fn bulk_completion_rate_has_no_fabricated_zero_without_duration() {
         assert_eq!(Indexer::bulk_completion_blocks_per_second(100, None), None);
-        assert_eq!(Indexer::bulk_completion_blocks_per_second(100, Some(0)), None);
-        assert_eq!(Indexer::bulk_completion_blocks_per_second(100, Some(20)), Some(5.0));
+        assert_eq!(
+            Indexer::bulk_completion_blocks_per_second(100, Some(0)),
+            None
+        );
+        assert_eq!(
+            Indexer::bulk_completion_blocks_per_second(100, Some(20)),
+            Some(5.0)
+        );
     }
     use ckbadger_store::keys;
     use ckbadger_store::LiveCellInfo;

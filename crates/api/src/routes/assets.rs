@@ -3261,10 +3261,16 @@ mod tests {
         .unwrap();
         entry.owned_capacity = Some("not-a-number".into());
         let error = parse_h_multiplier_ratio(&entry).unwrap_err().to_string();
-        assert!(error.contains("owned_capacity") && error.contains("0x01"), "{error}");
+        assert!(
+            error.contains("owned_capacity") && error.contains("0x01"),
+            "{error}"
+        );
         entry.owned_capacity = None;
         entry.owned_knowledge = Some("invalid".into());
-        assert!(parse_h_multiplier_ratio(&entry).unwrap_err().to_string().contains("owned_knowledge"));
+        assert!(parse_h_multiplier_ratio(&entry)
+            .unwrap_err()
+            .to_string()
+            .contains("owned_knowledge"));
         entry.owned_knowledge = None;
         assert_eq!(parse_h_multiplier_ratio(&entry).unwrap(), None);
         entry.owned_capacity = Some("42".into());
