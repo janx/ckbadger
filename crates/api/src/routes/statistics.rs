@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
@@ -19,6 +19,7 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
+use crate::utils::daily_series::{certify_blockless_daily_gap, consecutive_daily_chart};
 use crate::utils::stats_bucket::{
     complete_days_cache_key, is_complete_day_key, load_chain_time, parse_day_key, ChainTime,
 };
@@ -1698,7 +1699,7 @@ async fn get_ckbytes_allocation(
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:knowledge-size:v2", chain)?;
+    let cache_key = complete_days_cache_key("chart:knowledge-size:v3", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if chart_response_has_data(&cached) {
@@ -1747,6 +1748,7 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         });
     }
 
+    let data = consecutive_daily_chart(state.store.clone(), chain, "knowledge-size", data).await?;
     let response = ChartResponse {
         data,
         title: "Common Knowledge Size".to_string(),
@@ -3798,87 +3800,6 @@ fn secondary_issuance_data_point(
     }))
 }
 
-fn certify_inflation_snapshot_gap_is_blockless(
-    store: &ckbadger_store::CkbadgerStore,
-    first_missing_date: chrono::NaiveDate,
-    next_snapshot_date: chrono::NaiveDate,
-) -> Result<(), ApiRouteError> {
-    if first_missing_date >= next_snapshot_date {
-        return Err(ApiError::internal(format!(
-            "invalid DAO snapshot gap bounds: first_missing_date={}, next_snapshot_date={}",
-            first_missing_date, next_snapshot_date
-        )));
-    }
-
-    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
-        .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
-    let day_start = first_missing_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
-        ApiError::internal(format!(
-            "invalid start of missing DAO snapshot date {}",
-            first_missing_date
-        ))
-    })?;
-    let day_start_ms = utc8
-        .from_local_datetime(&day_start)
-        .single()
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "ambiguous start of missing DAO snapshot date {}",
-                first_missing_date
-            ))
-        })?
-        .timestamp_millis();
-
-    let first_block = store
-        .find_first_block_at_or_after_chain_time_ms(day_start_ms)
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "failed to locate canonical block coverage for DAO snapshot gap starting {}: {}",
-                first_missing_date, error
-            ))
-        })?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "DAO snapshot exists for {} but no canonical block exists at or after preceding gap start {}",
-                next_snapshot_date, first_missing_date
-            ))
-        })?;
-    let first_header = store
-        .get_block_header(first_block)
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "failed to read canonical block {} while validating DAO snapshot gap starting {}: {}",
-                first_block, first_missing_date, error
-            ))
-        })?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "canonical block header disappeared while validating DAO snapshot gap: block={}, first_missing_date={}",
-                first_block, first_missing_date
-            ))
-        })?;
-    let first_block_date = ckbadger_common::stats_bucket::stats_day(first_header.chain_time_ms)
-        .map_err(|error| ApiError::internal(format!(
-            "invalid chain time while validating DAO snapshot gap: block={first_block} chain_time_ms={}: {error}",
-            first_header.chain_time_ms
-        )))?;
-
-    if first_block_date < next_snapshot_date {
-        return Err(ApiError::internal(format!(
-            "missing complete-day DAO snapshot for block-bearing date: missing_date={}, first_block={}, next_snapshot_date={}",
-            first_block_date, first_block, next_snapshot_date
-        )));
-    }
-    if first_block_date > next_snapshot_date {
-        return Err(ApiError::internal(format!(
-            "DAO snapshot has no canonical block-date coverage: snapshot_date={}, first_block_at_or_after_gap={}, first_block_date={}",
-            next_snapshot_date, first_block, first_block_date
-        )));
-    }
-
-    Ok(())
-}
-
 fn build_inflation_rate_response<F>(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
     chain: Option<ChainTime>,
@@ -4083,8 +4004,9 @@ async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResu
             &snapshots,
             chain,
             |first_missing_date, next_snapshot_date| {
-                certify_inflation_snapshot_gap_is_blockless(
+                certify_blockless_daily_gap(
                     &store,
+                    "DAO snapshot",
                     first_missing_date,
                     next_snapshot_date,
                 )

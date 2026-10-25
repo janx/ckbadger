@@ -1,6 +1,7 @@
 pub mod address;
 pub mod assets;
 pub(crate) mod client_ip;
+pub(crate) mod daily_series;
 pub mod exact_fee;
 pub mod exact_json;
 pub mod exact_ratio;

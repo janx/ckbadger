@@ -3858,4 +3858,34 @@ rejection tests for an output that is not the paired request.
 
 **Re-sync required**: Yes. `CachedBlockHeader` gained a required persisted field and existing date/hour aggregates were written under the old calendar rule. Rebuild the mutable domain store from genesis. The append-only cell payload store and network-observation store do not change.
 
+---
+
+### STATS-018: Homepage daily changes rejected legitimate blockless dates
+
+**Date**: 2026-10-25
+
+**Symptom**: The knowledge-size and DAO-deposit change charts displayed errors
+when their recent history included a blockless date, such as testnet's gap
+between genesis on May 12, 2020 and its first mined block on May 22.
+
+**Root cause**: The frontend correctly requires consecutive dates for daily
+subtraction, but both cumulative chart endpoints returned sparse stored rows.
+Those rows are valid: chain state cannot change during days without blocks.
+The inflation endpoint already verified and expanded such gaps (DAO-027),
+but the two homepage producers did not share that contract.
+
+**Fix**: Extract the inflation endpoint's canonical chain-time gap proof into
+one API utility. Both cumulative chart endpoints carry their exact value
+strings across verified blockless days, including trailing days before the
+incomplete tip day. Missing rows on block-bearing dates still fail with the
+date and first affected block. The frontend's consecutive-date check remains.
+
+**Regression checks**: Both endpoints serve every complete date across the
+genesis and trailing gaps, preserve single-shannon differences and secondary values,
+exclude the incomplete tip, and reject interior and trailing block-bearing
+gaps. Existing inflation regressions cover the shared proof.
+
+**Re-sync required**: No. The sparse persisted data is correct. All changes
+are on the API read path; no domain, append-only, or network writes change.
+
 _Last updated: 2026-10-25_

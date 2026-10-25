@@ -501,6 +501,69 @@ fn put_total_deposit_snapshot(store: &CkbadgerStore, snapshot: &DaoDailySnapshot
         .unwrap();
 }
 
+#[tokio::test]
+async fn total_deposit_chart_fills_only_verified_blockless_days() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/charts/total-deposit").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let expected: Vec<_> = (12..=24)
+        .map(|day| {
+            let (value, depositors) = if day < 22 {
+                ("123.00000001", "7")
+            } else {
+                ("120.00000002", "8")
+            };
+            serde_json::json!({
+                "date": format!("2020-05-{day:02}"),
+                "value": value,
+                "value2": depositors,
+            })
+        })
+        .collect();
+    assert_eq!(json["data"], serde_json::json!(expected));
+}
+
+#[tokio::test]
+async fn total_deposit_chart_rejects_block_bearing_gaps_including_trailing_days() {
+    for (missing_day, blocks, first_block) in [
+        (
+            "2020-05-15",
+            vec![
+                (0, 1_589_276_230_000),
+                (1, utc_ms("2020-05-15T04:00:00Z")),
+                (2, 1_590_137_711_584),
+                (3, utc_ms("2020-05-25T04:00:00Z")),
+            ],
+            1,
+        ),
+        (
+            "2020-05-24",
+            vec![
+                (0, 1_589_276_230_000),
+                (1, 1_590_137_711_584),
+                (2, utc_ms("2020-05-24T04:00:00Z")),
+                (3, utc_ms("2020-05-25T04:00:00Z")),
+            ],
+            2,
+        ),
+    ] {
+        let store = test_store();
+        seed_sparse_daily_chart_history(&store);
+        seed_block_headers_at(&store, &blocks);
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/dao/charts/total-deposit").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(message.contains(missing_day), "{json}");
+        assert!(
+            message.contains(&format!("first_block={first_block}")),
+            "{json}"
+        );
+    }
+}
+
 /// Regression (STATS-013): the snapshot of the indexed tip block's day is a
 /// running value, so the daily total-deposit chart must stop at the day before
 /// it — the homepage and the DAO card derive daily changes from consecutive

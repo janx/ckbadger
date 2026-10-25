@@ -160,6 +160,70 @@ pub fn utc_ms(rfc3339: &str) -> i64 {
         .timestamp_millis()
 }
 
+/// Sparse cumulative histories with testnet's genesis gap and a second gap
+/// immediately before the incomplete tip day. Both chart value columns change
+/// on May 22; the tip values must never appear in complete-day charts.
+pub fn seed_sparse_daily_chart_history(store: &Arc<CkbadgerStore>) {
+    seed_genesis_baseline(store);
+    let burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    seed_block_headers_at(
+        store,
+        &[
+            (0, 1_589_276_230_000),
+            (1, 1_590_137_711_584),
+            (2, utc_ms("2020-05-25T04:00:00Z")),
+        ],
+    );
+    for (date, knowledge, deposited, depositors) in [
+        ("2020-05-12", 100_00000001, 123_00000001, 7),
+        ("2020-05-22", 110_00000002, 120_00000002, 8),
+        ("2020-05-25", 999_00000000, 999_00000000, 9),
+    ] {
+        let date_key = date.replace('-', "");
+        store
+            .put_daily_stats(
+                &date_key,
+                &DailyStats {
+                    blocks_count: 1,
+                    knowledge_size: Some(knowledge),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let snapshot = DaoDailySnapshot {
+            date: date.to_string(),
+            total_deposited: deposited,
+            depositors_count: depositors,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: deposited,
+            total_issuance: burnt + 1000_00000000,
+            secondary_pool: 0,
+            occupied_capacity: knowledge,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
+            cumulative_depositors: depositors,
+            daily_depositor_addresses: 0,
+            protocol_deposited: None,
+        };
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&snapshot).unwrap(),
+            )
+            .unwrap();
+    }
+}
+
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());

@@ -2681,6 +2681,69 @@ fn knowledge_size_day(knowledge_size: i128) -> DailyStats {
 }
 
 #[tokio::test]
+async fn knowledge_chart_fills_only_verified_blockless_days() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/knowledge-size").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let expected: Vec<_> = (12..=24)
+        .map(|day| {
+            let (value, utilization) = if day < 22 {
+                ("100.00000001", "11.4025")
+            } else {
+                ("110.00000002", "12.5000")
+            };
+            serde_json::json!({
+                "date": format!("2020-05-{day:02}"),
+                "value": value,
+                "value2": utilization,
+            })
+        })
+        .collect();
+    assert_eq!(json["data"], serde_json::json!(expected));
+}
+
+#[tokio::test]
+async fn knowledge_chart_rejects_block_bearing_gaps_including_trailing_days() {
+    for (missing_day, blocks, first_block) in [
+        (
+            "2020-05-15",
+            vec![
+                (0, 1_589_276_230_000),
+                (1, utc_ms("2020-05-15T04:00:00Z")),
+                (2, 1_590_137_711_584),
+                (3, utc_ms("2020-05-25T04:00:00Z")),
+            ],
+            1,
+        ),
+        (
+            "2020-05-24",
+            vec![
+                (0, 1_589_276_230_000),
+                (1, 1_590_137_711_584),
+                (2, utc_ms("2020-05-24T04:00:00Z")),
+                (3, utc_ms("2020-05-25T04:00:00Z")),
+            ],
+            2,
+        ),
+    ] {
+        let store = test_store();
+        seed_sparse_daily_chart_history(&store);
+        seed_block_headers_at(&store, &blocks);
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/charts/knowledge-size").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(message.contains(missing_day), "{json}");
+        assert!(
+            message.contains(&format!("first_block={first_block}")),
+            "{json}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn turnover_chart_rejects_complete_day_without_knowledge_size() {
     let store = test_store();
     store

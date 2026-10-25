@@ -16,6 +16,7 @@ use crate::response::{
     chart_response_has_data, default_limit, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
     ChartResponse, CursorPaginatedResponse,
 };
+use crate::utils::daily_series::consecutive_daily_chart;
 use crate::utils::stats_bucket::{complete_days_cache_key, is_complete_iso_day, load_chain_time};
 use crate::utils::{
     dao_supply, parse_hash32, script_to_address, shannon_to_ckb, shannon_to_ckb_signed,
@@ -1079,7 +1080,7 @@ async fn load_dao_daily_snapshots(
 
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:dao-total-deposit", chain)?;
+    let cache_key = complete_days_cache_key("chart:dao-total-deposit:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
         if chart_response_has_data(&cached) {
@@ -1112,6 +1113,7 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         });
     }
 
+    let data = consecutive_daily_chart(state.store.clone(), chain, "DAO snapshot", data).await?;
     let response = ChartResponse {
         data,
         title: "Total Deposit".to_string(),

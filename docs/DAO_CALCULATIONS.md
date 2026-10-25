@@ -550,6 +550,14 @@ interpolation because chain state did not change. If a canonical block exists
 on a date whose DAO snapshot is missing, or if a cumulative value decreases,
 the request fails with the affected date and block context.
 
+The cumulative `/charts/knowledge-size` and `/dao/charts/total-deposit`
+responses use the same canonical-block gap check. They serve consecutive
+complete dates from their first observed row through the last complete chain
+day, carrying both chart values unchanged across verified blockless days.
+This gives the homepage exact zero daily changes on those dates. The shared
+read path is `crates/api/src/utils/daily_series.rs`; persisted rows remain
+sparse, and the API does not write any store.
+
 `secondary_pool` is DAO header `S`, the non-miner secondary issuance that has
 not yet been claimed. Adding cumulative claimed compensation restores the
 amount that left `S`; adding `cum_miner_secondary` then gives total secondary
