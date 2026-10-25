@@ -872,12 +872,15 @@ async fn test_charts_block_time_distribution_with_data() {
 async fn test_date_keyed_charts_emit_canonical_iso_dates() {
     let store = test_store();
 
-    for (date, difficulty) in [("20240115", 1_000_000.0), ("20240116", 2_000_000.0)] {
+    for (date, difficulty) in [
+        ("20240115", 9_007_199_254_740_993u128),
+        ("20240116", 2_000_000),
+    ] {
         store
             .put_daily_block_stats(
                 date,
                 &DailyBlockStats {
-                    avg_difficulty: difficulty,
+                    difficulty_sum: difficulty * 100,
                     block_count: 100,
                     total_uncles: 2,
                 },
@@ -921,6 +924,9 @@ async fn test_date_keyed_charts_emit_canonical_iso_dates() {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let data = json["data"].as_array().unwrap();
         assert!(!data.is_empty(), "uri={uri} returned no points");
+        if uri == "/api/v1/charts/difficulty" {
+            assert_eq!(data[0]["value"], "9007199254740993");
+        }
         for point in data {
             let date = point["date"].as_str().unwrap();
             assert!(
@@ -942,7 +948,7 @@ fn seed_uncle_rate_days(store: &CkbadgerStore) {
             .put_daily_block_stats(
                 date,
                 &DailyBlockStats {
-                    avg_difficulty: 1_000_000.0,
+                    difficulty_sum: 10_000_000_000,
                     block_count: 10_000,
                     total_uncles: uncles,
                 },
@@ -981,7 +987,7 @@ async fn test_uncle_rate_chart_carries_the_orphan_rate_target() {
         .put_daily_block_stats(
             "20240115",
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 10_000_000_000,
                 block_count: 10_000,
                 total_uncles: 1,
             },

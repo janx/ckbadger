@@ -3830,4 +3830,16 @@ rejection tests for an output that is not the paired request.
 
 ---
 
+### STATS-016: Daily work was rounded before storage and not reversed on rollback
+
+**Date**: 2026-10-25
+
+**Root cause**: Both indexer paths divided daily work by block count, discarded the remainder, and stored the average as `f64`. Live batches repeatedly multiplied and re-averaged that rounded number. Rollback removed blocks but kept the old average, so the repaired day retained orphaned work.
+
+**Fix**: `DailyBlockStats` stores checked `u128 difficulty_sum`. Bulk and live writers sum each block's exact compact-target difficulty; rollback sums removed headers' difficulty and subtracts it from the cutoff day's row. Daily difficulty is `round_half_up(difficulty_sum / block_count)`, and daily/window hash rate is `round_half_up(difficulty_sum × 1000 / span_ms)`. Both chart values remain decimal integer strings. The network display rounds to two decimal places using integers, and returns null when no measurable span exists.
+
+**Re-sync required**: Yes. The domain-store daily-block row layout and write path changed. Append-only and network stores are untouched.
+
+**Regression checks**: exact work across live batches above `2^53`, exact rollback subtraction, integer half-up boundaries and overflow, and chart values as decimal strings.
+
 _Last updated: 2026-10-25_

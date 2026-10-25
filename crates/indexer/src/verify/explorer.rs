@@ -806,6 +806,14 @@ fn compare_tolerance_f64(
             })
         }
     };
+    if !ours.is_finite() || !their_val.is_finite() {
+        return Some(Finding {
+            entity: date.to_string(),
+            details: vec![format!(
+                "{label}: non-finite comparison value, ours={ours}, explorer={theirs}"
+            )],
+        });
+    }
     if their_val == 0.0 && ours == 0.0 {
         return None;
     }
@@ -1284,6 +1292,14 @@ fn compare_tolerance_f64_values(
     label: &str,
     tolerance: f64,
 ) -> Option<Finding> {
+    if !ours.is_finite() || !theirs.is_finite() {
+        return Some(Finding {
+            entity: date.to_string(),
+            details: vec![format!(
+                "{label}: non-finite comparison value, ours={ours}, explorer={theirs}"
+            )],
+        });
+    }
     if theirs == 0.0 && ours == 0.0 {
         return None;
     }
@@ -1448,7 +1464,7 @@ impl Check for ExplorerHashRate {
             {
                 checked += 1;
                 let (Ok(ours), Ok(theirs_per_ms)) =
-                    (our_val.parse::<f64>(), explorer_val.parse::<f64>())
+                    (our_val.parse::<u128>(), explorer_val.parse::<f64>())
                 else {
                     findings.push(Finding {
                         entity: date.clone(),
@@ -1460,7 +1476,7 @@ impl Check for ExplorerHashRate {
                     continue;
                 };
                 if let Some(f) = compare_tolerance_f64_values(
-                    ours,
+                    ours as f64,
                     theirs_per_ms * EXPLORER_HASH_RATE_MS_PER_S,
                     date,
                     "avg_hash_rate (H/s)",
@@ -1510,9 +1526,21 @@ impl Check for ExplorerDifficulty {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                let ours: f64 = our_val.parse().unwrap_or(0.0);
+                let ours: u128 = match our_val.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        findings.push(Finding {
+                            entity: date.clone(),
+                            details: vec![format!(
+                                "avg_difficulty: unparseable integer, ours='{our_val}'"
+                            )],
+                        });
+                        progress.inc(1);
+                        continue;
+                    }
+                };
                 if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "avg_difficulty", 0.02)
+                    compare_tolerance_f64(ours as f64, explorer_val, date, "avg_difficulty", 0.02)
                 {
                     findings.push(f);
                 }
@@ -2958,6 +2986,55 @@ mod tests {
             "findings: {:?}",
             result.findings
         );
+    }
+
+    #[test]
+    fn difficulty_check_rejects_malformed_chart_integer() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let date = last_30_days()[0].clone();
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/difficulty"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "date": date.clone(), "value": "not-an-integer" }]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/avg_difficulty"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "attributes": {
+                        "created_at_unixtimestamp": explorer_timestamp_for_date(&date).to_string(),
+                        "avg_difficulty": "9007199254740993"
+                    }}]
+                })))
+                .mount(&server)
+                .await;
+        });
+        let result = ExplorerDifficulty
+            .run(
+                &explorer_test_context(&server),
+                &ProgressReporter::new(None),
+            )
+            .unwrap();
+        assert!(!result.passed());
+        assert!(result
+            .findings
+            .iter()
+            .any(|f| f.details.iter().any(|d| d.contains("not-an-integer"))));
+    }
+
+    #[test]
+    fn tolerance_checks_reject_nonfinite_explorer_values() {
+        for value in ["NaN", "inf", "-inf"] {
+            assert!(compare_tolerance_f64(10.0, value, "2026-10-24", "difficulty", 0.02).is_some());
+            let parsed: f64 = value.parse().unwrap();
+            assert!(
+                compare_tolerance_f64_values(10.0, parsed, "2026-10-24", "hash rate", 0.02)
+                    .is_some()
+            );
+        }
     }
 
     #[test]

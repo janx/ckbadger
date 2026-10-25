@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
-use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -3581,16 +3580,36 @@ impl Indexer {
             }
             {
                 let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
-                let difficulty_u256 = ckb_compact_to_difficulty(parsed.compact_target as u32);
-                let difficulty_u64: u64 = difficulty_u256.to_string().parse().map_err(|_| {
+                let difficulty =
+                    ckbadger_common::work::compact_difficulty(parsed.compact_target as u32)
+                        .map_err(|e| {
+                            anyhow!(
+                                "daily difficulty: block={}, date={}: {e}",
+                                parsed.number,
+                                block_date
+                            )
+                        })?;
+                entry.0 = entry.0.checked_add(difficulty).ok_or_else(|| {
                     anyhow!(
-                        "difficulty exceeds u64 range: block={}, date={}, compact_target={:#x}, difficulty={}",
-                        parsed.number, block_date, parsed.compact_target, difficulty_u256
+                        "daily difficulty overflow: block={}, date={}",
+                        parsed.number,
+                        block_date
                     )
                 })?;
-                entry.0 += difficulty_u64 as i128;
-                entry.1 += 1;
-                entry.2 += parsed.uncles_count;
+                entry.1 = entry.1.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "daily block count overflow: block={}, date={}",
+                        parsed.number,
+                        block_date
+                    )
+                })?;
+                entry.2 = entry.2.checked_add(parsed.uncles_count).ok_or_else(|| {
+                    anyhow!(
+                        "daily uncle count overflow: block={}, date={}",
+                        parsed.number,
+                        block_date
+                    )
+                })?;
             }
             // Miner attribution uses the cellbase WITNESS lock (the block's
             // own miner, RFC-0022) — the cellbase output lock instead pays the
@@ -4131,14 +4150,9 @@ impl Indexer {
 
         // Daily block stats
         for (date, (sum_difficulty, count, uncles)) in &stats.daily_block_stats {
-            let avg_difficulty = if *count > 0 {
-                (*sum_difficulty / *count as i128) as f64
-            } else {
-                0.0
-            };
             self.writer.update_daily_block_stats_batch(
                 *date,
-                avg_difficulty,
+                *sum_difficulty,
                 *count,
                 *uncles,
                 batch,

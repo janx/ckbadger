@@ -385,7 +385,7 @@ impl BatchWriter {
     pub fn update_daily_block_stats_batch(
         &self,
         date: NaiveDate,
-        avg_difficulty: f64,
+        difficulty_sum: u128,
         block_count: i32,
         total_uncles: i32,
         batch: &mut StoreBatch,
@@ -396,22 +396,28 @@ impl BatchWriter {
         );
         let existing = self.store.get_stats_key(&key)?;
 
-        let stats = match existing {
-            Some(val) => {
-                let mut s: DailyBlockStats = deserialize_stats(&val, "daily block stats")?;
-                let old_total = s.avg_difficulty * s.block_count as f64;
-                s.block_count += block_count;
-                s.avg_difficulty =
-                    (old_total + avg_difficulty * block_count as f64) / s.block_count as f64;
-                s.total_uncles += total_uncles;
-                s
-            }
-            None => DailyBlockStats {
-                avg_difficulty,
-                block_count,
-                total_uncles,
-            },
-        };
+        let stats =
+            match existing {
+                Some(val) => {
+                    let mut s: DailyBlockStats = deserialize_stats(&val, "daily block stats")?;
+                    s.block_count = s.block_count.checked_add(block_count).ok_or_else(|| {
+                        anyhow::anyhow!("daily block count overflow: date={date}")
+                    })?;
+                    s.difficulty_sum = s
+                        .difficulty_sum
+                        .checked_add(difficulty_sum)
+                        .ok_or_else(|| anyhow::anyhow!("daily difficulty overflow: date={date}"))?;
+                    s.total_uncles = s.total_uncles.checked_add(total_uncles).ok_or_else(|| {
+                        anyhow::anyhow!("daily uncle count overflow: date={date}")
+                    })?;
+                    s
+                }
+                None => DailyBlockStats {
+                    difficulty_sum,
+                    block_count,
+                    total_uncles,
+                },
+            };
 
         let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
@@ -3020,6 +3026,30 @@ mod tests {
         assert!(err
             .to_string()
             .contains("missing previous day stats while carrying daily totals"));
+    }
+
+    #[test]
+    fn test_daily_difficulty_preserves_exact_work_across_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let day = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        let first = 9_007_199_254_740_993u128;
+        let second = first + 4;
+        for work in [first, second] {
+            let mut batch = StoreBatch::new(&store);
+            writer
+                .update_daily_block_stats_batch(day, work, 1, 0, &mut batch)
+                .unwrap();
+            batch.commit().unwrap();
+        }
+        let row = store.get_daily_block_stats("20261024").unwrap().unwrap();
+        assert_eq!(row.difficulty_sum, first + second);
+        assert_eq!(row.block_count, 2);
+        assert_eq!(
+            ckbadger_common::work::rounded_ratio(row.difficulty_sum, 2).unwrap(),
+            first + 2
+        );
     }
 
     #[test]

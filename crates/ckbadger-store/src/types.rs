@@ -1271,7 +1271,8 @@ pub struct MinerStats {
 /// (live, bulk, and reorg rollback repair) maintains.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DailyBlockStats {
-    pub avg_difficulty: f64,
+    /// Sum of exact compact-target difficulty for every block in this day.
+    pub difficulty_sum: u128,
     pub block_count: i32,
     pub total_uncles: i32,
 }

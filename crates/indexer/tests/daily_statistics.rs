@@ -198,7 +198,7 @@ fn test_daily_block_stats() {
     let store = setup_store();
 
     let stats = DailyBlockStats {
-        avg_difficulty: 0.0042,
+        difficulty_sum: 144,
         block_count: 144,
         total_uncles: 12,
     };
@@ -208,7 +208,7 @@ fn test_daily_block_stats() {
     let retrieved = store.get_daily_block_stats("2024-01-15").unwrap();
     assert!(retrieved.is_some());
     let retrieved = retrieved.unwrap();
-    assert!((retrieved.avg_difficulty - 0.0042).abs() < f64::EPSILON);
+    assert_eq!(retrieved.difficulty_sum, 144);
     assert_eq!(retrieved.block_count, 144);
     assert_eq!(retrieved.total_uncles, 12);
 

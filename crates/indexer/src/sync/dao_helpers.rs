@@ -37,7 +37,7 @@ pub(crate) struct BatchStats {
     pub(crate) last_block: Option<(i64, Vec<u8>)>,
     pub(crate) hourly_stats: HashMap<chrono::DateTime<chrono::Utc>, (i32, i32, i32, i32, i128)>,
     pub(crate) daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
-    pub(crate) daily_block_stats: HashMap<NaiveDate, (i128, i32, i32)>,
+    pub(crate) daily_block_stats: HashMap<NaiveDate, (u128, i32, i32)>,
     pub(crate) miner_stats: HashMap<(NaiveDate, Vec<u8>), (i32, i64)>,
     pub(crate) epoch_stats: HashMap<i64, EpochAccum>,
     pub(crate) block_time_dist: HashMap<i32, i32>,

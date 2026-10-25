@@ -15,6 +15,12 @@ async fn test_network_stats_returns_ok() {
 
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["hashRate"].is_null(),
+        "an empty chain has no defined hash rate: {json}"
+    );
 }
 
 #[tokio::test]
@@ -659,7 +665,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         .put_daily_block_stats(
             &today_str,
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 100_000_000,
                 block_count: 100,
                 total_uncles: 5,
             },
@@ -918,7 +924,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 100_000_000,
                 block_count: 100,
                 total_uncles: 2,
             },
@@ -928,7 +934,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
         .put_daily_block_stats(
             "20260102",
             &DailyBlockStats {
-                avg_difficulty: 2_000_000.0,
+                difficulty_sum: 240_000_000,
                 block_count: 120,
                 total_uncles: 3,
             },
@@ -2542,7 +2548,7 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
         .put_daily_block_stats(
             "20191116",
             &DailyBlockStats {
-                avg_difficulty: 8_318_741_404_228_533.0,
+                difficulty_sum: 4_974_607_359_728_662_734,
                 block_count: 598,
                 total_uncles: 0,
             },
@@ -2564,7 +2570,7 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
         .put_daily_block_stats(
             "20191117",
             &DailyBlockStats {
-                avg_difficulty: 8_400_000_000_000_000.0,
+                difficulty_sum: 5_880_000_000_000_000_000,
                 block_count: 700,
                 total_uncles: 0,
             },
@@ -2631,7 +2637,7 @@ async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
             .put_daily_block_stats(
                 date,
                 &DailyBlockStats {
-                    avg_difficulty: 1_000_000.0,
+                    difficulty_sum: 1_000_000u128 * block_count as u128,
                     block_count,
                     total_uncles: 0,
                 },
@@ -2692,7 +2698,7 @@ async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 100_000_000,
                 block_count: 100,
                 total_uncles: 0,
             },
@@ -2713,7 +2719,7 @@ async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
         .put_daily_block_stats(
             "20260102",
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 100_000_000,
                 block_count: 100,
                 total_uncles: 0,
             },
@@ -2750,7 +2756,7 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 100_000_000,
                 block_count: 100,
                 total_uncles: 0,
             },
@@ -2760,7 +2766,7 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
         .put_daily_block_stats(
             "20260102",
             &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
+                difficulty_sum: 100_000_000,
                 block_count: 100,
                 total_uncles: 0,
             },

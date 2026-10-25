@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail, Context};
-use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 // The median-time watermark and bucket ends are the workspace's one
 // definition of a complete stats bucket, shared with the API's daily charts
 // and transaction stats.
@@ -1713,7 +1715,7 @@ struct ChainStatsAccumulator {
     ///           used_cap_created, used_cap_consumed, data_size_added, data_size_consumed)
     daily_stats: FxHashMap<chrono::NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
     /// Per-day: (sum_difficulty, block_count, total_uncles)
-    daily_block_stats: FxHashMap<chrono::NaiveDate, (i128, i32, i32)>,
+    daily_block_stats: FxHashMap<chrono::NaiveDate, (u128, i32, i32)>,
     /// Last DAO field seen per day (for knowledge_size).
     daily_dao_fields: FxHashMap<chrono::NaiveDate, [u8; 32]>,
     /// Per-day block time accumulation: (sum_ms, count)
@@ -1879,16 +1881,38 @@ impl ChainStatsAccumulator {
 
             // --- DailyBlockStats (accumulate difficulty, not compact_target) ---
             let block_entry = self.daily_block_stats.entry(block_date).or_default();
-            let difficulty_u256 = ckb_compact_to_difficulty(block.compact_target);
-            let difficulty_u64: u64 = difficulty_u256.to_string().parse().map_err(|_| {
+            let difficulty = ckbadger_common::work::compact_difficulty(block.compact_target)
+                .map_err(|e| {
+                    anyhow!(
+                        "daily difficulty: block={}, date={}: {e}",
+                        block.number,
+                        block_date
+                    )
+                })?;
+            block_entry.0 = block_entry.0.checked_add(difficulty).ok_or_else(|| {
                 anyhow!(
-                    "difficulty exceeds u64 range: block={}, date={}, compact_target={:#x}, difficulty={}",
-                    block.number, block_date, block.compact_target, difficulty_u256
+                    "daily difficulty overflow: block={}, date={}",
+                    block.number,
+                    block_date
                 )
             })?;
-            block_entry.0 += difficulty_u64 as i128;
-            block_entry.1 += 1;
-            block_entry.2 += block.uncles_count;
+            block_entry.1 = block_entry.1.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "daily block count overflow: block={}, date={}",
+                    block.number,
+                    block_date
+                )
+            })?;
+            block_entry.2 = block_entry
+                .2
+                .checked_add(block.uncles_count)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "daily uncle count overflow: block={}, date={}",
+                        block.number,
+                        block_date
+                    )
+                })?;
 
             // --- Inter-block time ---
             if let Some(prev_ts) = self.prev_timestamp_ms {
@@ -2034,14 +2058,8 @@ impl ChainStatsAccumulator {
         sorted_block_dates.sort();
         for date in &sorted_block_dates {
             let (sum_difficulty, count, uncles) = self.daily_block_stats[date];
-            let avg_difficulty = if count > 0 {
-                (sum_difficulty / count as i128) as f64
-            } else {
-                0.0
-            };
-
             let stats = ckbadger_store::types::DailyBlockStats {
-                avg_difficulty,
+                difficulty_sum: sum_difficulty,
                 block_count: count,
                 total_uncles: uncles,
             };
@@ -8348,7 +8366,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             block_stats.0,
-            expected_difficulty as i128 * 2,
+            expected_difficulty as u128 * 2,
             "sum_difficulty"
         );
         assert_eq!(block_stats.1, 2, "block_count");

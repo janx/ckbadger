@@ -20,6 +20,8 @@ struct RollbackStatsDeltas {
     /// Per-date rolled-back uncle count (from CachedBlockHeader.uncles_count).
     /// Used to repair DailyBlockStats.total_uncles on the cutoff date.
     date_uncles: HashMap<String, i32>,
+    /// Exact work in orphaned blocks, keyed by UTC+8 day.
+    date_difficulty: HashMap<String, u128>,
     /// Per-date rolled-back inter-block time: `(sum_ms, count)`.
     ///
     /// Mirrors the forward writers exactly (`BatchStats::accumulate_block_time`
@@ -755,8 +757,14 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.block_count -= rb_blocks;
-            if s.block_count <= 0 {
+            s.block_count = s.block_count.checked_sub(rb_blocks).ok_or_else(|| anyhow::anyhow!("daily block count arithmetic underflow on rollback: date={date_str}, stored={}, removed={rb_blocks}", s.block_count))?;
+            if s.block_count < 0 {
+                anyhow::bail!(
+                    "daily block count went negative on rollback: date={date_str}, result={}",
+                    s.block_count
+                );
+            }
+            if s.block_count == 0 {
                 return Ok(false); // all blocks rolled back — delete
             }
             // Subtract rolled-back uncles. Fail-fast if this would go negative,
@@ -783,9 +791,16 @@ fn repair_cutoff_date_stats(
                     s.total_uncles
                 );
             }
-            // avg_difficulty is kept unchanged: per-block difficulty is not stored
-            // in CachedBlockHeader, and shallow reorgs don't meaningfully change
-            // the daily average.
+            let rb_work = deltas
+                .date_difficulty
+                .get(date_str)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing rollback difficulty delta: date={date_str}, blocks={rb_blocks}"
+                    )
+                })?;
+            s.difficulty_sum = s.difficulty_sum.checked_sub(rb_work).ok_or_else(|| anyhow::anyhow!("daily difficulty underflow on rollback: date={date_str}, stored={}, removed={rb_work}", s.difficulty_sum))?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize daily_block repair: {}", e))?;
@@ -2029,6 +2044,7 @@ impl CkbadgerStore {
         let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
         // Per-date rolled-back uncle count, populated during block header deletion loop.
         let mut stats_date_uncles: HashMap<String, i32> = HashMap::new();
+        let mut stats_date_difficulty: HashMap<String, u128> = HashMap::new();
         // Per-date rolled-back inter-block time `(sum_ms, count)`, populated in
         // the same loop. `prev_header` walks the chain from the surviving fork
         // point so every orphaned block's gap `ts(b) - ts(b-1)` is the exact
@@ -2089,6 +2105,14 @@ impl CkbadgerStore {
             let date_str = ckbadger_common::block_date_from_ms(header.timestamp)
                 .format("%Y%m%d")
                 .to_string();
+            let work = ckbadger_common::work::compact_difficulty(header.compact_target)
+                .map_err(|e| anyhow::anyhow!("rollback block {block_num}, date {date_str}: {e}"))?;
+            let work_total = stats_date_difficulty.entry(date_str.clone()).or_insert(0);
+            *work_total = work_total.checked_add(work).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rollback difficulty sum overflow: block={block_num}, date={date_str}"
+                )
+            })?;
             let hour_str = ckbadger_common::utc_hour_key_from_ms(header.timestamp);
             // Accumulate per-date uncle count for repair_cutoff_date_stats.
             let uncles_entry = stats_date_uncles.entry(date_str.clone()).or_insert(0);
@@ -3079,6 +3103,7 @@ impl CkbadgerStore {
             let rollback_deltas = RollbackStatsDeltas {
                 date: stats_date_deltas,
                 date_uncles: stats_date_uncles,
+                date_difficulty: stats_date_difficulty,
                 date_block_time: stats_date_block_time,
                 hour: stats_hour_deltas,
                 date_capacity: stats_date_capacity_deltas,
@@ -5890,7 +5915,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -6678,7 +6703,7 @@ mod tests {
                         transactions_count: 1,
                         uncles_count: 0,
                         proposals_count: 0,
-                        compact_target: 0,
+                        compact_target: 0x1a08a97e,
                         miner_lock_hash: Some(miner.clone()),
                         cycles: None,
                     },
@@ -6842,7 +6867,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -6857,7 +6882,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -6916,7 +6941,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -6931,7 +6956,7 @@ mod tests {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7053,7 +7078,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7068,7 +7093,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7166,7 +7191,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7181,7 +7206,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7268,7 +7293,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7283,7 +7308,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7357,7 +7382,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7372,7 +7397,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7523,7 +7548,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7786,7 +7811,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -7934,7 +7959,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8147,7 +8172,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8162,7 +8187,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8311,7 +8336,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8326,7 +8351,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8516,7 +8541,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8531,7 +8556,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8729,7 +8754,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8744,7 +8769,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8921,7 +8946,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -8936,7 +8961,7 @@ mod tests {
             transactions_count: 2,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9114,7 +9139,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9129,7 +9154,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9179,7 +9204,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9194,7 +9219,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9258,7 +9283,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9273,7 +9298,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9378,7 +9403,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9393,7 +9418,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9521,7 +9546,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9536,7 +9561,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9551,7 +9576,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9721,7 +9746,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9736,7 +9761,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9829,7 +9854,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9861,7 +9886,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9876,7 +9901,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9956,7 +9981,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -9971,7 +9996,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -10174,7 +10199,7 @@ mod tests {
             transactions_count: 0,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -10388,7 +10413,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -10403,7 +10428,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -10711,7 +10736,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -10726,7 +10751,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         };
@@ -10924,7 +10949,7 @@ mod tests {
                     transactions_count: 0,
                     uncles_count: 0,
                     proposals_count: 0,
-                    compact_target: 0,
+                    compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
                 },
@@ -10982,7 +11007,7 @@ mod tests {
                     transactions_count: 3,
                     uncles_count: 0,
                     proposals_count: 0,
-                    compact_target: 0,
+                    compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
                 },
@@ -11268,7 +11293,7 @@ mod tests {
 
         let date = "20260210";
         let original = DailyBlockStats {
-            avg_difficulty: 1000.0,
+            difficulty_sum: 720_000,
             block_count: 720,
             total_uncles: 5,
         };
@@ -11280,6 +11305,7 @@ mod tests {
 
         let deltas = RollbackStatsDeltas {
             date: date_deltas,
+            date_difficulty: HashMap::from([(date.to_string(), 2_000)]),
             ..Default::default()
         };
 
@@ -11303,6 +11329,39 @@ mod tests {
         let raw = store.get_stats_key(&key).unwrap().unwrap();
         let result: DailyBlockStats = bincode::deserialize(&raw).unwrap();
         assert_eq!(result.block_count, 718); // 720 - 2
+        assert_eq!(result.difficulty_sum, 718_000);
+    }
+
+    #[test]
+    fn test_repair_daily_block_rejects_rollback_count_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let date = "20260210";
+        let original = DailyBlockStats {
+            difficulty_sum: 100,
+            block_count: 1,
+            total_uncles: 0,
+        };
+        let value = bincode::serialize(&original).unwrap();
+        let deltas = RollbackStatsDeltas {
+            date: HashMap::from([(date.to_string(), (2, 0, 0, 0))]),
+            date_difficulty: HashMap::from([(date.to_string(), 200)]),
+            ..Default::default()
+        };
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_DAILY_BLOCK, date.as_bytes());
+        let mut batch = rocksdb::WriteBatch::default();
+        let err = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            "2026021015",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("block count went negative"));
     }
 
     #[test]
@@ -11365,7 +11424,7 @@ mod tests {
                 transactions_count: 1,
                 uncles_count: 0,
                 proposals_count: 0,
-                compact_target: 0,
+                compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
             },
@@ -11380,7 +11439,7 @@ mod tests {
                 transactions_count: 1,
                 uncles_count: 1, // this block has an uncle
                 proposals_count: 0,
-                compact_target: 0,
+                compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
             },
@@ -11395,7 +11454,7 @@ mod tests {
                 transactions_count: 1,
                 uncles_count: 0,
                 proposals_count: 0,
-                compact_target: 0,
+                compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
             },
@@ -11410,7 +11469,7 @@ mod tests {
                 transactions_count: 1,
                 uncles_count: 1, // this block (to be rolled back) has an uncle
                 proposals_count: 0,
-                compact_target: 0,
+                compact_target: 0x1a07a97e,
                 miner_lock_hash: None,
                 cycles: None,
             },
@@ -11423,8 +11482,10 @@ mod tests {
         batch.commit().unwrap();
 
         // Seed pre-reorg DailyBlockStats: 4 blocks, 2 uncles.
+        let work_per_block = ckbadger_common::work::compact_difficulty(0x1a08a97e).unwrap();
+        let orphan_work = ckbadger_common::work::compact_difficulty(0x1a07a97e).unwrap();
         let pre_reorg = crate::types::DailyBlockStats {
-            avg_difficulty: 1.0,
+            difficulty_sum: work_per_block * 3 + orphan_work,
             block_count: 4,
             total_uncles: 2,
         };
@@ -11461,6 +11522,7 @@ mod tests {
             repaired.block_count, 3,
             "block_count must be 3 after rollback"
         );
+        assert_eq!(repaired.difficulty_sum, work_per_block * 3);
         assert_eq!(
             repaired.total_uncles,
             1,
@@ -11504,7 +11566,7 @@ mod tests {
                     transactions_count: 1,
                     uncles_count: 0,
                     proposals_count: 0,
-                    compact_target: 0,
+                    compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
                 },
@@ -11602,7 +11664,7 @@ mod tests {
                     transactions_count: 1,
                     uncles_count: 0,
                     proposals_count: 0,
-                    compact_target: 0,
+                    compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
                 },
@@ -11681,7 +11743,7 @@ mod tests {
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
-            compact_target: 0,
+            compact_target: 0x1a08a97e,
             miner_lock_hash: None,
             cycles: None,
         }
@@ -11963,7 +12025,7 @@ mod tests {
                     transactions_count: 0,
                     uncles_count: 0,
                     proposals_count: 0,
-                    compact_target: 0,
+                    compact_target: 0x1a08a97e,
                     miner_lock_hash: None,
                     cycles: None,
                 },

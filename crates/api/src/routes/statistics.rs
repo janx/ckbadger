@@ -133,7 +133,8 @@ pub struct DeepForkStatus {
 pub struct NetworkStats {
     pub latest_block: i64,
     pub avg_block_time: String,
-    pub hash_rate: String,
+    /// Human-readable H/s, absent until a measurable block span exists.
+    pub hash_rate: Option<String>,
     pub difficulty: String,
     pub epoch: String,
     pub tps: String,
@@ -391,7 +392,7 @@ const NETWORK_STATS_BLOCK_TIME_WINDOW: usize = 600;
 /// blocks (mirrors the avg-block-time "no data yet" case).
 fn estimate_hash_rate_from_window(
     headers_desc: &[(i64, CachedBlockHeader)],
-) -> Result<Option<f64>, ApiRouteError> {
+) -> Result<Option<u128>, ApiRouteError> {
     if headers_desc.len() < 2 {
         return Ok(None);
     }
@@ -406,13 +407,8 @@ fn estimate_hash_rate_from_window(
     }
     let mut work_sum: u128 = 0;
     for (block_num, header) in &headers_desc[..headers_desc.len() - 1] {
-        let difficulty_u256 = ckb_compact_to_difficulty(header.compact_target);
-        let difficulty: u128 = difficulty_u256.to_string().parse().map_err(|_| {
-            ApiError::internal(format!(
-                "block difficulty exceeds u128 range in hash-rate window: block={}, compact_target={:#x}, difficulty={}",
-                block_num, header.compact_target, difficulty_u256
-            ))
-        })?;
+        let difficulty = ckbadger_common::work::compact_difficulty(header.compact_target)
+            .map_err(|e| ApiError::internal(format!("hash-rate window block={block_num}: {e}")))?;
         work_sum = work_sum.checked_add(difficulty).ok_or_else(|| {
             ApiError::internal(format!(
                 "summed work overflows u128 in hash-rate window: block={}, work_sum_so_far={}",
@@ -420,7 +416,12 @@ fn estimate_hash_rate_from_window(
             ))
         })?;
     }
-    Ok(Some(work_sum as f64 / (span_ms as f64 / 1000.0)))
+    let span_ms =
+        u64::try_from(span_ms).map_err(|_| ApiError::internal("invalid hash-rate window span"))?;
+    Ok(Some(
+        ckbadger_common::work::hash_rate_hps(work_sum, span_ms)
+            .map_err(|e| ApiError::internal(format!("hash-rate window: {e}")))?,
+    ))
 }
 
 /// Sum committed transactions over the trailing 24 hours of hourly buckets:
@@ -448,29 +449,24 @@ fn rolling_24h_tx_window(
     (count, window_secs)
 }
 
-fn format_hash_rate(hash_rate: f64) -> String {
-    const KILO: f64 = 1_000.0;
-    const MEGA: f64 = 1_000_000.0;
-    const GIGA: f64 = 1_000_000_000.0;
-    const TERA: f64 = 1_000_000_000_000.0;
-    const PETA: f64 = 1_000_000_000_000_000.0;
-    const EXA: f64 = 1_000_000_000_000_000_000.0;
-
-    if hash_rate >= EXA {
-        format!("{:.2} EH/s", hash_rate / EXA)
-    } else if hash_rate >= PETA {
-        format!("{:.2} PH/s", hash_rate / PETA)
-    } else if hash_rate >= TERA {
-        format!("{:.2} TH/s", hash_rate / TERA)
-    } else if hash_rate >= GIGA {
-        format!("{:.2} GH/s", hash_rate / GIGA)
-    } else if hash_rate >= MEGA {
-        format!("{:.2} MH/s", hash_rate / MEGA)
-    } else if hash_rate >= KILO {
-        format!("{:.2} KH/s", hash_rate / KILO)
-    } else {
-        format!("{:.2} H/s", hash_rate)
-    }
+fn format_hash_rate(hash_rate: u128) -> String {
+    let (scale, unit) = [
+        (1_000_000_000_000_000_000u128, "EH/s"),
+        (1_000_000_000_000_000, "PH/s"),
+        (1_000_000_000_000, "TH/s"),
+        (1_000_000_000, "GH/s"),
+        (1_000_000, "MH/s"),
+        (1_000, "KH/s"),
+    ]
+    .into_iter()
+    .find(|(scale, _)| hash_rate >= *scale)
+    .unwrap_or((1, "H/s"));
+    let whole = hash_rate / scale;
+    let remainder = hash_rate % scale;
+    let cents = ckbadger_common::work::rounded_ratio(remainder * 100, scale)
+        .expect("scale is nonzero and bounded");
+    let whole = whole + cents / 100;
+    format!("{whole}.{:02} {unit}", cents % 100)
 }
 
 fn format_difficulty(difficulty: u64) -> String {
@@ -2761,8 +2757,8 @@ async fn fetch_network_stats_from_db(
     // tip_difficulty / avg_block_time, which overstates by the difficulty
     // step ratio for the first ~window blocks after every epoch boundary.
     // The displayed `difficulty` field below stays tip-epoch difficulty
-    // (that semantic is correct). Zero only while the store holds < 2 blocks.
-    let hash_rate = estimate_hash_rate_from_window(&window_headers)?.unwrap_or(0.0);
+    // (that semantic is correct). No rate exists until the window spans time.
+    let hash_rate = estimate_hash_rate_from_window(&window_headers)?;
 
     // Hero metrics from latest DAO daily snapshot
     let dao_snapshot = store
@@ -2790,7 +2786,7 @@ async fn fetch_network_stats_from_db(
         latest_block,
         // "0.00s" only while the store holds fewer than 2 blocks.
         avg_block_time: format!("{:.2}s", avg_block_time_secs.unwrap_or(0.0)),
-        hash_rate: format_hash_rate(hash_rate),
+        hash_rate: hash_rate.map(format_hash_rate),
         difficulty: format_difficulty(difficulty),
         epoch: format!("{}({}/{})", epoch_number, epoch_index, epoch_length),
         tps: format!("{:.2}", tps),
@@ -2853,9 +2849,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
-        if !is_complete_day_key(chain, "daily block stats", &date_str)?
-            || stats.avg_difficulty <= 0.0
-        {
+        if !is_complete_day_key(chain, "daily block stats", &date_str)? {
             continue;
         }
         let day_stats = daily_stats_by_date.get(&date_str).ok_or_else(|| {
@@ -2871,7 +2865,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         };
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
-            value: format!("{:.0}", hash_rate),
+            value: hash_rate.to_string(),
             value2: None,
         });
     }
@@ -2902,14 +2896,12 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
-        if !is_complete_day_key(chain, "daily block stats", &date_str)?
-            || stats.avg_difficulty <= 0.0
-        {
+        if !is_complete_day_key(chain, "daily block stats", &date_str)? {
             continue;
         }
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
-            value: format!("{:.0}", stats.avg_difficulty),
+            value: average_daily_difficulty(&date_str, &stats)?.to_string(),
             value2: None,
         });
     }
@@ -3189,12 +3181,26 @@ async fn get_miner_address_distribution_chart(
     ok(response)
 }
 
+/// Exact daily average difficulty, rounded half-up to integer work per block.
+fn average_daily_difficulty(
+    date_key: &str,
+    stats: &ckbadger_store::DailyBlockStats,
+) -> Result<u128, ApiRouteError> {
+    if stats.block_count <= 0 || stats.difficulty_sum == 0 {
+        return Err(ApiError::internal(format!(
+            "invalid daily difficulty: date={date_key}, block_count={}, difficulty_sum={}",
+            stats.block_count, stats.difficulty_sum
+        )));
+    }
+    ckbadger_common::work::rounded_ratio(stats.difficulty_sum, stats.block_count as u128)
+        .map_err(|e| ApiError::internal(format!("daily difficulty date={date_key}: {e}")))
+}
+
 /// Exact daily network hash rate in hashes per second (H/s, the unit of
 /// `/statistics/network` `hashRate`): the day's total mined work divided by the
 /// time actually spent mining it.
 ///
-/// * numerator — `avg_difficulty × block_count` is the day's exact difficulty
-///   sum (the indexer stores the sum divided by the count).
+/// * numerator — `difficulty_sum` is the exact sum of each block's work.
 /// * denominator — `DailyStats.block_time_sum_ms` sums every inter-block gap
 ///   `ts(b) − ts(b−1)` for the blocks `b` dated to this day, including the gap
 ///   across midnight from the previous day's last block, so it telescopes to
@@ -3218,11 +3224,17 @@ fn calculate_daily_hash_rate(
     block_stats: &ckbadger_store::DailyBlockStats,
     day_stats: &ckbadger_store::DailyStats,
     genesis_date_key: Option<&str>,
-) -> Result<Option<f64>, ApiRouteError> {
+) -> Result<Option<u128>, ApiRouteError> {
     if block_stats.block_count <= 0 {
         return Err(ApiError::internal(format!(
-            "daily block stats for {date_key} have avg_difficulty={} but block_count={}",
-            block_stats.avg_difficulty, block_stats.block_count
+            "daily block stats for {date_key} have difficulty_sum={} but block_count={}",
+            block_stats.difficulty_sum, block_stats.block_count
+        )));
+    }
+    if block_stats.difficulty_sum == 0 {
+        return Err(ApiError::internal(format!(
+            "zero difficulty sum for {date_key} with {} blocks",
+            block_stats.block_count
         )));
     }
     if day_stats.blocks_count != block_stats.block_count {
@@ -3251,9 +3263,12 @@ fn calculate_daily_hash_rate(
             block_stats.block_count
         )));
     }
-    let difficulty_sum = block_stats.avg_difficulty * block_stats.block_count as f64;
-    let mined_span_secs = day_stats.block_time_sum_ms as f64 / 1000.0;
-    Ok(Some(difficulty_sum / mined_span_secs))
+    let span_ms = u64::try_from(day_stats.block_time_sum_ms)
+        .map_err(|_| ApiError::internal(format!("invalid mined span for {date_key}")))?;
+    Ok(Some(
+        ckbadger_common::work::hash_rate_hps(block_stats.difficulty_sum, span_ms)
+            .map_err(|e| ApiError::internal(format!("daily hash rate for {date_key}: {e}")))?,
+    ))
 }
 
 fn snapshot_secondary_cumulative(
@@ -4804,9 +4819,12 @@ mod tests {
         assert!(err.1 .0.message.contains("underflow"));
     }
 
-    fn daily_block_stats(avg_difficulty: f64, block_count: i32) -> ckbadger_store::DailyBlockStats {
+    fn daily_block_stats(
+        avg_difficulty: u128,
+        block_count: i32,
+    ) -> ckbadger_store::DailyBlockStats {
         ckbadger_store::DailyBlockStats {
-            avg_difficulty,
+            difficulty_sum: avg_difficulty * block_count as u128,
             block_count,
             total_uncles: 0,
         }
@@ -4834,13 +4852,45 @@ mod tests {
         // 8_640_000_000 hashes / 86_400 s = 100_000 H/s.
         let hash_rate = calculate_daily_hash_rate(
             "20240115",
-            &daily_block_stats(1_000_000.0, 8_640),
+            &daily_block_stats(1_000_000, 8_640),
             &daily_stats(8_640, 86_400_000, 8_640),
             None,
         )
         .unwrap()
         .unwrap();
-        assert_eq!(hash_rate, 100_000.0);
+        assert_eq!(hash_rate, 100_000);
+    }
+
+    #[test]
+    fn test_network_hash_rate_formats_integer_without_float_rounding() {
+        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.91 PH/s");
+        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.01 PH/s");
+        assert_eq!(format_hash_rate(999), "999.00 H/s");
+    }
+
+    #[test]
+    fn test_daily_difficulty_remains_exact_above_f64_integer_range() {
+        let stats = ckbadger_store::DailyBlockStats {
+            difficulty_sum: 2 * 9_007_199_254_740_993 + 1,
+            block_count: 2,
+            total_uncles: 0,
+        };
+        assert_eq!(
+            average_daily_difficulty("20261024", &stats)
+                .unwrap()
+                .to_string(),
+            "9007199254740994"
+        );
+        let corrupt = ckbadger_store::DailyBlockStats {
+            difficulty_sum: 0,
+            ..stats
+        };
+        assert!(average_daily_difficulty("20261024", &corrupt)
+            .unwrap_err()
+            .1
+             .0
+            .message
+            .contains("20261024"));
     }
 
     /// Regression: mainnet's genesis day is partial — 598 blocks mined in
@@ -4852,20 +4902,64 @@ mod tests {
     fn test_calculate_daily_hash_rate_matches_node_on_partial_genesis_day() {
         let hash_rate = calculate_daily_hash_rate(
             "20191116",
-            &daily_block_stats(8_318_741_404_228_533.0, 598),
+            &daily_block_stats(8_318_741_404_228_533, 598),
             &daily_stats(598, 67_712_964, 597),
             Some("20191116"),
         )
         .unwrap()
         .unwrap();
-        assert_eq!(format!("{hash_rate:.0}"), "73466099633870");
+        assert_eq!(hash_rate.to_string(), "73466099633870");
+    }
+
+    #[test]
+    fn test_daily_work_and_rate_match_exact_mainnet_headers() {
+        // Mainnet 2020-01-01: independently summed per-block compact targets.
+        let stats = ckbadger_store::DailyBlockStats {
+            difficulty_sum: 18_073_578_343_689_051_602,
+            block_count: 8_816,
+            total_uncles: 0,
+        };
+        assert_eq!(
+            average_daily_difficulty("20200101", &stats).unwrap(),
+            2_050_088_287_623_531
+        );
+        let rate = calculate_daily_hash_rate(
+            "20200101",
+            &stats,
+            &daily_stats(8_816, 86_395_945, 8_816),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(rate, 209_194_752_643_646);
+
+        // Mainnet 2024-09-15: the former f64 chart was +320 difficulty
+        // and +66 H/s despite using the same 6,450 block headers.
+        let high_work = ckbadger_store::DailyBlockStats {
+            difficulty_sum: 31_658_704_914_240_744_125_258,
+            block_count: 6_450,
+            total_uncles: 0,
+        };
+        assert_eq!(
+            average_daily_difficulty("20240915", &high_work).unwrap(),
+            4_908_326_343_293_138_624
+        );
+        let high_rate = calculate_daily_hash_rate(
+            "20240915",
+            &high_work,
+            &daily_stats(6_450, 86_405_587, 6_450),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(high_rate, 366_396_502_974_289_662);
     }
 
     #[test]
     fn test_calculate_daily_hash_rate_omits_only_spanless_genesis_day() {
         let genesis = calculate_daily_hash_rate(
             "20200512",
-            &daily_block_stats(12_582_960.0, 1),
+            &daily_block_stats(12_582_960, 1),
             &daily_stats(1, 0, 0),
             Some("20200512"),
         )
@@ -4874,7 +4968,7 @@ mod tests {
 
         let err = calculate_daily_hash_rate(
             "20260101",
-            &daily_block_stats(12_582_960.0, 1),
+            &daily_block_stats(12_582_960, 1),
             &daily_stats(1, 0, 0),
             Some("20200512"),
         )
@@ -4886,7 +4980,7 @@ mod tests {
     fn test_calculate_daily_hash_rate_rejects_sibling_block_count_mismatch() {
         let err = calculate_daily_hash_rate(
             "20260101",
-            &daily_block_stats(1_000_000.0, 2),
+            &daily_block_stats(1_000_000, 2),
             &daily_stats(1, 10_000, 1),
             None,
         )
@@ -4903,7 +4997,7 @@ mod tests {
     fn test_calculate_daily_hash_rate_fails_without_a_mined_span() {
         let err = calculate_daily_hash_rate(
             "20260101",
-            &daily_block_stats(1_000_000.0, 100),
+            &daily_block_stats(1_000_000, 100),
             &daily_stats(100, 0, 0),
             None,
         )
@@ -5032,19 +5126,20 @@ mod tests {
         let span_secs = 600.0 * 8.0;
         // The oldest header's own difficulty predates the span: the counted
         // work is 581 old-epoch + 19 new-epoch blocks.
-        let expected = (581 * d_old + 19 * d_new) as f64 / span_secs;
+        let expected = ckbadger_common::work::hash_rate_hps(
+            581 * d_old + 19 * d_new,
+            (span_secs * 1000.0) as u64,
+        )
+        .unwrap();
         let got = estimate_hash_rate_from_window(&headers).unwrap().unwrap();
-        assert!(
-            ((got - expected) / expected).abs() < 1e-12,
-            "hash rate must be window work over span: got {got}, expected {expected}"
-        );
+        assert_eq!(got, expected);
 
         // The replaced formula — tip-epoch difficulty over the average gap —
         // reports the new-epoch rate for a window that is still ~97%
         // old-epoch blocks, overstating by ~19%.
         let old_formula = d_new as f64 / 8.0;
         assert!(
-            old_formula > got * 1.15,
+            old_formula > got as f64 * 1.15,
             "old formula ({old_formula}) must overstate the window-work rate ({got}) by ~19%"
         );
     }
