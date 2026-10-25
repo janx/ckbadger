@@ -594,17 +594,7 @@ impl TuiDb {
     fn get_memory_stats_without_refresh(&self) -> Option<MemoryStatsData> {
         let store = self.store_handle()?;
         let bytes = store.get_memory_stats().ok()??;
-        let mut mem: MemoryStatsData = serde_json::from_slice(&bytes).ok()?;
-
-        if mem.total_transactions == 0 || mem.total_cells == 0 {
-            if let Ok(sync) = store.get_sync_status() {
-                mem.total_transactions = sync.total_transactions;
-                mem.total_cells = sync.total_cells_created;
-                mem.total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
-                mem.total_addresses = 0;
-            }
-        }
-        Some(mem)
+        serde_json::from_slice(&bytes).ok()
     }
 
     fn get_runtime_diag_without_refresh(&self) -> Option<RuntimeDiagData> {

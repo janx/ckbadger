@@ -577,12 +577,12 @@ impl App {
             }
         }
 
-        let l0_files = self
-            .memory_stats
-            .as_ref()
-            .map(|m| m.l0_files_count as f64)
-            .unwrap_or(0.0);
-        push_history_sample(&mut self.l0_files_history, l0_files);
+        let l0_files = self.memory_stats.as_ref().and_then(|m| m.l0_files_count);
+        if let Some(count) = l0_files {
+            push_history_sample(&mut self.l0_files_history, count as f64);
+        } else {
+            self.l0_files_history.clear();
+        }
 
         let mut block_rate_alerted = false;
         if self.rate_history.len() >= 2 {
@@ -770,7 +770,7 @@ fn network_summary_row(local: &NetworkLocal) -> NetworkSummaryRow {
             progress: Some(s.progress),
             tip: Some(s.tip_block),
             blk_per_sec: s.rate_realtime.or(s.rate_ema),
-            db_mem_bytes: local.memory.as_ref().map(|m| m.rocksdb_total_bytes),
+            db_mem_bytes: local.memory.as_ref().and_then(|m| m.rocksdb_total_bytes),
             error: None,
         },
         Err(e) => NetworkSummaryRow {
@@ -4372,36 +4372,38 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
 fn storage_runtime_columns(
     mem: &MemoryStatsData,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<Line<'static>>) {
-    let live_delta = runtime_live_delta(mem.live_cells_count, mem.total_live_cells);
+    let live_delta = mem
+        .live_cells_count
+        .map(|count| runtime_live_delta(count, mem.total_live_cells));
 
     let left = vec![
         metric_line(
             "Live (cache)",
-            format_num_u64(mem.live_cells_count),
+            format_optional_u64(mem.live_cells_count),
             TERMINAL_GREEN,
         ),
         metric_line(
             "Consumed",
-            format_num_u64(mem.consumed_cells_count),
+            format_optional_u64(mem.consumed_cells_count),
             FOREGROUND,
         ),
         Line::from(vec![
             metric_label_span("Consumed Sz"),
             Span::styled(
-                format_bytes(mem.consumed_cells_bytes),
+                format_optional_bytes(mem.consumed_cells_bytes),
                 Style::default().fg(FOREGROUND),
             ),
             Span::styled("  src ", Style::default().fg(SLATE_500)),
             Span::styled(
-                consumed_cells_source_label(&mem.consumed_cells_bytes_source),
+                consumed_cells_source_label(mem.consumed_cells_bytes_source.as_deref()),
                 Style::default().fg(consumed_cells_source_color(
-                    &mem.consumed_cells_bytes_source,
+                    mem.consumed_cells_bytes_source.as_deref(),
                 )),
             ),
         ]),
         metric_line(
             "Block Hdrs",
-            format_num_u64(mem.block_headers_count),
+            format_optional_u64(mem.block_headers_count),
             TERMINAL_DIM,
         ),
     ];
@@ -4409,12 +4411,12 @@ fn storage_runtime_columns(
     let mid = vec![
         metric_line(
             "RocksDB Total",
-            format_bytes(mem.rocksdb_total_bytes),
+            format_optional_bytes(mem.rocksdb_total_bytes),
             TERMINAL_GREEN,
         ),
         metric_line(
             "Memtable",
-            format_bytes(mem.rocksdb_memtable_bytes),
+            format_optional_bytes(mem.rocksdb_memtable_bytes),
             FOREGROUND,
         ),
         metric_line(
@@ -4424,7 +4426,7 @@ fn storage_runtime_columns(
         ),
         metric_line(
             "TableReaders",
-            format_bytes(mem.rocksdb_table_readers_bytes),
+            format_optional_bytes(mem.rocksdb_table_readers_bytes),
             TERMINAL_DIM,
         ),
     ];
@@ -4444,14 +4446,18 @@ fn storage_runtime_columns(
             ),
             Span::styled("  Δcache ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_signed_num_i128(live_delta),
+                live_delta
+                    .map(format_signed_num_i128)
+                    .unwrap_or_else(|| "—".to_string()),
                 Style::default().fg(live_delta_color(live_delta)),
             ),
         ]),
         Line::from(vec![
             metric_label_span("Chain Addrs"),
             Span::styled(
-                format_num(mem.total_addresses),
+                mem.total_addresses
+                    .map(format_num)
+                    .unwrap_or_else(|| "—".to_string()),
                 Style::default().fg(TERMINAL_DIM),
             ),
             Span::styled("  mode ", Style::default().fg(SLATE_500)),
@@ -4482,22 +4488,19 @@ fn storage_runtime_columns(
     (left, mid, right)
 }
 
-fn consumed_cells_source_label(source: &str) -> &'static str {
+fn consumed_cells_source_label(source: Option<&str>) -> &'static str {
     match source {
-        "live" => "live",
-        "sst" => "sst",
-        "mem" => "mem",
-        "none" => "none",
-        _ => "unknown",
+        Some("live+mem") => "live+mem",
+        None => "—",
+        Some(_) => "invalid",
     }
 }
 
-fn consumed_cells_source_color(source: &str) -> Color {
+fn consumed_cells_source_color(source: Option<&str>) -> Color {
     match source {
-        "live" => TERMINAL_GREEN,
-        "sst" | "mem" => AMBER,
-        "none" => SLATE_500,
-        _ => AMBER,
+        Some("live+mem") => TERMINAL_GREEN,
+        None => SLATE_500,
+        Some(_) => ERROR_RED,
     }
 }
 
@@ -4516,13 +4519,24 @@ fn runtime_live_delta(cache_live_cells: u64, sync_live_cells: i64) -> i128 {
     i128::from(cache_live_cells) - i128::from(sync_live_cells)
 }
 
-fn live_delta_color(delta: i128) -> Color {
-    if delta == 0 {
+fn live_delta_color(delta: Option<i128>) -> Color {
+    if delta == Some(0) {
         TERMINAL_GREEN
-    } else if delta.abs() <= 100 {
+    } else if delta.is_some_and(|value| value.abs() <= 100) {
         AMBER
+    } else if delta.is_none() {
+        SLATE_500
     } else {
         ERROR_RED
+    }
+}
+
+fn l0_health(count: Option<u64>) -> (&'static str, Color) {
+    match count {
+        Some(value) if value >= 16 => ("HOT", ERROR_RED),
+        Some(value) if value >= 10 => ("WARN", AMBER),
+        Some(_) => ("OK", TERMINAL_GREEN),
+        None => ("—", SLATE_500),
     }
 }
 
@@ -4576,21 +4590,16 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(inner);
 
-    let l0_state = if mem.l0_files_max >= 16 {
-        ("HOT", ERROR_RED)
-    } else if mem.l0_files_max >= 10 {
-        ("WARN", AMBER)
-    } else {
-        ("OK", TERMINAL_GREEN)
-    };
-    let health_state = if mem.l0_files_max >= 16
-        || mem.compaction_pending_bytes >= 64 * 1024 * 1024 * 1024
-    {
-        ("HOT", ERROR_RED)
-    } else if mem.l0_files_max >= 10 || mem.compaction_pending_bytes >= 16 * 1024 * 1024 * 1024 {
-        ("WARN", AMBER)
-    } else {
-        ("OK", TERMINAL_GREEN)
+    let l0_state = l0_health(mem.l0_files_max);
+    let health_state = match (mem.l0_files_max, mem.compaction_pending_bytes) {
+        (Some(l0), Some(pending)) if l0 >= 16 || pending >= 64 * 1024 * 1024 * 1024 => {
+            ("HOT", ERROR_RED)
+        }
+        (Some(l0), Some(pending)) if l0 >= 10 || pending >= 16 * 1024 * 1024 * 1024 => {
+            ("WARN", AMBER)
+        }
+        (Some(_), Some(_)) => ("OK", TERMINAL_GREEN),
+        _ => ("—", SLATE_500),
     };
 
     let left = vec![
@@ -4607,7 +4616,7 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("Compaction Pending: ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_bytes(mem.compaction_pending_bytes),
+                format_optional_bytes(mem.compaction_pending_bytes),
                 Style::default().fg(FOREGROUND),
             ),
         ]),
@@ -4616,8 +4625,8 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 format!(
                     "{}/{}",
-                    format_num_u64(mem.num_running_compactions),
-                    format_num_u64(mem.immutable_memtables)
+                    format_optional_u64(mem.num_running_compactions),
+                    format_optional_u64(mem.immutable_memtables)
                 ),
                 Style::default().fg(TERMINAL_DIM),
             ),
@@ -4626,14 +4635,18 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("SST Files Size: ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_bytes(mem.sst_files_size),
+                format_optional_bytes(mem.sst_files_size),
                 Style::default().fg(FOREGROUND),
             ),
         ]),
         Line::from(vec![
             Span::styled("L0 Total/Max: ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format!("{}/{}", mem.l0_files_count, mem.l0_files_max),
+                format!(
+                    "{}/{}",
+                    format_optional_u64(mem.l0_files_count),
+                    format_optional_u64(mem.l0_files_max)
+                ),
                 Style::default().fg(l0_state.1),
             ),
             Span::styled("  ", Style::default().fg(SLATE_700)),
@@ -4642,11 +4655,7 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("Worst CF: ", Style::default().fg(SLATE_500)),
             Span::styled(
-                if mem.l0_worst_cf.is_empty() {
-                    "-"
-                } else {
-                    mem.l0_worst_cf.as_str()
-                },
+                mem.l0_worst_cf.as_deref().unwrap_or("—"),
                 Style::default().fg(AMBER),
             ),
         ]),
@@ -4658,20 +4667,24 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(TERMINAL_GREEN),
     ))];
 
-    if mem.top_cf_sizes.is_empty() {
+    if mem.top_cf_sizes.as_ref().is_none_or(Vec::is_empty) {
         right_lines.push(Line::from(Span::styled(
-            "- no data",
+            if mem.top_cf_sizes.is_none() {
+                "—"
+            } else {
+                "- no data"
+            },
             Style::default().fg(SLATE_500),
         )));
     } else {
-        let max_size = mem
-            .top_cf_sizes
+        let sizes = mem.top_cf_sizes.as_ref().expect("checked above");
+        let max_size = sizes
             .iter()
             .take(3)
             .map(|(_, size)| *size)
             .max()
             .unwrap_or(1);
-        for (idx, (name, size)) in mem.top_cf_sizes.iter().take(3).enumerate() {
+        for (idx, (name, size)) in sizes.iter().take(3).enumerate() {
             let ratio = if max_size == 0 {
                 0.0
             } else {
@@ -5467,27 +5480,25 @@ fn delta_color(delta: Option<f64>) -> Color {
 }
 
 fn storage_pressure_l0_line(mem: &MemoryStatsData, gauge_width: usize) -> Line<'static> {
-    let ratio = if L0_GAUGE_MAX > 0 {
-        (mem.l0_files_max as f64 / L0_GAUGE_MAX as f64).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let filled = (ratio * gauge_width as f64).round() as usize;
-    let gauge = render_gauge(filled, gauge_width);
-    let (badge, badge_color) = if mem.l0_files_max >= 16 {
-        ("HOT", ERROR_RED)
-    } else if mem.l0_files_max >= 10 {
-        ("WARN", AMBER)
-    } else {
-        ("OK", TERMINAL_GREEN)
-    };
+    let gauge = mem.l0_files_max.map(|count| {
+        let ratio = (count as f64 / L0_GAUGE_MAX as f64).clamp(0.0, 1.0);
+        render_gauge((ratio * gauge_width as f64).round() as usize, gauge_width)
+    });
+    let (badge, badge_color) = l0_health(mem.l0_files_max);
     Line::from(vec![
         Span::styled("L0 ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format!("{}/{} ", mem.l0_files_max, L0_GAUGE_MAX),
+            format!(
+                "{}/{} ",
+                format_optional_u64(mem.l0_files_max),
+                L0_GAUGE_MAX
+            ),
             Style::default().fg(FOREGROUND),
         ),
-        Span::styled(gauge, Style::default().fg(badge_color)),
+        Span::styled(
+            gauge.unwrap_or_else(|| "—".to_string()),
+            Style::default().fg(badge_color),
+        ),
         Span::styled(format!(" [{}]", badge), Style::default().fg(badge_color)),
     ])
 }
@@ -5499,8 +5510,8 @@ fn storage_pressure_wbm_line(mem: &MemoryStatsData, gauge_width: usize) -> Line<
             Span::styled("-", Style::default().fg(SLATE_500)),
         ]);
     }
+    let pct = u128::from(mem.wbm_usage_bytes) * 100 / u128::from(mem.wbm_budget_bytes);
     let ratio = (mem.wbm_usage_bytes as f64 / mem.wbm_budget_bytes as f64).clamp(0.0, 1.0);
-    let pct = (ratio * 100.0) as u64;
     let filled = (ratio * gauge_width as f64).round() as usize;
     let gauge = render_gauge(filled, gauge_width);
     let color = if pct > 90 {
@@ -5526,20 +5537,16 @@ fn storage_pressure_wbm_line(mem: &MemoryStatsData, gauge_width: usize) -> Line<
 }
 
 fn storage_pressure_summary_line(mem: &MemoryStatsData) -> Line<'static> {
-    let worst = if mem.l0_worst_cf.is_empty() {
-        "-".to_string()
-    } else {
-        mem.l0_worst_cf.clone()
-    };
+    let worst = mem.l0_worst_cf.clone().unwrap_or_else(|| "—".to_string());
     Line::from(vec![
         Span::styled("Compact ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_bytes(mem.compaction_pending_bytes),
+            format_optional_bytes(mem.compaction_pending_bytes),
             Style::default().fg(FOREGROUND),
         ),
         Span::styled("  Imm ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_num_u64(mem.immutable_memtables),
+            format_optional_u64(mem.immutable_memtables),
             Style::default().fg(FOREGROUND),
         ),
         Span::styled("  worst ", Style::default().fg(SLATE_500)),
@@ -5882,7 +5889,15 @@ fn format_num(value: i64) -> String {
 }
 
 fn format_num_u64(value: u64) -> String {
-    format_num_commas(value as i64)
+    format_num_commas_u128(u128::from(value))
+}
+
+fn format_optional_u64(value: Option<u64>) -> String {
+    value.map(format_num_u64).unwrap_or_else(|| "—".to_string())
+}
+
+fn format_optional_bytes(value: Option<u64>) -> String {
+    value.map(format_bytes).unwrap_or_else(|| "—".to_string())
 }
 
 fn format_num_commas(value: i64) -> String {
@@ -7179,14 +7194,14 @@ mod tests {
 
     #[test]
     fn test_consumed_cells_source_helpers() {
-        assert_eq!(consumed_cells_source_label("live"), "live");
-        assert_eq!(consumed_cells_source_label("sst"), "sst");
-        assert_eq!(consumed_cells_source_label("foo"), "unknown");
-        assert_eq!(consumed_cells_source_color("live"), Color::Rgb(0, 255, 65));
+        assert_eq!(consumed_cells_source_label(Some("live+mem")), "live+mem");
+        assert_eq!(consumed_cells_source_label(None), "—");
+        assert_eq!(consumed_cells_source_label(Some("foo")), "invalid");
         assert_eq!(
-            consumed_cells_source_color("none"),
-            Color::Rgb(160, 174, 192)
+            consumed_cells_source_color(Some("live+mem")),
+            Color::Rgb(0, 255, 65)
         );
+        assert_eq!(consumed_cells_source_color(None), Color::Rgb(160, 174, 192));
     }
 
     #[test]
@@ -7271,24 +7286,25 @@ mod tests {
         assert_eq!(runtime_live_delta(995, 1_000), -5);
         assert_eq!(format_signed_num_i128(5), "+5");
         assert_eq!(format_signed_num_i128(-5), "-5");
+        assert_eq!(super::format_num_u64(u64::MAX), "18,446,744,073,709,551,615");
     }
 
     #[test]
     fn test_storage_runtime_columns_live_sync_line() {
         let mem = MemoryStatsData {
-            live_cells_count: 1_428_835,
-            consumed_cells_count: 93_659_951,
-            consumed_cells_bytes: 7_860_000_000,
-            consumed_cells_bytes_source: "live".to_string(),
-            rocksdb_memtable_bytes: 48_060_000,
+            live_cells_count: Some(1_428_835),
+            consumed_cells_count: Some(93_659_951),
+            consumed_cells_bytes: Some(7_860_000_000),
+            consumed_cells_bytes_source: Some("live+mem".to_string()),
+            rocksdb_memtable_bytes: Some(48_060_000),
             rocksdb_block_cache_bytes: 7_990_000_000,
-            rocksdb_table_readers_bytes: 4_920_000,
-            rocksdb_total_bytes: 8_050_000_000,
-            block_headers_count: 18_663_072,
+            rocksdb_table_readers_bytes: Some(4_920_000),
+            rocksdb_total_bytes: Some(8_050_000_000),
+            block_headers_count: Some(18_663_072),
             total_transactions: 48_551_716,
             total_cells: 95_088_803,
             total_live_cells: 1_428_846,
-            total_addresses: 0,
+            total_addresses: Some(0),
             ..Default::default()
         };
 
@@ -7302,18 +7318,41 @@ mod tests {
     #[test]
     fn test_storage_runtime_columns_mode_and_consumed_source() {
         let mem = MemoryStatsData {
-            consumed_cells_bytes: 1_024,
-            consumed_cells_bytes_source: "sst".to_string(),
+            consumed_cells_bytes: Some(1_024),
+            consumed_cells_bytes_source: Some("live+mem".to_string()),
             bulk_sync_mode: true,
             bulk_sync_cell_cache_enabled: false,
-            total_addresses: 123,
+            total_addresses: Some(123),
             ..Default::default()
         };
 
         let (left, _, right) = storage_runtime_columns(&mem);
-        assert!(line_text(&left[2]).contains("src sst"));
+        assert!(line_text(&left[2]).contains("src live+mem"));
         assert!(line_text(&right[3]).contains("mode bulk"));
         assert!(line_text(&right[3]).contains("cache off"));
+    }
+
+    #[test]
+    fn unavailable_memory_gauges_are_distinct_from_real_zero() {
+        let missing = MemoryStatsData::new();
+        let (left, middle, right) = storage_runtime_columns(&missing);
+        assert!(line_text(&left[0]).contains("—"));
+        assert!(line_text(&middle[0]).contains("—"));
+        assert!(line_text(&right[3]).contains("—"));
+        assert!(line_text(&storage_pressure_l0_line(&missing, 10)).contains("[—]"));
+        assert_eq!(super::l0_health(None).0, "—");
+        assert_eq!(super::l0_health(Some(0)).0, "OK");
+
+        let observed = MemoryStatsData {
+            live_cells_count: Some(0),
+            rocksdb_total_bytes: Some(0),
+            l0_files_max: Some(0),
+            ..MemoryStatsData::new()
+        };
+        let (left, middle, _) = storage_runtime_columns(&observed);
+        assert!(line_text(&left[0]).contains("0"));
+        assert!(line_text(&middle[0]).contains("0 B"));
+        assert!(line_text(&storage_pressure_l0_line(&observed, 10)).contains("[OK]"));
     }
 
     #[test]
@@ -7636,17 +7675,31 @@ mod tests {
     }
 
     #[test]
+    fn storage_pressure_wbm_keeps_true_over_budget_readout() {
+        let mem = MemoryStatsData {
+            wbm_budget_bytes: 1_000,
+            wbm_usage_bytes: 1_500,
+            ..MemoryStatsData::new()
+        };
+        let text = line_text(&storage_pressure_wbm_line(&mem, 10));
+        assert!(
+            text.contains("150%"),
+            "actual WBM pressure must remain visible: {text}"
+        );
+    }
+
+    #[test]
     fn test_storage_pressure_l0_thresholds() {
         let mut mem = MemoryStatsData::new();
-        mem.l0_files_max = 5;
+        mem.l0_files_max = Some(5);
         let line = storage_pressure_l0_line(&mem, 10);
         assert!(line_text(&line).contains("[OK]"));
 
-        mem.l0_files_max = 12;
+        mem.l0_files_max = Some(12);
         let line = storage_pressure_l0_line(&mem, 10);
         assert!(line_text(&line).contains("[WARN]"));
 
-        mem.l0_files_max = 18;
+        mem.l0_files_max = Some(18);
         let line = storage_pressure_l0_line(&mem, 10);
         assert!(line_text(&line).contains("[HOT]"));
     }
@@ -8271,7 +8324,7 @@ mod tests {
             ..Default::default()
         };
         let mem = MemoryStatsData {
-            l0_files_max: 12,
+            l0_files_max: Some(12),
             wbm_usage_bytes: 340_000_000,
             wbm_budget_bytes: 1_000_000_000,
             ..Default::default()
