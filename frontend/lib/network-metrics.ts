@@ -1,4 +1,5 @@
 /** Units and consensus targets for the homepage network charts. */
+import { formatScaledInteger } from '@/lib/exact-integer';
 
 export interface HashRateUnit {
   suffix: string;
@@ -53,18 +54,32 @@ export interface OrphanRateTarget {
  * consensus) as a percentage. Missing or malformed is an API contract violation and throws: the
  * target is a consensus parameter, never a number the frontend assumes.
  */
-export function orphanRateTargetPercent(target: OrphanRateTarget | undefined | null): number {
+function checkedOrphanTarget(target: OrphanRateTarget | undefined | null): OrphanRateTarget {
   if (target === undefined || target === null) {
     throw new Error('the uncle-rate response has no orphanRateTarget');
   }
   const { numerator, denominator } = target;
-  if (!Number.isInteger(numerator) || numerator < 0) {
+  if (!Number.isSafeInteger(numerator) || numerator < 0) {
     throw new Error(`orphanRateTarget numerator ${numerator} is not a non-negative integer`);
   }
-  if (!Number.isInteger(denominator) || denominator <= 0) {
+  if (!Number.isSafeInteger(denominator) || denominator <= 0) {
     throw new Error(`orphanRateTarget denominator ${denominator} is not a positive integer`);
   }
+  return target;
+}
+
+export function orphanRateTargetPercent(target: OrphanRateTarget | undefined | null): number {
+  const { numerator, denominator } = checkedOrphanTarget(target);
   return (numerator / denominator) * 100;
+}
+
+/** Display the consensus target from its exact integer ratio, never its float geometry. */
+export function formatOrphanRateTarget(target: OrphanRateTarget | undefined | null): string {
+  const { numerator, denominator } = checkedOrphanTarget(target);
+  return formatScaledInteger(BigInt(numerator) * BigInt(100), BigInt(denominator), 2).replace(
+    /\.?0+$/,
+    ''
+  );
 }
 
 /** A percentage with at most two decimals and no trailing zeros: `2.5`, `2.64`, `3`. */

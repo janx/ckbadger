@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { formatPercentShort, hashRateUnit, orphanRateTargetPercent } from '@/lib/network-metrics';
+import {
+  formatOrphanRateTarget,
+  formatPercentShort,
+  hashRateUnit,
+  orphanRateTargetPercent,
+} from '@/lib/network-metrics';
 
 describe('hashRateUnit', () => {
   it('picks the largest unit the maximum reaches', () => {
@@ -20,6 +25,7 @@ describe('orphanRateTargetPercent', () => {
   it('turns the consensus ratio into a percentage', () => {
     expect(orphanRateTargetPercent({ numerator: 1, denominator: 40 })).toBe(2.5);
     expect(orphanRateTargetPercent({ numerator: 0, denominator: 7 })).toBe(0);
+    expect(formatOrphanRateTarget({ numerator: 201, denominator: 20000 })).toBe('1.01');
   });
 
   it('throws when the API did not send the target', () => {

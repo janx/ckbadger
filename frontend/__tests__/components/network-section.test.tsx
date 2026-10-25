@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
-import { txStats, uncleRateChart } from '@/__tests__/msw/fixtures/home';
+import { averageBlockTimeChart, txStats, uncleRateChart } from '@/__tests__/msw/fixtures/home';
 import { NetworkSection } from '@/components/home/network-section';
 
 const API = '/api/:network/v1';
@@ -42,6 +42,39 @@ describe('NetworkSection', () => {
       'href',
       '/mainnet/charts/average-block-time'
     );
+  });
+
+  it('uses exact daily decimals in the headline, caption, and accessible range', async () => {
+    server.use(
+      http.get(`${API}/charts/average-block-time`, () =>
+        HttpResponse.json({
+          ...averageBlockTimeChart,
+          data: averageBlockTimeChart.data.map((point, index, all) =>
+            index === all.length - 1 ? { ...point, value: '1.005' } : point
+          ),
+        })
+      ),
+      http.get(`${API}/charts/uncle-rate`, () =>
+        HttpResponse.json({
+          ...uncleRateChart,
+          orphanRateTarget: { numerator: 201, denominator: 20000 },
+          data: uncleRateChart.data.map((point, index, all) =>
+            index === all.length - 1 ? { ...point, value: '0.01005' } : point
+          ),
+        })
+      )
+    );
+    render(<NetworkSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId('home-block-time-headline')).toHaveTextContent('1.01')
+    );
+    expect(within(figure('home-block-time')).getByRole('img')).toHaveAccessibleName(
+      /1.01 s on 10\/23/
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('1.01%')
+    );
+    expect(figure('home-uncle-rate')).toHaveTextContent('NC-Max target 1.01%');
   });
 
   it('reads hash rate in H/s and only divides it into PH/s for display', async () => {

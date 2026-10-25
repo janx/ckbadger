@@ -18,10 +18,15 @@ import {
 } from '@/components/home/section';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
 import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import {
+  exactDecimalRatio,
+  exactUnsignedInteger,
+  formatDecimal,
+  formatScaledInteger,
+} from '@/lib/exact-integer';
 import {
   exactHashRateUnit,
-  formatPercentShort,
+  formatOrphanRateTarget,
   orphanRateTargetPercent,
 } from '@/lib/network-metrics';
 import { cn } from '@/lib/utils';
@@ -71,6 +76,39 @@ function lineView(chart: ChartResponse, scale: (v: number) => number): LineView 
 
 const range = (v: LineView) => `${v.points[0].label} to ${v.last.label}`;
 
+function exactLineView(
+  chart: ChartResponse,
+  multiplier: number
+):
+  | (LineView & {
+      minExact: string;
+      maxExact: string;
+      lastExact: string;
+    })
+  | null {
+  const view = lineView(chart, (value) => value * multiplier);
+  if (!view) return null;
+  const raw = chart.data.slice(-DAYS);
+  const values = raw.map((point) => ({
+    ...point,
+    ratio: exactDecimalRatio(point.value, `chart ${point.date}`),
+    display: formatDecimal(point.value, 2, multiplier),
+  }));
+  const min = values.reduce((best, value) =>
+    value.ratio[0] * best.ratio[1] < best.ratio[0] * value.ratio[1] ? value : best
+  );
+  const max = values.reduce((best, value) =>
+    value.ratio[0] * best.ratio[1] > best.ratio[0] * value.ratio[1] ? value : best
+  );
+  return {
+    ...view,
+    points: view.points.map((point, index) => ({ ...point, display: values[index].display })),
+    minExact: min.display,
+    maxExact: max.display,
+    lastExact: values[values.length - 1].display,
+  };
+}
+
 function BlockTimeFigure() {
   const { data, error } = useQuery({
     queryKey: ['chart-average-block-time-home'],
@@ -79,8 +117,7 @@ function BlockTimeFigure() {
     refetchInterval: 300_000,
   });
   const d = useMemo(
-    () =>
-      derive({ data, error }, (chart) => lineView(chart, (v) => v), 'No block-time history yet'),
+    () => derive({ data, error }, (chart) => exactLineView(chart, 1), 'No block-time history yet'),
     [data, error]
   );
   const v = viewOf(d);
@@ -91,12 +128,12 @@ function BlockTimeFigure() {
       title="Block time"
       href="/charts/average-block-time"
       subtitle="daily average, s"
-      headline={v ? s(v.last.value) : undefined}
+      headline={v?.lastExact}
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
           formatValue={s}
-          ariaLabel={`Average block time per day, ${range(view)}, between ${s(view.min)} and ${s(view.max)} seconds, ${s(view.last.value)} s on ${view.last.label}`}
+          ariaLabel={`Average block time per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} seconds, ${view.lastExact} s on ${view.last.label}`}
         />
       ))}
     />
@@ -184,8 +221,10 @@ function UncleRateFigure() {
         (chart) => {
           // The target is a consensus parameter the API reports; without it there is no chart.
           const target = orphanRateTargetPercent(chart.orphanRateTarget);
-          const view = lineView(chart, (rate) => rate * 100);
-          return view && { ...view, target };
+          const view = exactLineView(chart, 100);
+          return (
+            view && { ...view, target, targetExact: formatOrphanRateTarget(chart.orphanRateTarget) }
+          );
         },
         'No uncle-rate history yet'
       ),
@@ -198,14 +237,14 @@ function UncleRateFigure() {
       testId="home-uncle-rate"
       title="Uncle rate"
       href="/charts/uncle-rate"
-      subtitle={v ? `daily, NC-Max target ${formatPercentShort(v.target)}%` : 'daily'}
-      headline={v ? `${s(v.last.value)}%` : undefined}
+      subtitle={v ? `daily, NC-Max target ${v.targetExact}%` : 'daily'}
+      headline={v ? `${v.lastExact}%` : undefined}
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
           reference={view.target}
           formatValue={(n) => `${s(n)}%`}
-          ariaLabel={`Uncle rate per day, ${range(view)}, between ${s(view.min)} and ${s(view.max)} percent around the NC-Max target of ${formatPercentShort(view.target)} percent, ${s(view.last.value)} percent on ${view.last.label}`}
+          ariaLabel={`Uncle rate per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} percent around the NC-Max target of ${view.targetExact} percent, ${view.lastExact} percent on ${view.last.label}`}
         />
       ))}
     />
