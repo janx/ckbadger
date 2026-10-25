@@ -53,6 +53,13 @@ function stats(overrides: Partial<NetworkStats> = {}): NetworkStats {
 }
 
 describe('VitalsStrip', () => {
+  it('shows undefined network hash rate as an em dash', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats({ hashRate: null }));
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('Hash rate'));
+    expect(strip).toHaveTextContent('—');
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     useRealtimeStore.setState({ isConnected: false, socketHeld: false });

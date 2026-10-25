@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
+import { formatCompactInteger } from '@/lib/exact-integer';
 import {
   CHART_PRIMARY_COLOR,
   CHART_SECONDARY_COLOR,
@@ -30,9 +31,11 @@ interface LineChartProps {
   defaultLogScale?: boolean;
   chartType?: LineChartType;
   markers?: LineChartMarker[];
+  /** Exact decimal integer chart: use Number only for SVG geometry. */
+  exactIntegerValues?: boolean;
 }
 
-function formatValue(val: number | undefined, isPercent = false): string {
+function formatValue(val: number | null | undefined, isPercent = false): string {
   if (val === undefined || val === null || isNaN(val)) return '-';
   if (isPercent) return `${val.toFixed(2)}%`;
   if (val >= 1_000_000_000) return `${(val / 1_000_000_000).toFixed(2)}B`;
@@ -62,6 +65,7 @@ export function LineChart({
   defaultLogScale = false,
   chartType = 'line',
   markers = [],
+  exactIntegerValues = false,
 }: LineChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -88,9 +92,28 @@ export function LineChart({
 
   const isZoomed = zoomRange !== null;
 
-  const values = useMemo(() => data.map((d) => parseFloat(d.value) || 0), [data]);
+  const values = useMemo(
+    () =>
+      data.map((d) => {
+        if (exactIntegerValues) formatCompactInteger(d.value, `chart ${d.date}`);
+        const value = Number(d.value);
+        if (!Number.isFinite(value)) throw new Error(`chart ${d.date}: invalid value ${d.value}`);
+        return value;
+      }),
+    [data, exactIntegerValues]
+  );
   const values2 = useMemo(
-    () => (y2AxisLabel ? data.map((d) => parseFloat(d.value2 || '0') || 0) : []),
+    () =>
+      y2AxisLabel
+        ? data.map((d) => {
+            if (d.value2 === null) return null;
+            if (d.value2 === undefined) throw new Error(`chart ${d.date}: missing secondary value`);
+            const value = Number(d.value2);
+            if (!Number.isFinite(value))
+              throw new Error(`chart ${d.date}: invalid secondary value ${d.value2}`);
+            return value;
+          })
+        : [],
     [data, y2AxisLabel]
   );
 
@@ -110,7 +133,7 @@ export function LineChart({
 
     let max2 = -Infinity;
     for (const v of values2) {
-      if (v > max2) max2 = v;
+      if (v !== null && v > max2) max2 = v;
     }
     if (!isFinite(max2) || max2 === 0) max2 = 1;
 
@@ -353,7 +376,12 @@ export function LineChart({
     if (chartType === 'bar' || !values2.length) return '';
     const parts: string[] = new Array(data.length);
     for (let i = 0; i < data.length; i++) {
-      parts[i] = `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${y2Scale(values2[i])}`;
+      const value = values2[i];
+      if (value === null) {
+        parts[i] = '';
+        continue;
+      }
+      parts[i] = `${i === 0 || values2[i - 1] === null ? 'M' : 'L'} ${xScale(i)} ${y2Scale(value)}`;
     }
     return parts.join(' ');
   }, [chartType, data.length, xScale, y2Scale, values2]);
@@ -645,16 +673,19 @@ export function LineChart({
                 strokeWidth={1}
               />
             )}
-            {chartType === 'line' && values2.length > 0 && values2[hoverIndex] !== undefined && (
-              <circle
-                cx={xScale(hoverIndex)}
-                cy={y2Scale(values2[hoverIndex])}
-                r={4}
-                fill={secondaryColor}
-                stroke="#fff"
-                strokeWidth={2}
-              />
-            )}
+            {chartType === 'line' &&
+              values2.length > 0 &&
+              values2[hoverIndex] !== undefined &&
+              values2[hoverIndex] !== null && (
+                <circle
+                  cx={xScale(hoverIndex)}
+                  cy={y2Scale(values2[hoverIndex]!)}
+                  r={4}
+                  fill={secondaryColor}
+                  stroke="#fff"
+                  strokeWidth={2}
+                />
+              )}
           </>
         )}
 
@@ -683,7 +714,9 @@ export function LineChart({
             <text x={8} y={32} className="fill-text-dim font-mono tabular-nums" fontSize={10}>
               <tspan fill={primaryColor}>{yAxisLabel}: </tspan>
               <tspan className="fill-text-bright">
-                {formatValue(values[hoverIndex], isPercent)}
+                {exactIntegerValues
+                  ? formatCompactInteger(data[hoverIndex].value, `chart ${data[hoverIndex].date}`)
+                  : formatValue(values[hoverIndex], isPercent)}
               </tspan>
             </text>
             {y2AxisLabel && values2.length > 0 && (

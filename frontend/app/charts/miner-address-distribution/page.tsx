@@ -13,6 +13,7 @@ import { ChartCalculationNote } from '@/components/charts/chart-calculation-note
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { PieChart } from '@/components/ui/pie-chart';
 import { api, MinerDistributionDataPoint } from '@/lib/api';
+import { formatDecimal } from '@/lib/exact-integer';
 
 function formatNumber(num: number): string {
   return num.toLocaleString();
@@ -33,6 +34,10 @@ function MinerRow({
     : miner.minerLockHash.startsWith('0x')
       ? miner.minerLockHash.slice(2)
       : miner.minerLockHash;
+  const percentageGeometry = Number(miner.percentage);
+  if (!Number.isFinite(percentageGeometry) || percentageGeometry < 0 || percentageGeometry > 100) {
+    throw new Error(`miner ${miner.minerLockHash}: invalid percentage ${miner.percentage}`);
+  }
 
   return (
     <TerminalRow>
@@ -59,13 +64,13 @@ function MinerRow({
             <div
               className="h-full rounded-full"
               style={{
-                width: `${Math.min(parseFloat(miner.percentage), 100)}%`,
+                width: `${percentageGeometry}%`,
                 backgroundColor: color,
               }}
             />
           </div>
           <span className="text-text-dim w-16 text-right font-mono text-sm">
-            {parseFloat(miner.percentage).toFixed(2)}%
+            {formatDecimal(miner.percentage, 2)}%
           </span>
         </div>
       </div>

@@ -101,6 +101,9 @@ export function ChartPage({
                   defaultLogScale={defaultLogScale}
                   chartType={chartType}
                   markers={markers}
+                  exactIntegerValues={
+                    queryKey === 'chart-hash-rate' || queryKey === 'chart-difficulty'
+                  }
                 />
                 <div className="mt-6 flex items-center justify-center gap-6 text-sm">
                   <div className="flex items-center gap-2">

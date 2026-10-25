@@ -30,6 +30,7 @@ vi.mock('@/components/ui/line-chart', () => ({
       <span>{yAxisLabel}</span>
       {y2AxisLabel && <span>{y2AxisLabel}</span>}
       <span>points:{data.length}</span>
+      <span>values:{data.map((point) => point.value).join(',')}</span>
     </div>
   ),
 }));
@@ -61,5 +62,19 @@ describe('KnowledgeSizePage', () => {
       expect(screen.getByText('Description')).toBeInTheDocument();
       expect(screen.getByText('Legend Item Calculation')).toBeInTheDocument();
     });
+  });
+
+  it('keeps day-over-day knowledge flow exact above the number precision limit', async () => {
+    vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue({
+      title: 'Common Knowledge Size',
+      yAxisLabel: 'CKB',
+      y2AxisLabel: 'Utilization (%)',
+      data: [
+        { date: '2026-02-18', value: '9007199254740993.00000001', value2: '10' },
+        { date: '2026-02-19', value: '9007199254740993.00000003', value2: '10' },
+      ],
+    });
+    render(<KnowledgeSizePage />);
+    expect(await screen.findByText('values:0.00000000,0.00000002')).toBeInTheDocument();
   });
 });

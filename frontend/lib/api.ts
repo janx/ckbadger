@@ -210,7 +210,7 @@ interface SyncStatus {
 interface NetworkStats {
   latestBlock: number;
   avgBlockTime: string;
-  hashRate: string;
+  hashRate: string | null;
   difficulty: string;
   epoch: string;
   tps: string;
@@ -375,7 +375,7 @@ interface TransactionDetail extends Omit<
   }>;
   outputs?: Array<{
     capacity: string;
-    commonKnowledgeSize: number;
+    commonKnowledgeSize: string;
     virtualCommonKnowledgeSize?: string;
     cellType?: string;
     lock?: Script;
@@ -488,7 +488,7 @@ interface Cell {
   txHash: string;
   outputIndex: number;
   capacity: string;
-  commonKnowledgeSize?: number;
+  commonKnowledgeSize: string;
   commonKnowledgeSizeBreakdown?: CommonKnowledgeSizeBreakdown;
   lockScriptHash: string;
   address?: string;
@@ -1072,7 +1072,7 @@ interface DaoStatistics {
   totalCompensationPaidCkb: string;
   unclaimedCompensation: string;
   unclaimedCompensationCkb: string;
-  averageDepositDays: string;
+  averageDepositDays: string | null;
   estimatedApc: string;
   miningReward: string;
   miningRewardCkb: string;
@@ -1122,12 +1122,12 @@ interface SporeCluster {
   clusterId: string;
   name: string | null;
   description: string | null;
-  ownerLockHash: string;
+  ownerLockHash: string | null;
   ownerAddress?: string;
   sporesCount: number;
   holdersCount: number;
   activitiesCount: number;
-  createdAtBlock: number;
+  createdAtBlock: number | null;
   /** Shannons; null when the index holds no aggregate for the cluster. */
   ownedCapacity: string | null;
   /** Shannons; null when the index holds no aggregate for the cluster. */
@@ -1139,7 +1139,7 @@ interface SporeCluster {
     decentralizedMixtureCount: number;
     centralizedMixtureCount: number;
     unknownCount: number;
-    fullyOnchainRatio: string;
+    fullyOnchainRatio: string | null;
   };
 }
 
@@ -1150,7 +1150,7 @@ interface SporeNft {
   clusterId: string | null;
   contentType: string;
   contentSize: number;
-  ownerLockHash: string;
+  ownerLockHash: string | null;
   ownerAddress?: string;
   isLive: boolean;
   createdAtBlock: number;
@@ -1439,7 +1439,7 @@ interface MnftItemActivity {
 interface ChartDataPoint {
   date: string;
   value: string;
-  value2?: string;
+  value2?: string | null;
 }
 
 interface ChartResponse {

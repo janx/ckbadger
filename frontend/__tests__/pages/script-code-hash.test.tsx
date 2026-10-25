@@ -116,7 +116,7 @@ describe('ScriptByCodeHashPage', () => {
       txHash: mockDeploymentTxHash,
       outputIndex: 0,
       capacity: '16100000000',
-      commonKnowledgeSize: 6100000000,
+      commonKnowledgeSize: '6100000000',
       lockScriptHash: '0xlock1',
       dataSize: 0,
       createdAtBlock: 123456,

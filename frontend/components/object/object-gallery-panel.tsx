@@ -233,7 +233,9 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
               {spore.contentType || 'unknown'}
             </span>
             <span className="text-text-dim/60">{'\u00B7'}</span>
-            <span className="shrink-0">{formatNumber(spore.contentSize ?? 0)} B</span>
+            <span className="shrink-0">
+              {spore.contentSize == null ? '—' : `${formatNumber(spore.contentSize)} B`}
+            </span>
           </div>
 
           {/* Footer: owner + block */}
@@ -258,12 +260,16 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
             ) : (
               <span className="text-text-dim font-mono text-[10px]">{'\u2014'}</span>
             )}
-            <Link
-              href={`/blocks/${spore.createdAtBlock}`}
-              className="text-text-dim hover:text-emphasis shrink-0 font-mono text-[10px] hover:underline"
-            >
-              #{formatNumber(spore.createdAtBlock ?? 0)}
-            </Link>
+            {spore.createdAtBlock == null ? (
+              <span className="text-text-dim font-mono text-[10px]">—</span>
+            ) : (
+              <Link
+                href={`/blocks/${spore.createdAtBlock}`}
+                className="text-text-dim hover:text-emphasis shrink-0 font-mono text-[10px] hover:underline"
+              >
+                #{formatNumber(spore.createdAtBlock)}
+              </Link>
+            )}
           </div>
         </div>
       </div>

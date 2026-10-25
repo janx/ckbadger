@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from '@/src/navigation';
 import { focusGlobalSearchInput, isEditableElement } from '@/lib/search-focus';
 import { resolveSearchRoute } from '@/lib/search-routing';
@@ -314,8 +315,9 @@ export function CommandPalette() {
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div
+      data-testid="command-palette-overlay"
       className="bg-base-bg/70 fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[12vh]"
       onClick={closePalette}
       role="presentation"
@@ -395,6 +397,7 @@ export function CommandPalette() {
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

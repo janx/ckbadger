@@ -69,4 +69,10 @@ describe('witness-analysis', () => {
     expect(insights.some((insight) => insight.kind === 'extra_witnesses')).toBe(true);
     expect(insights.some((insight) => insight.kind === 'missing_input_witness')).toBe(false);
   });
+
+  it('rejects witness coverage when neither input count nor inputs are present', () => {
+    expect(() => inferWitnessInsights({}, [], [])).toThrow(
+      'cannot infer witness coverage without inputsCount or inputs'
+    );
+  });
 });

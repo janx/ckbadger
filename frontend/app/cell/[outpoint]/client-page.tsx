@@ -18,6 +18,7 @@ import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { ScriptView } from '@/components/ui/script-view';
 import { useInventoryLabel } from '@/components/cell/inventory-context';
 import { api, type GraphNode } from '@/lib/api';
+import { formatCkbValue } from '@/lib/utils';
 import {
   getScriptRefBadgeLabel,
   getScriptRefQueryHashType,
@@ -177,7 +178,8 @@ export default function CellDetailPage() {
   const router = useRouter();
   const outpoint = params.outpoint as string;
   const [txHash, indexStr] = outpoint.split('-');
-  const outputIndex = parseInt(indexStr || '0', 10);
+  const outputIndex = indexStr && /^(0|[1-9]\d*)$/.test(indexStr) ? Number(indexStr) : NaN;
+  const validOutpoint = /^0x[0-9a-fA-F]{64}$/.test(txHash) && Number.isSafeInteger(outputIndex);
   const {
     data: cell,
     isLoading,
@@ -185,12 +187,12 @@ export default function CellDetailPage() {
   } = useQuery({
     queryKey: ['cell', txHash, outputIndex],
     queryFn: () => api.getCell(txHash, outputIndex),
-    enabled: !!txHash,
+    enabled: validOutpoint,
   });
   const { data: graphData } = useQuery({
     queryKey: ['cellGraph', txHash, outputIndex],
     queryFn: () => api.getCellGraph(txHash, outputIndex, 2),
-    enabled: !!txHash,
+    enabled: validOutpoint,
   });
   const codeHashes = useMemo(() => {
     if (!cell) return [];
@@ -217,21 +219,26 @@ export default function CellDetailPage() {
       return null;
     }
     const SHANNONS_PER_CKB = BigInt(100000000);
-    const totalCapacity = BigInt(cell.capacity);
-    const used = cell.commonKnowledgeSize !== undefined ? BigInt(cell.commonKnowledgeSize) : null;
     const ZERO = BigInt(0);
-    const BASIS_POINTS = BigInt(10000);
-    const usedBytes = used !== null && used >= ZERO ? Number(used / SHANNONS_PER_CKB) : null;
-    const usedRatioPercent =
-      used !== null && totalCapacity > ZERO
-        ? Number((used * BASIS_POINTS) / totalCapacity) / 100
-        : null;
+    const integerPattern = /^(0|[1-9]\d*)$/;
+    const capacityError = !integerPattern.test(cell.capacity)
+      ? `invalid capacity ${JSON.stringify(cell.capacity)}`
+      : cell.commonKnowledgeSize === undefined
+        ? 'has no commonKnowledgeSize'
+        : !integerPattern.test(cell.commonKnowledgeSize)
+          ? `invalid commonKnowledgeSize ${JSON.stringify(cell.commonKnowledgeSize)}`
+          : BigInt(cell.commonKnowledgeSize) > BigInt(cell.capacity)
+            ? `commonKnowledgeSize ${cell.commonKnowledgeSize} exceeds capacity ${cell.capacity}`
+            : null;
+    const totalCapacity = integerPattern.test(cell.capacity) ? BigInt(cell.capacity) : ZERO;
+    const used = capacityError === null ? BigInt(cell.commonKnowledgeSize) : null;
+    const usedBytes = used === null ? null : Number(used / SHANNONS_PER_CKB);
     const breakdown = cell.commonKnowledgeSizeBreakdown;
     const segments = breakdown && [
       {
         key: 'capacityFieldBytes',
         label: 'Capacity Field',
-        bytes: Math.max(0, breakdown.capacityFieldBytes),
+        bytes: breakdown.capacityFieldBytes,
         colorClass: CAPACITY_SEGMENT_TONES.capacityFieldBytes.dot,
         legendActivePill: CAPACITY_SEGMENT_TONES.capacityFieldBytes.legendActivePill,
         legendValueText: CAPACITY_SEGMENT_TONES.capacityFieldBytes.legendValueText,
@@ -239,7 +246,7 @@ export default function CellDetailPage() {
       {
         key: 'lockScriptBytes',
         label: 'Lock Script',
-        bytes: Math.max(0, breakdown.lockScriptBytes),
+        bytes: breakdown.lockScriptBytes,
         colorClass: CAPACITY_SEGMENT_TONES.lockScriptBytes.dot,
         legendActivePill: CAPACITY_SEGMENT_TONES.lockScriptBytes.legendActivePill,
         legendValueText: CAPACITY_SEGMENT_TONES.lockScriptBytes.legendValueText,
@@ -247,7 +254,7 @@ export default function CellDetailPage() {
       {
         key: 'typeScriptBytes',
         label: 'Type Script',
-        bytes: Math.max(0, breakdown.typeScriptBytes),
+        bytes: breakdown.typeScriptBytes,
         colorClass: CAPACITY_SEGMENT_TONES.typeScriptBytes.dot,
         legendActivePill: CAPACITY_SEGMENT_TONES.typeScriptBytes.legendActivePill,
         legendValueText: CAPACITY_SEGMENT_TONES.typeScriptBytes.legendValueText,
@@ -255,46 +262,43 @@ export default function CellDetailPage() {
       {
         key: 'dataBytes',
         label: 'Cell Data',
-        bytes: Math.max(0, breakdown.dataBytes),
+        bytes: breakdown.dataBytes,
         colorClass: CAPACITY_SEGMENT_TONES.dataBytes.dot,
         legendActivePill: CAPACITY_SEGMENT_TONES.dataBytes.legendActivePill,
         legendValueText: CAPACITY_SEGMENT_TONES.dataBytes.legendValueText,
       },
     ];
-    const knownBytes = segments?.reduce((acc, seg) => acc + seg.bytes, 0) ?? 0;
-    const breakdownTotalBytes = Math.max(0, breakdown?.totalBytes ?? 0);
-    const canonicalTotalBytes =
-      usedBytes !== null
-        ? Math.max(usedBytes, knownBytes)
-        : Math.max(knownBytes, breakdownTotalBytes);
-    const inferredBytes = Math.max(0, canonicalTotalBytes - knownBytes);
-    const segmentsWithInference =
-      inferredBytes > 0
-        ? [
-            ...(segments ?? []),
-            {
-              key: 'inferredBytes',
-              label: 'Unindexed Script Args',
-              bytes: inferredBytes,
-              colorClass: CAPACITY_SEGMENT_TONES.inferredBytes.dot,
-              legendActivePill: CAPACITY_SEGMENT_TONES.inferredBytes.legendActivePill,
-              legendValueText: CAPACITY_SEGMENT_TONES.inferredBytes.legendValueText,
-            },
-          ]
-        : (segments ?? []);
+    const knownBytes = segments?.reduce((acc, seg) => acc + seg.bytes, 0);
+    const breakdownError =
+      breakdown && segments && usedBytes !== null && used !== null
+        ? segments.some((segment) => !Number.isSafeInteger(segment.bytes) || segment.bytes < 0) ||
+          !Number.isSafeInteger(breakdown.totalBytes) ||
+          breakdown.totalBytes < 0
+          ? 'byte breakdown contains an invalid byte count'
+          : knownBytes !== breakdown.totalBytes
+            ? `byte segments sum to ${knownBytes}, but breakdown total is ${breakdown.totalBytes}`
+            : used % SHANNONS_PER_CKB !== ZERO || breakdown.totalBytes !== usedBytes
+              ? `byte breakdown total ${breakdown.totalBytes} differs from occupied capacity ${used.toString()} shannons (${usedBytes} bytes)`
+              : null
+        : null;
+    const canonicalTotalBytes = breakdown?.totalBytes ?? null;
     return {
       used,
+      capacityError,
       totalCapacity,
       totalBytes: canonicalTotalBytes,
-      usedRatioPercent,
-      segments: segmentsWithInference.map((seg) => ({
+      breakdownError,
+      segments: (segments ?? []).map((seg) => ({
         ...seg,
-        percent: canonicalTotalBytes > 0 ? (seg.bytes / canonicalTotalBytes) * 100 : 0,
+        percent:
+          canonicalTotalBytes && canonicalTotalBytes > 0
+            ? (seg.bytes / canonicalTotalBytes) * 100
+            : 0,
       })),
       formulaText: breakdown
-        ? `${segmentsWithInference.map((seg) => seg.bytes).join(' + ')} = ${canonicalTotalBytes} bytes`
+        ? `${segments?.map((seg) => seg.bytes).join(' + ')} = ${canonicalTotalBytes} bytes`
         : null,
-      hasBreakdown: Boolean(breakdown),
+      hasBreakdown: Boolean(breakdown) && breakdownError === null && used !== null,
     };
   }, [cell]);
   const relationshipStats = useMemo(() => {
@@ -419,6 +423,20 @@ export default function CellDetailPage() {
       router.push(`/cell/${node.data.txHash}-${node.data.outputIndex}`);
     }
   };
+  if (!validOutpoint) {
+    return (
+      <div className="bg-base-bg min-h-screen">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <TerminalPanel>
+            <TerminalPanelContent className="py-12 text-center">
+              <h2 className="text-rouge text-xl">Invalid cell outpoint: {outpoint}</h2>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        </main>
+      </div>
+    );
+  }
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -477,7 +495,6 @@ export default function CellDetailPage() {
             <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="space-y-3">
-                {/* The cell detail always carries commonKnowledgeSize; absent is an error. */}
                 {capacityView.used === null ? (
                   <div
                     role="alert"
@@ -485,7 +502,7 @@ export default function CellDetailPage() {
                     className="text-rouge font-mono text-xs"
                   >
                     Owned capacity unavailable: the detail for cell {cell.txHash}:{cell.outputIndex}{' '}
-                    has no commonKnowledgeSize
+                    {capacityView.capacityError}
                   </div>
                 ) : (
                   <CapacityUtilization
@@ -495,7 +512,16 @@ export default function CellDetailPage() {
                     totalLabel="Owned Capacity"
                   />
                 )}
-                {capacityView.hasBreakdown ? (
+                {capacityView.breakdownError && (
+                  <div
+                    role="alert"
+                    data-testid="cell-capacity-error"
+                    className="text-rouge font-mono text-xs"
+                  >
+                    Cell {cell.txHash}:{cell.outputIndex}: {capacityView.breakdownError}
+                  </div>
+                )}
+                {capacityView.hasBreakdown && capacityView.totalBytes !== null ? (
                   <>
                     <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
                       <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
@@ -952,8 +978,8 @@ export default function CellDetailPage() {
                     <div className="text-text-dim text-xs">Compensation Earned</div>
                     <span className="text-text-bright font-mono">
                       {cell.daoInfo.compensationCkb
-                        ? `${Number(cell.daoInfo.compensationCkb).toLocaleString()} CKB`
-                        : `${Number(cell.daoInfo.compensation).toLocaleString()} Shannon`}
+                        ? `${formatCkbValue(cell.daoInfo.compensationCkb).full} CKB`
+                        : `${BigInt(cell.daoInfo.compensation).toLocaleString()} Shannon`}
                     </span>
                   </div>
                 )}

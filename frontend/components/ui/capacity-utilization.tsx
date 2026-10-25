@@ -59,7 +59,7 @@ export function CapacityUtilization({
   const unused = total - used;
   const share = formatPercent(used, total, 1);
   // Bar width only (display geometry); the printed share is the exact string.
-  const ratio = Number(share);
+  const ratio = (Number(used) / Number(total)) * 100;
 
   const gold = '#f2c55c';
   const glow = `0 0 8px ${gold}aa, 0 0 2px ${gold}`;
@@ -85,9 +85,10 @@ export function CapacityUtilization({
       </div>
       <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
         <div
+          data-testid="capacity-used-bar"
           className="transition-[background-color,box-shadow] duration-200"
           style={{
-            width: `${Math.max(ratio, 0.5)}%`,
+            width: `${ratio}%`,
             backgroundColor: usedBg,
             boxShadow: usedShadow,
           }}

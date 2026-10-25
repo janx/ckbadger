@@ -20,6 +20,7 @@ function makeCell(overrides: Partial<Cell> = {}): Cell {
     txHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
     outputIndex: 0,
     capacity: '14500000000',
+    commonKnowledgeSize: '0',
     dataSize: 100,
     createdAtBlock: 100000,
     lockScriptHash: '0xlockhash',

@@ -673,8 +673,13 @@ interface Sized {
 }
 
 /** Big squares first, then by fee rate (prototype `bySize`). */
-const bySize = (a: Sized, b: Sized) =>
-  squareSide(b.size) - squareSide(a.size) || Number(b.feeRate) - Number(a.feeRate);
+const bySize = (a: Sized, b: Sized) => {
+  const sizeOrder = squareSide(b.size) - squareSide(a.size);
+  if (sizeOrder !== 0) return sizeOrder;
+  const aRate = BigInt(a.feeRate);
+  const bRate = BigInt(b.feeRate);
+  return bRate > aRate ? 1 : bRate < aRate ? -1 : 0;
+};
 
 const square = (
   id: string,

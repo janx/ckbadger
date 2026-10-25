@@ -36,6 +36,16 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/blocks');
   });
 
+  it('places the fixed overlay outside a backdrop-filter containing block', () => {
+    render(
+      <header className="backdrop-blur-sm">
+        <CommandPalette />
+      </header>
+    );
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByTestId('command-palette-overlay').parentElement).toBe(document.body);
+  });
+
   it('executes the activities command from the palette', () => {
     render(<CommandPalette />);
 

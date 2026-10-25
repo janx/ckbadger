@@ -9,6 +9,7 @@ import {
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
 import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
+import { formatScaledInteger } from '@/lib/exact-integer';
 
 function formatCompact(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -17,10 +18,13 @@ function formatCompact(n: number): string {
 }
 
 function formatCkbCompact(shannons: string): string {
-  const ckb = Number(BigInt(shannons)) / 1e8;
-  if (ckb >= 1e9) return `${(ckb / 1e9).toFixed(1)}B`;
-  if (ckb >= 1e6) return `${(ckb / 1e6).toFixed(1)}M`;
-  return ckb.toLocaleString();
+  const amount = BigInt(shannons);
+  if (amount < BigInt(0)) throw new Error(`negative moved capacity ${amount}`);
+  if (amount >= BigInt('100000000000000000'))
+    return `${formatScaledInteger(amount, BigInt('100000000000000000'), 1)}B`;
+  if (amount >= BigInt('100000000000000'))
+    return `${formatScaledInteger(amount, BigInt('100000000000000'), 1)}M`;
+  return formatScaledInteger(amount, BigInt(100000000), 0);
 }
 
 export function ActivityTrend() {

@@ -18,7 +18,12 @@ import {
 } from '@/components/home/section';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
 import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
-import { formatPercentShort, hashRateUnit, orphanRateTargetPercent } from '@/lib/network-metrics';
+import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import {
+  exactHashRateUnit,
+  formatPercentShort,
+  orphanRateTargetPercent,
+} from '@/lib/network-metrics';
 import { cn } from '@/lib/utils';
 
 /** Daily charts show their last 14 points: complete days, by the endpoints' contract. */
@@ -111,11 +116,35 @@ function HashRateFigure() {
       derive(
         { data, error },
         (chart) => {
-          const raw = chart.data.slice(-DAYS).map(chartNumber);
+          const raw = chart.data
+            .slice(-DAYS)
+            .map((p) => exactUnsignedInteger(p.value, `hash rate ${p.date}`));
           if (raw.length === 0) return null;
-          const unit = hashRateUnit(Math.max(...raw));
-          const view = lineView(chart, (hps) => hps / unit.divisor);
-          return view && { ...view, unit: unit.suffix };
+          const unit = exactHashRateUnit(
+            raw.reduce((max, value) => (value > max ? value : max), BigInt(0))
+          );
+          const view = lineView(chart, (hps) => hps / Number(unit.divisor));
+          return (
+            view && {
+              ...view,
+              points: view.points.map((point, index) => ({
+                ...point,
+                display: formatScaledInteger(raw[index], unit.divisor, 2),
+              })),
+              unit: unit.suffix,
+              lastExact: formatScaledInteger(raw[raw.length - 1], unit.divisor, 2),
+              minExact: formatScaledInteger(
+                raw.reduce((min, value) => (value < min ? value : min)),
+                unit.divisor,
+                2
+              ),
+              maxExact: formatScaledInteger(
+                raw.reduce((max, value) => (value > max ? value : max)),
+                unit.divisor,
+                2
+              ),
+            }
+          );
         },
         'No hash-rate history yet'
       ),
@@ -129,12 +158,12 @@ function HashRateFigure() {
       title="Hash rate"
       href="/charts/hash-rate"
       subtitle={v ? `daily, ${v.unit}` : 'daily'}
-      headline={v ? s(v.last.value) : undefined}
+      headline={v ? v.lastExact : undefined}
       body={bodyOf(d, (view) => (
         <LineChart
           points={view.points}
           formatValue={s}
-          ariaLabel={`Hash rate per day, ${range(view)}, between ${s(view.min)} and ${s(view.max)} ${view.unit}, ${s(view.last.value)} ${view.unit} on ${view.last.label}`}
+          ariaLabel={`Hash rate per day, ${range(view)}, between ${view.minExact} and ${view.maxExact} ${view.unit}, ${view.lastExact} ${view.unit} on ${view.last.label}`}
         />
       ))}
     />

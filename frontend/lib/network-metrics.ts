@@ -5,6 +5,21 @@ export interface HashRateUnit {
   divisor: number;
 }
 
+export function exactHashRateUnit(maxHashesPerSecond: bigint): { suffix: string; divisor: bigint } {
+  if (maxHashesPerSecond < BigInt(0)) throw new Error('hash rate is negative');
+  for (const [suffix, divisor] of [
+    ['EH/s', BigInt(10) ** BigInt(18)],
+    ['PH/s', BigInt(10) ** BigInt(15)],
+    ['TH/s', BigInt(10) ** BigInt(12)],
+    ['GH/s', BigInt(10) ** BigInt(9)],
+    ['MH/s', BigInt(10) ** BigInt(6)],
+    ['KH/s', BigInt(10) ** BigInt(3)],
+  ] as const) {
+    if (maxHashesPerSecond >= divisor) return { suffix, divisor };
+  }
+  return { suffix: 'H/s', divisor: BigInt(1) };
+}
+
 const HASH_RATE_UNITS: HashRateUnit[] = [
   { suffix: 'EH/s', divisor: 1e18 },
   { suffix: 'PH/s', divisor: 1e15 },

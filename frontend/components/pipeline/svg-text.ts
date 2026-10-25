@@ -9,4 +9,4 @@ export const T11G = 'fill-gold text-[11px]';
 /** The footer row (legend or pinned selection): one fixed height, so pinning never resizes the panel. */
 export const FOOTER_ROW = 'flex h-6 items-center overflow-hidden whitespace-nowrap font-mono';
 
-export const fmtInt = (n: number) => n.toLocaleString('en-US');
+export const fmtInt = (n: number | bigint) => n.toLocaleString('en-US');

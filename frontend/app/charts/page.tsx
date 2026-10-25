@@ -105,10 +105,12 @@ function MultiSeriesPreview({
 }) {
   const chartData: ChartResponse | undefined = data
     ? {
-        data: data.data.map((d) => ({
-          date: d.date,
-          value: d.values[defaultSeries] || '0',
-        })),
+        data: data.data.map((d) => {
+          const value = d.values[defaultSeries];
+          if (value === undefined)
+            throw new Error(`${d.date}: missing ${defaultSeries} chart series`);
+          return { date: d.date, value };
+        }),
         title: data.title,
         yAxisLabel: 'Cells',
       }

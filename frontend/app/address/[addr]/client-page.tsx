@@ -25,6 +25,7 @@ import {
   type FiberChannel,
 } from '@/lib/api';
 import { ActivityEventGroup } from '@/components/activity-event-row';
+import { formatScaledInteger } from '@/lib/exact-integer';
 import {
   formatPoolDuration,
   PoolInterpretationNotice,
@@ -1221,9 +1222,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     </div>
                     {transactions.data.map((tx) => {
                       const isPositive = !tx.capacityChange.startsWith('-');
-                      const fee = Number(tx.fee);
                       const feeRate =
-                        tx.txSize && tx.txSize > 0 && fee > 0 ? fee / tx.txSize : null;
+                        tx.txSize && tx.txSize > 0 && BigInt(tx.fee) > BigInt(0)
+                          ? formatScaledInteger(BigInt(tx.fee), BigInt(tx.txSize), 1)
+                          : null;
                       // A transaction still in the node's pool has no block and
                       // no block time. It reports where it stands and how long
                       // it has waited instead. Keying by txHash is what lets the
@@ -1286,7 +1288,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   <Capacity value={tx.fee} className="text-text" />
                                   {feeRate != null && (
                                     <div className="text-text-dim font-mono text-xs">
-                                      {feeRate.toFixed(1)} shannons/B
+                                      {feeRate} shannons/B
                                     </div>
                                   )}
                                 </div>

@@ -633,7 +633,7 @@ export default function TransactionDetailPage() {
                   </span>
                   {tx.feeRate && (
                     <span className="text-text font-mono text-xs tabular-nums">
-                      {Number(tx.feeRate).toLocaleString()} shannon/KB
+                      {BigInt(tx.feeRate).toLocaleString()} shannon/KB
                     </span>
                   )}
                 </div>

@@ -91,7 +91,7 @@ function Vitals({ stats, connected }: { stats: NetworkStats; connected: boolean 
       <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
       <Vital label="Block time">{stats.avgBlockTime}</Vital>
       <Vital label="Hash rate" href="/charts/hash-rate">
-        {stats.hashRate}
+        {stats.hashRate ?? '—'}
       </Vital>
       <Vital label="Difficulty" href="/charts/difficulty">
         {stats.difficulty}

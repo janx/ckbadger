@@ -1,5 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { formatScaledInteger } from '@/lib/exact-integer';
+import { parseCkbDecimal } from '@/lib/ckb-decimal';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -44,24 +46,13 @@ export function formatCkbAmount(shannons: string | bigint): {
   return { integer, decimal, full, isNegative };
 }
 
-export function formatCkbValue(ckbValue: string | number): {
+export function formatCkbValue(ckbValue: string): {
   integer: string;
   decimal: string;
   full: string;
   isNegative: boolean;
 } {
-  const num = typeof ckbValue === 'string' ? parseFloat(ckbValue) : ckbValue;
-  const isNegative = num < 0;
-  const absNum = Math.abs(num);
-
-  const integerPart = Math.floor(absNum);
-  const fractionPart = absNum - integerPart;
-
-  const integer = integerPart.toLocaleString('en-US');
-  const decimal = fractionPart.toFixed(8).slice(2);
-  const full = `${isNegative ? '-' : ''}${integer}.${decimal}`;
-
-  return { integer, decimal, full, isNegative };
+  return formatCkbAmount(parseCkbDecimal(ckbValue));
 }
 
 export function formatCapacity(capacity: string | bigint): string {
@@ -73,22 +64,19 @@ export function formatCkbCompact(shannons: string | bigint): {
   value: string;
   full: string;
 } {
-  const ckb = Number(BigInt(shannons)) / 100_000_000;
+  const amount = BigInt(shannons);
+  if (amount < BigInt(0)) throw new Error(`negative capacity ${amount} shannons`);
   const full = formatCkbAmount(shannons).full;
-
-  if (ckb >= 1_000_000_000_000) {
-    return { value: `${(ckb / 1_000_000_000_000).toFixed(2)}T`, full };
+  for (const [suffix, divisor] of [
+    ['T', BigInt('100000000000000000000')],
+    ['B', BigInt('100000000000000000')],
+    ['M', BigInt('100000000000000')],
+    ['K', BigInt('100000000000')],
+  ] as const) {
+    if (amount >= divisor)
+      return { value: `${formatScaledInteger(amount, divisor, 2)}${suffix}`, full };
   }
-  if (ckb >= 1_000_000_000) {
-    return { value: `${(ckb / 1_000_000_000).toFixed(2)}B`, full };
-  }
-  if (ckb >= 1_000_000) {
-    return { value: `${(ckb / 1_000_000).toFixed(2)}M`, full };
-  }
-  if (ckb >= 1_000) {
-    return { value: `${(ckb / 1_000).toFixed(2)}K`, full };
-  }
-  return { value: ckb.toFixed(2), full };
+  return { value: formatScaledInteger(amount, BigInt(100000000), 2), full };
 }
 
 export function formatNumber(num: number | bigint): string {
@@ -99,23 +87,23 @@ export function formatCompactCkbDelta(ckbDelta: string): {
   compact: string;
   direction: 'up' | 'down' | 'neutral';
 } {
-  const num = parseFloat(ckbDelta);
-  if (isNaN(num) || num === 0) return { compact: '0', direction: 'neutral' };
+  const shannons = parseCkbDecimal(ckbDelta);
+  if (shannons === BigInt(0)) return { compact: '0', direction: 'neutral' };
 
-  const direction = num > 0 ? 'up' : num < 0 ? 'down' : 'neutral';
-  const abs = Math.abs(num);
+  const direction = shannons > BigInt(0) ? 'up' : 'down';
+  const abs = shannons < BigInt(0) ? -shannons : shannons;
 
   let compact: string;
-  if (abs >= 1_000_000_000) {
-    compact = `${(abs / 1_000_000_000).toFixed(2)}B`;
-  } else if (abs >= 1_000_000) {
-    compact = `${(abs / 1_000_000).toFixed(2)}M`;
-  } else if (abs >= 1_000) {
-    compact = `${(abs / 1_000).toFixed(2)}K`;
-  } else if (abs >= 1) {
-    compact = abs.toFixed(2);
+  if (abs >= BigInt('100000000000000000')) {
+    compact = `${formatScaledInteger(abs, BigInt('100000000000000000'), 2)}B`;
+  } else if (abs >= BigInt('100000000000000')) {
+    compact = `${formatScaledInteger(abs, BigInt('100000000000000'), 2)}M`;
+  } else if (abs >= BigInt('100000000000')) {
+    compact = `${formatScaledInteger(abs, BigInt('100000000000'), 2)}K`;
+  } else if (abs >= BigInt(100000000)) {
+    compact = formatScaledInteger(abs, BigInt(100000000), 2);
   } else {
-    compact = abs.toFixed(4);
+    compact = formatScaledInteger(abs, BigInt(100000000), 4);
   }
 
   return { compact, direction };

@@ -200,7 +200,9 @@ function InventoryTable({
   const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
   const capacityColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
   const formatNumber = (num: number | string) => {
-    return new Intl.NumberFormat().format(Number(num));
+    if (typeof num === 'string') return BigInt(num).toLocaleString();
+    if (!Number.isSafeInteger(num)) throw new Error(`invalid inventory count ${num}`);
+    return new Intl.NumberFormat().format(num);
   };
   const shortHash = (value: string) => {
     if (value.length <= 20) return value;
@@ -395,7 +397,7 @@ function InventoryTable({
             </div>
             {assetType !== 'token' && (
               <div className={`${smallNumberColumnClass} text-text-bright font-mono tabular-nums`}>
-                {formatNumber(asset.totalSupply || 0)}
+                {asset.totalSupply === null ? '—' : formatNumber(asset.totalSupply)}
               </div>
             )}
             <div className={`${smallNumberColumnClass} text-warning font-mono tabular-nums`}>
@@ -519,7 +521,11 @@ function InventoryTable({
                 24h: <span className="text-warning">{formatNumber(asset.transfers24h)}</span>
               </span>
               <span>Holders: {formatNumber(asset.holdersCount)}</span>
-              {assetType !== 'token' && <span>Items: {formatNumber(asset.totalSupply || 0)}</span>}
+              {assetType !== 'token' && (
+                <span>
+                  Items: {asset.totalSupply === null ? '—' : formatNumber(asset.totalSupply)}
+                </span>
+              )}
               <span>
                 Cap:{' '}
                 {(() => {

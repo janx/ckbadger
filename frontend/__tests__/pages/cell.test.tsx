@@ -5,10 +5,11 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { formatCapacity } from '@/lib/utils';
 
 const mockPush = vi.fn();
+let mockOutpoint = '0xabc123def456789012345678901234567890123456789012345678901234abcd-0';
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({
-    outpoint: '0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
+    outpoint: mockOutpoint,
   }),
   useRouter: () => ({ push: mockPush }),
   usePathname: () => '/cell/0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
@@ -23,7 +24,7 @@ const mockCellWithDao = {
   txHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
   outputIndex: 0,
   capacity: '50000000000',
-  commonKnowledgeSize: 8600000000,
+  commonKnowledgeSize: '8600000000',
   commonKnowledgeSizeBreakdown: {
     capacityFieldBytes: 8,
     lockScriptBytes: 53,
@@ -68,7 +69,7 @@ const mockCellWithoutDao = {
   txHash: '0xdef456789012345678901234567890123456789012345678901234567890abcd',
   outputIndex: 0,
   capacity: '10000000000',
-  commonKnowledgeSize: 6100000000,
+  commonKnowledgeSize: '6100000000',
   commonKnowledgeSizeBreakdown: {
     capacityFieldBytes: 8,
     lockScriptBytes: 53,
@@ -259,6 +260,14 @@ function renderWithQueryClient(component: React.ReactElement) {
 describe('CellDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockOutpoint = '0xabc123def456789012345678901234567890123456789012345678901234abcd-0';
+  });
+
+  it('rejects a cell route missing its output index instead of reading output zero', () => {
+    mockOutpoint = '0xabc123def456789012345678901234567890123456789012345678901234abcd';
+    renderWithQueryClient(<CellDetailPage />);
+    expect(screen.getByText(/invalid cell outpoint/i)).toBeInTheDocument();
+    expect(mockGetCell).not.toHaveBeenCalled();
   });
 
   it('renders DAO cell with Nervos DAO badge and info panel', async () => {
@@ -398,10 +407,22 @@ describe('CellDetailPage', () => {
     expect(screen.queryByText(/Common Knowledge:/)).toBeNull();
   });
 
-  it('renders inferred bytes segment entry in the legend', async () => {
+  it.each([
+    ['1.5', 'invalid commonKnowledgeSize'],
+    ['100000000001', 'exceeds capacity'],
+  ])('reports invalid occupied capacity %s with cell context', async (value, message) => {
+    mockGetCell.mockResolvedValue({ ...mockCellWithoutDao, commonKnowledgeSize: value });
+    renderWithQueryClient(<CellDetailPage />);
+    const alert = await screen.findByTestId('cell-capacity-error');
+    expect(alert).toHaveTextContent(mockCellWithoutDao.txHash);
+    expect(alert).toHaveTextContent(message);
+    expect(screen.queryByTestId('byte-composition-legend')).toBeNull();
+  });
+
+  it('reports an inconsistent byte breakdown instead of inventing bytes', async () => {
     mockGetCell.mockResolvedValue({
       ...mockCellWithDao,
-      commonKnowledgeSize: 10200000000,
+      commonKnowledgeSize: '10200000000',
       commonKnowledgeSizeBreakdown: {
         capacityFieldBytes: 8,
         lockScriptBytes: 53,
@@ -414,9 +435,11 @@ describe('CellDetailPage', () => {
     renderWithQueryClient(<CellDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Unindexed Script Args')).toBeInTheDocument();
+      expect(screen.getByTestId('cell-capacity-error')).toHaveTextContent(
+        'byte breakdown total 86 differs from occupied capacity 102'
+      );
     });
-    expect(screen.getByTestId('byte-composition-legend')).toBeInTheDocument();
+    expect(screen.queryByTestId('byte-composition-legend')).toBeNull();
   });
 
   it('renders withdrawn DAO cell with compensation info', async () => {

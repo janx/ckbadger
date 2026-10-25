@@ -13,21 +13,20 @@ import { ChartCalculationNote } from '@/components/charts/chart-calculation-note
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { LineChart } from '@/components/ui/line-chart';
 import { ChartDataPoint, api } from '@/lib/api';
+import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { dailyDeltas } from '@/lib/daily-series';
 
 function buildNetFlowData(data: ChartDataPoint[]): ChartDataPoint[] {
-  let previous: number | null = null;
-
-  return data.map((point) => {
-    const current = Number.parseFloat(point.value);
-    const safeCurrent = Number.isFinite(current) ? current : 0;
-    const delta = previous == null ? 0 : safeCurrent - previous;
-    previous = safeCurrent;
-
-    return {
-      date: point.date,
-      value: delta.toFixed(8),
-    };
-  });
+  if (data.length === 0) return [];
+  const deltas = dailyDeltas(data, data.length);
+  const format = (delta: bigint) => {
+    const magnitude = delta < BigInt(0) ? -delta : delta;
+    return `${delta < BigInt(0) ? '-' : ''}${magnitude / SHANNONS_PER_CKB}.${(magnitude % SHANNONS_PER_CKB).toString().padStart(8, '0')}`;
+  };
+  return [
+    { date: data[0].date, value: '0.00000000' },
+    ...deltas.map(({ date, delta }) => ({ date, value: format(delta) })),
+  ];
 }
 
 export default function KnowledgeSizePage() {

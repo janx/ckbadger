@@ -48,6 +48,18 @@ function mockStats(overrides: Partial<NetworkStats> = {}): NetworkStats {
 }
 
 describe('HeroStatRow', () => {
+  it('formats large integer capacities before display rounding', () => {
+    render(
+      <HeroStatRow
+        stats={mockStats({
+          circulatingSupply: '100499999999999999',
+          knowledgeSize: '90071992547409900000000',
+        })}
+      />
+    );
+    expect(screen.getByText('1.00B CKB')).toBeInTheDocument();
+    expect(screen.getByText('900.7 TB')).toBeInTheDocument();
+  });
   it('renders formatted stat values and links to detail pages', () => {
     render(<HeroStatRow stats={mockStats()} />);
 

@@ -57,7 +57,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     outputs: [
       {
         capacity: '55499941197',
-        commonKnowledgeSize: 61,
+        commonKnowledgeSize: '61',
         lock: {
           codeHash: LOCK_CODE_HASH,
           hashType: 'type',

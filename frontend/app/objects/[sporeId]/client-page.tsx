@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
+import { formatDecimal } from '@/lib/exact-integer';
 import {
   api,
   isNotFoundApiError,
@@ -325,7 +326,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   });
   const { data: ownerAddressRecord } = useQuery({
     queryKey: ['address-by-lock-hash', spore?.ownerLockHash],
-    queryFn: () => api.getAddress(spore!.ownerLockHash),
+    queryFn: () => {
+      if (!spore?.ownerLockHash) throw new Error(`spore ${assetId} has no owner lock hash`);
+      return api.getAddress(spore.ownerLockHash);
+    },
     enabled: !!spore?.ownerLockHash && !spore?.ownerAddress,
     retry: false,
   });
@@ -602,7 +606,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         {collection.composition.fullyOnchainRatio && (
                           <div className="text-text-dim mt-1 font-mono text-xs">
                             On-chain:{' '}
-                            {(Number(collection.composition.fullyOnchainRatio) * 100).toFixed(1)}%
+                            {formatDecimal(collection.composition.fullyOnchainRatio, 1, 100)}%
                           </div>
                         )}
                       </div>
@@ -939,9 +943,18 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               {/* Owner Lock Hash */}
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
                 <span className="text-text-dim text-xs uppercase tracking-wider">lock hash</span>
-                <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
-                  <HexDisplay value={spore.ownerLockHash} size="sm" startChars={14} endChars={10} />
-                </Link>
+                {spore.ownerLockHash ? (
+                  <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
+                    <HexDisplay
+                      value={spore.ownerLockHash}
+                      size="sm"
+                      startChars={14}
+                      endChars={10}
+                    />
+                  </Link>
+                ) : (
+                  <span className="text-text-dim">—</span>
+                )}
               </div>
             </div>
 

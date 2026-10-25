@@ -117,4 +117,21 @@ describe('ChartPage', () => {
       })
     );
   });
+
+  it('marks hash-rate and difficulty points for exact integer readouts', async () => {
+    for (const queryKey of ['chart-hash-rate', 'chart-difficulty']) {
+      const queryFn = vi.fn().mockResolvedValue({
+        title: queryKey,
+        yAxisLabel: queryKey,
+        data: [{ date: '2026-10-24', value: '9007199254740993' }],
+      });
+      render(<ChartPage title={queryKey} queryKey={queryKey} queryFn={queryFn} />);
+      await waitFor(() =>
+        expect(lineChartMock).toHaveBeenCalledWith(
+          expect.objectContaining({ exactIntegerValues: true })
+        )
+      );
+      lineChartMock.mockClear();
+    }
+  });
 });

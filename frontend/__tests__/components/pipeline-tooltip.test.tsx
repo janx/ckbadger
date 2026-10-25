@@ -27,6 +27,16 @@ function renderTip(content: TipContent) {
 const classesOf = (el: Element) => el.className.split(/\s+/);
 
 describe('PipelineTooltip', () => {
+  it('keeps fee shannons beyond the safe Number range exact', () => {
+    const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
+    const tx = pool.pending[0];
+    const tip = txTip(
+      { kind: 'pending', tx: { ...tx, fee: '9007199254740993' } },
+      snapshot,
+      FIXTURE_NOW
+    );
+    expect(tip.rows).toContainEqual(['fee', '9,007,199,254,740,993 sh']);
+  });
   // jsdom does not lay out, so the contract is in the classes: values never wrap, and the tooltip
   // takes the width its rows need instead of squeezing the value column.
   it('keeps the proposal window values on one line', () => {

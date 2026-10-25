@@ -532,7 +532,10 @@ export function inferWitnessInsights(
 ): WitnessInference[] {
   const insights: WitnessInference[] = [];
 
-  const inputsCount = tx.inputsCount ?? tx.inputs?.length ?? 0;
+  const inputsCount = tx.inputsCount ?? tx.inputs?.length;
+  if (inputsCount === undefined) {
+    throw new Error('cannot infer witness coverage without inputsCount or inputs');
+  }
   const witnessesCount = witnessAnalyses.length;
   const inputWitnessIndices = Array.from(
     { length: Math.min(inputsCount, witnessesCount) },

@@ -251,6 +251,19 @@ describe('card size', () => {
     expect(card.w).toBe(CARD_W);
   });
 
+  it('orders equal-size transactions by their exact fee rates', () => {
+    const s = buildPipelineSnapshot();
+    const n = T - 8;
+    const txs = smallTxs(n, 2);
+    txs[0].feeRate = '9007199254740992';
+    txs[1].feeRate = '9007199254740993';
+    const blocks = s.blocks.map((b) =>
+      b.number === n ? { ...b, txs, txCount: 1 + txs.length, omittedTxs: 0 } : b
+    );
+    const card = cardOf(buildScene({ ...s, blocks }, 1600, 'settled'), n);
+    expect(card.squares.slice(1).map((square) => square.id)).toEqual([txs[1].hash, txs[0].hash]);
+  });
+
   it('counts the txs the backend omitted together with the field overflow', () => {
     // T−5 commits 299 txs; the backend lists the cellbase's 39 companions and omits 260.
     const full = cardOf(scene, T - 5);

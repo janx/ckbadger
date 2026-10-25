@@ -51,12 +51,6 @@ function safeString(value: unknown, fallback = ''): string {
   }
   return value;
 }
-function safeNumber(value: unknown, fallback = 0): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return value;
-}
 const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
   pure_ckb:
     'All content is stored directly on the CKB blockchain (on-chain data or ckbfs://). Fully verifiable and permanent.',
@@ -282,7 +276,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
   });
   const { data: creatorAddressRecord } = useQuery({
     queryKey: ['cluster-creator-address', cluster?.ownerLockHash],
-    queryFn: () => api.getAddress(cluster!.ownerLockHash),
+    queryFn: () => {
+      if (!cluster?.ownerLockHash) throw new Error(`cluster ${clusterId} has no owner lock hash`);
+      return api.getAddress(cluster.ownerLockHash);
+    },
     enabled: !!cluster?.ownerLockHash && !cluster?.ownerAddress,
     retry: false,
   });
@@ -375,10 +372,18 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       : filtered;
     const sorted = [...queryFiltered];
     sorted.sort((a, b) => {
-      const createdAtA = safeNumber(a.createdAtBlock);
-      const createdAtB = safeNumber(b.createdAtBlock);
-      const contentSizeA = safeNumber(a.contentSize);
-      const contentSizeB = safeNumber(b.contentSize);
+      if (
+        !Number.isSafeInteger(a.createdAtBlock) ||
+        !Number.isSafeInteger(b.createdAtBlock) ||
+        !Number.isSafeInteger(a.contentSize) ||
+        !Number.isSafeInteger(b.contentSize)
+      ) {
+        throw new Error(`cluster ${clusterId}: a spore has invalid createdAtBlock or contentSize`);
+      }
+      const createdAtA = a.createdAtBlock;
+      const createdAtB = b.createdAtBlock;
+      const contentSizeA = a.contentSize;
+      const contentSizeB = b.contentSize;
       if (listSort === 'createdDesc') {
         return createdAtB - createdAtA;
       }
@@ -576,7 +581,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               )}
 
               {/* Created card */}
-              {cluster.createdAtBlock !== undefined && (
+              {cluster.createdAtBlock !== null && (
                 <div className="border-base-border rounded border p-3">
                   <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
                     Created

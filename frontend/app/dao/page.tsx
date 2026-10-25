@@ -231,7 +231,7 @@ function InteractivePieChart({
   );
 }
 
-function formatStatCkb(ckbValue: string | number) {
+function formatStatCkb(ckbValue: string) {
   const f = formatCkbValue(ckbValue);
   return (
     <>
@@ -447,11 +447,13 @@ export default function DaoPage() {
               <StatCard
                 label="Average Deposit Time"
                 value={
-                  stats?.averageDepositDays ? (
+                  stats?.averageDepositDays !== undefined && stats.averageDepositDays !== null ? (
                     <>
                       {stats.averageDepositDays}
                       <span className="text-text-dim ml-1 text-[0.7em] font-normal">days</span>
                     </>
+                  ) : stats ? (
+                    '—'
                   ) : (
                     '...'
                   )

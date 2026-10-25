@@ -2,20 +2,14 @@
 
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
+import { formatScaledInteger } from '@/lib/exact-integer';
+import { parseShannons } from '@/lib/ckb-decimal';
 
 interface HMultiplierProps {
   totalCapacity: string; // total capacity in shannons (BigInt string)
   commonKnowledgeSize: string; // common knowledge size in shannons (BigInt string)
   totalLabel?: string; // defaults to 'Cells Capacity'
   className?: string;
-}
-
-function parseBigInt(value: string): bigint | null {
-  try {
-    return BigInt(value);
-  } catch {
-    return null;
-  }
 }
 
 export function HMultiplier({
@@ -26,15 +20,16 @@ export function HMultiplier({
 }: HMultiplierProps) {
   const zero = BigInt(0);
 
-  const total = parseBigInt(totalCapacity);
-  const used = parseBigInt(commonKnowledgeSize);
-  if (total == null || used == null || total <= zero || used <= zero) {
+  const total = parseShannons(totalCapacity, 'totalCapacity');
+  const used = parseShannons(commonKnowledgeSize, 'commonKnowledgeSize');
+  if (total < zero || used < zero || used > total)
+    throw new Error(`invalid HMul capacity split ${total}/${used}`);
+  if (used === zero) {
     return null;
   }
 
-  const ratioScale = BigInt(10000);
-  const usedBarPercent = Number((used * ratioScale) / total) / 100;
-  const hmul = Number((total * ratioScale) / used) / 10000;
+  const usedBarPercent = (Number(used) / Number(total)) * 100;
+  const hmul = formatScaledInteger(total, used, 2);
 
   return (
     <div className={className}>
@@ -52,7 +47,7 @@ export function HMultiplier({
       <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
         <div
           className="bg-gold transition-all duration-300"
-          style={{ width: `${Math.max(usedBarPercent, 0.5)}%` }}
+          style={{ width: `${usedBarPercent}%` }}
         />
         <div className="bg-gold/30 flex-1" />
       </div>
@@ -64,7 +59,7 @@ export function HMultiplier({
           Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-gold font-mono text-xs tabular-nums">HMul: {hmul.toFixed(2)}x</span>
+          <span className="text-gold font-mono text-xs tabular-nums">HMul: {hmul}x</span>
           <HMulHelpPopover align="end" />
         </span>
       </div>

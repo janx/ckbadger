@@ -170,7 +170,7 @@ describe('SporeDetailPage', () => {
       outputs: [
         {
           capacity: '100000000000',
-          commonKnowledgeSize: 61,
+          commonKnowledgeSize: '61',
           type: {
             codeHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
             hashType: 'type',
@@ -366,6 +366,18 @@ describe('SporeDetailPage', () => {
       'href',
       '/mainnet/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
     );
+  });
+
+  it('shows absent owner lock hash without linking to a null address', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      ownerLockHash: null,
+      ownerAddress: undefined,
+    });
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+    await screen.findByText('lock hash');
+    expect(document.querySelector('a[href$="/address/null"]')).toBeNull();
+    expect(api.getAddress).not.toHaveBeenCalled();
   });
 
   it('renders decoded traits panel for DOB spores', async () => {

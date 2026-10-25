@@ -36,6 +36,21 @@ describe('CapacityUtilization', () => {
     expect(screen.getByText('(100.0% share)')).toBeInTheDocument();
   });
 
+  it('draws zero with no visible used bar and does not inflate a tiny nonzero share', () => {
+    const { rerender } = renderBar('1000000000000000000', '0');
+    expect(screen.getByTestId('capacity-used-bar')).toHaveStyle({ width: '0%' });
+    rerender(
+      <CapacityUtilization
+        subject="spore 0xabc"
+        totalCapacity="1000000000000000000"
+        commonKnowledgeSize="1"
+      />
+    );
+    expect(
+      Number(screen.getByTestId('capacity-used-bar').style.width.replace('%', ''))
+    ).toBeLessThan(0.5);
+  });
+
   it('rejects a total it cannot parse', () => {
     renderBar('abc', '0');
     expectError(

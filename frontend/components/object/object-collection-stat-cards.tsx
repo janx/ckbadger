@@ -3,6 +3,7 @@ import Link from '@/components/ui/link';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { formatNumber } from '@/lib/utils';
 import { formatCompositionTier } from '@/lib/asset-utils';
+import { formatDecimal } from '@/lib/exact-integer';
 
 interface ObjectCollectionStatCardsProps {
   totalCount: number;
@@ -62,7 +63,7 @@ export function ObjectCollectionStatCards({
             </div>
             {storageOnchainRatio && (
               <div className="text-text-dim font-mono text-xs">
-                On-chain ratio: {(Number(storageOnchainRatio) * 100).toFixed(2)}%
+                On-chain ratio: {formatDecimal(storageOnchainRatio, 2, 100)}%
               </div>
             )}
           </TerminalPanelContent>

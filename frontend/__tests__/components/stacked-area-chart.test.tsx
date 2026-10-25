@@ -4,6 +4,17 @@ import { render } from '../utils/test-utils';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 
 describe('StackedAreaChart', () => {
+  it('rejects malformed shannon data instead of graphing zero', () => {
+    expect(() =>
+      render(
+        <StackedAreaChart
+          data={[{ date: '2026-02-19', values: { used: 'bad' } }]}
+          series={[{ key: 'used', label: 'Used', color: '#f59e0b' }]}
+          valueUnit="shannon"
+        />
+      )
+    ).toThrow('invalid shannon chart value');
+  });
   it('normalizes values when percentage mode is enabled', () => {
     render(
       <StackedAreaChart

@@ -379,6 +379,8 @@ const signatureOf = (items: { label: string; value: number }[]) =>
 export interface SeriesPoint {
   label: string;
   value: number;
+  /** Exact formatted value for the caption; value remains SVG geometry only. */
+  display?: string;
 }
 
 interface LineChartProps {
@@ -411,7 +413,7 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
       ariaLabel={ariaLabel}
       xsFor={(w) => lineXs(w, n)}
       readoutOf={(i) => {
-        const text = formatValue(points[i].value);
+        const text = points[i].display ?? formatValue(points[i].value);
         return { value: text, text, label: points[i].label };
       }}
       signature={signatureOf(points)}

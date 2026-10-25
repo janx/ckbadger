@@ -56,26 +56,23 @@ function formatAxisValue(val: number, isPercentage = false): string {
 function parseShannonToCkb(value: string): number {
   const SHANNON = BigInt(100_000_000);
   const ZERO = BigInt(0);
-  try {
-    const shannon = BigInt(value);
-    const isNegative = shannon < ZERO;
-    const abs = isNegative ? -shannon : shannon;
-    const whole = Number(abs / SHANNON);
-    const fraction = Number(abs % SHANNON) / 100_000_000;
-    if (!Number.isFinite(whole)) return 0;
-    const ckb = whole + fraction;
-    return isNegative ? -ckb : ckb;
-  } catch {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed / 100_000_000 : 0;
-  }
+  if (!/^-?(0|[1-9]\d*)$/.test(value)) throw new Error(`invalid shannon chart value ${value}`);
+  const shannon = BigInt(value);
+  const isNegative = shannon < ZERO;
+  const abs = isNegative ? -shannon : shannon;
+  const whole = Number(abs / SHANNON);
+  const fraction = Number(abs % SHANNON) / 100_000_000;
+  if (!Number.isFinite(whole)) throw new Error(`shannon chart value ${value} exceeds SVG range`);
+  const ckb = whole + fraction;
+  return isNegative ? -ckb : ckb;
 }
 
 function parseChartValue(value: string | undefined, valueUnit: 'raw' | 'shannon'): number {
-  if (!value) return 0;
+  if (value === undefined) throw new Error('missing chart value');
   if (valueUnit === 'shannon') return parseShannonToCkb(value);
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  if (!Number.isFinite(parsed)) throw new Error(`invalid chart value ${value}`);
+  return parsed;
 }
 
 function formatTooltipLabel(label: string): string {

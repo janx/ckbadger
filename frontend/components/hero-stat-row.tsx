@@ -2,36 +2,41 @@
 
 import Link from '@/components/ui/link';
 import type { NetworkStats } from '@/lib/api';
+import { formatScaledInteger } from '@/lib/exact-integer';
 
 interface HeroStatRowProps {
   stats: NetworkStats | null;
 }
 
 function formatKnowledgeSize(shannons: string): string {
-  const ckb = Number(BigInt(shannons) / BigInt(1e8));
+  const amount = BigInt(shannons);
+  if (amount % BigInt(100000000) !== BigInt(0)) {
+    throw new Error(`knowledge size ${shannons} is not a whole occupied byte`);
+  }
+  const ckb = amount / BigInt(100000000);
   // 1 CKB = 1 byte of storage
   const bytes = ckb;
-  if (bytes >= 1e12) {
-    return `${(bytes / 1e12).toFixed(1)} TB`;
+  if (bytes >= BigInt('1000000000000')) {
+    return `${formatScaledInteger(bytes, BigInt('1000000000000'), 1)} TB`;
   }
-  if (bytes >= 1e9) {
-    return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= BigInt('1000000000')) {
+    return `${formatScaledInteger(bytes, BigInt('1000000000'), 1)} GB`;
   }
-  if (bytes >= 1e6) {
-    return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes >= BigInt('1000000')) {
+    return `${formatScaledInteger(bytes, BigInt('1000000'), 1)} MB`;
   }
   return `${bytes.toLocaleString()} B`;
 }
 
 function formatCkbAmount(shannons: string): string {
-  const ckb = Number(BigInt(shannons) / BigInt(1e4)) / 1e4;
-  if (ckb >= 1e9) {
-    return `${(ckb / 1e9).toFixed(2)}B CKB`;
+  const amount = BigInt(shannons);
+  if (amount >= BigInt('100000000000000000')) {
+    return `${formatScaledInteger(amount, BigInt('100000000000000000'), 2)}B CKB`;
   }
-  if (ckb >= 1e6) {
-    return `${(ckb / 1e6).toFixed(2)}M CKB`;
+  if (amount >= BigInt('100000000000000')) {
+    return `${formatScaledInteger(amount, BigInt('100000000000000'), 2)}M CKB`;
   }
-  return `${ckb.toLocaleString()} CKB`;
+  return `${formatScaledInteger(amount, BigInt(100000000), 4)} CKB`;
 }
 
 function formatBlockHeight(block: number): string {
@@ -42,7 +47,7 @@ function extractEpochNumber(epoch: string): string {
   // epoch format: "8234(150/1800)" or "8234 (150/1800)" — extract the leading number
   const match = epoch.match(/^(\d+)/);
   if (!match) return epoch;
-  return `#${Number(match[1]).toLocaleString()}`;
+  return `#${BigInt(match[1]).toLocaleString()}`;
 }
 
 interface StatItemProps {

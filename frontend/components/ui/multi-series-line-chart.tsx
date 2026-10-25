@@ -65,7 +65,13 @@ export function MultiSeriesLineChart({
   const seriesValues = useMemo(() => {
     const result: Record<string, number[]> = {};
     for (const s of series) {
-      result[s.key] = data.map((d) => parseFloat(d.values[s.key] || '0') || 0);
+      result[s.key] = data.map((d) => {
+        const raw = d.values[s.key];
+        if (raw === undefined) throw new Error(`${d.date}: missing ${s.key} value`);
+        const value = Number(raw);
+        if (!Number.isFinite(value)) throw new Error(`${d.date}: invalid ${s.key} value ${raw}`);
+        return value;
+      });
     }
     return result;
   }, [data, series]);

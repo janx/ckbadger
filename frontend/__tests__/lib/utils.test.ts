@@ -1,5 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { truncateHash, formatCkbAmount, formatTimeAgo, hexToBytes, bytesToHex } from '@/lib/utils';
+import {
+  truncateHash,
+  formatCkbAmount,
+  formatCkbCompact,
+  formatCkbValue,
+  formatCompactCkbDelta,
+  formatTimeAgo,
+  hexToBytes,
+  bytesToHex,
+} from '@/lib/utils';
+
+describe('formatCkbCompact', () => {
+  it('rounds a large shannon amount without losing the threshold bit', () => {
+    expect(formatCkbCompact('100499999999999999999').value).toBe('1.00T');
+    expect(formatCkbCompact('100500000000000000000').value).toBe('1.01T');
+  });
+});
+
+describe('exact CKB decimal readouts', () => {
+  it('keeps fractional CKB from a large API decimal string', () => {
+    expect(formatCkbValue('9007199254740993.00000001').full).toBe('9,007,199,254,740,993.00000001');
+  });
+
+  it('rounds signed activity deltas only at display precision', () => {
+    expect(formatCompactCkbDelta('-9007199254740993.005')).toEqual({
+      compact: '9007199.25B',
+      direction: 'down',
+    });
+  });
+});
 
 describe('truncateHash', () => {
   it('truncates long hashes', () => {

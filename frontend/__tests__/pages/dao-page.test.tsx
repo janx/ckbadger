@@ -84,6 +84,16 @@ describe('DaoPage', () => {
     expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
   });
 
+  it('shows undefined average deposit time as an em dash', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({
+      ...daoStatistics,
+      averageDepositDays: null,
+    });
+    render(<DaoPage />);
+    expect(await screen.findByText('Average Deposit Time')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThan(0));
+  });
+
   it('renders withdraw request tx as reference for withdrawing rows', async () => {
     vi.mocked(api.getDaoDeposits).mockResolvedValueOnce({
       data: [

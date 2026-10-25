@@ -89,4 +89,22 @@ describe('LineChart', () => {
       CHART_SECONDARY_COLOR
     );
   });
+
+  it('leaves an undefined secondary ratio as a gap rather than drawing zero', () => {
+    render(
+      <LineChart
+        interactive={false}
+        yAxisLabel="Knowledge"
+        y2AxisLabel="Utilization"
+        data={[
+          { date: '2026-10-23', value: '10', value2: '20' },
+          { date: '2026-10-24', value: '11', value2: null },
+          { date: '2026-10-25', value: '12', value2: '22' },
+        ]}
+      />
+    );
+    const path = screen.getByTestId('line-series-secondary').getAttribute('d');
+    expect(path).toMatch(/M .* M /);
+    expect(path).not.toMatch(/NaN/);
+  });
 });

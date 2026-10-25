@@ -111,7 +111,9 @@ function proposalToItem(proposal: PendingProposal): FlowTxItem {
 }
 
 function blockTxToItem(tx: Transaction): FlowTxItem {
-  const feeNum = parseFloat(tx.fee) || 0;
+  if (!/^(0|[1-9]\d*)$/.test(tx.fee))
+    throw new Error(`transaction ${tx.hash}: invalid fee ${tx.fee}`);
+  const feeNum = Number(BigInt(tx.fee)); // flow geometry only
   const feeRate = tx.txSize && tx.txSize > 0 ? feeNum / tx.txSize : null;
 
   return {

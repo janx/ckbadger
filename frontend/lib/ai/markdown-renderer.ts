@@ -1185,7 +1185,7 @@ export async function renderMarkdownPage(
           objects.data.map((obj) => [
             hashShort(obj.sporeId),
             obj.clusterId ?? '-',
-            obj.ownerAddress ?? hashShort(obj.ownerLockHash),
+            obj.ownerAddress ?? (obj.ownerLockHash ? hashShort(obj.ownerLockHash) : '—'),
             obj.isLive,
             obj.createdAtBlock,
           ])
@@ -1620,7 +1620,7 @@ export async function renderMarkdownPage(
           ['sporeId', 'owner', 'isLive', 'createdAtBlock'],
           spores.data.map((spore) => [
             hashShort(spore.sporeId),
-            spore.ownerAddress ?? hashShort(spore.ownerLockHash),
+            spore.ownerAddress ?? (spore.ownerLockHash ? hashShort(spore.ownerLockHash) : '—'),
             spore.isLive,
             spore.createdAtBlock,
           ])

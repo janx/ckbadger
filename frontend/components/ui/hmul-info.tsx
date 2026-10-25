@@ -2,6 +2,8 @@
 
 import { HelpPopover } from '@/components/ui/help-popover';
 import { cn } from '@/lib/utils';
+import { parseShannons } from '@/lib/ckb-decimal';
+import { formatScaledInteger } from '@/lib/exact-integer';
 
 interface HMulHelpPopoverProps {
   align?: 'start' | 'end';
@@ -11,39 +13,22 @@ interface HMulHelpPopoverProps {
 const HMUL_EXPLANATION =
   'HMul = Owned Capacity / Common Knowledge. It measures how strongly a script or asset amplifies CKB hodl: for each unit of common knowledge it anchors, how much CKB is held in total. Higher HMul means stronger CKB hodl amplification.';
 
-function parseBigInt(value: string | null | undefined): bigint | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return BigInt(value);
-  } catch {
-    return null;
-  }
-}
-
-export function formatHMulValue(value: number | null | undefined): string | null {
-  if (value == null || !Number.isFinite(value)) {
-    return null;
-  }
-
-  return `×${value.toFixed(2)}`;
+export function formatHMulValue(value: string | null | undefined): string | null {
+  return value == null ? null : `×${value}`;
 }
 
 export function computeHMulValue(
   totalCapacity: string | null | undefined,
   commonKnowledgeSize: string | null | undefined
-): number | null {
+): string | null {
   const zero = BigInt(0);
-  const scale = BigInt(10000);
-  const total = parseBigInt(totalCapacity);
-  const used = parseBigInt(commonKnowledgeSize);
-  if (total == null || used == null || total <= zero || used <= zero) {
-    return null;
-  }
-
-  return Number((total * scale) / used) / 10000;
+  if (totalCapacity == null || commonKnowledgeSize == null) return null;
+  const total = parseShannons(totalCapacity, 'totalCapacity');
+  const used = parseShannons(commonKnowledgeSize, 'commonKnowledgeSize');
+  if (total < zero || used < zero || used > total)
+    throw new Error(`invalid HMul capacity split ${total}/${used}`);
+  if (used === zero) return null;
+  return formatScaledInteger(total, used, 2);
 }
 
 export function HMulHelpPopover({ align = 'start', className }: HMulHelpPopoverProps) {

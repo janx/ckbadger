@@ -477,6 +477,21 @@ describe('ClusterDetailPage', () => {
     });
   });
 
+  it('omits a nonexistent minted-block link for a synthetic cluster', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue({
+      ...mockCluster,
+      createdAtBlock: null,
+      ownerLockHash: null,
+      ownerAddress: undefined,
+    });
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
+    await screen.findByText(mockCluster.name!);
+    expect(document.querySelector('a[href$="/blocks/null"]')).toBeNull();
+    expect(api.getAddress).not.toHaveBeenCalledWith(null);
+    expect(api.getAddress).not.toHaveBeenCalledWith(mockCluster.ownerLockHash);
+  });
+
   it('resolves spore owner address from owner lock hash', async () => {
     const resolvedSporeOwnerAddress = 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgpz9p9j';
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);

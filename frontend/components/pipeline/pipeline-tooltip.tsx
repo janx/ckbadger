@@ -57,7 +57,7 @@ export function commitNote(p: number, tooEarly: boolean, s: PipelineSnapshot): s
   return `yes · ${left} blocks left`;
 }
 
-const feeRate = (rate: string) => `${fmtInt(Number(rate))} sh/kB`;
+const feeRate = (rate: string) => `${fmtInt(BigInt(rate))} sh/kB`;
 
 export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipContent {
   if (info.kind === 'cellbase') return cellbaseTip(info.block, s);
@@ -81,7 +81,7 @@ export function txTip(info: TxInfo, s: PipelineSnapshot, now: number): TipConten
       `${fmtCycles(info.tx.cycles)} · ${STEPS[shadeStep(info.tx.cycles)]}`,
     ]);
   }
-  rows.push(['fee rate', feeRate(t.feeRate)], ['fee', `${fmtInt(Number(t.fee))} sh`]);
+  rows.push(['fee rate', feeRate(t.feeRate)], ['fee', `${fmtInt(BigInt(t.fee))} sh`]);
   let foot = 'Click to pin it and follow it from the pool to the block that commits it.';
   if (info.kind === 'pending') {
     rows.push(['waiting', `${((now - info.tx.arrivedAt) / 1000).toFixed(1)} s`]);
@@ -127,8 +127,8 @@ export function cellbaseTip(b: PipelineBlock, s: PipelineSnapshot): TipContent {
         `${num(pays.number)} · ${formatCapacity(r.total)}${r.paid ? '' : ' · not paid'}`,
       ],
       ['· base issuance', formatCapacity(BigInt(r.primary) + BigInt(r.secondary))],
-      ['· committed fees', `${fmtInt(Number(r.committed))} sh`],
-      ['· proposal fees', `${fmtInt(Number(r.proposal))} sh`]
+      ['· committed fees', `${fmtInt(BigInt(r.committed))} sh`],
+      ['· proposal fees', `${fmtInt(BigInt(r.proposal))} sh`]
     );
     if (!r.paid) {
       foot += ` The reward of ${num(pays.number)} is less than the occupied capacity of the cell that would hold it, so this cellbase has no output and the reward is not issued.`;

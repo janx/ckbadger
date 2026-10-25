@@ -4,6 +4,16 @@ import userEvent from '@testing-library/user-event';
 import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 
 describe('MultiSeriesLineChart', () => {
+  it('rejects a missing required series value with date and series context', () => {
+    expect(() =>
+      render(
+        <MultiSeriesLineChart
+          data={[{ date: '2026-02-23', values: {} }]}
+          series={[{ key: 'holders', label: 'Holder Count', color: '#00c389' }]}
+        />
+      )
+    ).toThrow('2026-02-23: missing holders value');
+  });
   it('toggles series visibility from the legend controls', async () => {
     const user = userEvent.setup();
     const { container } = render(

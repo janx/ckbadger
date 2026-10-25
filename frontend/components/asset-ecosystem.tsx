@@ -9,6 +9,7 @@ import {
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
 import { ASSET_CATEGORY_COLORS } from '@/lib/chart-colors';
+import { formatDecimal } from '@/lib/exact-integer';
 
 const CATEGORY_LABELS: Record<string, string> = {
   dao: 'DAO',
@@ -84,10 +85,10 @@ export function AssetEcosystem() {
                   <div
                     key={cat.category}
                     style={{
-                      width: `${Math.max(parseFloat(cat.percentage), 1)}%`,
+                      width: `${Number(cat.percentage)}%`,
                       backgroundColor: ASSET_CATEGORY_COLORS[cat.category] ?? '#666',
                     }}
-                    title={`${CATEGORY_LABELS[cat.category] ?? cat.category}: ${parseFloat(cat.percentage).toFixed(1)}%`}
+                    title={`${CATEGORY_LABELS[cat.category] ?? cat.category}: ${formatDecimal(cat.percentage, 1)}%`}
                   />
                 ))}
               </div>
@@ -104,7 +105,7 @@ export function AssetEcosystem() {
                       {CATEGORY_LABELS[cat.category] ?? cat.category}
                     </span>
                     <span className="text-text-bright font-mono text-xs tabular-nums">
-                      {parseFloat(cat.percentage).toFixed(1)}%
+                      {formatDecimal(cat.percentage, 1)}%
                     </span>
                   </span>
                 ))}

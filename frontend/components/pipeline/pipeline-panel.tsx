@@ -744,7 +744,7 @@ function selectionText(
   if (pending) {
     return {
       tag: 'pending',
-      text: `${fmtBytes(pending.size)} · fee rate ${fmtInt(Number(pending.feeRate))} sh/kB · waiting to be proposed by the next block`,
+      text: `${fmtBytes(pending.size)} · fee rate ${fmtInt(BigInt(pending.feeRate))} sh/kB · waiting to be proposed by the next block`,
     };
   }
   const proposed = s.pool?.proposed.find((t) => t.hash === hash);
