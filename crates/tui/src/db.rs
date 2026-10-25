@@ -12,6 +12,19 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::time::Instant;
 
+pub(crate) fn unix_time_seconds(now: std::time::SystemTime) -> Result<u64> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .context("system clock is before Unix epoch")
+}
+
+fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+    builder
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .context("failed to build TUI HTTP client with 3-second timeout")
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiNetworkStats {
@@ -304,10 +317,8 @@ impl TuiDb {
             }
         };
 
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
+        let http = build_http_client(reqwest::Client::builder())
+            .expect("failed to initialize TUI HTTP client");
 
         Self {
             store: RwLock::new(store),
@@ -875,10 +886,14 @@ impl TuiDb {
         // 3. distributions + hourly trend (best-effort, run concurrently).
         // Window floor on wall-clock, NOT a masking guard: a `from` lower bound can't be
         // negative and `now < window` is impossible in practice.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let now = match unix_time_seconds(std::time::SystemTime::now()) {
+            Ok(now) => now,
+            Err(error) => {
+                out.summary = None;
+                out.error = Some(error.to_string());
+                return out;
+            }
+        };
         let from = now.saturating_sub(PEERS_TREND_WINDOW_SECS);
         let verified_path = peers_history_path("verifiedPeers", from);
         let reach_path = peers_history_path("reachablePeers", from);
@@ -1028,6 +1043,23 @@ mod tests {
         assert!(info.avg_block_time.is_none());
         assert!(info.tps.is_none());
         assert!(info.tx_per_day.is_none());
+    }
+
+    #[test]
+    fn pre_epoch_clock_is_an_error_not_timestamp_zero() {
+        let before_epoch = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        assert!(super::unix_time_seconds(before_epoch)
+            .unwrap_err()
+            .to_string()
+            .contains("before Unix epoch"));
+    }
+
+    #[test]
+    fn invalid_http_client_configuration_is_not_replaced_by_default_client() {
+        let error = super::build_http_client(reqwest::Client::builder().user_agent("\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("TUI HTTP client"), "{error}");
     }
 
     #[test]

@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, render_stacked_bar_chart, ChartStats};
 use crate::db::{
-    ApiServiceInfo, ChainInfoData, LabelCount, NetworkHistoryPoint, PeersData, RuntimeDiagData,
-    ServiceLogTailData, SupervisorServiceData, SyncStatusRow, TuiDb,
+    unix_time_seconds, ApiServiceInfo, ChainInfoData, LabelCount, NetworkHistoryPoint, PeersData,
+    RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, SyncStatusRow, TuiDb,
 };
 use crate::multi::{MultiNetworkDb, NetworkLocal};
 
@@ -1318,10 +1318,9 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         return;
     };
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let last_round_age = unix_time_seconds(std::time::SystemTime::now())
+        .map(|now| format_last_round_age(lr.finished_at, now))
+        .unwrap_or_else(|error| format!("clock error: {error}"));
 
     // Line 1: last atomically completed round plus optional active progress.
     let mut line1 = vec![
@@ -1340,10 +1339,7 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format_last_round_age(lr.finished_at, now),
-            Style::default().fg(FOREGROUND),
-        ),
+        Span::styled(last_round_age, Style::default().fg(FOREGROUND)),
     ];
     if let Some(active) = data
         .summary
