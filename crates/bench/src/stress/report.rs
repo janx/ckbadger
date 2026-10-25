@@ -206,8 +206,11 @@ pub fn build_read_pattern_summary(
             .push(stable_ep.p95_ms);
 
         if let Some(break_ep) = breaking.per_endpoint.get(&idx) {
+            if break_ep.read_pattern != stable_ep.read_pattern {
+                continue;
+            }
             pattern_break
-                .entry(break_ep.read_pattern.clone())
+                .entry(stable_ep.read_pattern.clone())
                 .or_default()
                 .push(break_ep.p95_ms);
         }
@@ -219,7 +222,7 @@ pub fn build_read_pattern_summary(
         let stable_avg = stable_vals.iter().sum::<f64>() / stable_vals.len() as f64;
         let break_vals = pattern_break.get(pattern);
         let break_avg = break_vals
-            .filter(|vals| !vals.is_empty())
+            .filter(|vals| vals.len() == endpoint_count)
             .map(|vals| vals.iter().sum::<f64>() / vals.len() as f64);
         let degradation = if stable_avg > 0.0 {
             break_avg.map(|value| value / stable_avg)
@@ -657,6 +660,21 @@ mod tests {
         let breaking = make_stage(1, 100, StageStatus::HardFailure, HashMap::new());
         let summary = build_read_pattern_summary(&stable, &breaking);
         assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].break_avg_p95_ms, None);
+        assert_eq!(summary[0].degradation, None);
+    }
+
+    #[test]
+    fn partial_breaking_pattern_is_unknown_until_all_endpoints_are_observed() {
+        let mut stable_eps = HashMap::new();
+        stable_eps.insert(0, make_ep("/blocks", "KeyLookup", 10.0, 0.0));
+        stable_eps.insert(1, make_ep("/txs", "KeyLookup", 20.0, 0.0));
+        let stable = make_stage(0, 10, StageStatus::Ok, stable_eps);
+        let mut breaking_eps = HashMap::new();
+        breaking_eps.insert(0, make_ep("/blocks", "KeyLookup", 50.0, 0.0));
+        let breaking = make_stage(1, 100, StageStatus::HardFailure, breaking_eps);
+        let summary = build_read_pattern_summary(&stable, &breaking);
+        assert_eq!(summary[0].endpoint_count, 2);
         assert_eq!(summary[0].break_avg_p95_ms, None);
         assert_eq!(summary[0].degradation, None);
     }
