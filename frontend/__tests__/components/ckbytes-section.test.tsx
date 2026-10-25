@@ -41,8 +41,20 @@ describe('CkbytesSection', () => {
     const bar = await screen.findByRole('img', {
       name: 'Knowledge 0.30 percent, free 83.22 percent, Nervos DAO 16.48 percent',
     });
-    expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade', 'min-w-[3px]');
+    expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade');
+    expect(bar.querySelector('[data-segment="knowledge"]')).not.toHaveClass('min-w-[3px]');
     expect(bar.querySelector('[data-segment="dao"]')).toHaveClass('bg-gold');
+    for (const [part, amount] of [
+      ['knowledge', ckbytesAllocation.knowledge],
+      ['free', ckbytesAllocation.free],
+      ['dao', ckbytesAllocation.daoFree],
+    ]) {
+      const segment = bar.querySelector(`[data-segment="${part}"]`) as HTMLElement;
+      expect(Number.parseFloat(segment.style.width)).toBeCloseTo(
+        (Number(amount) / Number(ckbytesAllocation.circulating)) * 100,
+        10
+      );
+    }
     expect(document.querySelector('[data-legend="Knowledge"]')).toHaveTextContent(
       'Knowledge151.13M CKB151.1 MB · 0.30%'
     );
@@ -53,6 +65,25 @@ describe('CkbytesSection', () => {
     expect(document.querySelector('[data-legend="Nervos DAO"]')).toHaveTextContent(
       'Nervos DAO8.22B CKB16.48% · 8.22B locked'
     );
+  });
+
+  it('uses raw allocation amounts for widths, including zero and a share below label precision', async () => {
+    serveAllocation({
+      ...ckbytesAllocation,
+      circulating: '1000000000000000000',
+      knowledge: '1',
+      free: '999999999999999999',
+      daoFree: '0',
+    });
+    render(<CkbytesSection />);
+    const bar = await screen.findByRole('img', { name: /Knowledge 0\.00 percent/ });
+    const knowledge = bar.querySelector('[data-segment="knowledge"]') as HTMLElement;
+    const free = bar.querySelector('[data-segment="free"]') as HTMLElement;
+    expect(Number.parseFloat(knowledge.style.width)).toBeGreaterThan(0);
+    expect(Number.parseFloat(knowledge.style.width)).toBeLessThan(0.01);
+    expect(Number.parseFloat(free.style.width)).toBeGreaterThan(99.99);
+    expect(bar.querySelector('[data-segment="dao"]')).toBeNull();
+    expect(bar).toHaveAccessibleName(/Nervos DAO 0\.00 percent/);
   });
 
   it('uses the served free part, never a remainder of its own', async () => {

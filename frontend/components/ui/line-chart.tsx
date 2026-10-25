@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
 import {
   exactDecimalRatio,
+  exactSignedDecimalRatio,
   formatCompactInteger,
   formatCompactRatio,
   formatScaledInteger,
@@ -42,12 +43,14 @@ interface LineChartProps {
 
 function formatTooltipValue(raw: string | null, context: string, isPercent = false): string {
   if (raw === null) return '—';
-  const [numerator, denominator] = exactDecimalRatio(raw, context);
-  if (isPercent) return `${formatScaledInteger(numerator, denominator, 2)}%`;
-  if (numerator > BigInt(0) && numerator < denominator) {
-    return formatScaledInteger(numerator, denominator, 4);
+  const [numerator, denominator] = exactSignedDecimalRatio(raw, context);
+  const sign = numerator < BigInt(0) ? '-' : '';
+  const magnitude = numerator < BigInt(0) ? -numerator : numerator;
+  if (isPercent) return `${sign}${formatScaledInteger(magnitude, denominator, 2)}%`;
+  if (magnitude > BigInt(0) && magnitude < denominator) {
+    return `${sign}${formatScaledInteger(magnitude, denominator, 4)}`;
   }
-  return formatCompactRatio(numerator, denominator);
+  return `${sign}${formatCompactRatio(magnitude, denominator)}`;
 }
 
 function formatAxisValue(val: number, isPercent = false): string {
@@ -101,7 +104,7 @@ export function LineChart({
     () =>
       data.map((d) => {
         if (exactIntegerValues) formatCompactInteger(d.value, `chart ${d.date}`);
-        else exactDecimalRatio(d.value, `chart ${d.date}`);
+        else exactSignedDecimalRatio(d.value, `chart ${d.date}`);
         const value = Number(d.value);
         if (!Number.isFinite(value)) throw new Error(`chart ${d.date}: invalid value ${d.value}`);
         return value;
@@ -150,7 +153,12 @@ export function LineChart({
       return { minVal: min, maxVal: max * 1.1, minVal2: 0, maxVal2: max2 * 1.1 };
     }
 
-    return { minVal: min * 0.9, maxVal: max * 1.1, minVal2: 0, maxVal2: max2 * 1.1 };
+    return {
+      minVal: min < 0 ? min * 1.1 : min * 0.9,
+      maxVal: max < 0 ? max * 0.9 : max * 1.1,
+      minVal2: 0,
+      maxVal2: max2 * 1.1,
+    };
   }, [values, values2, useLogScale, chartType]);
 
   const xScale = useCallback(

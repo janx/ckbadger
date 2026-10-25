@@ -4,6 +4,26 @@ import { LineChart } from '@/components/ui/line-chart';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
 describe('LineChart', () => {
+  it('draws a negative daily flow and keeps its sign in the hover readout', () => {
+    const { container } = render(
+      <LineChart
+        yAxisLabel="Net Flow (CKB/day)"
+        data={[
+          { date: '2026-02-18', value: '0.00000000' },
+          { date: '2026-02-19', value: '-30.00000000' },
+        ]}
+      />
+    );
+    const path = screen.getByTestId('line-series-primary');
+    expect(path.getAttribute('d')).not.toMatch(/NaN/);
+    const endY = Number(path.getAttribute('d')!.match(/L 580 ([\d.]+)/)?.[1]);
+    expect(endY).toBeGreaterThanOrEqual(20);
+    expect(endY).toBeLessThanOrEqual(200);
+    const svg = container.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    fireEvent.mouseMove(svg, { clientX: 580 });
+    expect(screen.getByText('-30.00')).toBeInTheDocument();
+  });
   it('keeps exact primary and secondary decimals in hover readouts', () => {
     const { container } = render(
       <LineChart

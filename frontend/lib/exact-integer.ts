@@ -51,6 +51,13 @@ export function exactDecimalRatio(value: string, context: string): [bigint, bigi
   return [BigInt(match[1] + fraction), BigInt(10) ** BigInt(fraction.length)];
 }
 
+/** Signed chart decimal; preserve the unsigned API contract above. */
+export function exactSignedDecimalRatio(value: string, context: string): [bigint, bigint] {
+  const negative = value.startsWith('-');
+  const [numerator, denominator] = exactDecimalRatio(negative ? value.slice(1) : value, context);
+  return [negative ? -numerator : numerator, denominator];
+}
+
 /** Compact amount rounded half-up from an exact decimal rational. */
 export function formatCompactRatio(numerator: bigint, denominator: bigint): string {
   if (numerator < BigInt(0) || denominator <= BigInt(0)) {

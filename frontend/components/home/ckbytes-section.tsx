@@ -189,6 +189,8 @@ function AllocationReady({ view }: { view: AllocationView }) {
   const { circulating, knowledge, free, daoFree, daoCapacity } = view;
   const { active, handlers, focusHandlers } = useHighlight();
   const pct = (part: bigint) => formatPercent(part, circulating, 2);
+  // Geometry follows the unrounded served amounts; Number is used only for CSS layout.
+  const width = (part: bigint) => `${(Number(part) / Number(circulating)) * 100}%`;
   const total = formatCkbAmount(circulating);
   const segment = (part: Part) => ({
     'data-segment': part,
@@ -220,19 +222,29 @@ function AllocationReady({ view }: { view: AllocationView }) {
       <div
         role="img"
         aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
-        className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden rounded-[5px]"
+        className="bg-base-surface flex h-2.5 overflow-hidden rounded-[5px]"
       >
-        <span
-          {...segment('knowledge')}
-          className={cn(SEGMENT, 'bg-jade min-w-[3px] shrink-0', dim('knowledge'))}
-          style={{ width: `${pct(knowledge)}%` }}
-        />
-        <span
-          {...segment('free')}
-          className={cn(SEGMENT, FREE_COLOR, dim('free'))}
-          style={{ width: `${pct(free)}%` }}
-        />
-        <span {...segment('dao')} className={cn(SEGMENT, 'bg-gold flex-1', dim('dao'))} />
+        {knowledge > BigInt(0) && (
+          <span
+            {...segment('knowledge')}
+            className={cn(SEGMENT, 'bg-jade shrink-0', dim('knowledge'))}
+            style={{ width: width(knowledge) }}
+          />
+        )}
+        {free > BigInt(0) && (
+          <span
+            {...segment('free')}
+            className={cn(SEGMENT, FREE_COLOR, 'shrink-0', dim('free'))}
+            style={{ width: width(free) }}
+          />
+        )}
+        {daoFree > BigInt(0) && (
+          <span
+            {...segment('dao')}
+            className={cn(SEGMENT, 'bg-gold shrink-0', dim('dao'))}
+            style={{ width: width(daoFree) }}
+          />
+        )}
       </div>
       <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs">
         <LegendItem

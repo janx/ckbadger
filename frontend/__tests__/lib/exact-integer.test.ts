@@ -5,6 +5,7 @@ import {
   formatScaledInteger,
   formatDecimal,
   exactDecimalRatio,
+  exactSignedDecimalRatio,
   formatCompactRatio,
   formatExactShare,
 } from '@/lib/exact-integer';
@@ -32,6 +33,11 @@ describe('exact integer display', () => {
 
   it('formats decimal chart amounts and shares from exact rational values', () => {
     expect(exactDecimalRatio('1.005', 'chart')).toEqual([BigInt(1005), BigInt(1000)]);
+    expect(exactSignedDecimalRatio('-30.00000000', 'flow')).toEqual([
+      BigInt(-3000000000),
+      BigInt(100000000),
+    ]);
+    expect(() => exactDecimalRatio('-30.00000000', 'unsigned')).toThrow('unsigned');
     expect(formatCompactRatio(BigInt(1005), BigInt(1000))).toBe('1.01');
     expect(formatCompactRatio(BigInt('9007199254740993'), BigInt(1))).toBe('9.01P');
     expect(
