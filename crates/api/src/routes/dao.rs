@@ -254,7 +254,8 @@ pub struct CalculatorResponse {
     pub estimated_compensation_ckb: String,
     pub total_withdrawable: String,
     pub total_withdrawable_ckb: String,
-    pub apc: String,
+    /// Realized annualized return; absent when the two blocks have the same chain time.
+    pub apc: Option<String>,
 }
 
 /// Convert a DAO deposit entry from the store to an API response.
@@ -922,43 +923,36 @@ async fn calculate_compensation(
     let withdraw_block = requested_withdraw_block.unwrap_or(latest_block);
     ensure_withdraw_block_not_before_deposit(deposit_block, withdraw_block)?;
 
-    let deposit_dao = state
-        .store
-        .get_block_header(deposit_block)
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "block header unavailable for deposit_block={}: {}",
-                deposit_block, e
-            ))
-        })?
-        .map(|h| h.dao);
+    let deposit_header = state.store.get_block_header(deposit_block).map_err(|e| {
+        ApiError::internal(format!(
+            "block header unavailable for deposit_block={}: {}",
+            deposit_block, e
+        ))
+    })?;
 
-    let withdraw_dao = state
-        .store
-        .get_block_header(withdraw_block)
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "block header unavailable for withdraw_block={}: {}",
-                withdraw_block, e
-            ))
-        })?
-        .map(|h| h.dao);
+    let withdraw_header = state.store.get_block_header(withdraw_block).map_err(|e| {
+        ApiError::internal(format!(
+            "block header unavailable for withdraw_block={}: {}",
+            withdraw_block, e
+        ))
+    })?;
 
-    let (ar_deposit, ar_withdraw) = match (deposit_dao, withdraw_dao) {
+    let (ar_deposit, ar_withdraw, duration_ms) = match (deposit_header, withdraw_header) {
         (Some(d), Some(w)) => {
-            let ar_d = extract_ar(&d).ok_or_else(|| {
+            let ar_d = extract_ar(&d.dao).ok_or_else(|| {
                 ApiError::internal(format!(
                     "invalid DAO field in deposit block header: block_number={}",
                     deposit_block
                 ))
             })?;
-            let ar_w = extract_ar(&w).ok_or_else(|| {
+            let ar_w = extract_ar(&w.dao).ok_or_else(|| {
                 ApiError::internal(format!(
                     "invalid DAO field in withdraw block header: block_number={}",
                     withdraw_block
                 ))
             })?;
-            (ar_d, ar_w)
+            let duration_ms = i128::from(w.chain_time_ms) - i128::from(d.chain_time_ms);
+            (ar_d, ar_w, duration_ms)
         }
         _ => {
             return Err(ApiError::bad_request(
@@ -982,13 +976,7 @@ async fn calculate_compensation(
 
     let total = capacity + compensation;
 
-    let blocks_held = (withdraw_block - deposit_block) as f64;
-    let years = blocks_held / (365.25 * 24.0 * 60.0 * 60.0 / 8.0);
-    let apc = if years > 0.0 && free > 0 {
-        (compensation as f64 / free as f64 / years) * 100.0
-    } else {
-        0.0
-    };
+    let apc = realized_apc(compensation, free, duration_ms).map_err(ApiError::internal)?;
 
     ok(CalculatorResponse {
         capacity: capacity.to_string(),
@@ -999,8 +987,36 @@ async fn calculate_compensation(
         estimated_compensation_ckb: shannon_to_ckb(&compensation.to_string()),
         total_withdrawable: total.to_string(),
         total_withdrawable_ckb: shannon_to_ckb(&total.to_string()),
-        apc: format!("{:.2}%", apc),
+        apc,
     })
+}
+
+fn realized_apc(
+    compensation: u128,
+    free: u128,
+    duration_ms: i128,
+) -> Result<Option<String>, String> {
+    // 365.25 days, expressed exactly in milliseconds.  This is an annualized
+    // historical return, so the actual effective chain-time span is required.
+    const YEAR_MS: i128 = 31_557_600_000;
+    if duration_ms < 0 {
+        return Err(format!(
+            "DAO calculator chain time regressed: duration_ms={duration_ms}"
+        ));
+    }
+    if duration_ms == 0 || free == 0 {
+        return Ok(None);
+    }
+    let compensation = i128::try_from(compensation).map_err(|_| "DAO compensation exceeds i128")?;
+    let free = i128::try_from(free).map_err(|_| "DAO free capacity exceeds i128")?;
+    let numerator = compensation
+        .checked_mul(YEAR_MS)
+        .ok_or("DAO APC numerator overflow")?;
+    let denominator = free
+        .checked_mul(duration_ms)
+        .ok_or("DAO APC denominator overflow")?;
+    crate::utils::exact_ratio::format_percent(numerator, denominator, 2)
+        .map(|value| Some(format!("{value}%")))
 }
 
 fn ensure_withdraw_block_not_before_deposit(
@@ -1312,6 +1328,21 @@ mod tests {
     use crate::cache::InMemoryCache;
     use ckbadger_store::types::CachedBlockHeader;
     use std::time::Duration;
+
+    #[test]
+    fn realized_apc_uses_actual_chain_duration_and_marks_zero_span_undefined() {
+        const YEAR_MS: i128 = 31_557_600_000;
+        assert_eq!(
+            realized_apc(1, 10, YEAR_MS).unwrap().as_deref(),
+            Some("10.00%")
+        );
+        assert_eq!(
+            realized_apc(1, 10, YEAR_MS / 2).unwrap().as_deref(),
+            Some("20.00%")
+        );
+        assert_eq!(realized_apc(1, 10, 0).unwrap(), None);
+        assert!(realized_apc(1, 10, -1).unwrap_err().contains("regressed"));
+    }
 
     #[test]
     fn top_depositor_duration_uses_exact_ms_and_rejects_zero_count() {
