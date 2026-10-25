@@ -226,7 +226,7 @@ async fn get_cell_graph(
     nodes.push(GraphNode {
         id: cell_id.clone(),
         node_type: "cell".to_string(),
-        label: format!("{} CKB", parse_capacity(&capacity_str)),
+        label: format!("{} CKB", parse_capacity(&capacity_str)?),
         data: serde_json::json!({
             "txHash": format!("0x{}", hex::encode(&hash_bytes)),
             "outputIndex": output_index,
@@ -281,7 +281,11 @@ async fn get_cell_graph(
                     let label = cell_map
                         .get(&(prev_tx_hash.clone(), *prev_idx))
                         .or_else(|| consumed_map.get(&(prev_tx_hash.clone(), *prev_idx)))
-                        .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
+                        .map(|c| {
+                            parse_capacity(&c.capacity.to_string())
+                                .map(|amount| format!("{amount} CKB"))
+                        })
+                        .transpose()?
                         .unwrap_or_else(|| "?".to_string());
 
                     nodes.push(GraphNode {
@@ -399,7 +403,11 @@ async fn get_tx_graph(
                     let label = live_map
                         .get(&(prev_tx_hash.clone(), prev_idx))
                         .or_else(|| consumed_map.get(&(prev_tx_hash.clone(), prev_idx)))
-                        .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
+                        .map(|c| {
+                            parse_capacity(&c.capacity.to_string())
+                                .map(|amount| format!("{amount} CKB"))
+                        })
+                        .transpose()?
                         .unwrap_or_else(|| "?".to_string());
 
                     nodes.push(GraphNode {
@@ -454,7 +462,7 @@ async fn get_tx_graph(
                 nodes.push(GraphNode {
                     id: output_cell_id.clone(),
                     node_type: "cell".to_string(),
-                    label: format!("{} CKB", parse_capacity(&capacity_str)),
+                    label: format!("{} CKB", parse_capacity(&capacity_str)?),
                     data: serde_json::json!({
                         "txHash": hash,
                         "outputIndex": output_index,
@@ -505,7 +513,7 @@ async fn get_tx_graph(
             nodes.push(GraphNode {
                 id: output_cell_id.clone(),
                 node_type: "cell".to_string(),
-                label: format!("{} CKB", parse_capacity(&capacity_str)),
+                label: format!("{} CKB", parse_capacity(&capacity_str)?),
                 data: serde_json::json!({
                     "txHash": hash,
                     "outputIndex": output_index,
@@ -529,15 +537,25 @@ fn live_cell_key_matches_tx_hash(key: &[u8], tx_hash: &[u8]) -> bool {
     key.len() >= 34 && tx_hash.len() == 32 && &key[..32] == tx_hash
 }
 
-fn parse_capacity(capacity: &str) -> String {
-    let ckb = capacity.parse::<u64>().unwrap_or(0) as f64 / 1e8;
-    if ckb >= 1_000_000.0 {
-        format!("{:.2}M", ckb / 1_000_000.0)
-    } else if ckb >= 1_000.0 {
-        format!("{:.2}K", ckb / 1_000.0)
+fn parse_capacity(
+    capacity: &str,
+) -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let shannons = capacity.parse::<u64>().map_err(|error| {
+        ApiError::internal(format!("invalid graph capacity {capacity:?}: {error}"))
+    })?;
+    let (divisor, suffix): (u128, &str) = if shannons >= 100_000_000_000_000 {
+        (100_000_000_000_000, "M")
+    } else if shannons >= 100_000_000_000 {
+        (100_000_000_000, "K")
     } else {
-        format!("{:.2}", ckb)
-    }
+        (100_000_000, "")
+    };
+    let rounded_hundredths = (u128::from(shannons) * 100 + divisor / 2) / divisor;
+    Ok(format!(
+        "{}.{:02}{suffix}",
+        rounded_hundredths / 100,
+        rounded_hundredths % 100
+    ))
 }
 
 #[derive(Debug, Serialize)]
@@ -730,23 +748,28 @@ mod tests {
 
     #[test]
     fn test_parse_capacity_small() {
-        assert_eq!(parse_capacity("10000000000"), "100.00");
+        assert_eq!(parse_capacity("10000000000").unwrap(), "100.00");
     }
 
     #[test]
     fn test_parse_capacity_thousands() {
         // 100_000_000_000_000 shannon = 1_000_000 CKB = 1.00M
-        assert_eq!(parse_capacity("100000000000000"), "1.00M");
+        assert_eq!(parse_capacity("100000000000000").unwrap(), "1.00M");
     }
 
     #[test]
     fn test_parse_capacity_millions() {
-        assert_eq!(parse_capacity("100000000000000000"), "1000.00M");
+        assert_eq!(parse_capacity("100000000000000000").unwrap(), "1000.00M");
     }
 
     #[test]
     fn test_parse_capacity_zero() {
-        assert_eq!(parse_capacity("0"), "0.00");
+        assert_eq!(parse_capacity("0").unwrap(), "0.00");
+    }
+
+    #[test]
+    fn malformed_capacity_must_not_be_labeled_zero() {
+        assert!(parse_capacity("not a capacity").is_err());
     }
 
     #[test]

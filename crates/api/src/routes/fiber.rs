@@ -157,7 +157,9 @@ fn build_channel_response(
     }
 }
 
-fn build_timeline(ch: &ckbadger_store::types::FiberChannel) -> Vec<FiberTimelineEvent> {
+fn build_timeline(
+    ch: &ckbadger_store::types::FiberChannel,
+) -> Result<Vec<FiberTimelineEvent>, String> {
     let mut timeline = Vec::new();
 
     // Open event is always present.
@@ -168,63 +170,47 @@ fn build_timeline(ch: &ckbadger_store::types::FiberChannel) -> Vec<FiberTimeline
         timestamp: ch.open_timestamp.to_string(),
     });
 
-    // Close (cooperative) or force close.
-    match ch.state {
-        FiberChannelState::CooperativelyClosed => {
-            if let Some(ref tx) = ch.close_tx_hash {
-                timeline.push(FiberTimelineEvent {
-                    event: "close".to_string(),
-                    tx_hash: format_hex(tx),
-                    block: ch.close_block.unwrap_or(0),
-                    timestamp: ch
-                        .close_timestamp
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                });
-            }
-        }
-        FiberChannelState::ForceClosed => {
-            if let Some(ref tx) = ch.close_tx_hash {
-                timeline.push(FiberTimelineEvent {
-                    event: "forceClose".to_string(),
-                    tx_hash: format_hex(tx),
-                    block: ch.close_block.unwrap_or(0),
-                    timestamp: ch
-                        .close_timestamp
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                });
-            }
-        }
-        FiberChannelState::Settled => {
-            // Force-closed channels that are now settled still have the forceClose event.
-            if let Some(ref tx) = ch.close_tx_hash {
-                timeline.push(FiberTimelineEvent {
-                    event: "forceClose".to_string(),
-                    tx_hash: format_hex(tx),
-                    block: ch.close_block.unwrap_or(0),
-                    timestamp: ch
-                        .close_timestamp
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                });
-            }
-            if let Some(ref tx) = ch.settlement_tx_hash {
-                timeline.push(FiberTimelineEvent {
-                    event: "settlement".to_string(),
-                    tx_hash: format_hex(tx),
-                    block: ch.settlement_block.unwrap_or(0),
-                    timestamp: ch
-                        .settlement_timestamp
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                });
-            }
-        }
-        FiberChannelState::Open => { /* no additional events */ }
+    let close_event = match ch.state {
+        FiberChannelState::Open => None,
+        FiberChannelState::CooperativelyClosed => Some("close"),
+        FiberChannelState::ForceClosed | FiberChannelState::Settled => Some("forceClose"),
+    };
+    if let Some(event) = close_event {
+        let tx = ch
+            .close_tx_hash
+            .as_ref()
+            .ok_or("closed channel has no close_tx_hash")?;
+        let block = ch.close_block.ok_or("closed channel has no close_block")?;
+        let timestamp = ch
+            .close_timestamp
+            .ok_or("closed channel has no close_timestamp")?;
+        timeline.push(FiberTimelineEvent {
+            event: event.to_string(),
+            tx_hash: format_hex(tx),
+            block,
+            timestamp: timestamp.to_string(),
+        });
+    }
+    if ch.state == FiberChannelState::Settled {
+        let tx = ch
+            .settlement_tx_hash
+            .as_ref()
+            .ok_or("settled channel has no settlement_tx_hash")?;
+        let block = ch
+            .settlement_block
+            .ok_or("settled channel has no settlement_block")?;
+        let timestamp = ch
+            .settlement_timestamp
+            .ok_or("settled channel has no settlement_timestamp")?;
+        timeline.push(FiberTimelineEvent {
+            event: "settlement".to_string(),
+            tx_hash: format_hex(tx),
+            block,
+            timestamp: timestamp.to_string(),
+        });
     }
 
-    timeline
+    Ok(timeline)
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
@@ -292,7 +278,8 @@ async fn get_channel(
         .ok_or_else(|| ApiError::not_found("Fiber channel not found"))?;
 
     let resp = build_channel_response(&id_bytes, &channel);
-    let timeline = build_timeline(&channel);
+    let timeline = build_timeline(&channel)
+        .map_err(|error| ApiError::internal(format!("fiber channel {}: {error}", channel_id)))?;
 
     ok(FiberChannelDetailResponse {
         channel: resp,
@@ -488,7 +475,7 @@ mod tests {
             participants: vec![],
             funding_lock_args: vec![],
         };
-        let timeline = build_timeline(&channel);
+        let timeline = build_timeline(&channel).unwrap();
         assert_eq!(timeline.len(), 1);
         assert_eq!(timeline[0].event, "open");
     }
@@ -516,10 +503,16 @@ mod tests {
             participants: vec![],
             funding_lock_args: vec![],
         };
-        let timeline = build_timeline(&channel);
+        let timeline = build_timeline(&channel).unwrap();
         assert_eq!(timeline.len(), 2);
         assert_eq!(timeline[0].event, "open");
         assert_eq!(timeline[1].event, "close");
+
+        let mut missing_block = channel.clone();
+        missing_block.close_block = None;
+        assert!(build_timeline(&missing_block)
+            .unwrap_err()
+            .contains("close_block"));
     }
 
     #[test]
@@ -545,11 +538,17 @@ mod tests {
             participants: vec![],
             funding_lock_args: vec![],
         };
-        let timeline = build_timeline(&channel);
+        let timeline = build_timeline(&channel).unwrap();
         assert_eq!(timeline.len(), 3);
         assert_eq!(timeline[0].event, "open");
         assert_eq!(timeline[1].event, "forceClose");
         assert_eq!(timeline[2].event, "settlement");
+
+        let mut missing_settlement = channel.clone();
+        missing_settlement.settlement_block = None;
+        assert!(build_timeline(&missing_settlement)
+            .unwrap_err()
+            .contains("settlement_block"));
     }
 
     #[test]
