@@ -2751,38 +2751,56 @@ impl CkbadgerStore {
     /// over all CFs in this store. With atomic_flush enabled, flushes
     /// fan out across every CF of the store simultaneously, so summing is
     /// representative of total flush pressure.
-    pub fn flush_stats(&self) -> FlushStats {
-        let num_running_flushes = self
-            .db
-            .property_int_value("rocksdb.num-running-flushes")
-            .ok()
-            .flatten()
-            .unwrap_or(0);
+    pub fn flush_stats(&self) -> anyhow::Result<FlushStats> {
+        let num_running_flushes = required_flush_property(
+            self.db
+                .property_int_value("rocksdb.num-running-flushes")
+                .map_err(Into::into),
+            "db rocksdb.num-running-flushes",
+        )?;
         let mut mem_table_flush_pending: u64 = 0;
         let mut active_memtable_bytes: u64 = 0;
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
-                {
-                    mem_table_flush_pending += v;
-                }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.cur-size-active-mem-table")
-                {
-                    active_memtable_bytes += v;
-                }
+                let pending = required_flush_property(
+                    self.db
+                        .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
+                        .map_err(Into::into),
+                    &format!("CF {cf_name} rocksdb.mem-table-flush-pending"),
+                )?;
+                mem_table_flush_pending =
+                    mem_table_flush_pending
+                        .checked_add(pending)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("flush-pending sum overflows at CF {cf_name}")
+                        })?;
+                let active = required_flush_property(
+                    self.db
+                        .property_int_value_cf(cf, "rocksdb.cur-size-active-mem-table")
+                        .map_err(Into::into),
+                    &format!("CF {cf_name} rocksdb.cur-size-active-mem-table"),
+                )?;
+                active_memtable_bytes =
+                    active_memtable_bytes.checked_add(active).ok_or_else(|| {
+                        anyhow::anyhow!("active memtable byte sum overflows at CF {cf_name}")
+                    })?;
             }
         }
-        FlushStats {
+        Ok(FlushStats {
             num_running_flushes,
             mem_table_flush_pending,
             active_memtable_bytes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage() as u64,
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size() as u64,
-        }
+        })
+    }
+}
+
+fn required_flush_property(value: anyhow::Result<Option<u64>>, name: &str) -> anyhow::Result<u64> {
+    match value {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => anyhow::bail!("RocksDB flush property unavailable: {name}"),
+        Err(error) => anyhow::bail!("RocksDB flush property {name}: {error}"),
     }
 }
 
@@ -2801,6 +2819,24 @@ pub struct FlushStats {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn unavailable_flush_property_is_not_reported_as_zero() {
+        assert_eq!(
+            required_flush_property(Ok(Some(0)), "db flushes").unwrap(),
+            0
+        );
+        assert!(required_flush_property(Ok(None), "db flushes")
+            .unwrap_err()
+            .to_string()
+            .contains("db flushes"));
+        assert!(
+            required_flush_property(Err(anyhow::anyhow!("IO failed")), "db flushes")
+                .unwrap_err()
+                .to_string()
+                .contains("IO failed")
+        );
+    }
 
     // ── P3.3: live write buffers, flush storm, MANIFEST ────────────────
 

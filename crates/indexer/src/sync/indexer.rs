@@ -1135,7 +1135,7 @@ impl Indexer {
     }
 
     /// Cheap flush-side snapshot used by the live-sync health monitor.
-    pub(crate) fn flush_stats(&self) -> ckbadger_store::FlushStats {
+    pub(crate) fn flush_stats(&self) -> anyhow::Result<ckbadger_store::FlushStats> {
         self.writer.store().flush_stats()
     }
 

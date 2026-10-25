@@ -130,14 +130,20 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
 
         let curr_lookup = indexer.parser_cell_lookup_snapshot();
         let lookup_delta = delta(&last_lookup_snap, &curr_lookup);
-        last_lookup_snap = curr_lookup;
 
         let (_fetch_ms, db_stage_ms, db_commit_ms) = indexer.perf_snapshot_ms();
         let (precompute_ms, build_ms, finalize_ms) = indexer.perf_write_phase_snapshot_ms();
         let (commit_prepare_ms, script_rollup_ms, append_only_commit_synced_ms, domain_commit_ms) =
             indexer.perf_commit_phase_snapshot_ms();
         let memory = indexer.get_memory_stats();
-        let flush = indexer.flush_stats();
+        let flush = match indexer.flush_stats() {
+            Ok(flush) => flush,
+            Err(e) => {
+                warn!(error = %e, "skipping live-sync health sample: RocksDB flush metrics unavailable");
+                continue;
+            }
+        };
+        last_lookup_snap = curr_lookup;
         let progress = indexer.progress();
         let sample = Sample {
             db_stage_write_ms: db_stage_ms,
