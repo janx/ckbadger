@@ -526,33 +526,55 @@ impl BatchWriter {
         Ok(())
     }
 
+    fn update_chain_time_histogram_batch(
+        &self,
+        prefix: u8,
+        kind: &str,
+        bucket: i32,
+        count: i32,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if bucket < 0 || count <= 0 {
+            anyhow::bail!("invalid {kind} histogram delta: bucket={bucket} count={count}");
+        }
+        let key = keys::encode_stats_key(prefix, &bucket.to_be_bytes());
+        let previous = match self.store.get_stats_key(&key)? {
+            Some(bytes) => {
+                let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                    anyhow!(
+                        "invalid {kind} histogram count length: bucket={bucket} expected=4 got={}",
+                        bytes.len()
+                    )
+                })?;
+                i32::from_le_bytes(bytes)
+            }
+            None => 0,
+        };
+        if previous < 0 {
+            anyhow::bail!("negative {kind} histogram count: bucket={bucket} previous={previous}");
+        }
+        let next = previous.checked_add(count).ok_or_else(|| {
+            anyhow!(
+            "{kind} histogram count overflow: bucket={bucket} previous={previous} added={count}"
+        )
+        })?;
+        batch.put_stats(&key, &next.to_le_bytes());
+        Ok(())
+    }
+
     pub fn update_block_time_distribution_batch(
         &self,
         bucket_seconds: i32,
         count: i32,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let key = keys::encode_stats_key(
+        self.update_chain_time_histogram_batch(
             keys::STATS_PREFIX_BLOCK_TIME_DIST,
-            &bucket_seconds.to_be_bytes(),
-        );
-        let existing = self.store.get_stats_key(&key)?;
-
-        let new_count = match existing {
-            Some(val) if val.len() == 4 => {
-                let existing_count_bytes: [u8; 4] = val.as_slice().try_into().map_err(|_| {
-                    anyhow!(
-                        "invalid block time distribution count bytes length: expected=4 got={}",
-                        val.len()
-                    )
-                })?;
-                i32::from_le_bytes(existing_count_bytes) + count
-            }
-            _ => count,
-        };
-
-        batch.put_stats(&key, &new_count.to_le_bytes());
-        Ok(())
+            "block time",
+            bucket_seconds,
+            count,
+            batch,
+        )
     }
 
     pub fn update_epoch_time_distribution_batch(
@@ -561,30 +583,21 @@ impl BatchWriter {
         count: i32,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let key = keys::encode_stats_key(
+        self.update_chain_time_histogram_batch(
             keys::STATS_PREFIX_EPOCH_TIME_DIST,
-            &bucket_minutes.to_be_bytes(),
-        );
-        let existing = self.store.get_stats_key(&key)?;
-
-        let new_count = match existing {
-            Some(val) if val.len() == 4 => {
-                let existing_count_bytes: [u8; 4] = val.as_slice().try_into().map_err(|_| {
-                    anyhow!(
-                        "invalid epoch time distribution count bytes length: expected=4 got={}",
-                        val.len()
-                    )
-                })?;
-                i32::from_le_bytes(existing_count_bytes) + count
-            }
-            _ => count,
-        };
-
-        batch.put_stats(&key, &new_count.to_le_bytes());
-        Ok(())
+            "epoch time",
+            bucket_minutes,
+            count,
+            batch,
+        )
     }
 
-    pub fn get_previous_block_timestamp(&self, block_number: i64) -> Result<Option<DateTime<Utc>>> {
+    /// Read a predecessor's immutable raw header timestamp for diagnostics.
+    /// Statistics writers use `CachedBlockHeader.chain_time_ms` instead.
+    pub fn get_previous_block_raw_timestamp(
+        &self,
+        block_number: i64,
+    ) -> Result<Option<DateTime<Utc>>> {
         if block_number <= 0 {
             return Ok(None);
         }
@@ -3096,7 +3109,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_previous_block_timestamp_errors_on_invalid_millis() {
+    fn test_get_previous_block_raw_timestamp_errors_on_invalid_millis() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -3123,10 +3136,42 @@ mod tests {
         );
         batch.commit().unwrap();
 
-        let err = writer.get_previous_block_timestamp(1).unwrap_err();
+        let err = writer.get_previous_block_raw_timestamp(1).unwrap_err();
         assert!(err
             .to_string()
             .contains("invalid previous block timestamp millis"));
+    }
+
+    #[test]
+    fn histogram_writers_reject_malformed_and_overflowed_existing_counts() {
+        for (prefix, bucket) in [
+            (keys::STATS_PREFIX_BLOCK_TIME_DIST, 7i32),
+            (keys::STATS_PREFIX_EPOCH_TIME_DIST, 42i32),
+        ] {
+            for (existing, expected) in [
+                (vec![0xaa], "length"),
+                (i32::MAX.to_le_bytes().to_vec(), "overflow"),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+                let writer = BatchWriter::new(store.clone(), store.clone());
+                let key = keys::encode_stats_key(prefix, &bucket.to_be_bytes());
+                let mut seed = StoreBatch::new(&store);
+                seed.put_stats(&key, &existing);
+                seed.commit().unwrap();
+
+                let mut batch = StoreBatch::new(&store);
+                let error = if prefix == keys::STATS_PREFIX_BLOCK_TIME_DIST {
+                    writer.update_block_time_distribution_batch(bucket, 1, &mut batch)
+                } else {
+                    writer.update_epoch_time_distribution_batch(bucket, 1, &mut batch)
+                }
+                .unwrap_err()
+                .to_string();
+                assert!(error.contains(expected), "{error}");
+                assert!(error.contains(&bucket.to_string()), "{error}");
+            }
+        }
     }
 
     #[test]
