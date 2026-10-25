@@ -119,6 +119,12 @@ async fn test_router_drop_cleans_up_temp_ckb_db() {
 #[tokio::test]
 async fn test_network_stats_includes_api_background_tasks() {
     let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000)]);
+    let mut header = store.get_block_header(0).unwrap().unwrap();
+    header.compact_target = 0x190df964;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.commit().unwrap();
     let config = test_config(store);
 
     // Build AppState through the shared helper so this test keeps compiling as

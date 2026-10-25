@@ -129,6 +129,11 @@ async fn test_network_stats_allows_zero_chain_time_span_without_a_rate() {
 async fn test_network_stats_rejects_invalid_tip_timestamp() {
     let store = test_store();
     seed_block_headers_at(&store, &[(0, i64::MAX)]);
+    let mut header = store.get_block_header(0).unwrap().unwrap();
+    header.compact_target = 0x190df964;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let response = app
         .oneshot(
