@@ -31,9 +31,12 @@
 //!   for. `/pipeline` then pins one fresh view per attempt and builds its
 //!   snapshot under the last one, holding none while it sleeps.
 //! - Deliberately not pinned: background full-store scans (asset/address/script
-//!   cache warmup) and the WebSocket broadcasters. They interleave external I/O
-//!   and minutes-long scans with store reads; pinning them would freeze
-//!   catch-up for that long. They accept drift and are rebuilt periodically.
+//!   cache warmup). They interleave external I/O and minutes-long scans with
+//!   store reads; pinning them would freeze catch-up for that long.
+//! - WebSocket block broadcasts pin only their bounded synchronous local
+//!   payload build, after the external RPC tip request. No read guard spans an
+//!   RPC await or ticker wait, and a block header and its tx-index rows cannot
+//!   be read from different catch-up views.
 //!
 //! A read view must never be held across a call to [`crate::CkbadgerStore::refresh`]
 //! on the same thread — that self-deadlocks. Catch-up runs on its own thread

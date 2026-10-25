@@ -494,9 +494,11 @@ a primary, which every multi-CF read path already assumes:
   long-poll releases its pin before waiting — its contract is to observe the _next_ view;
   `/pipeline` releases it before waiting, at most 3 s, for the store to reach the node's pool tip,
   pins a fresh view for each attempt, and builds the snapshot under the attempt that ended the
-  wait), plus
-  background full-store scans (cache warmup) and WebSocket broadcasters, which interleave external
+  wait), plus background full-store scans (cache warmup), which interleave external
   I/O with minutes-long scans and accept drift rather than freeze catch-up.
+- WebSocket block broadcasts pin only the bounded synchronous local payload build
+  after the RPC tip request. The pin keeps block headers and canonical tx-index
+  hashes in one catch-up view and is released before the next ticker/RPC await.
 - Both sides are bounded: a read scope arriving after a catch-up queues yields to it for 100ms and
   then pins anyway, and a catch-up held up by a read scope logs the stall every 5s.
 - Never hold a read view across `CkbadgerStore::refresh` on the same thread — that self-deadlocks.

@@ -1,4 +1,5 @@
 use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
+use ckbadger_store::read_view::{self, ReadViewGuard};
 use ckbadger_store::CkbadgerStore;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,6 +43,10 @@ pub(crate) fn adjust_for_broadcast_gap(
     None
 }
 
+fn pin_broadcast_read_view() -> ReadViewGuard {
+    read_view::acquire_read()
+}
+
 pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
@@ -69,6 +74,10 @@ pub async fn start_block_broadcaster(
                 continue;
             }
         };
+        // All following domain/append-only reads are synchronous and bounded
+        // (at most twenty blocks and eight activities). Pin only after RPC so
+        // a catch-up cannot splice a new-fork tx index into an old-fork header.
+        let _view = pin_broadcast_read_view();
 
         // Get latest block from store
         let latest_block = match store.get_sync_tip_block() {
@@ -508,6 +517,26 @@ mod tests {
         types::{CachedBlockHeader, TxIndexEntry},
         StoreBatch,
     };
+
+    #[test]
+    fn broadcaster_scope_blocks_catch_up_until_local_payload_finishes() {
+        let before = read_view::pinned_read_scopes();
+        let view = pin_broadcast_read_view();
+        assert!(read_view::pinned_read_scopes() >= before + 1);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _catch_up = read_view::catch_up_window();
+            sender.send(()).unwrap();
+        });
+        assert!(receiver
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_err());
+        drop(view);
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        worker.join().unwrap();
+    }
 
     #[test]
     fn transaction_push_uses_canonical_index_hash_without_ckb_reader() {
