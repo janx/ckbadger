@@ -2383,6 +2383,12 @@ const BUDGET_BUILD_COLOR: Color = TERMINAL_GREEN;
 const BUDGET_FETCH_WAIT_COLOR: Color = AMBER;
 const BUDGET_FLUSH_WAIT_COLOR: Color = Color::Rgb(255, 80, 80);
 
+fn iteration_budget_value(value: Option<f64>) -> String {
+    value
+        .map(|ms| format!("{ms:.0}"))
+        .unwrap_or_else(|| "—".to_string())
+}
+
 /// Renders an iteration budget chart showing build_ms / fetch_wait / flush_wait
 /// as a stacked bar chart. Color bands show where iteration time goes.
 fn draw_iteration_budget_panel(f: &mut Frame, area: Rect, app: &App) {
@@ -2414,27 +2420,18 @@ fn draw_iteration_budget_panel(f: &mut Frame, area: Rect, app: &App) {
         .split(inner);
 
     // Stats line: current values for each component
-    let build_cur = app.build_cpu_ms_history.back().copied().unwrap_or(0.0);
-    let fetch_wait_cur = app.fetch_wait_ms_history.back().copied().unwrap_or(0.0);
-    let flush_wait_cur = app.flush_wait_ms_history.back().copied().unwrap_or(0.0);
+    let build_cur = iteration_budget_value(app.build_cpu_ms_history.back().copied());
+    let fetch_wait_cur = iteration_budget_value(app.fetch_wait_ms_history.back().copied());
+    let flush_wait_cur = iteration_budget_value(app.flush_wait_ms_history.back().copied());
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("build ", Style::default().fg(BUDGET_BUILD_COLOR)),
-            Span::styled(
-                format!("{:.0}", build_cur),
-                Style::default().fg(BUDGET_BUILD_COLOR),
-            ),
+            Span::styled(build_cur, Style::default().fg(BUDGET_BUILD_COLOR)),
             Span::styled(" fetch_wait ", Style::default().fg(BUDGET_FETCH_WAIT_COLOR)),
-            Span::styled(
-                format!("{:.0}", fetch_wait_cur),
-                Style::default().fg(BUDGET_FETCH_WAIT_COLOR),
-            ),
+            Span::styled(fetch_wait_cur, Style::default().fg(BUDGET_FETCH_WAIT_COLOR)),
             Span::styled(" flush_wait ", Style::default().fg(BUDGET_FLUSH_WAIT_COLOR)),
-            Span::styled(
-                format!("{:.0}", flush_wait_cur),
-                Style::default().fg(BUDGET_FLUSH_WAIT_COLOR),
-            ),
+            Span::styled(flush_wait_cur, Style::default().fg(BUDGET_FLUSH_WAIT_COLOR)),
         ])),
         rows[0],
     );
@@ -3054,22 +3051,31 @@ fn controller_panel_lines(
     dense: bool,
     deltas: Option<&ControllerDeltas>,
 ) -> Vec<Line<'static>> {
-    let recv_ema = bb.controller_recv_ema.unwrap_or(0.0);
-    let build_ema = bb.controller_build_ema.unwrap_or(0.0);
-    let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
-    let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
-    let io_ema = recv_ema + wait_ema;
-    let target_cells = bb.target_cells.unwrap_or(0);
+    let build_ema = bb.controller_build_ema;
+    let io_ema = bb
+        .controller_recv_ema
+        .zip(bb.controller_wait_ema)
+        .map(|(recv, wait)| recv + wait);
+    let l0_ema = bb.controller_l0_ema;
+    let build_text = build_ema
+        .map(|ms| format!("{:.1}s", ms / 1000.0))
+        .unwrap_or_else(|| "—".to_string());
+    let io_text = io_ema
+        .map(|ms| format!("{:.1}s", ms / 1000.0))
+        .unwrap_or_else(|| "—".to_string());
+    let l0_text = l0_ema
+        .map(|files| format!("{files:.0}"))
+        .unwrap_or_else(|| "—".to_string());
 
     // Band bar color: green if build_ema in [2s, 5s], red if outside.
-    let build_band_color = if (2000.0..=5000.0).contains(&build_ema) {
+    let build_band_color = if build_ema.is_some_and(|ms| (2000.0..=5000.0).contains(&ms)) {
         TERMINAL_GREEN
     } else {
         ERROR_RED
     };
 
     // Band bar: 10-char visual showing build_ema position within [2s, 5s].
-    let band_position = ((build_ema - 2000.0) / 3000.0 * 10.0)
+    let band_position = ((build_ema.unwrap_or(0.0) - 2000.0) / 3000.0 * 10.0)
         .round()
         .clamp(0.0, 10.0) as usize;
     let band_bar = format!(
@@ -3079,11 +3085,11 @@ fn controller_panel_lines(
     );
 
     // Waste composition
-    let (recv_waste_pct, wait_waste_pct) = if io_ema > 1.0 {
-        (recv_ema / io_ema * 100.0, wait_ema / io_ema * 100.0)
-    } else {
-        (0.0, 0.0)
-    };
+    let waste_pct = bb
+        .controller_recv_ema
+        .zip(bb.controller_wait_ema)
+        .filter(|(recv, wait)| recv + wait > 1.0)
+        .map(|(recv, wait)| (recv / (recv + wait) * 100.0, wait / (recv + wait) * 100.0));
 
     // Bottleneck label + color
     let (bn_label, bn_color) = match bb.controller_bottleneck {
@@ -3114,7 +3120,10 @@ fn controller_panel_lines(
         .unwrap_or_else(|| "-".to_string());
 
     // Budget text: target_cells formatted as "XXK"
-    let budget_k = target_cells / 1_000;
+    let budget_text = bb
+        .target_cells
+        .map(|target| format!("{}K", target / 1_000))
+        .unwrap_or_else(|| "—".to_string());
     let budget_delta_text = deltas.map(|d| {
         let pct = d.budget_delta_pct;
         if pct.abs() < 0.5 {
@@ -3137,11 +3146,13 @@ fn controller_panel_lines(
         } else {
             ("HOLD", SLATE_500)
         }
-    } else if build_ema < 1.0 {
+    } else if build_ema.is_none() || io_ema.is_none() {
+        ("N/A", SLATE_500)
+    } else if build_ema.is_some_and(|ms| ms < 1.0) {
         ("cold start", SLATE_500)
-    } else if build_ema < 2000.0 {
+    } else if build_ema.is_some_and(|ms| ms < 2000.0) {
         ("below band \u{2192} GROW", TERMINAL_GREEN)
-    } else if build_ema > 5000.0 {
+    } else if build_ema.is_some_and(|ms| ms > 5000.0) {
         ("above band \u{2192} SHRINK", AMBER)
     } else if build_ema > io_ema {
         ("build>io \u{2192} GROW", TERMINAL_GREEN)
@@ -3208,14 +3219,11 @@ fn controller_panel_lines(
         let spans0 = vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!("build {:.1}s ", build_ema / 1000.0),
+                format!("build {build_text} "),
                 Style::default().fg(FOREGROUND),
             ),
             Span::styled(band_bar.clone(), Style::default().fg(build_band_color)),
-            Span::styled(
-                format!("  io {:.1}s", io_ema / 1000.0),
-                Style::default().fg(SLATE_500),
-            ),
+            Span::styled(format!("  io {io_text}"), Style::default().fg(SLATE_500)),
             Span::styled(
                 format!(" \u{2192} {}", sizing_decision.0),
                 Style::default().fg(sizing_decision.1),
@@ -3228,7 +3236,7 @@ fn controller_panel_lines(
                 format!("[{}]", bn_label),
                 Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!(" {}K", budget_k), Style::default().fg(FOREGROUND)),
+            Span::styled(format!(" {budget_text}"), Style::default().fg(FOREGROUND)),
             Span::styled(" thr ", Style::default().fg(SLATE_500)),
             Span::styled(threads_text.clone(), Style::default().fg(FOREGROUND)),
             Span::styled(" bg ", Style::default().fg(SLATE_500)),
@@ -3239,8 +3247,12 @@ fn controller_panel_lines(
         }
         spans1.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
         spans1.push(Span::styled(
-            format!("{:.0}", l0_ema),
-            Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+            l0_text.clone(),
+            Style::default().fg(if l0_ema.is_some_and(|files| files > 40.0) {
+                ERROR_RED
+            } else {
+                FOREGROUND
+            }),
         ));
 
         vec![Line::from(spans0), Line::from(spans1)]
@@ -3256,19 +3268,16 @@ fn controller_panel_lines(
         let line1 = Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!("build {:.1}s ", build_ema / 1000.0),
+                format!("build {build_text} "),
                 Style::default().fg(FOREGROUND),
             ),
             Span::styled(band_bar, Style::default().fg(build_band_color)),
-            Span::styled(
-                format!("  io {:.1}s", io_ema / 1000.0),
-                Style::default().fg(SLATE_500),
-            ),
+            Span::styled(format!("  io {io_text}"), Style::default().fg(SLATE_500)),
         ]);
 
         // Line 2: waste composition
         let mut waste_spans = vec![Span::styled("  waste: ", Style::default().fg(SLATE_500))];
-        if io_ema > 1.0 {
+        if let Some((recv_waste_pct, wait_waste_pct)) = waste_pct {
             waste_spans.push(Span::styled(
                 format!("recv {:.0}%", recv_waste_pct),
                 Style::default().fg(AMBER),
@@ -3311,11 +3320,8 @@ fn controller_panel_lines(
 
         // Line 6: budget + fill + blocks + knobs + L0 + flush
         let mut adjust_spans = vec![Span::styled("  ", Style::default())];
-        if target_cells > 0 {
-            adjust_spans.push(Span::styled(
-                format!("{}K", budget_k),
-                Style::default().fg(FOREGROUND),
-            ));
+        if bb.target_cells.is_some_and(|target| target > 0) {
+            adjust_spans.push(Span::styled(budget_text, Style::default().fg(FOREGROUND)));
             if let Some((ref txt, col)) = budget_delta_text {
                 adjust_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
             }
@@ -3344,8 +3350,12 @@ fn controller_panel_lines(
         }
         adjust_spans.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
         adjust_spans.push(Span::styled(
-            format!("{:.0}", l0_ema),
-            Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+            l0_text,
+            Style::default().fg(if l0_ema.is_some_and(|files| files > 40.0) {
+                ERROR_RED
+            } else {
+                FOREGROUND
+            }),
         ));
         if let Some((ref txt, col)) = flush_text {
             adjust_spans.push(Span::styled("  fl ", Style::default().fg(SLATE_500)));
@@ -7959,6 +7969,34 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(text.contains("1500%"), "true fill ratio missing: {text}");
+    }
+
+    #[test]
+    fn controller_panel_does_not_invent_zero_observations() {
+        let bb = BulkBuildProgressData::default();
+        for dense in [true, false] {
+            let text = controller_panel_lines(&bb, dense, None)
+                .iter()
+                .map(line_text)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                text.contains("build —"),
+                "missing build observation: {text}"
+            );
+            assert!(text.contains("io —"), "missing I/O observation: {text}");
+            assert!(text.contains("L0 —"), "missing L0 observation: {text}");
+            assert!(
+                !text.contains("cold start"),
+                "missing observation is not a cold start: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn iteration_budget_readout_distinguishes_missing_from_zero() {
+        assert_eq!(super::iteration_budget_value(None), "—");
+        assert_eq!(super::iteration_budget_value(Some(0.0)), "0");
     }
 
     #[test]
