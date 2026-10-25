@@ -61,11 +61,11 @@ struct Sample {
     target_block: u64,
     // Flush-side signals — added to verify WBM tuning actually reduces
     // flush frequency (the suspected dominant cost in per-block commit).
-    num_running_flushes: u64,
-    mem_table_flush_pending: u64,
-    active_memtable_mb: u64,
-    wbm_usage_mb: u64,
-    wbm_budget_mb: u64,
+    num_running_flushes: Option<u64>,
+    mem_table_flush_pending: Option<u64>,
+    active_memtable_mb: Option<u64>,
+    wbm_usage_mb: Option<u64>,
+    wbm_budget_mb: Option<u64>,
     // Per-phase decomposition of the writer step. We accumulate these
     // alongside db_stage / db_commit and report the CPU build cost vs
     // the I/O commit cost separately so the next investigation step
@@ -137,10 +137,10 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             indexer.perf_commit_phase_snapshot_ms();
         let memory = indexer.get_memory_stats();
         let flush = match indexer.flush_stats() {
-            Ok(flush) => flush,
+            Ok(flush) => Some(flush),
             Err(e) => {
-                warn!(error = %e, "skipping live-sync health sample: RocksDB flush metrics unavailable");
-                continue;
+                warn!(error = %e, "RocksDB flush metrics unavailable in live-sync health sample");
+                None
             }
         };
         last_lookup_snap = curr_lookup;
@@ -159,11 +159,11 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             elapsed_us_delta: lookup_delta.elapsed_us_total,
             current_block: progress.current(),
             target_block: progress.target(),
-            num_running_flushes: flush.num_running_flushes,
-            mem_table_flush_pending: flush.mem_table_flush_pending,
-            active_memtable_mb: flush.active_memtable_bytes / (1024 * 1024),
-            wbm_usage_mb: flush.wbm_usage_bytes / (1024 * 1024),
-            wbm_budget_mb: flush.wbm_budget_bytes / (1024 * 1024),
+            num_running_flushes: flush.map(|value| value.num_running_flushes),
+            mem_table_flush_pending: flush.map(|value| value.mem_table_flush_pending),
+            active_memtable_mb: flush.map(|value| value.active_memtable_bytes / (1024 * 1024)),
+            wbm_usage_mb: flush.map(|value| value.wbm_usage_bytes / (1024 * 1024)),
+            wbm_budget_mb: flush.map(|value| value.wbm_budget_bytes / (1024 * 1024)),
             precompute_ms,
             build_ms,
             finalize_ms,
@@ -253,13 +253,13 @@ fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
 /// in the RocksDB LOG; `sst_files_last` and `manifest_mb_last` are the exact
 /// standing consequences of flush frequency, and `flush_pending_peak` /
 /// `flush_observed_in_window` remain the sampled activity signals.
-const CSV_SCHEMA_VERSION: u32 = 3;
+const CSV_SCHEMA_VERSION: u32 = 4;
 
 /// The one definition of the column set. Every row is produced by
 /// [`format_hourly_row`] from the same list, and a unit test pins the two to
 /// the same column count.
 fn csv_header() -> &'static str {
-    "schema=3,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
+    "schema=4,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
      block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,\
      chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
      keys_per_hour,avg_us_per_chunk,\
@@ -392,17 +392,29 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let flush_pending_peak = buffer
         .iter()
         .map(|s| s.mem_table_flush_pending)
-        .max()
-        .unwrap_or(0);
-    let avg_active_mt = buffer.iter().map(|s| s.active_memtable_mb).sum::<u64>() as f64 / n;
-    let avg_wbm_usage = buffer.iter().map(|s| s.wbm_usage_mb).sum::<u64>() as f64 / n;
-    let last_wbm_budget = buffer.last().map(|s| s.wbm_budget_mb).unwrap_or(0);
+        .collect::<Option<Vec<_>>>()
+        .and_then(|values| values.into_iter().max());
+    let avg_active_mt = buffer
+        .iter()
+        .map(|s| s.active_memtable_mb)
+        .collect::<Option<Vec<_>>>()
+        .map(|values| values.into_iter().sum::<u64>() as f64 / n);
+    let avg_wbm_usage = buffer
+        .iter()
+        .map(|s| s.wbm_usage_mb)
+        .collect::<Option<Vec<_>>>()
+        .map(|values| values.into_iter().sum::<u64>() as f64 / n);
+    let last_wbm_budget = buffer.last().and_then(|s| s.wbm_budget_mb);
     // "Flush observed" = at least one sample saw num_running_flushes > 0.
     // With 60-CF atomic flush the per-minute sample window catches each
     // flush wave with high probability. This is a minute-resolution
     // signal of "did we flush in this hour" — useful for verifying that
     // the WBM cap change actually stretched flush intervals.
-    let flush_observed: u64 = buffer.iter().filter(|s| s.num_running_flushes > 0).count() as u64;
+    let flush_observed = buffer
+        .iter()
+        .map(|s| s.num_running_flushes)
+        .collect::<Option<Vec<_>>>()
+        .map(|values| values.into_iter().filter(|count| *count > 0).count() as u64);
     let avg_precompute = buffer.iter().map(|s| s.precompute_ms).sum::<f64>() / n;
     let avg_build = buffer.iter().map(|s| s.build_ms).sum::<f64>() / n;
     let avg_finalize = buffer.iter().map(|s| s.finalize_ms).sum::<f64>() / n;
@@ -416,7 +428,7 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let avg_domain_commit = buffer.iter().map(|s| s.domain_commit_ms).sum::<f64>() / n;
     let last = buffer.last().expect("buffer is non-empty");
     format!(
-        "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{},\
+        "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{},{},{},{},\
          {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}\n",
         CSV_SCHEMA_VERSION,
         Utc::now().to_rfc3339(),
@@ -433,11 +445,11 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         timeouts_per_hour,
         keys_per_hour,
         avg_us_per_chunk,
-        flush_pending_peak,
-        avg_active_mt,
-        avg_wbm_usage,
-        last_wbm_budget,
-        flush_observed,
+        flush_pending_peak.map_or_else(|| "n/a".to_string(), |value| value.to_string()),
+        avg_active_mt.map_or_else(|| "n/a".to_string(), |value| format!("{value:.0}")),
+        avg_wbm_usage.map_or_else(|| "n/a".to_string(), |value| format!("{value:.0}")),
+        last_wbm_budget.map_or_else(|| "n/a".to_string(), |value| value.to_string()),
+        flush_observed.map_or_else(|| "n/a".to_string(), |value| value.to_string()),
         avg_precompute,
         avg_build,
         avg_finalize,
@@ -492,11 +504,11 @@ mod tests {
             elapsed_us_delta: 11,
             current_block: 12,
             target_block: 13,
-            num_running_flushes: 14,
-            mem_table_flush_pending: 15,
-            active_memtable_mb: 16,
-            wbm_usage_mb: 17,
-            wbm_budget_mb: 18,
+            num_running_flushes: Some(14),
+            mem_table_flush_pending: Some(15),
+            active_memtable_mb: Some(16),
+            wbm_usage_mb: Some(17),
+            wbm_budget_mb: Some(18),
             precompute_ms: 19.0,
             build_ms: 20.0,
             finalize_ms: 21.0,
@@ -513,6 +525,19 @@ mod tests {
             csv_header().trim_end().split(',').count(),
             "row: {row}"
         );
+
+        // One failed flush-property read must not remove that minute from
+        // lookup deltas or turn a 60-minute row into a longer interval.
+        let mut samples = vec![sample; SAMPLES_PER_HOUR];
+        samples[17].num_running_flushes = None;
+        samples[17].mem_table_flush_pending = None;
+        samples[17].active_memtable_mb = None;
+        samples[17].wbm_usage_mb = None;
+        samples[17].wbm_budget_mb = None;
+        let row = format_hourly_row(&samples);
+        let columns: Vec<_> = row.trim_end().split(',').collect();
+        assert_eq!(columns[10], "420");
+        assert_eq!(&columns[15..20], &["n/a", "n/a", "n/a", "18", "n/a"]);
     }
 
     /// An existing file written by an older column set must never gain rows

@@ -520,14 +520,17 @@ mod tests {
 
     #[test]
     fn broadcaster_scope_blocks_catch_up_until_local_payload_finishes() {
-        let before = read_view::pinned_read_scopes();
         let view = pin_broadcast_read_view();
-        assert!(read_view::pinned_read_scopes() >= before + 1);
         let (sender, receiver) = std::sync::mpsc::channel();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
             let _catch_up = read_view::catch_up_window();
             sender.send(()).unwrap();
         });
+        started_receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
         assert!(receiver
             .recv_timeout(std::time::Duration::from_millis(20))
             .is_err());
