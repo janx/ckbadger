@@ -2,7 +2,12 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
-import { formatCompactInteger } from '@/lib/exact-integer';
+import {
+  exactDecimalRatio,
+  formatCompactInteger,
+  formatCompactRatio,
+  formatScaledInteger,
+} from '@/lib/exact-integer';
 import {
   CHART_PRIMARY_COLOR,
   CHART_SECONDARY_COLOR,
@@ -35,14 +40,14 @@ interface LineChartProps {
   exactIntegerValues?: boolean;
 }
 
-function formatValue(val: number | null | undefined, isPercent = false): string {
-  if (val === undefined || val === null || isNaN(val)) return '-';
-  if (isPercent) return `${val.toFixed(2)}%`;
-  if (val >= 1_000_000_000) return `${(val / 1_000_000_000).toFixed(2)}B`;
-  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(2)}M`;
-  if (val >= 1_000) return `${(val / 1_000).toFixed(2)}K`;
-  if (val < 1 && val > 0) return val.toFixed(4);
-  return val.toFixed(2);
+function formatTooltipValue(raw: string | null, context: string, isPercent = false): string {
+  if (raw === null) return '—';
+  const [numerator, denominator] = exactDecimalRatio(raw, context);
+  if (isPercent) return `${formatScaledInteger(numerator, denominator, 2)}%`;
+  if (numerator > BigInt(0) && numerator < denominator) {
+    return formatScaledInteger(numerator, denominator, 4);
+  }
+  return formatCompactRatio(numerator, denominator);
 }
 
 function formatAxisValue(val: number, isPercent = false): string {
@@ -96,6 +101,7 @@ export function LineChart({
     () =>
       data.map((d) => {
         if (exactIntegerValues) formatCompactInteger(d.value, `chart ${d.date}`);
+        else exactDecimalRatio(d.value, `chart ${d.date}`);
         const value = Number(d.value);
         if (!Number.isFinite(value)) throw new Error(`chart ${d.date}: invalid value ${d.value}`);
         return value;
@@ -108,6 +114,7 @@ export function LineChart({
         ? data.map((d) => {
             if (d.value2 === null) return null;
             if (d.value2 === undefined) throw new Error(`chart ${d.date}: missing secondary value`);
+            exactDecimalRatio(d.value2, `chart ${d.date}: secondary value`);
             const value = Number(d.value2);
             if (!Number.isFinite(value))
               throw new Error(`chart ${d.date}: invalid secondary value ${d.value2}`);
@@ -716,13 +723,22 @@ export function LineChart({
               <tspan className="fill-text-bright">
                 {exactIntegerValues
                   ? formatCompactInteger(data[hoverIndex].value, `chart ${data[hoverIndex].date}`)
-                  : formatValue(values[hoverIndex], isPercent)}
+                  : formatTooltipValue(
+                      data[hoverIndex].value,
+                      `chart ${data[hoverIndex].date}`,
+                      isPercent
+                    )}
               </tspan>
             </text>
             {y2AxisLabel && values2.length > 0 && (
               <text x={8} y={48} className="fill-text-dim font-mono tabular-nums" fontSize={10}>
                 <tspan fill={secondaryColor}>{y2AxisLabel}: </tspan>
-                <tspan className="fill-text-bright">{formatValue(values2[hoverIndex])}</tspan>
+                <tspan className="fill-text-bright">
+                  {formatTooltipValue(
+                    data[hoverIndex].value2 ?? null,
+                    `chart ${data[hoverIndex].date}: secondary value`
+                  )}
+                </tspan>
               </text>
             )}
           </g>

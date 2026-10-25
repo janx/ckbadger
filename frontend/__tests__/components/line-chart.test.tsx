@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { fireEvent, render, screen } from '../utils/test-utils';
 import { LineChart } from '@/components/ui/line-chart';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
 describe('LineChart', () => {
+  it('keeps exact primary and secondary decimals in hover readouts', () => {
+    const { container } = render(
+      <LineChart
+        yAxisLabel="Count"
+        y2AxisLabel="Ratio"
+        data={[{ date: '2026-10-25', value: '1005', value2: '1.005' }]}
+      />
+    );
+    const svg = container.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
+    fireEvent.mouseMove(svg, { clientX: 60 });
+    expect(screen.getByText('1.01K')).toBeInTheDocument();
+    expect(screen.getByText('1.01')).toBeInTheDocument();
+  });
   it('renders bars when chartType is bar', () => {
     render(
       <LineChart

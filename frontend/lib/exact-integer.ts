@@ -36,11 +36,11 @@ export function formatCompactInteger(value: string, context: string): string {
 
 /** Exact decimal ratio/percentage text from an API string. Geometry may still use Number. */
 export function formatDecimal(value: string, decimals: number, multiplier = 1): string {
-  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(value);
-  if (!match) throw new Error(`invalid decimal ${JSON.stringify(value)}`);
-  const fraction = match[2] ?? '';
-  const numerator = BigInt(match[1] + fraction) * BigInt(multiplier);
-  return formatScaledInteger(numerator, BigInt(10) ** BigInt(fraction.length), decimals);
+  if (!Number.isSafeInteger(multiplier) || multiplier < 0) {
+    throw new Error(`invalid decimal multiplier ${multiplier}`);
+  }
+  const [numerator, denominator] = exactDecimalRatio(value, 'decimal');
+  return formatScaledInteger(numerator * BigInt(multiplier), denominator, decimals);
 }
 
 /** Non-negative decimal API value as a rational, before any chart geometry conversion. */
