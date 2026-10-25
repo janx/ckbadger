@@ -789,7 +789,7 @@ async fn get_block_fee_stats(
         let fee_rate = indexed_block_fee_rate(entry, block_number, *tx_idx)?;
         non_cellbase_count += 1;
         total_size = total_size
-            .checked_add(fee_rate.size as i64)
+            .checked_add(fee_rate.size() as i64)
             .ok_or_else(|| {
                 ApiError::internal(format!(
                     "block {block_number} total transaction size overflows i64"

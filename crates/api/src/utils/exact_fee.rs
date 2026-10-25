@@ -5,10 +5,10 @@ use num_bigint::BigUint;
 use num_integer::Integer;
 use std::cmp::Ordering;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct FeeRate {
-    pub fee: u64,
-    pub size: u64,
+    fee: u64,
+    size: u64,
 }
 
 impl FeeRate {
@@ -19,6 +19,10 @@ impl FeeRate {
         Ok(Self { fee, size })
     }
 
+    pub fn size(self) -> u64 {
+        self.size
+    }
+
     pub fn format(self, bytes_per_unit: u64) -> String {
         format_rational(
             BigUint::from(self.fee) * BigUint::from(bytes_per_unit),
@@ -26,6 +30,14 @@ impl FeeRate {
         )
     }
 }
+
+impl PartialEq for FeeRate {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for FeeRate {}
 
 impl Ord for FeeRate {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -66,14 +78,17 @@ pub fn median_rate(sorted_rates: &[FeeRate], bytes_per_unit: u64) -> Option<Stri
 }
 
 fn sum_rates(rates: &[FeeRate]) -> (BigUint, BigUint) {
+    // Keep a common denominator as the LCM of transaction sizes. Multiplying
+    // all denominators, then reducing a giant fraction on every step, costs
+    // far more while representing the same exact sum.
     let mut numerator = BigUint::from(0u8);
     let mut denominator = BigUint::from(1u8);
     for rate in rates {
-        numerator = numerator * BigUint::from(rate.size) + BigUint::from(rate.fee) * &denominator;
-        denominator *= BigUint::from(rate.size);
-        let divisor = numerator.gcd(&denominator);
-        numerator /= &divisor;
-        denominator /= divisor;
+        let size = BigUint::from(rate.size);
+        let common = denominator.gcd(&size);
+        let new_factor = &size / &common;
+        numerator = numerator * &new_factor + BigUint::from(rate.fee) * (&denominator / &common);
+        denominator *= new_factor;
     }
     (numerator, denominator)
 }
@@ -98,6 +113,12 @@ mod tests {
         let higher = FeeRate::new(9_007_199_254_740_993, 1).unwrap();
         assert!(higher > lower);
         assert_eq!(higher.format(1), "9007199254740993.00");
+        let equivalent = FeeRate::new(2, 4).unwrap();
+        assert_eq!(FeeRate::new(1, 2).unwrap(), equivalent);
+        assert_eq!(
+            FeeRate::new(1, 2).unwrap().cmp(&equivalent),
+            Ordering::Equal
+        );
     }
 
     #[test]
