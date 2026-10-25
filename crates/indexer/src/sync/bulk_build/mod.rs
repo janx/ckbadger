@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -15,8 +15,8 @@ use anyhow::{anyhow, bail, Context};
 // definition of a complete stats bucket, shared with the API's daily charts
 // and transaction stats.
 use ckbadger_common::stats_bucket::{
-    bucket_end_from_utc8_key, bucket_end_ms, is_bucket_complete, median_time_ms, DAY_MS, HOUR_MS,
-    MEDIAN_TIME_BLOCK_COUNT,
+    bucket_end_from_utc8_key, bucket_end_ms, is_bucket_complete, stats_day, stats_hour, DAY_MS,
+    HOUR_MS,
 };
 use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
@@ -165,6 +165,8 @@ impl BulkBuildEngine {
                     )
                     })?;
                 runtime.owners.dao.seed_prev_dao_cu(c, u);
+                runtime.previous_chain_time_ms = Some(parent.chain_time_ms);
+                runtime.chain_stats.prev_timestamp_ms = Some(parent.chain_time_ms);
             }
         }
         let mut sync_totals = BulkBuildSyncTotals::default();
@@ -1313,7 +1315,6 @@ struct ActivityStatsAccumulator {
     daily_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
     hourly_stats: FxHashMap<String, DailyActivityStats>,
     hourly_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
-    mtp_timestamps_ms: VecDeque<i64>,
     sealed_through_ms: Option<i64>,
     last_block_number: Option<i64>,
 }
@@ -1373,6 +1374,7 @@ impl ActivityStatsAccumulator {
             })
             .transpose()?;
         let mut block_timestamps = FxHashMap::default();
+        let mut block_chain_times = FxHashMap::default();
         for block in blocks {
             if block.timestamp_ms < 0 {
                 bail!(
@@ -1400,6 +1402,7 @@ impl ActivityStatsAccumulator {
                     block.number
                 );
             }
+            block_chain_times.insert(block.number, block.chain_time_ms);
             expected_number = Some(block.number.checked_add(1).ok_or_else(|| {
                 anyhow!(
                     "activity accumulator block number overflow at block={}",
@@ -1408,22 +1411,32 @@ impl ActivityStatsAccumulator {
             })?);
         }
 
-        // A bucket already below the previous batch's MTP can never receive a
-        // valid future CKB block. Treat such input as a chain/order invariant
+        // A bucket sealed by the previous batch's chain time cannot receive
+        // another block. Treat such input as a chain/order invariant
         // violation instead of silently recreating an already-written row.
         if let Some(watermark) = self.sealed_through_ms {
             for actions in tx_actions_list {
+                let chain_time =
+                    *block_chain_times
+                        .get(&actions.block_number)
+                        .ok_or_else(|| {
+                            anyhow!(
+                            "activity action references block outside batch: block={} tx_index={}",
+                            actions.block_number,
+                            actions.tx_index
+                        )
+                        })?;
                 for (kind, end_ms) in [
-                    ("hourly", bucket_end_ms(actions.timestamp, HOUR_MS)?),
-                    ("daily", bucket_end_ms(actions.timestamp, DAY_MS)?),
+                    ("hourly", bucket_end_ms(chain_time, HOUR_MS)?),
+                    ("daily", bucket_end_ms(chain_time, DAY_MS)?),
                 ] {
                     if is_bucket_complete(end_ms, watermark) {
                         bail!(
-                            "already sealed activity bucket received a late action: kind={} block={} tx_index={} timestamp_ms={} bucket_end_ms={} mtp_watermark_ms={}",
+                            "already sealed activity bucket received a late action: kind={} block={} tx_index={} chain_time_ms={} bucket_end_ms={} chain_watermark_ms={}",
                             kind,
                             actions.block_number,
                             actions.tx_index,
-                            actions.timestamp,
+                            chain_time,
                             end_ms,
                             watermark
                         );
@@ -1453,49 +1466,55 @@ impl ActivityStatsAccumulator {
             }
         }
 
-        self.accumulate_tx_actions(tx_actions_list)?;
+        self.accumulate_tx_actions(tx_actions_list, &block_chain_times)?;
 
         let mut next_watermark = self.sealed_through_ms;
         for block in blocks {
-            self.mtp_timestamps_ms.push_back(block.timestamp_ms);
-            if self.mtp_timestamps_ms.len() > MEDIAN_TIME_BLOCK_COUNT {
-                self.mtp_timestamps_ms.pop_front();
-            }
-            let timestamps = self.mtp_timestamps_ms.make_contiguous();
-            let median = median_time_ms(timestamps)?;
+            let chain_time = block.chain_time_ms;
             if let Some(previous) = next_watermark {
-                if median < previous {
+                if chain_time < previous {
                     bail!(
-                        "CKB median-time watermark regressed: block={} previous_mtp_ms={} current_mtp_ms={} window={:?}",
+                        "chain-time watermark regressed: block={} previous_ms={} current_ms={}",
                         block.number,
                         previous,
-                        median,
-                        timestamps
+                        chain_time,
                     );
                 }
             }
-            next_watermark = Some(median);
+            next_watermark = Some(chain_time);
             self.last_block_number = Some(block.number);
         }
 
-        let watermark = next_watermark.expect("non-empty block batch has a median");
+        let watermark = next_watermark.expect("non-empty block batch has chain time");
         let rows = self.drain_sealed_rows(watermark)?;
         self.sealed_through_ms = Some(watermark);
         Ok(rows)
     }
 
-    fn accumulate_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+    fn accumulate_tx_actions(
+        &mut self,
+        tx_actions_list: &[TxActions],
+        block_chain_times: &FxHashMap<i64, i64>,
+    ) -> Result<()> {
         let mut cached_ts = i64::MIN;
         let mut cached_date = String::new();
         let mut cached_hour = String::new();
 
         for tx_actions in tx_actions_list {
-            if tx_actions.timestamp != cached_ts {
-                cached_ts = tx_actions.timestamp;
-                cached_date = ckbadger_common::block_date_from_ms(tx_actions.timestamp)
-                    .format("%Y%m%d")
-                    .to_string();
-                cached_hour = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp)
+            let chain_time = *block_chain_times
+                .get(&tx_actions.block_number)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing chain time for activity action: block={} tx_index={}",
+                        tx_actions.block_number,
+                        tx_actions.tx_index
+                    )
+                })?;
+            if chain_time != cached_ts {
+                cached_ts = chain_time;
+                cached_date = stats_day(chain_time)?.format("%Y%m%d").to_string();
+                // Activity hour keys are UTC+8, unlike chain-level hourly keys.
+                cached_hour = (stats_hour(chain_time)? + chrono::Duration::hours(8))
                     .format("%Y%m%d%H")
                     .to_string();
             }
@@ -1531,7 +1550,11 @@ impl ActivityStatsAccumulator {
 
     #[cfg(test)]
     fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
-        self.accumulate_tx_actions(tx_actions_list)
+        let times = tx_actions_list
+            .iter()
+            .map(|action| (action.block_number, action.timestamp))
+            .collect();
+        self.accumulate_tx_actions(tx_actions_list, &times)
     }
 
     fn drain_sealed_rows(
@@ -1770,7 +1793,7 @@ impl ChainStatsAccumulator {
         resolved: &[facts::ResolvedTxFacts<'_>],
     ) -> Result<()> {
         for block in &arena.blocks {
-            let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+            let block_date = stats_day(block.chain_time_ms)?;
 
             // --- DailyStats fields ---
             let mut cells_created: i32 = 0;
@@ -1851,7 +1874,7 @@ impl ChainStatsAccumulator {
             // --- HourlyStats (UTC hour bucket; same per-block values as the
             // daily row above, tx count including the cellbase — identical to
             // the live write point in SyncBatch) ---
-            let hour_start_secs = block.timestamp_ms.div_euclid(3_600_000) * 3600;
+            let hour_start_secs = stats_hour(block.chain_time_ms)?.timestamp();
             let hourly_entry = self.hourly_stats.entry(hour_start_secs).or_default();
             hourly_entry.0 += 1;
             hourly_entry.1 += block.transactions_count;
@@ -1916,49 +1939,68 @@ impl ChainStatsAccumulator {
 
             // --- Inter-block time ---
             if let Some(prev_ts) = self.prev_timestamp_ms {
-                let delta_ms = block.timestamp_ms - prev_ts;
-                if delta_ms >= 0 {
-                    let delta_seconds = delta_ms / 1000;
-                    *self
-                        .block_time_dist
-                        .entry(crate::sync::dao_helpers::block_time_to_bucket(
-                            delta_seconds,
-                        ))
-                        .or_default() += 1;
-
-                    let bt_entry = self.daily_block_times.entry(block_date).or_insert((0, 0));
-                    bt_entry.0 += delta_ms;
-                    bt_entry.1 += 1;
+                let delta_ms = block.chain_time_ms.checked_sub(prev_ts).ok_or_else(|| {
+                    anyhow!(
+                        "chain-time interval overflow: block={} previous_ms={} current_ms={}",
+                        block.number,
+                        prev_ts,
+                        block.chain_time_ms
+                    )
+                })?;
+                if delta_ms < 0 {
+                    bail!(
+                        "chain time regressed: block={} previous_ms={} current_ms={}",
+                        block.number,
+                        prev_ts,
+                        block.chain_time_ms
+                    );
                 }
+                let delta_seconds = delta_ms / 1000;
+                *self
+                    .block_time_dist
+                    .entry(crate::sync::dao_helpers::block_time_to_bucket(
+                        delta_seconds,
+                    )?)
+                    .or_default() += 1;
+                let bt_entry = self.daily_block_times.entry(block_date).or_insert((0, 0));
+                bt_entry.0 = bt_entry.0.checked_add(delta_ms).ok_or_else(|| {
+                    anyhow!(
+                        "daily block-time sum overflow: block={} date={}",
+                        block.number,
+                        block_date
+                    )
+                })?;
+                bt_entry.1 = bt_entry.1.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "daily block-time count overflow: block={} date={}",
+                        block.number,
+                        block_date
+                    )
+                })?;
             }
-            self.prev_timestamp_ms = Some(block.timestamp_ms);
+            self.prev_timestamp_ms = Some(block.chain_time_ms);
 
             // --- Epoch time distribution ---
             if block.epoch_index == 0 && block.epoch_number > 0 {
                 if let Some((prev_epoch_num, prev_start_ts)) = self.prev_epoch {
                     if prev_epoch_num == block.epoch_number - 1 {
-                        let duration_ms = block.timestamp_ms - prev_start_ts;
-                        let epoch_duration_minutes = duration_ms as f64 / 60_000.0;
-                        let bucket_minutes = epoch_duration_minutes.round() as i32;
-                        if bucket_minutes <= 0 {
-                            anyhow::bail!(
-                                "epoch time distribution: invalid bucket_minutes={} \
-                                 for epoch {} (prev_epoch={}, duration_ms={}, \
-                                 block={}, prev_start_ts={})",
-                                bucket_minutes,
-                                block.epoch_number,
-                                prev_epoch_num,
-                                duration_ms,
-                                block.number,
-                                prev_start_ts,
-                            );
-                        }
+                        let duration_ms = block.chain_time_ms.checked_sub(prev_start_ts).ok_or_else(|| anyhow!(
+                            "epoch duration overflow: block={} epoch={} previous_start_ms={prev_start_ts} current_ms={}",
+                            block.number, block.epoch_number, block.chain_time_ms
+                        ))?;
+                        let duration_ms = u128::try_from(duration_ms).map_err(|_| anyhow!(
+                            "negative epoch duration: block={} epoch={} previous_start_ms={prev_start_ts} current_ms={}",
+                            block.number, block.epoch_number, block.chain_time_ms
+                        ))?;
+                        let bucket_minutes = i32::try_from(ckbadger_common::work::rounded_ratio(duration_ms, 60_000)
+                            .map_err(|e| anyhow!("epoch minute rounding failed: block={}: {e}", block.number))?)
+                            .map_err(|_| anyhow!("epoch minute bucket exceeds i32: block={} duration_ms={duration_ms}", block.number))?;
                         *self.epoch_time_dist.entry(bucket_minutes).or_default() += 1;
                     }
                 }
             }
             if block.epoch_index == 0 {
-                self.prev_epoch = Some((block.epoch_number, block.timestamp_ms));
+                self.prev_epoch = Some((block.epoch_number, block.chain_time_ms));
             }
 
             // --- Per-epoch stats ---
@@ -1970,13 +2012,13 @@ impl ChainStatsAccumulator {
                         block.number,
                         block.number,
                         block.epoch_length,
-                        block.timestamp_ms,
-                        block.timestamp_ms,
+                        block.chain_time_ms,
+                        block.chain_time_ms,
                         0,
                     )
                 });
             epoch_entry.1 = block.number; // end_block
-            epoch_entry.4 = block.timestamp_ms; // end_ts_ms
+            epoch_entry.4 = block.chain_time_ms; // end_ts_ms
             epoch_entry.5 += block.transactions_count; // tx_count
         }
         Ok(())
@@ -2151,10 +2193,10 @@ impl ChainStatsAccumulator {
         for (&epoch_number, &(start_block, end_block, length, start_ts_ms, end_ts_ms, tx_count)) in
             &self.epoch_stats
         {
-            let start_timestamp =
-                chrono::DateTime::from_timestamp(start_ts_ms / 1000, 0).unwrap_or_default();
-            let end_timestamp =
-                chrono::DateTime::from_timestamp(end_ts_ms / 1000, 0).unwrap_or_default();
+            let start_timestamp = chrono::DateTime::from_timestamp_millis(start_ts_ms)
+                .ok_or_else(|| anyhow!("epoch start chain time out of range: epoch={epoch_number} start_ms={start_ts_ms}"))?;
+            let end_timestamp = chrono::DateTime::from_timestamp_millis(end_ts_ms)
+                .ok_or_else(|| anyhow!("epoch end chain time out of range: epoch={epoch_number} end_ms={end_ts_ms}"))?;
             let blocks_count = (end_block - start_block + 1) as i32;
             let is_complete = blocks_count >= length;
             let stats = ckbadger_store::types::EpochStats {
@@ -2195,6 +2237,7 @@ fn required_secondary_epoch_reward(store: &CkbadgerStore) -> Result<u64> {
 }
 
 struct BulkBuildRuntimeState {
+    previous_chain_time_ms: Option<i64>,
     interner: interner::IdentityInterner,
     interner_liveness: interner::IdentityLiveness,
     sequencer: sequencer::BulkSequencer,
@@ -2209,6 +2252,7 @@ struct BulkBuildRuntimeState {
 impl Default for BulkBuildRuntimeState {
     fn default() -> Self {
         Self {
+            previous_chain_time_ms: None,
             interner: interner::IdentityInterner::with_capacity(8192),
             interner_liveness: interner::IdentityLiveness::default(),
             sequencer: sequencer::BulkSequencer::default(),
@@ -2223,6 +2267,30 @@ impl Default for BulkBuildRuntimeState {
 }
 
 impl BulkBuildRuntimeState {
+    fn assign_chain_times(&mut self, arena: &mut facts::FactsArena) -> Result<()> {
+        for block in &mut arena.blocks {
+            if block.timestamp_ms < 0 {
+                anyhow::bail!(
+                    "negative header timestamp in bulk build: block={} timestamp_ms={}",
+                    block.number,
+                    block.timestamp_ms
+                );
+            }
+            let chain_time_ms = self
+                .previous_chain_time_ms
+                .map_or(block.timestamp_ms, |prior| prior.max(block.timestamp_ms));
+            block.chain_time_ms = chain_time_ms;
+            for tx in &mut arena.txs[block.tx_range.clone()] {
+                if tx.block_number != block.number {
+                    bail!("bulk tx/block alignment mismatch while assigning chain time: tx_block={} block={}", tx.block_number, block.number);
+                }
+                tx.chain_time_ms = chain_time_ms;
+            }
+            self.previous_chain_time_ms = Some(chain_time_ms);
+        }
+        Ok(())
+    }
+
     fn memory_breakdown_bytes(&self) -> HashMap<String, u64> {
         let mut breakdown = self.owners.estimated_bytes_by_owner();
         breakdown.insert("live_cells".to_string(), self.sequencer.live_cells_bytes());
@@ -2269,8 +2337,9 @@ impl BulkBuildRuntimeState {
         }
 
         let facts_started = Instant::now();
-        let (arena, facts_breakdown) =
+        let (mut arena, facts_breakdown) =
             binary_facts::build_bulk_facts_arena_from_raw_blocks(blocks, &self.interner)?;
+        self.assign_chain_times(&mut arena)?;
         let facts_elapsed = facts_started.elapsed();
 
         // Snapshot interner for zero-copy reads during resolve/reduce phases.
@@ -2401,7 +2470,7 @@ impl BulkBuildRuntimeState {
                                 let mut cell_dist_sealed_rows = Vec::new();
                                 for block in &arena.blocks {
                                     let block_date =
-                                        ckbadger_common::block_date_from_ms(block.timestamp_ms);
+                                        ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?;
                                     if let Some((snapshot_date, snapshot, cohort)) =
                                         begin_cell_distribution_block(
                                             cell_dist_tracker,
@@ -2615,8 +2684,9 @@ impl BulkBuildRuntimeState {
             ));
         }
         let facts_started = Instant::now();
-        let (arena, facts_breakdown) =
+        let (mut arena, facts_breakdown) =
             crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &self.interner)?;
+        self.assign_chain_times(&mut arena)?;
         let facts_elapsed = facts_started.elapsed();
         let frozen = self.interner.snapshot_for_reads();
         let resolve_started = Instant::now();
@@ -2707,7 +2777,7 @@ impl BulkBuildRuntimeState {
                         || -> Result<Vec<materialize::MaterializedRow>> {
                             let mut cell_dist_sealed_rows = Vec::new();
                             for block in &arena.blocks {
-                                let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+                                let block_date = ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?;
                                 if let Some((snapshot_date, snapshot, cohort)) = begin_cell_distribution_block(cell_dist_tracker, block.number, block_date) {
                                     let date_str = snapshot_date.format("%Y%m%d").to_string();
                                     cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
@@ -2889,7 +2959,7 @@ fn apply_hodl_tracker_batch_standalone(
 
     let mut sealed_rows = Vec::new();
     for block in &arena.blocks {
-        let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+        let block_date = ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?;
         if let Some((snapshot_date, snapshot)) =
             begin_hodl_wave_block(hodl_tracker, block.number, block_date)
         {
@@ -4104,7 +4174,7 @@ fn build_history_rows_for_block(
         compact_target: block.compact_target,
         miner_lock_hash: block.miner_lock_hash.map(|h| h.to_vec()),
         cycles: None,
-        chain_time_ms: block.timestamp_ms,
+        chain_time_ms: block.chain_time_ms,
     };
     rows.push_serialized(
         CF_BLOCK_HEADERS,
@@ -6032,6 +6102,44 @@ mod tests {
     }
 
     #[test]
+    fn assigns_monotonic_chain_time_across_bulk_arenas() {
+        let mut runtime = BulkBuildRuntimeState::default();
+        let mut first = facts::FactsArena {
+            blocks: vec![facts::BlockFacts {
+                number: 10,
+                timestamp_ms: 1_800_000_002_000,
+                tx_range: 0..1,
+                ..Default::default()
+            }],
+            txs: vec![facts::TxFacts {
+                block_number: 10,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        runtime.assign_chain_times(&mut first).unwrap();
+        assert_eq!(first.blocks[0].chain_time_ms, 1_800_000_002_000);
+        assert_eq!(first.txs[0].chain_time_ms, 1_800_000_002_000);
+
+        let mut second = facts::FactsArena {
+            blocks: vec![facts::BlockFacts {
+                number: 11,
+                timestamp_ms: 1_799_999_998_000,
+                tx_range: 0..1,
+                ..Default::default()
+            }],
+            txs: vec![facts::TxFacts {
+                block_number: 11,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        runtime.assign_chain_times(&mut second).unwrap();
+        assert_eq!(second.blocks[0].chain_time_ms, 1_800_000_002_000);
+        assert_eq!(second.txs[0].chain_time_ms, 1_800_000_002_000);
+    }
+
+    #[test]
     fn unique_temp_test_dir_builder_avoids_same_timestamp_collisions() {
         let first = build_unique_temp_test_dir("bulk-build-core-owners", 42, 123456789, 0);
         let second = build_unique_temp_test_dir("bulk-build-core-owners", 42, 123456789, 1);
@@ -7279,6 +7387,7 @@ mod tests {
                 block_number: 300,
                 block_hash: [0xa0; 32],
                 timestamp_ms: 1_700_100_000_000,
+                chain_time_ms: 1_700_100_000_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: Some("confirm_proposal".to_string()),
@@ -7290,6 +7399,7 @@ mod tests {
                 block_number: 301,
                 block_hash: [0xa1; 32],
                 timestamp_ms: 1_700_100_360_000,
+                chain_time_ms: 1_700_100_360_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: Some("transfer_account".to_string()),
@@ -7301,6 +7411,7 @@ mod tests {
                 block_number: 302,
                 block_hash: [0xa2; 32],
                 timestamp_ms: 1_700_100_720_000,
+                chain_time_ms: 1_700_100_720_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: Some("recycle_expired_account".to_string()),
@@ -7312,6 +7423,7 @@ mod tests {
                 block_number: 303,
                 block_hash: [0xa3; 32],
                 timestamp_ms: 1_700_101_080_000,
+                chain_time_ms: 1_700_101_080_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: Some("confirm_proposal".to_string()),
@@ -7479,6 +7591,7 @@ mod tests {
                 block_number: 400,
                 block_hash: [0xb0; 32],
                 timestamp_ms: 1_700_200_000_000,
+                chain_time_ms: 1_700_200_000_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: None,
@@ -7497,6 +7610,7 @@ mod tests {
                 block_number: 401,
                 block_hash: [0xb1; 32],
                 timestamp_ms: 1_700_200_360_000,
+                chain_time_ms: 1_700_200_360_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: None,
@@ -7520,6 +7634,7 @@ mod tests {
                 block_number: 402,
                 block_hash: [0xb2; 32],
                 timestamp_ms: 1_700_200_720_000,
+                chain_time_ms: 1_700_200_720_000,
                 block_dao_ar: 0,
                 tx_index: 0,
                 dotbit_action: None,
@@ -8117,6 +8232,7 @@ mod tests {
                     hash: [0x01; 32],
                     parent_hash: [0u8; 32],
                     timestamp_ms: ts1,
+                    chain_time_ms: ts1,
                     epoch_number: 5,
                     epoch_index: 10,
                     epoch_length: 1800,
@@ -8133,6 +8249,7 @@ mod tests {
                     hash: [0x02; 32],
                     parent_hash: [0u8; 32],
                     timestamp_ms: ts2,
+                    chain_time_ms: ts2,
                     epoch_number: 5,
                     epoch_index: 11,
                     epoch_length: 1800,
@@ -8152,6 +8269,7 @@ mod tests {
                     block_number: 100,
                     block_hash: [0x01; 32],
                     timestamp_ms: ts1,
+                    chain_time_ms: ts1,
                     block_dao_ar: 10_000_000_000,
                     tx_index: 0,
                     is_cellbase: true,
@@ -8169,6 +8287,7 @@ mod tests {
                     block_number: 101,
                     block_hash: [0x02; 32],
                     timestamp_ms: ts2,
+                    chain_time_ms: ts2,
                     block_dao_ar: 10_000_000_000,
                     tx_index: 0,
                     is_cellbase: true,
@@ -8186,6 +8305,7 @@ mod tests {
                     block_number: 101,
                     block_hash: [0x02; 32],
                     timestamp_ms: ts2,
+                    chain_time_ms: ts2,
                     block_dao_ar: 10_000_000_000,
                     tx_index: 1,
                     is_cellbase: false,
@@ -8303,6 +8423,7 @@ mod tests {
                 block_number: 100,
                 block_hash: [0x01; 32],
                 timestamp_ms: ts1,
+                chain_time_ms: ts1,
                 block_dao_ar: 10_000_000_000,
                 tx_index: 0,
                 dotbit_action: None,
@@ -8315,6 +8436,7 @@ mod tests {
                 block_number: 101,
                 block_hash: [0x02; 32],
                 timestamp_ms: ts2,
+                chain_time_ms: ts2,
                 block_dao_ar: 10_000_000_000,
                 tx_index: 0,
                 dotbit_action: None,
@@ -8327,6 +8449,7 @@ mod tests {
                 block_number: 101,
                 block_hash: [0x02; 32],
                 timestamp_ms: ts2,
+                chain_time_ms: ts2,
                 block_dao_ar: 10_000_000_000,
                 tx_index: 1,
                 dotbit_action: None,
@@ -8446,6 +8569,8 @@ mod tests {
                     epoch_number: 5,
                     epoch_index: 0,
                     timestamp_ms: 1_700_000_000_000,
+                    chain_time_ms: 1_700_000_000_000,
+                    compact_target: 0x1a08a97e,
                     ..Default::default()
                 },
                 facts::BlockFacts {
@@ -8619,7 +8744,7 @@ mod tests {
     }
 
     #[test]
-    fn chain_stats_epoch_time_dist_rejects_zero_bucket() {
+    fn chain_stats_epoch_time_dist_records_zero_bucket() {
         let mut acc = ChainStatsAccumulator::default();
 
         // Epoch 5 starts, then epoch 6 starts with the same timestamp → 0-minute bucket
@@ -8630,6 +8755,8 @@ mod tests {
                     epoch_number: 5,
                     epoch_index: 0,
                     timestamp_ms: 1_700_000_000_000,
+                    chain_time_ms: 1_700_000_000_000,
+                    compact_target: 0x1a08a97e,
                     ..Default::default()
                 },
                 facts::BlockFacts {
@@ -8638,6 +8765,8 @@ mod tests {
                     epoch_index: 0,
                     // Same timestamp → 0-minute duration
                     timestamp_ms: 1_700_000_000_000,
+                    chain_time_ms: 1_700_000_000_000,
+                    compact_target: 0x1a08a97e,
                     ..Default::default()
                 },
             ],
@@ -8646,14 +8775,8 @@ mod tests {
         };
 
         let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
-        let result = acc.apply_blocks(&arena, &resolved);
-        assert!(result.is_err(), "should reject 0-minute epoch duration");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("invalid bucket_minutes=0"),
-            "error should mention invalid bucket_minutes: {}",
-            err_msg
-        );
+        acc.apply_blocks(&arena, &resolved).unwrap();
+        assert_eq!(acc.epoch_time_dist.get(&0), Some(&1));
     }
 
     #[test]
@@ -8948,6 +9071,7 @@ mod tests {
             block_number: 1000,
             block_hash: [0x01; 32],
             timestamp_ms: 0,
+            chain_time_ms: 0,
             block_dao_ar: withdraw_ar,
             tx_index: 1,
             is_cellbase: false,
@@ -9019,6 +9143,7 @@ mod tests {
             block_number: tx.block_number,
             block_hash: tx.block_hash,
             timestamp_ms: tx.timestamp_ms,
+            chain_time_ms: tx.timestamp_ms,
             block_dao_ar: tx.block_dao_ar,
             tx_index: tx.tx_index,
             dotbit_action: None,

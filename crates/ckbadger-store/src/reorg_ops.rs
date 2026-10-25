@@ -12,6 +12,56 @@ use crate::store::*;
 use crate::sync_ops::checked_rollback_total;
 use crate::types::*;
 
+fn chain_date_key(chain_time_ms: i64) -> anyhow::Result<String> {
+    Ok(ckbadger_common::stats_bucket::stats_day(chain_time_ms)?
+        .format("%Y%m%d")
+        .to_string())
+}
+
+fn chain_hour_utc8_key(chain_time_ms: i64) -> anyhow::Result<String> {
+    Ok(
+        (ckbadger_common::stats_bucket::stats_hour(chain_time_ms)? + chrono::Duration::hours(8))
+            .format("%Y%m%d%H")
+            .to_string(),
+    )
+}
+
+fn chain_hour_utc_key(chain_time_ms: i64) -> anyhow::Result<String> {
+    Ok(ckbadger_common::stats_bucket::stats_hour(chain_time_ms)?
+        .format("%Y%m%d%H")
+        .to_string())
+}
+
+fn subtract_chain_histogram(
+    store: &CkbadgerStore,
+    batch: &mut WriteBatch,
+    prefix: u8,
+    removed: &HashMap<i32, i32>,
+) -> anyhow::Result<()> {
+    for (&bucket, &delta) in removed {
+        let key = keys::encode_stats_key(prefix, &bucket.to_be_bytes());
+        let bytes = store.get_stats_key(&key)?.ok_or_else(|| anyhow::anyhow!(
+            "missing chain histogram bucket during rollback: prefix={prefix} bucket={bucket} removed={delta}"
+        ))?;
+        let count_bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!(
+            "invalid chain histogram value length during rollback: prefix={prefix} bucket={bucket} length={}", bytes.len()
+        ))?;
+        let count = i32::from_le_bytes(count_bytes);
+        let remaining = count.checked_sub(delta).ok_or_else(|| anyhow::anyhow!(
+            "chain histogram underflow during rollback: prefix={prefix} bucket={bucket} count={count} removed={delta}"
+        ))?;
+        if remaining < 0 {
+            anyhow::bail!("chain histogram underflow during rollback: prefix={prefix} bucket={bucket} count={count} removed={delta}");
+        }
+        if remaining == 0 {
+            batch.delete_cf(store.cf_stats_chain(), &key);
+        } else {
+            batch.put_cf(store.cf_stats_chain(), &key, remaining.to_le_bytes());
+        }
+    }
+    Ok(())
+}
+
 /// Bundled rollback delta maps for cutoff-date stats repair.
 #[derive(Default)]
 struct RollbackStatsDeltas {
@@ -901,9 +951,7 @@ fn rebuild_cutoff_activity_addr_sets(
             // recompute_dao_daily_snapshot_for_date.
             break;
         };
-        let date = ckbadger_common::block_date_from_ms(header.timestamp)
-            .format("%Y%m%d")
-            .to_string();
+        let date = chain_date_key(header.chain_time_ms)?;
         if date != cutoff_date {
             break;
         }
@@ -957,9 +1005,13 @@ fn rebuild_cutoff_activity_addr_sets(
         if tx_actions.is_cellbase {
             continue;
         }
-        let dt = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp);
-        let in_date = dt.format("%Y%m%d").to_string() == cutoff_date;
-        let in_hour = dt.format("%Y%m%d%H").to_string() == cutoff_hour_utc8;
+        let header = store.get_block_header(block_num)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing canonical header for cutoff activity action: block={block_num}"
+            )
+        })?;
+        let in_date = chain_date_key(header.chain_time_ms)? == cutoff_date;
+        let in_hour = chain_hour_utc8_key(header.chain_time_ms)? == cutoff_hour_utc8;
         if !in_date && !in_hour {
             continue;
         }
@@ -1131,11 +1183,9 @@ fn should_delete_stats_for_replay(
             })?);
             Ok(epoch > cutoff_epoch || (epoch == cutoff_epoch && delete_cutoff_epoch))
         }
-        // BLOCK_TIME_DIST and EPOCH_TIME_DIST are cumulative histograms
-        // spanning the entire chain. A shallow reorg (≤36 blocks) has
-        // negligible impact on distributions built over millions of blocks.
-        // Deleting them would lose all pre-rollback counts since replay
-        // only re-processes blocks after the fork point.
+        // BLOCK_TIME_DIST and EPOCH_TIME_DIST span the entire chain. They are
+        // repaired by subtracting each orphaned interval before replay;
+        // deleting them would lose the surviving chain's counts.
         //
         // DAO singleton aggregates (`dao_latest_stats`, `dao_top_depositors`):
         // KEPT, never deleted. They are tip-scoped rows that the indexer
@@ -1998,18 +2048,16 @@ impl CkbadgerStore {
         let rollback_started_at = Instant::now();
         let replay_start = rollback_to + 1;
         let replay_start_header = self.get_block_header(replay_start)?;
-        let replay_cutoff_date = replay_start_header.as_ref().map(|h| {
-            ckbadger_common::block_date_from_ms(h.timestamp)
-                .format("%Y%m%d")
-                .to_string()
-        });
+        let replay_cutoff_date = replay_start_header
+            .as_ref()
+            .map(|h| chain_date_key(h.chain_time_ms))
+            .transpose()?;
         let replay_cutoff_epoch = replay_start_header.as_ref().map(|h| h.epoch_number);
         // UTC+8 hour cutoff — governs the ACTIVITY_HOURLY bucket family.
-        let replay_cutoff_hour_str_utc8 = replay_start_header.as_ref().map(|h| {
-            ckbadger_common::block_datetime_from_ms(h.timestamp)
-                .format("%Y%m%d%H")
-                .to_string()
-        });
+        let replay_cutoff_hour_str_utc8 = replay_start_header
+            .as_ref()
+            .map(|h| chain_hour_utc8_key(h.chain_time_ms))
+            .transpose()?;
         // UTC hour cutoff — governs the chain-level HOURLY bucket family,
         // whose keys are UTC hour strings (see
         // `BatchWriter::update_hourly_statistics`). Routing the wrong clock
@@ -2017,7 +2065,8 @@ impl CkbadgerStore {
         // residue to accumulate monotonically.
         let replay_cutoff_hour_str_utc = replay_start_header
             .as_ref()
-            .map(|h| ckbadger_common::utc_hour_key_from_ms(h.timestamp));
+            .map(|h| chain_hour_utc_key(h.chain_time_ms))
+            .transpose()?;
 
         // The surviving fork-point header: its date detects partial-day
         // rollbacks (fork_point and first rolled-back block on the same calendar
@@ -2028,11 +2077,10 @@ impl CkbadgerStore {
         } else {
             None
         };
-        let fork_point_date = fork_point_header.as_ref().map(|h| {
-            ckbadger_common::block_date_from_ms(h.timestamp)
-                .format("%Y%m%d")
-                .to_string()
-        });
+        let fork_point_date = fork_point_header
+            .as_ref()
+            .map(|h| chain_date_key(h.chain_time_ms))
+            .transpose()?;
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
@@ -2050,9 +2098,12 @@ impl CkbadgerStore {
         // point so every orphaned block's gap `ts(b) - ts(b-1)` is the exact
         // value the forward writers added.
         let mut stats_date_block_time: HashMap<String, (i64, i32)> = HashMap::new();
+        let mut removed_block_time_histogram: HashMap<i32, i32> = HashMap::new();
+        let mut removed_epoch_time_histogram: HashMap<i32, i32> = HashMap::new();
+        let mut previous_epoch_start: Option<(i64, i64)> = None;
         let mut prev_header: Option<(i64, i64)> = fork_point_header
             .as_ref()
-            .map(|h| (rollback_to, h.timestamp));
+            .map(|h| (rollback_to, h.chain_time_ms));
         // Per-epoch rolled-back transaction count, used to truncate the
         // boundary epoch stats row (the epoch containing replay_start).
         let mut epoch_tx_removed: HashMap<i64, i64> = HashMap::new();
@@ -2102,9 +2153,7 @@ impl CkbadgerStore {
             // Collect block→date/hour mapping for stats delta subtraction:
             // UTC+8 date (date-scoped stats keys) + UTC hour (chain-level
             // HOURLY stats keys).
-            let date_str = ckbadger_common::block_date_from_ms(header.timestamp)
-                .format("%Y%m%d")
-                .to_string();
+            let date_str = chain_date_key(header.chain_time_ms)?;
             let work = ckbadger_common::work::compact_difficulty(header.compact_target)
                 .map_err(|e| anyhow::anyhow!("rollback block {block_num}, date {date_str}: {e}"))?;
             let work_total = stats_date_difficulty.entry(date_str.clone()).or_insert(0);
@@ -2113,7 +2162,42 @@ impl CkbadgerStore {
                     "rollback difficulty sum overflow: block={block_num}, date={date_str}"
                 )
             })?;
-            let hour_str = ckbadger_common::utc_hour_key_from_ms(header.timestamp);
+            let hour_str = chain_hour_utc_key(header.chain_time_ms)?;
+            if header.epoch_index == 0 {
+                if previous_epoch_start.is_none() && block_num > 0 {
+                    for previous_number in (0..block_num).rev() {
+                        let previous = self.get_block_header(previous_number)?.ok_or_else(|| anyhow::anyhow!(
+                            "missing canonical header while locating prior epoch start: block={previous_number} rollback_block={block_num}"
+                        ))?;
+                        if previous.epoch_index == 0 {
+                            previous_epoch_start =
+                                Some((previous.epoch_number, previous.chain_time_ms));
+                            break;
+                        }
+                    }
+                }
+                if header.epoch_number > 0 {
+                    let (previous_number, previous_time_ms) = previous_epoch_start.ok_or_else(|| anyhow::anyhow!(
+                        "missing prior epoch start while rolling back epoch boundary: block={block_num} epoch={}", header.epoch_number
+                    ))?;
+                    if previous_number == header.epoch_number - 1 {
+                        let duration_ms = header.chain_time_ms.checked_sub(previous_time_ms).ok_or_else(|| anyhow::anyhow!(
+                            "epoch duration overflow during rollback: block={block_num} epoch={} previous_ms={previous_time_ms}", header.epoch_number
+                        ))?;
+                        let duration_ms = u128::try_from(duration_ms).map_err(|_| anyhow::anyhow!(
+                            "negative epoch duration during rollback: block={block_num} epoch={} previous_ms={previous_time_ms} current_ms={}", header.epoch_number, header.chain_time_ms
+                        ))?;
+                        let bucket = i32::try_from(ckbadger_common::work::rounded_ratio(duration_ms, 60_000)
+                            .map_err(|e| anyhow::anyhow!("epoch minute rounding failed during rollback: block={block_num}: {e}"))?)
+                            .map_err(|_| anyhow::anyhow!("epoch minute bucket exceeds i32 during rollback: block={block_num} duration_ms={duration_ms}"))?;
+                        let removed = removed_epoch_time_histogram.entry(bucket).or_default();
+                        *removed = removed.checked_add(1).ok_or_else(|| anyhow::anyhow!(
+                            "epoch histogram delta overflow during rollback: block={block_num} bucket={bucket}"
+                        ))?;
+                    }
+                }
+                previous_epoch_start = Some((header.epoch_number, header.chain_time_ms));
+            }
             // Accumulate per-date uncle count for repair_cutoff_date_stats.
             let uncles_entry = stats_date_uncles.entry(date_str.clone()).or_insert(0);
             *uncles_entry = uncles_entry
@@ -2130,26 +2214,30 @@ impl CkbadgerStore {
                     .or_insert(0) += 1;
             }
             // Reverse this block's inter-block time contribution. The forward
-            // writers attribute `ts(b) - ts(b-1)` to block b's UTC+8 date and
-            // skip a negative gap, so the same two rules apply here — an
-            // approximation would leave the day's average block time and hash
-            // rate permanently wrong.
+            // writers attribute `t*(b) - t*(b-1)` to block b's UTC+8 date.
             match prev_header {
                 Some((prev_num, prev_ts)) if prev_num + 1 == block_num => {
-                    let delta_ms = header.timestamp - prev_ts;
-                    if delta_ms >= 0 {
-                        let entry = stats_date_block_time
-                            .entry(date_str.clone())
-                            .or_insert((0, 0));
-                        entry.0 = entry.0.checked_add(delta_ms).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "block_time_sum_ms overflow during rollback delta accumulation: block_num={}, delta_ms={}",
-                                block_num,
-                                delta_ms
-                            )
-                        })?;
-                        entry.1 += 1;
+                    let delta_ms = header.chain_time_ms.checked_sub(prev_ts).ok_or_else(|| anyhow::anyhow!(
+                        "chain-time interval overflow during rollback: block={block_num} previous_ms={prev_ts} current_ms={}", header.chain_time_ms
+                    ))?;
+                    if delta_ms < 0 {
+                        anyhow::bail!("chain time regressed during rollback: block={block_num} previous_ms={prev_ts} current_ms={}", header.chain_time_ms);
                     }
+                    let entry = stats_date_block_time
+                        .entry(date_str.clone())
+                        .or_insert((0, 0));
+                    entry.0 = entry.0.checked_add(delta_ms).ok_or_else(|| anyhow::anyhow!(
+                        "block_time_sum_ms overflow during rollback delta accumulation: block_num={block_num} delta_ms={delta_ms}"
+                    ))?;
+                    entry.1 = entry.1.checked_add(1).ok_or_else(|| anyhow::anyhow!(
+                        "block-time count overflow during rollback: block={block_num} date={date_str}"
+                    ))?;
+                    let bucket =
+                        ckbadger_common::stats_bucket::block_time_to_bucket(delta_ms / 1_000)?;
+                    let removed = removed_block_time_histogram.entry(bucket).or_default();
+                    *removed = removed.checked_add(1).ok_or_else(|| anyhow::anyhow!(
+                        "block-time histogram delta overflow during rollback: block={block_num} bucket={bucket}"
+                    ))?;
                 }
                 Some((prev_num, _)) => {
                     anyhow::bail!(
@@ -2166,16 +2254,15 @@ impl CkbadgerStore {
                 // repaired, so no delta is consumed.
                 None => {}
             }
-            prev_header = Some((block_num, header.timestamp));
+            prev_header = Some((block_num, header.chain_time_ms));
 
             // Activity buckets run on the UTC+8 clock for both date and hour.
             {
-                let dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
                 *activity_coinbase_date_deltas
-                    .entry(dt.format("%Y%m%d").to_string())
+                    .entry(chain_date_key(header.chain_time_ms)?)
                     .or_insert(0) += 1;
                 *activity_coinbase_hour_deltas
-                    .entry(dt.format("%Y%m%d%H").to_string())
+                    .entry(chain_hour_utc8_key(header.chain_time_ms)?)
                     .or_insert(0) += 1;
             }
             block_date_map.insert(block_num, (date_str, hour_str));
@@ -3056,9 +3143,13 @@ impl CkbadgerStore {
                             bytes_to_hex(&tx_actions.tx_hash)
                         );
                     }
-                    let dt = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp);
-                    let date_str = dt.format("%Y%m%d").to_string();
-                    let hour_str = dt.format("%Y%m%d%H").to_string();
+                    let header = self.get_block_header(block_num)?.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing orphan header for activity rollback: block={block_num}"
+                        )
+                    })?;
+                    let date_str = chain_date_key(header.chain_time_ms)?;
+                    let hour_str = chain_hour_utc8_key(header.chain_time_ms)?;
 
                     activity_date_deltas
                         .entry(date_str.clone())
@@ -3199,6 +3290,18 @@ impl CkbadgerStore {
                 }
             }
             stage.finish(stats_removed + stats_repaired);
+            subtract_chain_histogram(
+                self,
+                &mut batch,
+                keys::STATS_PREFIX_BLOCK_TIME_DIST,
+                &removed_block_time_histogram,
+            )?;
+            subtract_chain_histogram(
+                self,
+                &mut batch,
+                keys::STATS_PREFIX_EPOCH_TIME_DIST,
+                &removed_epoch_time_histogram,
+            )?;
             if stats_repaired > 0 {
                 info!(
                     stats_repaired,
@@ -4566,17 +4669,22 @@ impl CkbadgerStore {
                         batch.put_cf(self.cf_mnft_by_collection(), idx_key, []);
                         secondary_keys_written += 1;
                         // Resolve storage tier from class entry before taking mutable borrow on agg
-                        let token_tier = self
-                            .get_mnft(collection_id)
-                            .ok()
-                            .flatten()
-                            .map(|class_entry| match &class_entry.extra {
-                                ObjectExtra::MnftClass {
-                                    composition_tier, ..
-                                } => *composition_tier,
-                                _ => CompositionTier::Unknown,
-                            })
-                            .unwrap_or(CompositionTier::Unknown);
+                        let token_tier = match self.get_mnft(collection_id).map_err(|e| anyhow::anyhow!(
+                            "failed to load mNFT class during rollback aggregate repair: collection_id=0x{} token_id=0x{}: {e}",
+                            bytes_to_hex(collection_id), bytes_to_hex(&object_id)
+                        ))? {
+                            Some(class_entry) => match class_entry.extra {
+                                ObjectExtra::MnftClass { composition_tier, .. } => composition_tier,
+                                other => anyhow::bail!(
+                                    "mNFT token refers to a non-class entry during rollback aggregate repair: collection_id=0x{} token_id=0x{} extra={other:?}",
+                                    bytes_to_hex(collection_id), bytes_to_hex(&object_id)
+                                ),
+                            },
+                            // A token can have no indexed class metadata (for example
+                            // independently imported protocol tokens). Its tier is
+                            // then genuinely unknown, not a suppressed read error.
+                            None => CompositionTier::Unknown,
+                        };
                         let agg = object_collection_aggs
                             .entry(collection_id.clone())
                             .or_insert_with(|| MnftCollectionAggregate {
@@ -11289,8 +11397,8 @@ mod tests {
             coinbase_count: 50,
             unique_address_count: 200,
             total_ckb_moved: 500_000,
-            script_counts: std::collections::HashMap::new(),
-            protocol_action_counts: std::collections::HashMap::new(),
+            script_counts: std::collections::BTreeMap::new(),
+            protocol_action_counts: std::collections::BTreeMap::new(),
         };
         store.put_daily_activity_stats(date, &original).unwrap();
 
@@ -11845,20 +11953,17 @@ mod tests {
     const CROSS_DAY_S: u64 = 50_000_000_000;
     const CROSS_DAY_AR_DEPOSIT: u64 = 10_000_000_000_000_000;
     const CROSS_DAY_AR_END: u64 = 10_100_000_000_000_000;
-    const CROSS_DAY_CAPACITY: i64 = 100_000_000_000;
-    const CROSS_DAY_OCCUPIED: i64 = 10_200_000_000;
 
     #[test]
-    fn test_cross_day_rollback_recomputes_fork_point_date_dao_snapshot() {
+    fn test_backward_raw_time_rollback_keeps_completed_fork_day_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let prev_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
         let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
         let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
-
         let mut batch = StoreBatch::new(&store);
-        // Block 0 is the previous day's tail — the C/S/U baseline for block 1.
+        let mut previous_chain_time_ms = 0i64;
         for (block, ts, ar) in [
             (
                 0i64,
@@ -11867,123 +11972,54 @@ mod tests {
             ),
             (1, cross_day_utc8_ms(fork_date, 0, 10), CROSS_DAY_AR_DEPOSIT),
             (2, cross_day_utc8_ms(fork_date, 12, 0), CROSS_DAY_AR_DEPOSIT),
-            // Block 3 is the fork point and the final surviving block of the
-            // fork-point date.
             (3, cross_day_utc8_ms(fork_date, 23, 50), CROSS_DAY_AR_END),
-            // Block 4 is the first rolled-back block and sets the cutoff date.
             (4, cross_day_utc8_ms(cutoff_date, 0, 5), CROSS_DAY_AR_END),
-            // Block 5 is rolled back too, but its timestamp crosses the day
-            // boundary backwards onto the fork-point date. CKB block timestamps
-            // are only median-time-past-bounded, so this is legal — and it is
-            // what leaves the fork-point date's snapshot stale.
+            // Raw time goes backwards, while t* remains on the cutoff day.
             (5, cross_day_utc8_ms(fork_date, 23, 58), CROSS_DAY_AR_END),
         ] {
-            batch.put_block_header(
+            let mut header = cross_day_header(
                 block,
-                &cross_day_header(
-                    block,
-                    ts,
-                    cross_day_dao_field(CROSS_DAY_C, ar, CROSS_DAY_S, CROSS_DAY_U),
-                ),
+                ts,
+                cross_day_dao_field(CROSS_DAY_C, ar, CROSS_DAY_S, CROSS_DAY_U),
             );
+            header.chain_time_ms = previous_chain_time_ms.max(ts);
+            previous_chain_time_ms = header.chain_time_ms;
+            batch.put_block_header(block, &header);
         }
-        batch.put_dao_deposit(
-            &keys::encode_outpoint(&[0xAA; 32], 0),
-            &DaoDepositCacheEntry {
-                capacity: CROSS_DAY_CAPACITY,
-                occupied_capacity: CROSS_DAY_OCCUPIED,
-                deposit_block_number: 2,
-                deposit_timestamp: 0,
-                lock_script_hash: vec![0xA1; 32],
-                deposit_ar: CROSS_DAY_AR_DEPOSIT as i64,
-                status: 0,
-                withdraw_request_tx: None,
-                withdraw_request_output_index: None,
-                withdraw_request_block: None,
-                withdraw_request_ar: None,
-                withdraw_block: None,
-                withdraw_tx: None,
-                withdraw_request_occupied_capacity: None,
-                withdraw_to_output_index: None,
-                compensation: None,
-            },
+        batch.put_stats(
+            &keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &30i32.to_be_bytes()),
+            &4i32.to_le_bytes(),
+        );
+        batch.put_stats(
+            &keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &0i32.to_be_bytes()),
+            &1i32.to_le_bytes(),
         );
         batch.commit().unwrap();
         seed_sync_status(&store, 5, &[5u8; 32], 0, 0, 0);
-        // Real consensus secondary_epoch_reward; the DAO snapshot recompute
-        // needs it for the per-block miner secondary split.
-        store
-            .set_secondary_epoch_reward(61_369_863_013_698)
-            .unwrap();
-
-        // Both the fork-point date and the cutoff date have materialized DAO
-        // aggregate state before the rollback.
         seed_dao_daily_snapshot(&store, "20260310", &stale_dao_daily_snapshot("2026-03-10"));
         seed_dao_daily_snapshot(&store, "20260311", &stale_dao_daily_snapshot("2026-03-11"));
+        let completed_before = store.get_dao_daily_snapshot("20260310").unwrap();
 
-        // Cross-day rollback: fork point is on 2026-03-10, cutoff on 2026-03-11.
         store.rollback_to_block(3).unwrap();
 
-        let expected_unclaimed = i128::from(
-            ckbadger_common::dao::calculate_dao_compensation_from_ar(
-                CROSS_DAY_CAPACITY,
-                CROSS_DAY_OCCUPIED,
-                CROSS_DAY_AR_DEPOSIT,
-                CROSS_DAY_AR_END,
-            )
-            .unwrap(),
-        );
-
-        let recomputed = store
-            .get_dao_daily_snapshot("20260310")
-            .unwrap()
-            .expect("fork-point date snapshot must survive a cross-day rollback");
         assert_eq!(
-            recomputed.cum_dao_compensation, expected_unclaimed,
-            "fork-point date snapshot must be recomputed, not left at its stale cumulative value"
+            bincode::serialize(&store.get_dao_daily_snapshot("20260310").unwrap()).unwrap(),
+            bincode::serialize(&completed_before).unwrap(),
+            "no orphan carried the completed fork day's canonical bucket"
         );
-        assert_eq!(recomputed.unclaimed_compensation, expected_unclaimed);
-        assert_eq!(
-            recomputed.frozen_phase1_compensation, 0,
-            "active compensation must not be materialized as frozen phase-1"
-        );
-        assert_eq!(
-            recomputed.cum_treasury,
-            i128::from(CROSS_DAY_S) - expected_unclaimed
-        );
-        assert_eq!(recomputed.total_deposited, i128::from(CROSS_DAY_CAPACITY));
-        assert_eq!(
-            recomputed.protocol_deposited,
-            Some(i128::from(CROSS_DAY_CAPACITY))
-        );
-        assert_eq!(recomputed.new_deposits, 1);
-        assert_eq!(recomputed.withdrawals, 0);
-        assert_eq!(recomputed.depositors_count, 1);
-        assert_eq!(recomputed.cumulative_depositors, 1);
-        assert_eq!(recomputed.daily_depositor_addresses, 1);
-        assert_eq!(recomputed.total_issuance, i128::from(CROSS_DAY_C));
-        assert_eq!(recomputed.secondary_pool, i128::from(CROSS_DAY_S));
-        assert_eq!(recomputed.occupied_capacity, i128::from(CROSS_DAY_U));
-        assert_eq!(recomputed.compensation, 0);
-        // Blocks 1..=3 survive on the fork-point date, each splitting its own
-        // scheduled secondary issuance against its parent's C/U. S is flat
-        // across this fixture, which under the old S-delta reconstruction
-        // wrongly produced zero — the protocol issues secondary every block
-        // regardless of how the pool moves.
-        let per_block_miner = ckbadger_common::dao::calculate_miner_secondary_issuance(
-            ckbadger_common::dao::secondary_block_issuance(0, 1800, 61_369_863_013_698).unwrap(),
-            i128::from(CROSS_DAY_C),
-            i128::from(CROSS_DAY_U),
-        )
-        .unwrap();
-        assert_eq!(per_block_miner, 6_818_873);
-        assert_eq!(recomputed.cum_miner_secondary, 3 * per_block_miner);
-
-        // The cutoff date has no surviving blocks, so its snapshot is dropped.
         assert!(
             store.get_dao_daily_snapshot("20260311").unwrap().is_none(),
-            "cutoff-date snapshot must be deleted when no block on that date survives"
+            "the orphaned cutoff day must be deleted"
         );
+        let bucket30 =
+            keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &30i32.to_be_bytes());
+        let bucket0 =
+            keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &0i32.to_be_bytes());
+        assert_eq!(
+            store.get_stats_key(&bucket30).unwrap(),
+            Some(3i32.to_le_bytes().to_vec())
+        );
+        assert_eq!(store.get_stats_key(&bucket0).unwrap(), None);
     }
 
     /// Fixture layout shared by the skip tests: no block 0, so any DAO snapshot

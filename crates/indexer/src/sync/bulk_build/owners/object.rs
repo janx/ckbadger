@@ -84,7 +84,7 @@ impl BulkReducer for ObjectOwner {
     }
 
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
+        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.chain_time_ms);
         let mnft_tokens_consumed_in_tx = tx
             .resolved_inputs
             .iter()
@@ -1314,7 +1314,7 @@ impl ObjectOwner {
                 agg,
             )?;
             if consumed_in_same_tx {
-                let hour_bucket = tx.timestamp_ms / 3_600_000;
+                let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
                 let key = keys::encode_spore_hourly_key(&cluster_id, hour_bucket);
                 let current = *self
                     .spore_hourly_transfers
@@ -1332,7 +1332,7 @@ impl ObjectOwner {
         } else {
             // Same-cluster re-insert (transfer) — increment hourly bucket
             {
-                let hour_bucket = tx.timestamp_ms / 3_600_000;
+                let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
                 let key = keys::encode_spore_hourly_key(&cluster_id, hour_bucket);
                 let current = *self
                     .spore_hourly_transfers
@@ -1665,7 +1665,7 @@ impl ObjectOwner {
                 self.increment_mnft_hourly_transfer(
                     &class_id,
                     &token_id,
-                    tx.timestamp_ms,
+                    tx.chain_time_ms,
                     tx.block_number,
                 )?;
             }
@@ -1673,7 +1673,7 @@ impl ObjectOwner {
             // Re-insert (transfer) — increment hourly bucket unconditionally,
             // matching the live sync path in db/writer/mnft.rs.
             {
-                let hour_bucket = tx.timestamp_ms / 3_600_000;
+                let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
                 let key = keys::encode_object_hourly_key(&class_id, hour_bucket).to_vec();
                 let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
                 let next = checked_next_i64(
@@ -1833,7 +1833,7 @@ impl ObjectOwner {
             consumed_in_same_tx_owner
         };
         if transfer_from_owner.is_some() && transfer_from_owner != Some(owner_lock.as_slice()) {
-            self.increment_dotbit_hourly_transfer(&account_id, tx.timestamp_ms, tx.block_number)?;
+            self.increment_dotbit_hourly_transfer(&account_id, tx.chain_time_ms, tx.block_number)?;
         }
         self.insert_dotbit_outpoint_rows(&account_id, cell)?;
         Ok(())
@@ -3593,6 +3593,7 @@ mod tests {
             block_number: 21_080_336,
             block_hash: [0x80; 32],
             timestamp_ms: 1_753_100_000_000,
+            chain_time_ms: 1_753_100_000_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
@@ -3705,6 +3706,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x80; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
@@ -3742,6 +3744,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x80; 32],
             timestamp_ms: 1_700_000_000_001,
+            chain_time_ms: 1_700_000_000_001,
             block_dao_ar: 0,
             tx_index: 1,
             dotbit_action: None,
@@ -3805,6 +3808,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x80; 32],
             timestamp_ms: 1_700_000_000_002,
+            chain_time_ms: 1_700_000_000_002,
             block_dao_ar: 0,
             tx_index: 2,
             dotbit_action: None,
@@ -3865,6 +3869,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x80; 32],
             timestamp_ms: 1_700_000_000_003,
+            chain_time_ms: 1_700_000_000_003,
             block_dao_ar: 0,
             tx_index: 3,
             dotbit_action: None,
@@ -4106,6 +4111,7 @@ mod tests {
             block_number: 200,
             block_hash: [0x90; 32],
             timestamp_ms: 1_700_000_100_000,
+            chain_time_ms: 1_700_000_100_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
@@ -4205,6 +4211,7 @@ mod tests {
             block_number: 201,
             block_hash: [0x91; 32],
             timestamp_ms: 1_700_000_200_000,
+            chain_time_ms: 1_700_000_200_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
@@ -4269,6 +4276,7 @@ mod tests {
             block_number: 202,
             block_hash: [0x92; 32],
             timestamp_ms: 1_700_000_260_000,
+            chain_time_ms: 1_700_000_260_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
@@ -4432,6 +4440,7 @@ mod tests {
             block_number: 300,
             block_hash: [0xa0; 32],
             timestamp_ms: 1_700_100_000_000,
+            chain_time_ms: 1_700_100_000_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: Some("confirm_proposal".to_string()),
@@ -4472,6 +4481,7 @@ mod tests {
             block_number: 301,
             block_hash: [0xa1; 32],
             timestamp_ms: 1_700_100_360_000,
+            chain_time_ms: 1_700_100_360_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: Some("transfer_account".to_string()),
@@ -4536,6 +4546,7 @@ mod tests {
             block_number: 302,
             block_hash: [0xa2; 32],
             timestamp_ms: 1_700_100_720_000,
+            chain_time_ms: 1_700_100_720_000,
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: Some("recycle_expired_account".to_string()),

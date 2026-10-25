@@ -190,15 +190,7 @@ pub(crate) fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32)
 
 /// Map inter-block time (seconds) to a histogram bucket.
 /// Buckets: 0 (<1s), 1..29 (per-second), 30 (>=30s).
-pub(crate) fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
-    if block_time_seconds < 1 {
-        0
-    } else if block_time_seconds < 30 {
-        block_time_seconds as i32
-    } else {
-        30
-    }
-}
+pub(crate) use ckbadger_common::stats_bucket::block_time_to_bucket;
 
 impl BatchStats {
     /// Accumulate one monotonic chain-time interval into the per-day sum and
@@ -217,7 +209,7 @@ impl BatchStats {
         if delta_ms < 0 {
             anyhow::bail!("chain time regressed while accumulating block interval: previous_ms={} current_ms={} date={}", prev_ts.timestamp_millis(), curr_ts.timestamp_millis(), block_date);
         }
-        let bucket = block_time_to_bucket(delta_ms / 1000);
+        let bucket = block_time_to_bucket(delta_ms / 1000)?;
         *self.block_time_dist.entry(bucket).or_default() += 1;
         let entry = self.daily_block_times.entry(block_date).or_insert((0, 0));
         entry.0 = entry

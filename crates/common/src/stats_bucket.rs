@@ -1,27 +1,13 @@
-//! The one definition of a complete stats time bucket (an hour or a UTC+8 day).
+//! Calendar buckets for the canonical chain clock.
 //!
-//! CKB consensus only requires a block's timestamp to exceed the median time
-//! of the 37 blocks before it ([`median_time_ms`]). A block may therefore be
-//! dated earlier than its parent, so "the tip block's day" is not the newest
-//! day the chain can still add a block to: a tip at 23:59:58 may follow a
-//! parent at 00:00:02 the next day.
+//! A block's raw timestamp may be earlier than its parent's. Statistics use
+//! the running maximum of raw timestamps through that block, stored as
+//! `CachedBlockHeader.chain_time_ms`. A UTC hour or UTC+8 day ends once that
+//! chain time reaches its exclusive end. Reorg rollback can reopen a bucket;
+//! caches must also bind their contents to the canonical tip hash.
 //!
-//! What the rule does guarantee is a floor. Every future block is dated after
-//! the median time of the newest 37 indexed blocks (the window ending at the
-//! tip), and along one chain that median never decreases. So a bucket
-//! `[start, end)` whose end is at or below it can never receive another block
-//! of this chain: it is complete. Every later bucket — including any dated
-//! after the tip's own — is in progress.
-//!
-//! A reorg is the exception: rolling back to a fork point lowers the median
-//! time to the fork point's, so a complete bucket can reopen. The bulk sealer
-//! never meets one (it builds a fresh store); readers that cache by
-//! completeness must key the cache by it (the API keys daily charts by the
-//! last complete day).
-//!
-//! The bulk indexer seals activity buckets with this rule and the API judges
-//! every daily chart and the transaction stats with it; both call
-//! [`is_bucket_complete`].
+//! [`median_time_ms`] remains a protocol helper for the CKB median-time rule;
+//! it does not assign statistics buckets.
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -33,6 +19,19 @@ pub const MEDIAN_TIME_BLOCK_COUNT: usize = 37;
 pub const HOUR_MS: i64 = 60 * 60 * 1_000;
 pub const DAY_MS: i64 = 24 * HOUR_MS;
 const UTC8_OFFSET_MS: i64 = CKB_UTC8_OFFSET as i64 * 1_000;
+
+/// Map an exact nonnegative inter-block interval in whole seconds to the
+/// chain-wide histogram bucket: 0 (<1s), 1..29, or 30 (>=30s).
+pub fn block_time_to_bucket(block_time_seconds: i64) -> Result<i32> {
+    if block_time_seconds < 0 {
+        bail!("negative inter-block time: seconds={block_time_seconds}");
+    }
+    Ok(if block_time_seconds < 30 {
+        block_time_seconds as i32
+    } else {
+        30
+    })
+}
 
 /// The canonical stats day of a block's running-maximum chain time.
 pub fn stats_day(chain_time_ms: i64) -> Result<NaiveDate> {
@@ -78,10 +77,10 @@ pub fn median_time_ms(timestamps: &[i64]) -> Result<i64> {
     Ok(*median)
 }
 
-/// Whether the bucket ending (exclusively) at `bucket_end_ms` is complete
-/// under `median_time_ms`, the median time of the newest indexed blocks.
-pub fn is_bucket_complete(bucket_end_ms: i64, median_time_ms: i64) -> bool {
-    bucket_end_ms <= median_time_ms
+/// Whether a bucket ending exclusively at `bucket_end_ms` is complete at the
+/// canonical tip's running-maximum chain time.
+pub fn is_bucket_complete(bucket_end_ms: i64, chain_time_ms: i64) -> bool {
+    bucket_end_ms <= chain_time_ms
 }
 
 /// Exclusive end of the UTC+8-aligned bucket of `bucket_ms` holding
@@ -155,6 +154,16 @@ pub fn bucket_end_from_utc8_key(bucket: &str, hourly: bool) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_time_bucket_boundaries_are_shared_by_live_bulk_and_rollback() {
+        assert_eq!(block_time_to_bucket(0).unwrap(), 0);
+        assert_eq!(block_time_to_bucket(1).unwrap(), 1);
+        assert_eq!(block_time_to_bucket(29).unwrap(), 29);
+        assert_eq!(block_time_to_bucket(30).unwrap(), 30);
+        assert_eq!(block_time_to_bucket(300).unwrap(), 30);
+        assert!(block_time_to_bucket(-1).is_err());
+    }
 
     #[test]
     fn backward_raw_timestamp_keeps_next_day_and_hour_at_chain_time() {

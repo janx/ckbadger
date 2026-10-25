@@ -1,87 +1,110 @@
 //! Which stats buckets the API may serve as complete.
 //!
-//! The rule is [`ckbadger_common::stats_bucket`]'s, the one the bulk indexer
-//! seals activity buckets with: a bucket (an hour, or a UTC+8 day) is complete
-//! when its end is at or below the median time of the newest 37 indexed
-//! blocks. CKB only bounds a block's timestamp by that median time, so a block
-//! may be dated before its parent — across an hour or midnight — and neither
-//! the tip block's date nor the wall clock says which buckets are final.
-//!
-//! This module reads the median time from the store, once per request under
-//! the request's pinned read view, and judges rows with it. A row dated after
-//! the tip block's own day is legal and simply in progress.
+//! A bucket is complete when its exclusive end is at or below the canonical
+//! tip's running-maximum chain time. The indexer assigns every stats row by
+//! this same monotonic time, so no later block can reopen an earlier bucket.
 
 use chrono::NaiveDate;
-use ckbadger_common::stats_bucket::{
-    bucket_end_ms, is_bucket_complete, median_time_ms, utc8_day_end_ms, HOUR_MS,
-    MEDIAN_TIME_BLOCK_COUNT,
-};
+use ckbadger_common::stats_bucket::{bucket_end_ms, is_bucket_complete, utc8_day_end_ms, HOUR_MS};
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 
 use crate::response::{ApiError, ApiRouteError};
 
-/// The indexed chain's clock: its tip block and the median time of the newest
-/// (at most 37) blocks ending at the tip.
+/// The indexed chain's clock and the first block of its incomplete day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainTime {
     tip_number: i64,
     tip_timestamp_ms: i64,
-    median_time_ms: i64,
+    chain_time_ms: i64,
+    complete_day_boundary_hash: [u8; 32],
 }
 
 impl ChainTime {
     /// The store's chain time, `None` while it holds no block.
     pub fn load(store: &CkbadgerStore) -> Result<Option<Self>, ApiRouteError> {
-        let headers = store
-            .list_blocks_desc(None, MEDIAN_TIME_BLOCK_COUNT)
-            .map_err(|e| {
-                ApiError::internal(format!("failed to read the newest block headers: {e}"))
-            })?;
+        let headers = store.list_blocks_desc(None, 1).map_err(|e| {
+            ApiError::internal(format!("failed to read the newest block headers: {e}"))
+        })?;
         if headers.is_empty() {
             return Ok(None);
         }
-        let window: Vec<(i64, i64)> = headers
-            .iter()
-            .map(|(number, header)| (*number, header.timestamp))
-            .collect();
-        Self::from_window(&window).map(Some)
+        let (number, header) = &headers[0];
+        let tip_hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+            ApiError::internal(format!(
+                "block {number} has invalid hash length {}",
+                header.hash.len()
+            ))
+        })?;
+        let mut chain =
+            Self::from_header(*number, header.timestamp, header.chain_time_ms, tip_hash)?;
+        let current_day_start_ms = utc8_day_end_ms(chain.last_complete_day()?)
+            .map_err(|e| ApiError::internal(format!("invalid current-day boundary: {e}")))?;
+        let boundary_block = store
+            .find_first_block_at_or_after_chain_time_ms(current_day_start_ms)
+            .map_err(|e| ApiError::internal(format!("failed to locate current-day boundary: {e}")))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing current-day boundary at {current_day_start_ms}"
+                ))
+            })?;
+        let boundary_header = store
+            .get_block_header(boundary_block)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to read boundary block {boundary_block}: {e}"
+                ))
+            })?
+            .ok_or_else(|| {
+                ApiError::internal(format!("missing boundary block {boundary_block}"))
+            })?;
+        chain.complete_day_boundary_hash =
+            boundary_header.hash.as_slice().try_into().map_err(|_| {
+                ApiError::internal(format!(
+                    "boundary block {boundary_block} has invalid hash length {}",
+                    boundary_header.hash.len()
+                ))
+            })?;
+        Ok(Some(chain))
     }
 
-    /// Build from the newest headers as `(number, timestamp_ms)`, tip first.
-    /// The window must be the consecutive blocks ending at the tip — all 37,
-    /// or every block down to genesis on a younger chain; a gap is an error.
-    pub fn from_window(newest_first: &[(i64, i64)]) -> Result<Self, ApiRouteError> {
+    pub fn from_header(
+        tip_number: i64,
+        tip_timestamp_ms: i64,
+        chain_time_ms: i64,
+        tip_hash: [u8; 32],
+    ) -> Result<Self, ApiRouteError> {
+        if tip_number < 0 || chain_time_ms < tip_timestamp_ms {
+            return Err(ApiError::internal(format!("invalid canonical chain time at block {tip_number}: raw_ms={tip_timestamp_ms} chain_time_ms={chain_time_ms}")));
+        }
+        Ok(Self {
+            tip_number,
+            tip_timestamp_ms,
+            chain_time_ms,
+            complete_day_boundary_hash: tip_hash,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_window(newest_first: &[(i64, i64)]) -> Result<Self, ApiRouteError> {
         let Some(&(tip_number, tip_timestamp_ms)) = newest_first.first() else {
-            return Err(ApiError::internal(
-                "cannot derive the chain's median time from an empty header window",
-            ));
+            return Err(ApiError::internal("empty chain-time fixture"));
         };
-        let expected_len = usize::try_from(tip_number)
-            .ok()
-            .and_then(|tip| tip.checked_add(1))
-            .map_or(MEDIAN_TIME_BLOCK_COUNT, |blocks| {
-                blocks.min(MEDIAN_TIME_BLOCK_COUNT)
-            });
         let consecutive = newest_first
             .iter()
             .zip(0i64..)
             .all(|(&(number, _), offset)| Some(number) == tip_number.checked_sub(offset));
-        if tip_number < 0 || newest_first.len() != expected_len || !consecutive {
-            let numbers: Vec<i64> = newest_first.iter().map(|(number, _)| *number).collect();
-            return Err(ApiError::internal(format!(
-                "the newest block headers are not the {expected_len} consecutive blocks ending at \
-                 tip {tip_number}: got {numbers:?}; the median-time window needs every one"
-            )));
+        if !consecutive || newest_first.last().map(|(number, _)| *number) != Some(0) {
+            return Err(ApiError::internal(
+                "fixture is not consecutive blocks ending at tip",
+            ));
         }
-        let timestamps: Vec<i64> = newest_first.iter().map(|(_, ts)| *ts).collect();
-        let median_time_ms = median_time_ms(&timestamps)
-            .map_err(|e| ApiError::internal(format!("tip {tip_number}: {e}")))?;
-        Ok(Self {
-            tip_number,
-            tip_timestamp_ms,
-            median_time_ms,
-        })
+        let chain_time_ms = newest_first
+            .iter()
+            .map(|(_, ms)| *ms)
+            .max()
+            .expect("non-empty fixture");
+        Self::from_header(tip_number, tip_timestamp_ms, chain_time_ms, [0; 32])
     }
 
     pub fn tip_number(&self) -> i64 {
@@ -92,35 +115,34 @@ impl ChainTime {
         self.tip_timestamp_ms
     }
 
-    pub fn median_time_ms(&self) -> i64 {
-        self.median_time_ms
+    pub fn chain_time_ms(&self) -> i64 {
+        self.chain_time_ms
     }
 
     /// The tip block's UTC+8 stats day.
     pub fn tip_day(&self) -> Result<NaiveDate, ApiRouteError> {
-        utc8_date_of(self.tip_number, self.tip_timestamp_ms)
+        utc8_date_of(self.tip_number, self.chain_time_ms)
     }
 
-    /// The newest complete UTC+8 day: the day before the one the median time
-    /// falls in (that day can still gain a block; the one before cannot).
+    /// The newest complete UTC+8 day precedes the tip's chain-time day.
     pub fn last_complete_day(&self) -> Result<NaiveDate, ApiRouteError> {
-        let median_day = utc8_date_of(self.tip_number, self.median_time_ms)?;
-        median_day.pred_opt().ok_or_else(|| {
-            ApiError::internal(format!("no day precedes the median-time day {median_day}"))
+        let chain_day = utc8_date_of(self.tip_number, self.chain_time_ms)?;
+        chain_day.pred_opt().ok_or_else(|| {
+            ApiError::internal(format!("no day precedes the chain-time day {chain_day}"))
         })
     }
 
     /// Start (UTC seconds) of the newest complete hour: the hour before the
-    /// one the median time falls in.
+    /// one the chain time falls in.
     pub fn last_complete_hour_start_secs(&self) -> i64 {
-        let median_secs = self.median_time_ms.div_euclid(1000);
-        median_secs - median_secs.rem_euclid(3600) - 3600
+        let chain_secs = self.chain_time_ms.div_euclid(1000);
+        chain_secs - chain_secs.rem_euclid(3600) - 3600
     }
 
     /// Whether the UTC+8 day `date` is complete.
     pub fn is_day_complete(&self, date: NaiveDate) -> Result<bool, ApiRouteError> {
         let end = utc8_day_end_ms(date).map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok(is_bucket_complete(end, self.median_time_ms))
+        Ok(is_bucket_complete(end, self.chain_time_ms))
     }
 
     /// Whether the hour starting at `hour_start_secs` (UTC) is complete.
@@ -130,23 +152,23 @@ impl ChainTime {
         })?;
         let end =
             bucket_end_ms(start_ms, HOUR_MS).map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok(is_bucket_complete(end, self.median_time_ms))
+        Ok(is_bucket_complete(end, self.chain_time_ms))
     }
 }
 
 /// Cache key of a response built from complete days only: `base` plus the
-/// chain's last complete day. The median time moves back on a reorg (a
-/// rollback lowers it to the fork point's) as well as forward at midnight, so
-/// a cached value is only valid while the last complete day it was built for
-/// still is; keying by it replaces the value the moment that changes.
+/// chain's last complete day and the first block of its incomplete day. That
+/// block stays fixed during normal tip growth, and changes if a fork modifies
+/// a completed day.
 pub fn complete_days_cache_key(
     base: &str,
     chain: Option<ChainTime>,
 ) -> Result<String, ApiRouteError> {
     Ok(match chain {
         Some(chain) => format!(
-            "{base}:complete-through:{}",
-            chain.last_complete_day()?.format("%Y%m%d")
+            "{base}:complete-through:{}:boundary:{}",
+            chain.last_complete_day()?.format("%Y%m%d"),
+            hex::encode(chain.complete_day_boundary_hash),
         ),
         None => format!("{base}:complete-through:none"),
     })
@@ -249,28 +271,24 @@ mod tests {
         err.1 .0.message.clone()
     }
 
-    /// The tip (23:59:58 on 10-23, UTC+8) follows a parent dated 00:00:02 on
-    /// 10-24 — legal under CKB's median-time rule. Neither day is complete,
-    /// the row for 10-24 is in progress rather than corrupt, and 10-22 is the
-    /// last complete day.
+    /// A backward raw timestamp retains the parent's next-day chain time.
     #[test]
-    fn a_tip_dated_before_its_parent_leaves_both_days_in_progress() {
+    fn a_tip_dated_before_its_parent_stays_in_the_parent_day() {
         let chain = ChainTime::from_window(&[
             (2, utc_ms("2026-10-23T15:59:58Z")),
             (1, utc_ms("2026-10-23T16:00:02Z")),
             (0, utc_ms("2026-10-23T15:59:50Z")),
         ])
         .unwrap();
-        assert_eq!(chain.median_time_ms(), utc_ms("2026-10-23T15:59:58Z"));
-        assert_eq!(chain.tip_day().unwrap(), day("2026-10-23"));
+        assert_eq!(chain.chain_time_ms(), utc_ms("2026-10-23T16:00:02Z"));
+        assert_eq!(chain.tip_day().unwrap(), day("2026-10-24"));
         assert!(chain.is_day_complete(day("2026-10-22")).unwrap());
-        assert!(!chain.is_day_complete(day("2026-10-23")).unwrap());
+        assert!(chain.is_day_complete(day("2026-10-23")).unwrap());
         assert!(!is_complete_day_key(Some(chain), "s", "20261024").unwrap());
-        assert_eq!(chain.last_complete_day().unwrap(), day("2026-10-22"));
+        assert_eq!(chain.last_complete_day().unwrap(), day("2026-10-23"));
     }
 
-    /// Hours follow the same rule: the 15:00 UTC hour holding the parent and
-    /// the 14:00 hour holding the tip are both in progress.
+    /// The backward block remains in the parent's 15:00 UTC hour.
     #[test]
     fn a_tip_dated_before_its_parent_leaves_both_hours_in_progress() {
         let chain = ChainTime::from_window(&[
@@ -283,7 +301,7 @@ mod tests {
         assert!(chain
             .is_hour_complete(hour("2026-10-23T13:00:00Z"))
             .unwrap());
-        assert!(!chain
+        assert!(chain
             .is_hour_complete(hour("2026-10-23T14:00:00Z"))
             .unwrap());
         assert!(!chain
@@ -291,10 +309,9 @@ mod tests {
             .unwrap());
     }
 
-    /// A tip already past midnight does not complete the previous day while
-    /// the median time is still before midnight.
+    /// Crossing midnight completes the previous day immediately.
     #[test]
-    fn a_tip_past_midnight_waits_for_the_median_time() {
+    fn a_tip_past_midnight_completes_the_previous_day() {
         let chain = ChainTime::from_window(&[
             (2, utc_ms("2026-10-23T16:00:30Z")),
             (1, utc_ms("2026-10-23T15:59:55Z")),
@@ -302,26 +319,23 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(chain.tip_day().unwrap(), day("2026-10-24"));
-        assert!(!chain.is_day_complete(day("2026-10-23")).unwrap());
-        assert_eq!(chain.last_complete_day().unwrap(), day("2026-10-22"));
+        assert!(chain.is_day_complete(day("2026-10-23")).unwrap());
+        assert_eq!(chain.last_complete_day().unwrap(), day("2026-10-23"));
     }
 
     #[test]
-    fn the_window_must_be_the_consecutive_blocks_ending_at_the_tip() {
+    fn fixtures_must_be_consecutive_and_persisted_chain_time_cannot_regress() {
         // Every block down to genesis on a young chain.
         assert!(ChainTime::from_window(&[(1, 2_000), (0, 1_000)]).is_ok());
         for window in [
-            vec![(2, 2_000), (0, 1_000)],              // gap
-            vec![(5, 2_000), (4, 1_000)],              // lower blocks missing
-            vec![(40, 2_000), (39, 1_000), (38, 900)], // short of 37
+            vec![(2, 2_000), (0, 1_000)], // gap
+            vec![(5, 2_000), (4, 1_000)], // lower blocks missing
         ] {
             let err = message(ChainTime::from_window(&window).unwrap_err());
             assert!(err.contains("consecutive blocks ending at tip"), "{err}");
         }
-        let full: Vec<(i64, i64)> = (0..37).map(|i| (100 - i, 10_000 - i)).collect();
-        let chain = ChainTime::from_window(&full).unwrap();
-        // Upper median of 37 values 9_964..=10_000.
-        assert_eq!(chain.median_time_ms(), 9_982);
+        let err = message(ChainTime::from_header(5, 2_000, 1_999, [0; 32]).unwrap_err());
+        assert!(err.contains("invalid canonical chain time"), "{err}");
     }
 
     #[test]
@@ -332,11 +346,13 @@ mod tests {
             (0, utc_ms("2026-10-23T15:59:50Z")),
         ])
         .unwrap();
-        // Median time 15:59:55Z (23:59:55 UTC+8 on 10-23): 10-22 and the
-        // 14:00 UTC hour are the newest complete buckets.
+        // Chain time 16:00:30Z completes 10-23 and the 15:00 UTC hour.
         assert_eq!(
             complete_days_cache_key("chart:x", Some(chain)).unwrap(),
-            "chart:x:complete-through:20261022"
+            format!(
+                "chart:x:complete-through:20261023:boundary:{}",
+                "00".repeat(32)
+            )
         );
         assert_eq!(
             complete_days_cache_key("chart:x", None).unwrap(),
@@ -344,7 +360,7 @@ mod tests {
         );
         assert_eq!(
             chain.last_complete_hour_start_secs(),
-            utc_ms("2026-10-23T14:00:00Z") / 1000
+            utc_ms("2026-10-23T15:00:00Z") / 1000
         );
     }
 
@@ -405,7 +421,54 @@ mod tests {
         batch.commit().unwrap();
         let chain = ChainTime::load(&store).unwrap().unwrap();
         assert_eq!(chain.tip_number(), 39);
-        // Window 3..=39 → timestamps 1_030..=1_390, upper median 1_210.
-        assert_eq!(chain.median_time_ms(), 1_210);
+        assert_eq!(chain.chain_time_ms(), 1_390);
+    }
+
+    #[test]
+    fn complete_day_cache_survives_tip_growth_but_changes_on_boundary_fork() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let before = utc_ms("2026-10-23T15:59:59Z");
+        let after = utc_ms("2026-10-23T16:00:01Z");
+        let header = |hash: u8, timestamp: i64| ckbadger_store::types::CachedBlockHeader {
+            hash: vec![hash; 32],
+            parent_hash: vec![hash.wrapping_sub(1); 32],
+            timestamp,
+            chain_time_ms: timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let mut batch = ckbadger_store::batch::StoreBatch::new(&store);
+        batch.put_block_header(0, &header(1, before));
+        batch.put_block_header(1, &header(2, after));
+        batch.commit().unwrap();
+        let first = complete_days_cache_key("chart:x", ChainTime::load(&store).unwrap()).unwrap();
+
+        let mut batch = ckbadger_store::batch::StoreBatch::new(&store);
+        batch.put_block_header(2, &header(3, after + 1_000));
+        batch.commit().unwrap();
+        let grown = complete_days_cache_key("chart:x", ChainTime::load(&store).unwrap()).unwrap();
+        assert_eq!(
+            first, grown,
+            "tip growth within the incomplete day should reuse cache"
+        );
+
+        let mut batch = ckbadger_store::batch::StoreBatch::new(&store);
+        batch.put_block_header(1, &header(4, after));
+        batch.put_block_header(2, &header(5, after + 1_000));
+        batch.commit().unwrap();
+        let forked = complete_days_cache_key("chart:x", ChainTime::load(&store).unwrap()).unwrap();
+        assert_ne!(
+            first, forked,
+            "a fork across the day boundary must invalidate cache"
+        );
     }
 }

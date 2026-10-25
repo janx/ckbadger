@@ -67,9 +67,9 @@ impl CkbadgerStore {
         Ok(None)
     }
 
-    /// Binary-search `block_headers` to find the first block whose timestamp
-    /// is greater than or equal to `timestamp_ms`.
-    pub fn find_first_block_at_or_after_ms(
+    /// Binary-search the monotonic canonical chain time, never raw header
+    /// timestamps (which CKB permits to move backward).
+    pub fn find_first_block_at_or_after_chain_time_ms(
         &self,
         timestamp_ms: i64,
     ) -> anyhow::Result<Option<i64>> {
@@ -84,20 +84,14 @@ impl CkbadgerStore {
             let middle = low + (high - low) / 2;
             match self.get_block_header(middle)? {
                 Some(header) => {
-                    if header.timestamp >= timestamp_ms {
+                    if header.chain_time_ms >= timestamp_ms {
                         result = Some(middle);
                         high = middle - 1;
                     } else {
                         low = middle + 1;
                     }
                 }
-                None => {
-                    // A rollback repair can temporarily search a pre-commit
-                    // view with a lower header already absent. Continue above
-                    // the hole; the owning recomputation validates the exact
-                    // predecessor it needs with DAO-specific context.
-                    low = middle + 1;
-                }
+                None => anyhow::bail!("missing canonical header during chain-time binary search: block={middle} tip={tip} threshold_ms={timestamp_ms}"),
             }
         }
         Ok(result)
@@ -471,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_first_block_at_or_after_ms_uses_timestamp_order() {
+    fn test_find_first_block_at_or_after_chain_time_ms_uses_monotonic_order() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
@@ -483,16 +477,28 @@ mod tests {
         }
         batch.commit().unwrap();
 
-        assert_eq!(store.find_first_block_at_or_after_ms(0).unwrap(), Some(0));
         assert_eq!(
-            store.find_first_block_at_or_after_ms(2_001).unwrap(),
+            store.find_first_block_at_or_after_chain_time_ms(0).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            store
+                .find_first_block_at_or_after_chain_time_ms(2_001)
+                .unwrap(),
             Some(2)
         );
         assert_eq!(
-            store.find_first_block_at_or_after_ms(8_000).unwrap(),
+            store
+                .find_first_block_at_or_after_chain_time_ms(8_000)
+                .unwrap(),
             Some(3)
         );
-        assert_eq!(store.find_first_block_at_or_after_ms(8_001).unwrap(), None);
+        assert_eq!(
+            store
+                .find_first_block_at_or_after_chain_time_ms(8_001)
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

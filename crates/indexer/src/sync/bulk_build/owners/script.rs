@@ -398,7 +398,7 @@ impl BulkReducer for ScriptOwner {
             }
         }
 
-        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
+        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.chain_time_ms);
         for (code_hash, delta) in deltas {
             {
                 let info = self
@@ -1300,6 +1300,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x02; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1357,6 +1358,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x02; 32],
             timestamp_ms: 1_700_000_000_001,
+            chain_time_ms: 1_700_000_000_001,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1494,6 +1496,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x02; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1531,6 +1534,7 @@ mod tests {
             block_number: 200,
             block_hash: [0x09; 32],
             timestamp_ms: 1_700_000_100_000,
+            chain_time_ms: 1_700_000_100_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1693,6 +1697,7 @@ mod tests {
             block_number: 300,
             block_hash: [0x0a; 32],
             timestamp_ms: 1_700_000_200_000,
+            chain_time_ms: 1_700_000_200_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1940,6 +1945,7 @@ mod tests {
             block_number: 400,
             block_hash: [0x11; 32],
             timestamp_ms: 1_700_000_300_000,
+            chain_time_ms: 1_700_000_300_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1998,6 +2004,7 @@ mod tests {
             block_number: 401,
             block_hash: [0x12; 32],
             timestamp_ms: 1_700_000_400_000,
+            chain_time_ms: 1_700_000_400_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -2133,6 +2140,7 @@ mod tests {
             block_number: 500,
             block_hash: [0x21; 32],
             timestamp_ms: 1_700_000_500_000,
+            chain_time_ms: 1_700_000_500_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -2191,6 +2199,7 @@ mod tests {
             block_number: 501,
             block_hash: [0x22; 32],
             timestamp_ms: 1_700_000_600_000,
+            chain_time_ms: 1_700_000_600_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,

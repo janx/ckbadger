@@ -245,7 +245,7 @@ impl TokenOwner {
 impl BulkReducer for TokenOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         // Capacity history first: every sUDT/xUDT-typed cell, amount or not.
-        let date = keys::timestamp_ms_to_date(tx.timestamp_ms);
+        let date = keys::timestamp_ms_to_date(tx.chain_time_ms);
         for input in &tx.resolved_inputs {
             if let Some(type_hash) = token_daily_type_hash(
                 input.semantic_tag,
@@ -316,7 +316,7 @@ impl BulkReducer for TokenOwner {
             .iter()
             .map(TokenCellView::to_parsed_udt_cell)
             .collect::<Vec<_>>();
-        let hour_bucket = tx.timestamp_ms / 3_600_000;
+        let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
 
         // Collect max_supply observations from omnilock supply info output cells
         for cell in tx.cells.iter() {
@@ -1194,6 +1194,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1227,6 +1228,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_001,
+            chain_time_ms: 1_700_000_000_001,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1305,6 +1307,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_002,
+            chain_time_ms: 1_700_000_000_002,
             block_dao_ar: 1,
             tx_index: 2,
             dotbit_action: None,
@@ -1419,6 +1422,7 @@ mod tests {
             block_number: 6_019_278,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1468,6 +1472,7 @@ mod tests {
             block_number: 123,
             block_hash: [0x66; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
             dotbit_action: None,
@@ -1529,6 +1534,7 @@ mod tests {
             block_number: 1_001_688,
             block_hash: [0x66; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1612,6 +1618,7 @@ mod tests {
             block_number: 10,
             block_hash: [0x66; 32],
             timestamp_ms: ts,
+            chain_time_ms: ts,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1649,6 +1656,7 @@ mod tests {
             block_number: 11,
             block_hash: [0x67; 32],
             timestamp_ms: ts + 1_000,
+            chain_time_ms: ts + 1_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1793,6 +1801,7 @@ mod tests {
             block_number: 12_654_045,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1826,6 +1835,7 @@ mod tests {
             block_number: 12_654_045,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1842,6 +1852,7 @@ mod tests {
             block_number: 12_654_050,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1947,6 +1958,7 @@ mod tests {
             block_number: 12_654_045,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
@@ -1987,6 +1999,7 @@ mod tests {
             block_number: 12_654_046,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,

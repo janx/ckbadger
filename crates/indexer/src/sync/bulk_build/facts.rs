@@ -27,6 +27,9 @@ pub(crate) struct BlockFacts {
     pub(crate) hash: [u8; 32],
     pub(crate) parent_hash: [u8; 32],
     pub(crate) timestamp_ms: i64,
+    /// Running maximum of raw header timestamps, assigned in chain order
+    /// before any parallel bulk reducers read this block.
+    pub(crate) chain_time_ms: i64,
     pub(crate) epoch_number: i64,
     pub(crate) epoch_index: i32,
     pub(crate) epoch_length: i32,
@@ -141,6 +144,7 @@ pub(crate) struct TxFacts {
     pub(crate) block_number: i64,
     pub(crate) block_hash: [u8; 32],
     pub(crate) timestamp_ms: i64,
+    pub(crate) chain_time_ms: i64,
     pub(crate) block_dao_ar: u64,
     pub(crate) tx_index: i32,
     pub(crate) is_cellbase: bool,
@@ -267,6 +271,7 @@ pub(crate) struct ResolvedTxFacts<'a> {
     pub(crate) block_number: i64,
     pub(crate) block_hash: [u8; 32],
     pub(crate) timestamp_ms: i64,
+    pub(crate) chain_time_ms: i64,
     pub(crate) block_dao_ar: u64,
     pub(crate) tx_index: i32,
     pub(crate) dotbit_action: Option<String>,

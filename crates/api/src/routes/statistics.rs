@@ -297,7 +297,7 @@ fn collect_recent_window_blocks(
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let exhausted = page.len() < page_size;
         for (block_num, header) in page {
-            if header.timestamp <= cutoff_ts {
+            if header.chain_time_ms <= cutoff_ts {
                 return Ok(blocks);
             }
             blocks.push((block_num, header));
@@ -343,7 +343,7 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
 
     let reference_ts = latest
         .as_ref()
-        .map(|(_, h)| h.timestamp)
+        .map(|(_, h)| h.chain_time_ms)
         .unwrap_or_else(|| Utc::now().timestamp_millis());
 
     let cutoff_ts = reference_ts - 24 * 3600 * 1000; // 24 hours ago in ms
@@ -398,12 +398,22 @@ fn estimate_hash_rate_from_window(
     }
     let (newest_num, newest) = headers_desc.first().expect("len >= 2");
     let (oldest_num, oldest) = headers_desc.last().expect("len >= 2");
-    let span_ms = newest.timestamp - oldest.timestamp;
-    if span_ms <= 0 {
+    let span_ms = newest
+        .chain_time_ms
+        .checked_sub(oldest.chain_time_ms)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+        "hash-rate chain-time span overflow: newest_block={newest_num} oldest_block={oldest_num}"
+    ))
+        })?;
+    if span_ms < 0 {
         return Err(ApiError::internal(format!(
-            "non-increasing block timestamps across hash-rate window: newest_block={}, newest_ts_ms={}, oldest_block={}, oldest_ts_ms={}",
-            newest_num, newest.timestamp, oldest_num, oldest.timestamp
+            "chain time regressed across hash-rate window: newest_block={}, newest_chain_ms={}, oldest_block={}, oldest_chain_ms={}",
+            newest_num, newest.chain_time_ms, oldest_num, oldest.chain_time_ms
         )));
+    }
+    if span_ms == 0 {
+        return Ok(None);
     }
     let mut work_sum: u128 = 0;
     for (block_num, header) in &headers_desc[..headers_desc.len() - 1] {
@@ -529,7 +539,7 @@ fn build_tx_stats_response(
 
     // Hourly: chain-level buckets, each carrying its UTC hour start in seconds.
     // The tip block counts in its own hour, whatever the order of timestamps.
-    let tip_secs = chain.tip_timestamp_ms().div_euclid(1000);
+    let tip_secs = chain.chain_time_ms().div_euclid(1000);
     let holds_tip = |hour: i64| hour <= tip_secs && tip_secs < hour + SECS_PER_HOUR;
     if !hourly_stats.is_empty() && !hourly_stats.iter().any(|(_, s)| holds_tip(s.hour)) {
         return Err(ApiError::internal(format!(
@@ -2323,7 +2333,12 @@ pub(crate) fn build_block_time_distribution_response(
             if curr_header.epoch_number < first_epoch || curr_header.epoch_number > last_epoch {
                 continue;
             }
-            let diff_ms = curr_header.timestamp - prev_header.timestamp;
+            let diff_ms = curr_header.chain_time_ms.checked_sub(prev_header.chain_time_ms).ok_or_else(|| format!(
+                "chain-time interval overflow: previous_block={prev_number} current_block={curr_number}"
+            ))?;
+            if diff_ms < 0 {
+                return Err(format!("chain time regressed: previous_block={prev_number} current_block={curr_number}").into());
+            }
             if let Some(bucket_index) = block_time_ms_to_bucket_index(diff_ms) {
                 bucket_counts[bucket_index] += 1;
                 total_blocks += 1;
@@ -2553,13 +2568,13 @@ async fn fetch_network_stats_from_db(
         .list_blocks_desc(Some(latest_block), NETWORK_STATS_BLOCK_TIME_WINDOW + 1)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let avg_block_time_secs: Option<f64> = if window_headers.len() >= 2 {
-        let newest_ms = window_headers.first().expect("len >= 2").1.timestamp;
-        let oldest_ms = window_headers.last().expect("len >= 2").1.timestamp;
+        let newest_ms = window_headers.first().expect("len >= 2").1.chain_time_ms;
+        let oldest_ms = window_headers.last().expect("len >= 2").1.chain_time_ms;
         let gaps = (window_headers.len() - 1) as f64;
         let span_ms = newest_ms - oldest_ms;
-        if span_ms <= 0 {
+        if span_ms < 0 {
             return Err(ApiError::internal(format!(
-                "non-increasing block timestamps across avg-block-time window: tip_block={}, newest_ts_ms={}, oldest_ts_ms={}",
+                "chain time regressed across avg-block-time window: tip_block={}, newest_chain_ms={}, oldest_chain_ms={}",
                 latest_block, newest_ms, oldest_ms
             )));
         }
@@ -2875,11 +2890,13 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
 
     let daily_stats_by_date: HashMap<String, ckbadger_store::DailyStats> =
         daily_stats.into_iter().collect();
-    let genesis_date_key = genesis_header.map(|header| {
-        ckbadger_common::block_date_from_ms(header.timestamp)
-            .format("%Y%m%d")
-            .to_string()
-    });
+    let genesis_date_key = genesis_header
+        .map(|header| {
+            ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)
+                .map(|day| day.format("%Y%m%d").to_string())
+                .map_err(|e| ApiError::internal(format!("invalid genesis chain time: {e}")))
+        })
+        .transpose()?;
 
     let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
     for (date_str, stats) in daily_block_stats {
@@ -3668,7 +3685,7 @@ fn certify_inflation_snapshot_gap_is_blockless(
         .timestamp_millis();
 
     let first_block = store
-        .find_first_block_at_or_after_ms(day_start_ms)
+        .find_first_block_at_or_after_chain_time_ms(day_start_ms)
         .map_err(|error| {
             ApiError::internal(format!(
                 "failed to locate canonical block coverage for DAO snapshot gap starting {}: {}",
@@ -3695,7 +3712,11 @@ fn certify_inflation_snapshot_gap_is_blockless(
                 first_block, first_missing_date
             ))
         })?;
-    let first_block_date = ckbadger_common::block_date_from_ms(first_header.timestamp);
+    let first_block_date = ckbadger_common::stats_bucket::stats_day(first_header.chain_time_ms)
+        .map_err(|error| ApiError::internal(format!(
+            "invalid chain time while validating DAO snapshot gap: block={first_block} chain_time_ms={}: {error}",
+            first_header.chain_time_ms
+        )))?;
 
     if first_block_date < next_snapshot_date {
         return Err(ApiError::internal(format!(
@@ -5444,14 +5465,12 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_hash_rate_fails_fast_on_non_increasing_timestamps() {
+    fn test_estimate_hash_rate_is_undefined_for_equal_chain_times() {
         let headers = vec![
             (2i64, window_header(2, 5_000, 0x190d_f964)),
             (1i64, window_header(1, 5_000, 0x190d_f964)),
         ];
-        let err = estimate_hash_rate_from_window(&headers).unwrap_err();
-        assert!(err.1 .0.message.contains("non-increasing block timestamps"));
-        assert!(err.1 .0.message.contains("newest_block=2"));
+        assert_eq!(estimate_hash_rate_from_window(&headers).unwrap(), None);
     }
 
     /// Regression (C4): the 24h recent-blocks window must page through the

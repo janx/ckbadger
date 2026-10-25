@@ -1333,9 +1333,8 @@ pub(super) fn load_latest_dao_daily_snapshot(
         .context("failed to get latest dao daily snapshot while building cumulative snapshot")
 }
 
-/// The batch's DAO snapshot dates treated as complete: every date but the
-/// newest. Correct only while timestamps do not step back across midnight
-/// (CKB permits that; see POSTMORTEM STATS-014 for the open defect).
+/// The batch's completed DAO snapshot dates. Chain time never regresses, so
+/// every date before the newest date in this batch is closed.
 fn completed_dao_snapshot_boundaries(stats: &BatchStats) -> Result<Vec<DaoSnapshotBoundary>> {
     let mut dates = stats.dao_snapshot_dates.iter().copied().collect::<Vec<_>>();
     dates.sort_unstable();
@@ -3727,18 +3726,6 @@ impl Indexer {
                         let bucket_minutes = i32::try_from(ckbadger_common::work::rounded_ratio(duration_ms, 60_000)
                             .map_err(|e| anyhow!("epoch minute rounding failed: block={}: {e}", parsed.number))?)
                             .map_err(|_| anyhow!("epoch minute bucket exceeds i32: block={} duration_ms={duration_ms}", parsed.number))?;
-                        if bucket_minutes <= 0 {
-                            anyhow::bail!(
-                                "epoch time distribution: invalid bucket_minutes={} \
-                                 for epoch {} (prev_epoch={}, duration_ms={}, \
-                                 block={})",
-                                bucket_minutes,
-                                parsed.epoch_number,
-                                prev_epoch_num,
-                                duration_ms,
-                                parsed.number,
-                            );
-                        }
                         *batch_stats
                             .epoch_time_dist
                             .entry(bucket_minutes)
@@ -4313,13 +4300,8 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.cum_treasury)
                     .unwrap_or(0);
-                // Every date this batch wrote except the last is treated as
-                // complete. That holds only while block timestamps never step
-                // back across midnight; CKB allows it (a block need only be
-                // dated after the median time of the 37 before it), and then a
-                // later block can still land on such a date. This writer does
-                // not use `ckbadger_common::stats_bucket` yet — POSTMORTEM
-                // STATS-014 records the open defect and why.
+                // Chain-time buckets are monotonic, so every date except the
+                // newest date in this batch is complete.
                 let completed_boundaries: HashMap<NaiveDate, i64> =
                     completed_dao_snapshot_boundaries(stats)?
                         .into_iter()
@@ -7186,9 +7168,23 @@ mod tests {
                 write_live_block(&single_indexer, block).await.unwrap();
             }
             let (batch_store, batch_indexer) = live_dao_fixture_store();
+            seed_secp_script_info(batch_store.as_ref());
+            seed_script_info(batch_store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
+            // The rollback DAO boundary search spans genesis..tip. This live
+            // fixture normally starts at block 99, so fill its earlier
+            // canonical headers before exercising rollback/replay.
+            let mut earlier = ckbadger_store::batch::StoreBatch::new(batch_store.as_ref());
+            let parent = batch_store.get_block_header(99).unwrap().unwrap();
+            for number in 0i64..99 {
+                let mut header = parent.clone();
+                header.hash = vec![number as u8; 32];
+                header.parent_hash = vec![if number == 0 { 0 } else { (number - 1) as u8 }; 32];
+                earlier.put_block_header(number, &header);
+            }
+            earlier.commit().unwrap();
             write_live_blocks_with_entity_changes(
                 &batch_indexer,
-                blocks,
+                blocks.clone(),
                 EntityDailyChanges::new(),
             )
             .await
@@ -7263,6 +7259,62 @@ mod tests {
                     .block_count,
                 3
             );
+
+            let cells = |store: &CkbadgerStore| {
+                store
+                    .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
+                    .map(|row| {
+                        let (key, value) = row.unwrap();
+                        (key.to_vec(), value.to_vec())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let append_before = cells(&batch_store);
+            let undo = batch_store
+                .rollback_via_undo_log(batch_store.as_ref(), 101)
+                .unwrap();
+            batch_store
+                .rollback_to_block_with_tx_contexts(
+                    101,
+                    Some(batch_store.as_ref()),
+                    undo.tx_contexts,
+                )
+                .unwrap();
+            assert_eq!(
+                cells(&batch_store),
+                append_before,
+                "rollback must preserve CF_CELLS bytes"
+            );
+            batch_indexer.reconcile_hodl_tracker_with_tip(101).unwrap();
+            batch_indexer
+                .reconcile_cell_dist_tracker_with_tip(101)
+                .unwrap();
+            batch_indexer.cell_cache.clear();
+            write_live_blocks_with_entity_changes(
+                &batch_indexer,
+                blocks[2..].to_vec(),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                cells(&batch_store),
+                append_before,
+                "replay must preserve existing CF_CELLS bytes"
+            );
+            let replayed_rows = rows(&batch_store)
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            for (key, expected) in &single_rows {
+                assert_eq!(
+                    replayed_rows.get(key),
+                    Some(expected),
+                    "rollback/replay stats differ: cf={} key=0x{}",
+                    key.0,
+                    hex::encode(&key.1)
+                );
+            }
+            assert_eq!(replayed_rows.len(), single_rows.len());
         }
 
         // ---- Phase 1a: participant-derived addr_txs rows ----

@@ -378,7 +378,7 @@ impl<'a> DaoCompensationTimeline<'a> {
 
 impl BulkReducer for DaoOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        let tx_date = ckbadger_common::block_date_from_ms(tx.timestamp_ms);
+        let tx_date = ckbadger_common::stats_bucket::stats_day(tx.chain_time_ms)?;
 
         let dao_outputs = tx
             .cells
@@ -579,23 +579,11 @@ impl BulkReducer for DaoOwner {
                             format_outpoint(&origin_outpoint)
                         )
                     })?;
-                    let request_output_index = if let Some(output_index) =
-                        entry.withdraw_request_output_index
-                    {
-                        output_index
-                    } else {
-                        infer_request_output_index_from_inputs(&tx.resolved_inputs, request_tx_hash)
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "DAO withdraw request output index missing/ambiguous in bulk reducer: block={}, tx=0x{}, tx_index={}, origin_outpoint={}, request_tx=0x{}",
-                                    tx.block_number,
-                                    hex::encode(tx.tx_hash),
-                                    tx.tx_index,
-                                    format_outpoint(&origin_outpoint),
-                                    hex::encode(request_tx_hash)
-                                )
-                            })?
-                    };
+                    let request_output_index = entry.withdraw_request_output_index.ok_or_else(|| anyhow!(
+                        "DAO withdraw request output index missing from persisted phase-1 entry: block={} tx=0x{} tx_index={} origin_outpoint={} request_tx=0x{}",
+                        tx.block_number, hex::encode(tx.tx_hash), tx.tx_index,
+                        format_outpoint(&origin_outpoint), hex::encode(request_tx_hash)
+                    ))?;
 
                     let deposit_ar = u64::try_from(entry.deposit_ar).map_err(|_| {
                         anyhow!(
@@ -1116,7 +1104,7 @@ impl DaoOwner {
     }
 
     pub(crate) fn record_block(&mut self, block: &BlockFacts) -> Result<()> {
-        let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+        let block_date = ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?;
         self.snapshot_dates.insert(block_date);
 
         let (c, s, u) = extract_dao_csu(&block.dao).ok_or_else(|| {
@@ -1415,25 +1403,6 @@ impl DaoCellView {
             })?,
         }))
     }
-}
-
-fn infer_request_output_index_from_inputs(
-    inputs: &[ResolvedInputFacts],
-    request_tx_hash: &[u8],
-) -> Option<i16> {
-    let mut matches = inputs
-        .iter()
-        .filter_map(|input| {
-            (input.outpoint.tx_hash.as_slice() == request_tx_hash)
-                .then(|| i16::try_from(input.outpoint.index).ok())
-                .flatten()
-        })
-        .take(2);
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(first)
 }
 
 fn infer_withdraw_to_output_index_from_outputs(
@@ -1778,6 +1747,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x04; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 10_000,
             tx_index: 0,
             dotbit_action: None,
@@ -1822,6 +1792,7 @@ mod tests {
             block_number: 101,
             block_hash: [0x04; 32],
             timestamp_ms: 1_700_000_000_001,
+            chain_time_ms: 1_700_000_000_001,
             block_dao_ar: 12_000,
             tx_index: 0,
             dotbit_action: None,
@@ -1887,6 +1858,7 @@ mod tests {
             block_number: 102,
             block_hash: [0x04; 32],
             timestamp_ms: 1_700_000_000_002,
+            chain_time_ms: 1_700_000_000_002,
             block_dao_ar: 13_000,
             tx_index: 0,
             dotbit_action: None,
@@ -2025,6 +1997,7 @@ mod tests {
             block_number: 100,
             block_hash: [0x04; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 10_000,
             tx_index: 0,
             dotbit_action: None,
@@ -2069,6 +2042,7 @@ mod tests {
             block_number: 200,
             block_hash: [0x05; 32],
             timestamp_ms: 1_700_000_000_001,
+            chain_time_ms: 1_700_000_000_001,
             block_dao_ar: 12_000,
             tx_index: 1,
             dotbit_action: None,
@@ -2156,6 +2130,7 @@ mod tests {
             block_number: 5668752,
             block_hash: [0x04; 32],
             timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
             block_dao_ar: 10_000,
             tx_index: 0,
             dotbit_action: None,
@@ -2192,6 +2167,7 @@ mod tests {
             block_number: 5733774,
             block_hash: [0x05; 32],
             timestamp_ms: 1_700_000_000_001,
+            chain_time_ms: 1_700_000_000_001,
             block_dao_ar: 12_000,
             tx_index: 1,
             dotbit_action: None,
@@ -2300,6 +2276,7 @@ mod tests {
             block_number: 102,
             block_hash: [0x44; 32],
             timestamp_ms: 1_700_000_000_002,
+            chain_time_ms: 1_700_000_000_002,
             block_dao_ar: 13_000,
             tx_index: 0,
             dotbit_action: None,

@@ -1171,12 +1171,14 @@ impl CkbadgerStore {
         let day_start_ms = day_start_utc.timestamp_millis();
         let day_end_ms = day_end_utc.timestamp_millis();
 
-        // 2. Locate the first block whose timestamp >= day_start_ms, bounded
+        // 2. Locate the first block whose chain time >= day_start_ms, bounded
         //    above by end_block_inclusive.
-        let Some(day_start_block) = self.find_first_block_at_or_after_ms(day_start_ms)? else {
+        let Some(day_start_block) =
+            self.find_first_block_at_or_after_chain_time_ms(day_start_ms)?
+        else {
             return Ok(()); // no blocks at or after this date — nothing to recompute
         };
-        // NOTE: find_first_block_at_or_after_ms reads the live DB (pre-rollback-
+        // NOTE: find_first_block_at_or_after_chain_time_ms reads the live DB (pre-rollback-
         // committed state), so day_start_block may be > end_block_inclusive if
         // the first block on this date is itself being rolled back. This early
         // return correctly handles that case — do NOT remove this guard.
@@ -1189,10 +1191,10 @@ impl CkbadgerStore {
         {
             let mut bn = day_start_block + 1;
             while bn <= end_block_inclusive {
-                let Some(h) = self.get_block_header(bn)? else {
-                    break;
-                };
-                if h.timestamp >= day_end_ms {
+                let h = self.get_block_header(bn)?.ok_or_else(|| anyhow::anyhow!(
+                    "missing canonical header while recomputing DAO day: date={date} block={bn} end_block={end_block_inclusive}"
+                ))?;
+                if h.chain_time_ms >= day_end_ms {
                     break;
                 }
                 day_end_block = bn;
@@ -2148,8 +2150,8 @@ mod daily_activity_stats_tests {
             coinbase_count: 8640,
             unique_address_count: 500,
             total_ckb_moved: 100_000_000_000_000,
-            script_counts: std::collections::HashMap::new(),
-            protocol_action_counts: std::collections::HashMap::new(),
+            script_counts: std::collections::BTreeMap::new(),
+            protocol_action_counts: std::collections::BTreeMap::new(),
         };
         store.put_daily_activity_stats("20260309", &stats).unwrap();
         let loaded = store.get_daily_activity_stats("20260309").unwrap().unwrap();
