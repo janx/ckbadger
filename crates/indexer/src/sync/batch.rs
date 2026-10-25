@@ -1580,19 +1580,18 @@ impl Indexer {
                 );
             }
 
-            let elapsed = self
-                .writer
-                .store()
-                .get_sync_status()
-                .ok()
-                .and_then(|s| s.bulk_sync_total_seconds());
-            let avg_bps = elapsed
-                .filter(|&e| e > 0)
-                .map(|e| current as f64 / e as f64);
+            let elapsed = match self.writer.store().get_sync_status() {
+                Ok(status) => status.bulk_sync_total_seconds(),
+                Err(error) => {
+                    warn!(error = %error, "Cannot read bulk sync completion duration");
+                    None
+                }
+            };
+            let avg_bps = Self::bulk_completion_blocks_per_second(current, elapsed);
             info!(
                 blocks_synced = current,
-                elapsed_secs = elapsed.unwrap_or(0),
-                avg_bps = format!("{:.1}", avg_bps.unwrap_or(0.0)),
+                elapsed_secs = ?elapsed,
+                avg_bps = ?avg_bps,
                 sst_size_gb = ?sst_gb,
                 "Bulk sync completed"
             );
@@ -1603,6 +1602,10 @@ impl Indexer {
             // Compaction mode transition is now handled by ensure_compaction_mode()
             // which runs after every batch and includes a drain guard.
         }
+    }
+
+    fn bulk_completion_blocks_per_second(current: u64, elapsed: Option<i64>) -> Option<f64> {
+        elapsed.filter(|&seconds| seconds > 0).map(|seconds| current as f64 / seconds as f64)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4468,6 +4471,13 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bulk_completion_rate_has_no_fabricated_zero_without_duration() {
+        assert_eq!(Indexer::bulk_completion_blocks_per_second(100, None), None);
+        assert_eq!(Indexer::bulk_completion_blocks_per_second(100, Some(0)), None);
+        assert_eq!(Indexer::bulk_completion_blocks_per_second(100, Some(20)), Some(5.0));
+    }
     use ckbadger_store::keys;
     use ckbadger_store::LiveCellInfo;
     use std::sync::Arc;
