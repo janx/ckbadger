@@ -92,8 +92,8 @@ pub struct ReadPatternSummaryEntry {
     pub pattern: String,
     pub endpoint_count: usize,
     pub stable_avg_p95_ms: f64,
-    pub break_avg_p95_ms: f64,
-    pub degradation: f64,
+    pub break_avg_p95_ms: Option<f64>,
+    pub degradation: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -218,14 +218,13 @@ pub fn build_read_pattern_summary(
         let endpoint_count = stable_vals.len();
         let stable_avg = stable_vals.iter().sum::<f64>() / stable_vals.len() as f64;
         let break_vals = pattern_break.get(pattern);
-        let break_avg = match break_vals {
-            Some(vals) if !vals.is_empty() => vals.iter().sum::<f64>() / vals.len() as f64,
-            _ => stable_avg, // no breaking data: assume same
-        };
+        let break_avg = break_vals
+            .filter(|vals| !vals.is_empty())
+            .map(|vals| vals.iter().sum::<f64>() / vals.len() as f64);
         let degradation = if stable_avg > 0.0 {
-            break_avg / stable_avg
+            break_avg.map(|value| value / stable_avg)
         } else {
-            1.0
+            None
         };
 
         entries.push(ReadPatternSummaryEntry {
@@ -346,9 +345,12 @@ pub fn print_tables(report: &StressReport) {
             eprintln!("  \u{2705}  No breaking point detected within test range");
         }
 
-        // 2. Endpoint breakdown (last stable vs last stage)
-        if sr.stage_results.len() >= 2 {
-            let last_stage = sr.stage_results.last().unwrap();
+        // 2. Endpoint breakdown only when an actual hard-failure stage exists.
+        if let Some(last_stage) = sr
+            .stage_results
+            .iter()
+            .find(|stage| stage.status == StageStatus::HardFailure)
+        {
             if let Some(stable_stage) = find_last_stable(&sr.stage_results) {
                 // Only show if the last stage differs from stable
                 if stable_stage.stage_id != last_stage.stage_id {
@@ -416,20 +418,27 @@ pub fn print_tables(report: &StressReport) {
                         eprintln!("  {}", "-".repeat(72));
 
                         for ps in &pattern_summary {
-                            let flag = if ps.degradation > 25.0 {
+                            let flag = if ps.degradation.is_some_and(|value| value > 25.0) {
                                 " \u{2716}"
-                            } else if ps.degradation > 15.0 {
+                            } else if ps.degradation.is_some_and(|value| value > 15.0) {
                                 " \u{26a0}"
                             } else {
                                 ""
                             };
                             eprintln!(
-                                "  {}  {}  {}  {}  {:.1}\u{00d7}{}",
+                                "  {}  {}  {}  {}  {}{}",
                                 pad_right(&ps.pattern, 14),
                                 pad_left(&format!("{}", ps.endpoint_count), 10),
                                 pad_right(&format!("{:.0}ms", ps.stable_avg_p95_ms), 16),
-                                pad_right(&format!("{:.0}ms", ps.break_avg_p95_ms), 16),
-                                ps.degradation,
+                                pad_right(
+                                    &ps.break_avg_p95_ms
+                                        .map(|value| format!("{value:.0}ms"))
+                                        .unwrap_or_else(|| "unknown".into()),
+                                    16
+                                ),
+                                ps.degradation
+                                    .map(|value| format!("{value:.1}\u{00d7}"))
+                                    .unwrap_or_else(|| "unknown".into()),
                                 flag,
                             );
                         }
@@ -475,8 +484,11 @@ fn build_report_json(report: &StressReport) -> StressReportJson {
                 })
                 .collect();
 
-            // Build endpoint breakdown and pattern summary from last stable vs last
-            let last_stage = sr.stage_results.last();
+            // A scenario without a hard failure has no breaking-stage comparison.
+            let last_stage = sr
+                .stage_results
+                .iter()
+                .find(|stage| stage.status == StageStatus::HardFailure);
             let stable_stage = find_last_stable(&sr.stage_results);
 
             let (endpoint_breakdown, read_pattern_summary) = match (stable_stage, last_stage) {
@@ -625,16 +637,59 @@ mod tests {
         assert_eq!(summary[0].pattern, "RangeScan");
         assert_eq!(summary[0].endpoint_count, 1);
         assert!((summary[0].stable_avg_p95_ms - 20.0).abs() < 0.01);
-        assert!((summary[0].break_avg_p95_ms - 200.0).abs() < 0.01);
-        assert!((summary[0].degradation - 10.0).abs() < 0.01);
+        assert!((summary[0].break_avg_p95_ms.unwrap() - 200.0).abs() < 0.01);
+        assert!((summary[0].degradation.unwrap() - 10.0).abs() < 0.01);
 
         // KeyLookup: avg stable = (10+15)/2 = 12.5, avg break = (50+75)/2 = 62.5
         // degradation = 62.5 / 12.5 = 5.0
         assert_eq!(summary[1].pattern, "KeyLookup");
         assert_eq!(summary[1].endpoint_count, 2);
         assert!((summary[1].stable_avg_p95_ms - 12.5).abs() < 0.01);
-        assert!((summary[1].break_avg_p95_ms - 62.5).abs() < 0.01);
-        assert!((summary[1].degradation - 5.0).abs() < 0.01);
+        assert!((summary[1].break_avg_p95_ms.unwrap() - 62.5).abs() < 0.01);
+        assert!((summary[1].degradation.unwrap() - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn missing_breaking_pattern_is_unknown_not_unchanged() {
+        let mut stable_eps = HashMap::new();
+        stable_eps.insert(0, make_ep("/blocks", "KeyLookup", 10.0, 0.0));
+        let stable = make_stage(0, 10, StageStatus::Ok, stable_eps);
+        let breaking = make_stage(1, 100, StageStatus::HardFailure, HashMap::new());
+        let summary = build_read_pattern_summary(&stable, &breaking);
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].break_avg_p95_ms, None);
+        assert_eq!(summary[0].degradation, None);
+    }
+
+    #[test]
+    fn errors_rising_without_hard_failure_has_no_breaking_comparison() {
+        let mut stable_eps = HashMap::new();
+        stable_eps.insert(0, make_ep("/blocks", "KeyLookup", 10.0, 0.0));
+        let mut rising_eps = HashMap::new();
+        rising_eps.insert(0, make_ep("/blocks", "KeyLookup", 30.0, 0.0));
+        let report = StressReport {
+            timestamp: "2026-10-25".into(),
+            target: "http://localhost".into(),
+            config: StressConfig {
+                scenarios: "api".into(),
+                stage_duration_secs: 30,
+                auto_ramp: true,
+                think_time_ms: "0".into(),
+                timeout_ms: 1000,
+            },
+            scenarios: vec![ScenarioReport {
+                scenario: Scenario::Api,
+                stage_results: vec![
+                    make_stage(0, 10, StageStatus::Ok, stable_eps),
+                    make_stage(1, 20, StageStatus::ErrorsRising, rising_eps),
+                ],
+                soft_degradation_vus: Some(20),
+                breaking_point_vus: None,
+            }],
+        };
+        let json = build_report_json(&report);
+        assert!(json.scenarios[0].endpoint_breakdown.is_empty());
+        assert!(json.scenarios[0].read_pattern_summary.is_empty());
     }
 
     #[test]
