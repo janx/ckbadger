@@ -3618,16 +3618,18 @@ fn build_batch_left_column(
         let filled = filled.min(bar_width);
         let bar: String = "\u{2588}".repeat(filled);
         let empty: String = "\u{2591}".repeat(bar_width - filled);
-        let pct = if bb.build_ms.unwrap_or(0.0) > 0.0 {
-            format!("{:3.0}%", ms / bb.build_ms.unwrap() * 100.0)
-        } else {
-            "  -".to_string()
+        let pct = match (*ms_opt, bb.build_ms) {
+            (Some(stage), Some(build)) if build > 0.0 => format!("{:3.0}%", stage / build * 100.0),
+            _ => "  -".to_string(),
         };
+        let ms_text = ms_opt
+            .map(|value| format!("{value:>6.1}ms"))
+            .unwrap_or_else(|| "     —".to_string());
         left.push(Line::from(vec![
             Span::styled(format!("{:<8}", name), Style::default().fg(SLATE_500)),
             Span::styled(bar, Style::default().fg(*color)),
             Span::styled(empty, Style::default().fg(SLATE_800)),
-            Span::styled(format!(" {:>6.1}ms", ms), Style::default().fg(FOREGROUND)),
+            Span::styled(format!(" {ms_text}"), Style::default().fg(FOREGROUND)),
             Span::styled(format!(" {}", pct), Style::default().fg(SLATE_500)),
         ]));
     }
@@ -3737,29 +3739,31 @@ fn build_batch_left_column(
         }
     }
 
-    let cells_created = bb.cells_created.unwrap_or(0);
-    let cells_consumed = bb.cells_consumed.unwrap_or(0);
-    let total_cells = cells_created + cells_consumed;
-    let cells_per_sec_text = {
-        let iteration_ms = bb.build_ms.unwrap_or(0.0)
-            + bb.prefetch_recv_ms.unwrap_or(0.0)
-            + bb.flush_wait_ms.unwrap_or(0.0);
-        if iteration_ms > 0.0 && total_cells > 0 {
-            let cps = total_cells as f64 / (iteration_ms / 1000.0);
-            format!("{}k/s", (cps / 1000.0) as u64)
-        } else {
-            "-".to_string()
-        }
-    };
+    let cells_per_sec_text = bb
+        .cells_created
+        .zip(bb.cells_consumed)
+        .zip(bb.build_ms.zip(bb.prefetch_recv_ms).zip(bb.flush_wait_ms))
+        .and_then(|((created, consumed), ((build, recv), flush))| {
+            let iteration_ms = build + recv + flush;
+            (iteration_ms > 0.0).then(|| {
+                let cps = (created as f64 + consumed as f64) / (iteration_ms / 1000.0);
+                format!("{}k/s", (cps / 1000.0) as u64)
+            })
+        })
+        .unwrap_or_else(|| "—".to_string());
     left.push(Line::from(vec![
         Span::styled("Volume ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format!("+{}k", cells_created / 1000),
+            bb.cells_created
+                .map(|count| format!("+{}k", count / 1000))
+                .unwrap_or_else(|| "+—".to_string()),
             Style::default().fg(TERMINAL_GREEN),
         ),
         Span::styled(" ", Style::default()),
         Span::styled(
-            format!("-{}k", cells_consumed / 1000),
+            bb.cells_consumed
+                .map(|count| format!("-{}k", count / 1000))
+                .unwrap_or_else(|| "-—".to_string()),
             Style::default().fg(AMBER),
         ),
         Span::styled(" cells  ", Style::default().fg(SLATE_500)),
@@ -3791,11 +3795,16 @@ fn build_finalize_left_column(
     bb: &BulkBuildProgressData,
     available_height: usize,
 ) -> Vec<Line<'static>> {
-    let step = bb.finalize_step.unwrap_or(0);
-    let total = bb
-        .finalize_steps_total
-        .unwrap_or(FINALIZE_PHASES.len() as u8);
-    let elapsed_s = bb.finalize_elapsed_ms.unwrap_or(0.0) / 1000.0;
+    let step = bb.finalize_step;
+    let total = bb.finalize_steps_total;
+    let step_text = step
+        .zip(total)
+        .map(|(step, total)| format!("{}/{total}", step + 1))
+        .unwrap_or_else(|| "—".to_string());
+    let elapsed_text = bb
+        .finalize_elapsed_ms
+        .map(|ms| format!("{:.1}s", ms / 1000.0))
+        .unwrap_or_else(|| "—".to_string());
 
     let mut lines = vec![Line::from(vec![
         Span::styled("Engine ", Style::default().fg(SLATE_500)),
@@ -3807,18 +3816,17 @@ fn build_finalize_left_column(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  step {}/{}", step + 1, total),
+            format!("  step {step_text}"),
             Style::default().fg(FOREGROUND),
         ),
-        Span::styled(
-            format!("  {:.1}s", elapsed_s),
-            Style::default().fg(SLATE_500),
-        ),
+        Span::styled(format!("  {elapsed_text}"), Style::default().fg(SLATE_500)),
     ])];
 
     // Compact: if very little space, show only header + current phase
     if available_height < 6 {
-        let label = FINALIZE_PHASES.get(step as usize).unwrap_or(&"...");
+        let label = step
+            .and_then(|step| FINALIZE_PHASES.get(step as usize))
+            .unwrap_or(&"—");
         lines.push(Line::from(vec![
             Span::styled("\u{25b8} ", Style::default().fg(AMBER)),
             Span::styled(label.to_string(), Style::default().fg(AMBER)),
@@ -3835,9 +3843,9 @@ fn build_finalize_left_column(
 
     for (i, label) in FINALIZE_PHASES.iter().enumerate().take(individual_end) {
         let i = i as u8;
-        let (marker, color) = if i < step {
+        let (marker, color) = if step.is_some_and(|step| i < step) {
             ("\u{2713}", TERMINAL_GREEN) // ✓
-        } else if i == step {
+        } else if step == Some(i) {
             ("\u{25b8}", AMBER) // ►
         } else {
             (" ", SLATE_500)
@@ -3852,16 +3860,22 @@ fn build_finalize_left_column(
         // Group remaining owners (dao/fiber/object) on one line
         let group1_phases: &[usize] = &[7, 8, 9]; // dao, fiber, object
         let group1_label = "Owner: dao / fiber / object";
-        let group1_color = if group1_phases.iter().all(|&i| (i as u8) < step) {
+        let group1_color = if group1_phases
+            .iter()
+            .all(|&i| step.is_some_and(|step| (i as u8) < step))
+        {
             TERMINAL_GREEN
-        } else if group1_phases.iter().any(|&i| (i as u8) == step) {
+        } else if group1_phases.iter().any(|&i| step == Some(i as u8)) {
             AMBER
         } else {
             SLATE_500
         };
-        let group1_marker = if group1_phases.iter().all(|&i| (i as u8) < step) {
+        let group1_marker = if group1_phases
+            .iter()
+            .all(|&i| step.is_some_and(|step| (i as u8) < step))
+        {
             "\u{2713}"
-        } else if group1_phases.iter().any(|&i| (i as u8) == step) {
+        } else if group1_phases.iter().any(|&i| step == Some(i as u8)) {
             "\u{25b8}"
         } else {
             " "
@@ -3877,16 +3891,22 @@ fn build_finalize_left_column(
         // Group tail phases (metadata/memtable/sync) on one line
         let group2_phases: &[usize] = &[10, 11, 12]; // metadata, memtable, sync
         let group2_label = "Metadata / Flush / Status";
-        let group2_color = if group2_phases.iter().all(|&i| (i as u8) < step) {
+        let group2_color = if group2_phases
+            .iter()
+            .all(|&i| step.is_some_and(|step| (i as u8) < step))
+        {
             TERMINAL_GREEN
-        } else if group2_phases.iter().any(|&i| (i as u8) == step) {
+        } else if group2_phases.iter().any(|&i| step == Some(i as u8)) {
             AMBER
         } else {
             SLATE_500
         };
-        let group2_marker = if group2_phases.iter().all(|&i| (i as u8) < step) {
+        let group2_marker = if group2_phases
+            .iter()
+            .all(|&i| step.is_some_and(|step| (i as u8) < step))
+        {
             "\u{2713}"
-        } else if group2_phases.iter().any(|&i| (i as u8) == step) {
+        } else if group2_phases.iter().any(|&i| step == Some(i as u8)) {
             "\u{25b8}"
         } else {
             " "
@@ -6410,16 +6430,17 @@ fn draw_system_params_compact(
 mod tests {
     use super::{
         api_health_state, background_task_last_result, background_task_state_label,
-        build_controller_column_lines, build_finalize_left_column, build_pipeline_column,
-        build_resources_column, bulk_queue_indicator_line, chart_height_warning, ckb_path_display,
-        compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
-        controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
-        direct_io_reads_label, disk_pressure_lines, draw_peers_status, eta_confidence_label,
-        footer_hint_line, footer_status_message, format_age_secs, format_last_round_age,
-        format_num, format_num_commas, format_num_compact, format_rate_expanded,
-        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
-        network_summary_line, network_summary_row, network_switcher_line, overview_log_min_height,
+        build_batch_left_column, build_controller_column_lines, build_finalize_left_column,
+        build_pipeline_column, build_resources_column, bulk_queue_indicator_line,
+        chart_height_warning, ckb_path_display, compact_overview_layout,
+        consumed_cells_source_color, consumed_cells_source_label, controller_panel_lines,
+        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
+        disk_pressure_lines, draw_peers_status, eta_confidence_label, footer_hint_line,
+        footer_status_message, format_age_secs, format_last_round_age, format_num,
+        format_num_commas, format_num_compact, format_rate_expanded, format_signed_num_i128,
+        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line, network_summary_line,
+        network_summary_row, network_switcher_line, overview_log_min_height,
         overview_services_min_height, peers_trend_series, peers_view_state,
         percentile_from_history, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
         render_gauge, runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
@@ -7997,6 +8018,40 @@ mod tests {
     fn iteration_budget_readout_distinguishes_missing_from_zero() {
         assert_eq!(super::iteration_budget_value(None), "—");
         assert_eq!(super::iteration_budget_value(Some(0.0)), "0");
+    }
+
+    #[test]
+    fn batch_stage_readout_does_not_report_missing_stage_as_zero_ms() {
+        let bb = BulkBuildProgressData::default();
+        let lines = build_batch_left_column(&bb, &[Rect::new(0, 0, 80, 20)], false);
+        let facts = line_text(&lines[1]);
+        assert!(
+            facts.contains("—"),
+            "missing stage has false elapsed time: {facts}"
+        );
+        assert!(
+            !facts.contains("0.0ms"),
+            "missing stage has false elapsed time: {facts}"
+        );
+        let volume = line_text(lines.last().unwrap());
+        assert!(
+            volume.contains("+—"),
+            "missing cell count became zero: {volume}"
+        );
+    }
+
+    #[test]
+    fn finalize_header_does_not_invent_step_or_elapsed_time() {
+        let bb = BulkBuildProgressData::default();
+        let header = line_text(&build_finalize_left_column(&bb, 20)[0]);
+        assert!(
+            header.contains("step —"),
+            "missing step became step 1: {header}"
+        );
+        assert!(
+            header.contains("—"),
+            "missing elapsed time became zero: {header}"
+        );
     }
 
     #[test]
