@@ -7094,6 +7094,13 @@ mod tests {
                 ("dao_by_lock_block", store.cf_dao_by_lock_block()),
                 ("dao_by_status_block", store.cf_dao_by_status_block()),
                 ("stats_dao", store.cf(ckbadger_store::CF_STATS_DAO)),
+                ("stats_chain", store.cf_stats_chain()),
+                ("stats_hodl", store.cf_stats_hodl()),
+                ("stats_script", store.cf_stats_script()),
+                ("stats_token", store.cf_stats_token()),
+                ("stats_spore", store.cf_stats_spore()),
+                ("stats_mnft", store.cf_stats_mnft()),
+                ("stats_identity", store.cf_stats_identity()),
                 // The completion's fee and its DAO activity classification
                 // come from the same resolution.
                 ("tx_index", store.cf_tx_index()),

@@ -1003,6 +1003,17 @@ fn prefix_budget_gap(anchor_height: u64, budget: &RunBudget) -> anyhow::Result<O
     Ok(None)
 }
 
+fn scanned_prefix_anchor_mismatch(scanned_hash: &str, anchor: &SourceAnchor) -> Option<String> {
+    if scanned_hash.eq_ignore_ascii_case(&anchor.block_hash) {
+        None
+    } else {
+        Some(format!(
+            "independent header prefix at anchor {} ends in {}, but export anchor is {}; source changed during prefix scan",
+            anchor.block_number, scanned_hash, anchor.block_hash
+        ))
+    }
+}
+
 async fn qualify_and_collect(
     client: &CkbRpcClient,
     declaration: Option<&SourceDeclaration>,
@@ -1059,6 +1070,18 @@ async fn qualify_and_collect(
                 });
             }
             Err(error) => return Err(error),
+        }
+        let scanned_hash = collector
+            .last_header_hash
+            .as_deref()
+            .ok_or_else(|| anyhow!("complete chain-time prefix scan left no anchor header hash"))?;
+        if let Some(reason) = scanned_prefix_anchor_mismatch(scanned_hash, anchor) {
+            return Ok(ChainWork {
+                qualification: SourceQualification::Inconclusive(reason),
+                outcomes: Vec::new(),
+                rpc_requests: collector.budget.rpc_requests,
+                history_records: collector.budget.records,
+            });
         }
         for (_, script) in scripts {
             outcomes.push(
@@ -1866,6 +1889,29 @@ mod tests {
         assert_eq!(backward, previous, "raw block 5 is before block 4");
         assert_eq!(sparse_touch, previous, "block 10 inherits prefix maximum");
         assert_eq!(fixture.header_calls.load(Ordering::SeqCst), 11);
+    }
+
+    #[tokio::test]
+    async fn scanned_prefix_is_rejected_if_its_anchor_hash_differs_from_export() {
+        let fixture = shared_tx_fixture().await;
+        let client = CkbRpcClient::new(fixture.server.uri());
+        let mut budget = RunBudget::new(1_000, 100, Duration::from_secs(60));
+        let mut collector = Collector::new(&client, &mut budget);
+        collector.chain_time_ms(10).await.unwrap().unwrap();
+        let mismatched = SourceAnchor {
+            block_number: 10,
+            block_hash: test_hash(99),
+        };
+        let scanned_hash = collector.last_header_hash.as_deref().unwrap();
+        let reason = scanned_prefix_anchor_mismatch(scanned_hash, &mismatched)
+            .expect("a coherent but different fork must be inconclusive");
+        assert!(reason.contains(&test_hash(10)), "{reason}");
+        assert!(reason.contains(&test_hash(99)), "{reason}");
+        let canonical = SourceAnchor {
+            block_hash: test_hash(10),
+            ..mismatched
+        };
+        assert!(scanned_prefix_anchor_mismatch(scanned_hash, &canonical).is_none());
     }
 
     /// Pagination used to run before the collector existed, so its requests
