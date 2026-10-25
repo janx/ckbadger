@@ -52,6 +52,13 @@ pub fn stats_hour(chain_time_ms: i64) -> Result<DateTime<Utc>> {
     })
 }
 
+/// Integer UTC hour key shared by every persisted hourly statistics family.
+pub fn stats_hour_index(chain_time_ms: i64) -> Result<i64> {
+    Ok(stats_hour(chain_time_ms)?
+        .timestamp_millis()
+        .div_euclid(HOUR_MS))
+}
+
 /// CKB's median time of a window of consecutive block timestamps: the upper
 /// median (index `len / 2` of the sorted window), at most
 /// [`MEDIAN_TIME_BLOCK_COUNT`] blocks. Near genesis the window is every block
@@ -175,6 +182,10 @@ mod tests {
             stats_hour(chain_time).unwrap().timestamp_millis(),
             utc_ms("2026-10-23T16:00:00Z")
         );
+        assert_eq!(
+            stats_hour_index(chain_time).unwrap(),
+            chain_time.div_euclid(HOUR_MS)
+        );
     }
 
     fn utc_ms(rfc3339: &str) -> i64 {
@@ -191,37 +202,34 @@ mod tests {
         assert!(median_time_ms(&[0; MEDIAN_TIME_BLOCK_COUNT + 1]).is_err());
     }
 
-    /// A tip dated before its parent across midnight: the median time is the
-    /// tip's 23:59:58, so neither that day nor the parent's next day is
-    /// complete, and the day before is.
+    /// A raw timestamp moving backward cannot reopen the preceding day.
     #[test]
-    fn a_backward_tip_across_midnight_leaves_both_days_in_progress() {
+    fn a_backward_tip_across_midnight_keeps_parent_day_open() {
         let window = [
             utc_ms("2026-10-23T15:59:50Z"), // 23:59:50 UTC+8, 10-23
             utc_ms("2026-10-23T16:00:02Z"), // 00:00:02 UTC+8, 10-24
             utc_ms("2026-10-23T15:59:58Z"), // 23:59:58 UTC+8, 10-23 (tip)
         ];
-        let mtp = median_time_ms(&window).unwrap();
-        assert_eq!(mtp, utc_ms("2026-10-23T15:59:58Z"));
+        let chain_time = window.into_iter().max().unwrap();
+        assert_eq!(chain_time, utc_ms("2026-10-23T16:00:02Z"));
         let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
         assert!(is_bucket_complete(
             utc8_day_end_ms(day("2026-10-22")).unwrap(),
-            mtp
+            chain_time
         ));
-        assert!(!is_bucket_complete(
+        assert!(is_bucket_complete(
             utc8_day_end_ms(day("2026-10-23")).unwrap(),
-            mtp
+            chain_time
         ));
         assert!(!is_bucket_complete(
             utc8_day_end_ms(day("2026-10-24")).unwrap(),
-            mtp
+            chain_time
         ));
     }
 
     #[test]
-    fn a_bucket_ending_exactly_at_the_median_time_is_complete() {
-        // A future block must be dated strictly after the median time, so it
-        // cannot land in a bucket that ends at it.
+    fn a_bucket_ending_exactly_at_chain_time_is_complete() {
+        // Running-maximum chain time cannot return to the completed bucket.
         assert!(is_bucket_complete(1_000, 1_000));
         assert!(!is_bucket_complete(1_001, 1_000));
     }

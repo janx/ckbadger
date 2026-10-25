@@ -25,6 +25,11 @@ async fn test_network_stats_reports_initializing_before_genesis() {
 async fn test_network_stats_rejects_zero_difficulty_for_existing_tip() {
     let store = test_store();
     seed_block_headers_at(&store, &[(0, 1_700_000_000_000)]);
+    let mut header = store.get_block_header(0).unwrap().unwrap();
+    header.compact_target = 0;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let response = app
         .oneshot(
@@ -429,7 +434,7 @@ fn recent_block_header(number: i64, ts_ms: i64) -> CachedBlockHeader {
         transactions_count: 2,
         uncles_count: 0,
         proposals_count: 0,
-        compact_target: 0,
+        compact_target: 0x1a08a97e,
         miner_lock_hash: None,
         cycles: None,
         chain_time_ms: ts_ms,
@@ -2411,13 +2416,10 @@ fn seed_tx_stats_buckets(store: &CkbadgerStore, hours: &[(&str, i32)], days: &[(
 }
 
 /// The `/statistics/tx-stats` contract (see `TxStatsResponse`): every bucket
-/// says whether it is `complete`, by CKB's median-time rule — never by its
-/// position. Regression (STATS-014): the tip (14:59:58Z) follows a parent
-/// dated 15:00:02Z, which is legal; the 15:00 bucket used to 500 the endpoint
-/// as "after the tip". The median time is the tip's 14:59:58, so the 14:00
-/// and 15:00 hours and the 10-23 day (UTC+8) are all still in progress.
+/// says whether it is `complete`, by canonical monotone chain time. A tip
+/// dated 14:59:58Z after a parent at 15:00:02Z cannot reopen the 14:00 hour.
 #[tokio::test]
-async fn test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour() {
+async fn test_tx_stats_marks_buckets_complete_by_chain_time_across_an_hour() {
     let store = test_store();
     seed_block_headers_at(
         &store,
@@ -2447,7 +2449,7 @@ async fn test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour() {
             "currentDay": 17000,
             "hourlyData": [
                 { "label": "13:00", "value": 710, "complete": true },
-                { "label": "14:00", "value": 720, "complete": false },
+                { "label": "14:00", "value": 720, "complete": true },
                 { "label": "15:00", "value": 2, "complete": false }
             ],
             "dailyData": [
@@ -2458,11 +2460,10 @@ async fn test_tx_stats_marks_buckets_complete_by_median_time_across_an_hour() {
     );
 }
 
-/// The same across midnight UTC+8: the tip (23:59:58 on 10-23) follows a
-/// parent dated 00:00:02 on 10-24, so the newest hour and day buckets are not
-/// the tip's, and both of the newest days are in progress.
+/// Across midnight UTC+8, the parent's later clock closes 10-23 even when the
+/// tip's raw timestamp goes backward.
 #[tokio::test]
-async fn test_tx_stats_marks_buckets_complete_by_median_time_across_midnight() {
+async fn test_tx_stats_marks_buckets_complete_by_chain_time_across_midnight() {
     let store = test_store();
     seed_block_headers_at(
         &store,
@@ -2492,12 +2493,12 @@ async fn test_tx_stats_marks_buckets_complete_by_median_time_across_midnight() {
             "currentDay": 3,
             "hourlyData": [
                 { "label": "14:00", "value": 720, "complete": true },
-                { "label": "15:00", "value": 700, "complete": false },
+                { "label": "15:00", "value": 700, "complete": true },
                 { "label": "16:00", "value": 3, "complete": false }
             ],
             "dailyData": [
                 { "label": "10/22", "value": 16000, "complete": true },
-                { "label": "10/23", "value": 17000, "complete": false },
+                { "label": "10/23", "value": 17000, "complete": true },
                 { "label": "10/24", "value": 3, "complete": false }
             ]
         })
@@ -3269,6 +3270,15 @@ fn seed_allocation_headers(store: &Arc<CkbadgerStore>) {
         519_967_746_800_000_000,
     );
     batch.put_block_header(11, &later);
+    // Block 11's 10-second gap was persisted by the indexer. Rollback must
+    // subtract the actual histogram row instead of inventing missing state.
+    batch.put_stats(
+        &ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &10i32.to_be_bytes(),
+        ),
+        &1i32.to_le_bytes(),
+    );
     batch.commit().unwrap();
 }
 

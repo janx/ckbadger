@@ -2516,6 +2516,7 @@ impl Indexer {
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 let ts_ms = parsed.timestamp.timestamp_millis();
+                let stats_time_ms = chain_times_ms[block_idx];
                 for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                     let tx_global_index = block_tx_idx + tx_idx;
                     let tx = &block_response.block.transactions[tx_idx];
@@ -2788,7 +2789,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index_i16,
                             parsed.number,
-                            ts_ms,
+                            stats_time_ms,
                             &mut data_batch,
                             &mut spore_state,
                         )?;
@@ -2968,7 +2969,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index,
                             parsed.number,
-                            ts_ms,
+                            stats_time_ms,
                             &mut data_batch,
                             &mut mnft_state,
                         )?;
@@ -2998,7 +2999,7 @@ impl Indexer {
                                 account,
                                 &tx_data.hash,
                                 parsed.number,
-                                ts_ms,
+                                stats_time_ms,
                                 &mut data_batch,
                                 &mut dotbit_state,
                             )?;

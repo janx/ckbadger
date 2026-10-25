@@ -642,7 +642,7 @@ impl BatchWriter {
             state.put_collection_aggregate(&token.class_id, agg, batch);
 
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
-            let hour_bucket = timestamp_ms / 3_600_000;
+            let hour_bucket = ckbadger_common::stats_bucket::stats_hour_index(timestamp_ms)?;
             let key = ckbadger_store::keys::encode_object_hourly_key(&token.class_id, hour_bucket);
             state.stats.mutate_hourly(
                 self.store.as_ref(),

@@ -1079,12 +1079,8 @@ fn charted_dates(json: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// Regression (STATS-014): CKB only bounds a timestamp by the median time of
-/// the 37 blocks before it, so the tip (23:59:58 on 10-23, UTC+8) may follow a
-/// parent dated 00:00:02 on 10-24. That is a legal chain, not corruption: the
-/// 10-24 row must not 500 the chart. The median time is the tip's 23:59:58,
-/// so 10-23 and 10-24 are both still in progress and 10-22 is the last
-/// complete day.
+/// A backward raw tip timestamp remains legal. Its chain time carries forward
+/// the parent's 10-24 date, so 10-23 is complete and 10-24 remains in progress.
 #[tokio::test]
 async fn test_daily_chart_serves_a_tip_dated_before_its_parent_across_midnight() {
     let store = test_store();
@@ -1101,12 +1097,14 @@ async fn test_daily_chart_serves_a_tip_dated_before_its_parent_across_midnight()
 
     let (status, json) = get_json(&app, "/charts/average-block-time").await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(charted_dates(&json), vec!["2026-10-22"], "{json}");
+    assert_eq!(
+        charted_dates(&json),
+        vec!["2026-10-22", "2026-10-23"],
+        "{json}"
+    );
 }
 
-/// The tip block's date is not the reference either way: a tip at 00:00:30 on
-/// 10-24 does not complete 10-23 while the median time (23:59:55) is still
-/// before midnight — a later block may yet be dated 10-23.
+/// Once the tip's chain time crosses midnight, the preceding day is complete.
 #[tokio::test]
 async fn test_daily_chart_waits_for_the_median_time_to_pass_midnight() {
     let store = test_store();
@@ -1123,7 +1121,11 @@ async fn test_daily_chart_waits_for_the_median_time_to_pass_midnight() {
 
     let (status, json) = get_json(&app, "/charts/average-block-time").await;
     assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(charted_dates(&json), vec!["2026-10-22"], "{json}");
+    assert_eq!(
+        charted_dates(&json),
+        vec!["2026-10-22", "2026-10-23"],
+        "{json}"
+    );
 }
 
 /// Regression (STATS-014): transaction-count, cell-count and
@@ -1164,21 +1166,37 @@ async fn test_transaction_and_cell_daily_charts_exclude_in_progress_days() {
     }
 }
 
-/// Review C: the chain's median time is not monotone across a reorg — a
-/// rollback lowers it to the fork point's — so a day can go from complete back
-/// to in progress. A daily chart cached while that day was complete must not
-/// keep showing it: the cache is keyed by the last complete day.
+/// A rollback lowers the canonical tip chain time to the fork point. A day
+/// can reopen, so the completed-day cache must be keyed to that boundary.
 #[tokio::test]
 async fn test_daily_chart_cache_drops_a_day_that_a_rollback_reopened() {
     let store = test_store();
     seed_block_time_days(&store, &["20240114", "20240115"]);
     // Blocks 0..=36 late on 2024-01-15 (UTC+8), then 37..=73 at noon on
-    // 2024-01-16: the median time is on the 16th, so the 15th is complete.
+    // 2024-01-16: the chain time is on the 16th, so the 15th is complete.
     let mut blocks: Vec<(i64, i64)> = (0..=36)
         .map(|n| (n, utc_ms("2024-01-15T15:00:00Z") + n * 1_000))
         .collect();
     blocks.extend((37..=73).map(|n| (n, utc_ms("2024-01-16T04:00:00Z") + n * 1_000)));
     seed_block_headers_at(&store, &blocks);
+    // The forward writer emits a histogram contribution for every gap.
+    // Rollback requires those real rows in order to subtract orphaned gaps.
+    let mut histogram = StoreBatch::new(store.as_ref());
+    histogram.put_stats(
+        &ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &1i32.to_be_bytes(),
+        ),
+        &72i32.to_le_bytes(),
+    );
+    histogram.put_stats(
+        &ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &30i32.to_be_bytes(),
+        ),
+        &1i32.to_le_bytes(),
+    );
+    histogram.commit().unwrap();
     let app = create_router(test_config(store.clone())).await;
 
     let (status, json) = get_json(&app, "/charts/average-block-time").await;
@@ -1189,7 +1207,7 @@ async fn test_daily_chart_cache_drops_a_day_that_a_rollback_reopened() {
         "{json}"
     );
 
-    // A reorg back to block 36: the median time falls back onto the 15th.
+    // A reorg back to block 36: chain time falls back onto the 15th.
     store.rollback_to_block(36).unwrap();
     let (status, json) = get_json(&app, "/charts/average-block-time").await;
     assert_eq!(status, StatusCode::OK, "{json}");

@@ -3054,9 +3054,9 @@ fn lookup_dao_info(
     let deposit_timestamp = timestamp_for_block(entry.deposit_block_number)?;
     let withdraw_request_timestamp = entry
         .withdraw_request_block
-        .map(&timestamp_for_block)
+        .map(timestamp_for_block)
         .transpose()?;
-    let withdraw_timestamp = entry.withdraw_block.map(&timestamp_for_block).transpose()?;
+    let withdraw_timestamp = entry.withdraw_block.map(timestamp_for_block).transpose()?;
 
     let compensation = entry.compensation.map(|c| c.to_string());
     let compensation_ckb = compensation.as_ref().map(|c| shannon_to_ckb(c));

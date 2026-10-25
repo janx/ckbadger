@@ -839,7 +839,7 @@ impl BatchWriter {
                 )
             })?;
         let by_undo_window = match self.store.get_block_header(undo_window_block)? {
-            Some(header) => header.timestamp / 3_600_000,
+            Some(header) => ckbadger_common::stats_bucket::stats_hour_index(header.chain_time_ms)?,
             None => {
                 // A canonical block at or below the tip with no header is
                 // store corruption. Turning that into "delete nothing"

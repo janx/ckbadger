@@ -734,7 +734,7 @@ impl BatchWriter {
                 );
             }
             if old_owner.as_deref() != Some(account.owner_lock_hash.as_slice()) {
-                let hour_bucket = timestamp_ms / 3_600_000;
+                let hour_bucket = ckbadger_common::stats_bucket::stats_hour_index(timestamp_ms)?;
                 let key = ckbadger_store::keys::encode_object_hourly_key(
                     &DOTBIT_SENTINEL_COLLECTION,
                     hour_bucket,

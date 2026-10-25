@@ -1063,7 +1063,7 @@ impl DaoOwner {
                 block.dao.len()
             )
         })?;
-        self.daily_dao_fields.insert(block_date, block.dao.clone());
+        self.daily_dao_fields.insert(block_date, block.dao);
 
         // Track end-of-day block number and AR for exact unclaimed-compensation
         // computation during materialization (HashMap overwrites → last block

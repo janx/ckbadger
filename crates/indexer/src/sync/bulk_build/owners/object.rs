@@ -1314,7 +1314,8 @@ impl ObjectOwner {
                 agg,
             )?;
             if consumed_in_same_tx {
-                let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
+                let hour_bucket =
+                    ckbadger_common::stats_bucket::stats_hour_index(tx.chain_time_ms)?;
                 let key = keys::encode_spore_hourly_key(&cluster_id, hour_bucket);
                 let current = *self
                     .spore_hourly_transfers
@@ -1332,7 +1333,8 @@ impl ObjectOwner {
         } else {
             // Same-cluster re-insert (transfer) — increment hourly bucket
             {
-                let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
+                let hour_bucket =
+                    ckbadger_common::stats_bucket::stats_hour_index(tx.chain_time_ms)?;
                 let key = keys::encode_spore_hourly_key(&cluster_id, hour_bucket);
                 let current = *self
                     .spore_hourly_transfers
@@ -1673,7 +1675,8 @@ impl ObjectOwner {
             // Re-insert (transfer) — increment hourly bucket unconditionally,
             // matching the live sync path in db/writer/mnft.rs.
             {
-                let hour_bucket = tx.chain_time_ms.div_euclid(3_600_000);
+                let hour_bucket =
+                    ckbadger_common::stats_bucket::stats_hour_index(tx.chain_time_ms)?;
                 let key = keys::encode_object_hourly_key(&class_id, hour_bucket).to_vec();
                 let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
                 let next = checked_next_i64(
@@ -2599,7 +2602,7 @@ impl ObjectOwner {
         timestamp_ms: i64,
         block_number: i64,
     ) -> Result<()> {
-        let hour_bucket = timestamp_ms / 3_600_000;
+        let hour_bucket = ckbadger_common::stats_bucket::stats_hour_index(timestamp_ms)?;
         let key = keys::encode_object_hourly_key(class_id, hour_bucket).to_vec();
         let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
         let next = checked_next_i64(current, 1, "mnft hourly transfer", token_id, block_number)?;
@@ -2613,7 +2616,7 @@ impl ObjectOwner {
         timestamp_ms: i64,
         block_number: i64,
     ) -> Result<()> {
-        let hour_bucket = timestamp_ms / 3_600_000;
+        let hour_bucket = ckbadger_common::stats_bucket::stats_hour_index(timestamp_ms)?;
         let key = keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, hour_bucket).to_vec();
         let current = *self
             .dotbit_hourly_transfers

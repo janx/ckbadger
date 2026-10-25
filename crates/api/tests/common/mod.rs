@@ -90,12 +90,10 @@ pub fn seed_genesis_baseline(store: &Arc<CkbadgerStore>) {
         .unwrap();
 }
 
-/// Seed the indexed tip block `number` at 12:00 UTC+8 on `utc8_date`
-/// (`YYYY-MM-DD`), preceded by the rest of its median-time window — the 36
-/// blocks before it (or every block down to genesis), one second apart. The
-/// median time is then a few seconds before noon of that day, so daily charts
-/// treat that day as in progress and every earlier day as complete
-/// (`ckbadger_common::stats_bucket`).
+/// Seed a complete canonical prefix through the indexed tip `number` at
+/// 12:00 UTC+8 on `utc8_date`, with one-second intervals. Chain-time boundary
+/// searches require every header from genesis; a sparse recent-window fixture
+/// was never a valid persisted chain.
 pub fn seed_tip_block_on_utc8_day(store: &CkbadgerStore, number: i64, utc8_date: &str) {
     let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
     let timestamp = chrono::NaiveDate::parse_from_str(utc8_date, "%Y-%m-%d")
@@ -106,18 +104,32 @@ pub fn seed_tip_block_on_utc8_day(store: &CkbadgerStore, number: i64, utc8_date:
         .single()
         .unwrap()
         .timestamp_millis();
-    let window = ckbadger_common::stats_bucket::MEDIAN_TIME_BLOCK_COUNT as i64;
-    let blocks: Vec<(i64, i64)> = ((number - (window - 1)).max(0)..=number)
+    let blocks: Vec<(i64, i64)> = (0..=number)
         .map(|n| (n, timestamp - (number - n) * 1_000))
         .collect();
     seed_block_headers_at(store, &blocks);
 }
 
-/// Seed block headers `(number, timestamp_ms)`. The newest 37 by number form
-/// the median-time window that decides which stats buckets are complete.
+/// Seed explicit block headers `(number, raw timestamp_ms)` and calculate each
+/// header's monotone chain time from the immediately preceding canonical row.
 pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
     let mut batch = StoreBatch::new(store);
-    for &(number, timestamp) in blocks {
+    let mut sorted = blocks.to_vec();
+    sorted.sort_by_key(|&(number, _)| number);
+    let mut previous_chain_time_ms = sorted.first().and_then(|&(number, _)| {
+        number
+            .checked_sub(1)
+            .filter(|previous| *previous >= 0)
+            .and_then(|previous| {
+                store
+                    .get_block_header(previous)
+                    .expect("read fixture predecessor")
+                    .map(|header| header.chain_time_ms)
+            })
+    });
+    for (number, timestamp) in sorted {
+        let chain_time_ms = previous_chain_time_ms.map_or(timestamp, |prior| prior.max(timestamp));
+        previous_chain_time_ms = Some(chain_time_ms);
         batch.put_block_header(
             number,
             &CachedBlockHeader {
@@ -131,10 +143,10 @@ pub fn seed_block_headers_at(store: &CkbadgerStore, blocks: &[(i64, i64)]) {
                 transactions_count: 1,
                 uncles_count: 0,
                 proposals_count: 0,
-                compact_target: 0,
+                compact_target: 0x1a08a97e,
                 miner_lock_hash: None,
                 cycles: None,
-                chain_time_ms: timestamp,
+                chain_time_ms,
             },
         );
     }

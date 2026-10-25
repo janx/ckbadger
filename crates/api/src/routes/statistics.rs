@@ -2369,7 +2369,7 @@ pub(crate) fn build_block_time_distribution_response(
                 "chain-time interval overflow: previous_block={prev_number} current_block={curr_number}"
             ))?;
             if diff_ms < 0 {
-                return Err(format!("chain time regressed: previous_block={prev_number} current_block={curr_number}").into());
+                return Err(format!("chain time regressed: previous_block={prev_number} current_block={curr_number}"));
             }
             if let Some(bucket_index) = block_time_ms_to_bucket_index(diff_ms) {
                 bucket_counts[bucket_index] += 1;
