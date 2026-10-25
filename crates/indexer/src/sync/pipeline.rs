@@ -2910,13 +2910,13 @@ impl Indexer {
                                 format!("{:.1}", write_metrics.append_only_commit_synced_ms),
                             domain_commit_ms = format!("{:.1}", write_metrics.domain_commit_ms),
                             tracker_state_bytes = write_metrics.tracker_state_bytes,
-                            compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
+                            compaction_pending_mb = ?stats.compaction_pending_bytes.map(|value| value / (1024 * 1024)),
                             running_compactions = ?stats.num_running_compactions,
-                            l0_total = stats.l0_files_count,
-                            l0_max = stats.l0_files_max,
-                            l0_worst_cf = stats.l0_worst_cf,
-                            memtable_mb = stats.memtable_bytes / (1024 * 1024),
-                            imm_memtables = stats.immutable_memtables,
+                            l0_total = ?stats.l0_files_count,
+                            l0_max = ?stats.l0_files_max,
+                            l0_worst_cf = ?stats.l0_worst_cf,
+                            memtable_mb = ?stats.memtable_bytes.map(|value| value / (1024 * 1024)),
+                            imm_memtables = ?stats.immutable_memtables,
                             "Slow write stage detected"
                         );
                     }
@@ -2973,7 +2973,9 @@ impl Indexer {
                                     .expect("parsed block count exceeds u64"),
                                 db_elapsed.as_secs_f64(),
                                 write_metrics.commit_ms(),
-                                perf_stats.compaction_pending_bytes / (1024 * 1024),
+                                perf_stats
+                                    .compaction_pending_bytes
+                                    .map(|value| value / (1024 * 1024)),
                                 perf_stats.l0_files_count,
                                 perf_stats.immutable_memtables,
                                 chrono::Utc::now()
@@ -2999,7 +3001,7 @@ impl Indexer {
 
                         self.maybe_invalidate_chart_caches(end_block).await;
                         self.check_bulk_sync_completion().await;
-                        self.ensure_compaction_mode(blocks_remaining);
+                        self.ensure_compaction_mode(blocks_remaining)?;
                     }
 
                     self.perf

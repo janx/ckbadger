@@ -60,27 +60,27 @@ impl ProcessMemorySnapshot {
 /// L0 files, and immutable memtables are summed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ChainStoreMemorySnapshot {
-    pub domain_memtable_bytes: u64,
-    pub append_only_memtable_bytes: u64,
-    pub total_memtable_bytes: u64,
+    pub domain_memtable_bytes: Option<u64>,
+    pub append_only_memtable_bytes: Option<u64>,
+    pub total_memtable_bytes: Option<u64>,
     pub shared_block_cache_bytes: u64,
-    pub domain_table_readers_bytes: u64,
-    pub append_only_table_readers_bytes: u64,
-    pub total_table_readers_bytes: u64,
-    pub total_memory_bytes: u64,
-    pub domain_compaction_pending_bytes: u64,
-    pub append_only_compaction_pending_bytes: u64,
-    pub total_compaction_pending_bytes: u64,
+    pub domain_table_readers_bytes: Option<u64>,
+    pub append_only_table_readers_bytes: Option<u64>,
+    pub total_table_readers_bytes: Option<u64>,
+    pub total_memory_bytes: Option<u64>,
+    pub domain_compaction_pending_bytes: Option<u64>,
+    pub append_only_compaction_pending_bytes: Option<u64>,
+    pub total_compaction_pending_bytes: Option<u64>,
     pub num_running_compactions: Option<u64>,
-    pub sst_files_size: u64,
-    pub l0_files_count: u64,
-    pub l0_files_max: u64,
-    pub l0_worst_cf: String,
-    pub immutable_memtables: u64,
-    pub sst_files_total: u64,
-    pub domain_manifest_bytes: u64,
-    pub total_manifest_bytes: u64,
-    pub top_cf_sizes: Vec<(String, u64)>,
+    pub sst_files_size: Option<u64>,
+    pub l0_files_count: Option<u64>,
+    pub l0_files_max: Option<u64>,
+    pub l0_worst_cf: Option<String>,
+    pub immutable_memtables: Option<u64>,
+    pub sst_files_total: Option<u64>,
+    pub domain_manifest_bytes: Option<u64>,
+    pub total_manifest_bytes: Option<u64>,
+    pub top_cf_sizes: Option<Vec<(String, u64)>>,
     pub shared_wbm_usage_bytes: u64,
     pub shared_wbm_budget_bytes: u64,
 }
@@ -89,11 +89,9 @@ pub fn aggregate_chain_store_memory(
     domain: &MemoryStats,
     append_only: &MemoryStats,
 ) -> anyhow::Result<ChainStoreMemorySnapshot> {
-    let domain_memtable_bytes =
-        usize_memory_to_u64("domain.memtable_bytes", domain.memtable_bytes)?;
-    let append_only_memtable_bytes =
-        usize_memory_to_u64("append_only.memtable_bytes", append_only.memtable_bytes)?;
-    let total_memtable_bytes = checked_memory_add(
+    let domain_memtable_bytes = domain.memtable_bytes;
+    let append_only_memtable_bytes = append_only.memtable_bytes;
+    let total_memtable_bytes = checked_optional_add(
         "total_memtable_bytes",
         domain_memtable_bytes,
         append_only_memtable_bytes,
@@ -101,31 +99,27 @@ pub fn aggregate_chain_store_memory(
 
     let shared_block_cache_bytes =
         usize_memory_to_u64("shared.block_cache_bytes", domain.block_cache_bytes)?;
-    let domain_table_readers_bytes =
-        usize_memory_to_u64("domain.table_readers_bytes", domain.table_readers_bytes)?;
-    let append_only_table_readers_bytes = usize_memory_to_u64(
-        "append_only.table_readers_bytes",
-        append_only.table_readers_bytes,
-    )?;
-    let total_table_readers_bytes = checked_memory_add(
+    let domain_table_readers_bytes = domain.table_readers_bytes;
+    let append_only_table_readers_bytes = append_only.table_readers_bytes;
+    let total_table_readers_bytes = checked_optional_add(
         "total_table_readers_bytes",
         domain_table_readers_bytes,
         append_only_table_readers_bytes,
     )?;
-    let total_memory_bytes = checked_memory_add(
+    let total_memory_bytes = checked_optional_add(
         "total_memory_bytes.memtable_and_cache",
         total_memtable_bytes,
-        shared_block_cache_bytes,
+        Some(shared_block_cache_bytes),
     )
     .and_then(|bytes| {
-        checked_memory_add(
+        checked_optional_add(
             "total_memory_bytes.with_table_readers",
             bytes,
             total_table_readers_bytes,
         )
     })?;
 
-    let total_compaction_pending_bytes = checked_memory_add(
+    let total_compaction_pending_bytes = checked_optional_add(
         "total_compaction_pending_bytes",
         domain.compaction_pending_bytes,
         append_only.compaction_pending_bytes,
@@ -141,50 +135,58 @@ pub fn aggregate_chain_store_memory(
         )?),
         _ => None,
     };
-    let sst_files_size = checked_memory_add(
+    let sst_files_size = checked_optional_add(
         "sst_files_size",
         domain.sst_files_size,
         append_only.sst_files_size,
     )?;
-    let l0_files_count = checked_memory_add(
+    let l0_files_count = checked_optional_add(
         "l0_files_count",
         domain.l0_files_count,
         append_only.l0_files_count,
     )?;
-    let immutable_memtables = checked_memory_add(
+    let immutable_memtables = checked_optional_add(
         "immutable_memtables",
         domain.immutable_memtables,
         append_only.immutable_memtables,
     )?;
-    let sst_files_total = checked_memory_add(
+    let sst_files_total = checked_optional_add(
         "sst_files_total",
         domain.sst_files_total,
         append_only.sst_files_total,
     )?;
-    let total_manifest_bytes = checked_memory_add(
+    let total_manifest_bytes = checked_optional_add(
         "total_manifest_bytes",
         domain.manifest_bytes,
         append_only.manifest_bytes,
     )?;
 
-    let (l0_files_max, l0_worst_cf) = if append_only.l0_files_max > domain.l0_files_max {
-        (
-            append_only.l0_files_max,
-            format!("append-only.{}", append_only.l0_worst_cf),
-        )
-    } else {
-        (domain.l0_files_max, domain.l0_worst_cf.clone())
+    let (l0_files_max, l0_worst_cf) = match (domain.l0_files_max, append_only.l0_files_max) {
+        (Some(domain_max), Some(append_max)) if append_max > domain_max => (
+            Some(append_max),
+            append_only
+                .l0_worst_cf
+                .as_ref()
+                .map(|name| format!("append-only.{name}")),
+        ),
+        (Some(domain_max), Some(_)) => (Some(domain_max), domain.l0_worst_cf.clone()),
+        _ => (None, None),
     };
 
-    let mut top_cf_sizes = domain.top_cf_sizes.clone();
-    top_cf_sizes.extend(
-        append_only
-            .top_cf_sizes
-            .iter()
-            .map(|(name, bytes)| (format!("append-only.{name}"), *bytes)),
-    );
-    top_cf_sizes.sort_by_key(|item| std::cmp::Reverse(item.1));
-    top_cf_sizes.truncate(5);
+    let top_cf_sizes = match (&domain.top_cf_sizes, &append_only.top_cf_sizes) {
+        (Some(domain_sizes), Some(append_sizes)) => {
+            let mut sizes = domain_sizes.clone();
+            sizes.extend(
+                append_sizes
+                    .iter()
+                    .map(|(name, bytes)| (format!("append-only.{name}"), *bytes)),
+            );
+            sizes.sort_by_key(|item| std::cmp::Reverse(item.1));
+            sizes.truncate(5);
+            Some(sizes)
+        }
+        _ => None,
+    };
 
     Ok(ChainStoreMemorySnapshot {
         domain_memtable_bytes,
@@ -238,6 +240,17 @@ fn checked_memory_add(field: &str, left: u64, right: u64) -> anyhow::Result<u64>
             right
         )
     })
+}
+
+fn checked_optional_add(
+    field: &str,
+    left: Option<u64>,
+    right: Option<u64>,
+) -> anyhow::Result<Option<u64>> {
+    match (left, right) {
+        (Some(left), Some(right)) => checked_memory_add(field, left, right).map(Some),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -613,46 +626,46 @@ VmSwap:  1024 kB
     #[test]
     fn test_chain_store_memory_aggregation_counts_shared_resources_once() {
         let domain = MemoryStats {
-            memtable_bytes: 100,
+            memtable_bytes: Some(100),
             block_cache_bytes: 300,
-            table_readers_bytes: 10,
-            compaction_pending_bytes: 1_000,
+            table_readers_bytes: Some(10),
+            compaction_pending_bytes: Some(1_000),
             num_running_compactions: Some(2),
-            sst_files_size: 10_000,
-            l0_files_count: 4,
-            l0_files_max: 3,
-            l0_worst_cf: "activities".to_string(),
-            immutable_memtables: 5,
-            top_cf_sizes: vec![("activities".to_string(), 900)],
+            sst_files_size: Some(10_000),
+            l0_files_count: Some(4),
+            l0_files_max: Some(3),
+            l0_worst_cf: Some("activities".to_string()),
+            immutable_memtables: Some(5),
+            top_cf_sizes: Some(vec![("activities".to_string(), 900)]),
             wbm_usage_bytes: 400,
             wbm_budget_bytes: 800,
             ..Default::default()
         };
         let append_only = MemoryStats {
-            memtable_bytes: 200,
+            memtable_bytes: Some(200),
             // Both handles observe the same process-wide resources. These
             // values must not be added to the domain observations.
             block_cache_bytes: 300,
-            table_readers_bytes: 20,
-            compaction_pending_bytes: 2_000,
+            table_readers_bytes: Some(20),
+            compaction_pending_bytes: Some(2_000),
             num_running_compactions: Some(1),
-            sst_files_size: 20_000,
-            l0_files_count: 6,
-            l0_files_max: 6,
-            l0_worst_cf: "cells".to_string(),
-            immutable_memtables: 7,
-            top_cf_sizes: vec![("cells".to_string(), 1_200)],
+            sst_files_size: Some(20_000),
+            l0_files_count: Some(6),
+            l0_files_max: Some(6),
+            l0_worst_cf: Some("cells".to_string()),
+            immutable_memtables: Some(7),
+            top_cf_sizes: Some(vec![("cells".to_string(), 1_200)]),
             wbm_usage_bytes: 400,
             wbm_budget_bytes: 800,
             ..Default::default()
         };
 
         let snapshot = aggregate_chain_store_memory(&domain, &append_only).unwrap();
-        assert_eq!(snapshot.total_memtable_bytes, 300);
+        assert_eq!(snapshot.total_memtable_bytes, Some(300));
         assert_eq!(snapshot.shared_block_cache_bytes, 300);
-        assert_eq!(snapshot.total_table_readers_bytes, 30);
-        assert_eq!(snapshot.total_memory_bytes, 630);
-        assert_eq!(snapshot.total_compaction_pending_bytes, 3_000);
+        assert_eq!(snapshot.total_table_readers_bytes, Some(30));
+        assert_eq!(snapshot.total_memory_bytes, Some(630));
+        assert_eq!(snapshot.total_compaction_pending_bytes, Some(3_000));
         assert_eq!(snapshot.num_running_compactions, Some(3));
         let mut unavailable = domain.clone();
         unavailable.num_running_compactions = None;
@@ -663,19 +676,25 @@ VmSwap:  1024 kB
             None,
             "one unavailable store property makes the combined observation unknown"
         );
-        assert_eq!(snapshot.sst_files_size, 30_000);
-        assert_eq!(snapshot.l0_files_count, 10);
-        assert_eq!(snapshot.l0_files_max, 6);
-        assert_eq!(snapshot.l0_worst_cf, "append-only.cells");
-        assert_eq!(snapshot.immutable_memtables, 12);
+        unavailable.memtable_bytes = None;
+        unavailable.l0_files_count = None;
+        let incomplete = aggregate_chain_store_memory(&unavailable, &append_only).unwrap();
+        assert_eq!(incomplete.total_memtable_bytes, None);
+        assert_eq!(incomplete.total_memory_bytes, None);
+        assert_eq!(incomplete.l0_files_count, None);
+        assert_eq!(snapshot.sst_files_size, Some(30_000));
+        assert_eq!(snapshot.l0_files_count, Some(10));
+        assert_eq!(snapshot.l0_files_max, Some(6));
+        assert_eq!(snapshot.l0_worst_cf.as_deref(), Some("append-only.cells"));
+        assert_eq!(snapshot.immutable_memtables, Some(12));
         assert_eq!(snapshot.shared_wbm_usage_bytes, 400);
         assert_eq!(snapshot.shared_wbm_budget_bytes, 800);
         assert_eq!(
             snapshot.top_cf_sizes,
-            vec![
+            Some(vec![
                 ("append-only.cells".to_string(), 1_200),
                 ("activities".to_string(), 900)
-            ]
+            ])
         );
     }
 }

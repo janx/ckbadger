@@ -568,45 +568,50 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             // (stall detection, queue pressure, progress logging) still runs
             // every 3 s.
             if let Some(memory_stats) = memory_stats.as_ref() {
-                indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
-                    progress.current(),
-                    progress.target(),
-                    memory_stats.compaction_pending_bytes / (1024 * 1024),
+                if let (Some(pending), Some(l0), Some(immutable)) = (
+                    memory_stats.compaction_pending_bytes,
                     memory_stats.l0_files_count,
                     memory_stats.immutable_memtables,
-                );
+                ) {
+                    indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
+                        progress.current(),
+                        progress.target(),
+                        pending / (1024 * 1024),
+                        l0,
+                        immutable,
+                    );
+                } else {
+                    warn!("bulk-sync perf heartbeat lacks complete RocksDB pressure observation");
+                }
 
                 info!(
                     run_id = %indexer_for_progress.run_id(),
-                    memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
+                    memtable_mb = ?memory_stats.rocksdb_memtable_bytes.map(|value| value / (1024 * 1024)),
                     domain_memtable_mb =
-                        memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
+                        ?memory_stats.rocksdb_domain_memtable_bytes.map(|value| value / (1024 * 1024)),
                     append_only_memtable_mb =
-                        memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
+                        ?memory_stats.rocksdb_append_only_memtable_bytes.map(|value| value / (1024 * 1024)),
                     block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
-                    table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
+                    table_readers_mb = ?memory_stats.rocksdb_table_readers_bytes.map(|value| value / (1024 * 1024)),
                     wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
                     wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
-                    compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
+                    compaction_pending_mb = ?memory_stats.compaction_pending_bytes.map(|value| value / (1024 * 1024)),
                     domain_compaction_pending_mb =
-                        memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
+                        ?memory_stats.domain_compaction_pending_bytes.map(|value| value / (1024 * 1024)),
                     append_only_compaction_pending_mb =
-                        memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
+                        ?memory_stats.append_only_compaction_pending_bytes.map(|value| value / (1024 * 1024)),
                     running_compactions = ?memory_stats.num_running_compactions,
-                    l0_files = memory_stats.l0_files_count,
-                    l0_max = memory_stats.l0_files_max,
-                    l0_worst_cf = memory_stats.l0_worst_cf,
-                    imm_memtables = memory_stats.immutable_memtables,
-                    sst_size_gb = format!(
-                        "{:.1}",
-                        memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
-                    ),
+                    l0_files = ?memory_stats.l0_files_count,
+                    l0_max = ?memory_stats.l0_files_max,
+                    l0_worst_cf = ?memory_stats.l0_worst_cf,
+                    imm_memtables = ?memory_stats.immutable_memtables,
+                    sst_size_gb = ?memory_stats.sst_files_size.map(|value| value as f64 / (1024.0 * 1024.0 * 1024.0)),
                     // Flush-storm signals (P3.3): file count and MANIFEST size are
                     // the standing cost of how often the DB flushes, and the
                     // MANIFEST is what an API secondary replays on open.
-                    sst_files = memory_stats.sst_files_total,
-                    manifest_mb = memory_stats.manifest_bytes / (1024 * 1024),
-                    domain_manifest_mb = memory_stats.domain_manifest_bytes / (1024 * 1024),
+                    sst_files = ?memory_stats.sst_files_total,
+                    manifest_mb = ?memory_stats.manifest_bytes.map(|value| value / (1024 * 1024)),
+                    domain_manifest_mb = ?memory_stats.domain_manifest_bytes.map(|value| value / (1024 * 1024)),
                     "RocksDB stats"
                 );
             }

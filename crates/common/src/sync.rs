@@ -437,34 +437,34 @@ pub struct BackgroundTasksData {
 #[serde(rename_all = "camelCase")]
 pub struct MemoryStatsData {
     /// Number of live (unspent) cells in RocksDB
-    pub live_cells_count: u64,
+    pub live_cells_count: Option<u64>,
     /// Number of consumed cells retained for reorg support
-    pub consumed_cells_count: u64,
+    pub consumed_cells_count: Option<u64>,
     /// Estimated storage bytes used by consumed_cells column family
-    pub consumed_cells_bytes: u64,
-    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none
+    pub consumed_cells_bytes: Option<u64>,
+    /// Source used to estimate consumed_cells_bytes: live+mem when available
     #[serde(default)]
-    pub consumed_cells_bytes_source: String,
+    pub consumed_cells_bytes_source: Option<String>,
 
     /// RocksDB memtable (write buffer) memory usage
-    pub rocksdb_memtable_bytes: u64,
+    pub rocksdb_memtable_bytes: Option<u64>,
     /// RocksDB block cache usage
     pub rocksdb_block_cache_bytes: u64,
     /// RocksDB table readers memory estimate
-    pub rocksdb_table_readers_bytes: u64,
+    pub rocksdb_table_readers_bytes: Option<u64>,
     /// Total RocksDB memory usage
-    pub rocksdb_total_bytes: u64,
+    pub rocksdb_total_bytes: Option<u64>,
     /// Domain-store share of RocksDB memtable memory
-    pub rocksdb_domain_memtable_bytes: u64,
+    pub rocksdb_domain_memtable_bytes: Option<u64>,
     /// Append-only-store share of RocksDB memtable memory
-    pub rocksdb_append_only_memtable_bytes: u64,
+    pub rocksdb_append_only_memtable_bytes: Option<u64>,
     /// Domain-store share of RocksDB table-reader memory
-    pub rocksdb_domain_table_readers_bytes: u64,
+    pub rocksdb_domain_table_readers_bytes: Option<u64>,
     /// Append-only-store share of RocksDB table-reader memory
-    pub rocksdb_append_only_table_readers_bytes: u64,
+    pub rocksdb_append_only_table_readers_bytes: Option<u64>,
 
     /// Number of block headers cached
-    pub block_headers_count: u64,
+    pub block_headers_count: Option<u64>,
 
     /// Whether bulk sync cell cache is enabled (retains all consumed cells)
     pub bulk_sync_cell_cache_enabled: bool,
@@ -472,36 +472,36 @@ pub struct MemoryStatsData {
     pub bulk_sync_mode: bool,
 
     /// Estimated bytes pending compaction
-    pub compaction_pending_bytes: u64,
+    pub compaction_pending_bytes: Option<u64>,
     /// Domain-store bytes pending compaction
-    pub domain_compaction_pending_bytes: u64,
+    pub domain_compaction_pending_bytes: Option<u64>,
     /// Append-only-store bytes pending compaction
-    pub append_only_compaction_pending_bytes: u64,
+    pub append_only_compaction_pending_bytes: Option<u64>,
     /// Number of currently running compactions
     pub num_running_compactions: Option<u64>,
     /// Total SST file size on disk (all CFs)
-    pub sst_files_size: u64,
+    pub sst_files_size: Option<u64>,
     /// Total L0 files across all CFs (sum)
-    pub l0_files_count: u64,
+    pub l0_files_count: Option<u64>,
     /// Max L0 files in any single CF (the actual write stall trigger)
-    pub l0_files_max: u64,
+    pub l0_files_max: Option<u64>,
     /// Name of the CF with the most L0 files
-    pub l0_worst_cf: String,
+    pub l0_worst_cf: Option<String>,
     /// Total immutable memtables across all CFs (waiting for flush)
-    pub immutable_memtables: u64,
+    pub immutable_memtables: Option<u64>,
     /// SST files across every level of both chain stores. With atomic flush
     /// one flush round writes one file per written CF, so this is the standing
     /// cost of flush frequency.
-    pub sst_files_total: u64,
+    pub sst_files_total: Option<u64>,
     /// MANIFEST bytes across both chain stores. A secondary replays the
     /// MANIFEST on open, so this is what a slow API secondary open costs.
     /// Flush ROUND counts come from `flush_started` in the RocksDB LOG, not
     /// from any sampled gauge: RocksDB has no cumulative flush counter.
-    pub manifest_bytes: u64,
+    pub manifest_bytes: Option<u64>,
     /// Domain-store MANIFEST bytes (the one the API secondary replays).
-    pub domain_manifest_bytes: u64,
+    pub domain_manifest_bytes: Option<u64>,
     /// Top column families by estimated live data size: (name, bytes)
-    pub top_cf_sizes: Vec<(String, u64)>,
+    pub top_cf_sizes: Option<Vec<(String, u64)>>,
 
     /// WriteBufferManager current usage in bytes
     pub wbm_usage_bytes: u64,
@@ -512,7 +512,7 @@ pub struct MemoryStatsData {
     pub total_transactions: i64,
     pub total_cells: i64,
     pub total_live_cells: i64,
-    pub total_addresses: i64,
+    pub total_addresses: Option<i64>,
 
     /// Unix timestamp when this data was collected
     pub updated_at: i64,
@@ -686,43 +686,43 @@ mod tests {
     #[test]
     fn test_memory_stats_serialization() {
         let stats = MemoryStatsData {
-            live_cells_count: 45_000_000,
-            consumed_cells_count: 12_000_000,
-            consumed_cells_bytes: 14_000_000_000,
-            consumed_cells_bytes_source: "live".to_string(),
-            rocksdb_memtable_bytes: 1_000_000_000,
+            live_cells_count: Some(45_000_000),
+            consumed_cells_count: Some(12_000_000),
+            consumed_cells_bytes: Some(14_000_000_000),
+            consumed_cells_bytes_source: Some("live+mem".to_string()),
+            rocksdb_memtable_bytes: Some(1_000_000_000),
             rocksdb_block_cache_bytes: 512_000_000,
-            rocksdb_table_readers_bytes: 100_000_000,
-            rocksdb_total_bytes: 1_612_000_000,
-            rocksdb_domain_memtable_bytes: 600_000_000,
-            rocksdb_append_only_memtable_bytes: 400_000_000,
-            rocksdb_domain_table_readers_bytes: 60_000_000,
-            rocksdb_append_only_table_readers_bytes: 40_000_000,
-            block_headers_count: 6_000_000,
+            rocksdb_table_readers_bytes: Some(100_000_000),
+            rocksdb_total_bytes: Some(1_612_000_000),
+            rocksdb_domain_memtable_bytes: Some(600_000_000),
+            rocksdb_append_only_memtable_bytes: Some(400_000_000),
+            rocksdb_domain_table_readers_bytes: Some(60_000_000),
+            rocksdb_append_only_table_readers_bytes: Some(40_000_000),
+            block_headers_count: Some(6_000_000),
             bulk_sync_cell_cache_enabled: true,
             bulk_sync_mode: true,
-            compaction_pending_bytes: 500_000,
-            domain_compaction_pending_bytes: 300_000,
-            append_only_compaction_pending_bytes: 200_000,
+            compaction_pending_bytes: Some(500_000),
+            domain_compaction_pending_bytes: Some(300_000),
+            append_only_compaction_pending_bytes: Some(200_000),
             num_running_compactions: Some(2),
-            sst_files_size: 10_000_000_000,
-            l0_files_count: 15,
-            l0_files_max: 5,
-            l0_worst_cf: "live_cells".to_string(),
-            immutable_memtables: 3,
-            sst_files_total: 7_148,
-            manifest_bytes: 53_477_376,
-            domain_manifest_bytes: 51_380_224,
-            top_cf_sizes: vec![
+            sst_files_size: Some(10_000_000_000),
+            l0_files_count: Some(15),
+            l0_files_max: Some(5),
+            l0_worst_cf: Some("live_cells".to_string()),
+            immutable_memtables: Some(3),
+            sst_files_total: Some(7_148),
+            manifest_bytes: Some(53_477_376),
+            domain_manifest_bytes: Some(51_380_224),
+            top_cf_sizes: Some(vec![
                 ("live_cells".to_string(), 3_000_000_000),
                 ("consumed_cells".to_string(), 2_500_000_000),
-            ],
+            ]),
             wbm_usage_bytes: 4_000_000_000,
             wbm_budget_bytes: 8_000_000_000,
             total_transactions: 50_000_000,
             total_cells: 100_000_000,
             total_live_cells: 45_000_000,
-            total_addresses: 2_000_000,
+            total_addresses: Some(2_000_000),
             updated_at: 1700000000,
         };
 
@@ -733,11 +733,14 @@ mod tests {
         assert_eq!(parsed.rocksdb_total_bytes, stats.rocksdb_total_bytes);
         assert_eq!(parsed.bulk_sync_mode, stats.bulk_sync_mode);
         assert_eq!(parsed.sst_files_size, stats.sst_files_size);
-        assert_eq!(parsed.consumed_cells_bytes_source, "live");
-        assert_eq!(parsed.rocksdb_domain_memtable_bytes, 600_000_000);
-        assert_eq!(parsed.rocksdb_append_only_memtable_bytes, 400_000_000);
-        assert_eq!(parsed.append_only_compaction_pending_bytes, 200_000);
-        assert_eq!(parsed.top_cf_sizes.len(), 2);
+        assert_eq!(
+            parsed.consumed_cells_bytes_source.as_deref(),
+            Some("live+mem")
+        );
+        assert_eq!(parsed.rocksdb_domain_memtable_bytes, Some(600_000_000));
+        assert_eq!(parsed.rocksdb_append_only_memtable_bytes, Some(400_000_000));
+        assert_eq!(parsed.append_only_compaction_pending_bytes, Some(200_000));
+        assert_eq!(parsed.top_cf_sizes.as_ref().unwrap().len(), 2);
         assert_eq!(parsed.total_transactions, 50_000_000);
     }
 
@@ -751,7 +754,7 @@ mod tests {
             obj.remove("consumedCellsBytesSource");
         }
         let parsed: MemoryStatsData = serde_json::from_value(value).unwrap();
-        assert_eq!(parsed.consumed_cells_bytes_source, "");
+        assert_eq!(parsed.consumed_cells_bytes_source, None);
     }
 
     #[test]

@@ -357,7 +357,7 @@ mod tests {
         let invalidator = CacheInvalidator::new(store.clone());
 
         let data = MemoryStatsData {
-            live_cells_count: 1000,
+            live_cells_count: Some(1000),
             updated_at: 1700000000,
             ..Default::default()
         };
@@ -378,6 +378,6 @@ mod tests {
         let stored = store.get_memory_stats().unwrap();
         assert!(stored.is_some());
         let parsed: MemoryStatsData = serde_json::from_slice(&stored.unwrap()).unwrap();
-        assert_eq!(parsed.live_cells_count, 1000);
+        assert_eq!(parsed.live_cells_count, Some(1000));
     }
 }

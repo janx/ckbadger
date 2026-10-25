@@ -49,9 +49,9 @@ struct Sample {
     db_stage_write_ms: f64,
     db_commit_ms: f64,
     block_cache_mb: u64,
-    l0_files: u64,
-    l0_max: u64,
-    sst_size_gb: f64,
+    l0_files: Option<u64>,
+    l0_max: Option<u64>,
+    sst_size_gb: Option<f64>,
     chunks_delta: Option<u64>,
     slow_chunks_delta: Option<u64>,
     timeouts_delta: Option<u64>,
@@ -82,8 +82,8 @@ struct Sample {
     append_only_commit_synced_ms: f64,
     domain_commit_ms: f64,
     // Flush-storm outcome signals (P3.3).
-    sst_files_total: u64,
-    manifest_bytes: u64,
+    sst_files_total: Option<u64>,
+    manifest_bytes: Option<u64>,
 }
 
 /// Spawn the health monitor as a long-running background task. Returns
@@ -157,7 +157,9 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             block_cache_mb: memory.rocksdb_block_cache_bytes / (1024 * 1024),
             l0_files: memory.l0_files_count,
             l0_max: memory.l0_files_max,
-            sst_size_gb: memory.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0),
+            sst_size_gb: memory
+                .sst_files_size
+                .map(|value| value as f64 / (1024.0 * 1024.0 * 1024.0)),
             chunks_delta: lookup_delta.map(|value| value.chunks_total),
             slow_chunks_delta: lookup_delta.map(|value| value.slow_chunks_total),
             timeouts_delta: lookup_delta.map(|value| value.timeouts_total),
@@ -274,13 +276,13 @@ fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
 /// in the RocksDB LOG; `sst_files_last` and `manifest_mb_last` are the exact
 /// standing consequences of flush frequency, and `flush_pending_peak` /
 /// `flush_observed_in_window` remain the sampled activity signals.
-const CSV_SCHEMA_VERSION: u32 = 5;
+const CSV_SCHEMA_VERSION: u32 = 6;
 
 /// The one definition of the column set. Every row is produced by
 /// [`format_hourly_row`] from the same list, and a unit test pins the two to
 /// the same column count.
 fn csv_header() -> &'static str {
-    "schema=5,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
+    "schema=6,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
      block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,\
      chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
      keys_per_hour,avg_us_per_chunk,\
@@ -397,9 +399,13 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let avg_db_stage = buffer.iter().map(|s| s.db_stage_write_ms).sum::<f64>() / n;
     let avg_db_commit = buffer.iter().map(|s| s.db_commit_ms).sum::<f64>() / n;
     let avg_block_cache = buffer.iter().map(|s| s.block_cache_mb).sum::<u64>() as f64 / n;
-    let avg_l0 = buffer.iter().map(|s| s.l0_files).sum::<u64>() as f64 / n;
-    let peak_l0_max = buffer.iter().map(|s| s.l0_max).max().unwrap_or(0);
-    let last_sst_gb = buffer.last().map(|s| s.sst_size_gb).unwrap_or(0.0);
+    let avg_l0 = sum_complete(buffer.iter().map(|s| s.l0_files)).map(|value| value as f64 / n);
+    let peak_l0_max = buffer
+        .iter()
+        .map(|s| s.l0_max)
+        .collect::<Option<Vec<_>>>()
+        .and_then(|values| values.into_iter().max());
+    let last_sst_gb = buffer.last().and_then(|s| s.sst_size_gb);
     let chunks_per_hour = sum_complete(buffer.iter().map(|s| s.chunks_delta));
     let slow_per_hour = sum_complete(buffer.iter().map(|s| s.slow_chunks_delta));
     let timeouts_per_hour = sum_complete(buffer.iter().map(|s| s.timeouts_delta));
@@ -448,7 +454,7 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let avg_domain_commit = buffer.iter().map(|s| s.domain_commit_ms).sum::<f64>() / n;
     let last = buffer.last().expect("buffer is non-empty");
     format!(
-        "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{},{},{},{},{},{},\
+        "{},{},{},{},{:.1},{:.1},{:.0},{},{},{},{},{},{},{},{},{},{},{},{},{},\
          {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}\n",
         CSV_SCHEMA_VERSION,
         Utc::now().to_rfc3339(),
@@ -457,9 +463,9 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         avg_db_stage,
         avg_db_commit,
         avg_block_cache,
-        avg_l0,
-        peak_l0_max,
-        last_sst_gb,
+        avg_l0.map_or_else(|| "n/a".to_string(), |value| format!("{value:.1}")),
+        display_u64(peak_l0_max),
+        last_sst_gb.map_or_else(|| "n/a".to_string(), |value| format!("{value:.2}")),
         display_u64(chunks_per_hour),
         display_u64(slow_per_hour),
         display_u64(timeouts_per_hour),
@@ -477,8 +483,8 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         avg_script_rollup,
         avg_append_only_commit,
         avg_domain_commit,
-        last.sst_files_total,
-        last.manifest_bytes / (1024 * 1024),
+        display_u64(last.sst_files_total),
+        display_u64(last.manifest_bytes.map(|value| value / (1024 * 1024))),
     )
 }
 
@@ -525,9 +531,9 @@ mod tests {
             db_stage_write_ms: 1.0,
             db_commit_ms: 2.0,
             block_cache_mb: 3,
-            l0_files: 4,
-            l0_max: 5,
-            sst_size_gb: 6.0,
+            l0_files: Some(4),
+            l0_max: Some(5),
+            sst_size_gb: Some(6.0),
             chunks_delta: Some(7),
             slow_chunks_delta: Some(8),
             timeouts_delta: Some(9),
@@ -547,8 +553,8 @@ mod tests {
             script_rollup_ms: 23.0,
             append_only_commit_synced_ms: 24.0,
             domain_commit_ms: 25.0,
-            sst_files_total: 27,
-            manifest_bytes: 28 * 1024 * 1024,
+            sst_files_total: Some(27),
+            manifest_bytes: Some(28 * 1024 * 1024),
         };
         let row = format_hourly_row(&[sample]);
         assert_eq!(

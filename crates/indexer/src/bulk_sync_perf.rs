@@ -78,9 +78,9 @@ pub struct BatchSample {
     pub facts_intern_slow_path_count: u64,
     pub facts_intern_total_count: u64,
     pub facts_cell_count: u64,
-    pub compaction_pending_mb: u64,
-    pub l0_files: u64,
-    pub imm_memtables: u64,
+    pub compaction_pending_mb: Option<u64>,
+    pub l0_files: Option<u64>,
+    pub imm_memtables: Option<u64>,
     pub timestamp_utc: String,
     pub load_avg_1m: Option<f64>,
     pub mem_available_mb: Option<u64>,
@@ -98,14 +98,14 @@ pub struct BatchSample {
     pub jemalloc_mapped_bytes: u64,
     pub jemalloc_retained_bytes: u64,
     pub jemalloc_metadata_bytes: u64,
-    pub rocksdb_domain_memtable_bytes: u64,
-    pub rocksdb_append_only_memtable_bytes: u64,
+    pub rocksdb_domain_memtable_bytes: Option<u64>,
+    pub rocksdb_append_only_memtable_bytes: Option<u64>,
     pub rocksdb_shared_block_cache_bytes: u64,
-    pub rocksdb_domain_table_readers_bytes: u64,
-    pub rocksdb_append_only_table_readers_bytes: u64,
-    pub rocksdb_total_memory_bytes: u64,
-    pub rocksdb_domain_compaction_pending_bytes: u64,
-    pub rocksdb_append_only_compaction_pending_bytes: u64,
+    pub rocksdb_domain_table_readers_bytes: Option<u64>,
+    pub rocksdb_append_only_table_readers_bytes: Option<u64>,
+    pub rocksdb_total_memory_bytes: Option<u64>,
+    pub rocksdb_domain_compaction_pending_bytes: Option<u64>,
+    pub rocksdb_append_only_compaction_pending_bytes: Option<u64>,
     pub rocksdb_shared_wbm_usage_bytes: u64,
     pub rocksdb_shared_wbm_budget_bytes: u64,
     pub disk_read_mb: f64,
@@ -133,9 +133,9 @@ impl BatchSample {
         blocks: u64,
         batch_seconds: f64,
         commit_ms: f64,
-        compaction_pending_mb: u64,
-        l0_files: u64,
-        imm_memtables: u64,
+        compaction_pending_mb: impl Into<Option<u64>>,
+        l0_files: impl Into<Option<u64>>,
+        imm_memtables: impl Into<Option<u64>>,
         timestamp_utc: String,
         load_avg_1m: impl Into<Option<f64>>,
         mem_available_mb: impl Into<Option<u64>>,
@@ -183,9 +183,9 @@ impl BatchSample {
             facts_intern_slow_path_count: 0,
             facts_intern_total_count: 0,
             facts_cell_count: 0,
-            compaction_pending_mb,
-            l0_files,
-            imm_memtables,
+            compaction_pending_mb: compaction_pending_mb.into(),
+            l0_files: l0_files.into(),
+            imm_memtables: imm_memtables.into(),
             timestamp_utc,
             load_avg_1m: load_avg_1m.into(),
             mem_available_mb: mem_available_mb.into(),
@@ -203,14 +203,14 @@ impl BatchSample {
             jemalloc_mapped_bytes: 0,
             jemalloc_retained_bytes: 0,
             jemalloc_metadata_bytes: 0,
-            rocksdb_domain_memtable_bytes: 0,
-            rocksdb_append_only_memtable_bytes: 0,
+            rocksdb_domain_memtable_bytes: None,
+            rocksdb_append_only_memtable_bytes: None,
             rocksdb_shared_block_cache_bytes: 0,
-            rocksdb_domain_table_readers_bytes: 0,
-            rocksdb_append_only_table_readers_bytes: 0,
-            rocksdb_total_memory_bytes: 0,
-            rocksdb_domain_compaction_pending_bytes: 0,
-            rocksdb_append_only_compaction_pending_bytes: 0,
+            rocksdb_domain_table_readers_bytes: None,
+            rocksdb_append_only_table_readers_bytes: None,
+            rocksdb_total_memory_bytes: None,
+            rocksdb_domain_compaction_pending_bytes: None,
+            rocksdb_append_only_compaction_pending_bytes: None,
             rocksdb_shared_wbm_usage_bytes: 0,
             rocksdb_shared_wbm_budget_bytes: 0,
             disk_read_mb,
@@ -282,9 +282,9 @@ pub struct BulkSyncPerfMetrics {
     pub p95_commit_ms: f64,
     pub p99_commit_ms: f64,
     pub finalize_seconds: f64,
-    pub max_compaction_pending_mb: u64,
-    pub max_l0_files: u64,
-    pub max_imm_memtables: u64,
+    pub max_compaction_pending_mb: Option<u64>,
+    pub max_l0_files: Option<u64>,
+    pub max_imm_memtables: Option<u64>,
     pub avg_load_avg_1m: Option<f64>,
     pub max_load_avg_1m: Option<f64>,
     pub min_mem_available_mb: Option<u64>,
@@ -492,17 +492,21 @@ impl BulkSyncPerfRun {
             .chain(
                 self.heartbeat_samples
                     .iter()
-                    .map(|sample| sample.compaction_pending_mb),
+                    .map(|sample| Some(sample.compaction_pending_mb)),
             )
-            .max()
-            .unwrap_or(0);
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| values.into_iter().max());
         let max_l0_files = self
             .batch_samples
             .iter()
             .map(|sample| sample.l0_files)
-            .chain(self.heartbeat_samples.iter().map(|sample| sample.l0_files))
-            .max()
-            .unwrap_or(0);
+            .chain(
+                self.heartbeat_samples
+                    .iter()
+                    .map(|sample| Some(sample.l0_files)),
+            )
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| values.into_iter().max());
         let max_imm_memtables = self
             .batch_samples
             .iter()
@@ -510,10 +514,10 @@ impl BulkSyncPerfRun {
             .chain(
                 self.heartbeat_samples
                     .iter()
-                    .map(|sample| sample.imm_memtables),
+                    .map(|sample| Some(sample.imm_memtables)),
             )
-            .max()
-            .unwrap_or(0);
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| values.into_iter().max());
 
         // Environment pressure aggregates
         let load_avgs: Option<Vec<f64>> =
@@ -719,9 +723,9 @@ impl BulkSyncPerfRun {
             format_float(metrics.p95_commit_ms),
             format_float(metrics.p99_commit_ms),
             format_float(metrics.finalize_seconds),
-            metrics.max_compaction_pending_mb,
-            metrics.max_l0_files,
-            metrics.max_imm_memtables,
+            format_optional_u64(metrics.max_compaction_pending_mb),
+            format_optional_u64(metrics.max_l0_files),
+            format_optional_u64(metrics.max_imm_memtables),
             format_optional_float(metrics.avg_load_avg_1m),
             format_optional_float(metrics.max_load_avg_1m),
             format_optional_u64(metrics.min_mem_available_mb),
@@ -870,12 +874,15 @@ impl BulkSyncPerfRun {
         content.push_str("| --- | ---: |\n");
         content.push_str(&format!(
             "| max_compaction_pending_mb | {} |\n",
-            metrics.max_compaction_pending_mb
+            format_optional_u64(metrics.max_compaction_pending_mb)
         ));
-        content.push_str(&format!("| max_l0_files | {} |\n", metrics.max_l0_files));
+        content.push_str(&format!(
+            "| max_l0_files | {} |\n",
+            format_optional_u64(metrics.max_l0_files)
+        ));
         content.push_str(&format!(
             "| max_imm_memtables | {} |\n",
-            metrics.max_imm_memtables
+            format_optional_u64(metrics.max_imm_memtables)
         ));
         content.push_str(&format!(
             "| avg_load_avg_1m | {} |\n",
@@ -1338,8 +1345,8 @@ impl BulkSyncPerfRun {
                 idx + 1,
                 format_float(sample.batch_seconds),
                 ratio,
-                sample.l0_files,
-                sample.compaction_pending_mb
+                format_optional_u64(sample.l0_files),
+                format_optional_u64(sample.compaction_pending_mb)
             ));
         }
         content.push('\n');
@@ -1748,10 +1755,16 @@ fn collect_disk_attribution_signals(samples: &[BatchSample]) -> DiskAttributionS
         .collect();
     let compaction_pending_mb: Vec<f64> = samples
         .iter()
-        .map(|s| s.compaction_pending_mb as f64)
+        .map(|s| s.compaction_pending_mb.expect("RocksDB telemetry checked") as f64)
         .collect();
-    let l0_files: Vec<f64> = samples.iter().map(|s| s.l0_files as f64).collect();
-    let imm_memtables: Vec<f64> = samples.iter().map(|s| s.imm_memtables as f64).collect();
+    let l0_files: Vec<f64> = samples
+        .iter()
+        .map(|s| s.l0_files.expect("RocksDB telemetry checked") as f64)
+        .collect();
+    let imm_memtables: Vec<f64> = samples
+        .iter()
+        .map(|s| s.imm_memtables.expect("RocksDB telemetry checked") as f64)
+        .collect();
 
     let valid_disk_windows = samples
         .iter()
@@ -1813,6 +1826,20 @@ fn summarize_disk_attribution(samples: &[BatchSample]) -> DiskAttributionSummary
                 "{} samples; disk telemetry coverage {}; attribution not attempted",
                 samples.len(),
                 disk_telemetry_status
+            ),
+        };
+    }
+
+    if samples.iter().any(|sample| {
+        sample.compaction_pending_mb.is_none()
+            || sample.l0_files.is_none()
+            || sample.imm_memtables.is_none()
+    }) {
+        return DiskAttributionSummary {
+            classification: DiskAttribution::Inconclusive,
+            evidence: format!(
+                "{} samples; RocksDB pressure telemetry incomplete; attribution not attempted",
+                samples.len()
             ),
         };
     }
@@ -1918,20 +1945,27 @@ fn build_diagnosis(
     }
 
     // RocksDB compaction backlog
-    if metrics.max_l0_files > L0_BACKLOG_THRESHOLD as u64
-        || metrics.max_imm_memtables > IMM_MEMTABLE_BACKLOG_THRESHOLD as u64
+    if metrics
+        .max_l0_files
+        .is_some_and(|value| value > L0_BACKLOG_THRESHOLD as u64)
+        || metrics
+            .max_imm_memtables
+            .is_some_and(|value| value > IMM_MEMTABLE_BACKLOG_THRESHOLD as u64)
     {
         findings.push(format!(
             "RocksDB compaction backlog detected (L0={}, immutable memtables={}). Write stalls likely.",
-            metrics.max_l0_files, metrics.max_imm_memtables,
+            format_optional_u64(metrics.max_l0_files), format_optional_u64(metrics.max_imm_memtables),
         ));
     }
 
     // Large compaction pending
-    if metrics.max_compaction_pending_mb > COMPACTION_BACKLOG_THRESHOLD_MB as u64 {
+    if metrics
+        .max_compaction_pending_mb
+        .is_some_and(|value| value > COMPACTION_BACKLOG_THRESHOLD_MB as u64)
+    {
         findings.push(format!(
             "Large compaction backlog ({}MB pending). Disk throughput may be insufficient.",
-            metrics.max_compaction_pending_mb,
+            format_optional_u64(metrics.max_compaction_pending_mb),
         ));
     }
 
@@ -1961,7 +1995,17 @@ fn build_diagnosis(
         }
     }
 
-    // Default when no issues found
+    if metrics.max_compaction_pending_mb.is_none()
+        || metrics.max_l0_files.is_none()
+        || metrics.max_imm_memtables.is_none()
+    {
+        findings.push(
+            "RocksDB pressure telemetry incomplete; bottleneck assessment is inconclusive."
+                .to_string(),
+        );
+    }
+
+    // Default when no issues found and the pressure observations are complete.
     if findings.is_empty() {
         findings.push(
             "No bottleneck detected from aggregate metrics. Check per-batch samples for localized anomalies.".to_string(),
@@ -2028,9 +2072,9 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         p95_commit_ms: read_f64(&map, "p95_commit_ms")?,
         p99_commit_ms: read_f64(&map, "p99_commit_ms")?,
         finalize_seconds: read_f64(&map, "finalize_seconds")?,
-        max_compaction_pending_mb: read_u64(&map, "max_compaction_pending_mb")?,
-        max_l0_files: read_u64(&map, "max_l0_files")?,
-        max_imm_memtables: read_u64(&map, "max_imm_memtables")?,
+        max_compaction_pending_mb: read_optional_u64(&map, "max_compaction_pending_mb")?,
+        max_l0_files: read_optional_u64(&map, "max_l0_files")?,
+        max_imm_memtables: read_optional_u64(&map, "max_imm_memtables")?,
         avg_load_avg_1m: read_optional_f64(&map, "avg_load_avg_1m")?,
         max_load_avg_1m: read_optional_f64(&map, "max_load_avg_1m")?,
         min_mem_available_mb: read_optional_u64(&map, "min_mem_available_mb")?,
@@ -2326,8 +2370,8 @@ mod tests {
 
         assert_eq!(metrics.batches, 2);
         assert_eq!(metrics.blocks, 30);
-        assert_eq!(metrics.max_l0_files, 7);
-        assert_eq!(metrics.max_imm_memtables, 2);
+        assert_eq!(metrics.max_l0_files, Some(7));
+        assert_eq!(metrics.max_imm_memtables, Some(2));
     }
 
     #[test]
@@ -2428,8 +2472,8 @@ mod tests {
         sample.jemalloc_stats_available = true;
         sample.jemalloc_allocated_bytes = 14;
         sample.jemalloc_resident_bytes = 15;
-        sample.rocksdb_domain_memtable_bytes = 16;
-        sample.rocksdb_append_only_memtable_bytes = 17;
+        sample.rocksdb_domain_memtable_bytes = Some(16);
+        sample.rocksdb_append_only_memtable_bytes = Some(17);
         sample.rocksdb_shared_block_cache_bytes = 18;
         sample.rocksdb_shared_wbm_usage_bytes = 19;
         run.record_batch_sample(sample).unwrap();
@@ -2611,6 +2655,9 @@ mod tests {
         let mut missing = test_batch_sample(20, 2.0, 80.0, 200, 7, 2);
         missing.load_avg_1m = None;
         missing.mem_available_mb = None;
+        missing.compaction_pending_mb = None;
+        missing.l0_files = None;
+        missing.imm_memtables = None;
         run.record_batch_sample(missing).unwrap();
         run.finish_completed().unwrap();
 
@@ -2619,9 +2666,16 @@ mod tests {
         assert!(contents.contains("avg_load_avg_1m=n/a\n"));
         assert!(contents.contains("max_load_avg_1m=n/a\n"));
         assert!(contents.contains("min_mem_available_mb=n/a\n"));
+        assert!(contents.contains("max_compaction_pending_mb=n/a\n"));
+        assert!(contents.contains("max_l0_files=n/a\n"));
+        assert!(contents.contains("max_imm_memtables=n/a\n"));
         let parsed = super::read_metrics_env(&path).unwrap().unwrap();
         assert_eq!(parsed.avg_load_avg_1m, None);
         assert_eq!(parsed.min_mem_available_mb, None);
+        assert_eq!(parsed.max_l0_files, None);
+        assert!(build_diagnosis(&parsed, None)
+            .iter()
+            .any(|finding| finding.contains("inconclusive")));
         assert!(!build_diagnosis(
             &parsed,
             Some(&EnvironmentSnapshot {
@@ -3587,9 +3641,9 @@ mod tests {
             p95_commit_ms: 200.0,
             p99_commit_ms: 300.0,
             finalize_seconds: 60.0,
-            max_compaction_pending_mb: 100,
-            max_l0_files: 10,
-            max_imm_memtables: 3,
+            max_compaction_pending_mb: Some(100),
+            max_l0_files: Some(10),
+            max_imm_memtables: Some(3),
             avg_load_avg_1m: Some(4.0),
             max_load_avg_1m: Some(8.0),
             min_mem_available_mb: Some(8000),
@@ -3638,8 +3692,8 @@ mod tests {
     #[test]
     fn test_diagnosis_identifies_compaction_backlog() {
         let mut metrics = build_test_metrics(10, 100);
-        metrics.max_l0_files = 40;
-        metrics.max_imm_memtables = 10;
+        metrics.max_l0_files = Some(40);
+        metrics.max_imm_memtables = Some(10);
         let findings = build_diagnosis(&metrics, None);
         assert!(findings.iter().any(|f| f.contains("compaction backlog")));
     }
@@ -3647,7 +3701,7 @@ mod tests {
     #[test]
     fn test_diagnosis_identifies_large_compaction_pending() {
         let mut metrics = build_test_metrics(10, 100);
-        metrics.max_compaction_pending_mb = 400;
+        metrics.max_compaction_pending_mb = Some(400);
         let findings = build_diagnosis(&metrics, None);
         assert!(findings.iter().any(|f| f.contains("pending")));
     }

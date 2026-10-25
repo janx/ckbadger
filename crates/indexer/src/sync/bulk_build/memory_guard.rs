@@ -136,7 +136,7 @@ fn format_process_memory(snapshot: ProcessMemorySnapshot) -> String {
 
 fn format_store_memory(snapshot: &ChainStoreMemorySnapshot) -> String {
     format!(
-        "domain_memtable_bytes:{},append_only_memtable_bytes:{},shared_block_cache_bytes:{},domain_table_readers_bytes:{},append_only_table_readers_bytes:{},total_memory_bytes:{},domain_compaction_pending_bytes:{},append_only_compaction_pending_bytes:{},shared_wbm_usage_bytes:{},shared_wbm_budget_bytes:{}",
+        "domain_memtable_bytes:{:?},append_only_memtable_bytes:{:?},shared_block_cache_bytes:{},domain_table_readers_bytes:{:?},append_only_table_readers_bytes:{:?},total_memory_bytes:{:?},domain_compaction_pending_bytes:{:?},append_only_compaction_pending_bytes:{:?},shared_wbm_usage_bytes:{},shared_wbm_budget_bytes:{}",
         snapshot.domain_memtable_bytes,
         snapshot.append_only_memtable_bytes,
         snapshot.shared_block_cache_bytes,
@@ -178,14 +178,14 @@ mod tests {
 
     fn store_memory() -> ChainStoreMemorySnapshot {
         ChainStoreMemorySnapshot {
-            domain_memtable_bytes: 101,
-            append_only_memtable_bytes: 202,
+            domain_memtable_bytes: Some(101),
+            append_only_memtable_bytes: Some(202),
             shared_block_cache_bytes: 303,
-            domain_table_readers_bytes: 404,
-            append_only_table_readers_bytes: 505,
-            total_memory_bytes: 1_515,
-            domain_compaction_pending_bytes: 606,
-            append_only_compaction_pending_bytes: 707,
+            domain_table_readers_bytes: Some(404),
+            append_only_table_readers_bytes: Some(505),
+            total_memory_bytes: Some(1_515),
+            domain_compaction_pending_bytes: Some(606),
+            append_only_compaction_pending_bytes: Some(707),
             shared_wbm_usage_bytes: 808,
             shared_wbm_budget_bytes: 909,
             ..Default::default()

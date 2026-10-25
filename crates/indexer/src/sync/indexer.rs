@@ -712,7 +712,7 @@ impl Indexer {
     /// - **Exit bulk**: blocks_behind <= threshold and currently in bulk compaction mode,
     ///   BUT only if compaction pressure has drained (L0 files < 10, pending < 2 GB).
     ///   Otherwise defers the transition and logs.
-    pub(super) fn ensure_compaction_mode(&self, blocks_behind: u64) {
+    pub(super) fn ensure_compaction_mode(&self, blocks_behind: u64) -> Result<()> {
         let domain_store = self.writer.store();
         let append_store = &self.append_only_store;
         let in_bulk = domain_store.is_bulk_sync_mode();
@@ -727,7 +727,7 @@ impl Indexer {
             domain_store.set_bulk_sync_compaction_options();
             append_store.set_bulk_sync_compaction_options();
         } else if !should_be_bulk && in_bulk {
-            let pressure = domain_store.compaction_pressure();
+            let pressure = domain_store.compaction_pressure()?;
             const DRAIN_L0_THRESHOLD: u64 = 10;
             let drain_pending_threshold =
                 domain_store.memory_profile().drain_pending_bytes_threshold;
@@ -756,6 +756,7 @@ impl Indexer {
                 );
             }
         }
+        Ok(())
     }
 
     pub fn is_direct_db_read(&self) -> bool {
@@ -1176,10 +1177,12 @@ impl Indexer {
             )
         });
         ckbadger_common::MemoryStatsData {
-            live_cells_count: domain_stats.live_cells_count as u64,
-            consumed_cells_count: domain_stats.consumed_cells_count as u64,
-            consumed_cells_bytes: domain_stats.consumed_cells_bytes as u64,
-            consumed_cells_bytes_source: domain_stats.consumed_cells_bytes_source.to_string(),
+            live_cells_count: domain_stats.live_cells_count,
+            consumed_cells_count: domain_stats.consumed_cells_count,
+            consumed_cells_bytes: domain_stats.consumed_cells_bytes,
+            consumed_cells_bytes_source: domain_stats
+                .consumed_cells_bytes_source
+                .map(str::to_string),
             rocksdb_memtable_bytes: chain_store_memory.total_memtable_bytes,
             rocksdb_block_cache_bytes: chain_store_memory.shared_block_cache_bytes,
             rocksdb_table_readers_bytes: chain_store_memory.total_table_readers_bytes,
@@ -1189,7 +1192,7 @@ impl Indexer {
             rocksdb_domain_table_readers_bytes: chain_store_memory.domain_table_readers_bytes,
             rocksdb_append_only_table_readers_bytes: chain_store_memory
                 .append_only_table_readers_bytes,
-            block_headers_count: domain_stats.block_headers_count as u64,
+            block_headers_count: domain_stats.block_headers_count,
             bulk_sync_cell_cache_enabled: false,
             bulk_sync_mode: self.is_bulk_sync_active(),
             compaction_pending_bytes: chain_store_memory.total_compaction_pending_bytes,
@@ -1211,11 +1214,10 @@ impl Indexer {
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
             total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
-            total_addresses: i64::try_from(domain_stats.addr_balance_count).unwrap_or_else(|_| {
-                panic!(
-                    "addr_balance_count over i64 range in memory stats: {}",
-                    domain_stats.addr_balance_count
-                )
+            total_addresses: domain_stats.addr_balance_count.map(|count| {
+                i64::try_from(count).unwrap_or_else(|_| {
+                    panic!("addr_balance_count over i64 range in memory stats: {count}")
+                })
             }),
             updated_at: chrono::Utc::now().timestamp(),
         }
@@ -1942,7 +1944,7 @@ mod tests {
         assert!(store.is_bulk_sync_mode());
 
         // Check compaction_pressure on an empty store (should be 0/0/0 → drain OK)
-        let pressure = store.compaction_pressure();
+        let pressure = store.compaction_pressure().unwrap();
         // Empty store has no L0 files and no pending compaction
         assert!(pressure.l0_files_max < 10);
         assert!(pressure.compaction_pending_bytes < 2 * 1024 * 1024 * 1024);

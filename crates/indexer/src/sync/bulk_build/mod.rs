@@ -627,7 +627,9 @@ impl BulkBuildEngine {
                 prefetch_recv_ms: prefetch_recv_elapsed.as_secs_f64() * 1000.0,
                 build_ms: build_elapsed.as_secs_f64() * 1000.0,
                 flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
-                l0_files: snap.l0_files,
+                l0_files: snap.l0_files.ok_or_else(|| anyhow!(
+                    "bulk controller requires complete RocksDB L0 file count: batch_index={batch_count} start_block={current_block}"
+                ))?,
                 actual_cells: batch_cells,
             }) {
                 let _ = threads_tx.send(output.fetch_threads);
@@ -6834,7 +6836,14 @@ mod tests {
         let domain_stats_before = domain_store.memory_stats();
         let append_stats_before = append_store.memory_stats();
         assert!(
-            domain_stats_before.memtable_bytes > 0 || append_stats_before.memtable_bytes > 0,
+            domain_stats_before
+                .memtable_bytes
+                .expect("domain memtable observation")
+                > 0
+                || append_stats_before
+                    .memtable_bytes
+                    .expect("append-only memtable observation")
+                    > 0,
             "expected pending no-WAL memtable bytes before flush helper"
         );
 
@@ -6843,8 +6852,22 @@ mod tests {
 
         let domain_stats_after = domain_store.memory_stats();
         let append_stats_after = append_store.memory_stats();
-        assert!(domain_stats_after.sst_files_size > domain_stats_before.sst_files_size);
-        assert!(append_stats_after.sst_files_size > append_stats_before.sst_files_size);
+        assert!(
+            domain_stats_after
+                .sst_files_size
+                .expect("domain SST observation")
+                > domain_stats_before
+                    .sst_files_size
+                    .expect("domain SST observation")
+        );
+        assert!(
+            append_stats_after
+                .sst_files_size
+                .expect("append-only SST observation")
+                > append_stats_before
+                    .sst_files_size
+                    .expect("append-only SST observation")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

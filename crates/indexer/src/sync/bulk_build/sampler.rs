@@ -9,9 +9,9 @@ use crate::sys_info;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SamplerSnapshot {
-    pub compaction_pending_mb: u64,
-    pub l0_files: u64,
-    pub imm_memtables: u64,
+    pub compaction_pending_mb: Option<u64>,
+    pub l0_files: Option<u64>,
+    pub imm_memtables: Option<u64>,
     pub load_avg_1m: Option<f64>,
     pub mem_available_mb: Option<u64>,
     pub disk_read_mb: f64,
@@ -34,9 +34,9 @@ pub(crate) struct SamplerSnapshot {
 impl Default for SamplerSnapshot {
     fn default() -> Self {
         Self {
-            compaction_pending_mb: 0,
-            l0_files: 0,
-            imm_memtables: 0,
+            compaction_pending_mb: None,
+            l0_files: None,
+            imm_memtables: None,
             load_avg_1m: None,
             mem_available_mb: None,
             disk_read_mb: 0.0,
@@ -96,8 +96,9 @@ impl BackgroundSampler {
                             });
                     let env = sys_info::read_batch_environment(&mut disk_tracker);
                     let snapshot = SamplerSnapshot {
-                        compaction_pending_mb: store_memory.total_compaction_pending_bytes
-                            / (1024 * 1024),
+                        compaction_pending_mb: store_memory
+                            .total_compaction_pending_bytes
+                            .map(|value| value / (1024 * 1024)),
                         l0_files: store_memory.l0_files_count,
                         imm_memtables: store_memory.immutable_memtables,
                         load_avg_1m: env.load_avg_1m,
@@ -155,8 +156,8 @@ mod tests {
     #[test]
     fn sampler_snapshot_default_marks_disk_unavailable() {
         let snap = SamplerSnapshot::default();
-        assert_eq!(snap.l0_files, 0);
-        assert_eq!(snap.compaction_pending_mb, 0);
+        assert_eq!(snap.l0_files, None);
+        assert_eq!(snap.compaction_pending_mb, None);
         assert_eq!(snap.load_avg_1m, None);
         assert_eq!(snap.mem_available_mb, None);
         assert_eq!(snap.disk_read_mb, 0.0);
@@ -186,7 +187,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(10));
                     if tx
                         .send(SamplerSnapshot {
-                            l0_files: 42,
+                            l0_files: Some(42),
                             ..Default::default()
                         })
                         .is_err()
@@ -205,7 +206,7 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(50));
         let snap = sampler.latest();
-        assert_eq!(snap.l0_files, 42);
+        assert_eq!(snap.l0_files, Some(42));
 
         sampler.shutdown();
     }

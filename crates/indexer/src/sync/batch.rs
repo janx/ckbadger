@@ -1561,7 +1561,9 @@ impl Indexer {
             let stats = self.writer.store().memory_stats();
             let current = self.progress.current();
             let chain_tip = self.progress.target();
-            let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
+            let sst_gb = stats
+                .sst_files_size
+                .map(|value| value as f64 / (1024.0 * 1024.0 * 1024.0));
 
             // `current` is the last block actually written; it is what the
             // entity-stats coverage floor must record.
@@ -1591,7 +1593,7 @@ impl Indexer {
                 blocks_synced = current,
                 elapsed_secs = elapsed.unwrap_or(0),
                 avg_bps = format!("{:.1}", avg_bps.unwrap_or(0.0)),
-                sst_size_gb = format!("{:.1}", sst_gb),
+                sst_size_gb = ?sst_gb,
                 "Bulk sync completed"
             );
             self.finalize_bulk_sync_perf_completed();

@@ -1912,41 +1912,41 @@ pub const HOURLY_RETENTION_POLICY_VERSION: u32 = 1;
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
     /// Estimated number of live cells (from RocksDB estimate-num-keys on live_cells CF).
-    pub live_cells_count: usize,
+    pub live_cells_count: Option<u64>,
     /// Estimated number of consumed cells (from consumed_cells CF).
-    pub consumed_cells_count: usize,
-    /// Estimated bytes used by consumed_cells CF (live-data estimate with SST fallback).
-    pub consumed_cells_bytes: usize,
-    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none.
-    pub consumed_cells_bytes_source: &'static str,
+    pub consumed_cells_count: Option<u64>,
+    /// Estimated bytes used by consumed_cells CF (live-data estimate plus memtable bytes).
+    pub consumed_cells_bytes: Option<u64>,
+    /// Source used to estimate consumed_cells_bytes: live+mem when available.
+    pub consumed_cells_bytes_source: Option<&'static str>,
     /// Estimated number of cached block headers.
-    pub block_headers_count: usize,
+    pub block_headers_count: Option<u64>,
     /// Estimated number of address entries in addr_balance column family.
-    pub addr_balance_count: usize,
+    pub addr_balance_count: Option<u64>,
     /// Estimated number of canonical cells in `cells` column family.
-    pub cells_count: usize,
-    pub memory_bytes: usize,
-    pub memtable_bytes: usize,
+    pub cells_count: Option<u64>,
+    pub memory_bytes: Option<u64>,
+    pub memtable_bytes: Option<u64>,
     pub block_cache_bytes: usize,
-    pub table_readers_bytes: usize,
+    pub table_readers_bytes: Option<u64>,
     /// Estimated bytes pending compaction across all CFs
-    pub compaction_pending_bytes: u64,
+    pub compaction_pending_bytes: Option<u64>,
     /// Number of currently running compactions
     pub num_running_compactions: Option<u64>,
     /// Total SST file size on disk (all CFs)
-    pub sst_files_size: u64,
+    pub sst_files_size: Option<u64>,
     /// Total L0 files across all CFs (sum)
-    pub l0_files_count: u64,
+    pub l0_files_count: Option<u64>,
     /// Max L0 files in any single CF (the actual write stall trigger)
-    pub l0_files_max: u64,
+    pub l0_files_max: Option<u64>,
     /// Name of the CF with the most L0 files
-    pub l0_worst_cf: String,
+    pub l0_worst_cf: Option<String>,
     /// Total immutable memtables across all CFs (waiting for flush)
-    pub immutable_memtables: u64,
+    pub immutable_memtables: Option<u64>,
     /// Total SST files across every level of every CF. With `atomic_flush` one
     /// flush round creates one file per written CF, so this is the direct
     /// outcome of flush frequency (7,148 / 5,343 files on 2026-09-22).
-    pub sst_files_total: u64,
+    pub sst_files_total: Option<u64>,
     /// Size of the MANIFEST this DB is currently writing. A secondary replays
     /// it on open, so an unbounded MANIFEST is what made the API domain
     /// secondary take 596 s to open (51 MB MANIFEST).
@@ -1957,9 +1957,9 @@ pub struct MemoryStats {
     /// authoritative number is the `flush_started` events in the RocksDB LOG.
     /// `sst_files_total` and `manifest_bytes` are the exact standing
     /// consequences of flush frequency, and are what P3.3 compares.
-    pub manifest_bytes: u64,
+    pub manifest_bytes: Option<u64>,
     /// Top column families by estimated live data size: (name, bytes)
-    pub top_cf_sizes: Vec<(String, u64)>,
+    pub top_cf_sizes: Option<Vec<(String, u64)>>,
     /// WriteBufferManager current usage in bytes
     pub wbm_usage_bytes: usize,
     /// WriteBufferManager budget (buffer_size) in bytes

@@ -750,21 +750,38 @@ fn domain_path_from_append(append_path: &Path) -> PathBuf {
 
 fn consumed_cf_storage_bytes(
     live_data_bytes: Option<u64>,
-    sst_files_bytes: Option<u64>,
     memtable_bytes: Option<u64>,
-) -> (usize, &'static str) {
-    let (base, source) = match live_data_bytes {
-        Some(v) if v > 0 => (v, "live"),
-        _ => match sst_files_bytes {
-            Some(v) if v > 0 => (v, "sst"),
-            _ => match memtable_bytes {
-                Some(v) if v > 0 => (0, "mem"),
-                _ => (0, "none"),
-            },
-        },
+) -> (Option<u64>, Option<&'static str>) {
+    let bytes =
+        live_data_bytes.and_then(|live| memtable_bytes.and_then(|mem| live.checked_add(mem)));
+    (bytes, bytes.map(|_| "live+mem"))
+}
+
+fn complete_observed_sum(prior: Option<u64>, value: Option<u64>) -> Option<u64> {
+    prior.and_then(|prior| value.and_then(|value| prior.checked_add(value)))
+}
+
+fn manifest_bytes_at(db_path: &Path) -> Option<u64> {
+    let current = match std::fs::read_to_string(db_path.join("CURRENT")) {
+        Ok(current) => current,
+        Err(error) => {
+            warn!(path = %db_path.display(), %error, "failed to read RocksDB CURRENT");
+            return None;
+        }
     };
-    let total = base.saturating_add(memtable_bytes.unwrap_or(0));
-    (usize::try_from(total).unwrap_or(usize::MAX), source)
+    let manifest_name = current.trim();
+    if manifest_name.is_empty() {
+        warn!(path = %db_path.display(), "RocksDB CURRENT has empty MANIFEST name");
+        return None;
+    }
+    match std::fs::metadata(db_path.join(manifest_name)) {
+        Ok(metadata) => Some(metadata.len()),
+        Err(error) => {
+            warn!(path = %db_path.display(), manifest = manifest_name, %error,
+                "failed to stat RocksDB MANIFEST");
+            None
+        }
+    }
 }
 
 fn short_hex(bytes: &[u8], max_len: usize) -> String {
@@ -2494,155 +2511,195 @@ impl CkbadgerStore {
     /// Lightweight compaction pressure snapshot for the adaptive batch controller.
     /// Only collects the 3 RocksDB properties needed for backpressure decisions,
     /// avoiding the full CF iteration of `memory_stats()`.
-    pub fn compaction_pressure(&self) -> CompactionPressureSnapshot {
+    pub fn compaction_pressure(&self) -> anyhow::Result<CompactionPressureSnapshot> {
         let mut compaction_pending_bytes = 0u64;
         let mut l0_files_total = 0u64;
         let mut l0_files_max: u64 = 0;
         let mut immutable_memtables = 0u64;
-        for &cf_name in ALL_CFS {
-            if let Some(cf) = self.db.cf_handle(cf_name) {
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.estimate-pending-compaction-bytes")
-                {
-                    compaction_pending_bytes += v;
-                }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
-                {
-                    l0_files_total += v;
-                    l0_files_max = l0_files_max.max(v);
-                }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.num-immutable-mem-table")
-                {
-                    immutable_memtables += v;
-                }
-            }
+        for &cf_name in Self::cfs_for_class(self.store_class) {
+            let cf = self.db.cf_handle(cf_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compaction pressure CF missing: path={} cf={cf_name}",
+                    self.db_path.display()
+                )
+            })?;
+            let read = |property| {
+                required_compaction_property(
+                    self.db
+                        .property_int_value_cf(cf, property)
+                        .map_err(Into::into),
+                    &self.db_path,
+                    cf_name,
+                    property,
+                )
+            };
+            let pending = read("rocksdb.estimate-pending-compaction-bytes")?;
+            compaction_pending_bytes =
+                compaction_pending_bytes
+                    .checked_add(pending)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "compaction pending bytes overflow: path={} cf={cf_name}",
+                            self.db_path.display()
+                        )
+                    })?;
+            let l0 = read("rocksdb.num-files-at-level0")?;
+            l0_files_total = l0_files_total.checked_add(l0).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compaction L0 file count overflow: path={} cf={cf_name}",
+                    self.db_path.display()
+                )
+            })?;
+            l0_files_max = l0_files_max.max(l0);
+            let immutable = read("rocksdb.num-immutable-mem-table")?;
+            immutable_memtables = immutable_memtables.checked_add(immutable).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compaction immutable memtable count overflow: path={} cf={cf_name}",
+                    self.db_path.display()
+                )
+            })?;
         }
-        CompactionPressureSnapshot {
+        Ok(CompactionPressureSnapshot {
             l0_files_total,
             l0_files_max,
             compaction_pending_bytes,
             immutable_memtables,
-        }
+        })
     }
 
     pub fn memory_stats(&self) -> MemoryStats {
-        let mut memtable_bytes = 0usize;
-        let mut table_readers_bytes = 0usize;
-        let mut cells_count = 0usize;
-        let mut live_cells_count = 0usize;
-        let mut consumed_cells_count = 0usize;
+        let mut memtable_bytes = Some(0u64);
+        let mut table_readers_bytes = Some(0u64);
+        let mut cells_count = None;
+        let mut live_cells_count = None;
+        let mut consumed_cells_count = None;
         let mut consumed_cf_live_data_bytes: Option<u64> = None;
-        let mut consumed_cf_sst_files_bytes: Option<u64> = None;
         let mut consumed_cf_memtable_bytes: Option<u64> = None;
-        let mut block_headers_count = 0usize;
-        let mut addr_balance_count = 0usize;
-        let mut compaction_pending_bytes = 0u64;
-        let mut sst_files_size = 0u64;
-        let mut l0_files_total = 0u64;
-        let mut l0_files_max: u64 = 0;
-        let mut l0_worst_cf = String::new();
-        let mut immutable_memtables = 0u64;
-        let mut cf_sizes: Vec<(String, u64)> = Vec::new();
+        let mut block_headers_count = None;
+        let mut addr_balance_count = None;
+        let mut compaction_pending_bytes = Some(0u64);
+        let mut sst_files_size = Some(0u64);
+        let mut l0_files_total = Some(0u64);
+        let mut l0_files_max = Some(0u64);
+        let mut l0_worst_cf = Some(String::new());
+        let mut immutable_memtables = Some(0u64);
+        let mut cf_sizes: Option<Vec<(String, u64)>> = Some(Vec::new());
 
         for &cf_name in ALL_CFS {
-            if let Some(cf) = self.db.cf_handle(cf_name) {
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.cur-size-all-mem-tables")
-                {
-                    memtable_bytes += v as usize;
-                    if cf_name == CF_CONSUMED_CELLS {
-                        consumed_cf_memtable_bytes = Some(v);
-                    }
+            let Some(cf) = self.db.cf_handle(cf_name) else {
+                continue;
+            };
+            let read = |property: &str| match self.db.property_int_value_cf(cf, property) {
+                Ok(Some(value)) => Some(value),
+                Ok(None) => {
+                    warn!(path = %self.db_path.display(), cf = cf_name, property,
+                        "RocksDB telemetry property unavailable");
+                    None
                 }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.estimate-table-readers-mem")
-                {
-                    table_readers_bytes += v as usize;
+                Err(error) => {
+                    warn!(path = %self.db_path.display(), cf = cf_name, property, %error,
+                        "failed to read RocksDB telemetry property");
+                    None
                 }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.estimate-pending-compaction-bytes")
-                {
-                    compaction_pending_bytes += v;
+            };
+            let add = |metric: &str, prior: Option<u64>, value: Option<u64>| {
+                let total = complete_observed_sum(prior, value);
+                if let (Some(prior), Some(value), None) = (prior, value, total) {
+                    warn!(path = %self.db_path.display(), metric, prior, value,
+                        "RocksDB telemetry sum overflow");
                 }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.estimate-num-keys")
-                {
-                    match cf_name {
-                        CF_CELLS => cells_count = v as usize,
-                        CF_LIVE_CELLS => live_cells_count = v as usize,
-                        CF_CONSUMED_CELLS => consumed_cells_count = v as usize,
-                        CF_BLOCK_HEADERS => block_headers_count = v as usize,
-                        CF_ADDR_BALANCE => addr_balance_count = v as usize,
-                        _ => {}
-                    }
+                total
+            };
+
+            let memtable = read("rocksdb.cur-size-all-mem-tables");
+            memtable_bytes = add("memtable_bytes", memtable_bytes, memtable);
+            if cf_name == CF_CONSUMED_CELLS {
+                consumed_cf_memtable_bytes = memtable;
+            }
+            table_readers_bytes = add(
+                "table_readers_bytes",
+                table_readers_bytes,
+                read("rocksdb.estimate-table-readers-mem"),
+            );
+            compaction_pending_bytes = add(
+                "compaction_pending_bytes",
+                compaction_pending_bytes,
+                read("rocksdb.estimate-pending-compaction-bytes"),
+            );
+            if matches!(
+                cf_name,
+                CF_CELLS | CF_LIVE_CELLS | CF_CONSUMED_CELLS | CF_BLOCK_HEADERS | CF_ADDR_BALANCE
+            ) {
+                let count = read("rocksdb.estimate-num-keys");
+                match cf_name {
+                    CF_CELLS => cells_count = count,
+                    CF_LIVE_CELLS => live_cells_count = count,
+                    CF_CONSUMED_CELLS => consumed_cells_count = count,
+                    CF_BLOCK_HEADERS => block_headers_count = count,
+                    CF_ADDR_BALANCE => addr_balance_count = count,
+                    _ => unreachable!(),
                 }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.total-sst-files-size")
-                {
-                    sst_files_size += v;
-                    if cf_name == CF_CONSUMED_CELLS {
-                        consumed_cf_sst_files_bytes = Some(v);
-                    }
+            }
+            let sst = read("rocksdb.total-sst-files-size");
+            sst_files_size = add("sst_files_size", sst_files_size, sst);
+
+            let l0 = read("rocksdb.num-files-at-level0");
+            l0_files_total = add("l0_files_total", l0_files_total, l0);
+            match (l0_files_max, l0) {
+                (Some(max), Some(value)) if value > max => {
+                    l0_files_max = Some(value);
+                    l0_worst_cf = Some(cf_name.to_string());
                 }
-                // L0 file count — track both total and per-CF max
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
-                {
-                    l0_files_total += v;
-                    if v > l0_files_max {
-                        l0_files_max = v;
-                        l0_worst_cf = cf_name.to_string();
-                    }
+                (Some(_), Some(_)) => {}
+                _ => {
+                    l0_files_max = None;
+                    l0_worst_cf = None;
                 }
-                // Immutable memtables waiting for flush — high values indicate
-                // flush can't keep up and writes will stall when all buffers fill.
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.num-immutable-mem-table")
-                {
-                    immutable_memtables += v;
-                }
-                // Per-CF live data size for top-N display
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.estimate-live-data-size")
-                {
-                    if cf_name == CF_CONSUMED_CELLS {
-                        consumed_cf_live_data_bytes = Some(v);
-                    }
-                    if v > 0 {
-                        cf_sizes.push((cf_name.to_string(), v));
-                    }
-                }
+            }
+            immutable_memtables = add(
+                "immutable_memtables",
+                immutable_memtables,
+                read("rocksdb.num-immutable-mem-table"),
+            );
+
+            let live = read("rocksdb.estimate-live-data-size");
+            if cf_name == CF_CONSUMED_CELLS {
+                consumed_cf_live_data_bytes = live;
+            }
+            match (cf_sizes.as_mut(), live) {
+                (Some(sizes), Some(value)) if value > 0 => sizes.push((cf_name.to_string(), value)),
+                (Some(_), Some(_)) => {}
+                _ => cf_sizes = None,
             }
         }
 
         // Sort by size descending and keep top 5
-        cf_sizes.sort_by_key(|item| std::cmp::Reverse(item.1));
-        cf_sizes.truncate(5);
-        let (consumed_cells_bytes, consumed_cells_bytes_source) = consumed_cf_storage_bytes(
-            consumed_cf_live_data_bytes,
-            consumed_cf_sst_files_bytes,
-            consumed_cf_memtable_bytes,
-        );
+        if let Some(sizes) = cf_sizes.as_mut() {
+            sizes.sort_by_key(|item| std::cmp::Reverse(item.1));
+            sizes.truncate(5);
+        }
+        let (consumed_cells_bytes, consumed_cells_bytes_source) =
+            consumed_cf_storage_bytes(consumed_cf_live_data_bytes, consumed_cf_memtable_bytes);
+        if consumed_cf_live_data_bytes.is_some()
+            && consumed_cf_memtable_bytes.is_some()
+            && consumed_cells_bytes.is_none()
+        {
+            warn!(path = %self.db_path.display(), ?consumed_cf_live_data_bytes,
+                ?consumed_cf_memtable_bytes, "consumed-cell storage observation overflow");
+        }
 
         let block_cache_bytes = self
             .block_cache
             .lock()
             .expect("block_cache lock poisoned")
             .get_usage();
-        let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
+        let memory_bytes = memtable_bytes
+            .and_then(|value| value.checked_add(block_cache_bytes as u64))
+            .and_then(|value| table_readers_bytes.and_then(|readers| value.checked_add(readers)));
+        if memtable_bytes.is_some() && table_readers_bytes.is_some() && memory_bytes.is_none() {
+            warn!(path = %self.db_path.display(), ?memtable_bytes, block_cache_bytes,
+                ?table_readers_bytes, "RocksDB total memory observation overflow");
+        }
         let num_running_compactions = match self
             .db
             .property_int_value("rocksdb.num-running-compactions")
@@ -2694,55 +2751,64 @@ impl CkbadgerStore {
     /// every 3 s during bulk sync. The number moves on the timescale of
     /// compactions, so a bounded-age cache gives the same signal without
     /// putting that sweep on every sample.
-    fn sst_files_total_cached(&self, max_age: Duration) -> u64 {
+    fn sst_files_total_cached(&self, max_age: Duration) -> Option<u64> {
         let mut cache = self
             .sst_file_count_cache
             .lock()
             .expect("sst_file_count_cache lock poisoned");
         if let Some((measured_at, value)) = *cache {
             if measured_at.elapsed() < max_age {
-                return value;
+                return Some(value);
             }
         }
         let value = self.count_sst_files();
-        *cache = Some((Instant::now(), value));
+        if let Some(value) = value {
+            *cache = Some((Instant::now(), value));
+        }
         value
     }
 
-    fn count_sst_files(&self) -> u64 {
+    fn count_sst_files(&self) -> Option<u64> {
         let mut total = 0u64;
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 for level in 0..=MAX_LEVEL_FOR_FILE_COUNT {
-                    if let Ok(Some(v)) = self
-                        .db
-                        .property_int_value_cf(cf, &format!("rocksdb.num-files-at-level{level}"))
-                    {
-                        total += v;
-                    }
+                    let property = format!("rocksdb.num-files-at-level{level}");
+                    let value = match self.db.property_int_value_cf(cf, &property) {
+                        Ok(Some(value)) => value,
+                        Ok(None) => {
+                            warn!(path = %self.db_path.display(), cf = cf_name, property,
+                                "RocksDB SST file count unavailable");
+                            return None;
+                        }
+                        Err(error) => {
+                            warn!(path = %self.db_path.display(), cf = cf_name, property, %error,
+                                "failed to read RocksDB SST file count");
+                            return None;
+                        }
+                    };
+                    total = match total.checked_add(value) {
+                        Some(total) => total,
+                        None => {
+                            warn!(path = %self.db_path.display(), cf = cf_name, property,
+                                prior = total, value, "RocksDB SST file count overflow");
+                            return None;
+                        }
+                    };
                 }
             }
         }
-        total
+        Some(total)
     }
 
     /// Size of the MANIFEST named by this DB's `CURRENT` file, in bytes.
     ///
-    /// 0 when `CURRENT` or the MANIFEST it names cannot be read — a
+    /// None when `CURRENT` or the MANIFEST it names cannot be read — a
     /// just-created DB directory, or a secondary whose primary rotated the
     /// MANIFEST between the two reads. This is a diagnostic gauge, never an
     /// input to chain state.
-    pub fn manifest_bytes(&self) -> u64 {
-        let Ok(current) = std::fs::read_to_string(self.db_path.join("CURRENT")) else {
-            return 0;
-        };
-        let manifest_name = current.trim();
-        if manifest_name.is_empty() {
-            return 0;
-        }
-        std::fs::metadata(self.db_path.join(manifest_name))
-            .map(|meta| meta.len())
-            .unwrap_or(0)
+    pub fn manifest_bytes(&self) -> Option<u64> {
+        manifest_bytes_at(&self.db_path)
     }
 
     /// Cheap snapshot of write-side flush activity. Used by the live-sync
@@ -2806,6 +2872,25 @@ fn required_flush_property(value: anyhow::Result<Option<u64>>, name: &str) -> an
     }
 }
 
+fn required_compaction_property(
+    value: anyhow::Result<Option<u64>>,
+    path: &Path,
+    cf: &str,
+    property: &str,
+) -> anyhow::Result<u64> {
+    match value {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => anyhow::bail!(
+            "compaction pressure property unavailable: path={} cf={cf} property={property}",
+            path.display()
+        ),
+        Err(error) => anyhow::bail!(
+            "compaction pressure property read failed: path={} cf={cf} property={property}: {error}",
+            path.display()
+        ),
+    }
+}
+
 /// Lightweight snapshot of write-side flush activity, sampled by the
 /// live-sync health monitor.
 #[derive(Debug, Clone, Copy, Default)]
@@ -2820,6 +2905,41 @@ pub struct FlushStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compaction_control_rejects_missing_or_failed_property() {
+        let path = Path::new("/tmp/domain");
+        assert_eq!(
+            required_compaction_property(
+                Ok(Some(0)),
+                path,
+                "activities",
+                "rocksdb.num-files-at-level0"
+            )
+            .unwrap(),
+            0
+        );
+        let missing = required_compaction_property(
+            Ok(None),
+            path,
+            "activities",
+            "rocksdb.num-files-at-level0",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(missing.contains("/tmp/domain"));
+        assert!(missing.contains("activities"));
+        assert!(missing.contains("rocksdb.num-files-at-level0"));
+        let failed = required_compaction_property(
+            Err(anyhow::anyhow!("I/O")),
+            path,
+            "activities",
+            "rocksdb.num-files-at-level0",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(failed.contains("I/O"));
+    }
     use tempfile::TempDir;
 
     #[test]
@@ -2995,7 +3115,10 @@ mod tests {
 
         write_and_flush(b"one", "p3.4-sst-cache-1");
         let first = store.sst_files_total_cached(Duration::from_secs(30));
-        assert!(first >= 1, "a flushed store must have at least one SST");
+        assert!(
+            first.expect("SST count") >= 1,
+            "a flushed store must have at least one SST"
+        );
 
         // A second flush inside the window is not resampled...
         write_and_flush(b"two", "p3.4-sst-cache-2");
@@ -3006,7 +3129,10 @@ mod tests {
         );
         // ...and is picked up as soon as the cached value is too old.
         assert!(
-            store.sst_files_total_cached(Duration::ZERO) > first,
+            store
+                .sst_files_total_cached(Duration::ZERO)
+                .expect("SST count")
+                > first.expect("SST count"),
             "an expired cache must recompute"
         );
     }
@@ -3027,11 +3153,11 @@ mod tests {
 
         let stats = store.memory_stats();
         assert!(
-            stats.sst_files_total >= 1,
+            stats.sst_files_total.expect("SST count") >= 1,
             "a flushed store must report at least one SST file: {stats:?}"
         );
         assert!(
-            stats.manifest_bytes > 0,
+            stats.manifest_bytes.expect("MANIFEST size") > 0,
             "an open store must report its MANIFEST size: {stats:?}"
         );
     }
@@ -3392,17 +3518,17 @@ mod tests {
         store.db.flush_cf(store.cf_addr_balance()).unwrap();
 
         let stats = store.memory_stats();
-        assert!(stats.live_cells_count >= 1);
-        assert!(stats.consumed_cells_count >= 1);
-        assert!(stats.block_headers_count >= 1);
-        assert!(stats.addr_balance_count >= 1);
-        assert!(stats.cells_count >= stats.live_cells_count);
+        assert!(stats.live_cells_count.expect("live cell count") >= 1);
+        assert!(stats.consumed_cells_count.expect("consumed cell count") >= 1);
+        assert!(stats.block_headers_count.expect("header count") >= 1);
+        assert!(stats.addr_balance_count.expect("address count") >= 1);
         assert!(
-            matches!(
-                stats.consumed_cells_bytes_source,
-                "live" | "sst" | "mem" | "none"
-            ),
-            "unexpected source: {}",
+            stats.cells_count.expect("cell count")
+                >= stats.live_cells_count.expect("live cell count")
+        );
+        assert!(
+            stats.consumed_cells_bytes_source == Some("live+mem"),
+            "unexpected source: {:?}",
             stats.consumed_cells_bytes_source
         );
     }
@@ -3421,33 +3547,44 @@ mod tests {
     }
 
     #[test]
-    fn test_consumed_cf_storage_bytes_prefers_live_data_estimate() {
+    fn test_consumed_cf_storage_bytes_requires_both_observations() {
         assert_eq!(
-            consumed_cf_storage_bytes(Some(100), Some(500), Some(20)),
-            (120, "live")
+            consumed_cf_storage_bytes(Some(100), Some(20)),
+            (Some(120), Some("live+mem"))
         );
-    }
-
-    #[test]
-    fn test_consumed_cf_storage_bytes_falls_back_to_sst_when_live_missing() {
+        assert_eq!(consumed_cf_storage_bytes(None, Some(20)), (None, None));
         assert_eq!(
-            consumed_cf_storage_bytes(None, Some(500), Some(20)),
-            (520, "sst")
-        );
-        assert_eq!(
-            consumed_cf_storage_bytes(Some(0), Some(500), Some(20)),
-            (520, "sst")
+            consumed_cf_storage_bytes(Some(0), Some(20)),
+            (Some(20), Some("live+mem"))
         );
     }
 
     #[test]
     fn test_consumed_cf_storage_bytes_returns_none_when_all_missing() {
-        assert_eq!(consumed_cf_storage_bytes(None, None, None), (0, "none"));
+        assert_eq!(consumed_cf_storage_bytes(None, None), (None, None));
     }
 
     #[test]
-    fn test_consumed_cf_storage_bytes_memtable_only_source() {
-        assert_eq!(consumed_cf_storage_bytes(None, None, Some(20)), (20, "mem"));
+    fn test_consumed_cf_storage_bytes_missing_memtable_is_unknown() {
+        assert_eq!(consumed_cf_storage_bytes(Some(10), None), (None, None));
+    }
+
+    #[test]
+    fn telemetry_sum_does_not_publish_partial_or_overflowed_values() {
+        assert_eq!(complete_observed_sum(Some(7), Some(3)), Some(10));
+        assert_eq!(complete_observed_sum(Some(7), None), None);
+        assert_eq!(complete_observed_sum(None, Some(3)), None);
+        assert_eq!(complete_observed_sum(Some(u64::MAX), Some(1)), None);
+    }
+
+    #[test]
+    fn missing_manifest_observation_is_not_zero_bytes() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(manifest_bytes_at(dir.path()), None);
+        std::fs::write(dir.path().join("CURRENT"), "MANIFEST-missing\n").unwrap();
+        assert_eq!(manifest_bytes_at(dir.path()), None);
+        std::fs::write(dir.path().join("MANIFEST-missing"), []).unwrap();
+        assert_eq!(manifest_bytes_at(dir.path()), Some(0));
     }
 
     #[test]
