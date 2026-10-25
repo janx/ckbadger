@@ -1357,6 +1357,125 @@ type ScriptReferenceDelta = (i64, i64, i128, i128, i128, i128);
 /// (sign > 0) and `removed` sums cells removed from live (sign < 0).
 type TokenHolderDelta = (TokenBalance, TokenBalance);
 
+fn checked_rollback_script_i64(
+    prior: i64,
+    delta: i64,
+    code_hash: &[u8],
+    field: &str,
+) -> anyhow::Result<i64> {
+    if prior < 0 {
+        anyhow::bail!("negative script_info prior during rollback: code_hash=0x{}, field={field}, prior={prior}", bytes_to_hex(code_hash));
+    }
+    let next = prior.checked_add(delta).ok_or_else(|| anyhow::anyhow!(
+        "script_info overflow during rollback: code_hash=0x{}, field={field}, prior={prior}, delta={delta}", bytes_to_hex(code_hash)
+    ))?;
+    if next < 0 {
+        anyhow::bail!("script_info underflow during rollback: code_hash=0x{}, field={field}, prior={prior}, delta={delta}", bytes_to_hex(code_hash));
+    }
+    Ok(next)
+}
+
+fn checked_rollback_script_i128(
+    prior: i128,
+    delta: i128,
+    code_hash: &[u8],
+    field: &str,
+) -> anyhow::Result<i128> {
+    if prior < 0 {
+        anyhow::bail!("negative script_info prior during rollback: code_hash=0x{}, field={field}, prior={prior}", bytes_to_hex(code_hash));
+    }
+    let next = prior.checked_add(delta).ok_or_else(|| anyhow::anyhow!(
+        "script_info overflow during rollback: code_hash=0x{}, field={field}, prior={prior}, delta={delta}", bytes_to_hex(code_hash)
+    ))?;
+    if next < 0 {
+        anyhow::bail!("script_info underflow during rollback: code_hash=0x{}, field={field}, prior={prior}, delta={delta}", bytes_to_hex(code_hash));
+    }
+    Ok(next)
+}
+
+/// A cell created and consumed wholly inside the removed suffix is neither
+/// live before nor live after rollback. Its creation nevertheless contributed
+/// to cumulative address and script-reference cell counts; reverse that fact
+/// without changing any live balance or holder state.
+fn reverse_created_consumed_cell_totals(
+    cell: &LiveCellInfo,
+    addr_deltas: &mut HashMap<Vec<u8>, (i128, i128, i32, i64)>,
+    script_reference_deltas: &mut HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta>,
+) -> anyhow::Result<()> {
+    let address = addr_deltas
+        .entry(cell.lock_script_hash.clone())
+        .or_insert((0, 0, 0, 0));
+    address.3 = address.3.checked_sub(1).ok_or_else(|| {
+        anyhow::anyhow!(
+            "address created-cell count delta overflow during rollback: lock_hash=0x{}",
+            bytes_to_hex(&cell.lock_script_hash)
+        )
+    })?;
+    let lock_key = (
+        cell.lock_code_hash.clone(),
+        cell.lock_hash_type as u8,
+        false,
+    );
+    let lock = script_reference_deltas
+        .entry(lock_key)
+        .or_insert((0, 0, 0, 0, 0, 0));
+    lock.0 = lock.0.checked_sub(1).ok_or_else(|| {
+        anyhow::anyhow!(
+            "lock script created-cell count delta overflow during rollback: code_hash=0x{}",
+            bytes_to_hex(&cell.lock_code_hash)
+        )
+    })?;
+    lock.2 = lock
+        .2
+        .checked_sub(i128::from(cell.capacity))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "lock script created capacity delta overflow during rollback: code_hash=0x{}",
+                bytes_to_hex(&cell.lock_code_hash)
+            )
+        })?;
+    lock.4 = lock
+        .4
+        .checked_sub(i128::from(cell.occupied_capacity))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "lock script created used delta overflow during rollback: code_hash=0x{}",
+                bytes_to_hex(&cell.lock_code_hash)
+            )
+        })?;
+    if let (Some(code_hash), Some(hash_type)) = (&cell.type_code_hash, cell.type_hash_type) {
+        let type_key = (code_hash.clone(), hash_type as u8, true);
+        let type_entry = script_reference_deltas
+            .entry(type_key)
+            .or_insert((0, 0, 0, 0, 0, 0));
+        type_entry.0 = type_entry.0.checked_sub(1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "type script created-cell count delta overflow during rollback: code_hash=0x{}",
+                bytes_to_hex(code_hash)
+            )
+        })?;
+        type_entry.2 = type_entry
+            .2
+            .checked_sub(i128::from(cell.capacity))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "type script created capacity delta overflow during rollback: code_hash=0x{}",
+                    bytes_to_hex(code_hash)
+                )
+            })?;
+        type_entry.4 = type_entry
+            .4
+            .checked_sub(i128::from(cell.occupied_capacity))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "type script created used delta overflow during rollback: code_hash=0x{}",
+                    bytes_to_hex(code_hash)
+                )
+            })?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accumulate_cell_deltas(
     cell: &LiveCellInfo,
@@ -1414,9 +1533,9 @@ fn accumulate_cell_deltas(
         .or_insert((0, 0, 0, 0, 0, 0));
     e.0 += total_d; // cells_delta (total cells created/removed)
     e.1 += live_d as i64; // live_delta
-    e.2 += cap; // capacity_delta (owned)
+    e.2 += if sign < 0 { cap } else { 0 }; // cumulative capacity of creations removed
     e.3 += cap; // owned_cap_delta
-    e.4 += occ; // used_delta
+    e.4 += if sign < 0 { occ } else { 0 }; // cumulative occupied capacity of creations removed
     e.5 += occ; // owned_knowledge_delta
 
     // script_info — type side (if present)
@@ -1436,9 +1555,9 @@ fn accumulate_cell_deltas(
                 .or_insert((0, 0, 0, 0, 0, 0));
             e.0 += total_d;
             e.1 += live_d as i64;
-            e.2 += cap;
+            e.2 += if sign < 0 { cap } else { 0 };
             e.3 += cap;
-            e.4 += occ;
+            e.4 += if sign < 0 { occ } else { 0 };
             e.5 += occ;
         }
     }
@@ -2782,6 +2901,12 @@ impl CkbadgerStore {
                         meta.created_at_block,
                         &mut hodl_capacity_deltas,
                     )?;
+                } else {
+                    reverse_created_consumed_cell_totals(
+                        &info,
+                        &mut addr_balance_deltas,
+                        &mut script_reference_deltas,
+                    )?;
                 }
                 stage.tick(cells_restored);
             }
@@ -2986,6 +3111,12 @@ impl CkbadgerStore {
                                     &mut cell_dist_capacity_deltas,
                                     consumed.created_at_block,
                                     &mut hodl_capacity_deltas,
+                                )?;
+                            } else {
+                                reverse_created_consumed_cell_totals(
+                                    &consumed.cell,
+                                    &mut addr_balance_deltas,
+                                    &mut script_reference_deltas,
                                 )?;
                             }
                         }
@@ -4289,11 +4420,68 @@ impl CkbadgerStore {
             addr_balances_updated += 1;
         }
 
-        // 9b. script_info
+        // 9b. Both script rollups must reverse the same cell facts. Aggregate
+        // the complete reference deltas by code hash; the older live-only
+        // script_info accumulator also lets us reject incomplete coverage.
+        let mut script_info_full_deltas: HashMap<(Vec<u8>, bool), ScriptReferenceDelta> =
+            HashMap::new();
+        for ((code_hash, _, is_type), delta) in &script_reference_deltas {
+            let summed = script_info_full_deltas
+                .entry((code_hash.clone(), *is_type))
+                .or_insert((0, 0, 0, 0, 0, 0));
+            for (dest, value) in [(&mut summed.0, delta.0), (&mut summed.1, delta.1)] {
+                *dest = dest.checked_add(value).ok_or_else(|| {
+                    anyhow::anyhow!(
+                    "script_info count delta overflow during rollback: code_hash=0x{}, is_type={}",
+                    bytes_to_hex(code_hash), is_type
+                )
+                })?;
+            }
+            for (dest, value) in [
+                (&mut summed.2, delta.2),
+                (&mut summed.3, delta.3),
+                (&mut summed.4, delta.4),
+                (&mut summed.5, delta.5),
+            ] {
+                *dest = dest.checked_add(value).ok_or_else(|| anyhow::anyhow!(
+                    "script_info capacity delta overflow during rollback: code_hash=0x{}, is_type={}",
+                    bytes_to_hex(code_hash), is_type
+                ))?;
+            }
+        }
         for ((code_hash, is_type), (live_delta, live_cap_delta, live_occ_delta)) in
             &script_info_deltas
         {
-            if *live_delta == 0 && *live_cap_delta == 0 && *live_occ_delta == 0 {
+            let full = script_info_full_deltas
+                .get(&(code_hash.clone(), *is_type))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                    "missing script reference delta during rollback: code_hash=0x{}, is_type={}",
+                    bytes_to_hex(code_hash), is_type
+                )
+                })?;
+            if (full.1, full.3, full.5) != (*live_delta, *live_cap_delta, *live_occ_delta) {
+                anyhow::bail!(
+                    "script rollup delta mismatch during rollback: code_hash=0x{}, is_type={}",
+                    bytes_to_hex(code_hash),
+                    is_type
+                );
+            }
+        }
+        for (
+            (code_hash, is_type),
+            (cells_delta, live_delta, cap_delta, owned_delta, used_delta, knowledge_delta),
+        ) in &script_info_full_deltas
+        {
+            if (
+                *cells_delta,
+                *live_delta,
+                *cap_delta,
+                *owned_delta,
+                *used_delta,
+                *knowledge_delta,
+            ) == (0, 0, 0, 0, 0, 0)
+            {
                 continue;
             }
             let mut si = self.get_script_info(code_hash)?.ok_or_else(|| {
@@ -4304,37 +4492,79 @@ impl CkbadgerStore {
                 )
             })?;
             if *is_type {
-                si.type_live_cells_count += live_delta;
-                si.type_owned_capacity_sum += live_cap_delta;
-                si.type_owned_knowledge_sum += live_occ_delta;
-                if si.type_live_cells_count < 0
-                    || si.type_owned_capacity_sum < 0
-                    || si.type_owned_knowledge_sum < 0
-                {
-                    anyhow::bail!(
-                        "script_info type underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
-                        bytes_to_hex(code_hash),
-                        si.type_live_cells_count,
-                        si.type_owned_capacity_sum,
-                        si.type_owned_knowledge_sum
-                    );
-                }
+                si.type_cells_count = checked_rollback_script_i64(
+                    si.type_cells_count,
+                    *cells_delta,
+                    code_hash,
+                    "type_cells_count",
+                )?;
+                si.type_live_cells_count = checked_rollback_script_i64(
+                    si.type_live_cells_count,
+                    *live_delta,
+                    code_hash,
+                    "type_live_cells_count",
+                )?;
+                si.type_capacity_sum = checked_rollback_script_i128(
+                    si.type_capacity_sum,
+                    *cap_delta,
+                    code_hash,
+                    "type_capacity_sum",
+                )?;
+                si.type_owned_capacity_sum = checked_rollback_script_i128(
+                    si.type_owned_capacity_sum,
+                    *owned_delta,
+                    code_hash,
+                    "type_owned_capacity_sum",
+                )?;
+                si.type_used_capacity_sum = checked_rollback_script_i128(
+                    si.type_used_capacity_sum,
+                    *used_delta,
+                    code_hash,
+                    "type_used_capacity_sum",
+                )?;
+                si.type_owned_knowledge_sum = checked_rollback_script_i128(
+                    si.type_owned_knowledge_sum,
+                    *knowledge_delta,
+                    code_hash,
+                    "type_owned_knowledge_sum",
+                )?;
             } else {
-                si.lock_live_cells_count += live_delta;
-                si.lock_owned_capacity_sum += live_cap_delta;
-                si.lock_owned_knowledge_sum += live_occ_delta;
-                if si.lock_live_cells_count < 0
-                    || si.lock_owned_capacity_sum < 0
-                    || si.lock_owned_knowledge_sum < 0
-                {
-                    anyhow::bail!(
-                        "script_info lock underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
-                        bytes_to_hex(code_hash),
-                        si.lock_live_cells_count,
-                        si.lock_owned_capacity_sum,
-                        si.lock_owned_knowledge_sum
-                    );
-                }
+                si.lock_cells_count = checked_rollback_script_i64(
+                    si.lock_cells_count,
+                    *cells_delta,
+                    code_hash,
+                    "lock_cells_count",
+                )?;
+                si.lock_live_cells_count = checked_rollback_script_i64(
+                    si.lock_live_cells_count,
+                    *live_delta,
+                    code_hash,
+                    "lock_live_cells_count",
+                )?;
+                si.lock_capacity_sum = checked_rollback_script_i128(
+                    si.lock_capacity_sum,
+                    *cap_delta,
+                    code_hash,
+                    "lock_capacity_sum",
+                )?;
+                si.lock_owned_capacity_sum = checked_rollback_script_i128(
+                    si.lock_owned_capacity_sum,
+                    *owned_delta,
+                    code_hash,
+                    "lock_owned_capacity_sum",
+                )?;
+                si.lock_used_capacity_sum = checked_rollback_script_i128(
+                    si.lock_used_capacity_sum,
+                    *used_delta,
+                    code_hash,
+                    "lock_used_capacity_sum",
+                )?;
+                si.lock_owned_knowledge_sum = checked_rollback_script_i128(
+                    si.lock_owned_knowledge_sum,
+                    *knowledge_delta,
+                    code_hash,
+                    "lock_owned_knowledge_sum",
+                )?;
             }
             batch.put_cf(
                 self.cf_script_info(),
@@ -5405,7 +5635,76 @@ mod tests {
 
     fn rollback_fixture(store: &CkbadgerStore, rollback_to: i64) -> anyhow::Result<RollbackResult> {
         seed_forward_chain_histogram(store)?;
+        seed_fixture_script_creation_totals(store)?;
         store.rollback_to_block(rollback_to)
+    }
+
+    /// Older hand-built rollback fixtures seeded only live script metrics.
+    /// Their immutable cell payloads are the exact creation ledger: establish
+    /// the cumulative ScriptInfo fields the normal forward writer would have
+    /// written before invoking the production rollback path.
+    fn seed_fixture_script_creation_totals(store: &CkbadgerStore) -> anyhow::Result<()> {
+        if !store.has_cf(CF_CELLS) {
+            return Ok(());
+        }
+        type FixtureScriptTotals = (i64, i128, i128, i64, i128, i128);
+        let mut totals: HashMap<Vec<u8>, FixtureScriptTotals> = HashMap::new();
+        for row in store.iterator_cf(store.cf_cells(), IteratorMode::Start) {
+            let (outpoint, payload) = row?;
+            let cell: LiveCellInfo = bincode::deserialize(&payload).map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid fixture cell payload: outpoint=0x{}, error={e}",
+                    bytes_to_hex(&outpoint)
+                )
+            })?;
+            let lock = totals.entry(cell.lock_code_hash.clone()).or_default();
+            lock.0 = lock
+                .0
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("fixture lock cell count overflow"))?;
+            lock.1 = lock
+                .1
+                .checked_add(i128::from(cell.capacity))
+                .ok_or_else(|| anyhow::anyhow!("fixture lock capacity overflow"))?;
+            lock.2 = lock
+                .2
+                .checked_add(i128::from(cell.occupied_capacity))
+                .ok_or_else(|| anyhow::anyhow!("fixture lock occupied overflow"))?;
+            if let Some(code_hash) = &cell.type_code_hash {
+                let type_total = totals.entry(code_hash.clone()).or_default();
+                type_total.3 = type_total
+                    .3
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("fixture type cell count overflow"))?;
+                type_total.4 = type_total
+                    .4
+                    .checked_add(i128::from(cell.capacity))
+                    .ok_or_else(|| anyhow::anyhow!("fixture type capacity overflow"))?;
+                type_total.5 = type_total
+                    .5
+                    .checked_add(i128::from(cell.occupied_capacity))
+                    .ok_or_else(|| anyhow::anyhow!("fixture type occupied overflow"))?;
+            }
+        }
+        let mut batch = StoreBatch::new(store);
+        for (code_hash, (lock_count, lock_cap, lock_used, type_count, type_cap, type_used)) in
+            totals
+        {
+            let Some(mut info) = store.get_script_info(&code_hash)? else {
+                // This fixture does not seed a script rollup for this code
+                // hash. If rollback touches it, production still rejects the
+                // missing row at its owning write path.
+                continue;
+            };
+            info.lock_cells_count = lock_count;
+            info.lock_capacity_sum = lock_cap;
+            info.lock_used_capacity_sum = lock_used;
+            info.type_cells_count = type_count;
+            info.type_capacity_sum = type_cap;
+            info.type_used_capacity_sum = type_used;
+            batch.put_script_info(&code_hash, &info);
+        }
+        batch.commit()
     }
 
     /// Persist a DAO daily snapshot directly, so a rollback fixture can start
@@ -8565,6 +8864,7 @@ mod tests {
         // Step 2: rollback_to_block_with_tx_contexts uses the pre-loaded
         // tx-context entries (targeted lookup, not full CF scan).
         seed_forward_chain_histogram(&store).unwrap();
+        seed_fixture_script_creation_totals(&store).unwrap();
         store
             .rollback_to_block_with_tx_contexts(1, None, undo_result.tx_contexts)
             .unwrap();
@@ -9785,7 +10085,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        batch.put_addr_balance(&[0xCC; 32], &AddressBalance::default());
+        batch.put_addr_balance(
+            &[0xCC; 32],
+            &AddressBalance {
+                total_cells_count: 1,
+                ..Default::default()
+            },
+        );
         batch.put_script_info(
             &[0x11; 32],
             &ScriptInfo {
@@ -9815,6 +10121,15 @@ mod tests {
             .get_consumed_cell(&drop_consumed_tx, 0, &store)
             .unwrap()
             .is_none());
+        assert_eq!(
+            store
+                .get_addr_balance(&[0xCC; 32])
+                .unwrap()
+                .unwrap()
+                .total_cells_count,
+            0,
+            "a cell created and consumed in the removed suffix has no surviving creation"
+        );
     }
 
     #[test]
@@ -10876,6 +11191,12 @@ mod tests {
         let (added, removed) = token.get(&(type_hash, lock_hash)).unwrap();
         assert_eq!(added.to_string(), "531691198313966349161522824112137830400");
         assert!(removed.is_zero());
+        assert_eq!(script_ref[&(vec![0x11; 32], 1, false)].0, 0);
+        assert_eq!(script_ref[&(vec![0x11; 32], 1, false)].2, 0);
+        assert_eq!(script_ref[&(vec![0x11; 32], 1, false)].4, 0);
+        assert_eq!(script_ref[&(vec![0x22; 32], 1, true)].0, 0);
+        assert_eq!(script_ref[&(vec![0x22; 32], 1, true)].2, 0);
+        assert_eq!(script_ref[&(vec![0x22; 32], 1, true)].4, 0);
     }
 
     #[test]
@@ -10940,6 +11261,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hodl.get(&19_665_025).copied(), Some(0_i128));
+    }
+
+    #[test]
+    fn created_then_consumed_cell_reverses_cumulative_creation_facts_only() {
+        let cell = LiveCellInfo {
+            capacity: 200,
+            lock_script_hash: vec![0xaa; 32],
+            lock_code_hash: vec![0xbb; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(vec![0xcc; 32]),
+            type_code_hash: Some(vec![0xdd; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 0,
+            occupied_capacity: 100,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let mut address = HashMap::new();
+        let mut script = HashMap::new();
+        reverse_created_consumed_cell_totals(&cell, &mut address, &mut script).unwrap();
+        assert_eq!(address[&cell.lock_script_hash], (0, 0, 0, -1));
+        assert_eq!(
+            script[&(cell.lock_code_hash.clone(), 1, false)],
+            (-1, 0, -200, 0, -100, 0)
+        );
+        assert_eq!(
+            script[&(cell.type_code_hash.clone().unwrap(), 1, true)],
+            (-1, 0, -200, 0, -100, 0)
+        );
     }
 
     #[test]

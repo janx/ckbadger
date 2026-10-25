@@ -766,19 +766,18 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 
 /// Stats key prefixes
 ///
-/// # Timezone conventions (deliberate, but two-clocked — read before
+/// # Timezone conventions (one canonical chain time, two key formats — read before
 /// comparing against these keys)
 ///
 /// - **Date-scoped suffixes (`%Y%m%d`)** — `DAILY`, `DAILY_BLOCK`, `MINER`,
 ///   `DAO_DAILY_SNAPSHOT`, `ACTIVITY_DAILY`, `HODL_WAVE`, etc. — use the
-///   **UTC+8** calendar day (`ckbadger_common::block_date_from_ms`), matching
+///   **UTC+8** calendar day (`ckbadger_common::stats_bucket::stats_day(chain_time_ms)`), matching
 ///   the CKB explorer's day boundary.
 /// - **`HOURLY` (`%Y%m%d%H`)** uses the **UTC** clock: the live writer
-///   formats the UTC-truncated block hour
-///   (`BatchWriter::update_hourly_statistics`), and
-///   `ckbadger_common::utc_hour_key_from_ms` is the shared encoder.
+///   formats the UTC-truncated canonical block hour from
+///   `ckbadger_common::stats_bucket::stats_hour(chain_time_ms)`.
 /// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_SET` (`%Y%m%d%H`)** use the
-///   **UTC+8** clock (`ckbadger_common::block_datetime_from_ms`), keeping the
+///   **UTC+8** display of that same canonical hour, keeping the
 ///   hourly activity series aligned with its UTC+8 daily parent.
 ///
 /// Any cutoff/window computation against an hour-keyed prefix MUST use the
@@ -888,7 +887,7 @@ pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
 }
 
 /// Token hourly transfer count key: prefix(1B) + type_hash(32B) + hour_bucket(8B BE) = 41 bytes
-/// hour_bucket = timestamp_ms / 3_600_000
+/// hour_bucket = stats_hour_index(chain_time_ms)
 pub fn encode_token_hourly_key(type_hash: &[u8], hour_bucket: i64) -> Vec<u8> {
     assert_key_component_len(
         "encode_token_hourly_key",

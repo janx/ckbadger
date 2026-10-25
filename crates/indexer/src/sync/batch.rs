@@ -6201,8 +6201,16 @@ mod tests {
                 indexer,
                 blocks,
                 FixtureTokenDaily::Given(token_daily_changes),
+                false,
             )
             .await
+        }
+
+        async fn write_live_blocks_with_parser_script_deltas(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells, true).await
         }
 
         /// Same live write path, with `TOKEN_DAILY` changes derived from the
@@ -6212,7 +6220,7 @@ mod tests {
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
-            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells).await
+            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells, false).await
         }
 
         enum FixtureTokenDaily {
@@ -6289,10 +6297,122 @@ mod tests {
             Ok(changes)
         }
 
+        fn fixture_script_deltas_from_cells(
+            all_tx_data: &[TxData],
+            input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        ) -> Result<(
+            ScriptUsageChanges,
+            ScriptReferenceUsageChanges,
+            EntityDailyChanges<ScriptDailyKey>,
+        )> {
+            let mut usage = ScriptUsageChanges::new();
+            let mut references = ScriptReferenceUsageChanges::new();
+            let mut daily = EntityDailyChanges::new();
+            for tx in all_tx_data {
+                let date =
+                    ckbadger_store::keys::timestamp_ms_to_date(tx.timestamp.timestamp_millis());
+                let mut apply = |code_hash: &[u8],
+                                 hash_type: i16,
+                                 is_type: bool,
+                                 capacity: i64,
+                                 occupied: i64,
+                                 created: bool|
+                 -> Result<()> {
+                    let hash_type = u8::try_from(hash_type).map_err(|_| {
+                        anyhow!(
+                        "invalid fixture script hash type: block={} tx=0x{} hash_type={hash_type}",
+                        tx.block_number, hex::encode(tx.hash)
+                    )
+                    })?;
+                    let value = usage.entry((code_hash.to_vec(), is_type)).or_default();
+                    let reference = references
+                        .entry((code_hash.to_vec(), hash_type, is_type))
+                        .or_default();
+                    let sign = if created { 1 } else { -1 };
+                    if created {
+                        value.0 += 1;
+                        value.2 += i128::from(capacity);
+                        value.4 += i128::from(occupied);
+                        reference.0 += 1;
+                        reference.2 += i128::from(capacity);
+                        reference.4 += i128::from(occupied);
+                    }
+                    value.1 += sign;
+                    value.3 += i128::from(sign) * i128::from(capacity);
+                    value.5 += i128::from(sign) * i128::from(occupied);
+                    reference.1 += sign;
+                    reference.3 += i128::from(sign) * i128::from(capacity);
+                    reference.5 += i128::from(sign) * i128::from(occupied);
+                    daily.add(
+                        tx.block_number,
+                        (code_hash.to_vec(), hash_type, is_type, date),
+                        i128::from(sign) * i128::from(capacity),
+                        i128::from(sign) * i128::from(occupied),
+                    )?;
+                    Ok(())
+                };
+                for cell in &tx.cells {
+                    let occupied = occupied_capacity_shannons_i64(
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(|args| args.len()),
+                        cell.data_size,
+                    );
+                    apply(
+                        &cell.lock_code_hash,
+                        cell.lock_hash_type,
+                        false,
+                        cell.capacity,
+                        occupied,
+                        true,
+                    )?;
+                    if let (Some(code_hash), Some(hash_type)) =
+                        (&cell.type_code_hash, cell.type_hash_type)
+                    {
+                        apply(code_hash, hash_type, true, cell.capacity, occupied, true)?;
+                    }
+                }
+                if tx.is_cellbase {
+                    continue;
+                }
+                for input in &tx.inputs {
+                    let output_index = parsed_input_outpoint_index_i16(
+                        input.previous_output_index,
+                        "fixture script deltas",
+                    )?;
+                    let key = (input.previous_tx_hash.to_vec(), output_index);
+                    let info = input_cell_info.get(&key).or_else(|| batch_cell_infos.get(&key))
+                        .ok_or_else(|| anyhow!("missing input cell for fixture script deltas: block={} tx=0x{} outpoint=0x{}:{}", tx.block_number, hex::encode(tx.hash), hex::encode(&key.0), output_index))?;
+                    apply(
+                        &info.lock_code_hash,
+                        info.lock_hash_type,
+                        false,
+                        info.capacity,
+                        info.occupied_capacity,
+                        false,
+                    )?;
+                    if let (Some(code_hash), Some(hash_type)) =
+                        (&info.type_code_hash, info.type_hash_type)
+                    {
+                        apply(
+                            code_hash,
+                            hash_type,
+                            true,
+                            info.capacity,
+                            info.occupied_capacity,
+                            false,
+                        )?;
+                    }
+                }
+            }
+            Ok((usage, references, daily))
+        }
+
         async fn write_live_blocks_inner(
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
             token_daily: FixtureTokenDaily,
+            include_script_deltas: bool,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
@@ -6360,6 +6480,16 @@ mod tests {
                     token_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?
                 }
             };
+            let (script_usage_changes, script_reference_usage_changes, script_daily_changes) =
+                if include_script_deltas {
+                    fixture_script_deltas_from_cells(
+                        &all_tx_data,
+                        &input_cell_info,
+                        &batch_cell_infos,
+                    )?
+                } else {
+                    (HashMap::new(), HashMap::new(), EntityDailyChanges::new())
+                };
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
             let metrics = indexer
@@ -6370,9 +6500,9 @@ mod tests {
                     input_cell_info,
                     batch_cell_infos,
                     address_balance_changes,
-                    HashMap::new(),
-                    HashMap::new(),
-                    EntityDailyChanges::new(),
+                    script_usage_changes,
+                    script_reference_usage_changes,
+                    script_daily_changes,
                     token_daily_changes,
                     HashMap::new(),
                     EntityDailyChanges::new(),
@@ -7132,6 +7262,45 @@ mod tests {
             rows
         }
 
+        fn modeled_domain_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+            let mut rows = Vec::new();
+            for &name in ckbadger_store::DOMAIN_CFS {
+                // Sync progress includes wall-clock write times. Undo records
+                // are keyed by the write batch's pre-images, so single and
+                // multi-block commits legitimately encode different histories.
+                // Both are exercised by the rollback/replay assertion below.
+                if name == ckbadger_store::CF_SYNC_META
+                    || name == ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK
+                {
+                    continue;
+                }
+                for item in store.iterator_cf(store.cf(name), rocksdb::IteratorMode::Start) {
+                    let (key, value) = item.expect("iterate domain CF");
+                    rows.push((name, key.to_vec(), value.to_vec()));
+                }
+            }
+            rows
+        }
+
+        fn assert_same_modeled_domain_rows(
+            left: &CkbadgerStore,
+            right: &CkbadgerStore,
+            phase: &str,
+        ) {
+            let left = modeled_domain_rows(left);
+            let right = modeled_domain_rows(right);
+            for (left_row, right_row) in left.iter().zip(right.iter()) {
+                assert_eq!(
+                    left_row,
+                    right_row,
+                    "{phase}: first domain difference: left={}:0x{} ({} bytes), right={}:0x{} ({} bytes)",
+                    left_row.0, hex::encode(&left_row.1), left_row.2.len(),
+                    right_row.0, hex::encode(&right_row.1), right_row.2.len(),
+                );
+            }
+            assert_eq!(left.len(), right.len(), "{phase}: domain row count differs");
+        }
+
         /// The class assertion: one batch over blocks 100-103 (deposit,
         /// request AND completion inside it) must leave exactly the rows four
         /// single-block batches leave. Batch boundaries are an artefact of
@@ -7161,18 +7330,16 @@ mod tests {
             seed_secp_script_info(unbatched.as_ref());
             seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             for single in blocks.clone() {
-                write_live_block(&unbatched_indexer, single).await.unwrap();
+                write_live_blocks_with_parser_script_deltas(&unbatched_indexer, vec![single])
+                    .await
+                    .unwrap();
             }
             let (batched, batched_indexer) = live_dao_fixture_store();
             seed_secp_script_info(batched.as_ref());
             seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
-            write_live_blocks_with_entity_changes(
-                &batched_indexer,
-                blocks.clone(),
-                EntityDailyChanges::new(),
-            )
-            .await
-            .unwrap();
+            write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks.clone())
+                .await
+                .unwrap();
 
             for store in [&unbatched, &batched] {
                 let before_midnight = store
@@ -7192,6 +7359,7 @@ mod tests {
             }
 
             assert_eq!(stored_dao_entry(&unbatched, [0xd1; 32], 0).status, 2);
+            assert_same_modeled_domain_rows(&unbatched, &batched, "live batch shapes");
             let unbatched_rows = dao_rows(&unbatched);
             let batched_rows = dao_rows(&batched);
             for (left, right) in unbatched_rows.iter().zip(batched_rows.iter()) {
@@ -7234,6 +7402,13 @@ mod tests {
                 .writer
                 .cleanup_batch_range(batched.as_ref(), 102, 103)
                 .expect("roll back request and backward-time completion");
+            let dao_code =
+                hex::decode(crate::parser::dao::DAO_CODE_HASH.trim_start_matches("0x")).unwrap();
+            let script_after_rollback = batched.get_script_info(&dao_code).unwrap().unwrap();
+            assert_eq!(
+                script_after_rollback.type_live_cells_count, 1001,
+                "deposit is the sole surviving DAO type cell after rollback"
+            );
             assert_eq!(cell_payloads(&batched), immutable_cells_before);
             batched_indexer
                 .reconcile_hodl_tracker_with_tip(101)
@@ -7242,13 +7417,9 @@ mod tests {
                 .reconcile_cell_dist_tracker_with_tip(101)
                 .unwrap();
             batched_indexer.cell_cache.clear();
-            write_live_blocks_with_entity_changes(
-                &batched_indexer,
-                blocks[2..].to_vec(),
-                EntityDailyChanges::new(),
-            )
-            .await
-            .expect("replay request and completion");
+            write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks[2..].to_vec())
+                .await
+                .expect("replay request and completion");
             let replayed_rows = dao_rows(&batched);
             for (replayed, expected) in replayed_rows.iter().zip(&unbatched_rows) {
                 assert_eq!(
@@ -7260,6 +7431,7 @@ mod tests {
                 );
             }
             assert_eq!(replayed_rows.len(), unbatched_rows.len());
+            assert_same_modeled_domain_rows(&unbatched, &batched, "rollback/replay");
             assert_eq!(cell_payloads(&batched), immutable_cells_before);
         }
 
