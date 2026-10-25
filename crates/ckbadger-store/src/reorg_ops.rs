@@ -1749,6 +1749,7 @@ fn truncate_cell_dist_tracker_state_for_rollback(
     rollback_to: i64,
     count_deltas: &[i64; 6],
     capacity_deltas: &[i128; 6],
+    cohort_deltas: &HashMap<String, (i128, i128)>,
 ) -> anyhow::Result<bool> {
     if rollback_to < 0 {
         return Ok(true);
@@ -1792,9 +1793,40 @@ fn truncate_cell_dist_tracker_state_for_rollback(
         }
     }
 
-    // Note: cohort_accum (address cohort accumulator) cannot be precisely
-    // adjusted without per-address tracking. For shallow reorgs the drift is
-    // negligible; the next forward sync corrects incrementally.
+    // Each affected address's first-seen block supplies its immutable cohort
+    // month. Apply the exact inverse of its balance/used-capacity change.
+    let mut cohorts = state
+        .cohort_accum
+        .iter()
+        .map(|(month, used, balance)| (month.clone(), (*used, *balance)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (month, (used_delta, balance_delta)) in cohort_deltas {
+        let entry = cohorts.entry(month.clone()).or_insert((0, 0));
+        if entry.0 < 0 || entry.1 < 0 {
+            anyhow::bail!("negative cohort accumulator before rollback repair: month={month}, used={}, balance={}", entry.0, entry.1);
+        }
+        entry.0 = entry.0.checked_add(*used_delta).ok_or_else(|| anyhow::anyhow!(
+            "cohort used-capacity overflow during rollback: month={month}, current={}, delta={used_delta}", entry.0
+        ))?;
+        entry.1 = entry.1.checked_add(*balance_delta).ok_or_else(|| anyhow::anyhow!(
+            "cohort balance overflow during rollback: month={month}, current={}, delta={balance_delta}", entry.1
+        ))?;
+        if entry.0 < 0 || entry.1 < 0 {
+            anyhow::bail!(
+                "cohort accumulator underflow during rollback: month={month}, used={}, balance={}",
+                entry.0,
+                entry.1
+            );
+        }
+        changed = true;
+    }
+    if changed {
+        state.cohort_accum = cohorts
+            .into_iter()
+            .filter(|(_, (used, balance))| *used != 0 || *balance != 0)
+            .map(|(month, (used, balance))| (month, used, balance))
+            .collect();
+    }
 
     // 4. Apply cell distribution bucket deltas from cell rollback.
     // count_deltas/capacity_deltas were accumulated during stages 4-5:
@@ -4104,6 +4136,11 @@ impl CkbadgerStore {
 
         // Track holder count transitions for HODL tracker repair in stage 11.
         let mut holder_count_delta: i64 = 0;
+        // A store without a cell-distribution tracker has no cohort state to
+        // reverse (for example, an isolated rollback fixture).
+        let cell_dist_state_for_rollback = self.get_cell_dist_tracker_state()?;
+        let mut cohort_deltas = HashMap::<String, (i128, i128)>::new();
+        let mut cohort_month_by_first_seen = HashMap::<i64, String>::new();
 
         for lock_hash in &all_addr_keys {
             let (balance_delta, used_delta, live_delta, total_cells_delta) = addr_balance_deltas
@@ -4179,6 +4216,38 @@ impl CkbadgerStore {
                     ab.used_capacity,
                     ab.live_cells_count
                 );
+            }
+            if cell_dist_state_for_rollback.is_some() && (balance_delta != 0 || used_delta != 0) {
+                let month = match cohort_month_by_first_seen.get(&ab.first_seen_block) {
+                    Some(month) => month.clone(),
+                    None => {
+                        let first_seen = self.get_block_header(ab.first_seen_block)?.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing first-seen header for cohort rollback: lock_hash=0x{}, first_seen_block={}",
+                                bytes_to_hex(lock_hash),
+                                ab.first_seen_block
+                            )
+                        })?;
+                        let month = ckbadger_common::stats_bucket::stats_day(first_seen.chain_time_ms)?
+                            .format("%Y-%m")
+                            .to_string();
+                        cohort_month_by_first_seen.insert(ab.first_seen_block, month.clone());
+                        month
+                    }
+                };
+                let entry = cohort_deltas.entry(month.clone()).or_insert((0, 0));
+                entry.0 = entry.0.checked_add(used_delta).ok_or_else(|| {
+                    anyhow::anyhow!(
+                    "cohort rollback used-capacity delta overflow: month={month}, lock_hash=0x{}",
+                    bytes_to_hex(lock_hash)
+                )
+                })?;
+                entry.1 = entry.1.checked_add(balance_delta).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cohort rollback balance delta overflow: month={month}, lock_hash=0x{}",
+                        bytes_to_hex(lock_hash)
+                    )
+                })?;
             }
             // Repair last_activity from the latest surviving CELL participation.
             // Both forward paths set last_activity from cell participation
@@ -5099,12 +5168,13 @@ impl CkbadgerStore {
                 batch.delete_cf(self.cf_sync_meta(), keys::sync_meta_keys::CELL_DIST_TRACKER);
                 cell_dist_tracker_repaired += 1;
             }
-        } else if let Some(mut state) = self.get_cell_dist_tracker_state()? {
+        } else if let Some(mut state) = cell_dist_state_for_rollback {
             if truncate_cell_dist_tracker_state_for_rollback(
                 &mut state,
                 rollback_to,
                 &cell_dist_count_deltas,
                 &cell_dist_capacity_deltas,
+                &cohort_deltas,
             )? {
                 let encoded = bincode::serialize(&state).map_err(|e| {
                     anyhow::anyhow!(
@@ -11034,9 +11104,14 @@ mod tests {
             last_processed_block: Some(200),
         };
 
-        let changed =
-            truncate_cell_dist_tracker_state_for_rollback(&mut state, 150, &[0; 6], &[0; 6])
-                .unwrap();
+        let changed = truncate_cell_dist_tracker_state_for_rollback(
+            &mut state,
+            150,
+            &[0; 6],
+            &[0; 6],
+            &HashMap::new(),
+        )
+        .unwrap();
         assert!(changed);
         assert_eq!(state.date_transitions.len(), 2);
         assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
@@ -11058,9 +11133,14 @@ mod tests {
             last_processed_block: Some(200),
         };
 
-        let changed =
-            truncate_cell_dist_tracker_state_for_rollback(&mut state, 150, &[0; 6], &[0; 6])
-                .unwrap();
+        let changed = truncate_cell_dist_tracker_state_for_rollback(
+            &mut state,
+            150,
+            &[0; 6],
+            &[0; 6],
+            &HashMap::new(),
+        )
+        .unwrap();
         assert!(changed);
         assert_eq!(state.date_transitions.len(), 2);
         assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
@@ -11078,8 +11158,14 @@ mod tests {
             last_processed_block: Some(100),
         };
         // Rollback to block 50 — before any transition → should error.
-        let err = truncate_cell_dist_tracker_state_for_rollback(&mut state, 50, &[0; 6], &[0; 6])
-            .unwrap_err();
+        let err = truncate_cell_dist_tracker_state_for_rollback(
+            &mut state,
+            50,
+            &[0; 6],
+            &[0; 6],
+            &HashMap::new(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no remaining date transitions"));
     }
 
@@ -11101,6 +11187,7 @@ mod tests {
             50,
             &count_deltas,
             &cap_deltas,
+            &HashMap::new(),
         )
         .unwrap();
         assert!(changed);
@@ -11108,6 +11195,35 @@ mod tests {
         assert_eq!(state.count_by_bucket[1], 6); // 5 + 1
         assert_eq!(state.total_capacity_by_bucket[0], 400); // 500 - 100
         assert_eq!(state.total_capacity_by_bucket[1], 3800); // 3000 + 800
+    }
+
+    #[test]
+    fn test_cell_dist_cohort_deltas_exactly_reverse_address_changes() {
+        let mut state = CellDistributionTrackerState {
+            count_by_bucket: [1, 0, 0, 0, 0, 0],
+            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
+            date_transitions: vec![(1, "20231115".to_string())],
+            last_snapshot_date: Some("20231115".to_string()),
+            cohort_accum: vec![("2023-11".to_string(), 50, 300)],
+            last_processed_block: Some(3),
+        };
+        let deltas = HashMap::from([("2023-11".to_string(), (-20, -100))]);
+        assert!(truncate_cell_dist_tracker_state_for_rollback(
+            &mut state, 2, &[0; 6], &[0; 6], &deltas,
+        )
+        .unwrap());
+        assert_eq!(state.cohort_accum, vec![("2023-11".to_string(), 30, 200)]);
+
+        let impossible = HashMap::from([("2023-11".to_string(), (-31, 0))]);
+        let error = truncate_cell_dist_tracker_state_for_rollback(
+            &mut state,
+            2,
+            &[0; 6],
+            &[0; 6],
+            &impossible,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cohort accumulator underflow"));
     }
 
     #[test]
@@ -11129,6 +11245,7 @@ mod tests {
             1,
             &count_deltas,
             &cap_deltas,
+            &HashMap::new(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("count_by_bucket underflow"));

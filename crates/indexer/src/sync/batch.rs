@@ -7127,19 +7127,51 @@ mod tests {
             let expected_fee: i64 = 527;
             let mut blocks = phase_setup_blocks();
             blocks.push(completion_block(expected_fee));
+            // Two backward raw timestamps, including a completion whose raw
+            // time crosses back over midnight. Canonical t* assigns that
+            // completion to the request's new UTC+8 day on every batch shape.
+            for (block, raw_ms) in blocks.iter_mut().zip([
+                1_700_063_999_000u64,
+                1_700_063_998_000,
+                1_700_064_001_000,
+                1_700_063_997_000,
+            ]) {
+                block.block.header.timestamp = format!("0x{raw_ms:x}");
+            }
 
             let (unbatched, unbatched_indexer) = live_dao_fixture_store();
+            seed_secp_script_info(unbatched.as_ref());
+            seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             for single in blocks.clone() {
                 write_live_block(&unbatched_indexer, single).await.unwrap();
             }
             let (batched, batched_indexer) = live_dao_fixture_store();
+            seed_secp_script_info(batched.as_ref());
+            seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             write_live_blocks_with_entity_changes(
                 &batched_indexer,
-                blocks,
+                blocks.clone(),
                 EntityDailyChanges::new(),
             )
             .await
             .unwrap();
+
+            for store in [&unbatched, &batched] {
+                let before_midnight = store
+                    .get_daily_block_stats("20231115")
+                    .unwrap()
+                    .expect("pre-midnight bucket");
+                let after_midnight = store
+                    .get_daily_block_stats("20231116")
+                    .unwrap()
+                    .expect("post-midnight bucket");
+                assert_eq!(before_midnight.block_count, 2);
+                assert_eq!(after_midnight.block_count, 2);
+                let request = store.get_block_header(102).unwrap().unwrap();
+                let completion = store.get_block_header(103).unwrap().unwrap();
+                assert!(completion.timestamp < request.timestamp);
+                assert_eq!(completion.chain_time_ms, request.chain_time_ms);
+            }
 
             assert_eq!(stored_dao_entry(&unbatched, [0xd1; 32], 0).status, 2);
             let unbatched_rows = dao_rows(&unbatched);
@@ -7168,6 +7200,49 @@ mod tests {
             );
             assert_eq!(stored_fee(&batched, [0xd3; 32]), expected_fee);
             assert_eq!(stored_fee(&unbatched, [0xd3; 32]), expected_fee);
+
+            let cell_payloads = |store: &CkbadgerStore| {
+                store
+                    .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
+                    .map(|entry| {
+                        let (key, value) = entry.unwrap();
+                        (key.to_vec(), value.to_vec())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let immutable_cells_before = cell_payloads(&batched);
+            assert!(!immutable_cells_before.is_empty());
+            batched_indexer
+                .writer
+                .cleanup_batch_range(batched.as_ref(), 102, 103)
+                .expect("roll back request and backward-time completion");
+            assert_eq!(cell_payloads(&batched), immutable_cells_before);
+            batched_indexer
+                .reconcile_hodl_tracker_with_tip(101)
+                .unwrap();
+            batched_indexer
+                .reconcile_cell_dist_tracker_with_tip(101)
+                .unwrap();
+            batched_indexer.cell_cache.clear();
+            write_live_blocks_with_entity_changes(
+                &batched_indexer,
+                blocks[2..].to_vec(),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .expect("replay request and completion");
+            let replayed_rows = dao_rows(&batched);
+            for (replayed, expected) in replayed_rows.iter().zip(&unbatched_rows) {
+                assert_eq!(
+                    replayed,
+                    expected,
+                    "rollback/replay changed cf={} key=0x{}",
+                    expected.0,
+                    hex::encode(&expected.1)
+                );
+            }
+            assert_eq!(replayed_rows.len(), unbatched_rows.len());
+            assert_eq!(cell_payloads(&batched), immutable_cells_before);
         }
 
         #[tokio::test]
