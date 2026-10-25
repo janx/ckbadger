@@ -160,15 +160,13 @@ function parseDnaFromDobContent(contentText: string): string | null {
   }
 }
 
-function parseLeModulo(bytes: Uint8Array, modulo: number): number {
-  if (modulo <= 0) {
-    return 0;
-  }
-  let acc = 0;
-  let factor = 1 % modulo;
+function parseLeModulo(bytes: Uint8Array, modulo: bigint): bigint {
+  if (modulo <= BigInt(0)) throw new Error(`invalid DNA modulo ${modulo}`);
+  let acc = BigInt(0);
+  let factor = BigInt(1) % modulo;
   for (let i = 0; i < bytes.length; i += 1) {
-    acc = (acc + (((bytes[i] % modulo) * factor) % modulo)) % modulo;
-    factor = (factor * 256) % modulo;
+    acc = (acc + BigInt(bytes[i]) * factor) % modulo;
+    factor = (factor * BigInt(256)) % modulo;
   }
   return acc;
 }
@@ -188,8 +186,8 @@ function normalizeDob0PatternElement(value: unknown): Dob0PatternElement | null 
     const [traitName, dobType, dnaOffset, dnaLength, patternType, traitArgs] = value;
     if (
       typeof traitName !== 'string' ||
-      !Number.isInteger(dnaOffset) ||
-      !Number.isInteger(dnaLength)
+      !Number.isSafeInteger(dnaOffset) ||
+      !Number.isSafeInteger(dnaLength)
     ) {
       return null;
     }
@@ -209,8 +207,8 @@ function normalizeDob0PatternElement(value: unknown): Dob0PatternElement | null 
   }
   if (
     typeof record.traitName !== 'string' ||
-    !Number.isInteger(Number(record.dnaOffset)) ||
-    !Number.isInteger(Number(record.dnaLength))
+    !Number.isSafeInteger(Number(record.dnaOffset)) ||
+    !Number.isSafeInteger(Number(record.dnaLength))
   ) {
     return null;
   }
@@ -226,7 +224,22 @@ function normalizeDob0PatternElement(value: unknown): Dob0PatternElement | null 
   };
 }
 
-function extractDob0Pattern(metadata: DobMetadata): Dob0PatternElement[] {
+function normalizeDobPatterns(values: unknown[], issues: string[]): Dob0PatternElement[] {
+  return values.flatMap((value, index) => {
+    const normalized = normalizeDob0PatternElement(value);
+    if (normalized) return [normalized];
+    const record = asRecord(value);
+    // DOB/1 image-only decoder records carry no trait and are not trait patterns.
+    if (record && typeof record.imageName === 'string' && !record.traitName) return [];
+    const name = record?.traitName ?? (Array.isArray(value) ? value[0] : undefined);
+    issues.push(
+      `${typeof name === 'string' ? name : `pattern ${index}`}: invalid DOB pattern coordinates or identity`
+    );
+    return [];
+  });
+}
+
+function extractDob0Pattern(metadata: DobMetadata, issues: string[]): Dob0PatternElement[] {
   const dob = metadata.dob;
   if (!dob) {
     return [];
@@ -236,9 +249,7 @@ function extractDob0Pattern(metadata: DobMetadata): Dob0PatternElement[] {
     if (!Array.isArray(dob.pattern)) {
       return [];
     }
-    return dob.pattern
-      .map(normalizeDob0PatternElement)
-      .filter((item): item is Dob0PatternElement => !!item);
+    return normalizeDobPatterns(dob.pattern, issues);
   }
 
   if (!Array.isArray(dob.decoders)) {
@@ -249,9 +260,7 @@ function extractDob0Pattern(metadata: DobMetadata): Dob0PatternElement[] {
     if (!record || !Array.isArray(record.pattern)) {
       continue;
     }
-    const normalized = record.pattern
-      .map(normalizeDob0PatternElement)
-      .filter((item): item is Dob0PatternElement => !!item);
+    const normalized = normalizeDobPatterns(record.pattern, issues);
     if (normalized.length > 0) {
       return normalized;
     }
@@ -279,13 +288,11 @@ function formatUnknownValue(value: unknown): string {
 
 function decodeDob0TraitValue(pattern: Dob0PatternElement, dnaSlice: Uint8Array): unknown {
   const kind = pattern.patternType.toLowerCase();
-  const rawNumber = parseLeNumber(dnaSlice);
-
   if (kind === 'options') {
     if (!Array.isArray(pattern.traitArgs) || pattern.traitArgs.length === 0) {
       return null;
     }
-    const index = parseLeModulo(dnaSlice, pattern.traitArgs.length);
+    const index = Number(parseLeModulo(dnaSlice, BigInt(pattern.traitArgs.length)));
     return pattern.traitArgs[index];
   }
 
@@ -298,10 +305,9 @@ function decodeDob0TraitValue(pattern: Dob0PatternElement, dnaSlice: Uint8Array)
     ) {
       return null;
     }
-    const min = Math.min(pattern.traitArgs[0], pattern.traitArgs[1]);
-    const max = Math.max(pattern.traitArgs[0], pattern.traitArgs[1]);
-    const width = max - min + 1;
-    return min + parseLeModulo(dnaSlice, width);
+    const min = BigInt(Math.min(pattern.traitArgs[0], pattern.traitArgs[1]));
+    const max = BigInt(Math.max(pattern.traitArgs[0], pattern.traitArgs[1]));
+    return (min + parseLeModulo(dnaSlice, max - min + BigInt(1))).toString();
   }
 
   if (kind === 'utf8') {
@@ -312,7 +318,7 @@ function decodeDob0TraitValue(pattern: Dob0PatternElement, dnaSlice: Uint8Array)
     if (dnaSlice.length > 6) {
       return `0x${bytesToHex(dnaSlice)}`;
     }
-    return rawNumber.toString();
+    return parseLeNumber(dnaSlice).toString();
   }
 
   if (kind === 'rawstring') {
@@ -324,7 +330,7 @@ function decodeDob0TraitValue(pattern: Dob0PatternElement, dnaSlice: Uint8Array)
       if (dnaSlice.length > 6) {
         return `0x${bytesToHex(dnaSlice)}`;
       }
-      return rawNumber.toString();
+      return parseLeNumber(dnaSlice).toString();
     }
     return `0x${bytesToHex(dnaSlice)}`;
   }
@@ -400,11 +406,27 @@ export function decodeDobContent(input: {
   const traits: DobTrait[] = [];
   if (metadata && dnaHex) {
     const dnaBytes = hexToBytes(dnaHex);
-    const patterns = extractDob0Pattern(metadata);
+    const patterns = extractDob0Pattern(metadata, issues);
     for (const pattern of patterns) {
-      const start = Math.max(0, pattern.dnaOffset);
-      const end = Math.min(dnaBytes.length, start + Math.max(0, pattern.dnaLength));
-      const slice = end > start ? dnaBytes.slice(start, end) : new Uint8Array();
+      const start = pattern.dnaOffset;
+      const length = pattern.dnaLength;
+      if (start < 0 || length <= 0 || start > dnaBytes.length || length > dnaBytes.length - start) {
+        issues.push(
+          `${pattern.traitName}: DNA slice ${start}+${length} is outside ${dnaBytes.length} bytes`
+        );
+        continue;
+      }
+      if (
+        pattern.patternType.toLowerCase() === 'range' &&
+        (!Array.isArray(pattern.traitArgs) ||
+          pattern.traitArgs.length < 2 ||
+          !Number.isSafeInteger(pattern.traitArgs[0]) ||
+          !Number.isSafeInteger(pattern.traitArgs[1]))
+      ) {
+        issues.push(`${pattern.traitName}: range bounds must be safe JSON integers`);
+        continue;
+      }
+      const slice = dnaBytes.slice(start, start + length);
       const rawValue = decodeDob0TraitValue(pattern, slice);
       traits.push({
         name: pattern.traitName,

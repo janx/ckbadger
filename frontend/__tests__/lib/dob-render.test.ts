@@ -117,6 +117,86 @@ describe('dob-render helpers', () => {
     ]);
   });
 
+  it('reports out-of-bounds DNA patterns without inventing traits', () => {
+    for (const [offset, length] of [
+      [-1, 1],
+      [1, 2],
+    ]) {
+      const decoded = decodeDobContent({
+        sporeContentType: 'dob/0',
+        contentText: '{ "dna": "01" }',
+        clusterDescription: JSON.stringify({
+          dob: {
+            ver: 0,
+            pattern: [
+              {
+                traitName: 'Broken',
+                dnaOffset: offset,
+                dnaLength: length,
+                patternType: 'rawNumber',
+              },
+            ],
+          },
+        }),
+      });
+      expect(decoded?.traits).toEqual([]);
+      expect(decoded?.issues.join(' ')).toMatch(/Broken.*DNA/);
+    }
+  });
+
+  it('reports an unsafe offset even when another pattern remains valid', () => {
+    const decoded = decodeDobContent({
+      sporeContentType: 'dob/0',
+      contentText: '{ "dna": "01" }',
+      clusterDescription: JSON.stringify({
+        dob: {
+          ver: 0,
+          pattern: [
+            { traitName: 'Good', dnaOffset: 0, dnaLength: 1, patternType: 'rawNumber' },
+            {
+              traitName: 'Bad',
+              dnaOffset: Number.MAX_SAFE_INTEGER + 1,
+              dnaLength: 1,
+              patternType: 'rawNumber',
+            },
+          ],
+        },
+      }),
+    });
+    expect(decoded?.traits).toEqual([{ name: 'Good', value: '1' }]);
+    expect(decoded?.issues.join(' ')).toMatch(/Bad.*pattern/);
+  });
+
+  it('decodes a wide safe range with BigInt modulo and rejects unsafe JSON bounds', () => {
+    const pattern = (max: number) =>
+      JSON.stringify({
+        dob: {
+          ver: 0,
+          pattern: [
+            {
+              traitName: 'Wide',
+              dnaOffset: 0,
+              dnaLength: 9,
+              patternType: 'range',
+              traitArgs: [0, max],
+            },
+          ],
+        },
+      });
+    const input = { sporeContentType: 'dob/0', contentText: '{ "dna": "ffffffffffffffffff" }' };
+    const valid = decodeDobContent({
+      ...input,
+      clusterDescription: pattern(Number.MAX_SAFE_INTEGER),
+    });
+    expect(valid?.traits).toEqual([{ name: 'Wide', value: '9007199254740991' }]);
+    const invalid = decodeDobContent({
+      ...input,
+      clusterDescription: pattern(Number.MAX_SAFE_INTEGER + 1),
+    });
+    expect(invalid?.traits).toEqual([]);
+    expect(invalid?.issues.join(' ')).toMatch(/Wide.*range/);
+  });
+
   it('decodes dob/1 traits from multi-decoder pattern', () => {
     const decoded = decodeDobContent({
       sporeContentType: 'dob/0',
