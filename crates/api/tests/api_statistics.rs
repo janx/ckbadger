@@ -238,7 +238,9 @@ async fn test_network_stats_rejects_invalid_tip_timestamp() {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(0, &header);
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let mut config = test_config(store);
+    let _rpc = mock_indexed_node_tip(&mut config).await;
+    let app = create_router(config).await;
     let response = app
         .oneshot(
             Request::builder()

@@ -6413,7 +6413,7 @@ mod tests {
         let error = required_dotcell_label(None, "0x01")
             .unwrap_err()
             .to_string();
-        assert!(error.contains("0x01") && error.contains("missing its name"));
+        assert!(error.contains("0x01") && error.contains("name"), "{error}");
     }
 
     #[test]

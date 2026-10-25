@@ -575,19 +575,24 @@ mod tests {
         status.as_object_mut().unwrap().remove("tipBlockHash");
         assert!(serde_json::from_value::<SyncStatusData>(status).is_err());
 
-        for field in [
-            "rocksdbDomainMemtableBytes",
-            "compactionPendingBytes",
-            "l0FilesCount",
-            "wbmUsageBytes",
-            "totalTransactions",
-        ] {
+        for field in ["wbmUsageBytes", "totalTransactions"] {
             let mut memory = serde_json::to_value(MemoryStatsData::default()).unwrap();
             memory.as_object_mut().unwrap().remove(field);
             assert!(
                 serde_json::from_value::<MemoryStatsData>(memory).is_err(),
                 "missing {field} cannot mean zero or empty"
             );
+        }
+        for field in [
+            "rocksdbDomainMemtableBytes",
+            "compactionPendingBytes",
+            "l0FilesCount",
+        ] {
+            let mut memory = serde_json::to_value(MemoryStatsData::default()).unwrap();
+            memory.as_object_mut().unwrap().remove(field);
+            let decoded: MemoryStatsData = serde_json::from_value(memory).unwrap();
+            let encoded = serde_json::to_value(decoded).unwrap();
+            assert!(encoded[field].is_null(), "missing {field} is unknown, not zero");
         }
     }
 
