@@ -2355,8 +2355,12 @@ async fn list_live_cells(
         (Some(lock_bytes), None, None) => state
             .store
             .get_addr_balance(lock_bytes)
-            .ok()
-            .flatten()
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "address balance 0x{} read: {error}",
+                    hex::encode(lock_bytes)
+                ))
+            })?
             .map(|ab| ab.live_cells_count as i64),
         _ => None,
     };

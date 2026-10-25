@@ -179,6 +179,23 @@ async fn test_lock_scan_applies_type_code_hash() {
     }
 }
 
+#[tokio::test]
+async fn corrupt_address_balance_does_not_become_an_uncounted_page() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_one_live_cell(&store);
+    store
+        .put_cf(store.cf_addr_balance(), &LOCK_HASH, b"broken")
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, _) = get_json(
+        &app,
+        &format!("/cells/live?lock_script_hash={}", hex32(&LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 /// A filter combination that selects no index must say so. Returning an empty
 /// page told the caller "no such cells exist" while the cell was sitting in the
 /// store, which is the silent-wrong-answer half of the same defect.
