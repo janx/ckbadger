@@ -374,7 +374,6 @@ pub async fn create_router(config: AppConfig) -> Router {
         });
 
         let broadcaster_ws = state.ws_manager.clone();
-        let broadcaster_ckb_store = state.ckb_store.clone();
         let broadcaster_network = state.ckb_network.clone();
         tokio::spawn(async move {
             ws::start_block_broadcaster(
@@ -383,7 +382,6 @@ pub async fn create_router(config: AppConfig) -> Router {
                 broadcaster_ws,
                 broadcaster_rpc_url,
                 broadcaster_network,
-                broadcaster_ckb_store,
             )
             .await;
         });

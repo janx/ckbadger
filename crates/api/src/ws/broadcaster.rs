@@ -1,4 +1,3 @@
-use ckb_store_reader::CkbChainReader;
 use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
 use ckbadger_store::CkbadgerStore;
 use std::collections::HashMap;
@@ -49,7 +48,6 @@ pub async fn start_block_broadcaster(
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
     ckb_network: String,
-    ckb_store: Option<Arc<CkbChainReader>>,
 ) {
     let mut last_block_number: Option<i64> = None;
     let mut ticker = interval(Duration::from_secs(2));
@@ -58,9 +56,19 @@ pub async fn start_block_broadcaster(
     loop {
         ticker.tick().await;
 
-        let tip_block = fetch_tip_block(&http_client, &ckb_rpc_url)
-            .await
-            .unwrap_or(0) as i64;
+        let tip_block = match fetch_tip_block(&http_client, &ckb_rpc_url).await {
+            Ok(tip) => match i64::try_from(tip) {
+                Ok(tip) => tip,
+                Err(_) => {
+                    error!(tip, "RPC tip exceeds supported block number range");
+                    continue;
+                }
+            },
+            Err(e) => {
+                error!("Failed to fetch RPC tip for WS broadcast: {e}");
+                continue;
+            }
+        };
 
         // Get latest block from store
         let latest_block = match store.get_sync_tip_block() {
@@ -107,12 +115,15 @@ pub async fn start_block_broadcaster(
         let tx_count = header.transactions_count;
 
         if sync_mode == SyncMode::FastSync {
-            let sync_status = build_sync_status(&store, tip_block);
-
-            let timestamp_ms = header.timestamp;
-            let timestamp_str = chrono::DateTime::from_timestamp(timestamp_ms / 1000, 0)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default();
+            let (sync_status, timestamp_str) = match build_sync_status(&store, tip_block)
+                .and_then(|status| Ok((status, format_block_timestamp(header.timestamp)?)))
+            {
+                Ok(payload) => payload,
+                Err(e) => {
+                    error!(block = number, "Failed to build WS block payload: {e:#}");
+                    continue;
+                }
+            };
 
             let msg = BroadcastMessage::NewBlock {
                 number,
@@ -137,18 +148,43 @@ pub async fn start_block_broadcaster(
 
             // Get blocks between last and current
             let mut new_blocks = Vec::new();
+            let mut block_read_error = None;
             for block_num in (last + 1)..=(number.min(last + 20)) {
-                if let Ok(Some(hdr)) = store.get_block_header(block_num) {
-                    new_blocks.push((block_num, hdr));
+                match store.get_block_header(block_num) {
+                    Ok(Some(hdr)) => new_blocks.push((block_num, hdr)),
+                    Ok(None) => {
+                        block_read_error = Some(format!("missing block header {block_num}"));
+                        break;
+                    }
+                    Err(e) => {
+                        block_read_error =
+                            Some(format!("failed to read block header {block_num}: {e}"));
+                        break;
+                    }
                 }
             }
+            if let Some(e) = block_read_error {
+                error!("Failed to prepare WS block range: {e}");
+                continue;
+            }
 
+            let mut payload_failed = false;
             for (num, hdr) in new_blocks {
-                let sync_status = build_sync_status(&store, tip_block);
-
-                let timestamp_str = chrono::DateTime::from_timestamp(hdr.timestamp / 1000, 0)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default();
+                let payload = (|| -> anyhow::Result<_> {
+                    Ok((
+                        build_sync_status(&store, tip_block)?,
+                        format_block_timestamp(hdr.timestamp)?,
+                        build_block_transaction_messages(&store, num)?,
+                    ))
+                })();
+                let (sync_status, timestamp_str, transactions) = match payload {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        error!(block = num, "Failed to build WS block payload: {e:#}");
+                        payload_failed = true;
+                        break;
+                    }
+                };
 
                 let msg = BroadcastMessage::NewBlock {
                     number: num,
@@ -163,83 +199,53 @@ pub async fn start_block_broadcaster(
                 info!("Broadcasting new block: {}", num);
                 ws_manager.broadcast_block(msg);
 
-                broadcast_block_transactions(&store, &ws_manager, &ckb_store, num);
+                for transaction in transactions {
+                    ws_manager.broadcast_transaction(transaction);
+                }
                 last_block_number = Some(num);
             }
 
             // Broadcast latest activities after new blocks
-            broadcast_latest_activities(&store, &append_only_store, &ws_manager, &ckb_network);
+            if !payload_failed {
+                broadcast_latest_activities(&store, &append_only_store, &ws_manager, &ckb_network);
+            }
         }
     }
 }
 
-fn get_block_tx_hashes(
-    ckb_store: &Option<Arc<CkbChainReader>>,
-    block_num: i64,
-) -> Option<Vec<Vec<u8>>> {
-    let store = ckb_store.as_ref()?;
-    let block_hash_bytes = store.get_block_hash(block_num as u64)?;
-    let block = store.get_block(&block_hash_bytes)?;
-    Some(
-        block
-            .transactions()
-            .into_iter()
-            .map(|tx| tx.hash().raw_data().to_vec())
-            .collect(),
-    )
+fn format_block_timestamp(timestamp_ms: i64) -> anyhow::Result<String> {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|dt| dt.to_rfc3339())
+        .ok_or_else(|| anyhow::anyhow!("unrepresentable block timestamp_ms={timestamp_ms}"))
 }
 
-fn broadcast_block_transactions(
+fn build_block_transaction_messages(
     store: &CkbadgerStore,
-    ws_manager: &Arc<WsManager>,
-    ckb_store: &Option<Arc<CkbChainReader>>,
     block_number: i64,
-) {
-    let tx_hashes = match get_block_tx_hashes(ckb_store, block_number) {
-        Some(h) => h,
-        None => {
-            debug!(
-                "Cannot resolve tx hashes for block {} (CKB store unavailable)",
-                block_number
-            );
-            return;
-        }
-    };
-
-    let txs = match store.list_block_txs(block_number) {
-        Ok(txs) => txs,
-        Err(e) => {
-            error!("Failed to query block transactions: {}", e);
-            return;
-        }
-    };
-
-    let block_header = store.get_block_header(block_number).ok().flatten();
-    let timestamp_str = block_header
-        .and_then(|h| chrono::DateTime::from_timestamp(h.timestamp / 1000, 0))
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default();
-
+) -> anyhow::Result<Vec<BroadcastMessage>> {
+    let header = store.get_block_header(block_number)?.ok_or_else(|| {
+        anyhow::anyhow!("missing block header {block_number} for transaction broadcast")
+    })?;
+    let timestamp_str = format_block_timestamp(header.timestamp)?;
+    let txs = store.list_block_txs(block_number)?;
+    let mut messages = Vec::new();
     for (tx_idx, entry) in txs {
         if entry.is_cellbase {
             continue;
         }
-
-        let tx_hash = match tx_hashes.get(tx_idx as usize) {
-            Some(h) => format!("0x{}", hex::encode(h)),
-            None => continue,
-        };
-
-        let msg = BroadcastMessage::NewTransaction {
-            hash: tx_hash,
+        if tx_idx < 0 {
+            anyhow::bail!("negative transaction index {tx_idx} in block {block_number}");
+        }
+        messages.push(BroadcastMessage::NewTransaction {
+            hash: format!("0x{}", hex::encode(entry.tx_hash)),
             block_number,
-            inputs_count: entry.inputs_count as i32,
-            outputs_count: entry.outputs_count as i32,
+            inputs_count: i32::from(entry.inputs_count),
+            outputs_count: i32::from(entry.outputs_count),
             fee: entry.fee.to_string(),
             timestamp: timestamp_str.clone(),
-        };
-        ws_manager.broadcast_transaction(msg);
+        });
     }
+    Ok(messages)
 }
 
 fn broadcast_latest_activities(
@@ -248,52 +254,42 @@ fn broadcast_latest_activities(
     ws_manager: &Arc<WsManager>,
     ckb_network: &str,
 ) {
-    match store.get_latest_activities() {
-        Ok(items) if !items.is_empty() => {
-            let mut script_info_cache = HashMap::new();
-            let mut address_cache = HashMap::new();
-            let activities: Vec<serde_json::Value> = items
-                .iter()
-                .take(8)
-                .filter_map(|actions| {
-                    match build_global_activity_response(
-                        store,
-                        ao_store,
-                        ckb_network,
-                        actions,
-                        &mut script_info_cache,
-                        &mut address_cache,
-                    ) {
-                        Ok(activity) => match serde_json::to_value(activity) {
-                            Ok(value) => Some(value),
-                            Err(e) => {
-                                error!(
-                                    "Failed to encode latest activity broadcast for tx=0x{}: {}",
-                                    hex::encode(&actions.tx_hash),
-                                    e
-                                );
-                                None
-                            }
-                        },
-                        Err(e) => {
-                            error!(
-                                "Failed to serialize latest activity broadcast for tx=0x{}: {}",
-                                hex::encode(&actions.tx_hash),
-                                e
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect();
-            ws_manager.broadcast_activities(BroadcastMessage::LatestActivities { activities });
+    let items = match store.get_latest_activities() {
+        Ok(items) if !items.is_empty() => items,
+        Ok(_) => return,
+        Err(e) => {
+            error!("Failed to read latest activities for WS broadcast: {e}");
+            return;
         }
-        _ => {}
+    };
+    let mut script_info_cache = HashMap::new();
+    let mut address_cache = HashMap::new();
+    let activities = items
+        .iter()
+        .take(8)
+        .map(|actions| {
+            build_global_activity_response(
+                store,
+                ao_store,
+                ckb_network,
+                actions,
+                &mut script_info_cache,
+                &mut address_cache,
+            )
+            .and_then(|activity| serde_json::to_value(activity).map_err(Into::into))
+            .map_err(|e| anyhow::anyhow!("tx=0x{}: {e}", hex::encode(&actions.tx_hash)))
+        })
+        .collect::<anyhow::Result<Vec<serde_json::Value>>>();
+    match activities {
+        Ok(activities) => {
+            ws_manager.broadcast_activities(BroadcastMessage::LatestActivities { activities })
+        }
+        Err(e) => error!("Failed to build latest activity WS payload: {e:#}"),
     }
 }
 
-fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
-    let store_sync = store.get_sync_status().unwrap_or_default();
+fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> anyhow::Result<SyncStatus> {
+    let store_sync = store.get_sync_status()?;
     let synced_block = store_sync.tip_block_number;
     let db_ema_rate = store_sync.sync_ema_rate;
     let sync_started_at = store_sync.sync_started_at;
@@ -327,10 +323,9 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
         };
 
     let sync_progress_from_store: Option<SyncProgressData> = store
-        .get_sync_progress()
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        .get_sync_progress()?
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()?;
 
     let (
         progress,
@@ -399,7 +394,7 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
         (p, eta, ema, ema, None, None)
     };
 
-    SyncStatus {
+    Ok(SyncStatus {
         is_syncing,
         synced_block,
         tip_block,
@@ -414,7 +409,7 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
         started_at: sync_started_at,
         elapsed_time,
         total_time,
-    }
+    })
 }
 
 async fn fetch_tip_block(client: &reqwest::Client, ckb_rpc_url: &str) -> Result<u64, String> {
@@ -509,6 +504,86 @@ pub async fn start_reorg_broadcaster(store: Arc<CkbadgerStore>, ws_manager: Arc<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::{
+        types::{CachedBlockHeader, TxIndexEntry},
+        StoreBatch,
+    };
+
+    #[test]
+    fn transaction_push_uses_canonical_index_hash_without_ckb_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(
+            7,
+            &CachedBlockHeader {
+                hash: vec![7; 32],
+                parent_hash: vec![6; 32],
+                timestamp: 1_700_000_000_123,
+                chain_time_ms: 1_700_000_000_123,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+        batch.put_tx_index(
+            7,
+            1,
+            &TxIndexEntry {
+                tx_hash: [0xAB; 32],
+                is_cellbase: false,
+                timestamp: 1_700_000_000_123,
+                inputs_count: 1,
+                outputs_count: 2,
+                fee: 42,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().unwrap();
+        let messages = build_block_transaction_messages(&store, 7).unwrap();
+        assert_eq!(messages.len(), 1);
+        match &messages[0] {
+            BroadcastMessage::NewTransaction {
+                hash,
+                timestamp,
+                fee,
+                ..
+            } => {
+                assert_eq!(hash, &format!("0x{}", "ab".repeat(32)));
+                assert!(timestamp.contains(".123"));
+                assert_eq!(fee, "42");
+            }
+            _ => panic!("expected transaction push"),
+        }
+    }
+
+    #[test]
+    fn ws_payload_rejects_missing_header_and_bad_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        assert!(build_block_transaction_messages(&store, 7)
+            .unwrap_err()
+            .to_string()
+            .contains("missing block header 7"));
+        assert!(format_block_timestamp(i64::MAX).is_err());
+    }
+
+    #[test]
+    fn ws_sync_status_rejects_corrupt_progress_instead_of_zero_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.put_sync_progress(b"not-json").unwrap();
+        assert!(build_sync_status(&store, 7).is_err());
+    }
 
     /// A `new_block` push must never carry rolling network statistics. Pushing
     /// them meant a second computation path: the broadcaster derived the
