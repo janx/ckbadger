@@ -141,6 +141,34 @@ interface PoolSummary {
 }
 
 interface Block {
+  maxBlockBytes: number;
+  maxBlockCycles: string;
+  minerMessageText: string | null;
+  size: number;
+  userTransactionsSize: number;
+  overheadSize: number;
+  totalFees: string;
+  cycles: string | null;
+  cyclesStatus: 'pending' | 'complete' | 'failed';
+  transactionSizes: number[];
+  rewardBreakdown: {
+    primary: string;
+    secondary: string;
+    committed: string;
+    proposal: string;
+  } | null;
+  rewardPaidAtBlock: number | null;
+  rewardFinalizesAt: number | null;
+  confirmations: number;
+  parentTimestamp: string | null;
+  rawHeader: { epoch: string; dao: string; proposalsHash: string; extraHash: string };
+  uncles: Array<{
+    number: number;
+    hash: string;
+    parentHash: string;
+    timestamp: string;
+    proposalIds: string[];
+  }>;
   number: number;
   hash: string;
   parentHash: string;
@@ -174,6 +202,7 @@ interface HardforkActivation {
 }
 
 interface Transaction {
+  value: string;
   hash: string;
   blockNumber: number;
   blockHash: string;
@@ -336,9 +365,53 @@ interface Script {
   args: string;
 }
 
+interface TransactionScriptGroup {
+  scriptHash: string;
+  kind: 'lock' | 'type';
+  ran: boolean;
+  inputIndices: number[];
+  outputIndices: number[];
+  witnessIndex: number | null;
+  script: Script;
+  cycles: string | null;
+}
+interface TransactionWitness {
+  index: number;
+  size: number;
+  kind: 'empty' | 'witness_args' | 'ckbfs' | 'cobuild' | 'opaque';
+  fields: Array<{ name: string; start: number; end: number; hex: string }>;
+}
+
+interface PoolTransaction {
+  hash: string;
+  status: PoolStatus;
+  value: string | null;
+  fee: string;
+  feeRate: string;
+  txSize: number;
+  cycles: string;
+  inputsCount: number;
+  outputsCount: number;
+  timestamp: string;
+  interpretation: PoolInterpretation;
+  activity: Pick<
+    GlobalActivity,
+    'participants' | 'protocolActions' | 'typeCalls' | 'lockCalls' | 'isCellbase'
+  > | null;
+}
+interface PoolTransactionsResponse {
+  data: PoolTransaction[];
+  total: number;
+  limit: number;
+  nextCursor: string | null;
+  totals: { pending: number; proposed: number; awaitingIndex: number };
+  truncated: boolean;
+  lastPolledAt: string | null;
+}
+
 interface TransactionDetail extends Omit<
   Transaction,
-  'blockNumber' | 'blockHash' | 'index' | 'timestamp'
+  'blockNumber' | 'blockHash' | 'index' | 'timestamp' | 'value'
 > {
   status: TransactionStatus;
   /**
@@ -369,6 +442,9 @@ interface TransactionDetail extends Omit<
     };
     since?: string;
     capacity?: string;
+    /** Exact occupied bytes (not shannons). */
+    commonKnowledgeSize?: string | null;
+    cellType?: string | null;
     lock?: Script;
     type?: Script;
     address?: string;
@@ -377,11 +453,15 @@ interface TransactionDetail extends Omit<
     capacity: string;
     commonKnowledgeSize: string;
     virtualCommonKnowledgeSize?: string;
+    status?: 'pending' | 'live' | 'consumed' | null;
+    consumedByTx?: string | null;
     cellType?: string;
     lock?: Script;
     type?: Script;
     address?: string;
   }>;
+  scriptGroups?: TransactionScriptGroup[];
+  witnessDetails?: TransactionWitness[];
   witnesses: string[];
   witnessesAvailable: boolean;
   /**
@@ -539,6 +619,14 @@ interface CellDep {
   outPointTxHash: string;
   outPointIndex: number;
   depType: string;
+  scriptHashes: string[];
+  resolvedCells: Array<{
+    txHash: string;
+    index: number;
+    dataHash: string;
+    typeHash: string | null;
+    scriptHashes: string[];
+  }>;
 }
 
 interface LockScriptInfo {
@@ -733,6 +821,8 @@ interface Activity {
  * rendered as its prefix, never as a made-up address.
  */
 interface ParticipantRef {
+  /** Registered display name of the participant lock, if resolved. */
+  lockKind?: string | null;
   address: string | null;
   lockHash: string | null;
   lockHashPrefix: string | null;
@@ -947,7 +1037,10 @@ interface Asset {
   famous: boolean;
   tags: string[] | null;
   holdersCount: number;
-  transfersCount: number;
+  /** Token transfer count; omitted for object/identity collections. */
+  transfersCount?: number;
+  liveCount?: number | null;
+  activitiesCount?: number | null;
   transfers24h: number;
   decimals: number | null;
   totalSupply: string | null;
@@ -1015,6 +1108,7 @@ interface TokenTransferDetail {
 }
 
 interface TokenActivity {
+  transferSequence: number;
   txHash: string;
   blockNumber: number;
   txIndex: number;
@@ -1144,6 +1238,7 @@ interface SporeCluster {
 }
 
 interface SporeNft {
+  createdAtTx?: string;
   sporeId: string;
   txHash: string;
   outputIndex: number;
@@ -1856,7 +1951,8 @@ interface PendingProposalsResponse {
 interface BlockFeeStats {
   blockNumber: number;
   totalSize: number;
-  totalCycles: number;
+  totalCycles: number | null;
+  cyclesStatus: 'pending' | 'complete' | 'failed';
   /** Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples. */
   avgFeeRate: string | null;
   minFeeRate: string | null;
@@ -2108,6 +2204,7 @@ interface FiberChannel {
    * with BigInt, never Number.
    */
   delayEpoch: string | null;
+  delayEpochDecoded?: { relative: boolean; epochs: number; index: number; length: number } | null;
   settlementBlock: number | null;
   settlementTimestamp: string | null;
   settlementTxHash: string | null;
@@ -2164,6 +2261,10 @@ export type {
   Transaction,
   TransactionStatus,
   TransactionDetail,
+  TransactionScriptGroup,
+  TransactionWitness,
+  PoolTransaction,
+  PoolTransactionsResponse,
   Block,
   NetworkStats,
   SyncStatus,
@@ -2616,6 +2717,19 @@ export const api = {
     return fetchApi(`/transactions?${query}`);
   },
 
+  getPoolTransactions: (
+    params: CursorQueryParams & { status?: PoolStatus | 'all' } = {}
+  ): Promise<PoolTransactionsResponse> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.status) query.set('status', params.status);
+    return fetchApi(`/transactions/pool?${query}`);
+  },
+
+  getTransactionActivity: (hash: string): Promise<GlobalActivity | null> =>
+    fetchApi(`/transactions/${hash}/activity`),
+
   getTransaction: (hash: string): Promise<Transaction> => {
     return fetchApi(`/transactions/${hash}`);
   },
@@ -2697,11 +2811,12 @@ export const api = {
   },
 
   getGlobalActivities: (
-    params: CursorQueryParams & { filter?: GlobalActivityFilter } = {}
+    params: CursorQueryParams & { filter?: GlobalActivityFilter; blockNumber?: number } = {}
   ): Promise<CursorPaginatedResponse<GlobalActivity>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
+    if (params.blockNumber !== undefined) query.set('blockNumber', String(params.blockNumber));
     if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
     return fetchApi(`/activities?${query}`);
   },

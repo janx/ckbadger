@@ -163,6 +163,8 @@ describe('renderRawPage', () => {
         outPointTxHash: `0x${'c'.repeat(64)}`,
         outPointIndex: 0,
         depType: 'code',
+        scriptHashes: [],
+        resolvedCells: [],
       },
     ]);
     vi.mocked(api.getTransactionLifecycle).mockResolvedValue({

@@ -39,6 +39,26 @@ describe('api', () => {
       vi.restoreAllMocks();
     });
 
+    it('passes block activity and pool pagination to their canonical endpoints', async () => {
+      server.use(
+        http.get('/api/:network/v1/activities', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('blockNumber')).toBe('42');
+          return HttpResponse.json({ data: [], nextCursor: null });
+        }),
+        http.get('/api/:network/v1/transactions/pool', ({ request }) => {
+          const query = new URL(request.url).searchParams;
+          expect(query.get('status')).toBe('proposed');
+          expect(query.get('cursor')).toBe('123:0xab');
+          expect(query.get('limit')).toBe('5');
+          return HttpResponse.json({ data: [], nextCursor: null, total: 0 });
+        }),
+        http.get('/api/:network/v1/transactions/0xabc/activity', () => HttpResponse.json(null))
+      );
+      await api.getGlobalActivities({ blockNumber: 42 });
+      await api.getPoolTransactions({ status: 'proposed', cursor: '123:0xab', limit: 5 });
+      expect(await api.getTransactionActivity('0xabc')).toBeNull();
+    });
+
     it('builds query params for getBlocks with cursor', async () => {
       server.use(
         http.get('/api/:network/v1/blocks', ({ request }) => {

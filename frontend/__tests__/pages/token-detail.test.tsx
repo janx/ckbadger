@@ -139,6 +139,7 @@ describe('TokenDetailPage', () => {
           txHash: '0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234',
           blockNumber: 12345,
           txIndex: 0,
+          transferSequence: 0,
           timestamp: '1700000000000',
           actions: ['mint', 'transfer'],
           transfers: [
@@ -210,6 +211,7 @@ describe('TokenDetailPage', () => {
           txHash: '0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234',
           blockNumber: 12345,
           txIndex: 0,
+          transferSequence: 0,
           timestamp: '1700000000000',
           actions: ['mint'],
           transfers: [

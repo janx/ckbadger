@@ -21,6 +21,7 @@ function tx(i: number): Transaction {
     index: 1,
     inputsCount: 2,
     outputsCount: 3,
+    value: '7000000000',
     fee: '10000',
     isCellbase: false,
     timestamp: String(Date.now() - i * 10_000),
