@@ -12,6 +12,8 @@ use crate::rpc::parse_hex_to_bytes;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolScript {
     Dao,
+    /// Witness-backed file cells; read classification only, no indexed asset kind.
+    Ckbfs,
     Sudt,
     Xudt,
     SporeNft,
@@ -53,6 +55,7 @@ impl ProtocolScript {
     pub fn slug(self) -> &'static str {
         match self {
             ProtocolScript::Dao => "nervos-dao",
+            ProtocolScript::Ckbfs => "ckbfs",
             ProtocolScript::Sudt => "simple-udt",
             ProtocolScript::Xudt => "xudt",
             ProtocolScript::SporeNft => "spore",
@@ -88,6 +91,7 @@ impl ProtocolScript {
 fn slug_to_protocol(slug: &str) -> Option<ProtocolScript> {
     Some(match slug {
         "nervos-dao" => ProtocolScript::Dao,
+        "ckbfs" => ProtocolScript::Ckbfs,
         "simple-udt" => ProtocolScript::Sudt,
         "xudt" => ProtocolScript::Xudt,
         "spore" => ProtocolScript::SporeNft,
@@ -212,6 +216,21 @@ pub static PROTOCOL_REGISTRY: LazyLock<ProtocolRegistry> =
 mod tests {
     use super::*;
     use crate::rpc::parse_hex_to_bytes;
+
+    #[test]
+    fn ckbfs_deployments_have_one_canonical_protocol_identity() {
+        for hash in [
+            "31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a",
+            "b5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695",
+        ] {
+            assert_eq!(
+                PROTOCOL_REGISTRY
+                    .get(&hex::decode(hash).unwrap())
+                    .map(|p| p.slug()),
+                Some("ckbfs")
+            );
+        }
+    }
 
     #[test]
     fn detects_mainnet_and_testnet_hashes() {

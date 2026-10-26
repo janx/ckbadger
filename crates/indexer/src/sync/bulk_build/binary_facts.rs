@@ -698,6 +698,9 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
             // Phase 2 decodes its history, Phase 1 leaves it unclassified.
             | ProtocolScript::DotCellPrice,
         ) => CellSemanticTag::Plain,
+        // CKBFS gets a read-time file label only; preserve the existing bulk
+        // classification, with no protocol facts or domain asset writes.
+        Some(ProtocolScript::Ckbfs) => CellSemanticTag::Plain,
         // Unregistered code_hash.
         None => CellSemanticTag::Plain,
     }
@@ -1528,6 +1531,20 @@ mod tests {
     /// The did:ckb outage was invisible to per-protocol unit tests because they
     /// only exercised one path. Any future `ProtocolScript` variant that is
     /// wired into one classifier but not the other fails here.
+    #[test]
+    fn ckbfs_recognition_preserves_plain_bulk_semantics() {
+        for (hash, protocol) in PROTOCOL_REGISTRY.iter() {
+            if protocol == ProtocolScript::Ckbfs {
+                for hash_type in [0, 1, 2, 4] {
+                    assert_eq!(
+                        code_hash_to_semantic_tag(hash, hash_type),
+                        CellSemanticTag::Plain
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn bulk_and_live_classifiers_agree_on_every_registered_code_hash() {
         use crate::parser::cell::ParsedCell;
