@@ -34,6 +34,15 @@ impl CkbadgerStore {
             anyhow::ensure!(header.hash == expected_block_hash,
                 "canonical block identity changed before cycles write: block={block_number}, expected=0x{}, actual=0x{}",
                 crate::bytes_to_hex(expected_block_hash), crate::bytes_to_hex(&header.hash));
+            if block_number == 0 {
+                anyhow::ensure!(header.cycles.is_none_or(|cycles| cycles == 0),
+                    "invalid genesis block cycles: block={block_number}, hash=0x{}, cycles={:?}",
+                    crate::bytes_to_hex(expected_block_hash), header.cycles);
+            } else {
+                anyhow::ensure!(header.cycles.is_none_or(|cycles| cycles >= 0),
+                    "negative block cycles: block={block_number}, hash=0x{}, cycles={:?}",
+                    crate::bytes_to_hex(expected_block_hash), header.cycles);
+            }
             let txs = self.list_block_txs(block_number)?;
             anyhow::ensure!(header.transactions_count >= 0 && txs.len() == header.transactions_count as usize,
                 "canonical block tx index incomplete: block={block_number}, header_count={}, indexed_count={}",
@@ -48,23 +57,29 @@ impl CkbadgerStore {
                 anyhow::ensure!(idx == expected_idx && entry.tx_hash == *expected_hash,
                     "canonical block tx identity changed before cycles write: block={block_number}, index={idx}, expected_index={expected_idx}, expected_hash=0x{}, actual_hash=0x{}",
                     crate::bytes_to_hex(expected_hash), crate::bytes_to_hex(&entry.tx_hash));
-                if entry.is_cellbase {
+                if block_number == 0 || entry.is_cellbase {
+                    let kind = if block_number == 0 { "genesis" } else { "cellbase" };
                     anyhow::ensure!(entry.cycles.is_none_or(|cycles| cycles == 0),
-                        "invalid cellbase cycles: block={block_number}, index={idx}, hash=0x{}, cycles={:?}",
+                        "invalid {kind} cycles: block={block_number}, index={idx}, hash=0x{}, cycles={:?}",
                         crate::bytes_to_hex(&entry.tx_hash), entry.cycles);
                 } else {
                     let cycles = entry.cycles.ok_or_else(|| anyhow::anyhow!(
                         "missing non-cellbase tx cycles: block={block_number}, index={idx}, hash=0x{}",
                         crate::bytes_to_hex(&entry.tx_hash)
                     ))?;
-                    anyhow::ensure!(cycles >= 0,
-                        "failed non-cellbase tx cycles: block={block_number}, index={idx}, hash=0x{}, cycles={cycles}",
-                        crate::bytes_to_hex(&entry.tx_hash));
+                    if cycles <= 0 {
+                        let state = match cycles { 0 => "pending", -1 => "failed", _ => "invalid" };
+                        anyhow::bail!("{state} non-cellbase tx cycles: block={block_number}, index={idx}, hash=0x{}, cycles={cycles}",
+                            crate::bytes_to_hex(&entry.tx_hash));
+                    }
                     total = total.checked_add(cycles).ok_or_else(|| anyhow::anyhow!(
                         "block cycles total overflow: block={block_number}, index={idx}, running_total={total}, cycles={cycles}"
                     ))?;
                 }
             }
+            anyhow::ensure!(header.cycles.is_none_or(|cached| cached == total),
+                "block cycles total mismatch: block={block_number}, hash=0x{}, cached={:?}, calculated={total}",
+                crate::bytes_to_hex(expected_block_hash), header.cycles);
             header.cycles = Some(total);
             let value = bincode::serialize(&header)?;
             db.put_cf(self.cf_block_headers(), key, &value)?;
@@ -428,6 +443,34 @@ mod tests {
         );
         assert_eq!(store.get_block_header(42).unwrap().unwrap().cycles, None);
 
+        let mut pending_zero = tx.clone();
+        pending_zero.cycles = Some(0);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(42, 1, &pending_zero);
+        batch.commit().unwrap();
+        let error = store
+            .update_block_cycles_if_complete(42, &hash, &identities)
+            .expect_err("ordinary zero cycles are pending, not a complete total");
+        assert!(error.to_string().contains("non-cellbase"), "{error:#}");
+        assert_eq!(store.get_block_header(42).unwrap().unwrap().cycles, None);
+
+        for negative in [-2, -1] {
+            let mut failed = tx.clone();
+            failed.cycles = Some(negative);
+            let mut batch = StoreBatch::new(&store);
+            batch.put_tx_index(42, 1, &failed);
+            batch.commit().unwrap();
+            let error = store
+                .update_block_cycles_if_complete(42, &hash, &identities)
+                .unwrap_err();
+            assert!(error.to_string().contains("non-cellbase"), "{error:#}");
+            assert_eq!(store.get_block_header(42).unwrap().unwrap().cycles, None);
+            assert_eq!(
+                store.get_tx_index(42, 1).unwrap().unwrap().cycles,
+                Some(negative)
+            );
+        }
+
         let mut completed = tx.clone();
         completed.cycles = Some(77);
         let mut batch = StoreBatch::new(&store);
@@ -443,6 +486,30 @@ mod tests {
             store.get_block_header(42).unwrap().unwrap().cycles,
             Some(77)
         );
+
+        for cached_total in [-2, -1, 0, 76, 78] {
+            let mut contradictory = header.clone();
+            contradictory.cycles = Some(cached_total);
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(42, &contradictory);
+            batch.commit().unwrap();
+            let error = store
+                .update_block_cycles_if_complete(42, &hash, &identities)
+                .expect_err("a contradictory cached block total must not be repaired");
+            let message = error.to_string();
+            assert!(message.contains("block=42"), "{message}");
+            assert!(message.contains(&hex::encode(&hash)), "{message}");
+            assert_eq!(
+                store.get_block_header(42).unwrap().unwrap().cycles,
+                Some(cached_total)
+            );
+            assert_eq!(store.get_tx_index(42, 1).unwrap().unwrap().cycles, Some(77));
+        }
+        let mut correct_header = header.clone();
+        correct_header.cycles = Some(77);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(42, &correct_header);
+        batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_tx_index(
@@ -517,6 +584,111 @@ mod tests {
         assert_eq!(
             store.get_block_header(42).unwrap().unwrap().cycles,
             Some(77)
+        );
+    }
+
+    #[test]
+    fn genesis_block_cycles_require_execution_exempt_values() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut header = make_header(0);
+        header.transactions_count = 2;
+        let hash = header.hash.clone();
+        let identities = [(0, [1; 32]), (1, [2; 32])];
+        let tx = TxIndexEntry {
+            tx_hash: [1; 32],
+            is_cellbase: true,
+            timestamp: 0,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let other = TxIndexEntry {
+            tx_hash: [2; 32],
+            is_cellbase: false,
+            ..tx.clone()
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &header);
+        batch.put_tx_index(0, 0, &tx);
+        batch.put_tx_index(0, 1, &other);
+        batch.commit().unwrap();
+        assert_eq!(
+            store
+                .update_block_cycles_if_complete(0, &hash, &identities)
+                .unwrap(),
+            0
+        );
+        assert_eq!(store.get_block_header(0).unwrap().unwrap().cycles, Some(0));
+        for value in [Some(0), None] {
+            let mut batch = StoreBatch::new(&store);
+            batch.put_tx_index(
+                0,
+                1,
+                &TxIndexEntry {
+                    cycles: value,
+                    ..other.clone()
+                },
+            );
+            batch.commit().unwrap();
+            assert_eq!(
+                store
+                    .update_block_cycles_if_complete(0, &hash, &identities)
+                    .unwrap(),
+                0
+            );
+        }
+        for value in [-1, 1] {
+            let mut batch = StoreBatch::new(&store);
+            batch.put_tx_index(
+                0,
+                1,
+                &TxIndexEntry {
+                    cycles: Some(value),
+                    ..other.clone()
+                },
+            );
+            batch.commit().unwrap();
+            let error = store
+                .update_block_cycles_if_complete(0, &hash, &identities)
+                .unwrap_err();
+            assert!(error.to_string().contains("genesis"), "{error:#}");
+            assert!(error.to_string().contains("index=1"), "{error:#}");
+            assert_eq!(store.get_block_header(0).unwrap().unwrap().cycles, Some(0));
+        }
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(0, 1, &other);
+        batch.commit().unwrap();
+        for value in [-1, 1] {
+            header.cycles = Some(value);
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(0, &header);
+            batch.commit().unwrap();
+            let error = store
+                .update_block_cycles_if_complete(0, &hash, &identities)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("genesis block cycles"),
+                "{error:#}"
+            );
+            assert_eq!(
+                store.get_block_header(0).unwrap().unwrap().cycles,
+                Some(value)
+            );
+        }
+        let append_dir = tempdir().unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        assert!(append
+            .update_block_cycles_if_complete(0, &hash, &identities)
+            .is_err());
+        assert_eq!(
+            append
+                .iterator_cf(append.cf_cells(), IteratorMode::Start)
+                .count(),
+            0
         );
     }
 

@@ -314,6 +314,9 @@ impl CkbadgerStore {
         groups: Option<&ckbadger_common::cycles_task::TransactionCycles>,
     ) -> anyhow::Result<()> {
         self.with_domain_write_gate(|db| {
+            anyhow::ensure!(cycles >= -1,
+                "invalid cycles update: block={block_num}, index={tx_idx}, hash=0x{}, cycles={cycles}",
+                bytes_to_hex(expected_hash));
             let mapped = self.get_tx_location(expected_hash)?.ok_or_else(|| anyhow!(
                 "canonical tx identity disappeared: hash=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash)
@@ -328,7 +331,13 @@ impl CkbadgerStore {
             anyhow::ensure!(entry.tx_hash == *expected_hash,
                 "canonical tx identity changed: expected=0x{}, actual=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash), bytes_to_hex(&entry.tx_hash));
+            anyhow::ensure!(entry.cycles.is_none_or(|stored| stored >= -1),
+                "invalid stored cycles: block={block_num}, index={tx_idx}, hash=0x{}, cycles={:?}",
+                bytes_to_hex(expected_hash), entry.cycles);
             if let Some(groups) = groups {
+                anyhow::ensure!(!entry.cycles.is_some_and(|stored| stored > 0 && stored != cycles),
+                    "cycles total mismatch: block={block_num}, index={tx_idx}, hash=0x{}, stored={:?}, calculated={cycles}",
+                    bytes_to_hex(expected_hash), entry.cycles);
                 let header = self.get_block_header(block_num)?.ok_or_else(|| anyhow!("canonical block disappeared while persisting cycles: block={block_num}"))?;
                 anyhow::ensure!(header.hash.as_slice() == groups.block_hash, "canonical block changed while persisting cycles: block={block_num}");
             }
@@ -551,6 +560,25 @@ mod tests {
             store.get_tx_group_cycles(&tx_hash).unwrap(),
             Some(result.groups.clone())
         );
+        let mut conflicting_total = result.clone();
+        conflicting_total.cycles += 1;
+        conflicting_total.groups[0].cycles += 1;
+        let error = store
+            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &conflicting_total)
+            .expect_err("group execution must not replace a different canonical positive total");
+        let message = error.to_string();
+        assert!(message.contains("cycles total mismatch"), "{message}");
+        assert!(message.contains("block=123"), "{message}");
+        assert!(message.contains("index=2"), "{message}");
+        assert!(message.contains(&hex::encode(tx_hash)), "{message}");
+        assert_eq!(
+            store.get_tx_by_hash(&tx_hash).unwrap().unwrap().2.cycles,
+            Some(12_345)
+        );
+        assert_eq!(
+            store.get_tx_cycles_result(&tx_hash).unwrap(),
+            Some(result.clone())
+        );
         let wrong_block = TransactionCycles {
             block_hash: [0x88; 32],
             ..result.clone()
@@ -569,6 +597,9 @@ mod tests {
         assert!(append
             .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &result)
             .is_err());
+        assert!(append
+            .update_tx_cycles(block_num, tx_idx, &tx_hash, -1)
+            .is_err());
         assert_eq!(
             append
                 .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
@@ -579,6 +610,63 @@ mod tests {
             .update_tx_cycles(block_num, tx_idx, &tx_hash, -1)
             .unwrap();
         assert!(store.get_tx_group_cycles(&tx_hash).unwrap().is_none());
+    }
+
+    #[test]
+    fn invalid_negative_cycles_do_not_change_the_transaction() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let tx_hash = [0x11; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&tx_hash, 123, 2);
+        batch.put_tx_index(
+            123,
+            2,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase: false,
+                timestamp: 1,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().unwrap();
+        for invalid in [-2, i64::MIN] {
+            let error = store
+                .update_tx_cycles(123, 2, &tx_hash, invalid)
+                .unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("invalid cycles"), "{message}");
+            assert!(
+                message.contains("block=123") && message.contains("index=2"),
+                "{message}"
+            );
+            assert!(message.contains(&hex::encode(tx_hash)), "{message}");
+            assert_eq!(store.get_tx_index(123, 2).unwrap().unwrap().cycles, None);
+        }
+        store.update_tx_cycles(123, 2, &tx_hash, -1).unwrap();
+        assert_eq!(
+            store.get_tx_index(123, 2).unwrap().unwrap().cycles,
+            Some(-1)
+        );
+        let (_, _, mut corrupt) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
+        corrupt.cycles = Some(-2);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(123, 2, &corrupt);
+        batch.commit().unwrap();
+        let error = store.update_tx_cycles(123, 2, &tx_hash, 10).unwrap_err();
+        assert!(
+            error.to_string().contains("invalid stored cycles"),
+            "{error:#}"
+        );
+        assert_eq!(
+            store.get_tx_index(123, 2).unwrap().unwrap().cycles,
+            Some(-2)
+        );
     }
 
     #[test]
