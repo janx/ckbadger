@@ -43,6 +43,14 @@ Commit `f8e314ba` recognizes the two bundled CKBFS deployment hashes via `Protoc
 - The first full API run compiled and ran 647 unit tests: 625 passed, 22 existing mock-socket tests failed with sandbox `EPERM` on port binding. Cargo stopped before running integration binaries. All five new unit cases present in that run passed.
 - Final refinements (historical consumed-output fixture, deterministic registry fixture selection, payload-variant invariant/test) are source-complete. Their final execution, full API socket-capable rerun, check, strict clippy and formatting gate are **pending the root integration gates after the performance quiet window**. No check was skipped or claimed green.
 
+### Integrated `.cell` fixture correction
+
+The root integrated run at `1eb5a929` exposed one older fixture that seeded committed `.cell` transaction/header/live-cell rows without the identities indexing necessarily creates. This was reproduced before changing the fixture (`api-dotcell-fixture-red.log`, exit 101). Both live `insert_dotcell_name` (`db/writer/dotcell.rs`) and bulk `ObjectOwner::insert_dotcell` persist ordinary names as `IdentityEntry` with `IdentityExtra::DotCell`; only the empty-label ring root deliberately has no identity. The API already excludes that root.
+
+The fixture now derives both identity entries and validated records from its existing cell/witness bytes through `DotCellParser`, matching the writer contract without changing production code. Existing witness assertions remain, and both output display descriptors must agree with their decoded identity IDs and names. A separate incomplete-store regression preserves the contextual 500 for missing identity metadata, including the transaction, output index and identity ID.
+
+The complete affected suites passed with local socket access: `api_transactions` **41/41** and `api_transaction_cells` **5/5** (`api-dotcell-fixture-green.log`). API test-target `cargo check`, strict `cargo clippy -- -D warnings`, touched-file rustfmt and `git diff --check` also passed. The original root integrated failure remains in `site-redesign-d2-cell-evidence-final-integrated-test.log`; the full workspace rerun remains owned by root. No persistent production writes or schema changes are part of this fixture correction; re-sync is not required.
+
 ## Result
 
 The API now provides the exact evidence needed by Transaction Main v5 tiles and file continuity. Read-time reconstruction honors historical cell bytes and reports unavailable or inconsistent required evidence with context.

@@ -1779,12 +1779,9 @@ fn t2_register_transaction() -> ckb_types::core::TransactionView {
         .build()
 }
 
-/// The tx page decodes each `.cell` name's records where they live — the
-/// witness at the name cell's own output index — through the same parser the
-/// indexer runs, and resolves the `address.309` record to a testnet address.
-#[tokio::test]
-async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
+async fn dotcell_transaction_app(index_identities: bool) -> (axum::Router, String) {
     use ckb_types::prelude::*;
+    use ckbadger_indexer::parser::dotcell::DotCellParser;
 
     let block_number: i64 = 22_471_181;
     let tx = t2_register_transaction();
@@ -1877,6 +1874,42 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
     for output in 0..4 {
         batch.put_live_cell_marker_by_outpoint(&tx_hash, output, block_number);
     }
+    if index_identities {
+        // Both live insert_dotcell_name and bulk ObjectOwner::insert_dotcell
+        // persist ordinary names in CF_IDENTITY_DATA. Only the empty-label
+        // ring root is infrastructure without an identity. Derive these rows
+        // from the same cell/witness bytes instead of inventing display labels.
+        let namespace_args = hex::decode(T2_NAMESPACE_ARGS).unwrap().try_into().unwrap();
+        for (data, witness) in [(T2_OUT0_DATA, T2_WITNESS_0), (T2_OUT1_DATA, T2_WITNESS_1)] {
+            let name = DotCellParser::parse_name_data(&hex::decode(data).unwrap()).unwrap();
+            let records =
+                DotCellParser::parse_witness_records(witness, &name.records_hash).unwrap();
+            assert!(!name.is_root());
+            batch.put_identity(
+                &name.id,
+                &IdentityEntry {
+                    standard: IdentityStandard::DotCell,
+                    owner_lock_hash: None,
+                    name: Some(format!("{}.cell", name.label)),
+                    is_live: true,
+                    created_at_block: block_number,
+                    created_at_tx: tx_hash.to_vec(),
+                    extra: IdentityExtra::DotCell {
+                        label: name.label.clone(),
+                        namespace_args,
+                        layout_version: name.layout_version,
+                        expired_at: name.expired_at,
+                        owner_hash20: name.owner_hash20,
+                        manager_hash20: name.manager_hash20,
+                        next_id: name.next_id,
+                        records_hash: name.records_hash,
+                        records,
+                        parent_id: name.parent_id(),
+                    },
+                },
+            );
+        }
+    }
     batch.commit().unwrap();
     store
         .update_sync_status(|s| {
@@ -1892,12 +1925,19 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
     );
     config.ckb_network = "testnet".to_string();
     let app = create_router(config).await;
-
-    let (status, json) = get_json(
-        &app,
-        &format!("/transactions/0x{}/detail", hex::encode(tx_hash)),
+    (
+        app,
+        format!("/transactions/0x{}/detail", hex::encode(tx_hash)),
     )
-    .await;
+}
+
+/// The tx page decodes each `.cell` name's records where they live — the
+/// witness at the name cell's own output index — through the same parser the
+/// indexer runs, and resolves the `address.309` record to a testnet address.
+#[tokio::test]
+async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
+    let (app, url) = dotcell_transaction_app(true).await;
+    let (status, json) = get_json(&app, &url).await;
     assert_eq!(status, StatusCode::OK, "got {json}");
     let names = json["dotcellNames"]
         .as_array()
@@ -1930,6 +1970,32 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
         "0x241e3586a41eb75dd6d68bf555acea74d6649ed5"
     );
     assert_eq!(joaom["records"].as_array().map(Vec::len), Some(0));
+
+    for (output_index, name) in [maria, joaom].into_iter().enumerate() {
+        let display = &json["outputs"][output_index]["display"];
+        assert_eq!(display["kind"], "identity");
+        assert_eq!(display["standard"], "dotcell");
+        assert_eq!(display["id"], name["identityId"]);
+        assert_eq!(display["name"], name["name"]);
+    }
+}
+
+#[tokio::test]
+async fn committed_dotcell_detail_rejects_missing_indexed_identity_metadata() {
+    let (app, url) = dotcell_transaction_app(false).await;
+    let (status, json) = get_json(&app, &url).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().expect("error message");
+    assert!(
+        message.contains("missing indexed identity metadata")
+            && message.contains("0x2224948f63975a7a0741139cd5d2a45b9fb02c03")
+            && message.contains("output_index=0")
+            && message.contains(
+                url.trim_start_matches("/transactions/")
+                    .trim_end_matches("/detail")
+            ),
+        "{message}"
+    );
 }
 
 /// The pending (pool) builder decodes `.cell` records through the same call:
