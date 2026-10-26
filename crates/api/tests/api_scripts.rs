@@ -1814,8 +1814,7 @@ async fn test_get_script_includes_direct_version_hash_reference_without_mapping(
     assert_eq!(references[0]["hashType"], "data1");
 }
 
-#[tokio::test]
-async fn test_get_script_fails_when_relevant_canonical_reference_mapping_missing() {
+async fn assert_registered_reference_missing_mapping(second_anchor: bool) {
     let store = test_store();
     let family_id = "default-lock";
     let version_hash = vec![0x70; 32];
@@ -1839,8 +1838,17 @@ async fn test_get_script_fails_when_relevant_canonical_reference_mapping_missing
             version_hash: version_hash.clone(),
             family_id: Some(family_id.to_string()),
             name: Some("Default Lock".to_string()),
-            canonical_reference_hash: Some(canonical_type_hash.clone()),
+            canonical_reference_hash: Some(if second_anchor {
+                vec![0x9a; 32]
+            } else {
+                canonical_type_hash.clone()
+            }),
             canonical_hash_type: Some(1),
+            registered_references: if second_anchor {
+                vec![(vec![0x9a; 32], 1), (canonical_type_hash.clone(), 1)]
+            } else {
+                vec![(canonical_type_hash.clone(), 1)]
+            },
             ..Default::default()
         },
     );
@@ -1875,6 +1883,16 @@ async fn test_get_script_fails_when_relevant_canonical_reference_mapping_missing
         .as_str()
         .unwrap()
         .contains("missing reference->version mapping"));
+}
+
+#[tokio::test]
+async fn test_get_script_fails_when_relevant_canonical_reference_mapping_missing() {
+    assert_registered_reference_missing_mapping(false).await;
+}
+
+#[tokio::test]
+async fn test_get_script_fails_when_second_registered_reference_mapping_missing() {
+    assert_registered_reference_missing_mapping(true).await;
 }
 
 async fn assert_retired_family_usage_and_utilization(app: &axum::Router, active: bool) {
@@ -1954,6 +1972,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         canonical_reference_hash: Some(reference.clone()),
         canonical_hash_type: Some(1),
         type_id_deployments: vec![(reference.clone(), 10)],
+        registered_references: vec![(reference.clone(), 1)],
         ..Default::default()
     };
     let mut batch = StoreBatch::new(store.as_ref());
@@ -2121,6 +2140,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         &ScriptVersionInfo {
             version_hash: active_binary.clone(),
             type_id_deployments: vec![(reference.clone(), 30)],
+            registered_references: Vec::new(),
             lock_live_cells_count: 6,
             lock_cells_count: 8,
             lock_capacity_sum: 1000,
@@ -2219,6 +2239,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     let mut old_reactivated = store.get_script_version(&active_binary).unwrap().unwrap();
     old_reactivated.version_hash = binary.clone();
     old_reactivated.type_id_deployments = vec![(reference.clone(), 10), (reference.clone(), 40)];
+    old_reactivated.registered_references = history.registered_references.clone();
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_version(&binary, &old_reactivated);
     batch.put_script_version(
@@ -2226,6 +2247,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         &ScriptVersionInfo {
             version_hash: active_binary.clone(),
             type_id_deployments: vec![(reference.clone(), 30)],
+            registered_references: Vec::new(),
             ..history
         },
     );
@@ -3442,14 +3464,13 @@ async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
             .as_deref(),
         Some("xUDT")
     );
+    let version = store.get_script_version(&binary).unwrap().unwrap();
+    assert_eq!(version.family_id.as_deref(), Some("xudt"));
+    assert_eq!(version.canonical_reference_hash, Some(binary.clone()));
+    assert_eq!(version.canonical_hash_type, Some(2));
     assert_eq!(
-        store
-            .get_script_version(&binary)
-            .unwrap()
-            .unwrap()
-            .family_id
-            .as_deref(),
-        Some("xudt")
+        version.registered_references,
+        vec![(binary, 2), (reference, 1)]
     );
     assert!(store.get_script_family("usdi-asset").unwrap().is_none());
     let app = create_router(test_config(store)).await;
@@ -3463,4 +3484,194 @@ async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_unregistered_type_id_copy_changes_current_family_without_permanent_membership() {
+    let store = test_store();
+    let reference = vec![0x31; 32];
+    let binaries = [vec![0x41; 32], vec![0x51; 32]];
+    let anchors = [vec![0x61; 32], vec![0x71; 32]];
+    let families = ["First", "Second"];
+    store
+        .put_script_reference_info_direct(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_live_cells_count: 6,
+                lock_cells_count: 8,
+                lock_capacity_sum: 1000,
+                lock_used_capacity_sum: 600,
+                lock_owned_capacity_sum: 800,
+                lock_owned_knowledge_sum: 500,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &reference,
+            1,
+            false,
+            20240115,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 800,
+                owned_knowledge_delta: 500,
+            },
+        )
+        .unwrap();
+    for active in [Some(0), Some(1), None] {
+        if let Some(index) = active {
+            store
+                .put_script_reference_to_version_direct(1, &reference, &binaries[index])
+                .unwrap();
+        } else {
+            store
+                .delete_script_reference_to_version_direct(1, &reference)
+                .unwrap();
+        }
+        let mut batch = StoreBatch::new(store.as_ref());
+        for (index, family) in families.iter().enumerate() {
+            let owns = active == Some(index);
+            batch.put_script_family(
+                family,
+                &ScriptFamilyInfo {
+                    family_id: family.to_string(),
+                    name: family.to_string(),
+                    versions_count: 1,
+                    live_cells_count: if owns { 6 } else { 0 },
+                    cells_count: if owns { 8 } else { 0 },
+                    lock_cells_count: if owns { 8 } else { 0 },
+                    owned_capacity_sum: if owns { 800 } else { 0 },
+                    owned_knowledge_sum: if owns { 500 } else { 0 },
+                    ..Default::default()
+                },
+            );
+            batch.put_script_family_by_name(family, family);
+            batch.put_script_version_by_family(family, &binaries[index]);
+            batch.put_script_version(
+                &binaries[index],
+                &ScriptVersionInfo {
+                    version_hash: binaries[index].clone(),
+                    family_id: Some(family.to_string()),
+                    name: Some(family.to_string()),
+                    canonical_reference_hash: Some(anchors[index].clone()),
+                    canonical_hash_type: Some(1),
+                    registered_references: vec![(anchors[index].clone(), 1)],
+                    // The copy is a real TypeID deployment, but not a registered family anchor.
+                    type_id_deployments: vec![(reference.clone(), 10 + index as i64)],
+                    lock_live_cells_count: if owns { 6 } else { 0 },
+                    lock_cells_count: if owns { 8 } else { 0 },
+                    lock_capacity_sum: if owns { 1000 } else { 0 },
+                    lock_used_capacity_sum: if owns { 600 } else { 0 },
+                    lock_owned_capacity_sum: if owns { 800 } else { 0 },
+                    lock_owned_knowledge_sum: if owns { 500 } else { 0 },
+                    ..Default::default()
+                },
+            );
+        }
+        batch.commit().unwrap();
+        let app = create_router(test_config(store.clone())).await;
+        for (index, family) in families.iter().enumerate() {
+            let owns = active == Some(index);
+            for suffix in [
+                "",
+                "/usage",
+                "/charts/capacity-history?from=2024-01-15&to=2024-01-15",
+            ] {
+                let uri = format!("/api/v1/scripts/{family}{suffix}");
+                let response = app
+                    .clone()
+                    .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    status,
+                    StatusCode::OK,
+                    "{uri}: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
+                let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if suffix.starts_with("/charts") {
+                    if owns {
+                        assert_eq!(
+                            json["data"][0]["values"],
+                            serde_json::json!({"used":"500","unused":"300"})
+                        );
+                    } else {
+                        assert_eq!(json["data"], serde_json::json!([]));
+                    }
+                } else {
+                    assert_eq!(json["liveCellsCount"], if owns { 6 } else { 0 });
+                    assert_eq!(json["ownedCapacitySum"], if owns { "800" } else { "0" });
+                    if suffix.is_empty() {
+                        let refs = json["versions"][0]["references"].as_array().unwrap();
+                        assert_eq!(refs.len(), usize::from(owns));
+                        if owns {
+                            assert_eq!(
+                                refs[0]["referenceHash"],
+                                format!("0x{}", hex::encode(&reference))
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/charts/most-utilized-scripts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for (chart, expected) in [("capacityShare", 800), ("usedShare", 500)] {
+            let total: i128 = json[chart]["data"][0]["values"]
+                .as_object()
+                .unwrap()
+                .values()
+                .map(|value| value.as_str().unwrap().parse::<i128>().unwrap())
+                .sum();
+            assert_eq!(
+                total, expected,
+                "retirement must preserve loose reference history: {json}"
+            );
+        }
+        let series = json["capacityShare"]["series"].as_array().unwrap();
+        for (index, family) in families.iter().enumerate() {
+            assert_eq!(
+                series.iter().filter(|row| row["label"] == *family).count(),
+                usize::from(active == Some(index)),
+                "{json}"
+            );
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/scripts/code-cells?code_hash=0x{}&hash_type=type",
+                        hex::encode(&reference)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            json["resolvedVersionHash"],
+            serde_json::json!(active.map(|index| format!("0x{}", hex::encode(&binaries[index]))))
+        );
+    }
 }

@@ -829,16 +829,15 @@ struct FamilyMemberForm {
     info: ckbadger_store::types::ScriptReferenceInfo,
 }
 
-fn canonical_reference_set(
+fn registered_reference_set(
     versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
 ) -> HashSet<(u8, Vec<u8>)> {
     versions
         .iter()
-        .filter_map(|(_, info)| {
-            Some((
-                info.canonical_hash_type?,
-                info.canonical_reference_hash.as_ref()?.clone(),
-            ))
+        .flat_map(|(_, info)| {
+            info.registered_references
+                .iter()
+                .map(|(reference, hash_type)| (*hash_type, reference.clone()))
         })
         .collect()
 }
@@ -851,7 +850,7 @@ fn family_member_reference_forms(
     membership_context: &str,
     family_id: Option<&str>,
     allowed_versions: &HashSet<Vec<u8>>,
-    canonical_references: &HashSet<(u8, Vec<u8>)>,
+    registered_references: &HashSet<(u8, Vec<u8>)>,
 ) -> Result<Vec<FamilyMemberForm>, ApiRouteError> {
     let versions = state
         .store
@@ -884,7 +883,7 @@ fn family_member_reference_forms(
         };
         if !is_member {
             if current_version_hash.is_none()
-                && canonical_references.contains(&(hash_type, reference_hash.clone()))
+                && registered_references.contains(&(hash_type, reference_hash.clone()))
             {
                 return Err(ApiError::internal(format!(
                     "script family detail is missing reference->version mapping: context={}, reference_hash=0x{}, hash_type={}",
@@ -922,14 +921,14 @@ fn observed_references_by_version(
         .iter()
         .map(|(version_hash, _)| version_hash.clone())
         .collect();
-    let canonical_references = canonical_reference_set(versions);
+    let registered_references = registered_reference_set(versions);
 
     for member in family_member_reference_forms(
         state,
         family_id,
         Some(family_id),
         &allowed_versions,
-        &canonical_references,
+        &registered_references,
     )? {
         let Some(version_hash) = member.current_version_hash else {
             continue;
@@ -1654,13 +1653,13 @@ async fn get_script_usage(
     let (family_id, family) = load_script_family_by_name(&state, &name)?;
     let versions = load_family_versions(&state, &family_id)?;
     let allowed_versions = versions.iter().map(|(hash, _)| hash.clone()).collect();
-    let canonical_references = canonical_reference_set(&versions);
+    let registered_references = registered_reference_set(&versions);
     let members = family_member_reference_forms(
         &state,
         &family_id,
         Some(&family_id),
         &allowed_versions,
-        &canonical_references,
+        &registered_references,
     )?;
     let mut usage = ScriptFamilyUsage::default();
     for member in members {
@@ -1967,13 +1966,13 @@ async fn get_script_capacity_history_chart(
         .iter()
         .map(|(version_hash, _)| version_hash.clone())
         .collect();
-    let canonical_references = canonical_reference_set(&family_versions);
+    let registered_references = registered_reference_set(&family_versions);
     let member_forms = family_member_reference_forms(
         &state,
         &family_id,
         Some(&family_id),
         &allowed_versions,
-        &canonical_references,
+        &registered_references,
     )?;
 
     let mut targets = Vec::new();
@@ -2042,15 +2041,15 @@ async fn get_script_capacity_history_chart_by_code_hash(
                 version_info,
                 ..
             } = *resolved;
-            let (allowed_versions, canonical_references, membership_context) =
+            let (allowed_versions, registered_references, membership_context) =
                 if let Some(family_id) = version_info.family_id.as_deref() {
                     let family_versions = load_family_versions(&state, family_id)?;
                     let allowed: HashSet<Vec<u8>> = family_versions
                         .iter()
                         .map(|(version_hash, _)| version_hash.clone())
                         .collect();
-                    let canonical = canonical_reference_set(&family_versions);
-                    (allowed, canonical, family_id.to_string())
+                    let registered = registered_reference_set(&family_versions);
+                    (allowed, registered, family_id.to_string())
                 } else {
                     (
                         HashSet::from([version_hash.clone()]),
@@ -2063,7 +2062,7 @@ async fn get_script_capacity_history_chart_by_code_hash(
                 &membership_context,
                 version_info.family_id.as_deref(),
                 &allowed_versions,
-                &canonical_references,
+                &registered_references,
             )?;
             for member in member_forms {
                 for is_type in &kind_filter {

@@ -1726,12 +1726,11 @@ const SHANNONS_PER_CKB: i128 = 100_000_000;
 /// the former mainnet-only `UDT_CODE_HASHES` / `NFT_SPORE_CODE_HASHES` const sets, which
 /// undercounted testnet assets because they enumerated only mainnet code_hashes.
 ///
-/// Coverage is preserved exactly (plus the testnet hashes the registry adds):
+/// Classification follows the registry's verified script families:
 ///
 /// - `Dao` = registry `Dao`.
-/// - `Udt` = registry `Sudt | Xudt`. The old set was sUDT + 2 xUDT canonical hashes, all
-///   of which map to `Sudt`/`Xudt`; it carried NO udt-compatible (Stable++/ccBTC/USDI)
-///   hashes, so none are added here.
+/// - `Udt` = registry `Sudt | Xudt`, including registered copies of those binaries.
+///   Other UDT-compatible families remain in `OtherTyped`.
 /// - `NftSpore` = registry `SporeNft | SporeDid | Cluster`. `.bit Cell` is an independent
 ///   identity protocol and therefore remains in `OtherTyped`, not the Spore bucket.
 ///   The Web5 `did:ckb` contract (`DidCkb`) is likewise an independent identity protocol
@@ -4986,17 +4985,26 @@ mod tests {
 
     #[test]
     fn test_knowledge_bucket_udt_compatible_hash_is_not_udt() {
-        // Faithful-preservation guard: the old `UDT_CODE_HASHES` held ONLY the 3 canonical
-        // sUDT/xUDT hashes and no udt-compatible (Stable++/ccBTC/USDI) hashes, so those
-        // never counted toward the UDT bucket. USDI's own type-script code_hash
-        // (usdi-asset.toml `canonical_ref_hash`) is not a registry Sudt/Xudt, so it must
-        // stay in the residual `OtherTyped` bucket — the registry migration must NOT
-        // silently widen mainnet UDT coverage to compatibles.
+        // The unchanged testnet USDI metadata registers a distinct compatible
+        // binary, so it remains OtherTyped. This asserts the metadata contract;
+        // it does not claim a fresh testnet-node verification.
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037"
+            )),
+            KnowledgeBucket::OtherTyped
+        );
+    }
+
+    #[test]
+    fn test_knowledge_bucket_mainnet_usdi_xudt_deployment_is_udt() {
+        // Mainnet node evidence proves this TypeID deploys the standard xUDT
+        // binary. Its former compatible-only fixture premise was incorrect.
         assert_eq!(
             classify_knowledge_bucket(&code_hash_bytes(
                 "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
             )),
-            KnowledgeBucket::OtherTyped
+            KnowledgeBucket::Udt
         );
     }
 

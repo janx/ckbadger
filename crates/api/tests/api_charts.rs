@@ -667,6 +667,7 @@ async fn test_most_utilized_scripts_keeps_retired_family_provenance_once() {
                 version_hash: binary.clone(),
                 family_id: Some("retired".to_string()),
                 type_id_deployments: vec![(first.clone(), 1), (second.clone(), 2)],
+                registered_references: vec![(first.clone(), 1), (second.clone(), 1)],
                 ..Default::default()
             },
         )

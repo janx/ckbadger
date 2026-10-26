@@ -488,15 +488,12 @@ pub fn has_observed_type_id_lineage(
     }))
 }
 
-/// Resolve which version an observed reference form belongs to, for
-/// family-membership purposes.
-///
-/// This is THE single membership computation shared by the family detail
-/// observed-reference grouping, family capacity-history chart aggregation and
-/// most-utilized chart grouping: first the persisted candidate (validated by
-/// [`persisted_reference_version_candidate`]), then — for data-family forms —
-/// the reference hash itself when the caller recognizes it as an admissible
-/// version hash (self usage of a known version's binary).
+/// Resolve a reference's current binary candidate. Family routes pass this
+/// result to the shared family-membership operator: a retired registered
+/// reference may still belong to a family when its current binary is absent.
+/// Type forms use the validated canonical mapping. Data-family forms also
+/// recognize the reference hash itself when the caller admits that version
+/// (self usage of a known version's binary).
 pub fn reference_form_member_version(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
@@ -776,6 +773,9 @@ mod tests {
         batch.put_cell_by_type(&reference, 20, &tx, 0);
         batch.commit().unwrap();
 
+        // Executable retirement applies to every observed native TypeID,
+        // including copies with no registered family anchor.
+        assert!(history.registered_references.is_empty());
         assert!(has_observed_type_id_lineage(&store, &reference).unwrap());
         assert!(!has_observed_type_id_lineage(&store, &[0x99; 32]).unwrap());
         for hash_type in [None, Some(1)] {
