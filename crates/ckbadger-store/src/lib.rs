@@ -70,6 +70,7 @@ pub use batch::{merge_write_batches, StoreBatch};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
 pub use network_types::*;
 pub use reorg_ops::RollbackResult;
+pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 pub use stats_ops::{activity_addr_set_count, decode_activity_addr_set, encode_activity_addr_set};
 pub use store::{
     cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
