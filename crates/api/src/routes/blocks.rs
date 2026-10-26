@@ -507,6 +507,20 @@ fn read_block_evidence(
             header.transactions_count
         )));
     }
+    if block.data().proposals().len() != header.proposals_count as usize {
+        return Err(error(format!(
+            "proposal count mismatch: indexed={}, node={}",
+            header.proposals_count,
+            block.data().proposals().len()
+        )));
+    }
+    if block.data().uncles().len() != header.uncles_count as usize {
+        return Err(error(format!(
+            "uncle count mismatch: indexed={}, node={}",
+            header.uncles_count,
+            block.data().uncles().len()
+        )));
+    }
     let info = ckb_store_reader::BlockHeaderInfo {
         parent_hash: block.parent_hash().unpack(),
         nonce: block.header().nonce(),

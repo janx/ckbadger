@@ -2279,6 +2279,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
         json["uniqueAddressCount"], 2,
         "same lock across hours counts once"
     );
+    assert_eq!(json["activityCount"], 522);
     assert_eq!(json["totalCkbMoved"], "645");
     assert_eq!(json["hoursCovered"], 2);
 

@@ -157,6 +157,7 @@ describe('renderMarkdownPage', () => {
 
   it('renders activities markdown', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 29,
       transferCount: 12,
       daoDepositCount: 3,
       daoWithdrawRequestCount: 1,
@@ -227,6 +228,7 @@ describe('renderMarkdownPage', () => {
 
   it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 29,
       transferCount: 0,
       daoDepositCount: 0,
       daoWithdrawRequestCount: 1,
@@ -291,6 +293,7 @@ describe('renderMarkdownPage', () => {
 
   it('writes "-" for an activity with no party, not an invented 0 CKB or an empty address', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 29,
       transferCount: 0,
       daoDepositCount: 0,
       daoWithdrawRequestCount: 0,
@@ -347,6 +350,7 @@ describe('renderMarkdownPage', () => {
     // no address; the API sends its lock hash instead.
     const lockHash = `0x${'5'.repeat(64)}`;
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      activityCount: 29,
       transferCount: 1,
       daoDepositCount: 0,
       daoWithdrawRequestCount: 0,

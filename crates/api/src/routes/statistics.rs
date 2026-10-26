@@ -4210,6 +4210,8 @@ pub struct ScriptCountEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivitySummary24hResponse {
+    /// Canonical non-cellbase transactions, counted once regardless of category overlap.
+    pub activity_count: u64,
     pub transfer_count: u32,
     pub dao_deposit_count: u32,
     pub dao_withdraw_request_count: u32,
@@ -4384,7 +4386,7 @@ async fn get_activity_summary_24h(
 
     let store = state.store.clone();
     let activity_window = state.activity_window.clone();
-    let (agg, hours_covered) =
+    let (agg, hours_covered, activity_count) =
         tokio::task::spawn_blocking(move || activity_window.summary(&store, tip))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
@@ -4422,6 +4424,7 @@ async fn get_activity_summary_24h(
     script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
     let result = ActivitySummary24hResponse {
+        activity_count,
         transfer_count: agg.transfer_count,
         dao_deposit_count: agg.dao_deposit_count,
         dao_withdraw_request_count: agg.dao_withdraw_request_count,

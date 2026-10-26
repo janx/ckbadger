@@ -48,6 +48,7 @@ export function ActivityStats() {
 
 interface SummaryView {
   activities: number;
+  occurrences: number;
   addresses: number;
   ckbMoved: string;
   types: RankedRow[];
@@ -71,7 +72,8 @@ function summaryView(s: ActivitySummary24h): SummaryView {
     });
   }
   return {
-    activities: totalActivities(s),
+    activities: s.activityCount,
+    occurrences: totalActivities(s),
     addresses: s.uniqueAddressCount,
     ckbMoved: formatCkbCompact(s.totalCkbMoved).value,
     types: activityTypeShares(s).map((r) => ({
@@ -106,7 +108,7 @@ function Summary({ view }: { view: SummaryView }) {
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-10 gap-y-[22px]">
         <RankedBars
           testId="home-activity-types"
-          title={`By type, share of ${n(view.activities)}`}
+          title={`By type, share of ${n(view.occurrences)} kind occurrences`}
           titleHref={TYPE_BREAKDOWN}
           rows={view.types}
         />
@@ -130,7 +132,7 @@ interface DailyView {
   max: number;
 }
 
-/** Activities per day, oldest first; the last day is the headline. Days must be in order. */
+/** Activity kind occurrences per day, oldest first; the last day is the headline. Days must be in order. */
 export function dailyActivityView(days: DailyActivityStats[]): DailyView | null {
   if (days.length === 0) return null;
   for (let i = 1; i < days.length; i++) {
@@ -172,13 +174,15 @@ function DailyActivityFigure() {
       testId="home-daily-activity"
       title="Daily activity"
       href="/charts/activity-volume"
-      subtitle={v ? `activities per day, ${v.first} to ${v.last.label}` : 'activities per day'}
+      subtitle={
+        v ? `kind occurrences per day, ${v.first} to ${v.last.label}` : 'kind occurrences per day'
+      }
       headline={v ? n(v.last.value) : undefined}
       body={bodyOf(d, (view) => (
         <BarChart
           bars={view.bars}
           formatValue={n}
-          ariaLabel={`Activities per day, ${view.first} to ${view.last.label}, between ${n(view.min)} and ${n(view.max)}, ${n(view.last.value)} on ${view.last.label}`}
+          ariaLabel={`Activity kind occurrences per day, ${view.first} to ${view.last.label}, between ${n(view.min)} and ${n(view.max)}, ${n(view.last.value)} on ${view.last.label}`}
         />
       ))}
     />

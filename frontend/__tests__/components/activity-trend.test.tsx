@@ -33,6 +33,7 @@ function mockDailyStats(): DailyActivityStats[] {
 
 function mockSummary24h(): ActivitySummary24h {
   return {
+    activityCount: 1689,
     transferCount: 1200,
     daoDepositCount: 200,
     daoWithdrawRequestCount: 80,

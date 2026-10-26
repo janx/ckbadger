@@ -15,6 +15,7 @@ struct ActivityWindow {
     tip: Option<(i64, Vec<u8>)>,
     blocks: BTreeMap<i64, BlockActivity>,
     stats: DailyActivityStats,
+    activity_count: u64,
     addresses: HashMap<[u8; 32], u32>,
     hours: HashMap<i64, u32>,
 }
@@ -22,6 +23,7 @@ struct ActivityWindow {
 struct BlockActivity {
     chain_time_ms: i64,
     stats: DailyActivityStats,
+    activity_count: u64,
     addresses: HashSet<[u8; 32]>,
 }
 
@@ -31,7 +33,7 @@ impl ActivityWindowCache {
         &self,
         store: &CkbadgerStore,
         tip: Option<(i64, CachedBlockHeader)>,
-    ) -> Result<(DailyActivityStats, u32)> {
+    ) -> Result<(DailyActivityStats, u32, u64)> {
         let mut slot = self
             .0
             .lock()
@@ -39,7 +41,7 @@ impl ActivityWindowCache {
         // An error discards any partly updated memory; it never serves stale totals.
         let mut window = slot.take().unwrap_or_default();
         let Some((tip_number, tip_header)) = tip else {
-            return Ok((DailyActivityStats::default(), 0));
+            return Ok((DailyActivityStats::default(), 0, 0));
         };
         if let Some((number, hash)) = &window.tip {
             let extends = if *number > tip_number {
@@ -57,7 +59,11 @@ impl ActivityWindowCache {
             }
         }
         window.advance(store, tip_number, &tip_header)?;
-        let answer = (window.stats.clone(), u32::try_from(window.hours.len())?);
+        let answer = (
+            window.stats.clone(),
+            u32::try_from(window.hours.len())?,
+            window.activity_count,
+        );
         *slot = Some(window);
         Ok(answer)
     }
@@ -125,10 +131,19 @@ impl ActivityWindow {
                     .or_insert_with(|| BlockActivity {
                         chain_time_ms: header.chain_time_ms,
                         stats: DailyActivityStats::default(),
+                        activity_count: 0,
                         addresses: HashSet::new(),
                     });
                 block.stats.accumulate_from_tx_actions(tx);
                 if !tx.is_cellbase {
+                    block.activity_count =
+                        block.activity_count.checked_add(1).ok_or_else(|| {
+                            anyhow!(
+                                "activity count overflow: block={} tx=0x{}",
+                                tx.block_number,
+                                hex::encode(&tx.tx_hash)
+                            )
+                        })?;
                     for participant in &tx.participants {
                         if let ParticipantId::Lock(hash) = participant.id {
                             block.addresses.insert(hash);
@@ -163,6 +178,17 @@ impl ActivityWindow {
     }
 
     fn apply(&mut self, block: &BlockActivity, add: bool) -> Result<()> {
+        self.activity_count = if add {
+            self.activity_count.checked_add(block.activity_count)
+        } else {
+            self.activity_count.checked_sub(block.activity_count)
+        }
+        .ok_or_else(|| {
+            anyhow!(
+                "rolling activity count overflow/underflow: chain_time_ms={}",
+                block.chain_time_ms
+            )
+        })?;
         macro_rules! counters {
             ($($field:ident),+ $(,)?) => { $(
                 self.stats.$field = if add { self.stats.$field.checked_add(block.stats.$field) }
@@ -306,6 +332,7 @@ mod tests {
             .unwrap();
         let rebuild_us = started.elapsed().as_micros();
         assert_eq!(initial.0.transfer_count, 128 * 31);
+        assert_eq!(initial.2, 128 * 31);
         assert_eq!(initial.0.coinbase_count, 128);
         assert_eq!(initial.0.unique_address_count, 3);
         seed(&store, 128, DAY_MS + 128_000, 128, 32);
@@ -315,6 +342,7 @@ mod tests {
             .unwrap();
         let extension_us = started.elapsed().as_micros();
         assert_eq!(extended.0.transfer_count, 129 * 31);
+        assert_eq!(extended.2, 129 * 31);
         eprintln!("activity window synthetic: rebuild 4096 rows={rebuild_us}us; extension 32 rows={extension_us}us");
         // A window jump evicts whole blocks at the exact inclusive lower boundary.
         seed(&store, 129, 2 * DAY_MS + 127_000, 129, 32);
@@ -322,6 +350,7 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         assert_eq!(evicted.0.transfer_count, 2 * 31);
+        assert_eq!(evicted.2, 2 * 31);
         assert_eq!(evicted.0.total_ckb_moved, 2 * 31 * 7);
         assert_eq!(evicted.0.unique_address_count, 2);
         // Same-height reorg changes a participant and lowers time, reopening the window.
@@ -337,6 +366,7 @@ mod tests {
             serde_json::to_value(&fresh).unwrap()
         );
         assert_eq!(reorg.0.transfer_count, 130 * 31);
+        assert_eq!(reorg.2, 130 * 31);
         assert_eq!(reorg.0.unique_address_count, 3);
         assert_eq!(cache.summary(&store, None).unwrap().0.transfer_count, 0);
         assert!(cache.0.lock().unwrap().is_none());
@@ -360,7 +390,7 @@ mod tests {
             let mut batch = StoreBatch::new(&store);
             batch.put_tx_actions(&tx);
             batch.commit().unwrap();
-            let (stats, _) = cache
+            let (stats, _, _) = cache
                 .summary(&store, store.get_sync_tip_block().unwrap())
                 .unwrap();
             assert_eq!(stats.coinbase_count, 1);
@@ -399,5 +429,35 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("block hash mismatch"), "{error}");
         assert!(cache.0.lock().unwrap().is_none());
+    }
+    #[test]
+    fn activity_count_counts_overlapping_and_protocol_only_transactions_once() {
+        use ckbadger_store::types::{ProtocolAction, TypeCallEntry, TAG_OBJECT, TAG_TOKEN};
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed(&store, 1, DAY_MS, 1, 3);
+        let mut mixed = store.get_tx_actions(1, 1, &[1; 32]).unwrap().unwrap();
+        mixed.participants[0].tags = TAG_TOKEN | TAG_OBJECT;
+        mixed.type_calls.push(TypeCallEntry {
+            type_code_hash: vec![0xAA; 32],
+            type_hash_type: 1,
+            type_args: vec![],
+        });
+        let mut protocol = store.get_tx_actions(1, 2, &[2; 32]).unwrap().unwrap();
+        protocol
+            .protocol_actions
+            .push(ProtocolAction::new("fiber", "open", serde_json::json!({})));
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&mixed);
+        batch.put_tx_actions(&protocol);
+        batch.commit().unwrap();
+        let summary = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap();
+        assert_eq!(
+            summary.0.token_count + summary.0.object_count + summary.0.script_call_count,
+            3
+        );
+        assert_eq!(serde_json::to_value(summary).unwrap()[2], 2, "two non-cellbase transactions, regardless of category overlap or protocol-only actions");
     }
 }

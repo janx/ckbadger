@@ -906,6 +906,8 @@ interface DailyActivityStats {
 }
 
 interface ActivitySummary24h {
+  /** Non-cellbase transactions, counted once even when activity kinds overlap. */
+  activityCount: number;
   transferCount: number;
   daoDepositCount: number;
   daoWithdrawRequestCount: number;

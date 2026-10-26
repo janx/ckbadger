@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
-import { dailyActivities } from '@/__tests__/msw/fixtures/home';
+import { dailyActivities, activitySummary24h } from '@/__tests__/msw/fixtures/home';
 import { ActivityStats, dailyActivityView } from '@/components/home/activity-stats';
 
 const API = '/api/:network/v1';
@@ -32,6 +32,19 @@ describe('ActivityStats', () => {
     await waitFor(() => expect(stats).toHaveTextContent('Activities7,115'));
     expect(stats).toHaveTextContent('Addresses1,497');
     expect(stats).toHaveTextContent('CKB moved346.28M');
+  });
+
+  it('uses the exact transaction count independently of overlapping category occurrences', async () => {
+    server.use(
+      http.get(`${API}/stats/activity-summary-24h`, () =>
+        HttpResponse.json({ ...activitySummary24h, activityCount: 123 })
+      )
+    );
+    render(<ActivityStats />);
+    await waitFor(() =>
+      expect(screen.getByTestId('home-activity-stats')).toHaveTextContent('Activities123')
+    );
+    expect(screen.getByTestId('home-activity-types')).toHaveTextContent('7,115 kind occurrences');
   });
 
   it('ranks activity types by share, hiding the empty ones', async () => {
@@ -76,7 +89,7 @@ describe('ActivityStats', () => {
       expect(screen.getByTestId('home-daily-activity-headline')).toHaveTextContent('6,691')
     );
     const fig = screen.getByTestId('home-daily-activity');
-    expect(fig).toHaveTextContent('activities per day, 09/25 to 10/23');
+    expect(fig).toHaveTextContent('kind occurrences per day, 09/25 to 10/23');
     const svg = within(fig).getByRole('img');
     const bars = svg.querySelectorAll('[data-bar]');
     expect(bars).toHaveLength(29);

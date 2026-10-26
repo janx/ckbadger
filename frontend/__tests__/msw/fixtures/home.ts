@@ -214,6 +214,7 @@ const SCRIPT_COUNTS = [
 ];
 
 export const activitySummary24h: ActivitySummary24h = {
+  activityCount: 7115,
   transferCount: 1302,
   daoDepositCount: 4,
   daoWithdrawRequestCount: 3,

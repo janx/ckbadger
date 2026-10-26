@@ -62,7 +62,22 @@ fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
         }
         batch.put_block_header(number, &header);
         batch.commit().unwrap();
+        let proposals = (0..header.proposals_count)
+            .map(|i| packed::ProposalShortId::new([i as u8; 10]))
+            .collect();
+        let uncles = (0..header.uncles_count)
+            .map(|i| {
+                core::BlockBuilder::default()
+                    .number((number as u64).pack())
+                    .epoch(core::EpochNumberWithFraction::new(1, 0, 1800).pack())
+                    .nonce((i as u128).pack())
+                    .build()
+                    .as_uncle()
+            })
+            .collect();
         let block = core::BlockBuilder::default()
+            .set_proposals(proposals)
+            .set_uncles(uncles)
             .number((number as u64).pack())
             .timestamp((header.timestamp as u64).pack())
             .epoch(
@@ -1005,4 +1020,26 @@ async fn block_cycles_do_not_present_partial_or_failed_execution_as_a_total() {
         assert_eq!(json["cyclesStatus"], expected_status);
         assert_eq!(json["cyclesPending"], expected_status == "pending");
     }
+}
+
+#[tokio::test]
+async fn block_response_rejects_index_counts_that_disagree_with_node_evidence() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let config = attach_block_evidence(test_config(store.clone()), &[500]);
+    let mut header = store.get_block_header(500).unwrap().unwrap();
+    header.proposals_count += 1;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(500, &header);
+    batch.commit().unwrap();
+    let app = create_router(config).await;
+    let (status, error) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("proposal count mismatch"),
+        "{error}"
+    );
 }
