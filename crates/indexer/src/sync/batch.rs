@@ -3973,6 +3973,8 @@ impl Indexer {
                 .materialize_script_versions_and_families_with_chain(
                     &updated_script_references,
                     &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
                     &batch_undo_seq,
                     &mut data_batch,
                 )

@@ -2610,6 +2610,8 @@ mod version_identity_tests {
         );
         batch.put_cell_by_type(&funding_ref, 5, &[0xcc; 32], 1);
         batch.put_cell_by_data_hash(&funding_version, 5, &[0xcc; 32], 1);
+        // The chain writer owns this canonical binding; label refresh reads it.
+        batch.put_script_reference_to_version(1, &funding_ref, &funding_version);
         batch.put_script_reference_info(
             1,
             &funding_ref,
@@ -2628,7 +2630,7 @@ mod version_identity_tests {
         batch.commit().unwrap();
 
         let rollups =
-            crate::db::writer::collect_current_script_reference_rollup_state(&store, &store)
+            crate::db::writer::collect_current_script_reference_rollup_state(&store)
                 .unwrap();
 
         let version = rollups
