@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::{
@@ -20,6 +20,7 @@ use ckbadger_store::CkbadgerStore;
 #[cfg(test)]
 use ckbadger_store::types::SporeMediaProfile;
 
+use super::dotbit::IdentityActionState;
 use super::entity_stats::{apply_daily_pair, EntityStatsOverlay, SharedEntityStatsOverlay};
 use crate::sync::types::{EntityDailyChanges, EntityDateKey};
 use crate::sync::undo::SharedUndoSeq;
@@ -42,7 +43,7 @@ pub(crate) enum IdentityOwnerKeyKind {
 pub(crate) struct SporeBatchState {
     spores: HashMap<Vec<u8>, Option<ObjectEntry>>,
     identities: HashMap<Vec<u8>, Option<IdentityEntry>>,
-    consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityEntry>,
+    consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityActionState>,
     cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
     cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
@@ -631,11 +632,16 @@ impl BatchWriter {
         let consumed = state
             .consumed_for_actions
             .remove(&(did.did_id.to_vec(), tx_hash.to_vec()));
-        let previous = consumed
-            .as_ref()
-            .or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let previous =
+            IdentityActionState::for_output(consumed, existing.as_ref()).with_context(|| {
+                format!(
+                    "identity action snapshot: item=0x{} block={block_number} tx=0x{}",
+                    hex::encode(&did.did_id),
+                    hex::encode(tx_hash)
+                )
+            })?;
         let item_action = super::dotbit::classify_identity_output_action(
-            previous,
+            previous.as_ref(),
             &did.owner_lock_hash,
             None,
             None,
@@ -1024,11 +1030,16 @@ impl BatchWriter {
         let consumed = state
             .consumed_for_actions
             .remove(&(identity_id.to_vec(), tx_hash.to_vec()));
-        let previous = consumed
-            .as_ref()
-            .or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let previous =
+            IdentityActionState::for_output(consumed, existing.as_ref()).with_context(|| {
+                format!(
+                    "identity action snapshot: item=0x{} block={block_number} tx=0x{}",
+                    hex::encode(identity_id),
+                    hex::encode(tx_hash)
+                )
+            })?;
         let item_action = super::dotbit::classify_identity_output_action(
-            previous,
+            previous.as_ref(),
             &bit_cell.owner_lock_hash,
             Some(bit_cell.expired_at),
             None,
@@ -1150,9 +1161,16 @@ impl BatchWriter {
                 )?),
                 &state.undo_seq_by_block,
             );
-            state
-                .consumed_for_actions
-                .insert((spore_id.to_vec(), tx_hash.to_vec()), identity.clone());
+            state.consumed_for_actions.insert(
+                (spore_id.to_vec(), tx_hash.to_vec()),
+                IdentityActionState::from_entry(&identity).with_context(|| {
+                    format!(
+                        "identity action snapshot: item=0x{} block={block_number} tx=0x{}",
+                        hex::encode(spore_id),
+                        hex::encode(tx_hash)
+                    )
+                })?,
+            );
             let old_owner = identity.owner_lock_hash.clone();
             let identity_standard = identity.standard;
             identity.is_live = false;

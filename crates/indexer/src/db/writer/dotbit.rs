@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use tracing::warn;
@@ -124,10 +124,66 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
     }
 }
 
+/// Only the pre-consumption fields needed for an item's output action. This
+/// deliberately leaves the full identity (name, transaction and extra data)
+/// in the owning state/undo record rather than cloning it for classification.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdentityActionState {
+    owner_lock_hash: Option<[u8; 32]>,
+    expired_at: Option<u64>,
+    standard: IdentityStandard,
+    created_at_block: i64,
+}
+
+impl IdentityActionState {
+    pub(crate) fn from_entry(entry: &IdentityEntry) -> Result<Self> {
+        let owner_lock_hash = entry
+            .owner_lock_hash
+            .as_deref()
+            .map(|owner| {
+                owner.try_into().map_err(|_| {
+                    anyhow!(
+                        "identity action invalid prior owner width: standard={} created_at_block={} expected=32 actual={}",
+                        entry.standard.as_str(),
+                        entry.created_at_block,
+                        owner.len()
+                    )
+                })
+            })
+            .transpose()?;
+        let expired_at = match entry.extra {
+            IdentityExtra::DotBit { expired_at, .. } => expired_at,
+            IdentityExtra::BitCell { expired_at, .. } => Some(expired_at),
+            _ => None,
+        };
+        Ok(Self {
+            owner_lock_hash,
+            expired_at,
+            standard: entry.standard,
+            created_at_block: entry.created_at_block,
+        })
+    }
+
+    /// The consumed input is authoritative for this transaction. A dead
+    /// historical entry with no matching input is a new mint, not an update.
+    pub(crate) fn for_output(
+        consumed: Option<Self>,
+        existing: Option<&IdentityEntry>,
+    ) -> Result<Option<Self>> {
+        match consumed {
+            Some(previous) => Ok(Some(previous)),
+            None => existing
+                .filter(|entry| entry.is_live)
+                .map(Self::from_entry)
+                .transpose(),
+        }
+    }
+}
+
 /// Per-item action, shared by bulk and live. Transaction-wide ActionData
 /// cannot turn an unchanged neighbour into a mint, transfer or recycle.
 pub(crate) fn classify_identity_output_action(
-    previous: Option<&IdentityEntry>,
+    previous: Option<&IdentityActionState>,
     next_owner: &[u8],
     next_expiry: Option<u64>,
     das_action: Option<&str>,
@@ -140,7 +196,7 @@ pub(crate) fn classify_identity_output_action(
     let Some(previous) = previous else {
         return Ok(AssetAction::Mint);
     };
-    let owner = previous.owner_lock_hash.as_deref().ok_or_else(|| {
+    let owner = previous.owner_lock_hash.as_ref().ok_or_else(|| {
         anyhow!(
             "identity action missing prior owner: standard={} created_at_block={}",
             previous.standard.as_str(),
@@ -150,12 +206,8 @@ pub(crate) fn classify_identity_output_action(
     if owner != next_owner {
         return Ok(AssetAction::Transfer);
     }
-    let previous_expiry = match previous.extra {
-        IdentityExtra::DotBit { expired_at, .. } => expired_at,
-        IdentityExtra::BitCell { expired_at, .. } => Some(expired_at),
-        _ => None,
-    };
-    if previous_expiry
+    if previous
+        .expired_at
         .zip(next_expiry)
         .is_some_and(|(old, new)| new > old)
     {
@@ -316,7 +368,7 @@ struct OwnerTransitionContext<'a> {
 #[derive(Default)]
 pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<IdentityEntry>>,
-    consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityEntry>,
+    consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityActionState>,
     stats: SharedEntityStatsOverlay,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
@@ -686,11 +738,16 @@ impl BatchWriter {
         let consumed = state
             .consumed_for_actions
             .remove(&(account.account_id.clone(), tx_hash.to_vec()));
-        let previous = consumed
-            .as_ref()
-            .or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let previous =
+            IdentityActionState::for_output(consumed, existing.as_ref()).with_context(|| {
+                format!(
+                    ".bit action snapshot: item=0x{} block={block_number} tx=0x{}",
+                    hex::encode(&account.account_id),
+                    hex::encode(tx_hash)
+                )
+            })?;
         let action = classify_identity_output_action(
-            previous,
+            previous.as_ref(),
             &account.owner_lock_hash,
             account.expired_at,
             das_action,
@@ -909,7 +966,13 @@ impl BatchWriter {
             let entry_snapshot = entry.clone();
             state.consumed_for_actions.insert(
                 (account_id.to_vec(), tx_hash.to_vec()),
-                entry_snapshot.clone(),
+                IdentityActionState::from_entry(&entry).with_context(|| {
+                    format!(
+                        ".bit action snapshot: item=0x{} block={block_number} tx=0x{}",
+                        hex::encode(account_id),
+                        hex::encode(tx_hash)
+                    )
+                })?,
             );
             entry.is_live = false;
             entry.owner_lock_hash = None;
@@ -1122,6 +1185,93 @@ mod tests {
     }
 
     #[test]
+    fn identity_action_rejects_invalid_prior_owner_width() {
+        let previous = IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![1; 31]),
+            name: None,
+            is_live: true,
+            created_at_block: 42,
+            created_at_tx: vec![2; 32],
+            extra: IdentityExtra::DidCkb,
+        };
+        let error = IdentityActionState::from_entry(&previous)
+            .expect_err("a malformed prior owner must not classify as a transfer");
+        let message = error.to_string();
+        assert!(
+            message.contains("owner") && message.contains("31"),
+            "{message}"
+        );
+        assert!(
+            message.contains("did_ckb") && message.contains("42"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn identity_action_snapshot_preserves_input_and_live_selection() {
+        let mut entry = IdentityEntry {
+            standard: IdentityStandard::BitCell,
+            owner_lock_hash: Some(vec![1; 32]),
+            name: Some("alice.bit".into()),
+            is_live: true,
+            created_at_block: 42,
+            created_at_tx: vec![2; 32],
+            extra: IdentityExtra::BitCell {
+                account_id: vec![3; 20],
+                expired_at: 100,
+            },
+        };
+        let consumed = IdentityActionState::from_entry(&entry).unwrap();
+        entry.owner_lock_hash = None;
+        entry.is_live = false;
+        entry.extra = IdentityExtra::BitCell {
+            account_id: vec![3; 20],
+            expired_at: 200,
+        };
+        let previous = IdentityActionState::for_output(Some(consumed), Some(&entry)).unwrap();
+        assert_eq!(
+            classify_identity_output_action(previous.as_ref(), &[1; 32], Some(150), None).unwrap(),
+            AssetAction::Renew
+        );
+        assert_eq!(
+            classify_identity_output_action(previous.as_ref(), &[2; 32], Some(150), None).unwrap(),
+            AssetAction::Transfer
+        );
+        assert!(IdentityActionState::for_output(None, Some(&entry))
+            .unwrap()
+            .is_none());
+
+        // Some missing-owner input is not the absence of an input. Preserve
+        // it in the snapshot and report the existing actionable error only
+        // when an output asks for classification.
+        let missing_owner = IdentityActionState::from_entry(&entry).unwrap();
+        let previous = IdentityActionState::for_output(Some(missing_owner), None).unwrap();
+        let message = classify_identity_output_action(previous.as_ref(), &[1; 32], None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("missing prior owner") && message.contains("42"),
+            "{message}"
+        );
+        entry.owner_lock_hash = Some(vec![4; 32]);
+        entry.is_live = true;
+        let previous = IdentityActionState::for_output(None, Some(&entry)).unwrap();
+        assert_eq!(
+            classify_identity_output_action(previous.as_ref(), &[4; 32], Some(200), None).unwrap(),
+            AssetAction::Update
+        );
+        let previous = IdentityActionState::for_output(Some(consumed), Some(&entry)).unwrap();
+        assert_eq!(
+            classify_identity_output_action(previous.as_ref(), &[1; 32], Some(100), None).unwrap(),
+            AssetAction::Update
+        );
+        assert!(
+            classify_identity_output_action(None, &[1; 32], None, Some("invented_action")).is_err()
+        );
+    }
+
+    #[test]
     fn item_actions_use_owner_and_expiry_not_the_transaction_neighbour_action() {
         let previous = IdentityEntry {
             standard: IdentityStandard::DotBit,
@@ -1136,6 +1286,7 @@ mod tests {
                 status: Some(153),
             },
         };
+        let previous = IdentityActionState::from_entry(&previous).unwrap();
         assert_eq!(
             classify_identity_output_action(None, &[1; 32], Some(100), Some("confirm_proposal"))
                 .unwrap(),
