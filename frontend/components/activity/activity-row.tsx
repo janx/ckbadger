@@ -1,0 +1,250 @@
+'use client';
+import { Fragment, useState, type ReactNode } from 'react';
+import Link from '@/components/ui/link';
+import { ClassMark } from '@/components/ui/class-mark';
+import {
+  ActivityReadError,
+  DotJoined,
+  ExactCkb,
+  ItemDeltaFact,
+  LockCallExpr,
+  TypeCallExpr,
+  activityHeadline,
+  globalTxEvents,
+  protocolActionLabel,
+  protocolActionNoteParts,
+} from '@/components/activity-event-row';
+import { ParticipantRefView } from '@/components/participant-ref';
+import { classifyActivity } from '@/lib/activity-classify';
+import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
+import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
+import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
+const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 transition-colors';
+/**
+ * Line 1 of a row: the primary fact on the left (the Layer-3 narrative for an activity), the raw
+ * evidence quiet on the right — block, tx hash, age — always there to verify it against.
+ */
+export function ActivityRowHead({
+  title,
+  hash,
+  blockNumber,
+  timestamp,
+}: {
+  title: ReactNode;
+  hash: string;
+  blockNumber: number;
+  timestamp: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+      <span data-role="headline" className="text-text-bright text-[13px] font-medium">
+        {title}
+      </span>
+      <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
+        <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
+          #{blockNumber.toLocaleString('en-US')}
+        </Link>
+        {' · '}
+        <Link href={`/tx/${hash}`} className="hover:text-jade text-text-dim transition-colors">
+          {truncateHash(hash, 10, 6)}
+        </Link>
+        {' · '}
+        {formatTimeAgo(timestamp)}
+      </span>
+    </div>
+  );
+}
+
+/** A detail line under the headline, indented: a short dim label column, then the text. */
+function DetailLine({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div data-role="detail" className="text-text flex items-baseline gap-2 pl-3.5 text-xs">
+      <span className="text-text-dim w-[30px] shrink-0 text-[11px]">{label}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The detail lines of an activity, from the one event classification: each protocol action's
+ * metadata (the headline's own action needs no name; another one leads with its label), then
+ * every type call and every lock call in call syntax, args kept.
+ */
+function ActivityDetails({ activity }: { activity: GlobalActivity }) {
+  const primary = classifyActivity(activity).primaryProtocolAction;
+  const events = globalTxEvents(activity);
+  const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
+  const locks = events.flatMap((e) => (e.kind === 'lock' ? [e.call] : []));
+  const lines: ReactNode[] = [];
+  events.forEach((e, i) => {
+    if (e.kind !== 'protocol') return;
+    let parts: ReactNode[];
+    try {
+      parts = protocolActionNoteParts(e.action);
+    } catch (error) {
+      lines.push(
+        <DetailLine key={`p${i}`} label="">
+          <ActivityReadError txHash={activity.txHash} error={error} />
+        </DetailLine>
+      );
+      return;
+    }
+    const named = e.action === primary ? parts : [protocolActionLabel(e.action), ...parts];
+    if (named.length > 0) {
+      lines.push(
+        <DetailLine key={`p${i}`} label="">
+          <DotJoined parts={named} />
+        </DetailLine>
+      );
+    }
+  });
+  if (types.length > 0) {
+    lines.push(
+      <DetailLine key="type" label="type">
+        <DotJoined
+          parts={types.map((sc, i) => (
+            <span key={i} className="whitespace-nowrap">
+              <TypeCallExpr sc={sc} quiet />
+            </span>
+          ))}
+        />
+      </DetailLine>
+    );
+  }
+  if (locks.length > 0) {
+    lines.push(
+      <DetailLine key="lock" label="lock">
+        <DotJoined
+          parts={locks.map((lc, i) => (
+            <span key={i} className="whitespace-nowrap">
+              <LockCallExpr lc={lc} quiet />
+            </span>
+          ))}
+        />
+      </DetailLine>
+    );
+  }
+  return <>{lines}</>;
+}
+
+/** The change in occupied capacity, whole CKB (it is bytes), exact otherwise. */
+export function formatOccupiedDelta(usedDelta: string): string {
+  const shannons = BigInt(usedDelta);
+  return shannons % SHANNONS_PER_CKB === BigInt(0)
+    ? formatSignedCkbInteger(shannons)
+    : formatSignedCkbExact(shannons);
+}
+
+const PARTICIPANT_GRID =
+  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs sm:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)]';
+
+function partyKey(p: ParticipantInfo, i: number): string {
+  return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
+}
+
+/**
+ * Every participant, Layer 1 and Layer 2: the party, its exact CKB change (decimal points lined
+ * up), its occupied change when there is one, and its item changes. Named parties with no change
+ * are listed — their zero is the fact. Over six, the five largest and an explicit "+N" to expand.
+ */
+function Participants({ participants }: { participants: ActivityParticipant[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
+  const { shown, hidden } = participantsToShow(indexed, expanded);
+  const foldable = participants.length > PARTICIPANT_LIMIT;
+  if (participants.length === 0) return null;
+  return (
+    <div data-role="participants" className={PARTICIPANT_GRID}>
+      {shown.map((p) => (
+        <Fragment key={p.key}>
+          <div data-party={p.key} className="col-start-1 min-w-0 overflow-hidden">
+            <ParticipantRefView participant={p} compact quiet />
+            {p.lockKind && <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>}
+          </div>
+          <div className="col-start-2 text-right">
+            <ExactCkb shannons={BigInt(p.ckbDelta)} />
+          </div>
+          {p.usedDelta !== '0' && (
+            <div
+              data-role="occupied"
+              className="text-text-dim col-start-2 text-right text-[11px] sm:col-start-3"
+            >
+              occupied {formatOccupiedDelta(p.usedDelta)}
+            </div>
+          )}
+          {p.itemDeltas.length > 0 && (
+            <div className="col-span-2 col-start-1 sm:col-span-1 sm:col-start-4">
+              <DotJoined
+                parts={p.itemDeltas.map((item, i) => (
+                  <ItemDeltaFact key={i} item={item} />
+                ))}
+              />
+            </div>
+          )}
+        </Fragment>
+      ))}
+      {foldable && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((e) => !e)}
+          className="text-interactive hover:text-jade col-span-full justify-self-start bg-transparent py-1 text-xs transition-colors"
+        >
+          {expanded ? 'Show fewer participants' : `+${hidden} participants`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export type ActivityRowProps = {
+  activity: GlobalActivity;
+  fresh?: boolean;
+  className?: string;
+} & (
+  | { mode?: 'cross-user'; participant?: never }
+  | { mode: 'participant'; participant: ParticipantInfo }
+);
+
+export function ActivityRow({
+  activity,
+  fresh = false,
+  className,
+  mode = 'cross-user',
+  participant,
+}: ActivityRowProps) {
+  const shown =
+    mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
+  const displayType = classifyActivity(shown).displayType;
+  const mark = displayType.startsWith('dao')
+    ? 'dao'
+    : displayType === 'token'
+      ? 'tokens'
+      : displayType === 'object'
+        ? 'objects'
+        : displayType === 'identity'
+          ? 'identities'
+          : null;
+  return (
+    <article
+      data-feed-row={activity.txHash}
+      className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
+    >
+      <ActivityRowHead
+        title={
+          <>
+            {mark && <ClassMark kind={mark} className="mr-2" />}
+            {activityHeadline(shown)}
+          </>
+        }
+        hash={activity.txHash}
+        blockNumber={activity.blockNumber}
+        timestamp={activity.timestamp}
+      />
+      <ActivityDetails activity={shown} />
+      <Participants participants={shown.participants} />
+    </article>
+  );
+}

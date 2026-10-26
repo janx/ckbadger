@@ -56,6 +56,13 @@ function NetworkGuard({ children }: { children: ReactElement }): ReactElement {
   return children;
 }
 
+/** Legacy aliases retain the active network and the caller's query/fragment. */
+function LegacyRedirect({ to }: { to: string }) {
+  const { network } = useParams();
+  const location = useLocation();
+  return <Navigate to={`/${network}/${to}${location.search}${location.hash}`} replace />;
+}
+
 function lazyPage<TProps extends object>(loader: () => Promise<PageModule<TProps>>) {
   return dynamic(loader, {
     loading: () => <div className="min-h-[240px]" />,
@@ -214,6 +221,9 @@ const IdentityCollectionRoute = lazyParamPage(
 
 export function createAppRouter(): RouteObject[] {
   const children: RouteObject[] = [
+    { path: 'tokens', element: <LegacyRedirect to="inventory/tokens" /> },
+    { path: 'objects', element: <LegacyRedirect to="inventory/objects" /> },
+    { path: 'dao/charts', element: <LegacyRedirect to="charts" /> },
     {
       index: true,
       element: <HomePage />,
