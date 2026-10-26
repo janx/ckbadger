@@ -709,6 +709,7 @@ pub struct TransactionInputResponse {
     pub r#type: Option<ScriptResponse>,
     pub address: Option<String>,
     pub cell_type: Option<String>,
+    pub display: Option<super::transaction_cells::CellDisplay>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -721,6 +722,7 @@ pub struct PreviousOutput {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionOutputResponse {
+    pub display: Option<super::transaction_cells::CellDisplay>,
     pub capacity: String,
     #[serde(rename = "commonKnowledgeSize")]
     pub used_capacity: String,
@@ -996,55 +998,6 @@ fn occupied_capacity_bytes(
     8 + 32 + 1 + lock_args_len + type_size + data_size
 }
 
-fn resolve_stored_input_type_hash_type(
-    core_store: &ckbadger_store::CkbadgerStore,
-    store: &ckbadger_store::CkbadgerStore,
-    type_script_hash: Option<&[u8]>,
-    type_code_hash: &[u8],
-) -> Result<String, ApiRouteError> {
-    if let Some(type_hash) = type_script_hash {
-        match core_store.get_token(type_hash) {
-            Ok(Some(token)) => {
-                return hash_type_to_str(token.hash_type as i16)
-                    .map(|s| s.to_string())
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "unknown hash_type {} for token type_script_hash=0x{}",
-                            token.hash_type,
-                            hex::encode(type_hash)
-                        ))
-                    })
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return Err(ApiError::internal(format!(
-                    "failed to resolve token hash_type for type_script_hash=0x{}: {}",
-                    hex::encode(type_hash),
-                    e
-                )));
-            }
-        }
-    }
-
-    match store.get_script_info(type_code_hash) {
-        Ok(Some(script)) => hash_type_to_str(script.hash_type as i16)
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "unknown hash_type {} for script code_hash=0x{}",
-                    script.hash_type,
-                    hex::encode(type_code_hash)
-                ))
-            }),
-        Ok(None) => Ok("unknown".to_string()),
-        Err(e) => Err(ApiError::internal(format!(
-            "failed to resolve script hash_type for type_code_hash=0x{}: {}",
-            hex::encode(type_code_hash),
-            e
-        ))),
-    }
-}
-
 #[instrument(skip(state, read_view), level = "debug")]
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
@@ -1160,13 +1113,48 @@ async fn get_transaction_detail(
                 }
             });
 
-        let io = build_inputs_outputs_from_pool_tx(
+        let mut io = build_inputs_outputs_from_pool_tx(
             rpc_tx,
             &resolved,
             &state.ckb_network,
             tx_lookup.block_number,
             virtual_occupied,
         )?;
+
+        for (index, (input, resolved_input)) in
+            io.inputs.iter_mut().zip(&resolved.inputs).enumerate()
+        {
+            if let Some(cell) = &resolved_input.cell {
+                input.display = super::transaction_cells::from_parts(
+                    &state.store,
+                    &cell.capacity.to_string(),
+                    input.lock.as_ref().expect("resolved input lock"),
+                    input.r#type.as_ref(),
+                    &cell.data,
+                    false,
+                )
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "transaction {hash} pool input {index} display: {e:#}"
+                    ))
+                })?;
+            }
+        }
+        for (index, (output, cell)) in io.outputs.iter_mut().zip(&resolved.outputs).enumerate() {
+            output.display = super::transaction_cells::from_parts(
+                &state.store,
+                &cell.capacity.to_string(),
+                output.lock.as_ref().expect("resolved output lock"),
+                output.r#type.as_ref(),
+                &cell.data,
+                false,
+            )
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "transaction {hash} pool output {index} display: {e:#}"
+                ))
+            })?;
+        }
 
         let pending_since = tx_lookup.time_added_to_pool.and_then(|timestamp| {
             chrono::DateTime::from_timestamp_millis(timestamp as i64).map(|dt| dt.to_rfc3339())
@@ -1305,9 +1293,9 @@ async fn get_transaction_detail(
         )))?;
         build_inputs_outputs_from_ckb(
             &tx_view,
+            ckb_store,
             &state.store,
             &state.append_only_store,
-            &state.store,
             &state.ckb_network,
             block_number,
             state.genesis_baseline()?.virtual_occupied,
@@ -1470,6 +1458,7 @@ fn build_inputs_outputs_from_pool_tx(
                 }
                 // The cellbase pseudo-input spends no cell.
                 return Ok(TransactionInputResponse {
+                    display: None,
                     previous_output,
                     since: input.since.clone(),
                     capacity: None,
@@ -1542,6 +1531,7 @@ fn build_inputs_outputs_from_pool_tx(
                 .transpose()?;
 
             Ok(TransactionInputResponse {
+                display: None,
                 previous_output,
                 since: input.since.clone(),
                 capacity: Some(cell.capacity.to_string()),
@@ -1627,6 +1617,7 @@ fn build_inputs_outputs_from_pool_tx(
             };
 
             Ok(TransactionOutputResponse {
+                display: None,
                 status: Some("pending".into()),
                 consumed_by_tx: None,
                 capacity: cell.capacity.to_string(),
@@ -1723,9 +1714,9 @@ fn required_output_data_size(
 #[allow(clippy::too_many_arguments)]
 fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
+    reader: &ckb_store_reader::CkbChainReader,
     core_store: &ckbadger_store::CkbadgerStore,
     cells_store: &ckbadger_store::CkbadgerStore,
-    store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
     virtual_occupied: i128,
@@ -1823,12 +1814,16 @@ fn build_inputs_outputs_from_ckb(
                     .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
                         Ok(ScriptResponse {
                             code_hash: format!("0x{}", hex::encode(type_code_hash)),
-                            hash_type: resolve_stored_input_type_hash_type(
-                                core_store,
-                                store,
-                                info.type_script_hash.as_deref(),
-                                type_code_hash,
-                            )?,
+                            hash_type: info
+                                .type_hash_type
+                                .and_then(hash_type_to_str)
+                                .ok_or_else(|| {
+                                    ApiError::internal(format!(
+                                        "missing or invalid stored type hash_type {:?} while {}",
+                                        info.type_hash_type, input_context
+                                    ))
+                                })?
+                                .to_string(),
                             args: format!(
                                 "0x{}",
                                 hex::encode(info.type_args.as_deref().unwrap_or(&[]))
@@ -1854,7 +1849,42 @@ fn build_inputs_outputs_from_ckb(
                 )
             };
 
+            let display = if super::transaction_cells::has_display(type_script.as_ref())
+                .map_err(|e| ApiError::internal(format!("{input_context}: {e}")))?
+            {
+                let hash: [u8; 32] = prev_tx_hash_bytes
+                    .as_slice()
+                    .try_into()
+                    .expect("validated input hash");
+                let previous = reader.get_transaction(&hash).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "missing CKB RocksDB input transaction while {input_context}"
+                    ))
+                })?;
+                let data = previous
+                    .outputs_data()
+                    .get(prev_index as usize)
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "missing CKB RocksDB input data while {input_context}"
+                        ))
+                    })?
+                    .raw_data();
+                super::transaction_cells::from_parts(
+                    core_store,
+                    capacity.as_deref().expect("real input capacity"),
+                    lock.as_ref().expect("real input lock"),
+                    type_script.as_ref(),
+                    &data,
+                    true,
+                )
+                .map_err(|e| ApiError::internal(format!("{input_context} display: {e:#}")))?
+            } else {
+                None
+            };
+
             Ok(TransactionInputResponse {
+                display,
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
                     index: prev_index as i32,
@@ -1960,7 +1990,23 @@ fn build_inputs_outputs_from_ckb(
                     )
                 };
 
+                let display = super::transaction_cells::from_parts(
+                    core_store,
+                    &cap.to_string(),
+                    &lock_resp,
+                    type_resp.as_ref(),
+                    &decode_hex_bytes_with_context(
+                        &rpc_tx.outputs_data[output_idx],
+                        "output.data",
+                        &output_context,
+                        None,
+                    )?,
+                    true,
+                )
+                .map_err(|e| ApiError::internal(format!("{output_context} display: {e:#}")))?;
+
                 Ok(TransactionOutputResponse {
+                    display,
                     status: None,
                     consumed_by_tx: None,
                     capacity: cap.to_string(),
@@ -2679,6 +2725,7 @@ mod tests {
     #[test]
     fn test_transaction_input_response_serializes_type_script() {
         let input = TransactionInputResponse {
+            display: None,
             used_capacity: Some("61".into()),
             cell_type: Some("plain".into()),
             previous_output: Some(PreviousOutput {

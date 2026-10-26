@@ -60,3 +60,5 @@ pub fn api_routes() -> Router<Arc<AppState>> {
 mod pool_transactions;
 
 mod transaction_structure;
+
+mod transaction_cells;

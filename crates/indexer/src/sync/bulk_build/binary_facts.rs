@@ -1525,12 +1525,6 @@ mod tests {
         );
     }
 
-    /// Cross-path parity: for every code_hash the protocol registry knows, the
-    /// bulk-build classifier and the live-sync classifier must agree.
-    ///
-    /// The did:ckb outage was invisible to per-protocol unit tests because they
-    /// only exercised one path. Any future `ProtocolScript` variant that is
-    /// wired into one classifier but not the other fails here.
     #[test]
     fn ckbfs_recognition_preserves_plain_bulk_semantics() {
         for (hash, protocol) in PROTOCOL_REGISTRY.iter() {
@@ -1545,6 +1539,12 @@ mod tests {
         }
     }
 
+    /// Cross-path parity: for every code_hash the protocol registry knows, the
+    /// bulk-build classifier and the live-sync classifier must agree.
+    ///
+    /// The did:ckb outage was invisible to per-protocol unit tests because they
+    /// only exercised one path. Any future `ProtocolScript` variant that is
+    /// wired into one classifier but not the other fails here.
     #[test]
     fn bulk_and_live_classifiers_agree_on_every_registered_code_hash() {
         use crate::parser::cell::ParsedCell;

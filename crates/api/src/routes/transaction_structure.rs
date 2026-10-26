@@ -621,6 +621,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            display: None,
             previous_output: None,
             since: "0x0".into(),
             capacity: Some("100".into()),
@@ -631,6 +632,7 @@ mod tests {
             cell_type: Some("typed".into()),
         };
         let output = TransactionOutputResponse {
+            display: None,
             capacity: "99".into(),
             used_capacity: "74".into(),
             virtual_used_capacity: None,
