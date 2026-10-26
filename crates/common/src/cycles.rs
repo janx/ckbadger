@@ -1,8 +1,6 @@
+mod vm;
+use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::process::Stdio;
-use tokio::process::Command;
-use tracing::debug;
 
 #[derive(Debug, Serialize)]
 pub struct MockTransaction {
@@ -32,6 +30,8 @@ pub struct MockInput {
     pub output: Output,
     pub data: String,
     pub header: String,
+    #[serde(skip)]
+    pub transaction_info: ckb_types::core::TransactionInfo,
 }
 
 /// Mirrors `ckb_mock_tx_types::ReprMockCellDep`; see [`MockInput::header`] for
@@ -42,6 +42,8 @@ pub struct MockCellDep {
     pub output: Output,
     pub data: String,
     pub header: String,
+    #[serde(skip)]
+    pub transaction_info: ckb_types::core::TransactionInfo,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -129,6 +131,7 @@ pub struct TransactionWithStatus {
 pub struct TxStatus {
     pub status: String,
     pub block_hash: Option<String>,
+    pub tx_index: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,7 +178,7 @@ pub struct RpcScript {
     pub args: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RpcHeader {
     pub compact_target: String,
     pub hash: String,
@@ -226,26 +229,64 @@ const RFC_VM1: &str = "0032";
 /// RFC number activating CKB-VM version 2 (CKB2023 / Meepo).
 const RFC_VM2: &str = "0049";
 
-pub async fn calculate_cycles(ckb_rpc_url: &str, tx_hash: &str) -> Result<i64, String> {
-    let (tx, tx_status) = fetch_transaction(ckb_rpc_url, tx_hash).await?;
+pub async fn calculate_cycles(
+    ckb_rpc_url: &str,
+    tx_hash: &str,
+) -> Result<crate::cycles_task::TransactionCycles, String> {
+    let (tx, status) = fetch_transaction(ckb_rpc_url, tx_hash).await?;
+    let block_hash = committed_block_hash(tx_hash, &status)?;
+    let (epochs, max_cycles) = fetch_vm_consensus(ckb_rpc_url).await?;
+    let commit = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)?;
+    if commit.number() == 0 {
+        return Err("genesis transactions have no consensus script execution".into());
+    }
+    let mock = build_mock_transaction(ckb_rpc_url, &tx).await?;
+    let mut extensions = std::collections::HashMap::new();
+    for hash in &tx.header_deps {
+        if let Some(extension) = fetch_block_extension(ckb_rpc_url, hash).await? {
+            let key = ckb_types::packed::Byte32::from_slice(
+                &hex::decode(hash.trim_start_matches("0x")).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            extensions.insert(key, extension.pack());
+        }
+    }
+    tokio::task::spawn_blocking(move || vm::execute(mock, commit, epochs, max_cycles, extensions))
+        .await
+        .map_err(|e| format!("cycles VM worker failed: {e}"))?
+}
 
-    // Consensus pins VM selection to the epoch of the block that COMMITTED the
-    // transaction (RFC0032/RFC0049). Without a commit block there is no epoch,
-    // so cycles are undefined — fail fast instead of guessing a VM.
-    let block_hash = committed_block_hash(tx_hash, &tx_status)?;
-
-    let epochs = fetch_vm_activation_epochs(ckb_rpc_url).await?;
-    let header = fetch_header(ckb_rpc_url, &block_hash).await?;
-    let epoch_number = parse_epoch_number(&header.epoch).map_err(|e| {
-        format!(
-            "invalid epoch in commit header {} for tx {}: {}",
-            block_hash, tx_hash, e
-        )
-    })?;
-    let script_version = script_version_for_epoch(epoch_number, &epochs);
-
-    let mock_tx = build_mock_transaction(ckb_rpc_url, &tx).await?;
-    run_ckb_debugger(&mock_tx, script_version).await
+async fn fetch_block_extension(
+    url: &str,
+    hash: &str,
+) -> Result<Option<ckb_types::bytes::Bytes>, String> {
+    #[derive(Deserialize)]
+    struct BlockExtension {
+        extension: Option<String>,
+    }
+    let response: RpcResponse<BlockExtension> = reqwest::Client::new()
+        .post(url)
+        .json(&serde_json::json!({"id":1,"jsonrpc":"2.0","method":"get_block","params":[hash]}))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        return Err(format!("block extension RPC error: {}", error.message));
+    }
+    let block = response
+        .result
+        .ok_or_else(|| format!("header dependency block missing: {hash}"))?;
+    block
+        .extension
+        .map(|value| {
+            hex::decode(value.trim_start_matches("0x"))
+                .map(Into::into)
+                .map_err(|e| e.to_string())
+        })
+        .transpose()
 }
 
 async fn fetch_transaction(
@@ -314,7 +355,10 @@ fn committed_block_hash(tx_hash: &str, status: &TxStatus) -> Result<String, Stri
 /// Verbosity `0x1` returns the `tx_status` only (`transaction: null`), which is
 /// all the header association needs — the genesis system-script transaction
 /// alone is 2.4 MB, and cell payloads are resolved separately.
-async fn fetch_committing_block_hash(ckb_rpc_url: &str, tx_hash: &str) -> Result<String, String> {
+async fn fetch_committing_transaction_info(
+    ckb_rpc_url: &str,
+    tx_hash: &str,
+) -> Result<ckb_types::core::TransactionInfo, String> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -341,13 +385,26 @@ async fn fetch_committing_block_hash(ckb_rpc_url: &str, tx_hash: &str) -> Result
         .result
         .ok_or_else(|| format!("Transaction {} not found", tx_hash))?;
 
-    committed_block_hash(tx_hash, &with_status.tx_status)
+    let block_hash = committed_block_hash(tx_hash, &with_status.tx_status)?;
+    let index = with_status
+        .tx_status
+        .tx_index
+        .as_deref()
+        .ok_or_else(|| format!("committed transaction lacks tx_index: {tx_hash}"))?;
+    let index = parse_hex_index(index)?;
+    let header = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)?;
+    Ok(ckb_types::core::TransactionInfo::new(
+        header.number(),
+        header.epoch(),
+        header.hash(),
+        index,
+    ))
 }
 
 /// Fetch the VM activation epochs (RFC0032 -> VM1, RFC0049 -> VM2) from the
 /// chain's `get_consensus` response. Chain data is the source of truth — no
 /// per-network hardcoded tables.
-async fn fetch_vm_activation_epochs(ckb_rpc_url: &str) -> Result<VmActivationEpochs, String> {
+async fn fetch_vm_consensus(ckb_rpc_url: &str) -> Result<(VmActivationEpochs, u64), String> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -374,7 +431,11 @@ async fn fetch_vm_activation_epochs(ckb_rpc_url: &str) -> Result<VmActivationEpo
         .result
         .ok_or_else(|| "get_consensus returned no result".to_string())?;
 
-    parse_vm_activation_epochs(&consensus)
+    let max = consensus
+        .get("max_block_cycles")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "consensus missing max_block_cycles".to_string())?;
+    Ok((parse_vm_activation_epochs(&consensus)?, parse_hex_u64(max)?))
 }
 
 /// Extract VM activation epochs from a `get_consensus` result object.
@@ -416,14 +477,9 @@ fn vm_activation_epoch_for_rfc(features: &[serde_json::Value], rfc: &str) -> Res
 }
 
 /// Map a commit-block epoch number to the consensus CKB-VM script version.
+#[cfg(test)]
 fn script_version_for_epoch(epoch_number: u64, epochs: &VmActivationEpochs) -> u8 {
-    if epoch_number >= epochs.vm2 {
-        2
-    } else if epoch_number >= epochs.vm1 {
-        1
-    } else {
-        0
-    }
+    vm::type_script_version_at_epoch(epoch_number, *epochs)
 }
 
 fn parse_hex_u64(hex: &str) -> Result<u64, String> {
@@ -435,8 +491,12 @@ fn parse_hex_u64(hex: &str) -> Result<u64, String> {
 ///
 /// The header packs `length << 40 | index << 24 | number`; the epoch number is
 /// the low 24 bits.
+#[cfg(test)]
 fn parse_epoch_number(epoch_hex: &str) -> Result<u64, String> {
-    Ok(parse_hex_u64(epoch_hex)? & 0xFF_FFFF)
+    Ok(
+        ckb_types::core::EpochNumberWithFraction::from_full_value(parse_hex_u64(epoch_hex)?)
+            .number(),
+    )
 }
 
 /// A cell resolved from chain data, together with the block that created it.
@@ -446,12 +506,13 @@ struct ResolvedCell {
     /// Hash of the block that committed the creating transaction; see
     /// [`MockInput::header`].
     block_hash: String,
+    transaction_info: ckb_types::core::TransactionInfo,
 }
 
 /// Resolve one out point into the cell payload plus its header association.
 async fn fetch_cell(ckb_rpc_url: &str, out_point: &RpcOutPoint) -> Result<ResolvedCell, String> {
     let (output, data) = fetch_cell_with_data(ckb_rpc_url, out_point).await?;
-    let block_hash = fetch_committing_block_hash(ckb_rpc_url, &out_point.tx_hash)
+    let transaction_info = fetch_committing_transaction_info(ckb_rpc_url, &out_point.tx_hash)
         .await
         .map_err(|e| {
             format!(
@@ -462,7 +523,8 @@ async fn fetch_cell(ckb_rpc_url: &str, out_point: &RpcOutPoint) -> Result<Resolv
     Ok(ResolvedCell {
         output,
         data,
-        block_hash,
+        block_hash: format!("{:#x}", transaction_info.block_hash),
+        transaction_info,
     })
 }
 
@@ -650,6 +712,7 @@ fn mock_input_from(input: &RpcInput, cell: ResolvedCell) -> MockInput {
         output: output_from_rpc(cell.output),
         data: cell.data,
         header: cell.block_hash,
+        transaction_info: cell.transaction_info,
     }
 }
 
@@ -669,6 +732,7 @@ fn mock_cell_dep_from(out_point: &RpcOutPoint, dep_type: &str, cell: ResolvedCel
         output: output_from_rpc(cell.output),
         data: cell.data,
         header: cell.block_hash,
+        transaction_info: cell.transaction_info,
     }
 }
 
@@ -786,349 +850,9 @@ async fn build_mock_transaction(
     })
 }
 
-/// Identifies a representative cell for one script group within a mock transaction.
-struct ScriptGroupRef {
-    cell_index: usize,
-    /// "input" or "output"
-    cell_type: &'static str,
-    /// "lock" or "type"
-    script_group_type: &'static str,
-}
-
-fn script_identity(s: &Script) -> String {
-    format!("{}:{}:{}", s.code_hash, s.hash_type, s.args)
-}
-
-/// Enumerate all unique script groups in a mock transaction.
-fn enumerate_script_groups(mock_tx: &MockTransaction) -> Vec<ScriptGroupRef> {
-    let mut groups = Vec::new();
-    let mut seen_locks = HashSet::new();
-    let mut seen_types = HashSet::new();
-
-    // Lock groups from inputs
-    for (i, mock_input) in mock_tx.mock_info.inputs.iter().enumerate() {
-        let key = script_identity(&mock_input.output.lock);
-        if seen_locks.insert(key) {
-            groups.push(ScriptGroupRef {
-                cell_index: i,
-                cell_type: "input",
-                script_group_type: "lock",
-            });
-        }
-    }
-
-    // Type groups from inputs
-    for (i, mock_input) in mock_tx.mock_info.inputs.iter().enumerate() {
-        if let Some(ref ts) = mock_input.output.type_script {
-            let key = script_identity(ts);
-            if seen_types.insert(key) {
-                groups.push(ScriptGroupRef {
-                    cell_index: i,
-                    cell_type: "input",
-                    script_group_type: "type",
-                });
-            }
-        }
-    }
-
-    // Type groups from outputs not already seen in inputs
-    for (i, output) in mock_tx.tx.outputs.iter().enumerate() {
-        if let Some(ref ts) = output.type_script {
-            let key = script_identity(ts);
-            if seen_types.insert(key) {
-                groups.push(ScriptGroupRef {
-                    cell_index: i,
-                    cell_type: "output",
-                    script_group_type: "type",
-                });
-            }
-        }
-    }
-
-    groups
-}
-
-/// Build the ckb-debugger argument list for one script group.
-///
-/// `--script-version` must always be pinned explicitly: ckb-debugger defaults
-/// to VM2 for `hash_type: "type"` groups, but consensus selects the VM from the
-/// commit block's epoch.
-fn debugger_args_for_group(
-    temp_file: &str,
-    group: &ScriptGroupRef,
-    script_version: u8,
-) -> Vec<String> {
-    vec![
-        "--tx-file".to_string(),
-        temp_file.to_string(),
-        "--cell-index".to_string(),
-        group.cell_index.to_string(),
-        "--cell-type".to_string(),
-        group.cell_type.to_string(),
-        "--script-group-type".to_string(),
-        group.script_group_type.to_string(),
-        "--script-version".to_string(),
-        script_version.to_string(),
-    ]
-}
-
-async fn run_ckb_debugger_for_group(
-    temp_file: &str,
-    group: &ScriptGroupRef,
-    script_version: u8,
-) -> Result<i64, String> {
-    let output = Command::new("ckb-debugger")
-        .args(debugger_args_for_group(temp_file, group, script_version))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run ckb-debugger: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    debug!(
-        group_type = group.script_group_type,
-        cell_type = group.cell_type,
-        cell_index = group.cell_index,
-        script_version,
-        "ckb-debugger stdout: {}",
-        stdout
-    );
-    debug!("ckb-debugger stderr: {}", stderr);
-
-    let combined = format!("{}\n{}", stdout, stderr);
-    parse_group_cycles(&combined, output.status.code())
-}
-
-async fn run_ckb_debugger(mock_tx: &MockTransaction, script_version: u8) -> Result<i64, String> {
-    let json = serde_json::to_string(mock_tx)
-        .map_err(|e| format!("Failed to serialize mock transaction: {}", e))?;
-
-    debug!(script_version, "Running ckb-debugger with mock transaction");
-
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("ckbadger_mock_tx_{}.json", uuid::Uuid::new_v4()));
-
-    tokio::fs::write(&temp_file, &json)
-        .await
-        .map_err(|e| format!("Failed to write temp file: {}", e))?;
-
-    let temp_file_str = temp_file
-        .to_str()
-        .ok_or_else(|| "Temp file path contains invalid UTF-8".to_string())?;
-
-    let groups = enumerate_script_groups(mock_tx);
-    if groups.is_empty() {
-        let _ = tokio::fs::remove_file(&temp_file).await;
-        // Every committed non-cellbase transaction resolves at least one input
-        // cell, hence at least one lock group. Zero groups means the mock
-        // transaction was built wrong; reporting 0 cycles would be a lie.
-        return Err(
-            "mock transaction has no script groups: a committed transaction always runs \
-             at least one lock script"
-                .to_string(),
-        );
-    }
-
-    let mut total_cycles: i64 = 0;
-    for group in &groups {
-        match run_ckb_debugger_for_group(temp_file_str, group, script_version).await {
-            Ok(cycles) => {
-                total_cycles = total_cycles
-                    .checked_add(cycles)
-                    .ok_or_else(|| "cycles overflow".to_string())?;
-            }
-            Err(e) => {
-                let _ = tokio::fs::remove_file(&temp_file).await;
-                return Err(format!(
-                    "Failed to calculate cycles for {} {} group (cell {}): {}",
-                    group.script_group_type, group.cell_type, group.cell_index, e
-                ));
-            }
-        }
-    }
-
-    let _ = tokio::fs::remove_file(&temp_file).await;
-    Ok(total_cycles)
-}
-
-/// The `Run result: <code>` line ckb-debugger prints for every script run.
-fn parse_run_result(output: &str) -> Option<i64> {
-    output.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("Run result:")
-            .and_then(|rest| rest.trim().parse::<i64>().ok())
-    })
-}
-
-/// Cycles consumed by one script group, or an error if the group did not pass.
-///
-/// A script group only *has* a cycle count when it succeeds: consensus rejects
-/// a transaction whose script exits non-zero, so a failed run has no cycles to
-/// report. ckb-debugger still prints a partial `All cycles:` line for a failed
-/// run (and exits 254), so both the reported `Run result` and the child process
-/// exit code must be verified before any number is harvested.
-fn parse_group_cycles(output: &str, exit_code: Option<i32>) -> Result<i64, String> {
-    let run_result = parse_run_result(output).ok_or_else(|| {
-        format!(
-            "ckb-debugger reported no `Run result` line (exit {}): {}",
-            describe_exit_code(exit_code),
-            summarize_output(output)
-        )
-    })?;
-
-    if run_result != 0 {
-        return Err(format!(
-            "script group failed: ckb-debugger reported `Run result: {}` (exit {}): {}",
-            run_result,
-            describe_exit_code(exit_code),
-            summarize_output(output)
-        ));
-    }
-
-    if exit_code != Some(0) {
-        return Err(format!(
-            "ckb-debugger exited with {} despite `Run result: 0`: {}",
-            describe_exit_code(exit_code),
-            summarize_output(output)
-        ));
-    }
-
-    parse_all_cycles_from_output(output)
-}
-
-fn describe_exit_code(exit_code: Option<i32>) -> String {
-    match exit_code {
-        Some(code) => code.to_string(),
-        None => "signal (no exit code)".to_string(),
-    }
-}
-
-fn summarize_output(output: &str) -> String {
-    let trimmed = output.trim();
-    let truncated: String = trimmed.chars().take(500).collect();
-    let suffix = if truncated.len() < trimmed.len() {
-        "... (truncated)"
-    } else {
-        ""
-    };
-    format!("{}{}", truncated.replace('\n', " | "), suffix)
-}
-
-fn parse_all_cycles_from_output(output: &str) -> Result<i64, String> {
-    for line in output.lines() {
-        if line.contains("All cycles:") {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 {
-                let cycles_part = parts[1].trim();
-                let num_str = cycles_part.split('(').next().unwrap_or(cycles_part).trim();
-                if let Ok(cycles) = num_str.parse::<i64>() {
-                    return Ok(cycles);
-                }
-            }
-        }
-    }
-
-    for line in output.lines() {
-        if line.contains("Total cycles consumed:") {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 {
-                let cycles_part = parts[1].trim();
-                let num_str = cycles_part.split('(').next().unwrap_or(cycles_part).trim();
-                if let Ok(cycles) = num_str.parse::<i64>() {
-                    return Ok(cycles);
-                }
-            }
-        }
-    }
-
-    Err(format!(
-        "Could not parse cycles from ckb-debugger output: {}",
-        summarize_output(output)
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_all_cycles() {
-        let output = "Run result: 0\nAll cycles: 1673136(1.6M)";
-        assert_eq!(parse_all_cycles_from_output(output), Ok(1673136));
-
-        let output2 =
-            "Run result: 0\nTotal cycles consumed: 7059(6.9K)\nTransfer cycles: 4537(4.4K)";
-        assert_eq!(parse_all_cycles_from_output(output2), Ok(7059));
-    }
-
-    #[test]
-    fn test_parse_group_cycles_accepts_successful_run() {
-        // Verbatim ckb-debugger 1.0.0 output for the Nervos DAO type group of
-        // mainnet tx 0x6fa94cb2... once the header association is supplied.
-        let ok = "Run result: 0\nAll cycles: 14095(13.8K)\n";
-        assert_eq!(parse_group_cycles(ok, Some(0)), Ok(14095));
-    }
-
-    #[test]
-    fn test_parse_group_cycles_rejects_failed_run_result() {
-        // Verbatim ckb-debugger 1.0.0 output for the same DAO type group when
-        // `load_header(source = Input)` cannot resolve: the group aborts after
-        // 8270 cycles and the process exits 254. Harvesting that partial number
-        // is what made every DAO transaction report wrong cycles as `done`.
-        let failed = "Run result: 2\nAll cycles: 8270(8.1K)\n";
-        let err = parse_group_cycles(failed, Some(254)).unwrap_err();
-        assert!(err.contains("Run result: 2"), "unexpected error: {}", err);
-        assert!(
-            err.contains("254"),
-            "error must name the exit code: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn test_parse_group_cycles_rejects_negative_run_result() {
-        // Genesis transactions: consensus never executed their scripts, and a
-        // replay of the secp data-hash lock exits -2 after 15511 cycles.
-        let failed = "Run result: -2\nAll cycles: 15511(15.1K)\n";
-        let err = parse_group_cycles(failed, Some(254)).unwrap_err();
-        assert!(err.contains("Run result: -2"), "unexpected error: {}", err);
-        // The trap this guards: the cycles line alone parses cleanly, so
-        // without the run-result check the aborted run reports a number.
-        assert_eq!(parse_all_cycles_from_output(failed), Ok(15511));
-    }
-
-    #[test]
-    fn test_parse_group_cycles_rejects_nonzero_exit_without_run_result() {
-        // A crashed/aborted debugger prints no `Run result` at all.
-        let err = parse_group_cycles("thread 'main' panicked at ...\n", Some(101)).unwrap_err();
-        assert!(err.contains("no `Run result`"), "unexpected error: {}", err);
-    }
-
-    #[test]
-    fn test_parse_group_cycles_rejects_nonzero_exit_code() {
-        // Successful-looking output plus a non-zero exit is still a failure.
-        let err = parse_group_cycles("Run result: 0\nAll cycles: 100(100)\n", Some(1)).unwrap_err();
-        assert!(err.contains("exited with 1"), "unexpected error: {}", err);
-    }
-
-    #[test]
-    fn test_parse_group_cycles_rejects_signal_termination() {
-        let err = parse_group_cycles("Run result: 0\nAll cycles: 100(100)\n", None).unwrap_err();
-        assert!(err.contains("signal"), "unexpected error: {}", err);
-    }
-
-    #[test]
-    fn test_summarize_output_truncates_on_char_boundary() {
-        // Debugger output can carry multi-byte characters; byte slicing would
-        // panic mid-character.
-        let noisy = "Run result: 2\n".to_string() + &"✗".repeat(600);
-        let summary = summarize_output(&noisy);
-        assert!(summary.ends_with("... (truncated)"));
-        assert!(summary.starts_with("Run result: 2 | "));
-    }
 
     const DEPOSIT_BLOCK_HASH: &str =
         "0x41e2ea50e0557f06c6e791f75d466528bc6524d5aaefe07789d36208c0fdea7d";
@@ -1146,6 +870,15 @@ mod tests {
             },
             data: "0x".to_string(),
             block_hash: block_hash.to_string(),
+            transaction_info: ckb_types::core::TransactionInfo::new(
+                1,
+                ckb_types::core::EpochNumberWithFraction::new(1, 0, 1),
+                ckb_types::packed::Byte32::from_slice(
+                    &hex::decode(block_hash.trim_start_matches("0x")).unwrap(),
+                )
+                .unwrap(),
+                1,
+            ),
         }
     }
 
@@ -1189,6 +922,7 @@ mod tests {
         let committed = TxStatus {
             status: "committed".to_string(),
             block_hash: Some(DEPOSIT_BLOCK_HASH.to_string()),
+            tx_index: Some("0x1".into()),
         };
         assert_eq!(
             committed_block_hash("0xf398", &committed),
@@ -1198,6 +932,7 @@ mod tests {
         let pending = TxStatus {
             status: "pending".to_string(),
             block_hash: None,
+            tx_index: None,
         };
         assert!(committed_block_hash("0xf398", &pending)
             .unwrap_err()
@@ -1207,6 +942,7 @@ mod tests {
         let broken = TxStatus {
             status: "committed".to_string(),
             block_hash: None,
+            tx_index: None,
         };
         assert!(committed_block_hash("0xf398", &broken)
             .unwrap_err()
@@ -1224,50 +960,6 @@ mod tests {
         );
         assert_eq!(out_points[0].index, "0x3");
         assert_eq!(out_points[1].index, "0x1");
-    }
-
-    #[test]
-    fn test_debugger_args_include_script_version() {
-        let group = ScriptGroupRef {
-            cell_index: 3,
-            cell_type: "input",
-            script_group_type: "lock",
-        };
-        let args = debugger_args_for_group("/tmp/mock_tx.json", &group, 1);
-        let pos = args
-            .iter()
-            .position(|a| a == "--script-version")
-            .unwrap_or_else(|| {
-                panic!(
-                    "ckb-debugger args must pin --script-version (consensus VM selection \
-                     is defined by the commit block's epoch; without it ckb-debugger \
-                     defaults to VM2 for every group), got: {:?}",
-                    args
-                )
-            });
-        assert_eq!(
-            args[pos + 1],
-            "1",
-            "mapped script version must follow the flag"
-        );
-
-        // The pre-existing group args must survive the refactor.
-        for expected in [
-            "--tx-file",
-            "/tmp/mock_tx.json",
-            "--cell-index",
-            "3",
-            "--cell-type",
-            "input",
-            "--script-group-type",
-            "lock",
-        ] {
-            assert!(
-                args.iter().any(|a| a == expected),
-                "missing arg {}",
-                expected
-            );
-        }
     }
 
     #[test]
@@ -1386,10 +1078,10 @@ mod tests {
     /// Empirical consensus-truth validation against a local mainnet node.
     ///
     /// Requires a synced mainnet CKB node (default http://127.0.0.1:8114,
-    /// override via CKBADGER_TEST_RPC) plus ckb-debugger on PATH. Run with:
+    /// override via CKBADGER_TEST_RPC) with its historical blocks available. Run with:
     /// `cargo test -p ckbadger-common -- --ignored --nocapture`
     #[tokio::test]
-    #[ignore = "requires local mainnet CKB node + ckb-debugger binary"]
+    #[ignore = "requires local mainnet CKB node"]
     async fn test_calculate_cycles_matches_consensus_across_vm_eras() {
         let rpc_url = std::env::var("CKBADGER_TEST_RPC")
             .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
@@ -1423,44 +1115,15 @@ mod tests {
                 .unwrap_or_else(|e| {
                     panic!("calculate_cycles failed for {} ({}): {}", tx_hash, era, e)
                 });
-            println!("{} ({}): {} cycles", tx_hash, era, cycles);
+            cycles.validate().unwrap();
+            assert!(!cycles.groups.is_empty());
+            println!("{} ({}): {} cycles", tx_hash, era, cycles.cycles);
             assert_eq!(
-                cycles, expected,
+                cycles.cycles, expected,
                 "cycles mismatch for {} ({})",
                 tx_hash, era
             );
         }
-    }
-
-    /// Zero script groups used to be reported as 0 cycles, which the API then
-    /// serves as "pending" forever. A committed transaction always resolves at
-    /// least one input cell, so no groups means the mock transaction is wrong.
-    #[tokio::test]
-    async fn test_run_ckb_debugger_rejects_mock_tx_without_script_groups() {
-        let mock_tx = MockTransaction {
-            mock_info: MockInfo {
-                inputs: vec![],
-                cell_deps: vec![],
-                header_deps: vec![],
-            },
-            tx: Transaction {
-                version: "0x0".to_string(),
-                cell_deps: vec![],
-                header_deps: vec![],
-                inputs: vec![],
-                outputs: vec![],
-                outputs_data: vec![],
-                witnesses: vec![],
-            },
-        };
-        let err = run_ckb_debugger(&mock_tx, 1)
-            .await
-            .expect_err("no script groups must not report 0 cycles");
-        assert!(
-            err.contains("no script groups"),
-            "unexpected error: {}",
-            err
-        );
     }
 
     /// Nervos DAO withdraw phases, which are the transactions that need the
@@ -1469,9 +1132,9 @@ mod tests {
     /// partial cycles used to be summed into the total.
     ///
     /// Expected values are consensus truth, independently reported by the
-    /// official explorer. Requires a synced mainnet CKB node plus ckb-debugger.
+    /// official explorer. Requires a synced mainnet CKB node with its historical blocks available.
     #[tokio::test]
-    #[ignore = "requires local mainnet CKB node + ckb-debugger binary"]
+    #[ignore = "requires local mainnet CKB node"]
     async fn test_calculate_cycles_includes_dao_script_group() {
         let rpc_url = std::env::var("CKBADGER_TEST_RPC")
             .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
@@ -1499,9 +1162,14 @@ mod tests {
                 .unwrap_or_else(|e| {
                     panic!("calculate_cycles failed for {} ({}): {}", tx_hash, phase, e)
                 });
-            println!("{} ({}): {} cycles", tx_hash, phase, cycles);
+            cycles.validate().unwrap();
+            assert!(cycles
+                .groups
+                .iter()
+                .any(|group| group.group_type == crate::cycles_task::ScriptGroupKind::Type));
+            println!("{} ({}): {} cycles", tx_hash, phase, cycles.cycles);
             assert_eq!(
-                cycles, expected,
+                cycles.cycles, expected,
                 "cycles mismatch for {} ({})",
                 tx_hash, phase
             );
@@ -1512,7 +1180,7 @@ mod tests {
     /// replay legitimately fails (`Run result: -2` after 15511 cycles). The
     /// failure must surface as an error instead of being served as `done`.
     #[tokio::test]
-    #[ignore = "requires local mainnet CKB node + ckb-debugger binary"]
+    #[ignore = "requires local mainnet CKB node"]
     async fn test_calculate_cycles_rejects_failed_genesis_replay() {
         let rpc_url = std::env::var("CKBADGER_TEST_RPC")
             .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
@@ -1524,194 +1192,10 @@ mod tests {
         .await
         .expect_err("a failed script replay must not produce a cycle count");
         println!("genesis tx error: {}", err);
-        assert!(err.contains("Run result: -2"), "unexpected error: {}", err);
-    }
-
-    #[test]
-    fn test_enumerate_script_groups_single_lock() {
-        let lock = Script {
-            code_hash: "0xaaa".to_string(),
-            hash_type: "type".to_string(),
-            args: "0x01".to_string(),
-        };
-        let mock_tx = MockTransaction {
-            mock_info: MockInfo {
-                inputs: vec![MockInput {
-                    input: Input {
-                        previous_output: OutPoint {
-                            tx_hash: "0x00".to_string(),
-                            index: "0x0".to_string(),
-                        },
-                        since: "0x0".to_string(),
-                    },
-                    output: Output {
-                        capacity: "0x100".to_string(),
-                        lock: lock.clone(),
-                        type_script: None,
-                    },
-                    data: "0x".to_string(),
-                    header: DEPOSIT_BLOCK_HASH.to_string(),
-                }],
-                cell_deps: vec![],
-                header_deps: vec![],
-            },
-            tx: Transaction {
-                version: "0x0".to_string(),
-                cell_deps: vec![],
-                header_deps: vec![],
-                inputs: vec![],
-                outputs: vec![],
-                outputs_data: vec![],
-                witnesses: vec![],
-            },
-        };
-        let groups = enumerate_script_groups(&mock_tx);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].script_group_type, "lock");
-    }
-
-    #[test]
-    fn test_enumerate_script_groups_deduplicates_same_lock() {
-        let lock = Script {
-            code_hash: "0xaaa".to_string(),
-            hash_type: "type".to_string(),
-            args: "0x01".to_string(),
-        };
-        let make_input = |idx: &str| MockInput {
-            input: Input {
-                previous_output: OutPoint {
-                    tx_hash: "0x00".to_string(),
-                    index: idx.to_string(),
-                },
-                since: "0x0".to_string(),
-            },
-            output: Output {
-                capacity: "0x100".to_string(),
-                lock: lock.clone(),
-                type_script: None,
-            },
-            data: "0x".to_string(),
-            header: DEPOSIT_BLOCK_HASH.to_string(),
-        };
-        let mock_tx = MockTransaction {
-            mock_info: MockInfo {
-                inputs: vec![make_input("0x0"), make_input("0x1")],
-                cell_deps: vec![],
-                header_deps: vec![],
-            },
-            tx: Transaction {
-                version: "0x0".to_string(),
-                cell_deps: vec![],
-                header_deps: vec![],
-                inputs: vec![],
-                outputs: vec![],
-                outputs_data: vec![],
-                witnesses: vec![],
-            },
-        };
-        let groups = enumerate_script_groups(&mock_tx);
-        assert_eq!(groups.len(), 1); // Same lock -> one group
-    }
-
-    #[test]
-    fn test_enumerate_script_groups_lock_and_type() {
-        let lock = Script {
-            code_hash: "0xaaa".to_string(),
-            hash_type: "type".to_string(),
-            args: "0x01".to_string(),
-        };
-        let type_s = Script {
-            code_hash: "0xbbb".to_string(),
-            hash_type: "data".to_string(),
-            args: "0x02".to_string(),
-        };
-        let mock_tx = MockTransaction {
-            mock_info: MockInfo {
-                inputs: vec![MockInput {
-                    input: Input {
-                        previous_output: OutPoint {
-                            tx_hash: "0x00".to_string(),
-                            index: "0x0".to_string(),
-                        },
-                        since: "0x0".to_string(),
-                    },
-                    output: Output {
-                        capacity: "0x100".to_string(),
-                        lock: lock.clone(),
-                        type_script: Some(type_s.clone()),
-                    },
-                    data: "0x".to_string(),
-                    header: DEPOSIT_BLOCK_HASH.to_string(),
-                }],
-                cell_deps: vec![],
-                header_deps: vec![],
-            },
-            tx: Transaction {
-                version: "0x0".to_string(),
-                cell_deps: vec![],
-                header_deps: vec![],
-                inputs: vec![],
-                outputs: vec![],
-                outputs_data: vec![],
-                witnesses: vec![],
-            },
-        };
-        let groups = enumerate_script_groups(&mock_tx);
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].script_group_type, "lock");
-        assert_eq!(groups[1].script_group_type, "type");
-    }
-
-    #[test]
-    fn test_enumerate_script_groups_output_only_type() {
-        let lock = Script {
-            code_hash: "0xaaa".to_string(),
-            hash_type: "type".to_string(),
-            args: "0x01".to_string(),
-        };
-        let type_out = Script {
-            code_hash: "0xccc".to_string(),
-            hash_type: "data".to_string(),
-            args: "0x03".to_string(),
-        };
-        let mock_tx = MockTransaction {
-            mock_info: MockInfo {
-                inputs: vec![MockInput {
-                    input: Input {
-                        previous_output: OutPoint {
-                            tx_hash: "0x00".to_string(),
-                            index: "0x0".to_string(),
-                        },
-                        since: "0x0".to_string(),
-                    },
-                    output: Output {
-                        capacity: "0x100".to_string(),
-                        lock: lock.clone(),
-                        type_script: None,
-                    },
-                    data: "0x".to_string(),
-                    header: DEPOSIT_BLOCK_HASH.to_string(),
-                }],
-                cell_deps: vec![],
-                header_deps: vec![],
-            },
-            tx: Transaction {
-                version: "0x0".to_string(),
-                cell_deps: vec![],
-                header_deps: vec![],
-                inputs: vec![],
-                outputs: vec![Output {
-                    capacity: "0x100".to_string(),
-                    lock: lock.clone(),
-                    type_script: Some(type_out.clone()),
-                }],
-                outputs_data: vec!["0x".to_string()],
-                witnesses: vec![],
-            },
-        };
-        let groups = enumerate_script_groups(&mock_tx);
-        assert_eq!(groups.len(), 2); // 1 lock (input) + 1 type (output only)
-        assert_eq!(groups[1].cell_type, "output");
-        assert_eq!(groups[1].cell_index, 0);
+        assert!(
+            err.contains("genesis transactions have no consensus script execution"),
+            "unexpected error: {}",
+            err
+        );
     }
 }

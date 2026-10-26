@@ -174,8 +174,17 @@ async fn process_block_request(store: &CkbadgerStore, ckb_rpc_url: &str, block_n
     let mut processed = 0;
     let mut all_ok = true;
     for (_, entry) in &block_txs {
-        if entry.is_cellbase || entry.cycles.is_some_and(|cycles| cycles >= 0) {
+        if entry.is_cellbase {
             continue;
+        }
+        match store.get_tx_group_cycles(&entry.tx_hash) {
+            Ok(Some(_)) => continue,
+            Ok(None) => {}
+            Err(error) => {
+                warn!("Cycles worker: invalid group result: {error}");
+                all_ok = false;
+                continue;
+            }
         }
         let hash = format!("0x{}", hex::encode(entry.tx_hash));
         let result = process_cycles_task(store, ckb_rpc_url, &hash).await;
@@ -263,20 +272,31 @@ async fn process_cycles_task(
         };
     }
 
-    if let Some(existing) = entry.cycles {
-        if existing > 0 {
+    match store.get_tx_cycles_result(&hash_bytes) {
+        Ok(Some(result)) => {
             return CyclesTaskResult {
                 status: CyclesTaskStatus::Done,
-                cycles: Some(existing),
+                cycles: Some(result.cycles),
                 error: None,
                 updated_at,
             };
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return CyclesTaskResult {
+                status: CyclesTaskStatus::Failed,
+                cycles: None,
+                error: Some(format!("invalid persisted group cycles: {error}")),
+                updated_at,
+            }
         }
     }
 
     match ckbadger_common::cycles::calculate_cycles(ckb_rpc_url, tx_hash).await {
         Ok(cycles) => {
-            if let Err(e) = store.update_tx_cycles(block_num, tx_idx, &hash_bytes, cycles) {
+            if let Err(e) =
+                store.update_tx_cycles_with_groups(block_num, tx_idx, &hash_bytes, &cycles)
+            {
                 return CyclesTaskResult {
                     status: CyclesTaskStatus::Failed,
                     cycles: None,
@@ -286,7 +306,7 @@ async fn process_cycles_task(
             }
             CyclesTaskResult {
                 status: CyclesTaskStatus::Done,
-                cycles: Some(cycles),
+                cycles: Some(cycles.cycles),
                 error: None,
                 updated_at,
             }
@@ -300,7 +320,10 @@ async fn process_cycles_task(
             CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
                 cycles: None,
-                error: Some(format!("ckb-debugger failed: {}{}", e, marker_err)),
+                error: Some(format!(
+                    "CKB script verification failed: {}{}",
+                    e, marker_err
+                )),
                 updated_at,
             }
         }
@@ -378,6 +401,64 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+    }
+
+    #[tokio::test]
+    async fn cached_group_result_is_reused_and_total_only_result_is_recalculated() {
+        use ckbadger_common::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let hash = [0x55; 32];
+        insert_tx_with_cycles(&store, &hash, None);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(
+            123,
+            &CachedBlockHeader {
+                hash: vec![0x77; 32],
+                parent_hash: vec![0; 32],
+                timestamp: 1,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1,
+            },
+        );
+        batch.commit().unwrap();
+        store
+            .update_tx_cycles_with_groups(
+                123,
+                0,
+                &hash,
+                &TransactionCycles {
+                    block_hash: [0x77; 32],
+                    cycles: 11,
+                    groups: vec![ScriptGroupCycles {
+                        script_hash: [3; 32],
+                        group_type: ScriptGroupKind::Lock,
+                        cycles: 11,
+                    }],
+                },
+            )
+            .unwrap();
+        let tx_hash = format!("0x{}", hex::encode(hash));
+        let cached = process_cycles_task(&store, "http://127.0.0.1:1", &tx_hash).await;
+        assert_eq!(cached.status, CyclesTaskStatus::Done);
+        assert_eq!(cached.cycles, Some(11));
+        // A pre-existing scalar cannot masquerade as a complete group result.
+        store.update_tx_cycles(123, 0, &hash, 12).unwrap();
+        let retry = process_cycles_task(&store, "http://127.0.0.1:1", &tx_hash).await;
+        assert_eq!(retry.status, CyclesTaskStatus::Failed);
+        assert!(retry
+            .error
+            .unwrap()
+            .contains("CKB script verification failed"));
     }
 
     #[tokio::test]

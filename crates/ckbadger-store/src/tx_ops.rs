@@ -242,6 +242,77 @@ impl CkbadgerStore {
         expected_hash: &[u8; 32],
         cycles: i64,
     ) -> anyhow::Result<()> {
+        self.persist_tx_cycles(block_num, tx_idx, expected_hash, cycles, None)
+    }
+
+    pub fn get_tx_group_cycles(
+        &self,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Option<Vec<ckbadger_common::cycles_task::ScriptGroupCycles>>> {
+        Ok(self
+            .get_tx_cycles_result(tx_hash)?
+            .map(|result| result.groups))
+    }
+
+    pub fn get_tx_cycles_result(
+        &self,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Option<ckbadger_common::cycles_task::TransactionCycles>> {
+        let Some((block_num, _, tx)) = self.get_tx_by_hash(tx_hash)? else {
+            return Ok(None);
+        };
+        let Some(bytes) = self.get_cf(
+            self.cf_sync_meta(),
+            &keys::encode_tx_group_cycles_key(tx_hash),
+        )?
+        else {
+            return Ok(None);
+        };
+        let result: ckbadger_common::cycles_task::TransactionCycles = bincode::deserialize(&bytes)?;
+        result.validate().map_err(anyhow::Error::msg)?;
+        let header = self
+            .get_block_header(block_num)?
+            .ok_or_else(|| anyhow!("lazy group cycles lack canonical block: {block_num}"))?;
+        anyhow::ensure!(
+            header.hash.as_slice() == result.block_hash,
+            "lazy group cycles belong to another block: tx=0x{}",
+            hex::encode(tx_hash)
+        );
+        anyhow::ensure!(
+            tx.cycles == Some(result.cycles),
+            "lazy group cycles differ from canonical total: tx=0x{} total={:?} groups={}",
+            hex::encode(tx_hash),
+            tx.cycles,
+            result.cycles
+        );
+        Ok(Some(result))
+    }
+
+    pub fn update_tx_cycles_with_groups(
+        &self,
+        block_num: i64,
+        tx_idx: i32,
+        expected_hash: &[u8; 32],
+        result: &ckbadger_common::cycles_task::TransactionCycles,
+    ) -> anyhow::Result<()> {
+        result.validate().map_err(anyhow::Error::msg)?;
+        self.persist_tx_cycles(
+            block_num,
+            tx_idx,
+            expected_hash,
+            result.cycles,
+            Some(result),
+        )
+    }
+
+    fn persist_tx_cycles(
+        &self,
+        block_num: i64,
+        tx_idx: i32,
+        expected_hash: &[u8; 32],
+        cycles: i64,
+        groups: Option<&ckbadger_common::cycles_task::TransactionCycles>,
+    ) -> anyhow::Result<()> {
         self.with_domain_write_gate(|db| {
             let mapped = self.get_tx_location(expected_hash)?.ok_or_else(|| anyhow!(
                 "canonical tx identity disappeared: hash=0x{}, block={block_num}, index={tx_idx}",
@@ -257,6 +328,10 @@ impl CkbadgerStore {
             anyhow::ensure!(entry.tx_hash == *expected_hash,
                 "canonical tx identity changed: expected=0x{}, actual=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash), bytes_to_hex(&entry.tx_hash));
+            if let Some(groups) = groups {
+                let header = self.get_block_header(block_num)?.ok_or_else(|| anyhow!("canonical block disappeared while persisting cycles: block={block_num}"))?;
+                anyhow::ensure!(header.hash.as_slice() == groups.block_hash, "canonical block changed while persisting cycles: block={block_num}");
+            }
             entry.cycles = Some(cycles);
             let key = keys::encode_composite(&[
                 &keys::encode_block_num(block_num),
@@ -265,7 +340,15 @@ impl CkbadgerStore {
             let value = bincode::serialize(&entry).with_context(|| format!(
                 "failed to serialize tx index entry {block_num}:{tx_idx}"
             ))?;
-            db.put_cf(self.cf_tx_index(), &key, &value).with_context(|| format!(
+            let mut batch = rocksdb::WriteBatch::default();
+            batch.put_cf(self.cf_tx_index(), &key, &value);
+            let groups_key = keys::encode_tx_group_cycles_key(expected_hash);
+            if let Some(groups) = groups {
+                batch.put_cf(self.cf_sync_meta(), &groups_key, bincode::serialize(groups)?);
+            } else {
+                batch.delete_cf(self.cf_sync_meta(), &groups_key);
+            }
+            db.write(batch).with_context(|| format!(
                 "failed to write canonical tx cycles: hash=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash)
             ))
@@ -428,6 +511,74 @@ mod tests {
         let (_, _, updated) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
         assert_eq!(updated.cycles, Some(12_345));
         assert_eq!(updated.tx_hash, tx_hash);
+        use ckbadger_common::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
+        let mut header_batch = StoreBatch::new(&store);
+        header_batch.put_block_header(block_num, &make_header(0x77));
+        header_batch.commit().unwrap();
+        let result = TransactionCycles {
+            block_hash: [0x77; 32],
+            cycles: 12_345,
+            groups: vec![
+                ScriptGroupCycles {
+                    script_hash: [1; 32],
+                    group_type: ScriptGroupKind::Lock,
+                    cycles: 12_000,
+                },
+                ScriptGroupCycles {
+                    script_hash: [2; 32],
+                    group_type: ScriptGroupKind::Type,
+                    cycles: 345,
+                },
+            ],
+        };
+        store
+            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &result)
+            .unwrap();
+        assert_eq!(
+            store.get_tx_group_cycles(&tx_hash).unwrap(),
+            Some(result.groups.clone())
+        );
+        let bad = TransactionCycles {
+            cycles: 12_346,
+            ..result.clone()
+        };
+        assert!(store
+            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &bad)
+            .unwrap_err()
+            .to_string()
+            .contains("differs"));
+        assert_eq!(
+            store.get_tx_group_cycles(&tx_hash).unwrap(),
+            Some(result.groups.clone())
+        );
+        let wrong_block = TransactionCycles {
+            block_hash: [0x88; 32],
+            ..result.clone()
+        };
+        assert!(store
+            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &wrong_block)
+            .unwrap_err()
+            .to_string()
+            .contains("canonical block changed"));
+        assert_eq!(
+            store.get_tx_group_cycles(&tx_hash).unwrap(),
+            Some(result.groups.clone())
+        );
+        let append_dir = tempdir().unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        assert!(append
+            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &result)
+            .is_err());
+        assert_eq!(
+            append
+                .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
+                .count(),
+            0
+        );
+        store
+            .update_tx_cycles(block_num, tx_idx, &tx_hash, -1)
+            .unwrap();
+        assert!(store.get_tx_group_cycles(&tx_hash).unwrap().is_none());
     }
 
     #[test]

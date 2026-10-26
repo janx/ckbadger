@@ -78,6 +78,9 @@ tempfile = "3.14"
 
 # CKB types
 ckb-types = "0.119"
+ckb-script = { version = "=0.119.0", features = ["asm"] }
+ckb-chain-spec = "0.119"
+ckb-traits = "0.119"
 ckb-jsonrpc-types = "0.119"
 ckb-hash = "0.119"
 

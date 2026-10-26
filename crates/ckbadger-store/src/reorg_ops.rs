@@ -2600,6 +2600,10 @@ impl CkbadgerStore {
                     cellbase_tx_hashes.insert(ctx.tx_hash.clone());
                 }
                 rolled_back_tx_positions.insert(ctx.tx_hash.clone(), (mapped_block, tx_idx));
+                batch.delete_cf(
+                    self.cf_sync_meta(),
+                    keys::encode_tx_group_cycles_key(&ctx.tx_hash),
+                );
                 batch.delete_cf(self.cf_tx_hash_map(), &ctx.tx_hash);
                 tx_hash_map_removed += 1;
                 stage.tick(tx_hash_map_removed);
@@ -2626,6 +2630,7 @@ impl CkbadgerStore {
                     if tx_idx == 0 {
                         cellbase_tx_hashes.insert(key.to_vec());
                     }
+                    batch.delete_cf(self.cf_sync_meta(), keys::encode_tx_group_cycles_key(&key));
                     batch.delete_cf(self.cf_tx_hash_map(), &key);
                     tx_hash_map_removed += 1;
                 }
@@ -9955,12 +9960,26 @@ mod tests {
         batch.put_tx_index(2, 0, &tx_index);
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                &keys::encode_tx_group_cycles_key(&drop_tx),
+                b"lazy groups",
+            )
+            .unwrap();
 
         rollback_fixture(&store, 1).unwrap();
 
         assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
         assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
         assert!(store.get_tx_index(2, 0).unwrap().is_none());
+        assert!(store
+            .get_cf(
+                store.cf_sync_meta(),
+                &keys::encode_tx_group_cycles_key(&drop_tx)
+            )
+            .unwrap()
+            .is_none());
     }
 
     #[test]

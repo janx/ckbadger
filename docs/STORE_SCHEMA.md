@@ -233,6 +233,18 @@ first block), because the prune can only see committed rows; a batch longer than
 leaves its own below-floor entries to the next batch, whose tip has moved past them. The floor is monotonic. `TxContext`, `DotBit` and `Object` entries are never
 pruned — they are removed only when replayed. Bulk build records no undo entries at all.
 
+### Protocol history and Type ID lineage
+
+Identity output history rows keep the same keys in domain `stats_spore` (did:ckb / .bit Cell)
+and `stats_mnft` (.bit AccountCell). Their value is now one `AssetAction` byte: mint 0, transfer 1,
+burn 2, recycle 3, renew 4, update 5. Bulk and live use the same prior-owner/expiry classifier;
+transaction-wide .bit actions cannot turn a recreated neighbour into a mint or transfer.
+
+Domain `ScriptVersionInfo.type_id_deployments` stores exact `(type_script_hash, block_number)`
+observations of ELF code. The indexer binds newly observed binaries to the registered Type ID
+family, rejecting conflicting family resolution. Bulk excludes non-executable state cells;
+live changes record undo for version metadata, family/label indexes and reference mapping.
+
 ### `sync_meta` Fixed Keys
 
 `sync_meta` belongs to the **domain store** and is written only by the indexer. Its fixed-key
@@ -252,6 +264,17 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   snapshots (current plus the maximum 36-block automatic reorg depth).
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
+- lazy VM results: `tx_group_cycles:<tx_hash_32B>` stores
+  `TransactionCycles { block_hash, cycles, groups: [{ script_hash, group_type, cycles }] }`.
+  Only the indexer's on-demand cycles worker writes it, atomically with `tx_index.cycles`
+  after checking the canonical transaction slot and block hash. Readers validate group sum,
+  uniqueness and canonical identity. Rollback deletes it alongside `tx_hash_map`; bulk emits
+  no such row and adds no fields to transaction records.
+- fork reconciliation: `reorg_reconcile_pending` names the automatic event waiting for
+  canonical replay. Once the winning tip is replayed, the indexer verifies abandoned-tip
+  ancestry and atomically adds full event-key `reverted_by_event` / `reverses_events` links.
+  Historical detection fields remain unchanged, and these observation links are not undo state.
+
 
 #### `entity_stats_undo_contract`
 

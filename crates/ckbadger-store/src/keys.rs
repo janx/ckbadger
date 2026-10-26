@@ -1917,6 +1917,13 @@ pub fn decode_object_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32,
 }
 
 /// Sync meta keys
+/// On-demand script-group cycles in domain sync_meta; no bulk writer emits it.
+pub fn encode_tx_group_cycles_key(tx_hash: &[u8]) -> Vec<u8> {
+    let mut key = b"tx_group_cycles:".to_vec();
+    key.extend_from_slice(tx_hash);
+    key
+}
+
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
     pub const SYNC_STATUS: &[u8] = b"sync_status";

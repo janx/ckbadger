@@ -9,8 +9,8 @@ use ckb_vm::machine::asm::{AsmCoreMachine, AsmMachine};
 use ckb_vm::machine::VERSION2;
 use ckb_vm::registers::{A0, A7};
 use ckb_vm::{
-    Bytes, DefaultMachineBuilder, DefaultMachineRunner, Memory, Register, SupportMachine, Syscalls,
-    ISA_A, ISA_B, ISA_IMC, ISA_MOP,
+    Bytes, DefaultMachineBuilder, Memory, Register, SupportMachine, Syscalls, ISA_A, ISA_B,
+    ISA_IMC, ISA_MOP,
 };
 
 use std::sync::{Arc, Mutex};
@@ -78,11 +78,7 @@ pub fn execute_riscv_binary(binary: &[u8], args: &[&str]) -> anyhow::Result<(i8,
         output: Arc::clone(&debug_output),
     });
 
-    let asm_core = <Box<AsmCoreMachine> as SupportMachine>::new(
-        ISA_IMC | ISA_B | ISA_MOP | ISA_A,
-        VERSION2,
-        u64::MAX,
-    );
+    let asm_core = AsmCoreMachine::new(ISA_IMC | ISA_B | ISA_MOP | ISA_A, VERSION2, u64::MAX);
     let default_machine = DefaultMachineBuilder::new(asm_core)
         .instruction_cycle_func(Box::new(constant_cycles))
         .syscall(syscall_handler)
@@ -90,7 +86,7 @@ pub fn execute_riscv_binary(binary: &[u8], args: &[&str]) -> anyhow::Result<(i8,
     let mut machine = AsmMachine::new(default_machine);
 
     machine
-        .load_program(&code, args_bytes.iter().map(|a| Ok(a.clone())))
+        .load_program(&code, &args_bytes)
         .map_err(|e| anyhow::anyhow!("failed to load program: {e}"))?;
 
     let exit_code = machine
@@ -104,6 +100,15 @@ pub fn execute_riscv_binary(binary: &[u8], args: &[&str]) -> anyhow::Result<(i8,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_vm_executes_valid_riscv_binary_with_arguments() {
+        // Minimal RV64 ELF that exits successfully via ecall(93).
+        let binary = hex::decode("7f454c460201010000000000000000000200f30001000000780001000000000040000000000000000000000000000000000000004000380001000000000000000100000005000000000000000000000000000100000000000000000000000000840000000000000084000000000000000010000000000000130500009308d00573000000").unwrap();
+        let (exit, output) = execute_riscv_binary(&binary, &["dna", "{}"]).unwrap();
+        assert_eq!(exit, 0);
+        assert!(output.is_empty());
+    }
 
     #[test]
     fn test_empty_binary_returns_error() {
