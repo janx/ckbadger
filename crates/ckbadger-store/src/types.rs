@@ -364,6 +364,9 @@ pub struct DaoDepositCacheEntry {
     #[serde(default)]
     pub withdraw_to_output_index: Option<i16>,
     pub compensation: Option<i64>,
+    /// Running-maximum canonical time at creation, assigned by the indexer.
+    /// Required schema field: older stores must be re-synced from genesis.
+    pub deposit_chain_time_ms: i64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

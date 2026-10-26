@@ -1,3 +1,5 @@
+mod activity_window;
+pub use activity_window::ActivityWindowCache;
 mod bounded;
 mod mem_cache;
 

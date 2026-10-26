@@ -2485,6 +2485,7 @@ mod dao_daily_snapshot_recompute_tests {
             occupied_capacity,
             deposit_block_number,
             deposit_timestamp: 0,
+            deposit_chain_time_ms: 0,
             lock_script_hash,
             deposit_ar,
             status: 0,

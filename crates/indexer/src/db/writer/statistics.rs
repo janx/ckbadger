@@ -1283,15 +1283,15 @@ impl BatchWriter {
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, i128)> = HashMap::new();
         let mut weighted_deposit_ms: i128 = 0;
         let mut avg_total_capacity: i128 = 0;
-        let mut chain_time_cache: HashMap<i64, (i64, i64)> = HashMap::new();
-        let mut chain_time_for = |block_number: i64| -> Result<(i64, i64)> {
+        let mut chain_time_cache: HashMap<i64, i64> = HashMap::new();
+        let mut chain_time_for = |block_number: i64| -> Result<i64> {
             if let Some(cached) = chain_time_cache.get(&block_number) {
                 return Ok(*cached);
             }
             let block = self.store.get_block_header(block_number)?.ok_or_else(|| anyhow!(
                 "missing DAO lifecycle block header while refreshing holding time: tip={tip_block_number}, block={block_number}"
             ))?;
-            let value = (block.chain_time_ms, block.timestamp);
+            let value = block.chain_time_ms;
             chain_time_cache.insert(block_number, value);
             Ok(value)
         };
@@ -1334,11 +1334,8 @@ impl BatchWriter {
                             "phase-1 DAO entry missing request block while refreshing averages: deposit_outpoint=0x{}",
                             hex::encode(outpoint)
                         ))?;
-                        let (deposit_time, deposit_raw_time) = chain_time_for(entry.deposit_block_number)?;
-                        if deposit_raw_time != entry.deposit_timestamp {
-                            bail!("DAO deposit timestamp disagrees with header: deposit_outpoint=0x{}, deposit_block={}, cached={}, header={}", hex::encode(outpoint), entry.deposit_block_number, entry.deposit_timestamp, deposit_raw_time);
-                        }
-                        let (request_time, _) = chain_time_for(request_block)?;
+                        let deposit_time = entry.deposit_chain_time_ms;
+                        let request_time = chain_time_for(request_block)?;
                         let elapsed = request_time.checked_sub(deposit_time).filter(|v| *v >= 0)
                             .ok_or_else(|| anyhow!("negative/overflow DAO deposit duration while refreshing averages: deposit_outpoint=0x{}, deposit_block={}, request_block={request_block}, deposit_chain_time={deposit_time}, request_chain_time={request_time}", hex::encode(outpoint), entry.deposit_block_number))?;
                         let weighted = i128::from(entry.capacity).checked_mul(i128::from(elapsed))
@@ -1355,10 +1352,7 @@ impl BatchWriter {
                         total_deposited += entry.capacity as i128;
                         unique_depositors.insert(entry.lock_script_hash.clone());
 
-                        let (deposit_time, deposit_raw_time) = chain_time_for(entry.deposit_block_number)?;
-                        if deposit_raw_time != entry.deposit_timestamp {
-                            bail!("DAO deposit timestamp disagrees with header: deposit_outpoint=0x{}, deposit_block={}, cached={}, header={}", hex::encode(outpoint), entry.deposit_block_number, entry.deposit_timestamp, deposit_raw_time);
-                        }
+                        let deposit_time = entry.deposit_chain_time_ms;
                         let held_ms = tip_timestamp.checked_sub(deposit_time).filter(|v| *v >= 0)
                             .ok_or_else(|| anyhow!("negative/overflow DAO live deposit duration: deposit_outpoint=0x{}, deposit_block={}, tip={tip_block_number}, deposit_chain_time={deposit_time}, tip_chain_time={tip_timestamp}", hex::encode(outpoint), entry.deposit_block_number))?;
                         let dm = depositor_map
@@ -1751,6 +1745,7 @@ mod tests {
                     occupied_capacity: 0,
                     deposit_block_number: 10,
                     deposit_timestamp: 0,
+                    deposit_chain_time_ms: 0,
                     lock_script_hash: vec![0xAA; 32],
                     deposit_ar: 1,
                     status: 2,
@@ -1777,6 +1772,7 @@ mod tests {
                     occupied_capacity: 0,
                     deposit_block_number: 15,
                     deposit_timestamp: 0,
+                    deposit_chain_time_ms: 0,
                     lock_script_hash: vec![0xBB; 32],
                     deposit_ar: 1,
                     status: 0,
@@ -1870,6 +1866,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 10,
                 deposit_timestamp: 1_700_000_000_000, // same as tip => 0 days held
+                deposit_chain_time_ms: 1_700_000_000_000,
                 lock_script_hash: vec![0x01; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -1891,6 +1888,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 5,
                 deposit_timestamp: 1_699_999_000_000,
+                deposit_chain_time_ms: 1_699_999_000_000,
                 lock_script_hash: vec![0x02; 32],
                 deposit_ar: 1,
                 status: 2,
@@ -2040,6 +2038,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 1,
                 deposit_timestamp: previous_timestamp - 86_400_000,
+                deposit_chain_time_ms: previous_timestamp - 86_400_000,
                 lock_script_hash: vec![0x01; 32],
                 deposit_ar: 100,
                 status: 0,
@@ -2139,6 +2138,7 @@ mod tests {
             occupied_capacity: 102_00000000,
             deposit_block_number: 7,
             deposit_timestamp: 0,
+            deposit_chain_time_ms: 0,
             lock_script_hash: vec![0x01; 32],
             deposit_ar: 100,
             status: 0,
@@ -2219,6 +2219,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
+                deposit_chain_time_ms: 0,
                 lock_script_hash: vec![0x02; 32],
                 deposit_ar: 100,
                 status: 1,
@@ -2368,6 +2369,7 @@ mod tests {
             occupied_capacity,
             deposit_block_number: 50,
             deposit_timestamp: 1_700_000_000_000 - 86_400_000,
+            deposit_chain_time_ms: 1_700_000_000_000 - 86_400_000,
             lock_script_hash: vec![status as u8 + 1; 32],
             deposit_ar: 2,
             status,
@@ -2740,6 +2742,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 50,
                 deposit_timestamp: tip_timestamp - two_days_ms,
+                deposit_chain_time_ms: tip_timestamp - two_days_ms,
                 lock_script_hash: vec![0x01; 32],
                 deposit_ar: 2,
                 status: 0,
@@ -2766,6 +2769,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 20,
                 deposit_timestamp: tip_timestamp - five_days_ms,
+                deposit_chain_time_ms: tip_timestamp - five_days_ms,
                 lock_script_hash: vec![0x02; 32],
                 deposit_ar: 2,
                 status: 1,
@@ -2790,6 +2794,7 @@ mod tests {
                 occupied_capacity: 102_00000000,
                 deposit_block_number: 5,
                 deposit_timestamp: tip_timestamp - 10 * 86_400_000,
+                deposit_chain_time_ms: tip_timestamp - 10 * 86_400_000,
                 lock_script_hash: vec![0x03; 32],
                 deposit_ar: 1,
                 status: 2,

@@ -1109,7 +1109,22 @@ fn seed_lifecycle_fixture(
     use ckb_types::prelude::*;
 
     let store = test_store();
-    let blocks: Vec<ckb_types::core::BlockView> = zones.iter().map(build_fixture_block).collect();
+    let blocks: Vec<ckb_types::core::BlockView> = (commit_block - 10..=commit_block - 2)
+        .filter(|number| *number >= 0)
+        .map(|number| {
+            zones
+                .iter()
+                .find(|zone| zone.number == number as u64)
+                .map(build_fixture_block)
+                .unwrap_or_else(|| {
+                    build_fixture_block(&ProposalZone {
+                        number: number as u64,
+                        proposals: vec![],
+                        uncles: vec![],
+                    })
+                })
+        })
+        .collect();
 
     let mut batch = StoreBatch::new(store.as_ref());
     let header = |hash: Vec<u8>, number: i64| CachedBlockHeader {
@@ -1163,6 +1178,63 @@ fn seed_lifecycle_fixture(
 
     let chain = seed_ckb_chain(&blocks);
     (store, chain)
+}
+
+#[tokio::test]
+async fn lifecycle_rejects_an_unavailable_node_reader() {
+    let tx_hash = vec![0x7b; 32];
+    let (store, _chain) = seed_lifecycle_fixture(&tx_hash, 100, &[]);
+    let mut config = test_config(store);
+    config.ckb_db_path = "/nonexistent/ckbadger-review-node-db".into();
+    let app = create_router(config).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/lifecycle", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("requires the CKB node DB reader"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_rejects_missing_or_malformed_proposal_headers() {
+    let tx_hash = vec![0x7b; 32];
+    for malformed in [false, true] {
+        let (store, chain) = seed_lifecycle_fixture(&tx_hash, 100, &[]);
+        store
+            .delete_cf(
+                store.cf_block_headers(),
+                &ckbadger_store::keys::encode_block_num(90),
+            )
+            .unwrap();
+        if malformed {
+            let mut header = store.get_block_header(100).unwrap().unwrap();
+            header.hash = vec![1, 2];
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(90, &header);
+            batch.commit().unwrap();
+        }
+        let config = test_config_with_ckb_db_path(
+            store.clone(),
+            store,
+            chain.path.clone(),
+            Some(chain.cleanup.clone()),
+        );
+        let app = create_router(config).await;
+        let (status, json) = get_json(
+            &app,
+            &format!("/transactions/0x{}/lifecycle", hex::encode(&tx_hash)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        assert!(json["message"].as_str().unwrap().contains("90"), "{json}");
+    }
 }
 
 #[tokio::test]

@@ -618,7 +618,7 @@ fn fetch_assets_cached(
     if request.sort_key == AssetSortKey::HMultiplier {
         let ratios: Vec<Option<(u128, u128)>> = all_cached
             .iter()
-            .map(parse_h_multiplier_ratio)
+            .map(CachedAssetEntry::h_multiplier_ratio)
             .collect::<anyhow::Result<_>>()
             .map_err(|error| ApiError::internal(error.to_string()))?;
         let mut keyed: Vec<_> = all_cached.into_iter().zip(ratios).collect();
@@ -961,32 +961,6 @@ fn asset_display_name(entry: &CachedAssetEntry) -> String {
             .clone()
             .unwrap_or_else(|| "Unnamed Collection".to_string())
     }
-}
-
-fn parse_h_multiplier_ratio(entry: &CachedAssetEntry) -> anyhow::Result<Option<(u128, u128)>> {
-    let parse = |field: &str, raw: &str| -> anyhow::Result<u128> {
-        raw.parse::<u128>().map_err(|error| {
-            anyhow::anyhow!(
-                "invalid H multiplier {field}: asset_type={} asset_id={} value={raw:?}: {error}",
-                entry.asset_type,
-                entry.id
-            )
-        })
-    };
-    let capacity = entry
-        .owned_capacity
-        .as_deref()
-        .map(|raw| parse("owned_capacity", raw))
-        .transpose()?;
-    let knowledge = entry
-        .owned_knowledge
-        .as_deref()
-        .map(|raw| parse("owned_knowledge", raw))
-        .transpose()?;
-    Ok(match (capacity, knowledge) {
-        (Some(capacity), Some(knowledge)) if knowledge != 0 => Some((capacity, knowledge)),
-        _ => None,
-    })
 }
 
 fn compare_h_multiplier_ratios(
@@ -3267,6 +3241,29 @@ mod tests {
     }
 
     #[test]
+    fn h_multiplier_sort_rejects_the_same_invalid_pairs_as_rendering() {
+        let mut entry: CachedAssetEntry = serde_json::from_value(serde_json::json!({
+            "id": "0x01", "asset_type": "token", "standard": "udt",
+            "holders_count": 0, "transfers_count": 0, "transfers_24h": 0
+        }))
+        .unwrap();
+        for (capacity, knowledge) in [
+            (Some("42"), None),
+            (None, Some("1")),
+            (Some("1"), Some("2")),
+            (Some("-1"), Some("0")),
+        ] {
+            entry.owned_capacity = capacity.map(str::to_owned);
+            entry.owned_knowledge = knowledge.map(str::to_owned);
+            assert!(entry.to_asset_response().is_err());
+            assert!(
+                entry.h_multiplier_ratio().is_err(),
+                "pair {capacity:?}/{knowledge:?}"
+            );
+        }
+    }
+
+    #[test]
     fn h_multiplier_sort_distinguishes_ratios_beyond_f64_precision() {
         let base = 1_000_000_000_000_000_000_000_000_000_000u128;
         assert_eq!(
@@ -3287,22 +3284,23 @@ mod tests {
         }))
         .unwrap();
         entry.owned_capacity = Some("not-a-number".into());
-        let error = parse_h_multiplier_ratio(&entry).unwrap_err().to_string();
+        let error = entry.h_multiplier_ratio().unwrap_err().to_string();
         assert!(
             error.contains("owned_capacity") && error.contains("0x01"),
             "{error}"
         );
         entry.owned_capacity = None;
         entry.owned_knowledge = Some("invalid".into());
-        assert!(parse_h_multiplier_ratio(&entry)
+        assert!(entry
+            .h_multiplier_ratio()
             .unwrap_err()
             .to_string()
             .contains("owned_knowledge"));
         entry.owned_knowledge = None;
-        assert_eq!(parse_h_multiplier_ratio(&entry).unwrap(), None);
+        assert_eq!(entry.h_multiplier_ratio().unwrap(), None);
         entry.owned_capacity = Some("42".into());
         entry.owned_knowledge = Some("0".into());
-        assert_eq!(parse_h_multiplier_ratio(&entry).unwrap(), None);
+        assert_eq!(entry.h_multiplier_ratio().unwrap(), None);
     }
 
     /// Identity ids contain a colon, so only the first one separates the type.

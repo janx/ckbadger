@@ -330,6 +330,7 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache: InMemoryCache::new(),
         pipeline_pays: Arc::new(ckbadger_api::routes::PipelinePaysCache::new()),
+        activity_window: Default::default(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
         dob_decode_dir: config.dob_decode_dir,

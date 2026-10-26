@@ -85,6 +85,17 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<TxActions>> {
+        self.list_tx_actions_recent_in_range(limit, cursor, None)
+    }
+
+    /// Recent actions strictly above `after_block`, stopping at the key before
+    /// deserializing older rows. Used by incremental, read-only API windows.
+    pub fn list_tx_actions_recent_in_range(
+        &self,
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        after_block: Option<i64>,
+    ) -> anyhow::Result<Vec<TxActions>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -113,6 +124,10 @@ impl CkbadgerStore {
             }
 
             let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_actions_key(&key);
+            if after_block.is_some_and(|number| block_num <= number) {
+                break;
+            }
+
             let actions: TxActions = bincode::deserialize(&value)?;
             validate_tx_actions_identity(&actions, block_num, tx_idx, &tx_hash_from_key)?;
 
@@ -398,6 +413,32 @@ mod tests {
 
         let results = store.list_tx_actions_recent(10, None).unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn recent_range_stops_before_deserializing_older_blocks() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&make_tx_actions(100, 0, 1));
+        batch.put_tx_actions(&make_tx_actions(101, 0, 2));
+        batch.put_tx_actions(&make_tx_actions(101, 1, 3));
+        batch.commit().unwrap();
+        let old_key = keys::encode_tx_actions_key(100, 0, &[1; 32]);
+        store
+            .put_cf(store.cf_tx_actions(), &old_key, b"unreadable old payload")
+            .unwrap();
+        let first = store
+            .list_tx_actions_recent_in_range(1, None, Some(100))
+            .unwrap();
+        assert_eq!(first[0].tx_index, 1);
+        let rest = store
+            .list_tx_actions_recent_in_range(512, Some((101, 1)), Some(100))
+            .unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].block_number, 101);
+        assert_eq!(rest[0].tx_index, 0);
+        assert!(store.list_tx_actions_recent(512, None).is_err());
     }
 
     #[test]

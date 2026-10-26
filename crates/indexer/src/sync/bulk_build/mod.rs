@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail, Context};
-// The median-time watermark and bucket ends are the workspace's one
+// The running-maximum chain-time watermark and bucket ends are the workspace's one
 // definition of a complete stats bucket, shared with the API's daily charts
 // and transaction stats.
 use ckbadger_common::stats_bucket::{
@@ -1514,11 +1514,9 @@ impl ActivityStatsAccumulator {
                 })?;
             if chain_time != cached_ts {
                 cached_ts = chain_time;
-                cached_date = stats_day(chain_time)?.format("%Y%m%d").to_string();
+                cached_date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
                 // Activity hour keys are UTC+8, unlike chain-level hourly keys.
-                cached_hour = (stats_hour(chain_time)? + chrono::Duration::hours(8))
-                    .format("%Y%m%d%H")
-                    .to_string();
+                cached_hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)?;
             }
 
             crate::db::BatchWriter::accumulate_tx_activity_stats(

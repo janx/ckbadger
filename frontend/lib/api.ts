@@ -1476,7 +1476,7 @@ interface CkbytesAllocation {
 interface TxStatsDataPoint {
   label: string;
   value: number;
-  /** No later block can be dated inside this bucket (CKB's median time of the last 37 blocks). */
+  /** The bucket ends at or before running-maximum chain time; only the newest bucket is in progress. */
   complete: boolean;
 }
 

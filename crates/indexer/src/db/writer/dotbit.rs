@@ -1603,6 +1603,21 @@ mod tests {
             &reactivate_tx_hash,
             &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
+        // Seed the cell owner's balance, as the canonical forward writer does.
+        domain_batch.put_addr_balance(
+            &owner,
+            &ckbadger_store::AddressBalance {
+                balance: 100_00000000,
+                used_capacity: 61_00000000,
+                live_cells_count: 1,
+                total_cells_count: 2,
+                txs_count: 1,
+                first_seen_block: 100,
+                first_seen_tx: initial_tx_hash.clone(),
+                last_activity_block: 200,
+                last_activity_tx: reactivate_tx_hash.clone(),
+            },
+        );
         // The fixture inserts the protocol rows directly, so mirror the
         // parser's script rollups too: two created cells (the first consumed),
         // with only the reactivation cell live at the fork tip.

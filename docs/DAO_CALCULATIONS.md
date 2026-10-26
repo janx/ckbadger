@@ -428,6 +428,15 @@ DAO-related state is split across several CFs:
 > protocol issuance schedule, and `GenesisBaseline.total_issuance`; it is not read from a
 > periodically persisted APC value.
 
+### Deposit holding time
+
+Holding durations use canonical running-maximum chain time. Both live and bulk writers
+persist the deposit's `deposit_chain_time_ms` in the domain lifecycle row when the deposit is
+created. Refresh subtracts that value from tip chain time for phase 0, or request-block chain
+time for phase 1; it never reloads deposit headers. Request-header reads are memoized per
+refresh. Raw `deposit_timestamp` is retained separately for display. Stores written before
+this required field must be re-synced from genesis.
+
 ## 6. Charts Data
 
 ### Total Supply Chart

@@ -526,7 +526,7 @@ fn format_hash_rate(hash_rate: u128) -> String {
         (1_000, "KH/s"),
     ]
     .into_iter()
-    .find(|(scale, _)| hash_rate >= *scale)
+    .find(|(scale, _)| hash_rate >= *scale - *scale / 200_000)
     .unwrap_or((1, "H/s"));
     let whole = hash_rate / scale;
     let remainder = hash_rate % scale;
@@ -553,7 +553,7 @@ fn format_difficulty(difficulty: u64) -> String {
         (KILO, "K"),
     ]
     .into_iter()
-    .find(|(scale, _)| difficulty >= *scale);
+    .find(|(scale, _)| difficulty >= *scale - *scale / 200_000);
     let Some((scale, unit)) = scale else {
         return difficulty.to_string();
     };
@@ -670,15 +670,11 @@ pub struct TxStatsDataPoint {
 /// `/statistics/tx-stats`: transaction counts per hour and per day, oldest
 /// first, every bucket marked `complete` or not.
 ///
-/// Completeness is CKB's median-time rule ([`ckbadger_common::stats_bucket`],
-/// the rule the daily charts and the bulk indexer use), never a position: a
-/// bucket is `complete: true` once its end is at or below the median time of
-/// the newest 37 indexed blocks, after which no block can be dated inside it.
-/// Complete buckets always come before in-progress ones, and the newest bucket
-/// (it holds the newest-dated block) is always in progress. Because a block
-/// may be dated before its parent, more than one trailing bucket can be in
-/// progress — typically the previous hour or day for the first minutes of a
-/// new one.
+/// Completeness uses the canonical running-maximum chain time shared by
+/// writers and readers (`ckbadger_common::stats_bucket`). A bucket is complete
+/// once its exclusive end is at or below the tip's chain time. Only the newest
+/// bucket can be in progress; a backward raw timestamp cannot reopen an older
+/// bucket. A reorg can lower chain time and reopen a bucket.
 ///
 /// - `hourly_data`: chain-level hourly buckets — the newest one and those
 ///   starting less than 24 h before it — labelled with their UTC start hour
@@ -3321,7 +3317,7 @@ fn build_miner_distribution_response(
 async fn get_miner_address_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MinerDistributionResponse> {
-    // The window ends at the chain's last complete day by the median-time
+    // The window ends at the chain's last complete day by the running-maximum chain-time
     // rule (`utils::stats_bucket`), not the wall clock: a lagging indexer has
     // not indexed "yesterday" yet, and its own complete days must still show.
     let store = state.store.clone();
@@ -3835,8 +3831,7 @@ where
                 snapshot.date
             )));
         }
-        // A snapshot dated after the tip block's day is legal (a block may be
-        // dated before its parent); the median-time rule below excludes it.
+        // Completion follows monotone chain time, not the raw tip timestamp.
         if date == tip_date {
             saw_tip_date = true;
         }
@@ -3989,7 +3984,7 @@ where
 async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
     // Keyed by the last complete day: the chart rolls over as soon as the
-    // median time passes midnight, and a reorg that reopens a day drops it.
+    // chain time passes midnight, and a reorg that reopens a day drops it.
     let cache_key = complete_days_cache_key("chart:inflation-rate:v3", chain)?;
     if let Some(cached) = state.cache.get::<ChartResponse>(&cache_key).await {
         return ok(cached);
@@ -4365,91 +4360,6 @@ async fn get_daily_activity_stats(
 // Activity Summary (24h rolling window)
 // ============================================
 
-fn scan_rolling_activity_24h(
-    store: &ckbadger_store::CkbadgerStore,
-    tip: Option<(i64, CachedBlockHeader)>,
-) -> anyhow::Result<(ckbadger_store::DailyActivityStats, u32)> {
-    use ckbadger_store::types::ParticipantId;
-
-    let mut stats = ckbadger_store::DailyActivityStats::default();
-    let Some((tip_number, tip_header)) = tip else {
-        return Ok((stats, 0));
-    };
-    let cutoff_ms = tip_header
-        .chain_time_ms
-        .checked_sub(86_400_000)
-        .ok_or_else(|| {
-            anyhow::anyhow!("activity 24h cutoff underflow at tip block {tip_number}")
-        })?;
-    let mut addresses = HashSet::new();
-    let mut hours = HashSet::new();
-    let mut cursor = None;
-    const PAGE_SIZE: usize = 512;
-    loop {
-        let page = store.list_tx_actions_recent(PAGE_SIZE, cursor)?;
-        if page.is_empty() {
-            break;
-        }
-        let block_numbers: Vec<i64> = page
-            .iter()
-            .map(|tx| tx.block_number)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        let headers = store.get_block_headers_batch(&block_numbers)?;
-        let page_len = page.len();
-        for tx in &page {
-            if tx.block_number > tip_number {
-                anyhow::bail!(
-                    "activity row above sync tip: tx=0x{}, block={}, tip={tip_number}",
-                    hex::encode(&tx.tx_hash),
-                    tx.block_number
-                );
-            }
-            let header = headers.get(&tx.block_number).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing block header for activity row: tx=0x{}, block={}",
-                    hex::encode(&tx.tx_hash),
-                    tx.block_number
-                )
-            })?;
-            if header.hash != tx.block_hash {
-                anyhow::bail!(
-                    "activity row block hash mismatch: tx=0x{}, block={}",
-                    hex::encode(&tx.tx_hash),
-                    tx.block_number
-                );
-            }
-            if header.chain_time_ms <= cutoff_ms {
-                stats.unique_address_count = u32::try_from(addresses.len()).map_err(|_| {
-                    anyhow::anyhow!(
-                        "activity 24h unique address count exceeds u32 at tip {tip_number}"
-                    )
-                })?;
-                return Ok((stats, u32::try_from(hours.len())?));
-            }
-            stats.accumulate_from_tx_actions(tx);
-            hours.insert(header.chain_time_ms.div_euclid(3_600_000));
-            if !tx.is_cellbase {
-                for participant in &tx.participants {
-                    if let ParticipantId::Lock(hash) = participant.id {
-                        addresses.insert(hash);
-                    }
-                }
-            }
-        }
-        let last = page.last().expect("nonempty page");
-        cursor = Some((last.block_number, last.tx_index));
-        if page_len < PAGE_SIZE {
-            break;
-        }
-    }
-    stats.unique_address_count = u32::try_from(addresses.len()).map_err(|_| {
-        anyhow::anyhow!("activity 24h unique address count exceeds u32 at tip {tip_number}")
-    })?;
-    Ok((stats, u32::try_from(hours.len())?))
-}
-
 async fn get_activity_summary_24h(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ActivitySummary24hResponse> {
@@ -4470,8 +4380,9 @@ async fn get_activity_summary_24h(
     }
 
     let store = state.store.clone();
+    let activity_window = state.activity_window.clone();
     let (agg, hours_covered) =
-        tokio::task::spawn_blocking(move || scan_rolling_activity_24h(&store, tip))
+        tokio::task::spawn_blocking(move || activity_window.summary(&store, tip))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -4753,6 +4664,29 @@ async fn get_asset_ecosystem(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compact_work_display_promotes_rounded_unit_boundaries() {
+        for (scale, previous, next) in [
+            (1_000_000u128, "K", "M"),
+            (1_000_000_000, "M", "G"),
+            (1_000_000_000_000, "G", "T"),
+            (1_000_000_000_000_000, "T", "P"),
+            (1_000_000_000_000_000_000, "P", "E"),
+        ] {
+            let boundary = scale - scale / 200_000;
+            assert_eq!(
+                format_hash_rate(boundary - 1),
+                format!("999.99 {previous}H/s")
+            );
+            assert_eq!(format_hash_rate(boundary), format!("1.00 {next}H/s"));
+            assert_eq!(
+                format_difficulty((boundary - 1) as u64),
+                format!("999.99 {previous}")
+            );
+            assert_eq!(format_difficulty(boundary as u64), format!("1.00 {next}"));
+        }
+    }
+
     #[test]
     fn difficulty_display_rounds_exactly_above_f64_integer_precision() {
         assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.01 P");
@@ -5488,7 +5422,7 @@ mod tests {
     }
 
     /// Tip at 2026-10-23T16:30Z (00:30 on 10-24, UTC+8) after blocks at 16:10Z
-    /// and 16:20Z: the median time is 16:20Z, so the 15:00 UTC hour and the
+    /// and 16:20Z: chain time is 16:30Z, so the 15:00 UTC hour and the
     /// 10-23 day are complete, while 16:00 and 10-24 are in progress.
     fn tx_stats_chain() -> Option<ChainTime> {
         Some(
@@ -5521,10 +5455,10 @@ mod tests {
     }
 
     /// Each series is oldest first, spans the window ending with its newest
-    /// bucket, and marks every bucket complete or not by the median time;
+    /// bucket, and marks every bucket complete or not by chain time;
     /// `currentHour` / `currentDay` are the newest buckets' counts.
     #[test]
-    fn test_tx_stats_windows_end_with_the_newest_buckets_marked_by_median_time() {
+    fn test_tx_stats_windows_end_with_the_newest_buckets_marked_by_chain_time() {
         let hourly = vec![
             // Starts exactly 24 h before the newest bucket: outside the window.
             tx_hour("2026-10-22T16:00:00Z", 1),

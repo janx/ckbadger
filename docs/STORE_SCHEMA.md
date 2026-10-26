@@ -14,6 +14,12 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 
 `block_headers` rows in the domain store require `CachedBlockHeader.chain_time_ms`, the running maximum of raw header timestamps from genesis through that block. The raw `timestamp` remains available for chain payloads and display. All indexed day/hour buckets, completed-bucket reads, and chain-time searches use `chain_time_ms`. Old serialized headers have no compatible default and must be rebuilt from genesis; mixing old headers with new statistics is invalid. Daily block statistics persist exact `difficulty_sum: u128` rather than a rounded floating-point average. Re-sync rebuilds these domain rows and aggregates; it does not mutate `cells` in the append-only store or the crawler's network store.
 
+`dao_deposits` also requires `DaoDepositCacheEntry.deposit_chain_time_ms`, the deposit
+block's canonical running-maximum time. Live and bulk indexer writers persist it at creation;
+DAO refresh reads this field rather than reloading every deposit header. The raw
+`deposit_timestamp` remains available for display. This domain-store serialization change
+requires re-sync from genesis; there is no default, migration, or append-only payload mutation.
+
 ## Column Families
 
 | Column Family                    | Key                                                                           | Value                                                                          | Purpose                                                                                                                                                                                                                                                    |

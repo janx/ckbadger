@@ -398,11 +398,11 @@ async fn get_block(
             let reward_info = get_mining_reward(
                 &state.ckb_rpc_url,
                 &block_hash,
-                state.ckb_store.as_ref(),
+                state.store.clone(),
                 &state.cache,
             )
             .await?;
-            // `None` only while the node has not finalized this block's reward.
+            // Pending until the node finalizes and the indexer reaches the paying block.
             let (mining_reward, mining_reward_tx_hash) = match reward_info {
                 Some(info) => (Some(info.reward), Some(info.cellbase_tx_hash)),
                 None => (None, None),
@@ -637,11 +637,11 @@ pub(crate) async fn fetch_block_economic_state(
 }
 
 /// The block's total miner reward and the cellbase that pays it. `Ok(None)`
-/// while the node has not finalized the block; every other gap is an error.
+/// until the node finalizes the block and its paying cellbase is indexed.
 async fn get_mining_reward(
     rpc_url: &str,
     block_hash: &[u8; 32],
-    ckb_store: Option<&Arc<CkbChainReader>>,
+    store: Arc<ckbadger_store::CkbadgerStore>,
     cache: &CacheBackend,
 ) -> Result<Option<MiningRewardInfo>, ApiRouteError> {
     let cache_key = CacheKeys::mining_reward(&format!("0x{}", hex::encode(block_hash)));
@@ -652,9 +652,19 @@ async fn get_mining_reward(
     let Some(economic_state) = fetch_block_economic_state(rpc_url, block_hash).await? else {
         return Ok(None);
     };
+    let finalized_at = economic_state.finalized_at;
+    let cellbase_tx_hash =
+        tokio::task::spawn_blocking(move || get_cellbase_tx_hash(&store, &finalized_at))
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!("reward cellbase lookup task: {error}"))
+            })??;
+    let Some(cellbase_tx_hash) = cellbase_tx_hash else {
+        return Ok(None);
+    };
     let info = MiningRewardInfo {
         reward: economic_state.miner_reward_total.to_string(),
-        cellbase_tx_hash: get_cellbase_tx_hash(ckb_store, &economic_state.finalized_at)?,
+        cellbase_tx_hash,
     };
 
     cache.set(&cache_key, &info, CacheTtl::MINING_REWARD).await;
@@ -662,31 +672,45 @@ async fn get_mining_reward(
     Ok(Some(info))
 }
 
-/// The cellbase of the block that finalized a reward — the transaction that
-/// pays it — read from the CKB node's RocksDB.
+/// Resolve the paying transaction through the canonical domain index. The node
+/// reader is optional and can lag independently; it does not own this lookup.
 fn get_cellbase_tx_hash(
-    ckb_store: Option<&Arc<CkbChainReader>>,
+    store: &ckbadger_store::CkbadgerStore,
     finalized_at: &[u8; 32],
-) -> Result<String, ApiRouteError> {
-    let ckb = ckb_store.ok_or_else(|| {
-        ApiError::internal(
-            "the mining reward's cellbase is read from the node DB; configure ckb_db_path \
-             so the API can open it",
-        )
+) -> Result<Option<String>, ApiRouteError> {
+    let context = format!("reward finalizing block 0x{}", hex::encode(finalized_at));
+    let read_error = |error| ApiError::internal(format!("{context}: {error}"));
+    let Some(number) = store
+        .get_block_number_by_hash(finalized_at)
+        .map_err(read_error)?
+    else {
+        return Ok(None);
+    };
+    let header = store
+        .get_block_header(number)
+        .map_err(read_error)?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "{context}: hash index points to missing header {number}"
+            ))
+        })?;
+    if header.hash != finalized_at {
+        return Err(ApiError::internal(format!(
+            "{context}: canonical header mismatch at {number}"
+        )));
+    }
+    let rows = store
+        .list_block_txs_after(number, -1, 1)
+        .map_err(read_error)?;
+    let (index, cellbase) = rows.first().ok_or_else(|| {
+        ApiError::internal(format!("{context}: indexed block {number} has no cellbase"))
     })?;
-    let block = ckb.get_block(finalized_at).ok_or_else(|| {
-        ApiError::internal(format!(
-            "block 0x{} finalized this reward but is not in the node DB",
-            hex::encode(finalized_at)
-        ))
-    })?;
-    let cellbase = block.transactions().into_iter().next().ok_or_else(|| {
-        ApiError::internal(format!(
-            "block 0x{} has no cellbase",
-            hex::encode(finalized_at)
-        ))
-    })?;
-    Ok(format!("0x{}", hex::encode(cellbase.hash().raw_data())))
+    if *index != 0 || !cellbase.is_cellbase {
+        return Err(ApiError::internal(format!(
+            "{context}: transaction {index} in block {number} is not cellbase index 0"
+        )));
+    }
+    Ok(Some(format!("0x{}", hex::encode(cellbase.tx_hash))))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

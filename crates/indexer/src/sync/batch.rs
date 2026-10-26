@@ -1638,10 +1638,11 @@ impl Indexer {
         let first_block = all_parsed_blocks.first().unwrap().number;
         let last_block = all_parsed_blocks.last().unwrap().number;
         let mut previous_chain_time = if first_block > 0 {
-            self.writer
+            Some(self.writer
                 .store()
                 .get_block_header(first_block - 1)?
-                .map(|header| header.chain_time_ms)
+                .ok_or_else(|| anyhow!("missing parent header for live batch: first_block={first_block}, parent={}", first_block - 1))?
+                .chain_time_ms)
         } else {
             None
         };
@@ -1773,18 +1774,23 @@ impl Indexer {
             .collect::<Result<_>>()?;
         // A resolution failure is a deterministic property of the chain and
         // the committed lifecycle: retrying the batch cannot change it.
-        let live_dao =
-            LiveDaoBatch::resolve(self.writer.store(), &all_tx_data, &batch_dao_ars, |key| {
+        let live_dao = LiveDaoBatch::resolve(
+            self.writer.store(),
+            &all_tx_data,
+            &batch_dao_ars,
+            &chain_time_by_block,
+            |key| {
                 input_cell_info
                     .get(key)
                     .or_else(|| batch_cell_infos.get(key))
-            })
-            .map_err(|source| {
-                PreCommitInvariantError::new(
-                    "DAO lifecycle",
-                    source.context(format!("live batch {}-{}", first_block, last_block)),
-                )
-            })?;
+            },
+        )
+        .map_err(|source| {
+            PreCommitInvariantError::new(
+                "DAO lifecycle",
+                source.context(format!("live batch {}-{}", first_block, last_block)),
+            )
+        })?;
         // DAO withdraw-request outpoints and their claimed compensation, for
         // fee correction and activity classification (no per-input DB reads).
         let dao_withdraw_outpoints = live_dao.withdraw_request_outpoints();
@@ -2102,9 +2108,7 @@ impl Indexer {
             let chain_time = *chain_time_by_block.get(&block).ok_or_else(|| {
                 anyhow!("entity daily delta references block outside live batch: block={block}")
             })?;
-            ckbadger_common::stats_bucket::stats_day(chain_time)?
-                .format("%Y%m%d")
-                .to_string()
+            ckbadger_common::stats_bucket::stats_date_key(chain_time)?
                 .parse::<u32>()
                 .map_err(|e| anyhow!("invalid canonical stats day for block={block}: {e}"))
         };
@@ -3283,19 +3287,14 @@ impl Indexer {
                                 tx_actions.tx_index
                             )
                         })?;
-                    let date = ckbadger_common::stats_bucket::stats_day(chain_time)?
-                        .format("%Y%m%d")
-                        .to_string();
+                    let date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
                     let day_stats = daily_activity_accum.entry(date.clone()).or_default();
                     BatchWriter::accumulate_tx_activity_stats(tx_actions, day_stats);
 
                     // Accumulate hourly activity stats. Activity hour keys
                     // are UTC+8 (`block_datetime_from_ms`) — unlike the
                     // chain-level hourly stats, whose keys are UTC.
-                    let hour = (ckbadger_common::stats_bucket::stats_hour(chain_time)?
-                        + chrono::Duration::hours(8))
-                    .format("%Y%m%d%H")
-                    .to_string();
+                    let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)?;
                     let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
                     BatchWriter::accumulate_tx_activity_stats(tx_actions, hour_stats);
 
@@ -6616,6 +6615,36 @@ mod tests {
         /// Before this, one `write_commit_ms` covered merge + balance reads +
         /// both trackers + the script rollup + both commits, so a 66-383 s
         /// catch-up commit window could not be attributed to anything.
+        #[tokio::test]
+        async fn live_batch_rejects_missing_parent_before_writing() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            store
+                .delete_cf(
+                    store.cf_block_headers(),
+                    &ckbadger_store::keys::encode_block_num(99),
+                )
+                .unwrap();
+            let error = write_live_block_with_entity_changes(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("missing parent header for live batch: first_block=100"),
+                "{error:#}"
+            );
+            assert!(store.get_block_header(100).unwrap().is_none());
+        }
+
         #[tokio::test]
         async fn live_batch_splits_the_commit_window_into_five_phases() {
             let dir = tempfile::tempdir().unwrap();

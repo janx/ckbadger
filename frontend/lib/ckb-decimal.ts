@@ -81,7 +81,7 @@ export function formatDecimalBytes(bytes: bigint): string {
     [BigInt(1e3), 'kB'],
   ];
   for (const [div, suffix] of units) {
-    if (bytes >= div) {
+    if (bytes >= div - div / BigInt(20000)) {
       const tenths = (bytes * BigInt(10) + div / BigInt(2)) / div;
       return `${tenths / BigInt(10)}.${tenths % BigInt(10)} ${suffix}`;
     }

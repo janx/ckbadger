@@ -59,6 +59,24 @@ pub fn stats_hour_index(chain_time_ms: i64) -> Result<i64> {
         .div_euclid(HOUR_MS))
 }
 
+/// Persisted UTC+8 day key shared by live, bulk, and rollback writers.
+pub fn stats_date_key(chain_time_ms: i64) -> Result<String> {
+    Ok(stats_day(chain_time_ms)?.format("%Y%m%d").to_string())
+}
+
+/// Persisted UTC+8 activity hour key.
+pub fn stats_hour_utc8_key(chain_time_ms: i64) -> Result<String> {
+    let hour = stats_hour(chain_time_ms)?
+        .checked_add_signed(chrono::Duration::seconds(i64::from(CKB_UTC8_OFFSET)))
+        .ok_or_else(|| anyhow!("UTC+8 hour overflow: chain_time_ms={chain_time_ms}"))?;
+    Ok(hour.format("%Y%m%d%H").to_string())
+}
+
+/// Persisted UTC chain-statistics hour key.
+pub fn stats_hour_utc_key(chain_time_ms: i64) -> Result<String> {
+    Ok(stats_hour(chain_time_ms)?.format("%Y%m%d%H").to_string())
+}
+
 /// CKB's median time of a window of consecutive block timestamps: the upper
 /// median (index `len / 2` of the sorted window), at most
 /// [`MEDIAN_TIME_BLOCK_COUNT`] blocks. Near genesis the window is every block
@@ -161,6 +179,29 @@ pub fn bucket_end_from_utc8_key(bucket: &str, hourly: bool) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_keys_pin_utc8_and_utc_at_day_and_year_boundaries() {
+        for (instant, day, utc8, utc) in [
+            (
+                "2026-12-31T15:59:59Z",
+                "20261231",
+                "2026123123",
+                "2026123115",
+            ),
+            (
+                "2026-12-31T16:00:00Z",
+                "20270101",
+                "2027010100",
+                "2026123116",
+            ),
+        ] {
+            let ms = utc_ms(instant);
+            assert_eq!(stats_date_key(ms).unwrap().as_bytes(), day.as_bytes());
+            assert_eq!(stats_hour_utc8_key(ms).unwrap().as_bytes(), utc8.as_bytes());
+            assert_eq!(stats_hour_utc_key(ms).unwrap().as_bytes(), utc.as_bytes());
+        }
+    }
 
     #[test]
     fn block_time_bucket_boundaries_are_shared_by_live_bulk_and_rollback() {

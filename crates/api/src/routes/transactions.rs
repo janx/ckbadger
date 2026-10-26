@@ -24,7 +24,6 @@ use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
 };
 use crate::{AppState, RequestReadView, RequestWait};
-use std::convert::Infallible;
 use tracing::instrument;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -205,46 +204,47 @@ async fn list_transactions(
         .map(|bn| validate_block_number(bn, "block_number"))
         .transpose()?;
 
-    // Get total count
-    let (total, selected_block_hash): (i64, Option<Vec<u8>>) =
-        if let Some(block_number) = block_number {
-            match state
-                .store
-                .get_block_header(block_number)
-                .map_err(|error| {
-                    ApiError::internal(format!("block {block_number} header read: {error}"))
-                })? {
-                Some(header) => (i64::from(header.transactions_count), Some(header.hash)),
-                None => {
-                    let has_index = !state
-                        .store
-                        .list_block_txs_after(block_number, -1, 1)
-                        .map_err(|error| {
-                            ApiError::internal(format!(
-                                "block {block_number} transaction index read: {error}"
-                            ))
-                        })?
-                        .is_empty();
-                    if has_index {
-                        return Err(ApiError::internal(format!(
-                            "block {block_number} transaction index exists without header"
+    let count_store = state.store.clone();
+    let (total, selected_block_hash) =
+        tokio::task::spawn_blocking(move || -> Result<(i64, Option<Vec<u8>>), ApiRouteError> {
+            Ok(if let Some(block_number) = block_number {
+                match count_store
+                    .get_block_header(block_number)
+                    .map_err(|error| {
+                        ApiError::internal(format!("block {block_number} header read: {error}"))
+                    })? {
+                    Some(header) => (i64::from(header.transactions_count), Some(header.hash)),
+                    None => {
+                        let has_index = !count_store
+                            .list_block_txs_after(block_number, -1, 1)
+                            .map_err(|error| {
+                                ApiError::internal(format!(
+                                    "block {block_number} transaction index read: {error}"
+                                ))
+                            })?
+                            .is_empty();
+                        if has_index {
+                            return Err(ApiError::internal(format!(
+                                "block {block_number} transaction index exists without header"
+                            )));
+                        }
+                        return Err(ApiError::not_found(format!(
+                            "block {block_number} not found"
                         )));
                     }
-                    return Err(ApiError::not_found(format!(
-                        "block {block_number} not found"
-                    )));
                 }
-            }
-        } else {
-            (
-                state
-                    .store
-                    .get_sync_status()
-                    .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
-                    .total_transactions,
-                None,
-            )
-        };
+            } else {
+                (
+                    count_store
+                        .get_sync_status()
+                        .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
+                        .total_transactions,
+                    None,
+                )
+            })
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("transaction count task: {error}")))??;
 
     let store = state.store.clone();
 
@@ -2146,59 +2146,66 @@ async fn get_transaction_lifecycle(
     // Look for proposal block in CKB node's RocksDB
     // A tx committed in block C must be proposed in block P where:
     // C - farthest <= P <= C - closest (blocks below genesis do not exist).
-    let proposed_in = if let Some(ref ckb_store) = state.ckb_store {
-        let store_c = state.store.clone();
-        let ckb_store_c = ckb_store.clone();
-        let short_hash_c = short_hash.clone();
-        tokio::task::spawn_blocking(move || -> Option<ProposalWindowHit> {
-            // CKB consensus counts the proposal zones of the uncles a block
-            // embeds, so a tx can legitimately be proposed only inside an
-            // uncle; the shared zone puts the block's own proposals first, so
-            // they own the attribution when both carry the short id.
+    let ckb_store = state.ckb_store.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "transaction {hash} proposal lookup requires the CKB node DB reader"
+        ))
+    })?;
+    let store = state.store.clone();
+    let proposed_in = tokio::task::spawn_blocking(
+        move || -> Result<Option<ProposalWindowHit>, ApiRouteError> {
             let mut headers = std::collections::HashMap::new();
-            let zone_of = |bn: i64| -> Result<Option<Vec<ZoneProposal>>, Infallible> {
-                let Ok(Some(header)) = store_c.get_block_header(bn) else {
-                    return Ok(None);
-                };
-                if header.hash.len() != 32 {
-                    return Ok(None);
-                }
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&header.hash);
-                let Some(block) = ckb_store_c.get_block(&hash) else {
-                    return Ok(None);
-                };
+            let zone_of = |bn: i64| -> Result<Option<Vec<ZoneProposal>>, ApiRouteError> {
+                let context = format!(
+                    "transaction 0x{} proposal block {bn}",
+                    hex::encode(&hash_bytes)
+                );
+                let header = store
+                    .get_block_header(bn)
+                    .map_err(|error| ApiError::internal(format!("{context} header read: {error}")))?
+                    .ok_or_else(|| ApiError::internal(format!("{context}: missing header")))?;
+                let hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+                    ApiError::internal(format!(
+                        "{context}: invalid header hash length {}",
+                        header.hash.len()
+                    ))
+                })?;
+                let block = ckb_store.get_block(&hash).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "{context}: block 0x{} missing from node DB",
+                        hex::encode(hash)
+                    ))
+                })?;
                 headers.insert(bn, (header.hash, header.timestamp));
                 Ok(Some(block_proposal_zone(&block)))
             };
-            let hit = match earliest_proposal_in_window(
-                window,
-                commit_block_number,
-                &short_hash_c,
-                zone_of,
-            ) {
-                Ok(hit) => hit?,
-                Err(never) => match never {},
+            let Some(hit) =
+                earliest_proposal_in_window(window, commit_block_number, &short_hash, zone_of)?
+            else {
+                return Ok(None);
             };
-            let (block_hash, timestamp) = headers.remove(&hit.block_number)?;
-            Some(ProposalWindowHit {
+            let (block_hash, timestamp) = headers.remove(&hit.block_number).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "proposal hit missing its header: block={}",
+                    hit.block_number
+                ))
+            })?;
+            Ok(Some(ProposalWindowHit {
                 block_number: hit.block_number,
                 block_hash,
                 timestamp,
                 uncle: hit.uncle.map(|uncle| (uncle.number, uncle.hash.to_vec())),
-            })
-        })
-        .await
-        .unwrap_or(None)
-    } else {
-        None
-    };
+            }))
+        },
+    )
+    .await
+    .map_err(|error| {
+        ApiError::internal(format!("transaction {hash} proposal lookup task: {error}"))
+    })??;
 
     let (proposed_in_info, proposed_in_uncle, commitment_distance) = match proposed_in {
         Some(hit) => {
-            let ts = chrono::DateTime::from_timestamp_millis(hit.timestamp)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default();
+            let ts = required_tx_timestamp(hit.timestamp, hit.block_number, 0)?;
             (
                 Some(LifecycleBlockInfo {
                     block_number: hit.block_number,

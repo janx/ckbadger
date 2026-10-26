@@ -636,9 +636,9 @@ async fn test_block_proposals_unknown_block_is_not_found() {
 // The block detail's mining reward used to swallow every failure into
 // `miningRewardTxHash: null`: a malformed `finalized_at`
 // (`hex::decode(..).ok()?`), a wrong-length one (`return None`), no node
-// reader (`ckb_store?`), a finalizing block missing from the node DB. A node
-// answer the API cannot use is an error, not a missing field. `null` remains
-// the honest answer only when the node reports the block not finalized yet.
+// reader (`ckb_store?`). A malformed node answer is an error. A valid finalizing
+// block not yet indexed is pending; once indexed its cellbase is resolved solely
+// through the domain index, independent of the optional node reader.
 // ---------------------------------------------------------------------------
 
 /// A block whose cellbase (index 0) pays an earlier block's reward.
@@ -652,6 +652,59 @@ fn build_finalizing_block(number: u64) -> ckb_types::core::BlockView {
     build_proposal_block(number, &[], &[cellbase])
 }
 
+fn seed_finalizing_index(store: &Arc<CkbadgerStore>, block: &ckb_types::core::BlockView) {
+    use ckb_types::prelude::*;
+    let hash: [u8; 32] = block.hash().unpack();
+    seed_proposer_header(store, block.number() as i64, &hash);
+    let mut batch = ckbadger_store::StoreBatch::new(store);
+    batch.put_tx_index(
+        block.number() as i64,
+        0,
+        &ckbadger_store::TxIndexEntry {
+            tx_hash: block.transactions()[0].hash().unpack(),
+            is_cellbase: true,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+}
+
+#[tokio::test]
+async fn mining_reward_uses_indexed_cellbase_without_optional_node_reader() {
+    let finalizing = build_finalizing_block(511);
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_finalizing_index(&store, &finalizing);
+    let server = MockServer::start().await;
+    mount_block_economic_state_rpc(
+        &server,
+        &[(
+            &format!("0x{}", hex::encode([0x50; 32])),
+            &format!("0x{}", hex::encode(finalizing.hash().raw_data())),
+        )],
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_db_path = "/nonexistent/ckbadger-review-node-db".into();
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["miningRewardTxHash"],
+        format!(
+            "0x{}",
+            hex::encode(finalizing.transactions()[0].hash().raw_data())
+        )
+    );
+}
+
 #[tokio::test]
 async fn test_mining_reward_names_the_finalizing_cellbase() {
     use ckb_types::prelude::*;
@@ -662,6 +715,7 @@ async fn test_mining_reward_names_the_finalizing_cellbase() {
 
     let store = test_store();
     seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_finalizing_index(&store, &finalizing);
     let chain = seed_ckb_chain(&[finalizing]);
     let server = MockServer::start().await;
     mount_block_economic_state_rpc(
@@ -721,23 +775,35 @@ async fn test_mining_reward_bad_finalized_at_is_error() {
 }
 
 #[tokio::test]
-async fn test_mining_reward_finalizing_block_missing_from_node_is_error() {
+async fn test_mining_reward_waits_until_finalizing_block_is_indexed() {
     let store = test_store();
     seed_proposer_header(&store, 500, &[0x50; 32]);
     let server = MockServer::start().await;
-    let finalized_at = format!("0x{}", hex::encode([0x51u8; 32]));
+    let finalizing = build_finalizing_block(511);
+    let finalized_at = format!("0x{}", hex::encode(finalizing.hash().raw_data()));
     mount_block_economic_state_rpc(
         &server,
         &[(&format!("0x{}", hex::encode([0x50u8; 32])), &finalized_at)],
     )
     .await;
-    // The (empty) node DB does not hold the finalizing block.
-    let mut config = test_config(store);
+    // Neither the node reader nor the domain index has reached the paying block.
+    let mut config = test_config(store.clone());
     config.ckb_rpc_url = server.uri();
     let app = create_router(config).await;
 
     let (status, json) = get_json(&app, "/blocks/500").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
-    let message = json["message"].as_str().unwrap();
-    assert!(message.contains(&finalized_at), "{message}");
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert!(json["miningReward"].is_null());
+    assert!(json["miningRewardTxHash"].is_null());
+    // Pending answers must not be cached across indexer progress.
+    seed_finalizing_index(&store, &finalizing);
+    let (status, indexed) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{indexed}");
+    assert_eq!(
+        indexed["miningRewardTxHash"],
+        format!(
+            "0x{}",
+            hex::encode(finalizing.transactions()[0].hash().raw_data())
+        )
+    );
 }

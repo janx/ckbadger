@@ -100,8 +100,8 @@ See [docs/INDEXER_PIPELINE.md](../INDEXER_PIPELINE.md) for runtime architecture 
 - CF writes are classified by policy: Class A (append-only event rows streamed immediately),
   Class B (final snapshot written once after convergence), Class C (sealed aggregates flushed
   when time bucket closes), Class D (disabled during bulk sync).
-- Activity Class C buckets seal only when their exact UTC+8 bucket end is at or below CKB median
-  time past (37 headers including the current header, upper median). This bounds unique-address
+- Activity Class C buckets seal only when their exact UTC+8 bucket end is at or below the persisted
+  running-maximum chain time. This bounds unique-address
   sets without allowing a later valid block to modify an already-written bucket.
 - Class B owners and live-cell indexes emit sequentially through domain-store batches capped at
   32 MiB. `CF_CELLS` remains on the separate append-only history path and is never targeted by

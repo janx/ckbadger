@@ -5,32 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::info;
 
+use ckbadger_common::stats_bucket::{stats_date_key, stats_hour_utc8_key, stats_hour_utc_key};
 use ckbadger_common::TokenBalance;
 
 use crate::keys;
 use crate::store::*;
 use crate::sync_ops::checked_rollback_total;
 use crate::types::*;
-
-fn chain_date_key(chain_time_ms: i64) -> anyhow::Result<String> {
-    Ok(ckbadger_common::stats_bucket::stats_day(chain_time_ms)?
-        .format("%Y%m%d")
-        .to_string())
-}
-
-fn chain_hour_utc8_key(chain_time_ms: i64) -> anyhow::Result<String> {
-    Ok(
-        (ckbadger_common::stats_bucket::stats_hour(chain_time_ms)? + chrono::Duration::hours(8))
-            .format("%Y%m%d%H")
-            .to_string(),
-    )
-}
-
-fn chain_hour_utc_key(chain_time_ms: i64) -> anyhow::Result<String> {
-    Ok(ckbadger_common::stats_bucket::stats_hour(chain_time_ms)?
-        .format("%Y%m%d%H")
-        .to_string())
-}
 
 fn subtract_chain_histogram(
     store: &CkbadgerStore,
@@ -951,7 +932,7 @@ fn rebuild_cutoff_activity_addr_sets(
             // recompute_dao_daily_snapshot_for_date.
             break;
         };
-        let date = chain_date_key(header.chain_time_ms)?;
+        let date = stats_date_key(header.chain_time_ms)?;
         if date != cutoff_date {
             break;
         }
@@ -1010,8 +991,8 @@ fn rebuild_cutoff_activity_addr_sets(
                 "missing canonical header for cutoff activity action: block={block_num}"
             )
         })?;
-        let in_date = chain_date_key(header.chain_time_ms)? == cutoff_date;
-        let in_hour = chain_hour_utc8_key(header.chain_time_ms)? == cutoff_hour_utc8;
+        let in_date = stats_date_key(header.chain_time_ms)? == cutoff_date;
+        let in_hour = stats_hour_utc8_key(header.chain_time_ms)? == cutoff_hour_utc8;
         if !in_date && !in_hour {
             continue;
         }
@@ -2204,13 +2185,13 @@ impl CkbadgerStore {
         let replay_start_header = self.get_block_header(replay_start)?;
         let replay_cutoff_date = replay_start_header
             .as_ref()
-            .map(|h| chain_date_key(h.chain_time_ms))
+            .map(|h| stats_date_key(h.chain_time_ms))
             .transpose()?;
         let replay_cutoff_epoch = replay_start_header.as_ref().map(|h| h.epoch_number);
         // UTC+8 hour cutoff — governs the ACTIVITY_HOURLY bucket family.
         let replay_cutoff_hour_str_utc8 = replay_start_header
             .as_ref()
-            .map(|h| chain_hour_utc8_key(h.chain_time_ms))
+            .map(|h| stats_hour_utc8_key(h.chain_time_ms))
             .transpose()?;
         // UTC hour cutoff — governs the chain-level HOURLY bucket family,
         // whose keys are UTC hour strings (see
@@ -2219,7 +2200,7 @@ impl CkbadgerStore {
         // residue to accumulate monotonically.
         let replay_cutoff_hour_str_utc = replay_start_header
             .as_ref()
-            .map(|h| chain_hour_utc_key(h.chain_time_ms))
+            .map(|h| stats_hour_utc_key(h.chain_time_ms))
             .transpose()?;
 
         // The surviving fork-point header: its date detects partial-day
@@ -2233,7 +2214,7 @@ impl CkbadgerStore {
         };
         let fork_point_date = fork_point_header
             .as_ref()
-            .map(|h| chain_date_key(h.chain_time_ms))
+            .map(|h| stats_date_key(h.chain_time_ms))
             .transpose()?;
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
@@ -2307,7 +2288,7 @@ impl CkbadgerStore {
             // Collect block→date/hour mapping for stats delta subtraction:
             // UTC+8 date (date-scoped stats keys) + UTC hour (chain-level
             // HOURLY stats keys).
-            let date_str = chain_date_key(header.chain_time_ms)?;
+            let date_str = stats_date_key(header.chain_time_ms)?;
             let work = ckbadger_common::work::compact_difficulty(header.compact_target)
                 .map_err(|e| anyhow::anyhow!("rollback block {block_num}, date {date_str}: {e}"))?;
             let work_total = stats_date_difficulty.entry(date_str.clone()).or_insert(0);
@@ -2316,7 +2297,7 @@ impl CkbadgerStore {
                     "rollback difficulty sum overflow: block={block_num}, date={date_str}"
                 )
             })?;
-            let hour_str = chain_hour_utc_key(header.chain_time_ms)?;
+            let hour_str = stats_hour_utc_key(header.chain_time_ms)?;
             if header.epoch_index == 0 {
                 if previous_epoch_start.is_none() && block_num > 0 {
                     for previous_number in (0..block_num).rev() {
@@ -2413,10 +2394,10 @@ impl CkbadgerStore {
             // Activity buckets run on the UTC+8 clock for both date and hour.
             {
                 *activity_coinbase_date_deltas
-                    .entry(chain_date_key(header.chain_time_ms)?)
+                    .entry(stats_date_key(header.chain_time_ms)?)
                     .or_insert(0) += 1;
                 *activity_coinbase_hour_deltas
-                    .entry(chain_hour_utc8_key(header.chain_time_ms)?)
+                    .entry(stats_hour_utc8_key(header.chain_time_ms)?)
                     .or_insert(0) += 1;
             }
             block_date_map.insert(block_num, (date_str, hour_str));
@@ -3314,8 +3295,8 @@ impl CkbadgerStore {
                             "missing orphan header for activity rollback: block={block_num}"
                         )
                     })?;
-                    let date_str = chain_date_key(header.chain_time_ms)?;
-                    let hour_str = chain_hour_utc8_key(header.chain_time_ms)?;
+                    let date_str = stats_date_key(header.chain_time_ms)?;
+                    let hour_str = stats_hour_utc8_key(header.chain_time_ms)?;
 
                     activity_date_deltas
                         .entry(date_str.clone())
@@ -4293,8 +4274,15 @@ impl CkbadgerStore {
             }
 
             let Some(mut ab) = self.get_addr_balance(lock_hash)? else {
-                // Address has addr_txs entries but no addr_balance — can happen when
-                // a cellbase-only address was never materialized. Skip gracefully.
+                // A named-only participant may have tx rows without owning cells.
+                // Any cell delta, however, requires the forward writer's balance row.
+                if balance_delta != 0
+                    || used_delta != 0
+                    || live_delta != 0
+                    || total_cells_delta != 0
+                {
+                    anyhow::bail!("missing addr_balance for cell rollback: lock_hash=0x{}, rollback_to={rollback_to}, balance_delta={balance_delta}, used_delta={used_delta}, live_delta={live_delta}, total_cells_delta={total_cells_delta}", hex::encode(lock_hash));
+                }
                 continue;
             };
             // Track holder transitions: capture pre-rollback live count, then
@@ -5929,6 +5917,7 @@ mod tests {
             occupied_capacity: 142_00000000,
             deposit_block_number: 10,
             deposit_timestamp: 0,
+            deposit_chain_time_ms: 0,
             lock_script_hash: vec![0x11; 32],
             deposit_ar: 10_000,
             status: 2,
@@ -10461,6 +10450,7 @@ mod tests {
                 occupied_capacity: 0,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
+                deposit_chain_time_ms: 0,
                 lock_script_hash: vec![0xA1; 32],
                 deposit_ar: 1,
                 status: 1,
@@ -10486,6 +10476,7 @@ mod tests {
                 occupied_capacity: 0,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
+                deposit_chain_time_ms: 0,
                 lock_script_hash: vec![0xB1; 32],
                 deposit_ar: 1,
                 status: 2,
@@ -10510,6 +10501,7 @@ mod tests {
                 occupied_capacity: 0,
                 deposit_block_number: 2,
                 deposit_timestamp: 0,
+                deposit_chain_time_ms: 0,
                 lock_script_hash: vec![0xC1; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -10637,6 +10629,7 @@ mod tests {
                 occupied_capacity: 0,
                 deposit_block_number: 2,
                 deposit_timestamp: 0,
+                deposit_chain_time_ms: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 1,
@@ -10732,6 +10725,106 @@ mod tests {
             err.to_string().contains("block=1 rollback_block=2"),
             "{err:#}"
         );
+    }
+
+    #[test]
+    fn rollback_rejects_missing_balance_for_cell_delta_without_touching_append_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_010_000,
+        };
+        let tx_hash = vec![0x21; 32];
+        let lock_hash = vec![0xAA; 32];
+        let lock_code_hash = vec![0x11; 32];
+        let cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 100,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 2, 0, &tx_hash);
+        batch.put_cell(&tx_hash, 0, &cell, 2);
+        batch.put_addr_tx(
+            &lock_hash,
+            2,
+            0,
+            &tx_hash,
+            &AddrTxValue::new(0, false, true, 0),
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+
+        seed_forward_chain_histogram(&store).unwrap();
+        let outpoint = keys::encode_outpoint(&tx_hash, 0);
+        let payload = store.get_cf(store.cf_cells(), &outpoint).unwrap().unwrap();
+        seed_fixture_script_creation_totals(&store).unwrap();
+        let err = store.rollback_to_block(1).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing addr_balance for cell rollback"),
+            "{err}"
+        );
+        assert!(err.to_string().contains(&hex::encode(&lock_hash)), "{err}");
+        assert!(err.to_string().contains("rollback_to=1"), "{err}");
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &outpoint).unwrap().unwrap(),
+            payload
+        );
+        assert!(store.get_block_header(2).unwrap().is_some());
     }
 
     #[test]

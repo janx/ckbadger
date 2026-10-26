@@ -11,6 +11,23 @@ import {
 } from '@/lib/exact-integer';
 
 describe('exact integer display', () => {
+  it('promotes the unit when rounding reaches the next compact boundary', () => {
+    const suffixes = ['K', 'M', 'B', 'T', 'P', 'E'];
+    for (let index = 0; index < suffixes.length; index++) {
+      const unit = BigInt(1000) ** BigInt(index + 1);
+      const threshold = unit * BigInt(100000) - unit / BigInt(2);
+      expect(formatCompactRatio(threshold, BigInt(100000))).toBe(`1.00${suffixes[index]}`);
+      if (index > 0) {
+        expect(formatCompactInteger((threshold / BigInt(100000)).toString(), 'count')).toBe(
+          `1.00${suffixes[index]}`
+        );
+        expect(formatCompactRatio(threshold - BigInt(1), BigInt(100000))).toBe(
+          `999.99${suffixes[index - 1]}`
+        );
+      }
+    }
+  });
+
   it('keeps bits beyond Number.MAX_SAFE_INTEGER and rounds half-up', () => {
     expect(exactUnsignedInteger('9007199254740993', 'hash rate')).toBe(BigInt('9007199254740993'));
     expect(formatScaledInteger(BigInt('9007199254740993'), BigInt('1000000000000000'), 2)).toBe(

@@ -190,35 +190,48 @@ impl PartialOrd for ActivityRank {
 }
 
 impl CachedAssetEntry {
-    pub fn to_asset_response(&self) -> anyhow::Result<AssetResponse> {
-        let h_multiplier = match (&self.owned_capacity, &self.owned_knowledge) {
+    /// One validated rational for sorting and display; zero knowledge has no H value.
+    pub fn h_multiplier_ratio(&self) -> anyhow::Result<Option<(u128, u128)>> {
+        let parse = |raw: &str, field: &str| -> anyhow::Result<i128> {
+            raw.parse::<i128>().map_err(|error| {
+                anyhow::anyhow!(
+                    "asset {} invalid owned {field} (owned_{field}) {raw:?}: {error}",
+                    self.id
+                )
+            })
+        };
+        let capacity = self
+            .owned_capacity
+            .as_deref()
+            .map(|raw| parse(raw, "capacity"))
+            .transpose()?;
+        let knowledge = self
+            .owned_knowledge
+            .as_deref()
+            .map(|raw| parse(raw, "knowledge"))
+            .transpose()?;
+        match (capacity, knowledge) {
             (Some(cap), Some(used)) => {
-                let cap = cap.parse::<i128>().map_err(|error| {
-                    anyhow::anyhow!("asset {} invalid owned capacity {cap:?}: {error}", self.id)
-                })?;
-                let used = used.parse::<i128>().map_err(|error| {
-                    anyhow::anyhow!(
-                        "asset {} invalid owned knowledge {used:?}: {error}",
-                        self.id
-                    )
-                })?;
                 anyhow::ensure!(
                     cap >= 0 && used >= 0 && used <= cap,
                     "asset {} invalid capacity/knowledge {cap}/{used}",
                     self.id
                 );
-                if used == 0 {
-                    None
-                } else {
-                    Some(
-                        crate::utils::exact_ratio::format_ratio(cap, used, 2)
-                            .map_err(anyhow::Error::msg)?,
-                    )
-                }
+                Ok((used != 0).then_some((cap as u128, used as u128)))
             }
-            (None, None) => None,
+            (None, None) => Ok(None),
             _ => anyhow::bail!("asset {} has incomplete capacity/knowledge pair", self.id),
-        };
+        }
+    }
+
+    pub fn to_asset_response(&self) -> anyhow::Result<AssetResponse> {
+        let h_multiplier = self
+            .h_multiplier_ratio()?
+            .map(|(cap, used)| {
+                crate::utils::exact_ratio::format_ratio(cap as i128, used as i128, 2)
+                    .map_err(anyhow::Error::msg)
+            })
+            .transpose()?;
         Ok(AssetResponse {
             id: self.id.clone(),
             asset_type: self.asset_type.clone(),

@@ -249,6 +249,7 @@ async fn test_dao_cell_missing_deposit_header_is_error() {
             occupied_capacity: 6_100_000_000,
             deposit_block_number: 123,
             deposit_timestamp: 0,
+            deposit_chain_time_ms: 0,
             lock_script_hash: vec![0x11; 32],
             deposit_ar: 1,
             status: 0,

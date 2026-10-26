@@ -86,6 +86,18 @@ describe('formatPercent', () => {
 });
 
 describe('formatDecimalBytes', () => {
+  it('promotes a rounded 1000.0 to the next decimal unit', () => {
+    for (const [unit, previous, next] of [
+      [BigInt(1e6), 'kB', 'MB'],
+      [BigInt(1e9), 'MB', 'GB'],
+      [BigInt(1e12), 'GB', 'TB'],
+    ] as const) {
+      const threshold = unit - unit / BigInt(20000);
+      expect(formatDecimalBytes(threshold - BigInt(1))).toBe(`999.9 ${previous}`);
+      expect(formatDecimalBytes(threshold)).toBe(`1.0 ${next}`);
+    }
+  });
+
   it('prints decimal units with one decimal', () => {
     expect(formatDecimalBytes(BigInt(151_134_245))).toBe('151.1 MB');
     expect(formatDecimalBytes(BigInt(41_590_000_000))).toBe('41.6 GB');

@@ -18,12 +18,16 @@ fn build_dao_cache_entry(
     block_number: i64,
     deposit_ar: i64,
     deposit_timestamp: i64,
-) -> DaoDepositCacheEntry {
-    DaoDepositCacheEntry {
+    deposit_chain_time_ms: i64,
+) -> Result<DaoDepositCacheEntry> {
+    anyhow::ensure!(deposit_timestamp >= 0 && deposit_chain_time_ms >= deposit_timestamp,
+        "invalid DAO deposit chain time: block={block_number}, timestamp={deposit_timestamp}, chain_time_ms={deposit_chain_time_ms}");
+    Ok(DaoDepositCacheEntry {
         capacity: deposit.capacity,
         occupied_capacity: deposit.occupied_capacity,
         deposit_block_number: block_number,
         deposit_timestamp,
+        deposit_chain_time_ms,
         lock_script_hash: deposit.lock_script_hash.clone(),
         deposit_ar,
         status: 0,
@@ -36,7 +40,7 @@ fn build_dao_cache_entry(
         withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
-    }
+    })
 }
 
 fn dao_cache_entry_to_row(
@@ -137,6 +141,7 @@ impl LiveDaoBatch {
         store: &CkbadgerStore,
         txs: &[TxData],
         block_ars: &HashMap<i64, i64>,
+        chain_times: &HashMap<i64, i64>,
         input_cell: F,
     ) -> Result<Self>
     where
@@ -145,7 +150,7 @@ impl LiveDaoBatch {
         let mut batch = Self::default();
         for tx in txs.iter().filter(|tx| !tx.is_cellbase) {
             batch
-                .apply_tx(store, tx, block_ars, &input_cell)
+                .apply_tx(store, tx, block_ars, chain_times, &input_cell)
                 .with_context(|| {
                     format!(
                         "resolving DAO lifecycle: block={}, tx=0x{}",
@@ -282,6 +287,7 @@ impl LiveDaoBatch {
         store: &CkbadgerStore,
         tx: &TxData,
         block_ars: &HashMap<i64, i64>,
+        chain_times: &HashMap<i64, i64>,
         input_cell: &F,
     ) -> Result<()>
     where
@@ -379,7 +385,10 @@ impl LiveDaoBatch {
                     tx.block_number,
                     block_ar,
                     tx.timestamp.timestamp_millis(),
-                ),
+                    *chain_times.get(&tx.block_number).ok_or_else(|| {
+                        anyhow!("missing DAO deposit chain time: block={}", tx.block_number)
+                    })?,
+                )?,
             );
             self.lifecycle_in_batch.insert(deposit_key);
             self.deposits_created += 1;
@@ -664,6 +673,77 @@ mod tests {
     }
 
     #[test]
+    fn persisted_deposit_clocks_equal_headers_without_refresh_point_reads() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for number in 0..1_000i64 {
+            let mut hash = [0; 32];
+            hash[..8].copy_from_slice(&number.to_be_bytes());
+            let raw = 1_700_000_000_000 + number * 10;
+            let chain_time = raw + 5; // A legal backward timestamp at deposit.
+            let deposit = ParsedDaoDeposit {
+                tx_hash: hash.to_vec(),
+                output_index: 0,
+                lock_script_hash: vec![1; 32],
+                capacity: 200_00000000,
+                occupied_capacity: 102_00000000,
+            };
+            batch.put_dao_deposit(
+                &keys::encode_outpoint(&hash, 0),
+                &build_dao_cache_entry(&deposit, number, 1, raw, chain_time).unwrap(),
+            );
+            batch.put_block_header(
+                number,
+                &ckbadger_store::CachedBlockHeader {
+                    hash: hash.to_vec(),
+                    parent_hash: vec![0; 32],
+                    timestamp: raw,
+                    chain_time_ms: chain_time,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        let mut previous_sum = 0i128;
+        let started = Instant::now();
+        store
+            .scan_dao_deposits_by_status(0, |_, entry| {
+                previous_sum += i128::from(
+                    store
+                        .get_block_header(entry.deposit_block_number)?
+                        .unwrap()
+                        .chain_time_ms,
+                );
+                Ok(())
+            })
+            .unwrap();
+        let previous_us = started.elapsed().as_micros();
+        let mut persisted_sum = 0i128;
+        let started = Instant::now();
+        store
+            .scan_dao_deposits_by_status(0, |_, entry| {
+                assert_eq!(entry.deposit_chain_time_ms, entry.deposit_timestamp + 5);
+                persisted_sum += i128::from(entry.deposit_chain_time_ms);
+                Ok(())
+            })
+            .unwrap();
+        let persisted_us = started.elapsed().as_micros();
+        assert_eq!(persisted_sum, previous_sum);
+        eprintln!("DAO clocks synthetic 1000 distinct deposit blocks: scan + 1000 header reads={previous_us}us; scan + persisted clocks={persisted_us}us");
+    }
+
+    #[test]
     fn test_build_dao_cache_entry_sets_defaults() {
         let deposit = ParsedDaoDeposit {
             tx_hash: vec![0x11; 32],
@@ -672,7 +752,14 @@ mod tests {
             capacity: 123_456,
             occupied_capacity: 45_678,
         };
-        let entry = build_dao_cache_entry(&deposit, 42, 9876, 0);
+        let entry = build_dao_cache_entry(&deposit, 42, 9876, 0, 1).unwrap();
+        assert_eq!(entry.deposit_chain_time_ms, 1);
+        let encoded = bincode::serialize(&entry).unwrap();
+        assert!(
+            bincode::deserialize::<DaoDepositCacheEntry>(&encoded[..encoded.len() - 8]).is_err(),
+            "old rows without the required clock must require re-sync, never default to zero"
+        );
+        assert!(build_dao_cache_entry(&deposit, 42, 9876, 10, 9).is_err());
 
         assert_eq!(entry.capacity, deposit.capacity);
         assert_eq!(entry.deposit_block_number, 42);
@@ -696,6 +783,7 @@ mod tests {
             occupied_capacity: 111,
             deposit_block_number: 77,
             deposit_timestamp: 0,
+            deposit_chain_time_ms: 0,
             lock_script_hash: vec![0x33; 32],
             deposit_ar: 123,
             status: 1,
@@ -1003,7 +1091,11 @@ mod tests {
                     );
                 }
             }
-            LiveDaoBatch::resolve(&self.store, txs, block_ars, |key| {
+            let chain_times = txs
+                .iter()
+                .map(|tx| (tx.block_number, tx.timestamp.timestamp_millis()))
+                .collect();
+            LiveDaoBatch::resolve(&self.store, txs, block_ars, &chain_times, |key| {
                 self.committed.get(key).or_else(|| batch_cells.get(key))
             })
         }
@@ -1027,6 +1119,7 @@ mod tests {
             occupied_capacity: 102_00000000,
             deposit_block_number: deposit_block,
             deposit_timestamp: 1_700_000_000_000,
+            deposit_chain_time_ms: 1_700_000_000_000,
             lock_script_hash: LOCK.to_vec(),
             deposit_ar: AR_DEPOSIT,
             status: 0,
