@@ -2240,6 +2240,34 @@ pub enum AssetAction {
     Update,
 }
 
+impl AssetAction {
+    /// Stable compact value used by existing identity outpoint-history rows.
+    pub fn compact(self) -> u8 {
+        match self {
+            Self::Mint => 0,
+            Self::Transfer => 1,
+            Self::Burn => 2,
+            Self::Recycle => 3,
+            Self::Renew => 4,
+            Self::Update => 5,
+        }
+    }
+    pub fn from_compact(value: &[u8]) -> anyhow::Result<Self> {
+        match value {
+            [0] => Ok(Self::Mint),
+            [1] => Ok(Self::Transfer),
+            [2] => Ok(Self::Burn),
+            [3] => Ok(Self::Recycle),
+            [4] => Ok(Self::Renew),
+            [5] => Ok(Self::Update),
+            _ => anyhow::bail!(
+                "invalid identity item action bytes: 0x{}",
+                hex::encode(value)
+            ),
+        }
+    }
+}
+
 // ============================================
 // Group J2: Fiber Channel State
 // ============================================

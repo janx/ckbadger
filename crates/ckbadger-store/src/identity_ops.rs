@@ -9,6 +9,52 @@ use crate::types::{
 use crate::bytes_to_hex;
 
 impl CkbadgerStore {
+    /// Exact item action stored on the existing reverse-outpoint row by the indexer.
+    pub fn get_identity_item_action(
+        &self,
+        id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<AssetAction> {
+        let key = keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index);
+        let value = self.get_cf(self.cf_stats_spore(), &key)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing identity action: item=0x{} tx=0x{} output={output_index}",
+                hex::encode(id),
+                hex::encode(tx_hash)
+            )
+        })?;
+        AssetAction::from_compact(&value).map_err(|error| {
+            anyhow::anyhow!(
+                "identity action item=0x{} tx=0x{} output={output_index}: {error}",
+                hex::encode(id),
+                hex::encode(tx_hash)
+            )
+        })
+    }
+    pub fn get_dotbit_item_action(
+        &self,
+        id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<AssetAction> {
+        let key = keys::encode_dotbit_outpoint_by_account_id_key(id, tx_hash, output_index);
+        let value = self.get_cf(self.cf_stats_mnft(), &key)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing .bit action: item=0x{} tx=0x{} output={output_index}",
+                hex::encode(id),
+                hex::encode(tx_hash)
+            )
+        })?;
+        AssetAction::from_compact(&value).map_err(|error| {
+            anyhow::anyhow!(
+                ".bit action item=0x{} tx=0x{} output={output_index}: {error}",
+                hex::encode(id),
+                hex::encode(tx_hash)
+            )
+        })
+    }
+
     pub fn get_identity(&self, id: &[u8]) -> anyhow::Result<Option<IdentityEntry>> {
         match self.get_cf(self.cf_identity_data(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),

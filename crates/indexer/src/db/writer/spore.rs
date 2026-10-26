@@ -42,6 +42,7 @@ pub(crate) enum IdentityOwnerKeyKind {
 pub(crate) struct SporeBatchState {
     spores: HashMap<Vec<u8>, Option<ObjectEntry>>,
     identities: HashMap<Vec<u8>, Option<IdentityEntry>>,
+    consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityEntry>,
     cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
     cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
@@ -627,6 +628,18 @@ impl BatchWriter {
                 .transpose()?,
             &state.undo_seq_by_block,
         );
+        let consumed = state
+            .consumed_for_actions
+            .remove(&(did.did_id.to_vec(), tx_hash.to_vec()));
+        let previous = consumed
+            .as_ref()
+            .or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let item_action = super::dotbit::classify_identity_output_action(
+            previous,
+            &did.owner_lock_hash,
+            None,
+            None,
+        )?;
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_owner = if was_live {
             existing.as_ref().and_then(|e| e.owner_lock_hash.clone())
@@ -658,6 +671,8 @@ impl BatchWriter {
             batch,
             state,
         )?;
+        let action_key = keys::encode_spore_outpoint_by_id_key(&did.did_id, tx_hash, output_index);
+        batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
 
         // Update identity collection aggregate
         let cid = &DID_CKB_SENTINEL_COLLECTION;
@@ -1006,6 +1021,18 @@ impl BatchWriter {
                 .transpose()?,
             &state.undo_seq_by_block,
         );
+        let consumed = state
+            .consumed_for_actions
+            .remove(&(identity_id.to_vec(), tx_hash.to_vec()));
+        let previous = consumed
+            .as_ref()
+            .or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let item_action = super::dotbit::classify_identity_output_action(
+            previous,
+            &bit_cell.owner_lock_hash,
+            Some(bit_cell.expired_at),
+            None,
+        )?;
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
             existing
@@ -1042,6 +1069,8 @@ impl BatchWriter {
             batch,
             state,
         )?;
+        let action_key = keys::encode_spore_outpoint_by_id_key(&identity_id, tx_hash, output_index);
+        batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
 
         let collection_id = &BIT_CELL_SENTINEL_COLLECTION;
         let mut aggregate = state.get_identity_agg(self.store.as_ref(), collection_id)?;
@@ -1096,7 +1125,7 @@ impl BatchWriter {
         &self,
         spore_id: &[u8],
         block_number: i64,
-        _tx_hash: &[u8],
+        tx_hash: &[u8],
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<Option<Vec<u8>>> {
@@ -1121,6 +1150,9 @@ impl BatchWriter {
                 )?),
                 &state.undo_seq_by_block,
             );
+            state
+                .consumed_for_actions
+                .insert((spore_id.to_vec(), tx_hash.to_vec()), identity.clone());
             let old_owner = identity.owner_lock_hash.clone();
             let identity_standard = identity.standard;
             identity.is_live = false;
@@ -2293,6 +2325,45 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded, spore_id);
+    }
+
+    #[test]
+    fn did_document_update_persists_update_action_in_existing_history_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(&store);
+        let mut state =
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let did = make_parsed_did(&[0x11; 20], &[0x22; 32]);
+        writer
+            .insert_did_ckb_cell(&did, &[0x33; 32], 0, 1, &mut batch, &mut state)
+            .unwrap();
+        writer
+            .consume_spore(&did.did_id, 2, &[0x44; 32], &mut batch, &mut state)
+            .unwrap();
+        writer
+            .insert_did_ckb_cell(&did, &[0x44; 32], 0, 2, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+        let key = keys::encode_spore_outpoint_by_id_key(&did.did_id, &[0x44; 32], 0);
+        assert_eq!(
+            store.get_cf(store.cf_stats_spore(), &key).unwrap().unwrap(),
+            vec![5],
+            "same-owner document edit is Update"
+        );
+        assert_eq!(
+            store
+                .get_identity_item_action(&did.did_id, &[0x44; 32], 0)
+                .unwrap(),
+            ckbadger_store::AssetAction::Update
+        );
+        assert_eq!(
+            store
+                .get_identity_item_action(&did.did_id, &[0x33; 32], 0)
+                .unwrap(),
+            ckbadger_store::AssetAction::Mint
+        );
     }
 
     #[test]

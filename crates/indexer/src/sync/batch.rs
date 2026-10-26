@@ -3012,11 +3012,12 @@ impl Indexer {
                         let das_action = das_action_cache.get(&tx_data.hash).cloned();
                         let mut created_ids = HashSet::new();
                         for account in &dotbit_accounts {
-                            self.writer.insert_dotbit_account_with_state(
+                            self.writer.insert_dotbit_account_with_action(
                                 account,
                                 &tx_data.hash,
                                 parsed.number,
                                 stats_time_ms,
+                                das_action.as_deref(),
                                 &mut data_batch,
                                 &mut dotbit_state,
                             )?;
