@@ -3423,3 +3423,44 @@ async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
         "What this lock decides."
     );
 }
+
+#[tokio::test]
+async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
+    let store = test_store();
+    let result = run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let reference =
+        hex::decode("bfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc").unwrap();
+    let binary =
+        hex::decode("50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95").unwrap();
+    assert_eq!(
+        store
+            .get_script_info(&reference)
+            .unwrap()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("xUDT")
+    );
+    assert_eq!(
+        store
+            .get_script_version(&binary)
+            .unwrap()
+            .unwrap()
+            .family_id
+            .as_deref(),
+        Some("xudt")
+    );
+    assert!(store.get_script_family("usdi-asset").unwrap().is_none());
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/USDI%20Asset")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

@@ -5,8 +5,8 @@ standard = "xudt_compatible"
 description = "Stablecoin issued by InterpayStellar (https://www.interpaystellar.com/)"
 icon = "https://avatars.githubusercontent.com/u/194223641?s=200&v=4"
 
-# InterPay USDI issued via the dedicated USDI Asset script
-# (see docs/metadata/scripts/usdi-asset.toml).
+# InterPay USDI uses its own Type ID deployment of the standard xUDT binary
+# on mainnet (docs/metadata/scripts/xudt.toml); the token identity stays distinct.
 [mainnet]
 code_hash = "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
 hash_type = "type"

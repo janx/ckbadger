@@ -9,6 +9,15 @@ canonical_ref_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6
 version_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
 canonical_hash_type = "data1"
 
+# USDI's mainnet Type ID deploys this same xUDT binary, not a separate script family.
+# Node-verified 2026-10-26: f6a5eef65101899db9709c8de1cc28f23c1bee90d857ebe176f6647ef109e20d:0,
+# block 14,861,099; 33,696-byte ELF. Exact Type ID history contains this sole
+# output, still live through indexer tip 20,840,008 (0x13dfe48).
+[[mainnet.versions]]
+canonical_ref_hash = "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
+version_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+canonical_hash_type = "type"
+
 [testnet]
 [[testnet.versions]]
 canonical_ref_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"

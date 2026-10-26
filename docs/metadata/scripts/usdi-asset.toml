@@ -3,12 +3,8 @@ description = "Stablecoin issued by InterpayStellar"
 website = "https://www.interpaystellar.com/"
 category = "udt"
 
-[mainnet]
-[[mainnet.versions]]
-canonical_ref_hash = "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
-version_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
-canonical_hash_type = "type"
-
+# Mainnet USDI uses the standard xUDT binary; its Type ID deployment is
+# registered in xudt.toml. This family retains the distinct testnet binary.
 [testnet]
 [[testnet.versions]]
 canonical_ref_hash = "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037"
