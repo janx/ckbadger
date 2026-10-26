@@ -12,6 +12,7 @@ import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb, ItemDeltaFact } from '@/components/activity-event-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
+import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
@@ -20,6 +21,7 @@ import {
   api,
   isServiceUnavailableError,
   type TransactionDetail,
+  type TransactionCellDisplay,
   type TransactionScriptGroup,
   type TransactionWitness,
   type ScriptLookupResponse,
@@ -86,7 +88,17 @@ function ScriptName({
 function kindOf(cell: {
   type?: { codeHash: string };
   cellType?: string | null;
+  display?: TransactionCellDisplay | null;
 }): CellTileData['kind'] {
+  if (cell.display) {
+    const kinds = {
+      token: 'tokens',
+      object: 'objects',
+      identity: 'identities',
+      file: 'other',
+    } as const;
+    return kinds[cell.display.kind];
+  }
   switch (cell.cellType) {
     case 'nervos-dao':
       return 'dao';
@@ -154,7 +166,14 @@ function cellTiles(
             owner: owner(cell.address, `input ${i}`),
             lockKind: lockKind(cell.lock?.codeHash),
             kind: kindOf(cell),
-            content: content(cell),
+            content: cell.display ? (
+              <TransactionCellContent
+                display={cell.display}
+                cellHref={`/cell/${out.txHash}-${out.index}`}
+              />
+            ) : (
+              content(cell)
+            ),
             capacity: required(cell.capacity, tx.hash, `input ${i} capacity`),
             occupied: (
               exactUnsignedInteger(
@@ -173,7 +192,11 @@ function cellTiles(
       owner: owner(cell.address, `output ${i}`),
       lockKind: lockKind(cell.lock?.codeHash),
       kind: kindOf(cell),
-      content: content(cell),
+      content: cell.display ? (
+        <TransactionCellContent display={cell.display} cellHref={`/cell/${tx.hash}-${i}`} />
+      ) : (
+        content(cell)
+      ),
       capacity: cell.capacity,
       occupied: (
         exactUnsignedInteger(cell.commonKnowledgeSize, `${tx.hash}: output ${i} occupied bytes`) *
@@ -972,20 +995,33 @@ export default function TransactionDetailPage() {
             poolCapacity={
               tx.isCellbase ? undefined : required(tx.inputsCapacity, hash, 'inputsCapacity')
             }
-            continuity={groups
-              .filter(
-                (g) =>
-                  g.kind === 'type' &&
-                  g.inputIndices.length === 1 &&
-                  g.outputIndices.length === 1 &&
-                  ['objects', 'identities'].includes(tiles.inputs[g.inputIndices[0]].kind)
+            continuity={groups.flatMap((g) => {
+              if (g.kind !== 'type' || g.inputIndices.length !== 1 || g.outputIndices.length !== 1)
+                return [];
+              const inputIndex = g.inputIndices[0];
+              const outputIndex = g.outputIndices[0];
+              const kind = tiles.inputs[inputIndex].kind;
+              const inputDisplay = tx.inputs![inputIndex].display;
+              const outputDisplay = tx.outputs![outputIndex].display;
+              if (
+                inputDisplay &&
+                outputDisplay &&
+                (inputDisplay.kind !== outputDisplay.kind ||
+                  inputDisplay.standard !== outputDisplay.standard ||
+                  inputDisplay.id !== outputDisplay.id)
               )
-              .map((g) => ({
-                from: `in:${g.inputIndices[0]}`,
-                to: `out:${g.outputIndices[0]}`,
-                label: `same ${tiles.inputs[g.inputIndices[0]].kind === 'objects' ? 'object' : 'identity'}`,
-                kind: tiles.inputs[g.inputIndices[0]].kind,
-              }))}
+                return [];
+              const file = inputDisplay?.kind === 'file' && outputDisplay?.kind === 'file';
+              if (!file && !['objects', 'identities'].includes(kind)) return [];
+              return [
+                {
+                  from: `in:${inputIndex}`,
+                  to: `out:${outputIndex}`,
+                  label: `same ${file ? 'file cell' : kind === 'objects' ? 'object' : 'identity'} continues`,
+                  kind: file ? ('file' as const) : kind,
+                },
+              ];
+            })}
             onClearFocus={() => select(null, null)}
           />
         </DetailSection>

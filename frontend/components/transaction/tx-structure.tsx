@@ -22,7 +22,7 @@ export interface TxContinuity {
   from: string;
   to: string;
   label: string;
-  kind?: AssetClass;
+  kind?: AssetClass | 'file';
 }
 export interface TxStructureProps {
   txHash: string;
@@ -56,6 +56,8 @@ export function TxStructure({
   onClearFocus,
   onCellHover,
 }: TxStructureProps) {
+  const continuityColor = (kind: TxContinuity['kind']) =>
+    kind === 'file' ? '#a0a8be' : kind ? CLASS_COLORS[kind] : CLASS_COLORS.objects;
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const [centers, setCenters] = useState<Record<string, number>>({});
@@ -177,9 +179,10 @@ export function TxStructure({
                 {continuity.map((link) => (
                   <path
                     key={`${link.from}:${link.to}`}
+                    data-continuity-kind={link.kind}
                     d={`M0 ${centers[link.from]}C44 ${centers[link.from]} 68 ${centers[link.to]} 112 ${centers[link.to]}`}
                     fill="none"
-                    stroke={link.kind ? CLASS_COLORS[link.kind] : '#a98cf5'}
+                    stroke={continuityColor(link.kind)}
                     strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
                     strokeDasharray="4 3"
                   />
@@ -217,12 +220,32 @@ export function TxStructure({
             <li key={`${l.from}:${l.to}`}>
               <button
                 type="button"
-                onMouseEnter={() => setHover({ kind: 'cell', id: l.from })}
-                onMouseLeave={() => setHover(null)}
-                onFocus={() => setHover({ kind: 'cell', id: l.from })}
-                onBlur={() => setHover(null)}
-                className="hover:text-text"
+                onMouseEnter={() => {
+                  setHover({ kind: 'cell', id: l.from });
+                  onCellHover?.(l.from);
+                }}
+                onMouseLeave={() => {
+                  setHover(null);
+                  onCellHover?.(null);
+                }}
+                onFocus={() => {
+                  setHover({ kind: 'cell', id: l.from });
+                  onCellHover?.(l.from);
+                }}
+                onBlur={() => {
+                  setHover(null);
+                  onCellHover?.(null);
+                }}
+                className="hover:text-text flex items-center gap-2"
               >
+                <svg aria-hidden="true" width="22" height="6" className="shrink-0">
+                  <path
+                    d="M0 3h22"
+                    stroke={continuityColor(l.kind)}
+                    strokeWidth="1.3"
+                    strokeDasharray="4 3"
+                  />
+                </svg>
                 {l.from} → {l.to} · {l.label}
               </button>
             </li>

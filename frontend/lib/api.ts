@@ -400,6 +400,22 @@ interface TransactionWitness {
   fields: Array<{ name: string; start: number; end: number; hex: string }>;
 }
 
+/** Per-cell semantics read from its payload and the canonical item indexes. */
+interface TransactionCellDisplay {
+  kind: 'token' | 'object' | 'identity' | 'file';
+  standard: string;
+  /** Token/file type-script hash, or the canonical object/identity item id. */
+  id: string;
+  name: string | null;
+  collectionId: string | null;
+  collectionName: string | null;
+  symbol: string | null;
+  decimals: number | null;
+  /** Exact token base units; null for non-token cells. */
+  amount: string | null;
+  compositionTier: NonNullable<SporeNft['mediaProfile']>['tier'] | null;
+}
+
 interface PoolTransaction {
   hash: string;
   status: PoolStatus;
@@ -470,6 +486,7 @@ interface TransactionDetail extends Omit<
     /** Exact occupied bytes (not shannons). */
     commonKnowledgeSize?: string | null;
     cellType?: string | null;
+    display: TransactionCellDisplay | null;
     lock?: Script;
     type?: Script;
     address?: string;
@@ -481,6 +498,7 @@ interface TransactionDetail extends Omit<
     status?: 'pending' | 'live' | 'consumed' | null;
     consumedByTx?: string | null;
     cellType?: string;
+    display: TransactionCellDisplay | null;
     lock?: Script;
     type?: Script;
     address?: string;
@@ -2322,6 +2340,7 @@ export type {
   Transaction,
   TransactionStatus,
   TransactionDetail,
+  TransactionCellDisplay,
   TransactionScriptGroup,
   TransactionWitness,
   PoolTransaction,

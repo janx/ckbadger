@@ -56,6 +56,7 @@ describe('renderRawPage', () => {
       outputsCommonKnowledgeSize: '49',
       inputs: [
         {
+          display: null,
           lock: {
             codeHash: `0x${'1'.repeat(64)}`,
             hashType: 'type',
@@ -153,6 +154,7 @@ describe('renderRawPage', () => {
       outputsCommonKnowledgeSize: '49',
       inputs: [
         {
+          display: null,
           lock: {
             codeHash: `0x${'1'.repeat(64)}`,
             hashType: 'type',

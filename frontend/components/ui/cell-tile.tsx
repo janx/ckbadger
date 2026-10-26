@@ -63,7 +63,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         {cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}
       </div>
       <div className="my-2 flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-text-bright flex min-w-0 items-center gap-1.5">
+        <span className="text-text-bright flex min-w-0 max-w-full items-start gap-1.5">
           <ClassMark kind={cell.kind} />
           {cell.content}
         </span>

@@ -3,7 +3,7 @@ import { act, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
-import { api, ApiRequestError } from '@/lib/api';
+import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';
@@ -47,6 +47,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
         capacity: '55500000000',
         commonKnowledgeSize: '94',
         cellType: 'typed',
+        display: null,
         lock: {
           codeHash: LOCK_CODE_HASH,
           hashType: 'type',
@@ -65,6 +66,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
         capacity: '55499941197',
         commonKnowledgeSize: '94',
         status: 'live',
+        display: null,
         lock: {
           codeHash: LOCK_CODE_HASH,
           hashType: 'type',
@@ -707,6 +709,164 @@ describe('TransactionDetailPage', () => {
     expect(
       document.querySelector('[data-script-group="lock:attached:0xinputlock"]')
     ).toHaveAttribute('data-highlighted', 'false');
+  });
+
+  it('links one-to-one CKBFS file continuity to its cells and exact type group', async () => {
+    const tx = createCommittedTransactionDetail();
+    tx.inputs![0].cellType = 'ckbfs';
+    tx.outputs![0].cellType = 'ckbfs';
+    const display: TransactionCellDisplay = {
+      kind: 'file',
+      standard: 'ckbfs',
+      id: '0xtypescript',
+      name: '3X0125NMNVAP033202.LOGS',
+      collectionId: null,
+      collectionName: null,
+      symbol: null,
+      decimals: null,
+      amount: null,
+      compositionTier: null,
+    };
+    tx.inputs![0].display = display;
+    tx.outputs![0].display = display;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    render(<TransactionDetailPage />);
+
+    const continuity = await screen.findByRole('button', {
+      name: 'in:0 → out:0 · same file cell continues',
+    });
+    fireEvent.mouseEnter(continuity);
+    expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
+    expect(document.querySelector('path[data-continuity-kind="file"]')).toHaveAttribute(
+      'stroke',
+      '#a0a8be'
+    );
+    expect(document.querySelector('[data-script-group="type:run:0xtypescript"]')).toHaveAttribute(
+      'data-highlighted',
+      'true'
+    );
+    fireEvent.mouseLeave(continuity);
+    expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'false');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'false');
+  });
+
+  it.each(['different identity', 'multiple outputs'])(
+    'does not infer file continuity with %s',
+    async (reason) => {
+      const tx = createCommittedTransactionDetail();
+      const display: TransactionCellDisplay = {
+        kind: 'file',
+        standard: 'ckbfs',
+        id: '0xtypescript',
+        name: 'identical-name.txt',
+        collectionId: null,
+        collectionName: null,
+        symbol: null,
+        decimals: null,
+        amount: null,
+        compositionTier: null,
+      };
+      tx.inputs![0].display = display;
+      tx.outputs![0].display =
+        reason === 'different identity' ? { ...display, id: '0xanother' } : display;
+      if (reason === 'multiple outputs') {
+        tx.outputs!.push({ ...tx.outputs![0] });
+        tx.scriptGroups![1].outputIndices = [0, 1];
+      }
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      render(<TransactionDetailPage />);
+      await screen.findByTestId('tx-io-input-0');
+      expect(screen.queryByRole('list', { name: 'Cell continuity' })).not.toBeInTheDocument();
+    }
+  );
+
+  it.each([
+    {
+      label: 'object name, identity and verified media tier',
+      display: {
+        kind: 'object',
+        standard: 'spore',
+        id: `0x${'5'.repeat(64)}`,
+        name: null,
+        collectionId: `0x${'6'.repeat(64)}`,
+        collectionName: 'Nervape 3x',
+        symbol: null,
+        decimals: null,
+        amount: null,
+        compositionTier: 'btc_ckb',
+      } satisfies TransactionCellDisplay,
+      expected: ['Spore', 'Nervape 3x', '0x55555555...555555', 'BTC+CKB'],
+      href: `/mainnet/objects/0x${'5'.repeat(64)}`,
+    },
+    {
+      label: 'exact CKBFS filename',
+      display: {
+        kind: 'file',
+        standard: 'ckbfs',
+        id: `0x${'7'.repeat(64)}`,
+        name: '3X0125NMNVAP033202.LOGS',
+        collectionId: null,
+        collectionName: null,
+        symbol: null,
+        decimals: null,
+        amount: null,
+        compositionTier: null,
+      } satisfies TransactionCellDisplay,
+      expected: ['CKBFS file', '3X0125NMNVAP033202.LOGS'],
+      href: `/mainnet/cell/0x${'b'.repeat(64)}-0`,
+    },
+    {
+      label: 'exact token units beyond Number precision',
+      display: {
+        kind: 'token',
+        standard: 'xudt',
+        id: `0x${'8'.repeat(64)}`,
+        name: 'Test USD',
+        collectionId: null,
+        collectionName: null,
+        symbol: 'USDI',
+        decimals: 6,
+        amount: '9007199254740993123456',
+        compositionTier: null,
+      } satisfies TransactionCellDisplay,
+      expected: ['xUDT', '9,007,199,254,740,993.123456', 'USDI'],
+      href: `/mainnet/tokens/0x${'8'.repeat(64)}`,
+    },
+    {
+      label: 'identity name and canonical detail link',
+      display: {
+        kind: 'identity',
+        standard: 'dotbit',
+        id: `0x${'9'.repeat(40)}`,
+        name: 'alice.bit',
+        collectionId: null,
+        collectionName: null,
+        symbol: null,
+        decimals: null,
+        amount: null,
+        compositionTier: null,
+      } satisfies TransactionCellDisplay,
+      expected: ['.bit', 'alice.bit', '0x99999999...999999'],
+      href: `/mainnet/identities/dotbit/0x${'9'.repeat(40)}`,
+    },
+  ])('renders $label from the per-cell API descriptor', async ({ display, expected, href }) => {
+    const tx = createCommittedTransactionDetail();
+    tx.inputs![0].display = display;
+    tx.outputs![0].display = display;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    render(<TransactionDetailPage />);
+    const input = await screen.findByTestId('tx-io-input-0');
+    const output = screen.getByTestId('tx-io-output-0');
+    for (const text of expected) {
+      expect(input).toHaveTextContent(text);
+      expect(output).toHaveTextContent(text);
+    }
+    expect(
+      within(input)
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === href)
+    ).toBe(true);
   });
 
   it('honors the graph deep link without requiring an extra raw-data click', async () => {
