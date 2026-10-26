@@ -263,7 +263,7 @@ async fn display_fixture(
         .unwrap();
     store
         .put_token_direct(
-            &token.calc_script_hash().as_slice().to_vec(),
+            token.calc_script_hash().as_slice(),
             &TokenInfo {
                 type_code_hash: token_code,
                 hash_type: 2,
