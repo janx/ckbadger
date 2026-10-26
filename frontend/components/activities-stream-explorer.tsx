@@ -4,7 +4,7 @@ import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CLASS_COLORS } from '@/lib/design-tokens';
-import { totalActivities } from '@/lib/activity-stats';
+import { totalActivities, activityFilterCounts } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -180,34 +180,23 @@ function getDayDividerTestId(label: string): string {
   return `activity-day-divider-${label.toLowerCase().replace(/\s+/g, '-')}`;
 }
 
-function activityFilterCounts(
-  summary: DailyActivityStats
-): Partial<Record<GlobalActivityFilter, number>> {
-  return {
-    all: totalActivities(summary),
-    ckb: summary.transferCount,
-    token: summary.tokenCount,
-    object: summary.objectCount,
-    identity: summary.identityCount,
-    dao:
-      summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount,
-    script: summary.scriptCallCount,
-  };
-}
 function ActivityStreamToolbar({
   selectedFilter,
   visibleItemsCount,
   statusLabel,
   onFilterChange,
   summary,
+  totalCount,
 }: {
   selectedFilter: GlobalActivityFilter;
   visibleItemsCount: number;
   statusLabel: 'active' | 'inactive';
   onFilterChange: (value: string | number | undefined) => void;
   summary?: DailyActivityStats;
+  totalCount?: number;
 }) {
-  const counts = summary ? activityFilterCounts(summary) : null;
+  const counts = summary ? activityFilterCounts(summary, totalCount) : null;
+  const occurrences = summary ? totalActivities(summary) : 0;
   const classes = {
     token: 'tokens',
     object: 'objects',
@@ -241,6 +230,7 @@ function ActivityStreamToolbar({
             {counts && counts[option.value] !== undefined && (
               <span className="text-text-dim text-[11px] tabular-nums">
                 {counts[option.value]!.toLocaleString('en-US')}
+                {option.value === 'dao' ? ' actions' : ''}
               </span>
             )}
           </button>
@@ -251,10 +241,15 @@ function ActivityStreamToolbar({
             : `${visibleItemsCount.toLocaleString('en-US')} loaded`}
         </span>
       </div>
-      {counts && counts.all !== undefined && counts.all > 0 && (
+      {summary && (
+        <p className="text-text-dim mt-2 text-[11px]">
+          Yesterday, UTC+8 · kind occurrences may overlap; DAO counts actions.
+        </p>
+      )}
+      {counts && occurrences > 0 && (
         <div
           role="img"
-          aria-label={`Activity kinds on ${summary!.date}`}
+          aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
           className="mt-3 flex h-2 overflow-hidden rounded-sm"
         >
           {FILTER_OPTIONS.filter(
@@ -264,7 +259,7 @@ function ActivityStreamToolbar({
               key={o.value}
               title={`${o.label}: ${counts[o.value]}`}
               style={{
-                width: `${(counts[o.value]! / counts.all!) * 100}%`,
+                width: `${(counts[o.value]! / occurrences) * 100}%`,
                 backgroundColor:
                   o.value in classes
                     ? CLASS_COLORS[classes[o.value as keyof typeof classes]]
@@ -310,7 +305,13 @@ function LoadingRows() {
   ));
 }
 
-export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityStats }) {
+export function ActivitiesStreamExplorer({
+  summary,
+  totalCount,
+}: {
+  summary?: DailyActivityStats;
+  totalCount?: number;
+}) {
   useEffect(() => ensureKeyframes(), []);
 
   const [selectedFilter, setSelectedFilter] = useState<GlobalActivityFilter>('all');
@@ -514,6 +515,7 @@ export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityS
             visibleItemsCount={visibleItems.length}
             statusLabel={statusLabel}
             summary={summary}
+            totalCount={totalCount}
             onFilterChange={handleFilterChange}
           />
         </div>

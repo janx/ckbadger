@@ -437,7 +437,8 @@ export default function TransactionDetailPage() {
     hash,
     tx?.cycles,
     (tx?.isCellbase ?? false) || isProvisional,
-    tx?.cyclesStatus
+    tx?.cyclesStatus,
+    !isProvisional && tx?.scriptGroups?.some((group) => group.ran && group.cycles === null) === true
   );
   const [selectedWitness, setSelectedWitness] = useState<number | null>(() =>
     indexParam(searchParams.get('witness'))

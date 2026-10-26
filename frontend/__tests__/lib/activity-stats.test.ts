@@ -1,6 +1,12 @@
+import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { describe, expect, it } from 'vitest';
 import {
   activityTypeShares,
+  activityFilterCounts,
+  completedYesterdayActivities,
+  completedYesterdayTransactions,
+  nonCellbaseCount,
+  previousChainDay,
   formatShare,
   scriptLabel,
   scriptShares,
@@ -110,5 +116,45 @@ describe('formatShare', () => {
 
   it('rejects a share outside [0, 1]', () => {
     expect(() => formatShare(1.2)).toThrow(/not in \[0, 1\]/);
+  });
+});
+
+describe('exact completed day counts', () => {
+  const now = Date.parse('2026-10-25T17:00:00Z');
+  it('uses the indexer UTC+8 day, including midnight and year boundaries', () => {
+    expect(previousChainDay(now)).toBe('2026-10-25');
+    expect(previousChainDay(Date.parse('2026-12-31T17:00:00Z'))).toBe('2026-12-31');
+    expect(
+      completedYesterdayActivities([{ ...dailyActivities[0], date: '20261025' }], now)?.date
+    ).toBe('20261025');
+  });
+  it('selects only the exact complete transaction bucket and never a latest-bucket substitute', () => {
+    const base = { currentHour: 0, currentDay: 999, hourlyData: [] };
+    expect(
+      completedYesterdayTransactions(
+        {
+          ...base,
+          dailyData: [
+            { label: '10/24', value: 9, complete: true },
+            { label: '10/25', value: 10, complete: false },
+          ],
+        },
+        now
+      )
+    ).toBeUndefined();
+    expect(
+      completedYesterdayTransactions(
+        { ...base, dailyData: [{ label: '10/25', value: 0, complete: true }] },
+        now
+      )
+    ).toBe(0);
+  });
+  it('keeps unique totals separate from overlapping occurrences', () => {
+    expect(activityFilterCounts(counts, 10).all).toBe(10);
+    expect(activityFilterCounts(counts).all).toBeUndefined();
+    expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
+    expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(
+      'Invalid transaction/cellbase counts'
+    );
   });
 });

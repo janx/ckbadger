@@ -2,7 +2,13 @@
  * The homepage's activity numbers: one total, the share of each activity type, and the ranked
  * script calls — all from `/stats/activity-summary-24h` and `/stats/daily-activities` rows.
  */
-import type { ActivitySummary24h, ScriptCountEntry } from '@/lib/api';
+import type {
+  ActivitySummary24h,
+  ScriptCountEntry,
+  DailyActivityStats,
+  GlobalActivityFilter,
+  TxStatsResponse,
+} from '@/lib/api';
 
 /** The activity-type counters a summary or a daily row carries. */
 export type ActivityCounts = Pick<
@@ -17,7 +23,7 @@ export type ActivityCounts = Pick<
   | 'scriptCallCount'
 >;
 
-/** Activities in a summary or day: every typed activity (cellbase and unknown are not counted). */
+/** Typed activity occurrences: categories can overlap. Never use as a transaction total. */
 export function totalActivities(c: ActivityCounts): number {
   return (
     c.transferCount +
@@ -110,4 +116,55 @@ export function formatShare(share: number): string {
   const pct = share * 100;
   if (pct > 0 && pct < 0.05) return '<0.1%';
   return `${pct.toFixed(1)}%`;
+}
+
+/** Same fixed UTC+8 calendar used by the indexer's ChainWindow day buckets. */
+export function previousChainDay(now = Date.now()): string {
+  return new Date(now + 8 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+export function completedYesterdayActivities(
+  days: readonly DailyActivityStats[],
+  now = Date.now()
+): DailyActivityStats | undefined {
+  const yesterday = previousChainDay(now);
+  return days.find((day) => day.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') === yesterday);
+}
+/** Reads only the matching, explicitly complete canonical transaction-count bucket. */
+export function completedYesterdayTransactions(
+  stats: TxStatsResponse,
+  now = Date.now()
+): number | undefined {
+  const label = previousChainDay(now).slice(5).replace('-', '/');
+  const bucket = stats.dailyData.find((day) => day.complete && day.label === label);
+  if (!bucket) return undefined;
+  if (!Number.isSafeInteger(bucket.value) || bucket.value < 0)
+    throw new Error(`Invalid transaction count for ${label}: ${bucket.value}`);
+  return bucket.value;
+}
+/** The global activity stream is exactly canonical transactions minus cellbase. */
+export function nonCellbaseCount(transactions: number, cellbase: number, date: string): number {
+  if (
+    !Number.isSafeInteger(transactions) ||
+    !Number.isSafeInteger(cellbase) ||
+    cellbase < 0 ||
+    transactions < cellbase
+  )
+    throw new Error(`Invalid transaction/cellbase counts on ${date}: ${transactions}/${cellbase}`);
+  return transactions - cellbase;
+}
+/** Per-kind occurrences, with All supplied independently as an exact unique count. */
+export function activityFilterCounts(
+  summary: ActivityCounts,
+  allCount?: number
+): Partial<Record<GlobalActivityFilter, number>> {
+  return {
+    ...(allCount === undefined ? {} : { all: allCount }),
+    ckb: summary.transferCount,
+    token: summary.tokenCount,
+    object: summary.objectCount,
+    identity: summary.identityCount,
+    dao:
+      summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount,
+    script: summary.scriptCallCount,
+  };
 }

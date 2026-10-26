@@ -64,6 +64,47 @@ describe('useCyclesCalculation', () => {
     expect(api.triggerCyclesCalculation).not.toHaveBeenCalled();
   });
 
+  it('does not enqueue canonical replay for cellbase or provisional transactions with pending cycles', () => {
+    const { result } = renderHook(() => useCyclesCalculation('0xpool', null, true, 'pending'), {
+      wrapper: createWrapper(),
+    });
+
+    expect(api.triggerCyclesCalculation).not.toHaveBeenCalled();
+    expect(result.current.isCalculating).toBe(false);
+  });
+
+  it('requests missing group cycles while preserving the exact transaction total', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
+      status: 'queued',
+      cycles: null,
+      error: null,
+    });
+    vi.mocked(api.getCyclesStatus).mockResolvedValue({
+      status: 'done',
+      cycles: 1000,
+      error: null,
+    });
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xgroups', 1000, false, 'complete', true),
+      { wrapper: Wrapper }
+    );
+
+    await act(async () => {});
+    expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xgroups');
+    expect(result.current.cycles).toBe(1000);
+    expect(result.current.isCalculating).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(api.getCyclesStatus).toHaveBeenCalledWith('0xgroups');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['transaction', '0xgroups'] });
+    expect(result.current.cycles).toBe(1000);
+    expect(result.current.isCalculating).toBe(false);
+  });
+
   it('triggers calculation when cycles are missing', async () => {
     vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
       status: 'calculating',

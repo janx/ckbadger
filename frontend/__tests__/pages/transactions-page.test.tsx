@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { render } from '@/__tests__/utils/test-utils';
+import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async () => ({
+  ...(await vi.importActual('@/lib/api')),
   api: {
     getTransactions: vi.fn(),
     getPoolTransactions: vi.fn(),
+    getDailyActivityStats: vi.fn(),
+    getTxStats: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
@@ -16,6 +20,28 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
+
+const emptyPool = {
+  summary: { size: '0', cycles: '0', minFeeRate: null, maxFeeRate: null, newestSeenAt: null },
+  data: [],
+  total: 0,
+  limit: 50,
+  nextCursor: null,
+  totals: { pending: 0, proposed: 0, awaitingIndex: 0 },
+  truncated: false,
+  lastPolledAt: null,
+};
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(api.getPoolTransactions).mockResolvedValue(emptyPool);
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([]);
+  vi.mocked(api.getTxStats).mockResolvedValue({
+    currentHour: 0,
+    currentDay: 0,
+    hourlyData: [],
+    dailyData: [],
+  });
+});
 
 describe('TransactionsPage', () => {
   beforeEach(() => {
@@ -36,6 +62,8 @@ describe('TransactionsPage', () => {
           value: '123456789012345678',
           txSize: 226,
           cycles: 1000000,
+          cyclesStatus: 'complete',
+          activity: feedSamples.eightParties,
           isCellbase: false,
           timestamp: '2026-02-20T00:00:00Z',
         },
@@ -91,6 +119,13 @@ describe('Transactions pool view', () => {
       nextCursor: null,
     });
     vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      summary: {
+        size: '226',
+        cycles: '1709221',
+        minFeeRate: '54623',
+        maxFeeRate: '54623',
+        newestSeenAt: '1792886400000',
+      },
       data: [
         {
           hash: `0x${'ab'.repeat(32)}`,
@@ -120,6 +155,97 @@ describe('Transactions pool view', () => {
       await screen.findByRole('table', { name: 'Transactions in the pool' })
     ).toHaveTextContent('Interpretation partial');
     expect(api.getPoolTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
-    expect(screen.getByText('0 pending · 1 proposed · 0 awaiting index')).toBeInTheDocument();
+    expect(screen.getByTestId('pool-banner')).toHaveTextContent(
+      '0 pending · 1 proposed · 0 awaiting index'
+    );
+    expect(screen.getByLabelText('Pool summary')).toHaveTextContent('226 bytes');
+    expect(screen.getByLabelText('Pool summary')).toHaveTextContent('1,709,221');
+    expect(screen.getByLabelText('Pool summary')).toHaveTextContent('54,623–54,623 shannon/KB');
   });
+});
+
+it('keeps the pool banner above tabs and uses exact day counts even when kinds overlap', async () => {
+  const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+    {
+      ...dailyActivities[0],
+      date: yesterday,
+      transferCount: 12,
+      tokenCount: 11,
+      coinbaseCount: 3,
+      daoDepositCount: 2,
+      daoWithdrawRequestCount: 1,
+      daoWithdrawCompleteCount: 0,
+    },
+  ]);
+  vi.mocked(api.getTxStats).mockResolvedValue({
+    currentHour: 0,
+    currentDay: 500,
+    hourlyData: [],
+    dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 20, complete: true }],
+  });
+  vi.mocked(api.getTransactions).mockResolvedValue({
+    data: [],
+    limit: 50,
+    nextCursor: null,
+    hasMore: false,
+    total: 0,
+  });
+  render(<TransactionsPage />);
+  expect(await screen.findByRole('button', { name: 'All' })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All20')
+  );
+  expect(screen.getByRole('button', { name: 'DAO' })).toHaveTextContent('3 actions');
+  expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('11');
+  expect(screen.getByRole('button', { name: 'Cellbase' })).toHaveTextContent('3');
+  expect(
+    screen
+      .getByTestId('pool-banner')
+      .compareDocumentPosition(screen.getByRole('group', { name: 'Transaction views' })) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
+  await waitFor(() =>
+    expect(api.getTransactions).toHaveBeenLastCalledWith({
+      cursor: undefined,
+      limit: 50,
+      activityType: 'token',
+    })
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Open the pool →' }));
+  await waitFor(() =>
+    expect(api.getPoolTransactions).toHaveBeenCalledWith({
+      cursor: undefined,
+      limit: 50,
+      activityType: 'token',
+    })
+  );
+  expect(screen.getByRole('link', { name: 'Activities →' })).toHaveAttribute(
+    'href',
+    '/mainnet/activities'
+  );
+});
+it('does not infer a transaction total from kind counts when yesterday is incomplete', async () => {
+  const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+    { ...dailyActivities[0], date: yesterday },
+  ]);
+  vi.mocked(api.getTxStats).mockResolvedValue({
+    currentHour: 0,
+    currentDay: 500,
+    hourlyData: [],
+    dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 999, complete: false }],
+  });
+  vi.mocked(api.getTransactions).mockResolvedValue({
+    data: [],
+    limit: 50,
+    nextCursor: null,
+    hasMore: false,
+  });
+  render(<TransactionsPage />);
+  expect(
+    await screen.findByText(`No complete transaction count for ${yesterday} (UTC+8).`)
+  ).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent(/^All$/);
 });

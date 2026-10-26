@@ -4,6 +4,7 @@ import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
+import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -29,6 +30,8 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     feeRate: '52130',
     txSize: 1128,
     isCellbase: false,
+    cycles: 1000,
+    cyclesStatus: 'complete',
     timestamp: '2026-02-20T16:46:12Z',
     confirmations: 4,
     inputsCapacity: '55500000000',
@@ -207,12 +210,12 @@ function inputsNotYetResolvable() {
 }
 
 vi.mock('@/hooks/useCyclesCalculation', () => ({
-  useCyclesCalculation: () => ({
+  useCyclesCalculation: vi.fn(() => ({
     cycles: 4446651,
     hasCycles: true,
     isCalculating: false,
     hasFailed: false,
-  }),
+  })),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -292,6 +295,13 @@ describe('TransactionDetailPage', () => {
     vi.useRealTimers();
   });
 
+  it('requests missing executed-group cycles without discarding the measured transaction total', async () => {
+    render(<TransactionDetailPage />);
+    await waitFor(() => {
+      expect(useCyclesCalculation).toHaveBeenLastCalledWith(TX_HASH, 1000, false, 'complete', true);
+    });
+  });
+
   it('renders pending placeholders while committed-only queries stay disabled', async () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
 
@@ -309,6 +319,8 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionGraph).not.toHaveBeenCalled();
     expect(api.getTransactionCellDeps).not.toHaveBeenCalled();
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+    expect(vi.mocked(useCyclesCalculation).mock.lastCall?.[2]).toBe(true);
+    expect(vi.mocked(useCyclesCalculation).mock.lastCall?.[4]).toBe(false);
   });
 
   it('serves a committed-but-unindexed transaction provisionally and polls until it is indexed', async () => {

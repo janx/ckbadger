@@ -120,6 +120,7 @@ describe('ActivitiesStreamExplorer', () => {
     });
     render(
       <ActivitiesStreamExplorer
+        totalCount={100}
         summary={{
           ...dailyActivities[0],
           transferCount: 12,
@@ -133,9 +134,9 @@ describe('ActivitiesStreamExplorer', () => {
         }}
       />
     );
-    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All33');
+    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All100');
     expect(screen.getByRole('button', { name: 'Token' })).toHaveTextContent('Token0');
-    expect(screen.getByRole('button', { name: 'DAO' })).toHaveTextContent('DAO6');
+    expect(screen.getByRole('button', { name: 'DAO' })).toHaveTextContent('DAO6 actions');
     expect(screen.getByRole('button', { name: 'Protocol' })).toHaveTextContent(/^Protocol$/);
     expect(await screen.findByText('No activities yet')).toBeInTheDocument();
   });

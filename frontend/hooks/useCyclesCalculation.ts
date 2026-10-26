@@ -7,8 +7,9 @@ import { api } from '@/lib/api';
 export function useCyclesCalculation(
   hash: string,
   txCycles: number | null | undefined,
-  isCellbase: boolean,
-  cyclesStatus?: string | null
+  skipCalculation: boolean,
+  cyclesStatus?: string | null,
+  needsGroupCycles = false
 ) {
   const queryClient = useQueryClient();
   const [isCalculating, setIsCalculating] = useState(false);
@@ -18,9 +19,16 @@ export function useCyclesCalculation(
 
   const parsedCycles = txCycles ?? null;
   const effectiveCycles = parsedCycles ?? resolvedCycles;
-  const hasCycles = effectiveCycles !== null && effectiveCycles > 0;
-  const needsCalculation = cyclesStatus === 'pending' && !hasFailed;
-  const displayCalculating = needsCalculation && !hasCycles;
+  const hasCycles = effectiveCycles !== null;
+  // Only committed, non-cellbase transactions can request canonical VM replay.
+  // A known aggregate does not imply that per-group execution evidence is indexed.
+  const needsCalculation =
+    !skipCalculation &&
+    cyclesStatus !== 'failed' &&
+    (cyclesStatus === 'pending' || needsGroupCycles) &&
+    !hasFailed;
+  const displayCalculating =
+    needsCalculation && (needsGroupCycles || !hasCycles) && resolvedCycles === null;
   const invalidateTransactionQuery = useCallback(
     () => queryClient.invalidateQueries({ queryKey: ['transaction', hash] }),
     [queryClient, hash]
@@ -31,7 +39,7 @@ export function useCyclesCalculation(
     setHasFailed(cyclesStatus === 'failed');
     setTriggeredForHash(null);
     setResolvedCycles(null);
-  }, [hash, cyclesStatus]);
+  }, [hash, cyclesStatus, skipCalculation]);
 
   useEffect(() => {
     if (!needsCalculation || triggeredForHash === hash) return;
@@ -71,7 +79,7 @@ export function useCyclesCalculation(
   }, [needsCalculation, triggeredForHash, hash, invalidateTransactionQuery]);
 
   useEffect(() => {
-    if (!isCalculating) return;
+    if (!isCalculating || !needsCalculation) return;
 
     const pollInterval = setInterval(async () => {
       try {
@@ -100,13 +108,13 @@ export function useCyclesCalculation(
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [isCalculating, hash, invalidateTransactionQuery]);
+  }, [isCalculating, needsCalculation, hash, invalidateTransactionQuery]);
 
   useEffect(() => {
-    if (hasCycles && isCalculating) {
+    if (isCalculating && (!needsCalculation || (hasCycles && !needsGroupCycles))) {
       setIsCalculating(false);
     }
-  }, [hasCycles, isCalculating]);
+  }, [hasCycles, isCalculating, needsCalculation, needsGroupCycles]);
 
   return {
     cycles: effectiveCycles,
