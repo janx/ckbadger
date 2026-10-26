@@ -18,9 +18,16 @@ impl ScriptFamilyMembershipIndex {
     pub fn new<'a>(
         versions: impl IntoIterator<Item = &'a crate::ScriptVersionInfo>,
     ) -> anyhow::Result<Self> {
+        let versions: Vec<_> = versions.into_iter().collect();
         let mut index = Self::default();
-        for version in versions {
+        let mut registered = std::collections::HashMap::<Vec<u8>, String>::new();
+        for version in &versions {
             let Some(family) = &version.family_id else {
+                anyhow::ensure!(
+                    version.registered_references.is_empty(),
+                    "registered references lack a family: binary=0x{}",
+                    bytes_to_hex(&version.version_hash)
+                );
                 continue;
             };
             if let Some(previous) = index
@@ -29,13 +36,25 @@ impl ScriptFamilyMembershipIndex {
             {
                 anyhow::ensure!(previous == *family, "binary registered in conflicting families: binary=0x{} families={previous}/{family}", bytes_to_hex(&version.version_hash));
             }
-            for (reference, block) in &version.type_id_deployments {
-                if let Some(previous) = index
-                    .type_id_families
-                    .insert(reference.clone(), family.clone())
-                {
-                    anyhow::ensure!(previous == *family, "observed type-id registered in conflicting families: reference=0x{} block={} binary=0x{} families={previous}/{family}", bytes_to_hex(reference), block, bytes_to_hex(&version.version_hash));
+            for (reference, kind) in &version.registered_references {
+                anyhow::ensure!(matches!(kind, 0 | 1 | 2 | 4), "unsupported registered reference hash type: binary=0x{} reference=0x{} hash_type={kind}", bytes_to_hex(&version.version_hash), bytes_to_hex(reference));
+                if *kind == 1 {
+                    if let Some(previous) = registered.insert(reference.clone(), family.clone()) {
+                        anyhow::ensure!(previous == *family, "type-id reference registered in conflicting families: reference=0x{} families={previous}/{family}", bytes_to_hex(reference));
+                    }
                 }
+            }
+        }
+        for version in versions {
+            for (reference, block) in &version.type_id_deployments {
+                let Some(family) = registered.get(reference) else {
+                    continue;
+                };
+                anyhow::ensure!(version.family_id.as_ref() == Some(family),
+                    "observed registered type-id contradicts family: reference=0x{} block={} binary=0x{} registered_family={} version_family={:?}", bytes_to_hex(reference), block, bytes_to_hex(&version.version_hash), family, version.family_id);
+                index
+                    .type_id_families
+                    .insert(reference.clone(), family.clone());
             }
         }
         Ok(index)
@@ -390,17 +409,20 @@ mod tests {
             family_id: Some("family".into()),
             canonical_reference_hash: Some(reference.clone()),
             canonical_hash_type: Some(1),
+            registered_references: vec![(reference.clone(), 1)],
             type_id_deployments: vec![(reference.clone(), 10)],
             ..Default::default()
         };
         let new = ScriptVersionInfo {
             version_hash: vec![0x22; 32],
+            registered_references: Vec::new(),
             type_id_deployments: vec![(reference.clone(), 20)],
             ..old.clone()
         };
         let metadata_only = ScriptVersionInfo {
             version_hash: vec![0x23; 32],
             canonical_reference_hash: Some(vec![0x12; 32]),
+            registered_references: vec![(vec![0x12; 32], 1)],
             type_id_deployments: vec![],
             ..old.clone()
         };
@@ -444,6 +466,55 @@ mod tests {
             .to_string();
         assert!(error.contains("conflicting families"));
         assert!(error.contains(&hex::encode(reference)));
+    }
+
+    #[test]
+    fn unregistered_type_id_copy_can_switch_families_without_registering_its_history() {
+        use crate::{ScriptFamilyMembershipIndex, ScriptVersionInfo};
+        let copy = vec![0xe3; 32];
+        let a = ScriptVersionInfo {
+            version_hash: vec![0x41; 32],
+            family_id: Some("a".into()),
+            registered_references: vec![(vec![0x51; 32], 1), (vec![0x52; 32], 1)],
+            type_id_deployments: vec![
+                (vec![0x51; 32], 10),
+                (vec![0x52; 32], 11),
+                (copy.clone(), 12),
+            ],
+            ..Default::default()
+        };
+        let b = ScriptVersionInfo {
+            version_hash: vec![0x42; 32],
+            family_id: Some("b".into()),
+            registered_references: vec![(vec![0x61; 32], 1)],
+            type_id_deployments: vec![(vec![0x61; 32], 20), (copy.clone(), 21)],
+            ..Default::default()
+        };
+        let index = ScriptFamilyMembershipIndex::new([&a, &b]).unwrap();
+        assert_eq!(
+            index
+                .resolve_family(&copy, 1, Some(&a.version_hash))
+                .unwrap(),
+            Some("a")
+        );
+        assert_eq!(
+            index
+                .resolve_family(&copy, 1, Some(&b.version_hash))
+                .unwrap(),
+            Some("b")
+        );
+        assert_eq!(index.resolve_family(&copy, 1, None).unwrap(), None);
+        assert_eq!(
+            index.resolve_family(&[0x51; 32], 1, None).unwrap(),
+            Some("a")
+        );
+        assert_eq!(
+            index.resolve_family(&[0x52; 32], 1, None).unwrap(),
+            Some("a")
+        );
+        assert!(index
+            .resolve_family(&[0x51; 32], 1, Some(&b.version_hash))
+            .is_err());
     }
 
     #[test]

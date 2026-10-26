@@ -358,6 +358,7 @@ fn fallback_script_version_info(
         canonical_reference_hash: None,
         canonical_hash_type: None,
         type_id_deployments: Vec::new(),
+        registered_references: Vec::new(),
     })
 }
 

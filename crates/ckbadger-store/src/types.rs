@@ -1358,6 +1358,9 @@ pub struct ScriptInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScriptVersionInfo {
     pub version_hash: Vec<u8>,
+    /// Complete imported metadata reference forms; only label import writes these.
+    /// Kept sorted and unique, independently of observed chain deployments.
+    pub registered_references: Vec<(Vec<u8>, u8)>,
     /// Exact code-bearing type-id observations (type hash, block), in chain order.
     /// Domain metadata; populated inline and undone with its deployment block.
     pub type_id_deployments: Vec<(Vec<u8>, i64)>,
