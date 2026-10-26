@@ -6,6 +6,14 @@ use crate::rpc::{parse_hex_to_bytes, Script};
 pub const TYPE_ID_CODE_HASH: &str =
     "00000000000000000000000000000000000000000000000000545950455f4944";
 
+/// The consensus type-id script, compared without allocating on the bulk path.
+pub(crate) fn is_type_id(code_hash: &[u8], hash_type: i16) -> bool {
+    hash_type == 1
+        && code_hash.len() == 32
+        && code_hash[..25] == [0; 25]
+        && &code_hash[25..] == b"TYPE_ID"
+}
+
 pub struct ScriptParser;
 
 impl ScriptParser {
@@ -106,6 +114,17 @@ impl ScriptParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn type_id_filter_is_exact_and_does_not_accept_data_hash_references() {
+        let hash = hex::decode(TYPE_ID_CODE_HASH).unwrap();
+        assert!(is_type_id(&hash, 1));
+        assert!(!is_type_id(&hash, 0));
+        assert!(!is_type_id(&hash[1..], 1));
+        let mut wrong = hash;
+        wrong[0] = 1;
+        assert!(!is_type_id(&wrong, 1));
+    }
 
     #[test]
     fn test_secp256k1_blake160_type_script_hash() {

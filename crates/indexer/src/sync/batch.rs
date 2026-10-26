@@ -3970,8 +3970,10 @@ impl Indexer {
             let script_rollup_started = Instant::now();
             self.perf.mark_writer_phase();
             self.writer
-                .materialize_script_versions_and_families(
+                .materialize_script_versions_and_families_with_chain(
                     &updated_script_references,
+                    &all_tx_data,
+                    &batch_undo_seq,
                     &mut data_batch,
                 )
                 .with_context(|| {

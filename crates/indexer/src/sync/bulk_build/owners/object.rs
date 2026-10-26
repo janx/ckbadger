@@ -76,6 +76,13 @@ pub(crate) struct ObjectOwner {
     cluster_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
 }
 
+struct ConsumedObjectActions<'a> {
+    spores: &'a BTreeSet<Vec<u8>>,
+    mnft_tokens: &'a BTreeSet<Vec<u8>>,
+    dotbit_accounts: &'a BTreeMap<Vec<u8>, Vec<u8>>,
+    identities: &'a BTreeMap<Vec<u8>, IdentityEntry>,
+}
+
 impl BulkReducer for ObjectOwner {
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
         materializer.stream_sealed_aggregate_rows_bounded(|sink| {
@@ -193,10 +200,12 @@ impl BulkReducer for ObjectOwner {
                 cell,
                 ctx,
                 tx,
-                &spores_consumed_in_tx,
-                &mnft_tokens_consumed_in_tx,
-                &dotbit_accounts_consumed_in_tx,
-                &consumed_for_actions,
+                &ConsumedObjectActions {
+                    spores: &spores_consumed_in_tx,
+                    mnft_tokens: &mnft_tokens_consumed_in_tx,
+                    dotbit_accounts: &dotbit_accounts_consumed_in_tx,
+                    identities: &consumed_for_actions,
+                },
             )?;
         }
 
@@ -728,10 +737,7 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
-        spores_consumed_in_tx: &BTreeSet<Vec<u8>>,
-        mnft_tokens_consumed_in_tx: &BTreeSet<Vec<u8>>,
-        dotbit_accounts_consumed_in_tx: &BTreeMap<Vec<u8>, Vec<u8>>,
-        consumed_for_actions: &BTreeMap<Vec<u8>, IdentityEntry>,
+        consumed: &ConsumedObjectActions<'_>,
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
             return Ok(());
@@ -744,14 +750,14 @@ impl ObjectOwner {
                 cell,
                 ctx,
                 tx,
-                consumed_for_actions.get(did.did_id.as_slice()),
+                consumed.identities.get(did.did_id.as_slice()),
             ),
             CellProtocolFacts::Spore(spore) => self.insert_spore(
                 spore,
                 cell,
                 ctx,
                 tx,
-                spores_consumed_in_tx.contains(spore.spore_id.as_slice()),
+                consumed.spores.contains(spore.spore_id.as_slice()),
             ),
             CellProtocolFacts::MnftIssuer(issuer) => self.insert_mnft_issuer(issuer, cell, ctx, tx),
             CellProtocolFacts::MnftClass(class) => self.insert_mnft_class(class, cell, ctx, tx),
@@ -760,24 +766,25 @@ impl ObjectOwner {
                 cell,
                 ctx,
                 tx,
-                mnft_tokens_consumed_in_tx.contains(token.token_id.as_slice()),
+                consumed.mnft_tokens.contains(token.token_id.as_slice()),
             ),
             CellProtocolFacts::Dotbit(dotbit) => self.insert_dotbit(
                 dotbit,
                 cell,
                 ctx,
                 tx,
-                dotbit_accounts_consumed_in_tx
+                consumed
+                    .dotbit_accounts
                     .get(dotbit.account_id.as_slice())
                     .map(Vec::as_slice),
-                consumed_for_actions.get(dotbit.account_id.as_slice()),
+                consumed.identities.get(dotbit.account_id.as_slice()),
             ),
             CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(
                 bit_cell,
                 cell,
                 ctx,
                 tx,
-                consumed_for_actions.get(bit_cell.identity_id.as_slice()),
+                consumed.identities.get(bit_cell.identity_id.as_slice()),
             ),
             CellProtocolFacts::DotCell(facts) => self.insert_dotcell(facts, cell, tx),
         }

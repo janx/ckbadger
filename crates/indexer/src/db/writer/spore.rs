@@ -1069,7 +1069,7 @@ impl BatchWriter {
             batch,
             state,
         )?;
-        let action_key = keys::encode_spore_outpoint_by_id_key(&identity_id, tx_hash, output_index);
+        let action_key = keys::encode_spore_outpoint_by_id_key(identity_id, tx_hash, output_index);
         batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
 
         let collection_id = &BIT_CELL_SENTINEL_COLLECTION;

@@ -1358,6 +1358,9 @@ pub struct ScriptInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScriptVersionInfo {
     pub version_hash: Vec<u8>,
+    /// Exact code-bearing type-id observations (type hash, block), in chain order.
+    /// Domain metadata; populated inline and undone with its deployment block.
+    pub type_id_deployments: Vec<(Vec<u8>, i64)>,
     pub name: Option<String>,
     #[serde(default)]
     pub family_id: Option<String>,
