@@ -646,6 +646,94 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
 }
 
 #[tokio::test]
+async fn test_most_utilized_scripts_keeps_retired_family_provenance_once() {
+    let store = test_store();
+    let binary = vec![0x21; 32];
+    let first = vec![0x31; 32];
+    let second = vec![0x41; 32];
+    seed_two_reference_script_family(
+        &store,
+        "Retired",
+        "retired",
+        &binary,
+        &first,
+        &second,
+        "Other label",
+    );
+    store
+        .put_script_version(
+            &binary,
+            &ScriptVersionInfo {
+                version_hash: binary.clone(),
+                family_id: Some("retired".to_string()),
+                type_id_deployments: vec![(first.clone(), 1), (second.clone(), 2)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for (reference, capacity, knowledge) in [(&first, 200, 120), (&second, 100, 60)] {
+        store
+            .delete_script_reference_to_version_direct(1, reference)
+            .unwrap();
+        store
+            .put_script_daily_delta(
+                reference,
+                1,
+                true,
+                20240115,
+                &ScriptDailyDelta {
+                    owned_capacity_delta: capacity,
+                    owned_knowledge_delta: knowledge,
+                },
+            )
+            .unwrap();
+    }
+    for reactivated in [false, true] {
+        if reactivated {
+            for reference in [&first, &second] {
+                store
+                    .put_script_reference_to_version_direct(1, reference, &binary)
+                    .unwrap();
+            }
+        }
+        let state = test_app_state(test_config(store.clone()));
+        let app = create_router_with_state(state.clone()).await;
+        // Metadata may be registered after warmup. A pinned membership join
+        // must not mix fresh version rows with an older empty family cache.
+        state.mem_cache.set(
+            ckbadger_api::warmup::CACHE_KEY_SCRIPT_FAMILIES_ALL,
+            &Vec::<(String, ScriptFamilyInfo)>::new(),
+            ckbadger_api::cache::CacheTtl::ASSETS,
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/charts/most-utilized-scripts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let chart: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        for (name, expected) in [("capacityShare", "300"), ("usedShare", "180")] {
+            let series = chart[name]["series"].as_array().unwrap();
+            let family: Vec<_> = series
+                .iter()
+                .filter(|row| row["label"] == "Retired")
+                .collect();
+            assert_eq!(family.len(), 1, "{chart}");
+            assert!(!series
+                .iter()
+                .any(|row| row["label"] == "Other label (type)"));
+            let key = family[0]["key"].as_str().unwrap();
+            assert_eq!(chart[name]["data"][0]["values"][key], expected);
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let store = test_store();
 

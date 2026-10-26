@@ -1877,6 +1877,72 @@ async fn test_get_script_fails_when_relevant_canonical_reference_mapping_missing
         .contains("missing reference->version mapping"));
 }
 
+async fn assert_retired_family_usage_and_utilization(app: &axum::Router, active: bool) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Retired%20family/usage")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let usage: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(usage["cellsCount"], 8);
+    assert_eq!(usage["liveCellsCount"], 6);
+    assert_eq!(usage["capacitySum"], "1000");
+    assert_eq!(usage["commonKnowledgeSizeSum"], "600");
+    assert_eq!(usage["ownedCapacitySum"], "800");
+    assert_eq!(usage["ownedKnowledgeSum"], "500");
+    let version_live: i64 = usage["byDeployment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|version| version["liveCellsCount"].as_i64().unwrap())
+        .sum();
+    assert_eq!(version_live, if active { 6 } else { 0 });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/most-utilized-scripts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let chart: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    for (name, expected) in [
+        ("capacityShare", ["1000", "800"]),
+        ("usedShare", ["600", "500"]),
+    ] {
+        let share = &chart[name];
+        let series = share["series"].as_array().unwrap();
+        assert_eq!(
+            series
+                .iter()
+                .filter(|s| s["label"] == "Retired family")
+                .count(),
+            1,
+            "{chart}"
+        );
+        let family = series
+            .iter()
+            .find(|s| s["label"] == "Retired family")
+            .unwrap();
+        let key = family["key"].as_str().unwrap();
+        assert_eq!(share["data"][0]["values"][key], expected[0]);
+        assert_eq!(share["data"][1]["values"][key], expected[1]);
+    }
+}
+
 async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     let store = test_store();
     let reference = vec![0x31; 32];
@@ -1897,6 +1963,11 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             family_id: "retired-family".to_string(),
             name: "Retired family".to_string(),
             versions_count: 1,
+            live_cells_count: 6,
+            cells_count: 8,
+            lock_cells_count: 8,
+            owned_capacity_sum: 800,
+            owned_knowledge_sum: 500,
             ..Default::default()
         },
     );
@@ -1912,6 +1983,10 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             // Cells using the retired code can remain live; these are not code cells.
             lock_live_cells_count: 6,
             lock_cells_count: 8,
+            lock_capacity_sum: 1000,
+            lock_owned_capacity_sum: 800,
+            lock_used_capacity_sum: 600,
+            lock_owned_knowledge_sum: 500,
             ..Default::default()
         },
     );
@@ -1941,10 +2016,35 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         batch.put_cell_by_type(&reference, 20, &[0x61; 32], 0);
     }
     batch.commit().unwrap();
+    store
+        .put_script_daily_delta(
+            &reference,
+            1,
+            false,
+            20240115,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 1000,
+                owned_knowledge_delta: 600,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &reference,
+            1,
+            false,
+            20240116,
+            &ScriptDailyDelta {
+                owned_capacity_delta: -200,
+                owned_knowledge_delta: -100,
+            },
+        )
+        .unwrap();
     let app = create_router(test_config(store.clone())).await;
     for uri in [
         "/api/v1/scripts/Retired%20family".to_string(),
-        "/api/v1/scripts/Retired%20family/charts/capacity-history".to_string(),
+        "/api/v1/scripts/Retired%20family/charts/capacity-history?from=2024-01-15&to=2024-01-16"
+            .to_string(),
     ] {
         let response = app
             .clone()
@@ -1966,8 +2066,21 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
                 format!("0x{}", hex::encode(&binary))
             );
             assert_eq!(json["versions"][0]["references"], serde_json::json!([]));
+            assert_eq!(json["liveCellsCount"], 6);
+            assert_eq!(json["ownedCapacitySum"], "800");
+            assert_eq!(json["ownedKnowledgeSum"], "500");
+            assert_eq!(json["versions"][0]["liveCellsCount"], 0);
+        } else {
+            assert_eq!(
+                json["data"],
+                serde_json::json!([
+                    {"date": "2024-01-15", "values": {"used": "600", "unused": "400"}},
+                    {"date": "2024-01-16", "values": {"used": "500", "unused": "300"}},
+                ])
+            );
         }
     }
+    assert_retired_family_usage_and_utilization(&app, false).await;
     for suffix in ["", "&hash_type=type"] {
         let response = app
             .clone()
@@ -2010,6 +2123,10 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             type_id_deployments: vec![(reference.clone(), 30)],
             lock_live_cells_count: 6,
             lock_cells_count: 8,
+            lock_capacity_sum: 1000,
+            lock_owned_capacity_sum: 800,
+            lock_used_capacity_sum: 600,
+            lock_owned_knowledge_sum: 500,
             ..history.clone()
         },
     );
@@ -2024,11 +2141,14 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             live_cells_count: 6,
             cells_count: 8,
             lock_cells_count: 8,
+            owned_capacity_sum: 800,
+            owned_knowledge_sum: 500,
             ..Default::default()
         },
     );
     batch.commit().unwrap();
-    let app = create_router(test_config(store.clone())).await;
+    // Keep the pre-upgrade warmup cache: membership must use the same pinned
+    // canonical metadata view as the newly published current binding.
     let response = app
         .clone()
         .oneshot(
@@ -2053,6 +2173,20 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         format!("0x{}", hex::encode(&reference))
     );
     assert_eq!(active["liveCellsCount"], 6);
+    assert_retired_family_usage_and_utilization(&app, true).await;
+    let response = app.clone().oneshot(Request::builder().uri(
+        "/api/v1/scripts/Retired%20family/charts/capacity-history?from=2024-01-15&to=2024-01-16"
+    ).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let chart: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        chart["data"],
+        serde_json::json!([
+            {"date": "2024-01-15", "values": {"used": "600", "unused": "400"}},
+            {"date": "2024-01-16", "values": {"used": "500", "unused": "300"}},
+        ])
+    );
     for suffix in ["", "&hash_type=type"] {
         let response = app
             .clone()
@@ -2075,7 +2209,53 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             format!("0x{}", hex::encode(&active_binary))
         );
     }
-    assert_eq!(store.get_script_version(&binary).unwrap(), Some(history));
+    assert_eq!(
+        store.get_script_version(&binary).unwrap(),
+        Some(history.clone())
+    );
+
+    // Reusing an earlier binary updates a row already present in the warmup
+    // cache. The family response must read its current counters, not that cache.
+    let mut old_reactivated = store.get_script_version(&active_binary).unwrap().unwrap();
+    old_reactivated.version_hash = binary.clone();
+    old_reactivated.type_id_deployments = vec![(reference.clone(), 10), (reference.clone(), 40)];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_version(&binary, &old_reactivated);
+    batch.put_script_version(
+        &active_binary,
+        &ScriptVersionInfo {
+            version_hash: active_binary.clone(),
+            type_id_deployments: vec![(reference.clone(), 30)],
+            ..history
+        },
+    );
+    batch.put_script_reference_to_version(1, &reference, &binary);
+    batch.commit().unwrap();
+    assert_retired_family_usage_and_utilization(&app, true).await;
+    let mut inconsistent_family = store.get_script_family("retired-family").unwrap().unwrap();
+    inconsistent_family.owned_capacity_sum += 1;
+    store
+        .put_script_family_direct("retired-family", &inconsistent_family)
+        .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Retired%20family/usage")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("retired-family"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -2150,7 +2330,7 @@ async fn test_get_script_ignores_unrelated_unresolved_reference_info() {
 }
 
 #[tokio::test]
-async fn test_get_script_usage_aggregates_family_versions() {
+async fn test_get_script_usage_aggregates_family_references() {
     let store = test_store();
     let family_id = "default-lock";
     let version_a = vec![0x11; 32];
@@ -2163,6 +2343,12 @@ async fn test_get_script_usage_aggregates_family_versions() {
             family_id: family_id.to_string(),
             name: "Default Lock".to_string(),
             versions_count: 2,
+            cells_count: 9,
+            live_cells_count: 5,
+            lock_cells_count: 4,
+            type_cells_count: 5,
+            owned_capacity_sum: 700,
+            owned_knowledge_sum: 400,
             ..Default::default()
         },
     );
@@ -2192,6 +2378,40 @@ async fn test_get_script_usage_aggregates_family_versions() {
             family_id: Some(family_id.to_string()),
             name: Some("Default Lock".to_string()),
             category: Some("type".to_string()),
+            type_cells_count: 5,
+            type_live_cells_count: 2,
+            type_capacity_sum: 700,
+            type_owned_capacity_sum: 400,
+            type_used_capacity_sum: 500,
+            type_owned_knowledge_sum: 220,
+            ..Default::default()
+        },
+    );
+    // Match the canonical reference facts from which the writer materializes
+    // these version/family totals; unrelated ScriptInfo labels are not members.
+    batch.put_script_reference_to_version(0, &version_a, &version_a);
+    batch.put_script_reference_to_version(0, &version_b, &version_b);
+    batch.put_script_reference_info(
+        0,
+        &version_a,
+        &ScriptReferenceInfo {
+            reference_hash: version_a.clone(),
+            hash_type: 0,
+            lock_cells_count: 4,
+            lock_live_cells_count: 3,
+            lock_capacity_sum: 500,
+            lock_owned_capacity_sum: 300,
+            lock_used_capacity_sum: 260,
+            lock_owned_knowledge_sum: 180,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_info(
+        0,
+        &version_b,
+        &ScriptReferenceInfo {
+            reference_hash: version_b.clone(),
+            hash_type: 0,
             type_cells_count: 5,
             type_live_cells_count: 2,
             type_capacity_sum: 700,

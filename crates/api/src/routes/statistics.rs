@@ -1004,7 +1004,7 @@ fn build_most_utilized_share_chart(
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
-    let cache_key = "chart:most-utilized-scripts:v4";
+    let cache_key = "chart:most-utilized-scripts:v5";
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(cache_key)
@@ -1013,25 +1013,33 @@ async fn get_most_utilized_scripts_chart(
         return ok(cached);
     }
 
-    // Entities follow the same family resolution the usage counters use: every
-    // observed reference form resolving into a family version is grouped under
-    // that family, so the chart totals equal /scripts/{name}/usage. Loose
-    // reference forms without a family keep their own label.
+    // Family provenance survives code retirement. Membership and exact totals
+    // share the writer's operators, matching /scripts/{name}/usage. Loose
+    // references without a family keep their own identity and label.
     let script_infos_by_code_hash: HashMap<Vec<u8>, ckbadger_store::ScriptInfo> =
         load_script_infos_cached(&state)?.into_iter().collect();
-    let version_families: HashMap<Vec<u8>, String> =
-        super::scripts::load_script_versions_cached(&state)?
-            .into_iter()
-            .filter_map(|(version_hash, info)| Some((version_hash, info.family_id?)))
-            .collect();
-    let family_names: HashMap<String, String> =
-        super::scripts::load_script_families_cached(&state)?
-            .into_iter()
-            .map(|(family_id, info)| (family_id, info.name))
-            .collect();
+    let versions = state
+        .store
+        .list_script_versions()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let membership =
+        ckbadger_store::ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let family_versions: std::collections::HashSet<Vec<u8>> = versions
+        .iter()
+        .filter(|(_, info)| info.family_id.is_some())
+        .map(|(hash, _)| hash.clone())
+        .collect();
+    let family_names: HashMap<String, String> = state
+        .store
+        .list_script_families()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .into_iter()
+        .map(|(family_id, info)| (family_id, info.name))
+        .collect();
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
-    let mut final_by_key: HashMap<String, (i128, i128)> = HashMap::new();
+    let mut usage_by_key: HashMap<String, ckbadger_store::ScriptFamilyUsage> = HashMap::new();
     let mut entity_key_by_form: HashMap<(Vec<u8>, u8), String> = HashMap::new();
     let mut code_hashes: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
 
@@ -1046,10 +1054,12 @@ async fn get_most_utilized_scripts_chart(
             &state.append_only_store,
             hash_type,
             &reference_hash,
-            &|hash: &[u8]| version_families.contains_key(hash),
+            &|hash: &[u8]| family_versions.contains(hash),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        let family_id = member_version.and_then(|version| version_families.get(&version).cloned());
+        let family_id = membership
+            .resolve_family(&reference_hash, hash_type, member_version.as_deref())
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
         // Aggregation keys are identities, never display names: a family bucket
         // is keyed by its family_id, a loose reference form by (code_hash,
@@ -1061,7 +1071,7 @@ async fn get_most_utilized_scripts_chart(
         // their form so same-named identities stay distinguishable.
         let (key, label) = match family_id {
             Some(family_id) => {
-                let name = family_names.get(&family_id).ok_or_else(|| {
+                let name = family_names.get(family_id).ok_or_else(|| {
                     ApiError::internal(format!(
                         "script version points to missing family in most-utilized chart: family_id={}",
                         family_id
@@ -1095,43 +1105,12 @@ async fn get_most_utilized_scripts_chart(
             }
         };
 
-        let final_total_cells_capacity =
-            reference_info.lock_owned_capacity_sum + reference_info.type_owned_capacity_sum;
-        let final_used_capacity =
-            reference_info.lock_owned_knowledge_sum + reference_info.type_owned_knowledge_sum;
-        if final_total_cells_capacity < 0 {
-            return Err(ApiError::internal(format!(
-                "negative script total capacity for key {}: reference_hash=0x{}, hash_type={}, value={}",
-                key,
-                hex::encode(&reference_hash),
-                hash_type,
-                final_total_cells_capacity
-            )));
-        }
-        if final_used_capacity < 0 {
-            return Err(ApiError::internal(format!(
-                "negative script common knowledge size for key {}: reference_hash=0x{}, hash_type={}, value={}",
-                key,
-                hex::encode(&reference_hash),
-                hash_type,
-                final_used_capacity
-            )));
-        }
-        if final_used_capacity > final_total_cells_capacity {
-            return Err(ApiError::internal(format!(
-                "script common knowledge size exceeds total for key {}: reference_hash=0x{}, hash_type={}, used={}, total={}",
-                key,
-                hex::encode(&reference_hash),
-                hash_type,
-                final_used_capacity,
-                final_total_cells_capacity
-            )));
-        }
-
         labels_by_key.insert(key.clone(), label);
-        let entry = final_by_key.entry(key.clone()).or_insert((0, 0));
-        entry.0 += final_total_cells_capacity;
-        entry.1 += final_used_capacity;
+        usage_by_key
+            .entry(key.clone())
+            .or_default()
+            .add_reference(&reference_info)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         entity_key_by_form.insert((reference_hash.clone(), hash_type), key);
         code_hashes.insert(reference_hash);
     }
@@ -1161,36 +1140,14 @@ async fn get_most_utilized_scripts_chart(
         }
     }
 
-    let entities_unfiltered: Vec<ScriptEntity> = final_by_key
+    let entities_unfiltered: Vec<ScriptEntity> = usage_by_key
         .iter()
-        .map(
-            |(key, (capacity, used))| -> Result<ScriptEntity, ApiRouteError> {
-                if *capacity < 0 {
-                    return Err(ApiError::internal(format!(
-                        "negative aggregated script total capacity for key {}: {}",
-                        key, capacity
-                    )));
-                }
-                if *used < 0 {
-                    return Err(ApiError::internal(format!(
-                        "negative aggregated script common knowledge size for key {}: {}",
-                        key, used
-                    )));
-                }
-                if *used > *capacity {
-                    return Err(ApiError::internal(format!(
-                    "aggregated script common knowledge size exceeds total for key {}: used={}, total={}",
-                    key, used, capacity
-                )));
-                }
-                Ok(ScriptEntity {
-                    key: key.clone(),
-                    final_total_cells_capacity: *capacity,
-                    final_used_capacity: *used,
-                })
-            },
-        )
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|(key, usage)| ScriptEntity {
+            key: key.clone(),
+            final_total_cells_capacity: usage.owned_capacity_sum,
+            final_used_capacity: usage.owned_knowledge_sum,
+        })
+        .collect();
     let entities: Vec<ScriptEntity> = entities_unfiltered
         .into_iter()
         .filter(|entity| entity.final_total_cells_capacity > 0 || entity.final_used_capacity > 0)

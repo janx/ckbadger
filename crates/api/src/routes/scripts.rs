@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use ckbadger_store::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -17,18 +18,14 @@ use crate::response::{
     ScriptFamilyListItemResponse, ScriptObservedReferenceResponse, ScriptVersionDeploymentResponse,
     ScriptVersionDetailResponse,
 };
-use crate::utils::script_resolution::{
-    has_observed_type_id_lineage, resolve_dep_cells_for_transaction,
-};
+use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
     parse_chart_date_range, parse_hash32, reference_form_member_version, resolve_script_by_hash,
     resolve_script_form_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
 };
-use crate::warmup::{
-    CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL, CACHE_KEY_SCRIPT_VERSIONS_ALL,
-};
+use crate::warmup::{CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL};
 use crate::AppState;
 
 fn load_script_infos_cached(
@@ -49,19 +46,6 @@ pub(crate) fn load_script_families_cached(
             CACHE_KEY_SCRIPT_FAMILIES_ALL,
         )
         .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
-}
-
-pub(crate) fn load_script_versions_cached(
-    state: &Arc<AppState>,
-) -> Result<Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)>, ApiRouteError> {
-    state
-        .mem_cache
-        .get::<Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)>>(
-            CACHE_KEY_SCRIPT_VERSIONS_ALL,
-        )
-        .ok_or_else(|| {
-            ApiError::warmup_pending("script version cache unavailable; warmup in progress")
-        })
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -142,6 +126,8 @@ pub struct ScriptUsageResponse {
     #[serde(rename = "commonKnowledgeSizeSum")]
     pub used_capacity_sum: String,
     pub owned_knowledge_sum: String,
+    /// Current binary bindings only; retired family references remain in the
+    /// top-level totals and are not assigned to a historical binary.
     pub by_deployment: Vec<DeploymentUsage>,
 }
 
@@ -834,11 +820,11 @@ fn script_version_deployments(
         .collect()
 }
 
-/// An observed reference form that resolved into a family/version set.
+/// Family provenance survives retirement; a current binary binding may not.
 struct FamilyMemberForm {
     reference_hash: Vec<u8>,
     hash_type: u8,
-    version_hash: Vec<u8>,
+    current_version_hash: Option<Vec<u8>>,
     info: ckbadger_store::types::ScriptReferenceInfo,
 }
 
@@ -856,29 +842,29 @@ fn canonical_reference_set(
         .collect()
 }
 
-/// Enumerate the observed reference forms belonging to a version set.
-///
-/// THE single family-membership computation: the family detail response, the
-/// family capacity-history chart and the most-utilized grouping all derive
-/// their reference sets through [`reference_form_member_version`] over the
-/// persisted reference forms, so counters and charts cannot diverge.
-///
-/// Observed native TypeID history may outlive its executable binding. Other
-/// canonical metadata without a mapping remains an invariant violation.
+/// Enumerate family provenance independently of current binary resolution.
+/// Charts include retired references; version rows include only current bindings.
+/// The indexer and API share the same family membership operator.
 fn family_member_reference_forms(
     state: &AppState,
     membership_context: &str,
+    family_id: Option<&str>,
     allowed_versions: &HashSet<Vec<u8>>,
     canonical_references: &HashSet<(u8, Vec<u8>)>,
 ) -> Result<Vec<FamilyMemberForm>, ApiRouteError> {
+    let versions = state
+        .store
+        .list_script_versions()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let membership = ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut members = Vec::new();
-
     for ((reference_hash, hash_type), info) in state
         .store
         .list_script_reference_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
-        let member_version = reference_form_member_version(
+        let current_version_hash = reference_form_member_version(
             &state.store,
             &state.append_only_store,
             hash_type,
@@ -886,37 +872,42 @@ fn family_member_reference_forms(
             &|hash: &[u8]| allowed_versions.contains(hash),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        let version_hash = match member_version {
-            Some(version_hash) if allowed_versions.contains(&version_hash) => version_hash,
-            Some(_) => continue,
-            None => {
-                if canonical_references.contains(&(hash_type, reference_hash.clone())) {
-                    if hash_type == 1
-                        && has_observed_type_id_lineage(&state.store, &reference_hash)
-                            .map_err(|e| ApiError::internal(e.to_string()))?
-                    {
-                        continue;
-                    }
-                    return Err(ApiError::internal(format!(
-                        "script family detail is missing reference->version mapping: context={}, reference_hash=0x{}, hash_type={}",
-                        membership_context,
-                        hex::encode(&reference_hash),
-                        hash_type
-                    )));
-                }
-                continue;
-            }
+        let resolved_family = membership
+            .resolve_family(&reference_hash, hash_type, current_version_hash.as_deref())
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let is_member = match family_id {
+            Some(family_id) => resolved_family == Some(family_id),
+            None => current_version_hash
+                .as_ref()
+                .is_some_and(|hash| allowed_versions.contains(hash)),
         };
-
+        if !is_member {
+            if current_version_hash.is_none()
+                && canonical_references.contains(&(hash_type, reference_hash.clone()))
+            {
+                return Err(ApiError::internal(format!(
+                    "script family detail is missing reference->version mapping: context={}, reference_hash=0x{}, hash_type={}",
+                    membership_context, hex::encode(&reference_hash), hash_type
+                )));
+            }
+            continue;
+        }
+        if current_version_hash
+            .as_ref()
+            .is_some_and(|hash| !allowed_versions.contains(hash))
+        {
+            return Err(ApiError::internal(format!(
+                "script family membership resolved to an unlisted version: context={}, reference_hash=0x{}, hash_type={}",
+                membership_context, hex::encode(&reference_hash), hash_type
+            )));
+        }
         members.push(FamilyMemberForm {
             reference_hash,
             hash_type,
-            version_hash,
+            current_version_hash,
             info,
         });
     }
-
     Ok(members)
 }
 
@@ -932,11 +923,18 @@ fn observed_references_by_version(
         .collect();
     let canonical_references = canonical_reference_set(versions);
 
-    for member in
-        family_member_reference_forms(state, family_id, &allowed_versions, &canonical_references)?
-    {
+    for member in family_member_reference_forms(
+        state,
+        family_id,
+        Some(family_id),
+        &allowed_versions,
+        &canonical_references,
+    )? {
+        let Some(version_hash) = member.current_version_hash else {
+            continue;
+        };
         by_version
-            .entry(member.version_hash)
+            .entry(version_hash)
             .or_default()
             .push(reference_info_to_response(&member.info)?);
     }
@@ -989,8 +987,6 @@ fn load_family_versions(
     state: &Arc<AppState>,
     family_id: &str,
 ) -> Result<Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)>, ApiRouteError> {
-    let mut versions_by_hash: HashMap<Vec<u8>, ckbadger_store::types::ScriptVersionInfo> =
-        load_script_versions_cached(state)?.into_iter().collect();
     let version_hashes = state
         .store
         .list_script_version_hashes_by_family(family_id)
@@ -998,21 +994,19 @@ fn load_family_versions(
 
     let mut versions = Vec::with_capacity(version_hashes.len());
     for version_hash in version_hashes {
-        let version_info = if let Some(version_info) = versions_by_hash.remove(&version_hash) {
-            version_info
-        } else {
-            state
-                .store
-                .get_script_version(&version_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "script family references missing version: family_id={}, version_hash=0x{}",
-                        family_id,
-                        hex::encode(&version_hash)
-                    ))
-                })?
-        };
+        // The family index, binding, and mutable version counters must all
+        // come from this request's pinned canonical read view.
+        let version_info = state
+            .store
+            .get_script_version(&version_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "script family references missing version: family_id={}, version_hash=0x{}",
+                    family_id,
+                    hex::encode(&version_hash)
+                ))
+            })?;
 
         if version_info.family_id.as_deref() != Some(family_id) {
             return Err(ApiError::internal(format!(
@@ -1656,16 +1650,30 @@ async fn get_script_usage(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<ScriptUsageResponse> {
-    let (family_id, _family) = load_script_family_by_name(&state, &name)?;
+    let (family_id, family) = load_script_family_by_name(&state, &name)?;
+    let versions = load_family_versions(&state, &family_id)?;
+    let allowed_versions = versions.iter().map(|(hash, _)| hash.clone()).collect();
+    let canonical_references = canonical_reference_set(&versions);
+    let members = family_member_reference_forms(
+        &state,
+        &family_id,
+        Some(&family_id),
+        &allowed_versions,
+        &canonical_references,
+    )?;
+    let mut usage = ScriptFamilyUsage::default();
+    for member in members {
+        usage
+            .add_reference(&member.info)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
+    usage
+        .validate_persisted(&family)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut total_cells: i64 = 0;
-    let mut total_live: i64 = 0;
-    let mut total_cap: u128 = 0;
-    let mut total_live_cap: u128 = 0;
-    let mut total_used_cap: u128 = 0;
-    let mut total_owned_knowledge: u128 = 0;
-
-    let mut by_deployment: Vec<DeploymentUsage> = load_family_versions(&state, &family_id)?
+    // Family totals include retired references. Per-binary rows describe only
+    // currently bound versions and need not sum to the family provenance totals.
+    let mut by_deployment: Vec<DeploymentUsage> = versions
         .into_iter()
         .map(|(version_hash, info)| {
             let (
@@ -1680,13 +1688,6 @@ async fn get_script_usage(
             let owned_capacity_sum = owned_capacity_sum as u128;
             let used_capacity_sum = used_capacity_sum as u128;
             let owned_knowledge_sum = owned_knowledge_sum as u128;
-
-            total_cells += cells_count;
-            total_live += live_cells_count;
-            total_cap += capacity_sum;
-            total_live_cap += owned_capacity_sum;
-            total_used_cap += used_capacity_sum;
-            total_owned_knowledge += owned_knowledge_sum;
 
             Ok(DeploymentUsage {
                 code_hash: format!("0x{}", hex::encode(&version_hash)),
@@ -1709,12 +1710,12 @@ async fn get_script_usage(
 
     ok(ScriptUsageResponse {
         name,
-        cells_count: total_cells,
-        live_cells_count: total_live,
-        capacity_sum: total_cap.to_string(),
-        owned_capacity_sum: total_live_cap.to_string(),
-        used_capacity_sum: total_used_cap.to_string(),
-        owned_knowledge_sum: total_owned_knowledge.to_string(),
+        cells_count: family.cells_count,
+        live_cells_count: family.live_cells_count,
+        capacity_sum: usage.capacity_sum.to_string(),
+        owned_capacity_sum: family.owned_capacity_sum.to_string(),
+        used_capacity_sum: usage.used_capacity_sum.to_string(),
+        owned_knowledge_sum: family.owned_knowledge_sum.to_string(),
         by_deployment,
     })
 }
@@ -1969,6 +1970,7 @@ async fn get_script_capacity_history_chart(
     let member_forms = family_member_reference_forms(
         &state,
         &family_id,
+        Some(&family_id),
         &allowed_versions,
         &canonical_references,
     )?;
@@ -2058,6 +2060,7 @@ async fn get_script_capacity_history_chart_by_code_hash(
             let member_forms = family_member_reference_forms(
                 &state,
                 &membership_context,
+                version_info.family_id.as_deref(),
                 &allowed_versions,
                 &canonical_references,
             )?;
