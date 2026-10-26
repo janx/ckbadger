@@ -14,6 +14,7 @@ export interface ProtocolActionMeta {
   depositBlock: bigint | null;
   channelOutpoint: string | null;
   btcTxid: string | null;
+  btcOutputIndex: bigint | null;
 }
 
 function where(pa: ActivityProtocolAction, key: string): string {
@@ -61,6 +62,7 @@ export function protocolActionMeta(pa: ActivityProtocolAction): ProtocolActionMe
     depositBlock: integerOf(pa, 'depositBlock'),
     channelOutpoint: stringOf(pa, 'channelOutpoint'),
     btcTxid: stringOf(pa, 'btcTxid'),
+    btcOutputIndex: integerOf(pa, 'outIndex'),
   };
   if (pa.protocol === 'dao') {
     for (const key of DAO_REQUIRED[pa.action] ?? []) {

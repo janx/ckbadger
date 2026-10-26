@@ -1,14 +1,20 @@
 'use client';
 
-import Link from '@/components/ui/link';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
-import { TerminalPanel, TerminalPanelContent, TerminalRow } from '@/components/ui/terminal-panel';
-import { buildGlobalTxEvents, ParticipantLine } from '@/components/activity-event-row';
+import { ActivityRow } from '@/components/activity/activity-row';
+import { ClassMark } from '@/components/ui/class-mark';
+import { CLASS_COLORS } from '@/lib/design-tokens';
+import { totalActivities } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type GlobalActivity, type GlobalActivityFilter } from '@/lib/api';
+import {
+  api,
+  type DailyActivityStats,
+  type GlobalActivity,
+  type GlobalActivityFilter,
+} from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const POLL_INTERVAL_MS = 10_000;
@@ -88,10 +94,6 @@ function toActivityDate(timestamp: string): Date {
     return new Date(timestamp);
   }
   return new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
-}
-
-function formatActivityTimeAgo(timestamp: string): string {
-  return formatTimeAgo(toActivityDate(timestamp));
 }
 
 function getActivityDayLabel(timestamp: string): string {
@@ -178,151 +180,102 @@ function getDayDividerTestId(label: string): string {
   return `activity-day-divider-${label.toLowerCase().replace(/\s+/g, '-')}`;
 }
 
-function getFilterLabel(filter: GlobalActivityFilter): string {
-  return FILTER_OPTIONS.find((option) => option.value === filter)?.label ?? 'All';
+function activityFilterCounts(
+  summary: DailyActivityStats
+): Partial<Record<GlobalActivityFilter, number>> {
+  return {
+    all: totalActivities(summary),
+    ckb: summary.transferCount,
+    token: summary.tokenCount,
+    object: summary.objectCount,
+    identity: summary.identityCount,
+    dao:
+      summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount,
+    script: summary.scriptCallCount,
+  };
 }
-
-function FilterDropdown({
-  selectedFilter,
-  onFilterChange,
-}: {
-  selectedFilter: GlobalActivityFilter;
-  onFilterChange: (value: string | number | undefined) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const activeLabel = getFilterLabel(selectedFilter).toUpperCase();
-
-  useEffect(() => {
-    if (!open) return;
-    const handleClose = (e: MouseEvent | TouchEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', handleClose);
-    document.addEventListener('touchstart', handleClose);
-    document.addEventListener('keydown', handleEsc);
-    return () => {
-      document.removeEventListener('mousedown', handleClose);
-      document.removeEventListener('touchstart', handleClose);
-      document.removeEventListener('keydown', handleEsc);
-    };
-  }, [open]);
-
-  return (
-    <div ref={dropdownRef} className="relative sm:hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="border-jade/15 flex items-center gap-1 rounded-sm border px-2 py-0.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors"
-      >
-        <span className="text-jade font-bold">{activeLabel}</span>
-        <span className="text-jade/35 text-[9px]">&#9662;</span>
-      </button>
-      {open && (
-        <div className="border-jade/15 bg-base-surface/95 absolute left-0 top-full z-40 mt-1 min-w-[8rem] rounded-md border py-1 shadow-xl backdrop-blur-sm">
-          {FILTER_OPTIONS.map((option) => {
-            const isActive = selectedFilter === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => {
-                  onFilterChange(option.value);
-                  setOpen(false);
-                }}
-                className={cn(
-                  'block w-full px-3 py-1.5 text-left font-mono text-[11px] uppercase tracking-[0.14em] transition-colors',
-                  isActive
-                    ? 'bg-jade/8 text-jade'
-                    : 'text-jade/50 hover:bg-jade/[0.04] hover:text-jade/80'
-                )}
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ActivityStreamToolbar({
   selectedFilter,
   visibleItemsCount,
   statusLabel,
-  stacked = false,
   onFilterChange,
+  summary,
 }: {
   selectedFilter: GlobalActivityFilter;
   visibleItemsCount: number;
   statusLabel: 'active' | 'inactive';
-  stacked?: boolean;
   onFilterChange: (value: string | number | undefined) => void;
+  summary?: DailyActivityStats;
 }) {
-  const activeLabel = getFilterLabel(selectedFilter).toUpperCase();
-  const indicatorClass =
-    statusLabel === 'active' ? 'bg-jade shadow-[0_0_8px_rgba(46,219,163,0.3)]' : 'bg-jade/35';
-
+  const counts = summary ? activityFilterCounts(summary) : null;
+  const classes = {
+    token: 'tokens',
+    object: 'objects',
+    identity: 'identities',
+    dao: 'dao',
+  } as const;
   return (
     <div
       data-testid="activities-stream-toolbar"
-      className={cn(
-        'bg-[#060810]',
-        stacked ? 'border-jade/10 border-b' : 'border-jade/10 border-y'
-      )}
+      className="bg-base-bg border-base-border-subtle border-b py-3"
     >
-      {/* Mobile: compact single-line toolbar */}
-      <div className="flex items-center gap-0 px-4 py-1.5 font-mono text-[11px] tabular-nums leading-none sm:hidden">
-        <span className={cn('mr-2 inline-block h-1.5 w-1.5 rounded-full', indicatorClass)} />
-        <FilterDropdown selectedFilter={selectedFilter} onFilterChange={onFilterChange} />
-        <span className="text-jade/20 mx-2 select-none">|</span>
-        <span className="text-jade/50 uppercase tracking-wider">
-          {visibleItemsCount.toLocaleString()}
+      <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
+        {FILTER_OPTIONS.map((option) => (
+          <button
+            type="button"
+            key={option.value}
+            aria-label={option.label}
+            aria-pressed={selectedFilter === option.value}
+            onClick={() => onFilterChange(option.value)}
+            className={cn(
+              'flex items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors',
+              selectedFilter === option.value
+                ? 'border-base-border text-text-bright bg-base-surface'
+                : 'text-text-dim hover:text-text border-transparent'
+            )}
+          >
+            {option.value in classes && (
+              <ClassMark kind={classes[option.value as keyof typeof classes]} />
+            )}
+            {option.label}
+            {counts && counts[option.value] !== undefined && (
+              <span className="text-text-dim text-[11px] tabular-nums">
+                {counts[option.value]!.toLocaleString('en-US')}
+              </span>
+            )}
+          </button>
+        ))}
+        <span className="text-text-dim ml-auto text-[11px]" aria-live="polite">
+          {statusLabel === 'active'
+            ? 'Refreshing'
+            : `${visibleItemsCount.toLocaleString('en-US')} loaded`}
         </span>
-        <span className="text-jade/50 ml-1 uppercase tracking-wider">loaded</span>
       </div>
-
-      {/* Desktop: full toolbar with inline buttons */}
-      <div className="container mx-auto hidden min-h-12 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:flex">
-        <div className="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
-          <span className={cn('mr-2 inline-block h-1.5 w-1.5 rounded-full', indicatorClass)} />
-          <span className="text-jade/50 uppercase tracking-wider">filter</span>
-          <span className="text-jade ml-1.5 font-bold transition-colors">{activeLabel}</span>
-          <span className="text-jade/20 mx-2.5 select-none">|</span>
-          <span className="text-jade/50 uppercase tracking-wider">loaded</span>
-          <span className="text-jade ml-1.5 font-bold transition-colors">
-            {visibleItemsCount.toLocaleString()}
-          </span>
+      {counts && counts.all !== undefined && counts.all > 0 && (
+        <div
+          role="img"
+          aria-label={`Activity kinds on ${summary!.date}`}
+          className="mt-3 flex h-2 overflow-hidden rounded-sm"
+        >
+          {FILTER_OPTIONS.filter(
+            (o) => o.value !== 'all' && counts[o.value] !== undefined && counts[o.value]! > 0
+          ).map((o) => (
+            <span
+              key={o.value}
+              title={`${o.label}: ${counts[o.value]}`}
+              style={{
+                width: `${(counts[o.value]! / counts.all!) * 100}%`,
+                backgroundColor:
+                  o.value in classes
+                    ? CLASS_COLORS[classes[o.value as keyof typeof classes]]
+                    : o.value === 'ckb'
+                      ? '#2edba3'
+                      : CLASS_COLORS.other,
+              }}
+            />
+          ))}
         </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          {FILTER_OPTIONS.map((option) => {
-            const isActive = selectedFilter === option.value;
-
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => onFilterChange(option.value)}
-                className={cn(
-                  'rounded-sm border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] transition-colors',
-                  isActive
-                    ? 'border-jade/20 bg-jade/8 text-jade'
-                    : 'text-jade/45 hover:bg-jade/[0.04] hover:text-jade/80 border-transparent bg-transparent'
-                )}
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -330,90 +283,11 @@ function ActivityStreamToolbar({
 function ActivityDayDivider({ label }: { label: string }) {
   return (
     <div
-      className="flex items-center gap-2 px-4 pb-1.5 pt-3.5"
+      className="text-text-dim border-base-border-subtle mt-5 border-b py-2 text-[11px]"
       data-testid={getDayDividerTestId(label)}
     >
-      <span className="bg-jade/55 block h-1 w-1 rounded-full" />
-      <span className="text-text-dim font-mono text-[10px] uppercase tracking-[0.22em]">
-        {label}
-      </span>
-      <div className="from-jade/12 via-base-border/55 h-px flex-1 bg-gradient-to-r to-transparent" />
+      {label}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ActivityStreamRow — tx-centric layered view
-// ---------------------------------------------------------------------------
-
-interface ActivityStreamRowProps {
-  activity: GlobalActivity;
-  isNew?: boolean;
-}
-
-function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) {
-  const txEvents = buildGlobalTxEvents(activity);
-  const txHref = `/tx/${activity.txHash}`;
-  const blockHref = `/blocks/${activity.blockNumber}`;
-
-  const rowAnimation = isNew
-    ? {
-        animation:
-          'activity-stream-row-enter 280ms ease-out, activity-stream-row-glow 2s ease-out forwards',
-      }
-    : undefined;
-
-  return (
-    <TerminalRow
-      role="article"
-      aria-label={`Transaction ${activity.txHash.slice(0, 10)}`}
-      className="px-4 py-4 sm:px-5"
-      style={rowAnimation}
-    >
-      <div className="space-y-2.5">
-        {/* TX header: hash · block#   time */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 font-mono text-sm">
-            <Link href={txHref} className="text-text-dim hover:text-aqua transition-colors">
-              <span className="text-text-dim/60 mr-0.5 text-xs">tx</span>
-              {truncateHash(activity.txHash, 10, 8)}
-            </Link>
-            <span className="text-text-dim">{'\u00B7'}</span>
-            <Link
-              href={blockHref}
-              className="text-text-dim hover:text-text text-xs transition-colors"
-            >
-              #{activity.blockNumber.toLocaleString()}
-            </Link>
-          </div>
-          <span className="text-text-dim shrink-0 font-mono text-[10px]">
-            {formatActivityTimeAgo(activity.timestamp)}
-          </span>
-        </div>
-
-        {/* TX-level events: L3 protocol actions + L2 catch-all type/lock calls */}
-        {txEvents.length > 0 && (
-          <div className="space-y-1 pl-3">
-            {txEvents.map((event, i) => (
-              <div key={i} className="flex items-center justify-between gap-2">
-                <div className="min-w-0 truncate">{event.badge}</div>
-                <div className="shrink-0">{event.value}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Per-participant lines: L1 CKB + L2 item deltas */}
-        <div className="space-y-1 pl-3">
-          {activity.participants.map((p, i) => (
-            <ParticipantLine
-              key={p.lockHash ?? p.lockHashPrefix ?? p.address ?? i}
-              participant={p}
-            />
-          ))}
-        </div>
-      </div>
-    </TerminalRow>
   );
 }
 
@@ -436,7 +310,7 @@ function LoadingRows() {
   ));
 }
 
-export function ActivitiesStreamExplorer() {
+export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityStats }) {
   useEffect(() => ensureKeyframes(), []);
 
   const [selectedFilter, setSelectedFilter] = useState<GlobalActivityFilter>('all');
@@ -601,125 +475,115 @@ export function ActivitiesStreamExplorer() {
 
       {headQuery.isError && visibleItems.length > 0 && (
         <div className="border-base-border bg-base-surface/90 text-text-dim rounded-lg border px-3 py-2 font-mono text-xs">
-          Live refresh paused:{' '}
+          Could not refresh:{' '}
           {headQuery.error instanceof Error
             ? headQuery.error.message
             : 'unable to refresh head stream right now'}
         </div>
       )}
 
-      <TerminalPanel
-        className="min-h-[44rem] overflow-visible"
+      <section
+        className="min-h-[44rem] min-w-0"
         data-testid="activities-stream-panel"
+        aria-label="Activity feed"
       >
-        <TerminalPanelContent padding="none">
-          <div
-            data-testid="activities-stream-sticky-stack"
-            className={cn(
-              'border-jade/10 sticky z-30 border-x',
-              BELOW_STICKY_HEADER,
-              hasPending && 'shadow-[0_10px_24px_rgba(0,0,0,0.28)]'
-            )}
-          >
-            {hasPending && (
-              <button
-                type="button"
-                onClick={handleMergePending}
-                aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
-                className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-1.5 text-left transition-colors hover:bg-[#060a11] sm:py-2"
-              >
-                {/* Mobile: compact single line */}
-                <div className="flex items-center gap-0 font-mono text-[11px] tabular-nums leading-none sm:hidden">
-                  <span className="bg-jade/80 mr-2 block h-1.5 w-1.5 rounded-full shadow-[0_0_8px_rgba(46,219,163,0.35)]" />
-                  <span className="text-jade font-bold uppercase tracking-[0.14em]">
-                    {pendingNewItems.length} new
-                  </span>
-                  <span className="text-text-dim ml-1.5 uppercase tracking-[0.18em]">
-                    &mdash; tap to load
-                  </span>
-                </div>
-                {/* Desktop: full labels */}
-                <div className="hidden flex-wrap items-center gap-0 font-mono text-[11px] tabular-nums leading-none sm:flex">
-                  <span className="bg-jade/80 mr-2 block h-2 w-2 rounded-full shadow-[0_0_10px_rgba(46,219,163,0.35)]" />
-                  <span className="text-jade/55 uppercase tracking-wider">LIVE BUFFER</span>
-                  <span className="text-jade/20 mx-2.5 select-none">|</span>
-                  <span className="text-jade font-bold uppercase tracking-[0.14em]">
-                    {pendingNewItems.length} new activit
-                    {pendingNewItems.length === 1 ? 'y' : 'ies'}
-                  </span>
-                  <span className="text-jade/20 mx-2.5 select-none">|</span>
-                  <span className="text-text-dim uppercase tracking-[0.18em]">merge at top</span>
-                </div>
-              </button>
-            )}
-
-            <ActivityStreamToolbar
-              selectedFilter={selectedFilter}
-              visibleItemsCount={visibleItems.length}
-              statusLabel={statusLabel}
-              stacked={hasPending}
-              onFilterChange={handleFilterChange}
-            />
-          </div>
-          {isLoading ? (
-            <LoadingRows />
-          ) : initialError ? (
-            <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-              <div className="text-text font-mono text-sm uppercase">Failed to load activities</div>
-              <div className="text-text-dim max-w-lg text-sm">
-                {error instanceof Error ? error.message : 'Unknown error'}
-              </div>
-            </div>
-          ) : emptyState ? (
-            <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-              <div className="text-text font-mono text-sm uppercase">No activities yet</div>
-              <div className="text-text-dim text-sm">
-                This filter has no canonical activity rows in the current window.
-              </div>
-            </div>
-          ) : (
-            <div>
-              {visibleItems.map((activity, index) => {
-                const key = itemKey(activity);
-                const previousLabel =
-                  index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp) : null;
-                const currentLabel = getActivityDayLabel(activity.timestamp);
-                const showDayDivider = currentLabel !== previousLabel;
-
-                return (
-                  <div key={key}>
-                    {showDayDivider && <ActivityDayDivider label={currentLabel} />}
-                    <ActivityStreamRow activity={activity} isNew={highlightedKeys.has(key)} />
-                  </div>
-                );
-              })}
-
-              <div ref={sentinelRef} data-testid="activities-stream-sentinel" className="h-4" />
-
-              {isFetchingNextPage && (
-                <div className="text-text-dim border-base-border/50 border-t px-3 py-3 text-center font-mono text-xs uppercase">
-                  Loading older activities
-                </div>
-              )}
-
-              {isFetchNextPageError && (
-                <div className="border-base-border/50 border-t px-3 py-3 text-center">
-                  <div className="text-negative font-mono text-xs uppercase">
-                    Failed to load older activities
-                  </div>
-                  <button
-                    type="button"
-                    className="text-jade hover:text-jade/80 mt-1 cursor-pointer font-mono text-xs uppercase underline transition-colors"
-                    onClick={() => void fetchNextPage()}
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-            </div>
+        <div
+          data-testid="activities-stream-sticky-stack"
+          className={cn(
+            'sticky z-30',
+            BELOW_STICKY_HEADER,
+            hasPending && 'shadow-[0_10px_24px_rgba(0,0,0,0.28)]'
           )}
-        </TerminalPanelContent>
-      </TerminalPanel>
+        >
+          {hasPending && (
+            <button
+              type="button"
+              onClick={handleMergePending}
+              aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
+              className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-1.5 text-left transition-colors hover:bg-[#060a11] sm:py-2"
+            >
+              <span className="text-text text-xs">
+                {pendingNewItems.length} new activit{pendingNewItems.length === 1 ? 'y' : 'ies'} ·
+                Show at top
+              </span>
+            </button>
+          )}
+
+          <ActivityStreamToolbar
+            selectedFilter={selectedFilter}
+            visibleItemsCount={visibleItems.length}
+            statusLabel={statusLabel}
+            summary={summary}
+            onFilterChange={handleFilterChange}
+          />
+        </div>
+        {isLoading ? (
+          <LoadingRows />
+        ) : initialError ? (
+          <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+            <div className="text-text font-mono text-sm uppercase">Failed to load activities</div>
+            <div className="text-text-dim max-w-lg text-sm">
+              {error instanceof Error ? error.message : 'Unknown error'}
+            </div>
+          </div>
+        ) : emptyState ? (
+          <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+            <div className="text-text font-mono text-sm uppercase">No activities yet</div>
+            <div className="text-text-dim text-sm">No activity matches this filter.</div>
+          </div>
+        ) : (
+          <div>
+            {visibleItems.map((activity, index) => {
+              const key = itemKey(activity);
+              const previousLabel =
+                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp) : null;
+              const currentLabel = getActivityDayLabel(activity.timestamp);
+              const showDayDivider = currentLabel !== previousLabel;
+
+              return (
+                <div key={key}>
+                  {showDayDivider && <ActivityDayDivider label={currentLabel} />}
+                  <ActivityRow activity={activity} fresh={highlightedKeys.has(key)} />
+                </div>
+              );
+            })}
+
+            <div ref={sentinelRef} data-testid="activities-stream-sentinel" className="h-4" />
+            {hasNextPage && !isFetchingNextPage && (
+              <div className="flex justify-center py-4">
+                <button
+                  type="button"
+                  onClick={() => void fetchNextPage()}
+                  className="border-base-border text-text hover:text-text-bright rounded-md border px-5 py-2 text-xs"
+                >
+                  Older
+                </button>
+              </div>
+            )}
+
+            {isFetchingNextPage && (
+              <div className="text-text-dim border-base-border/50 border-t px-3 py-3 text-center font-mono text-xs uppercase">
+                Loading older activities
+              </div>
+            )}
+
+            {isFetchNextPageError && (
+              <div className="border-base-border/50 border-t px-3 py-3 text-center">
+                <div className="text-negative font-mono text-xs uppercase">
+                  Failed to load older activities
+                </div>
+                <button
+                  type="button"
+                  className="text-jade hover:text-jade/80 mt-1 cursor-pointer font-mono text-xs uppercase underline transition-colors"
+                  onClick={() => void fetchNextPage()}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

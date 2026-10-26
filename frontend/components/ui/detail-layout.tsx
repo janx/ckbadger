@@ -16,6 +16,7 @@ export interface DetailLayoutProps {
   /** Developer evidence. Omit on pages that are developer pages throughout. */
   tier2?: ReactNode;
   rawData?: ReactNode;
+  rawOpen?: boolean;
   className?: string;
 }
 
@@ -30,6 +31,7 @@ export function DetailLayout({
   children,
   tier2,
   rawData,
+  rawOpen,
   className,
 }: DetailLayoutProps) {
   return (
@@ -71,7 +73,7 @@ export function DetailLayout({
         <div data-tier="2" className="mt-[72px] min-w-0 space-y-8">
           {tier2}
           {rawData && (
-            <details className="border-base-border-subtle border-t pt-4">
+            <details open={rawOpen} className="border-base-border-subtle border-t pt-4">
               <summary className="text-text-dim hover:text-text cursor-pointer text-xs">
                 Raw data
               </summary>

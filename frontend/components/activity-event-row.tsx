@@ -10,7 +10,8 @@ import {
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { classifyActivity } from '@/lib/activity-classify';
+import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
+export type { ActivityBody } from '@/lib/activity-classify';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
@@ -364,6 +365,16 @@ function getFiberActionLabel(action: string): string {
 /** The label of a protocol action (`DAO Deposit`, `Fiber · Channel Open`, `UTXOSwap · swap`). */
 export function protocolActionLabel(pa: ActivityProtocolAction): string {
   if (pa.protocol === 'dao') return daoActionLabel(pa.action);
+  if (pa.protocol === 'rgbpp') {
+    const labels: Record<string, string> = {
+      leap_to_btc: 'Leap to Bitcoin',
+      btc_time_locked: 'Bitcoin time lock',
+      leap_to_ckb: 'Leap to CKB',
+      transfer: 'Transfer',
+      receive: 'Receive',
+    };
+    return `${pa.protocolName} · ${labels[pa.action] ?? formatProtocolAction(pa.action)}`;
+  }
   const actionLabel =
     pa.protocol === 'fiber' ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
   return `${pa.protocolName} \u00B7 ${actionLabel}`;
@@ -683,7 +694,7 @@ export type TxEvent =
  * catch-all type calls, then the lock calls a protocol action does not already explain. The one
  * classification both the full event rows and the compact summary render.
  */
-export function globalTxEvents(activity: GlobalActivity): TxEvent[] {
+export function globalTxEvents(activity: ActivityBody): TxEvent[] {
   const events: TxEvent[] = activity.protocolActions.map((action) => ({
     kind: 'protocol' as const,
     action,
@@ -715,11 +726,42 @@ export function buildGlobalTxEvents(activity: GlobalActivity): EventParts[] {
   );
 }
 
+/** Net change of the same item across every participant decides mint/burn/transfer. */
+function itemMovement(activity: ActivityBody, primary: ItemDelta | null): string {
+  if (!primary)
+    throw new Error(
+      `transaction ${activity.txHash ?? 'uncommitted'}: item headline has no item delta`
+    );
+  const sameItem = (item: ItemDelta) => {
+    if (primary.kind === 'token')
+      return item.kind === 'token' && item.typeScriptHash === primary.typeScriptHash;
+    if (primary.kind === 'object')
+      return item.kind === 'object' && item.objectId === primary.objectId;
+    return (
+      item.kind === 'identity' &&
+      item.identityId === primary.identityId &&
+      item.standard === primary.standard
+    );
+  };
+  let net = BigInt(0);
+  for (const participant of activity.participants)
+    for (const item of participant.itemDeltas) {
+      if (!sameItem(item)) continue;
+      const delta = String(item.delta);
+      if (!/^-?\d+$/.test(delta))
+        throw new Error(
+          `transaction ${activity.txHash ?? 'uncommitted'}: invalid ${item.kind} delta ${delta}`
+        );
+      net += BigInt(delta);
+    }
+  return net > BigInt(0) ? 'mint' : net < BigInt(0) ? 'burn' : 'transfer';
+}
+
 /**
  * The Layer-3 narrative of a global activity, as the feed heads it: the classifier picks the
  * highest non-empty layer, and the existing labels name it.
  */
-export function activityHeadline(activity: GlobalActivity): string {
+export function activityHeadline(activity: ActivityBody): string {
   const c = classifyActivity(activity);
   switch (c.displayType) {
     case 'daoDeposit':
@@ -728,11 +770,11 @@ export function activityHeadline(activity: GlobalActivity): string {
     case 'protocolAction':
       return protocolActionLabel(c.primaryProtocolAction as ActivityProtocolAction);
     case 'token':
-      return 'Token transfer';
+      return `Token ${itemMovement(activity, c.primaryItemDelta)}`;
     case 'object':
-      return 'Object transfer';
+      return `Object ${itemMovement(activity, c.primaryItemDelta)}`;
     case 'identity':
-      return 'Identity transfer';
+      return `Identity ${itemMovement(activity, c.primaryItemDelta)}`;
     case 'typeCall':
       return 'Script call';
     case 'ckbTransfer':
@@ -859,7 +901,23 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
       </>
     );
   }
-  if (meta.btcTxid) parts.push(`btc ${truncateHash(meta.btcTxid, 8, 6)}`);
+  if (pa.protocol === 'rgbpp') {
+    const transitions: Record<string, string> = {
+      leap_to_btc: 'CKB lock → Bitcoin-controlled lock',
+      btc_time_locked: 'RGB++ lock → Bitcoin time lock',
+      leap_to_ckb: 'Bitcoin-linked lock → CKB lock',
+      transfer: 'Bitcoin-controlled cells change ownership',
+      receive: 'New Bitcoin-controlled cells',
+    };
+    if (transitions[pa.action]) parts.push(transitions[pa.action]);
+  }
+  if (meta.btcTxid)
+    parts.push(
+      <span className="text-[#dc8a5a]" title={meta.btcTxid}>
+        Bitcoin tx {truncateHash(meta.btcTxid, 8, 6)}
+        {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
+      </span>
+    );
   return parts;
 }
 

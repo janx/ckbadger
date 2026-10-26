@@ -1,10 +1,11 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { ExactCkb } from '@/components/activity-event-row';
 import Link from '@/components/ui/link';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
+import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 
 export interface TxStructureGroup {
   id: string;
@@ -21,6 +22,7 @@ export interface TxContinuity {
   from: string;
   to: string;
   label: string;
+  kind?: AssetClass;
 }
 export interface TxStructureProps {
   txHash: string;
@@ -33,6 +35,10 @@ export interface TxStructureProps {
   continuity?: readonly TxContinuity[];
   witnesses?: ReactNode;
   dependencies?: ReactNode;
+  hideGroups?: boolean;
+  focusedCellIds?: readonly string[];
+  onClearFocus?: () => void;
+  onCellHover?: (id: string | null) => void;
 }
 /** One hover selection ties cells, continuity and the script evidence together. */
 export function TxStructure({
@@ -45,8 +51,37 @@ export function TxStructure({
   continuity = [],
   witnesses,
   dependencies,
+  hideGroups = false,
+  focusedCellIds = [],
+  onClearFocus,
+  onCellHover,
 }: TxStructureProps) {
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
+  const canvas = useRef<HTMLDivElement>(null);
+  const [centers, setCenters] = useState<Record<string, number>>({});
+  useLayoutEffect(() => {
+    const root = canvas.current;
+    if (!root) return;
+    const measure = () => {
+      const top = root.getBoundingClientRect().top;
+      const next: Record<string, number> = {};
+      root.querySelectorAll<HTMLElement>('[data-cell-id]').forEach((cell) => {
+        const bounds = cell.getBoundingClientRect();
+        next[cell.dataset.cellId!] = bounds.top - top + bounds.height / 2;
+      });
+      setCenters((previous) =>
+        JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+      );
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(root);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [inputs, outputs]);
   const ids = new Set([...inputs, ...outputs].map((c) => c.id));
   if (ids.size !== inputs.length + outputs.length)
     throw new Error(`${txHash}: duplicate cell id in transaction structure`);
@@ -68,8 +103,11 @@ export function TxStructure({
               l.from === hover.id ? [l.to] : l.to === hover.id ? [l.from] : []
             ),
           ]
-        : []
+        : focusedCellIds
   );
+  const ys = Object.values(centers);
+  const poolTop = ys.length ? Math.min(...ys) - 16 : 0;
+  const poolBottom = ys.length ? Math.max(...ys) + 16 : 0;
   const column = (cells: readonly CellTileData[], label: string) => (
     <div className="min-w-0">
       <h3 className="text-text-dim mb-3 text-xs">
@@ -81,8 +119,12 @@ export function TxStructure({
             key={cell.id}
             cell={cell}
             highlighted={linked.has(cell.id)}
-            dimmed={Boolean(hover) && !linked.has(cell.id)}
-            onHover={(id) => setHover(id ? { kind: 'cell', id } : null)}
+            dimmed={(Boolean(hover) || focusedCellIds.length > 0) && !linked.has(cell.id)}
+            onClick={focusedCellIds.includes(cell.id) ? onClearFocus : undefined}
+            onHover={(id) => {
+              setHover(id ? { kind: 'cell', id } : null);
+              onCellHover?.(id);
+            }}
           />
         ))}
       </div>
@@ -90,32 +132,82 @@ export function TxStructure({
   );
   return (
     <div className="min-w-0 space-y-6" aria-label={`Transaction ${txHash} structure`}>
-      <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)]">
+      <div
+        ref={canvas}
+        className="relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)] lg:gap-0"
+      >
         {column(inputs, 'cells consumed')}
-        <div className="text-text-dim flex flex-wrap items-center justify-center gap-2 py-3 text-center text-[11px] lg:flex-col lg:pt-12">
-          <span aria-hidden="true" className="text-text">
-            →
+        <div className="text-text-dim relative flex flex-wrap items-center justify-center gap-2 py-3 text-center text-[11px] lg:block lg:min-h-[180px] lg:p-0">
+          <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
+          <span aria-hidden="true" className="lg:hidden">
+            ↓
           </span>
-          <span>Capacity pool</span>
-          {poolCapacity !== undefined && (
+          <svg
+            aria-label="Cells flow through the capacity pool"
+            className="pointer-events-none absolute inset-0 hidden h-full w-full overflow-visible lg:block"
+          >
+            {ys.length > 0 && (
+              <>
+                {inputs.map((cell) => (
+                  <path
+                    key={cell.id}
+                    d={`M0 ${centers[cell.id]}H46`}
+                    stroke={linked.has(cell.id) ? '#dee2ec' : '#4b5266'}
+                    strokeWidth="1.5"
+                  />
+                ))}
+                {outputs.map((cell) => (
+                  <path
+                    key={cell.id}
+                    d={`M66 ${centers[cell.id]}H112`}
+                    stroke={linked.has(cell.id) ? '#dee2ec' : '#4b5266'}
+                    strokeWidth="1.5"
+                  />
+                ))}
+                <rect
+                  x="46"
+                  y={poolTop}
+                  width="20"
+                  height={poolBottom - poolTop}
+                  rx="4"
+                  fill="#181d2b"
+                  stroke="#4b5266"
+                />
+                <path d={`M56 ${poolBottom}v16`} stroke="#4b5266" />
+                {continuity.map((link) => (
+                  <path
+                    key={`${link.from}:${link.to}`}
+                    d={`M0 ${centers[link.from]}C44 ${centers[link.from]} 68 ${centers[link.to]} 112 ${centers[link.to]}`}
+                    fill="none"
+                    stroke={link.kind ? CLASS_COLORS[link.kind] : '#a98cf5'}
+                    strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
+                    strokeDasharray="4 3"
+                  />
+                ))}
+              </>
+            )}
+          </svg>
+          <div className="space-y-1 lg:absolute lg:inset-x-0" style={{ top: poolBottom + 20 }}>
+            <span className="block">fee</span>
             <ExactCkb
-              shannons={exactUnsignedInteger(poolCapacity, `${txHash}: pool capacity`)}
+              shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
               signed={false}
               tone="plain"
             />
-          )}
-          <span>fee</span>
-          <ExactCkb
-            shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
-            signed={false}
-            tone="plain"
-          />
-          <span aria-hidden="true" className="text-text">
-            →
-          </span>
+          </div>
         </div>
         {column(outputs, 'cells created')}
       </div>
+      {poolCapacity !== undefined && (
+        <p className="text-text-dim text-[11px]">
+          Capacity entering the pool{' '}
+          <ExactCkb
+            shannons={exactUnsignedInteger(poolCapacity, `${txHash}: pool capacity`)}
+            signed={false}
+            tone="plain"
+          />
+        </p>
+      )}
       {continuity.length > 0 && (
         <ul
           aria-label="Cell continuity"
@@ -137,7 +229,7 @@ export function TxStructure({
           ))}
         </ul>
       )}
-      {groups.length > 0 && (
+      {!hideGroups && groups.length > 0 && (
         <section>
           <h3 className="text-text-bright mb-3 text-[15px] font-medium">Script groups</h3>
           <div className="divide-base-elevated divide-y">
@@ -176,7 +268,7 @@ export function TxStructure({
                   {g.cycles !== undefined && (
                     <span className="text-text-dim block">
                       {g.cycles === null
-                        ? 'cycles pending'
+                        ? 'cycles not available'
                         : `${exactUnsignedInteger(g.cycles, `${txHash}: ${g.id} cycles`).toLocaleString('en-US')} cycles`}
                     </span>
                   )}

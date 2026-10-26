@@ -7,6 +7,14 @@ import type {
 } from '@/lib/api';
 import { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE } from '@/lib/api';
 
+/** Interpretation needs only transaction contents, including before a block is known. */
+export type ActivityBody = Readonly<
+  Pick<
+    GlobalActivity,
+    'participants' | 'protocolActions' | 'typeCalls' | 'lockCalls' | 'isCellbase'
+  >
+> & { readonly txHash?: string };
+
 export type ActivityType =
   | 'daoDeposit'
   | 'daoWithdrawRequest'
@@ -32,10 +40,10 @@ export type ActivityType =
  * badge/icon/color selection. It picks a headline; it does NOT mean the
  * other layers are absent or unimportant.
  */
-export interface ClassifiedActivity {
+export interface ClassifiedActivity<T extends ActivityBody = ActivityBody> {
   /** Lossy projection for badge/icon/color — picks the highest non-empty layer. */
   displayType: ActivityType;
-  activity: GlobalActivity;
+  activity: T;
   /** Layer 3: highest-level interpretation, if a ProtocolDetector matched. */
   primaryProtocolAction: ActivityProtocolAction | null;
   /** Layer 2: primary recognized item delta, if present. */
@@ -48,7 +56,7 @@ export interface ClassifiedActivity {
 }
 
 /** Find the first item delta across all participants. */
-function findFirstItemDelta(activity: GlobalActivity): ItemDelta | null {
+function findFirstItemDelta(activity: ActivityBody): ItemDelta | null {
   for (const p of activity.participants) {
     if (p.itemDeltas.length > 0) {
       return p.itemDeltas[0];
@@ -58,7 +66,7 @@ function findFirstItemDelta(activity: GlobalActivity): ItemDelta | null {
 }
 
 /** Find the first item delta of a specific kind across all participants. */
-function findFirstItemDeltaByKind(activity: GlobalActivity, kind: string): ItemDelta | null {
+function findFirstItemDeltaByKind(activity: ActivityBody, kind: string): ItemDelta | null {
   for (const p of activity.participants) {
     const match = p.itemDeltas.find((d) => d.kind === kind);
     if (match) return match;
@@ -67,7 +75,7 @@ function findFirstItemDeltaByKind(activity: GlobalActivity, kind: string): ItemD
 }
 
 /** Compute combined tags bitmask from all participants. */
-function combinedTags(activity: GlobalActivity): number {
+function combinedTags(activity: ActivityBody): number {
   let tags = 0;
   for (const p of activity.participants) {
     tags |= p.tags;
@@ -80,7 +88,7 @@ function combinedTags(activity: GlobalActivity): number {
  * Returns the DAO display type and protocol action, or null if no DAO action found.
  */
 function findDaoAction(
-  activity: GlobalActivity
+  activity: ActivityBody
 ): { displayType: ActivityType; action: ActivityProtocolAction } | null {
   for (const pa of activity.protocolActions) {
     if (pa.protocol === 'dao') {
@@ -103,7 +111,7 @@ const ITEM_KIND_PRIORITY: Array<{ kind: string; activityType: ActivityType }> = 
   { kind: 'identity', activityType: 'identity' },
 ];
 
-export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
+export function classifyActivity<T extends ActivityBody>(activity: T): ClassifiedActivity<T> {
   const primaryLockCall = activity.lockCalls[0] ?? null;
   const tags = combinedTags(activity);
 

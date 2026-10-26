@@ -31,28 +31,32 @@ export function ActivityRowHead({
   hash,
   blockNumber,
   timestamp,
+  showEvidence = true,
 }: {
   title: ReactNode;
   hash: string;
   blockNumber: number;
   timestamp: string;
+  showEvidence?: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
       <span data-role="headline" className="text-text-bright text-[13px] font-medium">
         {title}
       </span>
-      <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
-        <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-          #{blockNumber.toLocaleString('en-US')}
-        </Link>
-        {' · '}
-        <Link href={`/tx/${hash}`} className="hover:text-jade text-text-dim transition-colors">
-          {truncateHash(hash, 10, 6)}
-        </Link>
-        {' · '}
-        {formatTimeAgo(timestamp)}
-      </span>
+      {showEvidence && (
+        <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
+          <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
+            #{blockNumber.toLocaleString('en-US')}
+          </Link>
+          {' · '}
+          <Link href={`/tx/${hash}`} className="hover:text-jade text-text-dim transition-colors">
+            {truncateHash(hash, 10, 6)}
+          </Link>
+          {' · '}
+          {formatTimeAgo(timestamp)}
+        </span>
+      )}
     </div>
   );
 }
@@ -72,7 +76,13 @@ function DetailLine({ label, children }: { label: string; children: ReactNode })
  * metadata (the headline's own action needs no name; another one leads with its label), then
  * every type call and every lock call in call syntax, args kept.
  */
-function ActivityDetails({ activity }: { activity: GlobalActivity }) {
+function ActivityDetails({
+  activity,
+  showScriptDetails = true,
+}: {
+  activity: GlobalActivity;
+  showScriptDetails?: boolean;
+}) {
   const primary = classifyActivity(activity).primaryProtocolAction;
   const events = globalTxEvents(activity);
   const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
@@ -100,7 +110,7 @@ function ActivityDetails({ activity }: { activity: GlobalActivity }) {
       );
     }
   });
-  if (types.length > 0) {
+  if (showScriptDetails && types.length > 0) {
     lines.push(
       <DetailLine key="type" label="type">
         <DotJoined
@@ -113,7 +123,7 @@ function ActivityDetails({ activity }: { activity: GlobalActivity }) {
       </DetailLine>
     );
   }
-  if (locks.length > 0) {
+  if (showScriptDetails && locks.length > 0) {
     lines.push(
       <DetailLine key="lock" label="lock">
         <DotJoined
@@ -203,6 +213,9 @@ export type ActivityRowProps = {
   activity: GlobalActivity;
   fresh?: boolean;
   className?: string;
+  showParticipants?: boolean;
+  showScriptDetails?: boolean;
+  showEvidence?: boolean;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -214,10 +227,13 @@ export function ActivityRow({
   className,
   mode = 'cross-user',
   participant,
+  showParticipants = true,
+  showScriptDetails = true,
+  showEvidence = true,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const displayType = classifyActivity(shown).displayType;
+  const displayType = classifyActivity(activity).displayType;
   const mark = displayType.startsWith('dao')
     ? 'dao'
     : displayType === 'token'
@@ -236,15 +252,16 @@ export function ActivityRow({
         title={
           <>
             {mark && <ClassMark kind={mark} className="mr-2" />}
-            {activityHeadline(shown)}
+            {activityHeadline(activity)}
           </>
         }
         hash={activity.txHash}
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
+        showEvidence={showEvidence}
       />
-      <ActivityDetails activity={shown} />
-      <Participants participants={shown.participants} />
+      <ActivityDetails activity={activity} showScriptDetails={showScriptDetails} />
+      {showParticipants && <Participants participants={shown.participants} />}
     </article>
   );
 }

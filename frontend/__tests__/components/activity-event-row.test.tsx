@@ -585,7 +585,7 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
       itemDeltas: [{ kind: 'object' as const, objectId: '0x51', delta: 1 }],
       tags: 2,
     };
-    expect(activityHeadline(makeGlobal({ participants: [party] }))).toBe('Object transfer');
+    expect(activityHeadline(makeGlobal({ participants: [party] }))).toBe('Object mint');
     expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
     expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');
     expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Coinbase');

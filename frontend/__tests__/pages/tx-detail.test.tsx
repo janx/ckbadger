@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { render } from '@/__tests__/utils/test-utils';
+import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
 
@@ -32,8 +33,8 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     confirmations: 4,
     inputsCapacity: '55500000000',
     outputsCapacity: '55499941197',
-    inputsCommonKnowledgeSize: '6100000000',
-    outputsCommonKnowledgeSize: '6100000650',
+    inputsCommonKnowledgeSize: '94',
+    outputsCommonKnowledgeSize: '94',
     inputs: [
       {
         previousOutput: {
@@ -41,6 +42,8 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
           index: 0,
         },
         capacity: '55500000000',
+        commonKnowledgeSize: '94',
+        cellType: 'typed',
         lock: {
           codeHash: LOCK_CODE_HASH,
           hashType: 'type',
@@ -57,7 +60,8 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     outputs: [
       {
         capacity: '55499941197',
-        commonKnowledgeSize: '61',
+        commonKnowledgeSize: '94',
+        status: 'live',
         lock: {
           codeHash: LOCK_CODE_HASH,
           hashType: 'type',
@@ -71,7 +75,65 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
         address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
       },
     ],
-    witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
+    scriptGroups: [
+      {
+        scriptHash: '0xinputlock',
+        kind: 'lock',
+        ran: true,
+        inputIndices: [0],
+        outputIndices: [],
+        witnessIndex: 0,
+        script: {
+          codeHash: LOCK_CODE_HASH,
+          hashType: 'type',
+          args: '0x1111111111111111111111111111111111111111',
+        },
+        cycles: '100',
+      },
+      {
+        scriptHash: '0xtypescript',
+        kind: 'type',
+        ran: true,
+        inputIndices: [0],
+        outputIndices: [0],
+        witnessIndex: 0,
+        script: { codeHash: TYPE_CODE_HASH, hashType: 'type', args: '0x' },
+        cycles: null,
+      },
+      {
+        scriptHash: '0xoutputlock',
+        kind: 'lock',
+        ran: false,
+        inputIndices: [],
+        outputIndices: [0],
+        witnessIndex: null,
+        script: {
+          codeHash: LOCK_CODE_HASH,
+          hashType: 'type',
+          args: '0x2222222222222222222222222222222222222222',
+        },
+        cycles: null,
+      },
+    ],
+    witnessDetails: [
+      {
+        index: 0,
+        size: 22,
+        kind: 'witness_args',
+        fields: [
+          { name: 'header', start: 0, end: 16, hex: '0x16000000100000001600000016000000' },
+          { name: 'lock length', start: 16, end: 20, hex: '0x02000000' },
+          { name: 'lock', start: 20, end: 22, hex: '0x1122' },
+        ],
+      },
+      {
+        index: 1,
+        size: 7,
+        kind: 'opaque',
+        fields: [{ name: 'raw', start: 0, end: 7, hex: '0x64617301020304' }],
+      },
+    ],
+    witnesses: ['0x16000000100000001600000016000000020000001122', '0x64617301020304'],
     witnessesAvailable: true,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
@@ -119,9 +181,11 @@ vi.mock('@/lib/api', async () => {
   // exactly what the API client produces for a 503.
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
+    ...actual,
     api: {
       getTransactionDetail: vi.fn(),
       getTransactionGraph: vi.fn(),
+      getTransactionActivity: vi.fn(),
       getTransactionCellDeps: vi.fn(),
       getTransactionLifecycle: vi.fn(),
       lookupScripts: vi.fn(),
@@ -205,6 +269,10 @@ describe('TransactionDetailPage', () => {
       },
     });
 
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.objectTransfer,
+      txHash: TX_HASH,
+    });
     vi.mocked(api.getTransactionGraph).mockResolvedValue({ nodes: [], links: [] });
     vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
     vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
@@ -229,10 +297,10 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('Pending')).toBeInTheDocument();
+    expect((await screen.findAllByText('Pending')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Cell Deps' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Graph' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cell deps' })).toBeInTheDocument();
+    expect(screen.getByText('Cell graph')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(api.getTransactionDetail).toHaveBeenCalledWith(TX_HASH);
@@ -254,8 +322,8 @@ describe('TransactionDetailPage', () => {
 
     // The committing block is known and shown; the block time and the
     // confirmation count are not known yet and are shown as pending.
-    expect(await screen.findByRole('link', { name: '#123' })).toBeInTheDocument();
-    expect(screen.getByText('Confirming')).toBeInTheDocument();
+    expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Confirming').length).toBeGreaterThan(0);
     expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
     expect(screen.queryByText(/Confirmations$/)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
@@ -263,7 +331,7 @@ describe('TransactionDetailPage', () => {
     // Still provisional: the page keeps asking until the store has it.
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole('link', { name: '#123' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: '#123' }).length).toBeGreaterThan(0);
 
     // Indexed: `poolStatus` is gone, the committed view renders, polling stops.
     await act(() => vi.advanceTimersByTimeAsync(3000));
@@ -285,7 +353,7 @@ describe('TransactionDetailPage', () => {
 
     // Provisional, not failed: a placeholder that says what it waits for.
     expect(await screen.findByTestId('tx-inputs-not-yet-resolvable')).toBeInTheDocument();
-    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
 
@@ -335,7 +403,8 @@ describe('TransactionDetailPage', () => {
       expect(api.getTransactionDetail).toHaveBeenCalled();
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Scripts' }, { timeout: 5000 }));
+    fireEvent.click(await screen.findByText('Raw data'));
+    fireEvent.click(screen.getByText('Scripts'));
 
     const link = document.querySelector(
       `a[href="/mainnet/script/${TYPE_CODE_HASH}?hashType=type&kind=type"]`
@@ -344,7 +413,7 @@ describe('TransactionDetailPage', () => {
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
   }, 10000);
 
-  it('does not render hash-only fallback label in IO tab', async () => {
+  it('uses domain cell labels without inventing an unknown script name', async () => {
     render(<TransactionDetailPage />);
 
     await waitFor(() => {
@@ -356,53 +425,15 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(fallbackLabel)).toBeNull();
   });
 
-  it('shows flow view by default and switches to graph view in graph tab', async () => {
-    vi.mocked(api.getTransactionGraph).mockResolvedValue({
-      nodes: [
-        {
-          id: `tx-${TX_HASH}`,
-          nodeType: 'transaction',
-          label: 'TX',
-          data: { hash: TX_HASH, blockNumber: 18661531 },
-        },
-        {
-          id: `cell-${TX_HASH}-0`,
-          nodeType: 'cell',
-          label: '554.99 CKB',
-          data: { txHash: TX_HASH, outputIndex: 0, status: 'live', capacity: '55499941197' },
-        },
-      ],
-      links: [
-        {
-          source: `tx-${TX_HASH}`,
-          target: `cell-${TX_HASH}-0`,
-          linkType: 'output',
-        },
-      ],
-    });
-
+  it('shows canonical cell structure first and loads the raw cell graph only when opened', async () => {
     render(<TransactionDetailPage />);
-
-    await waitFor(() => {
-      expect(api.getTransactionDetail).toHaveBeenCalled();
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Graph' }));
-
-    expect(await screen.findByRole('button', { name: 'Flow View' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Graph View' })).toBeInTheDocument();
-    expect(screen.getByTestId('tx-relationship-flow')).toBeInTheDocument();
-    expect(screen.getByText('Transaction Flow Snapshot')).toBeInTheDocument();
-    expect(screen.getByText('2 nodes / 1 links')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Graph View' }));
-
-    expect(screen.getByText('Loading graph section...')).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.queryByTestId('tx-relationship-flow')).not.toBeInTheDocument();
-    });
-    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    expect(screen.getByLabelText('Cells flow through the capacity pool')).toBeInTheDocument();
+    expect(api.getTransactionGraph).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Raw data'));
+    fireEvent.click(screen.getByText('Cell graph'));
+    expect(await screen.findByTestId('mock-cell-graph', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
   });
 
   it('renders witness tab with deterministic decode and byte interaction', async () => {
@@ -417,7 +448,7 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-item-1')).toBeInTheDocument();
-    expect(screen.getByText('Script Groups')).toBeInTheDocument();
+    expect(screen.getByText('Script groups')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-witness-deterministic-section')).not.toBeInTheDocument();
 
@@ -430,10 +461,12 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-deterministic-section')).toBeInTheDocument();
     expect(screen.getByText('WitnessArgs')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('tx-witness-segment-item-1'));
-    expect(screen.getByTestId('tx-witness-active-segment')).toBeInTheDocument();
-    expect(screen.getByTestId('tx-witness-active-segment-value')).toBeInTheDocument();
-    expect(screen.getByTestId('tx-witness-bytes-grid')).toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'lock bytes 20–21' }));
+    expect(screen.getByText('lock: 0x1122')).toBeInTheDocument();
+    expect(document.querySelector('[data-byte-offset="20"]')).toHaveAttribute(
+      'data-highlighted',
+      'true'
+    );
 
     fireEvent.click(screen.getByTestId('tx-script-group-focus-0-type'));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('wg=');
@@ -441,11 +474,6 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-focused-group')).toHaveTextContent(
       /Focused script group:/
     );
-    expect(screen.getByTestId('tx-witness-segment-pinned')).toBeInTheDocument();
-    expect(screen.getByTestId('tx-witness-active-segment')).toHaveTextContent(
-      /(inputType|outputType)/
-    );
-
     fireEvent.click(screen.getByRole('button', { name: 'Clear focus' }));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
     expect(screen.queryByTestId('tx-witness-focused-group')).not.toBeInTheDocument();
@@ -455,11 +483,10 @@ describe('TransactionDetailPage', () => {
     fireEvent.click(screen.getByTestId('tx-witness-item-1'));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=1');
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
-    expect(screen.getByText('DASWitness')).toBeInTheDocument();
+    expect(screen.getByText('Opaque witness bytes')).toBeInTheDocument();
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
-    fireEvent.click(screen.getByTestId('tx-witness-heuristic-item-0'));
-    expect(screen.getByTestId('tx-witness-heuristic-detail-0')).toBeInTheDocument();
+    expect(screen.queryByText('DASWitness')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('tx-witness-clear-selection'));
     const lastReplaceCall = String(mockReplace.mock.calls.at(-1)?.[0]);
@@ -479,7 +506,7 @@ describe('TransactionDetailPage', () => {
       witnessesAvailable: false,
     });
     render(<TransactionDetailPage />);
-    expect(await screen.findByText('Witness (—)')).toBeInTheDocument();
+    expect(await screen.findByText('Witnesses · unavailable')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-tab')).toHaveTextContent('Witness bytes are unavailable');
   });
 
@@ -542,8 +569,8 @@ describe('TransactionDetailPage', () => {
     // Header row + the two records.
     expect(within(section).getAllByRole('row')).toHaveLength(3);
     expect(within(section).getByText('maria@example.com')).toBeInTheDocument();
-    // The client-side witness decode still renders beside it.
-    expect(screen.getByText('DASWitness')).toBeInTheDocument();
+    // Server-owned witness interpretation still renders beside the verified records.
+    expect(screen.getByText('Opaque witness bytes')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('tx-witness-item-0'));
     expect(screen.queryByTestId('tx-witness-dotcell-records')).not.toBeInTheDocument();
@@ -599,6 +626,68 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+  });
+
+  it('renders exact occupied bytes, output liveness, and output locks that did not run', async () => {
+    render(<TransactionDetailPage />);
+    const output = await screen.findByTestId('tx-io-output-0');
+    expect(output).toHaveTextContent('occupied 94.00000000 CKB');
+    expect(output).toHaveTextContent('live');
+    expect(screen.getByText('occupied 94 → 94 bytes')).toBeInTheDocument();
+    expect(screen.getByText('attached, runs when spent')).toBeInTheDocument();
+    expect(screen.getByText('2 ran')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
+    expect(api.getTransactionActivity).toHaveBeenCalledWith(TX_HASH);
+  });
+
+  it('links expanded dep groups and highlights their exact script members', async () => {
+    vi.mocked(api.getTransactionCellDeps).mockResolvedValue([
+      {
+        outPointTxHash: '0xdep',
+        outPointIndex: 2,
+        depType: 'dep_group',
+        scriptHashes: ['0xinputlock'],
+        resolvedCells: [
+          {
+            txHash: '0xmember',
+            index: 3,
+            dataHash: '0xdata',
+            typeHash: null,
+            scriptHashes: ['0xinputlock'],
+          },
+        ],
+      },
+    ]);
+    render(<TransactionDetailPage />);
+    const member = await screen.findByRole('link', { name: '↳ 0xmember:3' });
+    expect(member).toHaveAttribute('href', '/mainnet/cell/0xmember-3');
+    fireEvent.mouseEnter(member.closest('#tx-dep-0')!);
+    expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'false');
+    fireEvent.mouseLeave(member.closest('#tx-dep-0')!);
+    expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'false');
+  });
+
+  it('keeps a same-hash output lock separate from the executed input lock during hover', async () => {
+    const tx = createCommittedTransactionDetail();
+    tx.scriptGroups![2].scriptHash = tx.scriptGroups![0].scriptHash;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    render(<TransactionDetailPage />);
+    fireEvent.mouseEnter(await screen.findByTestId('tx-io-input-0'));
+    expect(document.querySelector('[data-script-group="lock:run:0xinputlock"]')).toHaveAttribute(
+      'data-highlighted',
+      'true'
+    );
+    expect(
+      document.querySelector('[data-script-group="lock:attached:0xinputlock"]')
+    ).toHaveAttribute('data-highlighted', 'false');
+  });
+
+  it('honors the graph deep link without requiring an extra raw-data click', async () => {
+    mockSearchParams = new URLSearchParams('tab=graph');
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('mock-cell-graph', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText('Raw data').parentElement).toHaveAttribute('open');
   });
 
   it('shows not found message for 404 transaction errors', async () => {

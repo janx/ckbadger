@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/uti
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
+import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 
@@ -47,6 +48,11 @@ function makeActivity(
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants,
   };
+}
+
+function exactAmount(value: string) {
+  return (_text: string, element: Element | null) =>
+    element?.hasAttribute('data-ckb-amount') === true && element.textContent === value;
 }
 
 let intersectionCallback: IntersectionObserverCallback | null = null;
@@ -102,6 +108,36 @@ describe('ActivitiesStreamExplorer', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('shows exact completed-day counts, including zero, and leaves unavailable protocol count unnumbered', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      hasMore: false,
+      nextCursor: null,
+      total: 0,
+      limit: 20,
+    });
+    render(
+      <ActivitiesStreamExplorer
+        summary={{
+          ...dailyActivities[0],
+          transferCount: 12,
+          daoDepositCount: 1,
+          daoWithdrawRequestCount: 2,
+          daoWithdrawCompleteCount: 3,
+          tokenCount: 0,
+          objectCount: 4,
+          identityCount: 5,
+          scriptCallCount: 6,
+        }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All33');
+    expect(screen.getByRole('button', { name: 'Token' })).toHaveTextContent('Token0');
+    expect(screen.getByRole('button', { name: 'DAO' })).toHaveTextContent('DAO6');
+    expect(screen.getByRole('button', { name: 'Protocol' })).toHaveTextContent(/^Protocol$/);
+    expect(await screen.findByText('No activities yet')).toBeInTheDocument();
   });
 
   it('loads older pages on intersection and resets the stream on filter change', async () => {
@@ -212,7 +248,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
     await waitFor(() => {
       expect(intersectionCallback).not.toBeNull();
     });
@@ -228,7 +264,7 @@ describe('ActivitiesStreamExplorer', () => {
         })
       );
     });
-    expect(await screen.findByText('+2.00000000 CKB')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+2.00000000 CKB'))).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Token' }));
 
@@ -252,9 +288,7 @@ describe('ActivitiesStreamExplorer', () => {
     render(<ActivitiesStreamExplorer />);
 
     expect(await screen.findByText('No activities yet')).toBeInTheDocument();
-    expect(
-      screen.getByText('This filter has no canonical activity rows in the current window.')
-    ).toBeInTheDocument();
+    expect(screen.getByText('No activity matches this filter.')).toBeInTheDocument();
   });
 
   it('renders each activity row with tx hash, event rows, and participant lines', async () => {
@@ -298,7 +332,7 @@ describe('ActivitiesStreamExplorer', () => {
     // Time shown
     expect(within(row).getByText(/ago$/i)).toBeInTheDocument();
     // Script call event row (badge includes icon prefix)
-    expect(within(row).getByText(/Script Call \(type\)/)).toBeInTheDocument();
+    expect(within(row).getByText('Script call')).toBeInTheDocument();
     expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();
     // Participant line with address
     expect(
@@ -336,7 +370,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('+3.00000000 CKB')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+3.00000000 CKB'))).toBeInTheDocument();
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenNthCalledWith(2, {
         filter: 'all',
@@ -385,7 +419,7 @@ describe('ActivitiesStreamExplorer', () => {
     );
     // The other row still reads.
     expect(screen.getByText(/DAO Deposit/)).toBeInTheDocument();
-    expect(screen.getByText(/\+102\.00000000 CKB locked/)).toBeInTheDocument();
+    expect(screen.getAllByRole('article')[1]).toHaveTextContent('102.00000000 CKB locked');
   });
 
   it('sticks its toolbar right below the site header, at the height the header publishes', async () => {
@@ -457,14 +491,14 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
 
     const banner = await screen.findByRole('button', { name: '1 new activity' });
-    expect(screen.queryByText('+4.00000000 CKB')).not.toBeInTheDocument();
+    expect(screen.queryByText(exactAmount('+4.00000000 CKB'))).not.toBeInTheDocument();
 
     fireEvent.click(banner);
 
-    expect(screen.getByText('+4.00000000 CKB')).toBeInTheDocument();
+    expect(screen.getByText(exactAmount('+4.00000000 CKB'))).toBeInTheDocument();
   });
 
   it('drains more than one head page before buffering new activities', async () => {
@@ -541,7 +575,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
     const banner = await screen.findByRole('button', {
       name: `${DEFAULT_PAGE_SIZE + 1} new activities`,
     });
@@ -622,7 +656,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     const { unmount } = render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: '1 new activity' }));
 
     const highlightTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 2_000);
@@ -659,7 +693,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
-    expect(await screen.findByText('Live refresh paused: refresh failed')).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText('Could not refresh: refresh failed')).toBeInTheDocument();
   });
 });
