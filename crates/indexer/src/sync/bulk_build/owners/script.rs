@@ -416,8 +416,11 @@ impl BulkReducer for ScriptOwner {
                     (input.type_script_hash_id, input.data_hash)
                 {
                     let reference = ctx.resolve_identity(reference);
-                    if self.type_reference_live_versions.get(reference)
-                        .is_some_and(|versions| versions.contains_key(data_hash.as_slice())) {
+                    if self
+                        .type_reference_live_versions
+                        .get(reference)
+                        .is_some_and(|versions| versions.contains_key(data_hash.as_slice()))
+                    {
                         self.apply_type_reference_live_version_delta(
                             reference, &data_hash, -1, tx,
                         )?;
@@ -2184,13 +2187,22 @@ mod tests {
         retired.cells.to_mut()[0].data = vec![0; 31_560];
         retired.cells.to_mut()[0].data_hash = Some([0xc3; 32]);
         owner.apply_tx(&retired, &ctx).unwrap();
-        assert_eq!(owner.type_reference_versions.get(&reference_hash), Some(&None));
-        assert!(!owner.type_reference_live_versions.contains_key(&reference_hash));
+        assert_eq!(
+            owner.type_reference_versions.get(&reference_hash),
+            Some(&None)
+        );
+        assert!(!owner
+            .type_reference_live_versions
+            .contains_key(&reference_hash));
         let rows = owner.build_final_rows(&domain_store).unwrap().snapshot_rows;
-        assert!(!rows.iter().any(|row| row.cf_name == ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION
+        assert!(!rows.iter().any(|row| row.cf_name
+            == ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION
             && row.key == keys::encode_script_reference_key(1, &reference_hash)));
         for hash in [&registered_version_hash, &live_version_hash] {
-            let row = rows.iter().find(|row| row.cf_name == ckbadger_store::CF_SCRIPT_VERSIONS && &row.key == hash).unwrap();
+            let row = rows
+                .iter()
+                .find(|row| row.cf_name == ckbadger_store::CF_SCRIPT_VERSIONS && &row.key == hash)
+                .unwrap();
             let info: ScriptVersionInfo = bincode::deserialize(&row.value).unwrap();
             assert_eq!(info.lock_live_cells_count, 0);
             assert_eq!(info.type_id_deployments.len(), 1);
@@ -2200,14 +2212,35 @@ mod tests {
         // Production bulk materializes this mapping CF exactly once, at
         // finalize, into a fresh store. Labels seed metadata, never bindings.
         let retired_store = CkbadgerStore::open_domain(dir.path().join("retired-domain")).unwrap();
-        retired_store.put_script_version(&registered_version_hash, &old).unwrap();
-        retired_store.put_script_family_direct(family_id, &family).unwrap();
-        assert_eq!(retired_store.get_script_reference_version_hash(1, &reference_hash).unwrap(), None);
+        retired_store
+            .put_script_version(&registered_version_hash, &old)
+            .unwrap();
+        retired_store
+            .put_script_family_direct(family_id, &family)
+            .unwrap();
+        assert_eq!(
+            retired_store
+                .get_script_reference_version_hash(1, &reference_hash)
+                .unwrap(),
+            None
+        );
         let mut retired_materializer = Materializer::new(&retired_store, &append_store);
         owner.materialize_final(&mut retired_materializer).unwrap();
         let _ = retired_materializer.finish();
-        assert_eq!(retired_store.get_script_reference_version_hash(1, &reference_hash).unwrap(), None);
-        assert_eq!(retired_store.get_script_family(family_id).unwrap().unwrap().versions_count, 2);
+        assert_eq!(
+            retired_store
+                .get_script_reference_version_hash(1, &reference_hash)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            retired_store
+                .get_script_family(family_id)
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            2
+        );
 
         let mut reactivated = retired.clone();
         reactivated.tx_hash = [0x64; 32];
@@ -2218,14 +2251,28 @@ mod tests {
         reactivated.cells.to_mut()[0].data = b"\x7fELFreactivated".to_vec();
         reactivated.cells.to_mut()[0].data_hash = Some([0xd4; 32]);
         owner.apply_tx(&reactivated, &ctx).unwrap();
-        assert_eq!(owner.type_reference_versions.get(&reference_hash), Some(&Some(vec![0xd4; 32])));
+        assert_eq!(
+            owner.type_reference_versions.get(&reference_hash),
+            Some(&Some(vec![0xd4; 32]))
+        );
         let rows = owner.build_final_rows(&domain_store).unwrap().snapshot_rows;
-        let row = rows.iter().find(|row| row.cf_name == ckbadger_store::CF_SCRIPT_VERSIONS && row.key == vec![0xd4; 32]).unwrap();
+        let row = rows
+            .iter()
+            .find(|row| {
+                row.cf_name == ckbadger_store::CF_SCRIPT_VERSIONS && row.key == vec![0xd4; 32]
+            })
+            .unwrap();
         let info: ScriptVersionInfo = bincode::deserialize(&row.value).unwrap();
         assert_eq!(info.family_id.as_deref(), Some(family_id));
-        assert_eq!(info.type_id_deployments, vec![(reference_hash.clone(), 403)]);
+        assert_eq!(
+            info.type_id_deployments,
+            vec![(reference_hash.clone(), 403)]
+        );
         assert_eq!(info.lock_live_cells_count, 1);
-        assert!(!rows.iter().any(|row| row.cf_name == ckbadger_store::CF_SCRIPT_VERSIONS && row.key == vec![0xc3; 32]));
+        assert!(!rows
+            .iter()
+            .any(|row| row.cf_name == ckbadger_store::CF_SCRIPT_VERSIONS
+                && row.key == vec![0xc3; 32]));
         let mut burned = reactivated.clone();
         burned.tx_hash = [0x65; 32];
         burned.block_number = 404;
@@ -2233,9 +2280,17 @@ mod tests {
         burned.resolved_inputs[0].data_hash = Some([0xd4; 32]);
         burned.cells = Vec::new().into();
         owner.apply_tx(&burned, &ctx).unwrap();
-        assert_eq!(owner.type_reference_versions.get(&reference_hash), Some(&None));
+        assert_eq!(
+            owner.type_reference_versions.get(&reference_hash),
+            Some(&None)
+        );
         assert_eq!(owner.type_id_lineage.len(), 3);
-        assert_eq!(append_store.iterator_cf(append_store.cf_cells(), rocksdb::IteratorMode::Start).count(), 0);
+        assert_eq!(
+            append_store
+                .iterator_cf(append_store.cf_cells(), rocksdb::IteratorMode::Start)
+                .count(),
+            0
+        );
     }
 
     #[test]

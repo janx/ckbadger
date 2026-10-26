@@ -256,7 +256,9 @@ fn apply_type_id_lineage(
     templates: &HashMap<Vec<u8>, ScriptVersionInfo>,
     observed: &TypeIdCodeChange,
 ) -> Result<()> {
-    let Some(version_hash) = &observed.version_hash else { return Ok(()) };
+    let Some(version_hash) = &observed.version_hash else {
+        return Ok(());
+    };
     let template = templates.get(&observed.reference_hash);
     let version = versions
         .entry(version_hash.clone())
@@ -374,7 +376,9 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
             observation.version_hash.clone(),
         );
 
-        let Some(version_hash) = &observation.version_hash else { continue };
+        let Some(version_hash) = &observation.version_hash else {
+            continue;
+        };
         let previous = version_map
             .get(version_hash)
             .map(bincode::serialize)
@@ -392,8 +396,7 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         let updated = &version_map[version_hash];
         if updated.family_id != previous_family {
             if let Some(family) = &updated.family_id {
-                let key =
-                    keys::encode_script_version_by_family_key(family, version_hash);
+                let key = keys::encode_script_version_by_family_key(family, version_hash);
                 lineage_undo.push((
                     observation.block_number,
                     ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
@@ -1407,12 +1410,23 @@ impl BatchWriter {
                     let cell = batch_cells.get(&key).or_else(|| input_cells.get(&key)).ok_or_else(|| anyhow::anyhow!(
                         "missing prefetched input for script lineage: block={} tx=0x{} input=0x{}:{}",
                         tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index))?;
-                    if !cell.type_code_hash.as_deref().zip(cell.type_hash_type)
-                        .is_some_and(|(hash, kind)| kind == 1 && crate::parser::script::is_type_id(hash, 1)) {
+                    if !cell
+                        .type_code_hash
+                        .as_deref()
+                        .zip(cell.type_hash_type)
+                        .is_some_and(|(hash, kind)| {
+                            kind == 1 && crate::parser::script::is_type_id(hash, 1)
+                        })
+                    {
                         continue;
                     }
-                    let reference = cell.type_script_hash.as_ref().ok_or_else(|| anyhow::anyhow!(
-                        "type-id input lacks script hash: block={} tx=0x{}", tx.block_number, hex::encode(tx.hash)))?;
+                    let reference = cell.type_script_hash.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "type-id input lacks script hash: block={} tx=0x{}",
+                            tx.block_number,
+                            hex::encode(tx.hash)
+                        )
+                    })?;
                     let current = match chain_mappings.get(reference) {
                         Some(value) => value.clone(),
                         None => self.store.get_script_reference_version_hash(1, reference)?,
@@ -1421,21 +1435,36 @@ impl BatchWriter {
                         bail!("active type-id input lacks data hash: reference=0x{} block={} tx=0x{} input=0x{}:{}", hex::encode(reference), tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index);
                     }
                     if current.is_some() && current == cell.data_hash {
-                        lineage.push(TypeIdCodeChange { reference_hash: reference.clone(), version_hash: None, block_number: tx.block_number });
+                        lineage.push(TypeIdCodeChange {
+                            reference_hash: reference.clone(),
+                            version_hash: None,
+                            block_number: tx.block_number,
+                        });
                         chain_mappings.insert(reference.clone(), None);
                     }
                 }
             }
             for cell in &tx.cells {
-                if !cell.type_code_hash.as_deref().zip(cell.type_hash_type)
+                if !cell
+                    .type_code_hash
+                    .as_deref()
+                    .zip(cell.type_hash_type)
                     .is_some_and(|(hash, kind)| crate::parser::script::is_type_id(hash, kind))
-                    || !cell.data.starts_with(b"\x7fELF") {
+                    || !cell.data.starts_with(b"\x7fELF")
+                {
                     continue;
                 }
-                let reference = cell.type_script_hash.as_ref().ok_or_else(|| anyhow::anyhow!(
-                    "type-id output lacks script hash: block={} tx=0x{}", tx.block_number, hex::encode(tx.hash)))?;
+                let reference = cell.type_script_hash.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "type-id output lacks script hash: block={} tx=0x{}",
+                        tx.block_number,
+                        hex::encode(tx.hash)
+                    )
+                })?;
                 lineage.push(TypeIdCodeChange {
-                    reference_hash: reference.clone(), version_hash: Some(cell.data_hash.to_vec()), block_number: tx.block_number,
+                    reference_hash: reference.clone(),
+                    version_hash: Some(cell.data_hash.to_vec()),
+                    block_number: tx.block_number,
                 });
                 chain_mappings.insert(reference.clone(), Some(cell.data_hash.to_vec()));
             }
@@ -2006,7 +2035,8 @@ mod tests {
             .materialize_script_versions_and_families_with_chain(
                 &HashMap::new(),
                 std::slice::from_ref(&tx),
-                &HashMap::new(), &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2028,11 +2058,24 @@ mod tests {
             .list_script_version_hashes_by_family("cells-account")
             .unwrap()
             .contains(&new_hash.to_vec()));
-        let input_cell = ckbadger_store::PositionedCellInfo::new(ckbadger_store::LiveCellInfo {
-            capacity: 10000, lock_script_hash: vec![0x22; 32], lock_code_hash: vec![0x11; 32], lock_hash_type: 1, lock_args: vec![],
-            type_script_hash: Some(reference.clone()), type_code_hash: tx.cells[0].type_code_hash.clone(), type_hash_type: Some(1), type_args: Some(vec![0x33; 32]),
-            data_size: tx.cells[0].data_size, occupied_capacity: 0, udt_amount: None, data_hash: Some(new_hash.to_vec()),
-        }, 20);
+        let input_cell = ckbadger_store::PositionedCellInfo::new(
+            ckbadger_store::LiveCellInfo {
+                capacity: 10000,
+                lock_script_hash: vec![0x22; 32],
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference.clone()),
+                type_code_hash: tx.cells[0].type_code_hash.clone(),
+                type_hash_type: Some(1),
+                type_args: Some(vec![0x33; 32]),
+                data_size: tx.cells[0].data_size,
+                occupied_capacity: 0,
+                udt_amount: None,
+                data_hash: Some(new_hash.to_vec()),
+            },
+            20,
+        );
         let payload_key = keys::encode_outpoint(&tx.hash, 0);
         let payload_before = input_cell.cell.clone();
         let mut payload_batch = StoreBatch::new(&append);
@@ -2040,39 +2083,84 @@ mod tests {
         payload_batch.commit().unwrap();
         let mut input_cells = HashMap::from([((tx.hash.to_vec(), 0), input_cell.clone())]);
         let mut retired = tx;
-        retired.inputs = vec![crate::parser::transaction::ParsedInput { previous_tx_hash: retired.hash, previous_output_index: 0, since: 0 }];
+        retired.inputs = vec![crate::parser::transaction::ParsedInput {
+            previous_tx_hash: retired.hash,
+            previous_output_index: 0,
+            since: 0,
+        }];
         retired.inputs_count = 1;
         retired.hash = [0x45; 32];
         retired.block_number = 21;
         retired.cells[0].data = vec![0; 31_560];
-        retired.cells[0].data_hash = crate::parser::ScriptParser::compute_data_hash(&retired.cells[0].data);
+        retired.cells[0].data_hash =
+            crate::parser::ScriptParser::compute_data_hash(&retired.cells[0].data);
         retired.cells[0].data_size = 31_560;
         // Consuming a different payload must never retire the active binding.
         let mut inactive = input_cells.clone();
-        inactive.get_mut(&(vec![0x44; 32], 0)).unwrap().cell.data_hash = Some(vec![0xee; 32]);
+        inactive
+            .get_mut(&(vec![0x44; 32], 0))
+            .unwrap()
+            .cell
+            .data_hash = Some(vec![0xee; 32]);
         let mut inactive_batch = StoreBatch::new(&store);
-        writer.materialize_script_versions_and_families_with_chain(
-            &HashMap::new(), std::slice::from_ref(&retired), &inactive, &HashMap::new(),
-            &crate::sync::undo::SharedUndoSeq::default(), &mut inactive_batch,
-        ).unwrap();
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                std::slice::from_ref(&retired),
+                &inactive,
+                &HashMap::new(),
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut inactive_batch,
+            )
+            .unwrap();
         inactive_batch.commit().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), Some(new_hash.to_vec()));
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            Some(new_hash.to_vec())
+        );
         let mut batch = StoreBatch::new(&store);
-        writer.materialize_script_versions_and_families_with_chain(
-            &HashMap::new(), std::slice::from_ref(&retired),
-            &input_cells, &HashMap::new(),
-            &crate::sync::undo::SharedUndoSeq::default(), &mut batch,
-        ).unwrap();
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                std::slice::from_ref(&retired),
+                &input_cells,
+                &HashMap::new(),
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
         batch.commit().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), None);
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            None
+        );
         assert!(store.get_script_version(&new_hash).unwrap().is_some());
         writer.refresh_script_reference_rollups().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), None);
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            None
+        );
         let retired_info = store.get_script_version(&new_hash).unwrap().unwrap();
         assert_eq!(retired_info.lock_live_cells_count, 0);
         assert_eq!(retired_info.type_live_cells_count, 0);
-        assert_eq!(retired_info.type_id_deployments, vec![(reference.clone(), 20)]);
-        assert_eq!(store.get_script_family("cells-account").unwrap().unwrap().versions_count, 2);
+        assert_eq!(
+            retired_info.type_id_deployments,
+            vec![(reference.clone(), 20)]
+        );
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            2
+        );
         let non_elf_hash = retired.cells[0].data_hash;
         let mut non_elf_input = input_cell.clone();
         non_elf_input.cell.data_hash = Some(non_elf_hash.to_vec());
@@ -2084,21 +2172,52 @@ mod tests {
         retired.inputs[0].previous_tx_hash = previous_hash;
         retired.cells[0].data = b"\x7fELFreactivated".to_vec();
         retired.cells[0].data_size = retired.cells[0].data.len() as i32;
-        let reactivated_hash = crate::parser::ScriptParser::compute_data_hash(&retired.cells[0].data);
+        let reactivated_hash =
+            crate::parser::ScriptParser::compute_data_hash(&retired.cells[0].data);
         retired.cells[0].data_hash = reactivated_hash;
         let mut batch = StoreBatch::new(&store);
-        writer.materialize_script_versions_and_families_with_chain(
-            &HashMap::new(), std::slice::from_ref(&retired), &input_cells, &HashMap::new(),
-            &crate::sync::undo::SharedUndoSeq::default(), &mut batch,
-        ).unwrap();
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                std::slice::from_ref(&retired),
+                &input_cells,
+                &HashMap::new(),
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
         batch.commit().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), Some(reactivated_hash.to_vec()));
-        let reactivated = store.get_script_version(&reactivated_hash).unwrap().unwrap();
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            Some(reactivated_hash.to_vec())
+        );
+        let reactivated = store
+            .get_script_version(&reactivated_hash)
+            .unwrap()
+            .unwrap();
         assert_eq!(reactivated.family_id.as_deref(), Some("cells-account"));
-        assert_eq!(reactivated.type_id_deployments, vec![(reference.clone(), 22)]);
-        assert_eq!((reactivated.lock_live_cells_count, reactivated.type_live_cells_count), (7, 72));
+        assert_eq!(
+            reactivated.type_id_deployments,
+            vec![(reference.clone(), 22)]
+        );
+        assert_eq!(
+            (
+                reactivated.lock_live_cells_count,
+                reactivated.type_live_cells_count
+            ),
+            (7, 72)
+        );
         assert!(store.get_script_version(&non_elf_hash).unwrap().is_none());
-        assert_eq!(store.get_script_family("cells-account").unwrap().unwrap().versions_count, 3);
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            3
+        );
         let mut active_input = input_cell;
         active_input.cell.data_hash = Some(reactivated_hash.to_vec());
         // Exercise the same-batch prefetched input map too.
@@ -2110,26 +2229,79 @@ mod tests {
         retired.cells.clear();
         retired.outputs_count = 0;
         let mut batch = StoreBatch::new(&store);
-        writer.materialize_script_versions_and_families_with_chain(
-            &HashMap::new(), std::slice::from_ref(&retired), &HashMap::new(), &batch_cells,
-            &crate::sync::undo::SharedUndoSeq::default(), &mut batch,
-        ).unwrap();
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                std::slice::from_ref(&retired),
+                &HashMap::new(),
+                &batch_cells,
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
         batch.commit().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), None);
-        assert_eq!(store.get_script_family("cells-account").unwrap().unwrap().versions_count, 3);
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            3
+        );
         store.rollback_via_undo_log(&append, 22).unwrap();
         writer.refresh_script_reference_rollups().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), Some(reactivated_hash.to_vec()));
-        assert_eq!(store.get_script_version(&reactivated_hash).unwrap().unwrap().type_live_cells_count, 72);
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            Some(reactivated_hash.to_vec())
+        );
+        assert_eq!(
+            store
+                .get_script_version(&reactivated_hash)
+                .unwrap()
+                .unwrap()
+                .type_live_cells_count,
+            72
+        );
         store.rollback_via_undo_log(&append, 21).unwrap();
         writer.refresh_script_reference_rollups().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), None);
-        assert!(store.get_script_version(&reactivated_hash).unwrap().is_none());
-        assert!(!store.list_script_version_hashes_by_family("cells-account").unwrap().contains(&reactivated_hash.to_vec()));
-        assert_eq!(store.get_script_family("cells-account").unwrap().unwrap().versions_count, 2);
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            None
+        );
+        assert!(store
+            .get_script_version(&reactivated_hash)
+            .unwrap()
+            .is_none());
+        assert!(!store
+            .list_script_version_hashes_by_family("cells-account")
+            .unwrap()
+            .contains(&reactivated_hash.to_vec()));
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            2
+        );
         store.rollback_via_undo_log(&append, 20).unwrap();
         writer.refresh_script_reference_rollups().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), Some(new_hash.to_vec()));
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            Some(new_hash.to_vec())
+        );
         store.rollback_via_undo_log(&append, 19).unwrap();
         writer.refresh_script_reference_rollups().unwrap();
         assert!(store.get_script_version(&new_hash).unwrap().is_none());
@@ -2149,7 +2321,10 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(append.get_cell_by_outpoint_key(&payload_key).unwrap(), Some(payload_before));
+        assert_eq!(
+            append.get_cell_by_outpoint_key(&payload_key).unwrap(),
+            Some(payload_before)
+        );
     }
 
     #[test]
@@ -2163,54 +2338,141 @@ mod tests {
         let new_data = b"\x7fELFnew".to_vec();
         let new_hash = crate::parser::ScriptParser::compute_data_hash(&new_data);
         let mut seed = StoreBatch::new(&store);
-        seed.put_script_version(&old_hash, &ScriptVersionInfo {
-            version_hash: old_hash.clone(), canonical_reference_hash: Some(reference.clone()), canonical_hash_type: Some(1),
-            family_id: Some("family".into()), name: Some("Family".into()), type_id_deployments: vec![(reference.clone(), 10)], ..Default::default()
-        });
+        seed.put_script_version(
+            &old_hash,
+            &ScriptVersionInfo {
+                version_hash: old_hash.clone(),
+                canonical_reference_hash: Some(reference.clone()),
+                canonical_hash_type: Some(1),
+                family_id: Some("family".into()),
+                name: Some("Family".into()),
+                type_id_deployments: vec![(reference.clone(), 10)],
+                ..Default::default()
+            },
+        );
         seed.put_script_reference_to_version(1, &reference, &old_hash);
-        seed.put_script_reference_info(1, &reference, &ScriptReferenceInfo {
-            reference_hash: reference.clone(), hash_type: 1, lock_cells_count: 3, lock_live_cells_count: 2,
-            type_cells_count: 5, type_live_cells_count: 4, ..Default::default()
-        });
+        seed.put_script_reference_info(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_cells_count: 3,
+                lock_live_cells_count: 2,
+                type_cells_count: 5,
+                type_live_cells_count: 4,
+                ..Default::default()
+            },
+        );
         seed.commit().unwrap();
         let mut previous = ckbadger_store::LiveCellInfo {
-            capacity: 10000, lock_script_hash: vec![0x11; 32], lock_code_hash: vec![0x12; 32], lock_hash_type: 1, lock_args: vec![],
-            type_script_hash: Some(reference.clone()), type_code_hash: Some(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()),
-            type_hash_type: Some(1), type_args: Some(vec![0x33; 32]), data_size: 10, occupied_capacity: 0,
-            udt_amount: None, data_hash: Some(old_hash.clone()),
+            capacity: 10000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x12; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference.clone()),
+            type_code_hash: Some(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 32]),
+            data_size: 10,
+            occupied_capacity: 0,
+            udt_amount: None,
+            data_hash: Some(old_hash.clone()),
         };
         let mut inputs = HashMap::new();
         let mut txs = Vec::new();
         for block in 21u8..=24 {
-            inputs.insert((vec![block - 1; 32], 0), ckbadger_store::PositionedCellInfo::new(previous.clone(), i64::from(block - 1)));
-            let data = if block % 2 == 0 { new_data.clone() } else { vec![0; 128] };
+            inputs.insert(
+                (vec![block - 1; 32], 0),
+                ckbadger_store::PositionedCellInfo::new(previous.clone(), i64::from(block - 1)),
+            );
+            let data = if block % 2 == 0 {
+                new_data.clone()
+            } else {
+                vec![0; 128]
+            };
             let hash = crate::parser::ScriptParser::compute_data_hash(&data);
             let cell = crate::parser::cell::ParsedCell {
-                capacity: 10000, lock_script_hash: previous.lock_script_hash.clone(), lock_code_hash: previous.lock_code_hash.clone(),
-                lock_hash_type: 1, lock_args: vec![], type_script_hash: Some(reference.clone()), type_code_hash: previous.type_code_hash.clone(),
-                type_hash_type: Some(1), type_args: previous.type_args.clone(), data_hash: hash, data_size: data.len() as i32, data,
+                capacity: 10000,
+                lock_script_hash: previous.lock_script_hash.clone(),
+                lock_code_hash: previous.lock_code_hash.clone(),
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference.clone()),
+                type_code_hash: previous.type_code_hash.clone(),
+                type_hash_type: Some(1),
+                type_args: previous.type_args.clone(),
+                data_hash: hash,
+                data_size: data.len() as i32,
+                data,
             };
             previous.data_hash = Some(hash.to_vec());
             previous.data_size = cell.data_size;
             txs.push(crate::sync::types::TxData {
-                hash: [block; 32], block_number: i64::from(block), tx_index: 1, inputs_count: 1, outputs_count: 1, is_cellbase: false,
-                inputs: vec![crate::parser::transaction::ParsedInput { previous_tx_hash: [block - 1; 32], previous_output_index: 0, since: 0 }],
-                cells: vec![cell], witnesses: vec![], total_input_capacity: 10000, total_output_capacity: 10000,
-                fee: 0, tx_size: 0, cycles: None, timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), semantic_tags: 0,
+                hash: [block; 32],
+                block_number: i64::from(block),
+                tx_index: 1,
+                inputs_count: 1,
+                outputs_count: 1,
+                is_cellbase: false,
+                inputs: vec![crate::parser::transaction::ParsedInput {
+                    previous_tx_hash: [block - 1; 32],
+                    previous_output_index: 0,
+                    since: 0,
+                }],
+                cells: vec![cell],
+                witnesses: vec![],
+                total_input_capacity: 10000,
+                total_output_capacity: 10000,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                semantic_tags: 0,
             });
         }
         let mut batch = StoreBatch::new(&store);
-        writer.materialize_script_versions_and_families_with_chain(
-            &HashMap::new(), &txs, &HashMap::new(), &inputs,
-            &crate::sync::undo::SharedUndoSeq::default(), &mut batch,
-        ).unwrap();
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                &txs,
+                &HashMap::new(),
+                &inputs,
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
         batch.commit().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), Some(new_hash.to_vec()));
-        assert_eq!(store.get_script_version(&new_hash).unwrap().unwrap().type_id_deployments, vec![(reference.clone(), 22), (reference.clone(), 24)]);
-        for (fork, expected) in [(23, None), (22, Some(new_hash.to_vec())), (21, None), (20, Some(old_hash.clone()))] {
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            Some(new_hash.to_vec())
+        );
+        assert_eq!(
+            store
+                .get_script_version(&new_hash)
+                .unwrap()
+                .unwrap()
+                .type_id_deployments,
+            vec![(reference.clone(), 22), (reference.clone(), 24)]
+        );
+        for (fork, expected) in [
+            (23, None),
+            (22, Some(new_hash.to_vec())),
+            (21, None),
+            (20, Some(old_hash.clone())),
+        ] {
             store.rollback_via_undo_log(&append, fork).unwrap();
             writer.refresh_script_reference_rollups().unwrap();
-            assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), expected, "fork={fork}");
+            assert_eq!(
+                store
+                    .get_script_reference_version_hash(1, &reference)
+                    .unwrap(),
+                expected,
+                "fork={fork}"
+            );
             let new = store.get_script_version(&new_hash).unwrap();
             if fork >= 22 {
                 let info = new.unwrap();
@@ -2219,11 +2481,26 @@ mod tests {
                 assert_eq!(info.type_live_cells_count, if fork == 22 { 4 } else { 0 });
             } else {
                 assert!(new.is_none());
-                assert!(!store.list_script_version_hashes_by_family("family").unwrap().contains(&new_hash.to_vec()));
+                assert!(!store
+                    .list_script_version_hashes_by_family("family")
+                    .unwrap()
+                    .contains(&new_hash.to_vec()));
             }
-            assert_eq!(store.get_script_version(&old_hash).unwrap().unwrap().type_id_deployments, vec![(reference.clone(), 10)]);
+            assert_eq!(
+                store
+                    .get_script_version(&old_hash)
+                    .unwrap()
+                    .unwrap()
+                    .type_id_deployments,
+                vec![(reference.clone(), 10)]
+            );
         }
-        assert_eq!(append.iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start).count(), 0);
+        assert_eq!(
+            append
+                .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -2350,7 +2627,8 @@ mod tests {
             .materialize_script_versions_and_families_with_chain(
                 &HashMap::new(),
                 &[],
-                &HashMap::new(), &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2471,7 +2749,8 @@ mod tests {
             .materialize_script_versions_and_families_with_chain(
                 &HashMap::new(),
                 &[],
-                &HashMap::new(), &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut unchanged_batch,
             )
@@ -2519,7 +2798,8 @@ mod tests {
             .materialize_script_versions_and_families_with_chain(
                 &updated_references,
                 &[],
-                &HashMap::new(), &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut changed_batch,
             )
@@ -2549,36 +2829,87 @@ mod tests {
         let version = vec![0x81; 32];
         let non_elf = vec![0x91; 32];
         let mut batch = StoreBatch::new(&store);
-        batch.put_script_reference_info(1, &reference, &ScriptReferenceInfo {
-            reference_hash: reference.clone(), hash_type: 1, lock_cells_count: 2, lock_live_cells_count: 1,
-            type_cells_count: 3, type_live_cells_count: 2, ..Default::default()
-        });
-        batch.put_script_version(&version, &ScriptVersionInfo {
-            version_hash: version.clone(), canonical_reference_hash: Some(reference.clone()), canonical_hash_type: Some(1),
-            type_id_deployments: vec![(reference.clone(), 10)], ..Default::default()
-        });
-        batch.put_cell(&[0x45; 32], 0, &ckbadger_store::LiveCellInfo {
-            capacity: 100, lock_script_hash: vec![0x11; 32], lock_code_hash: vec![0x12; 32], lock_hash_type: 1, lock_args: vec![],
-            type_script_hash: Some(reference.clone()), type_code_hash: Some(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()),
-            type_hash_type: Some(1), type_args: Some(vec![]), data_size: 31_560, occupied_capacity: 80, udt_amount: None, data_hash: Some(non_elf.clone()),
-        }, 11);
+        batch.put_script_reference_info(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_cells_count: 2,
+                lock_live_cells_count: 1,
+                type_cells_count: 3,
+                type_live_cells_count: 2,
+                ..Default::default()
+            },
+        );
+        batch.put_script_version(
+            &version,
+            &ScriptVersionInfo {
+                version_hash: version.clone(),
+                canonical_reference_hash: Some(reference.clone()),
+                canonical_hash_type: Some(1),
+                type_id_deployments: vec![(reference.clone(), 10)],
+                ..Default::default()
+            },
+        );
+        batch.put_cell(
+            &[0x45; 32],
+            0,
+            &ckbadger_store::LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference.clone()),
+                type_code_hash: Some(
+                    hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                ),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 31_560,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(non_elf.clone()),
+            },
+            11,
+        );
         batch.put_cell_by_type(&reference, 11, &[0x45; 32], 0);
         batch.commit().unwrap();
-        let payload_before = store.get_cell_by_outpoint_key(&keys::encode_outpoint(&[0x45; 32], 0)).unwrap();
+        let payload_before = store
+            .get_cell_by_outpoint_key(&keys::encode_outpoint(&[0x45; 32], 0))
+            .unwrap();
         writer.refresh_script_reference_rollups().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), None);
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            None
+        );
         assert!(store.get_script_version(&non_elf).unwrap().is_none());
         let history = store.get_script_version(&version).unwrap().unwrap();
         assert_eq!(history.type_id_deployments, vec![(reference.clone(), 10)]);
         assert_eq!(history.lock_live_cells_count, 0);
         assert_eq!(history.type_live_cells_count, 0);
-        assert_eq!(store.get_cell_by_outpoint_key(&keys::encode_outpoint(&[0x45; 32], 0)).unwrap(), payload_before);
+        assert_eq!(
+            store
+                .get_cell_by_outpoint_key(&keys::encode_outpoint(&[0x45; 32], 0))
+                .unwrap(),
+            payload_before
+        );
 
         // An undo-restored canonical binding remains authoritative even when
         // there is no matching current payload in this isolated rollup fixture.
-        store.put_script_reference_to_version_direct(1, &reference, &version).unwrap();
+        store
+            .put_script_reference_to_version_direct(1, &reference, &version)
+            .unwrap();
         writer.refresh_script_reference_rollups().unwrap();
-        assert_eq!(store.get_script_reference_version_hash(1, &reference).unwrap(), Some(version.clone()));
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            Some(version.clone())
+        );
         let restored = store.get_script_version(&version).unwrap().unwrap();
         assert_eq!(restored.lock_live_cells_count, 1);
         assert_eq!(restored.type_live_cells_count, 2);

@@ -2630,8 +2630,7 @@ mod version_identity_tests {
         batch.commit().unwrap();
 
         let rollups =
-            crate::db::writer::collect_current_script_reference_rollup_state(&store)
-                .unwrap();
+            crate::db::writer::collect_current_script_reference_rollup_state(&store).unwrap();
 
         let version = rollups
             .versions
