@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 
 interface PageHeaderProps {
   title: string;
+  kind?: 'index' | 'entity' | 'topic';
   subtitle?: ReactNode;
   hash?: string;
   badge?: ReactNode;
@@ -19,6 +20,7 @@ interface PageHeaderProps {
 
 export function PageHeader({
   title,
+  kind = 'entity',
   subtitle,
   hash,
   badge,
@@ -51,7 +53,14 @@ export function PageHeader({
 
           <div>
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <h1 className="text-text-bright break-words font-mono text-2xl font-bold">{title}</h1>
+              <h1
+                className={cn(
+                  'text-text-bright break-words font-mono font-medium',
+                  kind === 'index' ? 'text-[22px]' : 'text-[26px]'
+                )}
+              >
+                {title}
+              </h1>
               {badge}
             </div>
             {subtitle && <div className="text-text-dim mt-1 break-words text-sm">{subtitle}</div>}

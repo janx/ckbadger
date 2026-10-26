@@ -30,9 +30,9 @@ export function HexCode({
       : value;
 
   const variantClasses = {
-    default: 'text-aqua-dim',
-    bright: 'text-aqua',
-    dim: 'text-aqua-dim',
+    default: 'text-text',
+    bright: 'text-text-bright',
+    dim: 'text-text-dim',
   };
 
   const handleCopy = async () => {

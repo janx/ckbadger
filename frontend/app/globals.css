@@ -2,7 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif Display';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/noto-serif-display.woff2') format('woff2');
+}
+
 :root {
+  --font-error-display: 'Noto Serif Display', serif;
+  --color-class-dao: #f2c55c;
+  --color-class-token: #5aa6f5;
+  --color-class-object: #a98cf5;
+  --color-class-identity: #f08aa8;
+  --color-bitcoin: #dc8a5a;
+  --color-cell-capacity: #dee2ec;
+  --color-cell-lock: #7aa7d6;
+  --color-cell-type: #b5c77a;
+  --color-cell-data: #6fc3d9;
   --foreground: #dee2ec;
   --background: #08090e;
   --color-surface: #10131c;
@@ -37,6 +69,8 @@
 }
 
 body {
+  font-family: var(--font-mono);
+  font-size: 13px;
   color: var(--foreground);
   background: var(--background);
   min-height: 100vh;

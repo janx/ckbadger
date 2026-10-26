@@ -39,7 +39,7 @@ export default {
         },
         emphasis: {
           DEFAULT: '#2edba3',
-          dim: '#d0a840',
+          dim: '#1fb88a',
           glow: '#2edba340',
           bright: '#3ef0b8',
         },
@@ -90,10 +90,13 @@ export default {
         },
         // Activity type semantic colors
         token: {
-          DEFAULT: '#ff66aa',
-          bright: '#ff88bb',
+          DEFAULT: '#5aa6f5',
+          bright: '#8cc3ff',
         },
-        // Chart accent palette (12 colors)
+        object: '#a98cf5',
+        identity: '#f08aa8',
+        copper: '#dc8a5a',
+        // Legacy chart aliases
         'accent-1': '#2edba3',
         'accent-2': '#e8555a',
         'accent-3': '#68ccf0',
@@ -106,6 +109,15 @@ export default {
         'accent-10': '#d0a840',
         'accent-11': '#9888c8',
         'accent-12': '#b07028',
+      },
+      fontSize: {
+        meta: ['11px', '1.5'],
+        small: ['12px', '1.5'],
+        body: ['13px', '1.6'],
+        section: ['15px', '1.5'],
+        hero: ['18px', '1.4'],
+        index: ['22px', '1.3'],
+        entity: ['26px', '1.3'],
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
