@@ -1,3 +1,5 @@
+'use client';
+
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
 import { formatStandard } from '@/components/activity-event-row';
