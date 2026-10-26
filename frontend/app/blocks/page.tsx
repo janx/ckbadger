@@ -166,7 +166,7 @@ export default function BlocksPage() {
                 <span className="text-jade">■</span> transaction · area ∝ bytes
               </span>
               <span>
-                <span className="text-dao">●</span> proposal
+                <span className="text-gold">●</span> proposal
               </span>
             </p>
           }

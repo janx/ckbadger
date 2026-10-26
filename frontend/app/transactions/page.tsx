@@ -56,7 +56,7 @@ export default function TransactionsPage() {
       label: 'State',
       minWidth: 100,
       render: (tx) => (
-        <span className={tx.status === 'proposed' ? 'text-dao' : 'text-text-dim'}>
+        <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text-dim'}>
           {poolStatusLabel(tx.status)}
         </span>
       ),

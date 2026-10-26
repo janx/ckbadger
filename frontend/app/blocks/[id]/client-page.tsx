@@ -347,7 +347,7 @@ export default function BlockDetailPage() {
                         className="border-base-border-subtle space-y-2 border-b py-3 text-xs"
                       >
                         <p className="flex flex-wrap gap-2">
-                          <span className="text-dao">●</span>
+                          <span className="text-gold">●</span>
                           {proposal.proposalId}
                           {proposal.uncle && (
                             <span className="text-text-dim">
