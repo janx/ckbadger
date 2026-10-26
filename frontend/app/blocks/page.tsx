@@ -42,7 +42,7 @@ export default function BlocksPage() {
             #{block.number.toLocaleString('en-US')}
           </Link>
           <span className="text-text-dim block text-[11px]">
-            <Hash hash={block.hash} copyable={false} />
+            <Hash hash={block.hash} copyable={false} className="text-xs" />
           </span>
           {block.hardforkActivation && (
             <Link href="/hardforks" className="text-text-dim block text-[11px]">
