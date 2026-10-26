@@ -1,4 +1,3 @@
-use ckbadger_common::cycles_task::CyclesTaskResult;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -83,14 +82,6 @@ impl CyclesClient {
         tokio::fs::write(&file_path, b"")
             .await
             .map_err(|e| format!("write request: {}", e))
-    }
-
-    /// No in-memory result store — API polls DB directly.
-    pub async fn get_task_result(
-        &self,
-        _tx_hash: &str,
-    ) -> Result<Option<CyclesTaskResult>, String> {
-        Ok(None)
     }
 }
 

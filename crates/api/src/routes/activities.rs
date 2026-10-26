@@ -903,10 +903,13 @@ fn list_canonical_activities_page(
 }
 
 /// Classify a TxActions for global activity filtering based on aggregate participant tags.
-fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> bool {
+pub(crate) fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> bool {
     use ckbadger_store::types::*;
 
     fn classify_global_bucket(actions: &TxActions) -> &'static str {
+        if actions.is_cellbase {
+            return "cellbase";
+        }
         // DAO operations are emitted as protocol actions with protocol="dao";
         // check before the generic protocol bucket so filter=dao still works.
         if actions.protocol_actions.iter().any(|a| a.protocol == "dao") {
@@ -947,7 +950,7 @@ fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> 
 }
 
 /// List canonical global activities (TX-level), applying filter and canonicity checks.
-fn list_canonical_global_activities_page(
+pub(crate) fn list_canonical_global_actions_page(
     store: &CkbadgerStore,
     limit: usize,
     cursor: Option<(i64, i32)>,
@@ -1192,6 +1195,111 @@ async fn get_address_activities(
     })
 }
 
+/// Cellbase actions are intentionally not materialized. Reuse the indexer's
+/// interpreter over the node's exact outputs when a block/detail requests one.
+fn canonical_transaction_actions(
+    store: &CkbadgerStore,
+    node: Option<&ckb_store_reader::CkbChainReader>,
+    block: i64,
+    index: i32,
+    entry: &ckbadger_store::TxIndexEntry,
+) -> anyhow::Result<TxActions> {
+    if !entry.is_cellbase {
+        return store
+            .get_tx_actions(block, index, &entry.tx_hash)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "canonical activity missing at block={block} index={index} tx=0x{}",
+                    hex::encode(entry.tx_hash)
+                )
+            });
+    }
+    use ckb_types::prelude::*;
+    let node = node.ok_or_else(|| {
+        anyhow::anyhow!("cellbase activity at block {block} requires CKB RocksDB reader")
+    })?;
+    let tx = node.get_transaction(&entry.tx_hash).ok_or_else(|| {
+        anyhow::anyhow!(
+            "cellbase transaction 0x{} at block {block} missing from CKB RocksDB",
+            hex::encode(entry.tx_hash)
+        )
+    })?;
+    anyhow::ensure!(
+        tx.is_cellbase(),
+        "indexed cellbase 0x{} is not cellbase in node bytes",
+        hex::encode(entry.tx_hash)
+    );
+    anyhow::ensure!(
+        tx.outputs().len() == tx.outputs_data().len(),
+        "cellbase output/data length mismatch at block {block}"
+    );
+    let header = store
+        .get_block_header(block)?
+        .ok_or_else(|| anyhow::anyhow!("cellbase block {block} header missing"))?;
+    let cells = tx
+        .outputs()
+        .into_iter()
+        .zip(tx.outputs_data())
+        .map(|(output, data)| -> anyhow::Result<_> {
+            let lock = output.lock();
+            let capacity: u64 = output.capacity().unpack();
+            let type_script = output.type_().to_opt().map(|script| {
+                (
+                    script.code_hash().as_slice().to_vec(),
+                    i16::from(script.hash_type().as_slice()[0]),
+                    script.args().raw_data().to_vec(),
+                )
+            });
+            let data = data.raw_data();
+            let data_hash = ckb_types::packed::CellOutput::calc_data_hash(&data)
+                .as_slice()
+                .to_vec();
+            let cell = crate::pool::ResolvedCell::new(
+                i64::try_from(capacity)?,
+                lock.code_hash().as_slice().to_vec(),
+                i16::from(lock.hash_type().as_slice()[0]),
+                lock.args().raw_data().to_vec(),
+                type_script,
+                data.to_vec(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            Ok((cell, data_hash))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let outputs = cells
+        .iter()
+        .map(|(cell, data_hash)| -> anyhow::Result<_> {
+            Ok(ckbadger_indexer::db::OutputCellView {
+                capacity: cell.capacity,
+                lock_code_hash: &cell.lock_code_hash,
+                lock_hash_type: cell.lock_hash_type,
+                lock_args: &cell.lock_args,
+                lock_script_hash: &cell.lock_script_hash,
+                type_code_hash: cell.type_code_hash.as_deref(),
+                type_hash_type: cell.type_hash_type,
+                type_args: cell.type_args.as_deref(),
+                type_script_hash: cell.type_script_hash.as_deref(),
+                data_hash,
+                data_size: i32::try_from(cell.data.len())?,
+                data: &cell.data,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let view = ckbadger_indexer::db::TxView {
+        tx_hash: &entry.tx_hash,
+        block_hash: &header.hash,
+        tx_index: index,
+        block_number: block,
+        timestamp: entry.timestamp,
+        is_cellbase: true,
+        inputs: vec![],
+        outputs,
+    };
+    ckbadger_indexer::db::build_tx_actions_for_block(&[view], &[])?
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("cellbase interpreter returned no action at block {block}"))
+}
+
 async fn get_transaction_activity(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -1202,19 +1310,9 @@ async fn get_transaction_activity(
         .get_tx_by_hash(&hash)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Committed transaction not found"))?;
-    if tx.is_cellbase {
-        return ok(None);
-    }
-    let actions = state
-        .store
-        .get_tx_actions(block, index, &hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "transaction activity missing: block={block} index={index} tx=0x{}",
-                hex::encode(hash)
-            ))
-        })?;
+    let actions =
+        canonical_transaction_actions(&state.store, state.ckb_store.as_deref(), block, index, &tx)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
     let activity = build_global_activity_response(
         &state.store,
         &state.append_only_store,
@@ -1250,19 +1348,33 @@ async fn get_global_activities(
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
+    let node = state.ckb_store.clone();
     let filter = params.filter.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = if let Some(block) = block_number {
             let mut rows = Vec::new();
             for (index, tx) in store.list_block_txs(block)?.into_iter().rev() {
-                if tx.is_cellbase || cursor.is_some_and(|(_,last)| index >= last) { continue; }
-                let actions = store.get_tx_actions(block, index, &tx.tx_hash)?
-                    .ok_or_else(|| anyhow::anyhow!("block activity missing canonical actions: block={block} index={index} tx=0x{}",hex::encode(tx.tx_hash)))?;
-                if matches_global_activity_filter(&actions, filter.as_deref()) { rows.push(actions); }
-                if rows.len() > limit { break; }
+                if cursor.is_some_and(|(_, last)| index >= last) {
+                    continue;
+                }
+                let actions =
+                    canonical_transaction_actions(&store, node.as_deref(), block, index, &tx)?;
+                if matches_global_activity_filter(&actions, filter.as_deref()) {
+                    rows.push(actions);
+                }
+                if rows.len() > limit {
+                    break;
+                }
             }
             rows
-        } else { list_canonical_global_activities_page(store.as_ref(), limit + 1, cursor, filter.as_deref())? };
+        } else {
+            list_canonical_global_actions_page(
+                store.as_ref(),
+                limit + 1,
+                cursor,
+                filter.as_deref(),
+            )?
+        };
 
         let has_more = results.len() > limit;
         let page: Vec<_> = results.into_iter().take(limit).collect();

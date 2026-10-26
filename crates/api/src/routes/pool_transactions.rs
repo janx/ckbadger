@@ -18,6 +18,7 @@ pub struct PoolListParams {
     limit: Option<usize>,
     cursor: Option<String>,
     status: Option<String>,
+    activity_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +101,8 @@ pub async fn list_pool_transactions(
 ) -> ApiResult<PoolTransactionsResponse> {
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let filter = params.status.as_deref().unwrap_or("all");
+    let activity_filter =
+        super::transactions::transaction_activity_filter(params.activity_type.as_deref())?;
     if !matches!(
         filter,
         "all" | "pending" | "proposed" | "committed_awaiting_index"
@@ -153,9 +156,19 @@ pub async fn list_pool_transactions(
             PoolStatus::Proposed => totals.proposed += 1,
             PoolStatus::CommittedAwaitingIndex { .. } => totals.awaiting_index += 1,
         }
-        if filter == "all" || filter == record.pool_status.as_str() {
-            records.push(record);
+        if filter != "all" && filter != record.pool_status.as_str() {
+            continue;
         }
+        if let Some(filter) = activity_filter {
+            if record.interpretation.is_partial()
+                || !record.actions.as_ref().is_some_and(|actions| {
+                    super::activities::matches_global_activity_filter(actions, Some(filter))
+                })
+            {
+                continue;
+            }
+        }
+        records.push(record);
     }
     let total = records.len();
     records.sort_by(|a, b| {

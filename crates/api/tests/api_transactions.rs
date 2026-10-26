@@ -975,6 +975,22 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
     batch.put_cell(&[0xab; 32], 0, &cell, 320);
     batch.put_live_cell_marker_by_outpoint(&hash_bytes, 0, 321);
     batch.commit().unwrap();
+    store
+        .update_tx_cycles_with_groups(
+            321,
+            0,
+            &hash_bytes.clone().try_into().unwrap(),
+            &ckbadger_common::cycles_task::TransactionCycles {
+                block_hash: [0x44; 32],
+                cycles: 333,
+                groups: vec![ckbadger_common::cycles_task::ScriptGroupCycles {
+                    script_hash: lock.calc_script_hash().as_slice().try_into().unwrap(),
+                    group_type: ckbadger_common::cycles_task::ScriptGroupKind::Lock,
+                    cycles: 333,
+                }],
+            },
+        )
+        .unwrap();
     let block = BlockBuilder::default()
         .number(321u64.pack())
         .epoch(EpochNumberWithFraction::new(1, 0, 1000).pack())
@@ -1019,6 +1035,13 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
     assert_eq!(json["cyclesStatus"], "complete");
     assert_eq!(json["inputs"].as_array().unwrap().len(), 1);
     assert_eq!(json["outputs"][0]["status"], "live");
+    let groups = json["scriptGroups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0]["cycles"], "333");
+    assert_eq!(groups[0]["ran"], true);
+    assert!(groups[1]["cycles"].is_null());
+    assert_eq!(groups[1]["ran"], false);
+    assert_eq!(groups[0]["scriptHash"], groups[1]["scriptHash"]);
 }
 
 #[tokio::test]
@@ -2066,7 +2089,22 @@ async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
     tokio::time::sleep(std::time::Duration::from_millis(SLOW_MS)).await;
-    seed_tx_awaiting_cycles(&store, &tx_hash, Some(777));
+    store
+        .update_tx_cycles_with_groups(
+            321,
+            1,
+            &tx_hash,
+            &ckbadger_common::cycles_task::TransactionCycles {
+                block_hash: [0x44; 32],
+                cycles: 777,
+                groups: vec![ckbadger_common::cycles_task::ScriptGroupCycles {
+                    script_hash: [0x21; 32],
+                    group_type: ckbadger_common::cycles_task::ScriptGroupKind::Lock,
+                    cycles: 777,
+                }],
+            },
+        )
+        .unwrap();
 
     let (status, json) = request.await.unwrap();
     assert_eq!(status, StatusCode::OK, "got {json}");
@@ -2253,4 +2291,429 @@ async fn redesign_empty_healthy_pool_has_exact_zero_summary_and_no_rates() {
         body["summary"],
         serde_json::json!({"size":"0","cycles":"0","minFeeRate":null,"maxFeeRate":null,"newestSeenAt":null})
     );
+}
+
+#[tokio::test]
+async fn transaction_class_filter_pages_across_sparse_action_chunks() {
+    use ckbadger_store::types::{TAG_TOKEN, TAG_TYPE_CALL};
+    let store = test_store();
+    let mut first = [0x45; 32];
+    first[..4].copy_from_slice(&1i32.to_be_bytes());
+    seed_committed_activity(&store, &[0x21; 32], &first, 100, 1, 1000, TAG_TOKEN);
+    let (_, _, template) = store.get_tx_by_hash(&first).unwrap().unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut header = store.get_block_header(100).unwrap().unwrap();
+    header.transactions_count = 261;
+    batch.put_block_header(100, &header);
+    let cell = LiveCellInfo {
+        capacity: 10_000_000_000,
+        lock_script_hash: vec![0x21; 32],
+        lock_code_hash: vec![0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0; 20],
+        type_script_hash: None,
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        occupied_capacity: 6_100_000_000,
+        udt_amount: None,
+        data_hash: None,
+    };
+    for index in 1i32..=260 {
+        let mut hash = [0x45; 32];
+        hash[..4].copy_from_slice(&index.to_be_bytes());
+        let tags = if [1, 130, 260].contains(&index) {
+            TAG_TOKEN
+        } else {
+            TAG_TYPE_CALL
+        };
+        batch.put_tx_hash_map(&hash, 100, index);
+        batch.put_tx_index(
+            100,
+            index,
+            &TxIndexEntry {
+                tx_hash: hash,
+                ..template.clone()
+            },
+        );
+        batch.put_tx_actions(&make_test_tx_actions(
+            &[0x21; 32],
+            &hash,
+            &[0xba; 32],
+            100,
+            index,
+            1000,
+            tags,
+        ));
+        batch.put_cell(&hash, 0, &cell, 100);
+    }
+    let cellbase_hash = [0xcb; 32];
+    // Production deliberately omits cellbase from CF_TX_ACTIONS.
+    batch.put_tx_hash_map(&cellbase_hash, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            tx_hash: cellbase_hash,
+            is_cellbase: true,
+            cycles: None,
+            ..template
+        },
+    );
+    batch.put_cell(&cellbase_hash, 0, &cell, 100);
+    let older_hash = [0xca; 32];
+    let older_header = CachedBlockHeader {
+        hash: vec![0xb9; 32],
+        ..store.get_block_header(100).unwrap().unwrap()
+    };
+    batch.put_block_header(99, &older_header);
+    batch.put_tx_hash_map(&older_hash, 99, 0);
+    batch.put_tx_index(
+        99,
+        0,
+        &TxIndexEntry {
+            tx_hash: older_hash,
+            is_cellbase: true,
+            timestamp: 1_700_000_000_099,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_cell(&older_hash, 0, &cell, 99);
+    batch.commit().unwrap();
+    assert!(store
+        .get_tx_actions(100, 0, &cellbase_hash)
+        .unwrap()
+        .is_none());
+    let app = create_router(test_config(store)).await;
+    let mut cursor = None;
+    for expected in [260, 130, 1] {
+        let url = format!(
+            "/transactions?activity_type=token&limit=1{}",
+            cursor
+                .as_ref()
+                .map(|c| format!("&cursor={c}"))
+                .unwrap_or_default()
+        );
+        let (status, body) = get_json(&app, &url).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"][0]["index"], expected, "{body}");
+        assert!(
+            body.get("total").is_none(),
+            "filtered total must not pretend to be all transactions"
+        );
+        cursor = body["nextCursor"].as_str().map(str::to_owned);
+    }
+    assert!(cursor.is_none());
+    let (_, scripts) = get_json(&app, "/transactions?activity_type=script&limit=1").await;
+    assert_eq!(
+        scripts["data"][0]["index"], 259,
+        "classification must use actions, not zero semantic_tags in TX_INDEX"
+    );
+    let (_, ckb) = get_json(&app, "/transactions?activity_type=ckb").await;
+    assert!(ckb["data"].as_array().unwrap().is_empty());
+    let (status, body) = get_json(&app, "/transactions?activity_type=cellbase&limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"][0]["cycles"], 0);
+    assert_eq!(body["data"][0]["cyclesStatus"], "complete");
+    assert_eq!(body["data"][0]["blockNumber"], 100);
+    assert_eq!(body["nextCursor"], "100:0");
+    let (status, older) = get_json(
+        &app,
+        "/transactions?activity_type=cellbase&limit=1&cursor=100:0",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{older}");
+    assert_eq!(older["data"][0]["blockNumber"], 99);
+    assert!(older["nextCursor"].is_null());
+    assert_eq!(
+        get_json(&app, "/transactions?activity_type=nft").await.0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
+    use ckbadger_api::pool::{Interpretation, PoolStatus};
+    use ckbadger_store::types::{TAG_TOKEN, TAG_TYPE_CALL};
+    let state = test_app_state(test_config(test_store()));
+    let mut partial =
+        make_test_pool_record(&[0x14; 32], &[0x21; 32], 1000, 4000, PoolStatus::Pending);
+    partial.interpretation = Interpretation::Partial {
+        reasons: vec![ckbadger_api::pool::PartialReason::UnresolvedInput {
+            tx_hash: [0xee; 32],
+            index: 0,
+        }],
+    };
+    partial.actions.as_mut().unwrap().participants[0].tags = TAG_TOKEN;
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![
+        make_test_pool_record_with(
+            &[0x11; 32],
+            &[0x21; 32],
+            1000,
+            1000,
+            PoolStatus::Pending,
+            TAG_TOKEN,
+            Interpretation::Complete,
+        ),
+        make_test_pool_record_with(
+            &[0x12; 32],
+            &[0x21; 32],
+            1000,
+            2000,
+            PoolStatus::Proposed,
+            TAG_TYPE_CALL,
+            Interpretation::Complete,
+        ),
+        make_test_pool_record_with(
+            &[0x13; 32],
+            &[0x21; 32],
+            1000,
+            3000,
+            PoolStatus::Pending,
+            TAG_TOKEN,
+            Interpretation::Complete,
+        ),
+        partial,
+    ]));
+    let app = router_from_state(state);
+    let (status, body) = get_json(&app, "/transactions/pool?activity_type=token&limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 2);
+    assert_eq!(body["data"][0]["hash"], format!("0x{}", "13".repeat(32)));
+    assert_eq!(body["summary"]["size"], "1000");
+    assert_eq!(body["summary"]["cycles"], "400000");
+    assert_eq!(body["summary"]["newestSeenAt"], "3000");
+    let cursor = body["nextCursor"].as_str().unwrap();
+    let (_, second) = get_json(
+        &app,
+        &format!("/transactions/pool?activity_type=token&limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(second["summary"], body["summary"]);
+    assert_eq!(second["data"][0]["hash"], format!("0x{}", "11".repeat(32)));
+    assert!(second["nextCursor"].is_null());
+    let (_, scripts) = get_json(&app, "/transactions/pool?activity_type=script").await;
+    assert_eq!(scripts["total"], 1);
+    assert_eq!(scripts["summary"]["size"], "500");
+    let (_, all) = get_json(&app, "/transactions/pool").await;
+    assert_eq!(all["total"], 4);
+    assert_eq!(
+        get_json(&app, "/transactions/pool?activity_type=nft")
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
+    let store = test_store();
+    let hash = [0x66; 32];
+    insert_committed_transaction(&store, &hash);
+    let requests = tempfile::tempdir().unwrap();
+    let mut config = test_config(store.clone());
+    config.cycles_request_dir = Some(requests.path().to_path_buf());
+    let app = create_router(config).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["status"], "queued",
+        "a scalar-only total must request its canonical group result"
+    );
+    assert!(requests
+        .path()
+        .join(format!("tx_0x{}", hex::encode(hash)))
+        .exists());
+    assert!(body["cycles"].is_null(), "{body}");
+    store
+        .update_tx_cycles_with_groups(
+            321,
+            0,
+            &hash,
+            &ckbadger_common::cycles_task::TransactionCycles {
+                block_hash: [0x44; 32],
+                cycles: 333,
+                groups: vec![ckbadger_common::cycles_task::ScriptGroupCycles {
+                    script_hash: [0x21; 32],
+                    group_type: ckbadger_common::cycles_task::ScriptGroupKind::Lock,
+                    cycles: 333,
+                }],
+            },
+        )
+        .unwrap();
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "done");
+    assert_eq!(body["cycles"], 333);
+}
+
+#[tokio::test]
+async fn genesis_non_cellbase_cycles_are_zero_without_a_vm_request() {
+    let store = test_store();
+    let hash = [0x67; 32];
+    insert_committed_transaction(&store, &hash);
+    let (_, _, entry) = store.get_tx_by_hash(&hash).unwrap().unwrap();
+    let header = store.get_block_header(321).unwrap().unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &header);
+    batch.put_tx_hash_map(&hash, 0, 1);
+    batch.put_tx_index(
+        0,
+        1,
+        &TxIndexEntry {
+            cycles: None,
+            ..entry
+        },
+    );
+    batch.commit().unwrap();
+    let requests = tempfile::tempdir().unwrap();
+    let mut config = test_config(store.clone());
+    config.cycles_request_dir = Some(requests.path().to_path_buf());
+    let app = create_router(config).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "done");
+    assert_eq!(body["cycles"], 0);
+    assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
+    store.update_tx_cycles(0, 1, &hash, 5).unwrap();
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains(&hex::encode(hash)));
+    assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(5));
+}
+
+#[tokio::test]
+async fn genesis_detail_marks_type_groups_as_unexecuted() {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x11; 32]))
+        .hash_type(1u8.into())
+        .args(Bytes::from(vec![0x22; 20]).pack())
+        .build();
+    let type_script = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x33; 32]))
+        .hash_type(1u8.into())
+        .build();
+    let tx = TransactionBuilder::default()
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity(12_300_000_000u64.pack())
+                .lock(lock.clone())
+                .type_(Some(type_script).pack())
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    assert!(!tx.is_cellbase());
+    let hash: [u8; 32] = tx.hash().unpack();
+    let block = BlockBuilder::default()
+        .number(0u64.pack())
+        .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
+        .transaction(
+            TransactionBuilder::default()
+                .input(packed::CellInput::new_cellbase_input(0))
+                .witness(
+                    packed::CellbaseWitness::new_builder()
+                        .lock(lock.clone())
+                        .build()
+                        .as_bytes()
+                        .pack(),
+                )
+                .build(),
+        )
+        .transaction(tx)
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        0,
+        &CachedBlockHeader {
+            hash: block_hash.to_vec(),
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 2,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_hash_map(&hash, 0, 1);
+    batch.put_tx_index(
+        0,
+        1,
+        &TxIndexEntry {
+            tx_hash: hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_live_cell_marker_by_outpoint(&hash, 0, 0);
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cycles"], 0);
+    assert_eq!(body["cyclesStatus"], "complete");
+    let groups = body["scriptGroups"].as_array().unwrap();
+    assert!(groups.iter().any(|group| group["kind"] == "type"));
+    assert!(groups.iter().all(|group| group["ran"] == false
+        && group["cycles"].is_null()
+        && group["witnessIndex"].is_null()));
 }

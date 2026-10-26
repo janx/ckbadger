@@ -177,13 +177,15 @@ async fn process_block_request(store: &CkbadgerStore, ckb_rpc_url: &str, block_n
         if entry.is_cellbase {
             continue;
         }
-        match store.get_tx_group_cycles(&entry.tx_hash) {
-            Ok(Some(_)) => continue,
-            Ok(None) => {}
-            Err(error) => {
-                warn!("Cycles worker: invalid group result: {error}");
-                all_ok = false;
-                continue;
+        if block_num != 0 {
+            match store.get_tx_group_cycles(&entry.tx_hash) {
+                Ok(Some(_)) => continue,
+                Ok(None) => {}
+                Err(error) => {
+                    warn!("Cycles worker: invalid group result: {error}");
+                    all_ok = false;
+                    continue;
+                }
             }
         }
         let hash = format!("0x{}", hex::encode(entry.tx_hash));
@@ -255,12 +257,24 @@ async fn process_cycles_task(
         }
     };
 
-    if entry.is_cellbase {
+    if entry.is_cellbase || block_num == 0 {
+        if entry.cycles.is_some_and(|cycles| cycles != 0) {
+            return CyclesTaskResult {
+                status: CyclesTaskStatus::Failed,
+                cycles: None,
+                error: Some(format!(
+                    "execution-exempt transaction 0x{} at block {block_num}:{tx_idx} has nonzero stored cycles {:?}",
+                    hex::encode(hash_bytes),
+                    entry.cycles,
+                )),
+                updated_at,
+            };
+        }
         if let Err(e) = store.update_tx_cycles(block_num, tx_idx, &hash_bytes, 0) {
             return CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
                 cycles: None,
-                error: Some(format!("failed to persist cellbase cycles: {}", e)),
+                error: Some(format!("failed to persist execution-exempt cycles: {}", e)),
                 updated_at,
             };
         }
@@ -334,6 +348,134 @@ async fn process_cycles_task(
 mod tests {
     use super::*;
     use ckbadger_store::{CachedBlockHeader, StoreBatch, TxIndexEntry};
+
+    #[tokio::test]
+    async fn genesis_non_cellbase_is_persisted_as_zero_without_vm_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let hash = [0x68; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&hash, 0, 1);
+        batch.put_tx_index(
+            0,
+            1,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp: 0,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 200,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().unwrap();
+        let result = process_cycles_task(
+            &store,
+            "http://127.0.0.1:1",
+            &format!("0x{}", hex::encode(hash)),
+        )
+        .await;
+        assert_eq!(result.status, CyclesTaskStatus::Done, "{result:?}");
+        assert_eq!(result.cycles, Some(0));
+        assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(0));
+        assert!(store.get_tx_group_cycles(&hash).unwrap().is_none());
+        store.update_tx_cycles(0, 1, &hash, 5).unwrap();
+        let invalid = process_cycles_task(
+            &store,
+            "http://127.0.0.1:1",
+            &format!("0x{}", hex::encode(hash)),
+        )
+        .await;
+        assert_eq!(invalid.status, CyclesTaskStatus::Failed, "{invalid:?}");
+        assert!(invalid
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("execution-exempt"));
+        assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(5));
+    }
+
+    #[tokio::test]
+    async fn genesis_block_request_publishes_zero_and_rejects_cached_positive_groups() {
+        use ckbadger_common::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let header = CachedBlockHeader {
+            hash: vec![0x69; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 2,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1,
+        };
+        let cellbase_hash = [0x70; 32];
+        let hash = [0x71; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &header);
+        for (index, hash, is_cellbase) in [(0, cellbase_hash, true), (1, hash, false)] {
+            batch.put_tx_hash_map(&hash, 0, index);
+            batch.put_tx_index(
+                0,
+                index,
+                &TxIndexEntry {
+                    tx_hash: hash,
+                    is_cellbase,
+                    timestamp: 1,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 200,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        assert_eq!(
+            process_block_request(&store, "http://127.0.0.1:1", 0).await,
+            1
+        );
+        assert_eq!(store.get_block_header(0).unwrap().unwrap().cycles, Some(0));
+        assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(0));
+        assert!(store.get_tx_group_cycles(&hash).unwrap().is_none());
+        store
+            .update_tx_cycles_with_groups(
+                0,
+                1,
+                &hash,
+                &TransactionCycles {
+                    block_hash: [0x69; 32],
+                    cycles: 5,
+                    groups: vec![ScriptGroupCycles {
+                        script_hash: [0x72; 32],
+                        group_type: ScriptGroupKind::Lock,
+                        cycles: 5,
+                    }],
+                },
+            )
+            .unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &header);
+        batch.commit().unwrap();
+        assert_eq!(
+            process_block_request(&store, "http://127.0.0.1:1", 0).await,
+            1,
+            "genesis must not accept cached execution groups"
+        );
+        assert_eq!(store.get_block_header(0).unwrap().unwrap().cycles, None);
+        assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(5));
+    }
 
     #[tokio::test]
     async fn block_request_does_not_publish_zero_when_canonical_tx_is_missing() {

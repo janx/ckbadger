@@ -118,6 +118,56 @@ pub fn script_groups(
     Ok(groups)
 }
 
+/// Attach the indexer's canonical, validated result by exact execution-group identity.
+/// Output locks are displayed as cell structure but are never execution results.
+pub fn apply_group_cycles(
+    groups: &mut [ScriptGroupResponse],
+    execution_exempt: bool,
+    result: Option<&ckbadger_common::cycles_task::TransactionCycles>,
+) -> anyhow::Result<()> {
+    use ckbadger_common::cycles_task::ScriptGroupKind;
+    if execution_exempt {
+        for group in groups {
+            group.ran = false;
+            group.witness_index = None;
+            group.cycles = None;
+        }
+        return Ok(());
+    }
+    let Some(result) = result else {
+        return Ok(());
+    };
+    let mut cycles = BTreeMap::new();
+    for group in &result.groups {
+        let kind = match group.group_type {
+            ScriptGroupKind::Lock => "lock",
+            ScriptGroupKind::Type => "type",
+        };
+        let hash = format!("0x{}", hex::encode(group.script_hash));
+        anyhow::ensure!(
+            cycles.insert((kind, hash.clone()), group.cycles).is_none(),
+            "duplicate {kind} cycles group {hash}"
+        );
+    }
+    for group in groups.iter_mut().filter(|group| group.ran) {
+        let count = cycles
+            .remove(&(group.kind.as_str(), group.script_hash.clone()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "canonical cycles result is missing executed {} group {}",
+                    group.kind,
+                    group.script_hash
+                )
+            })?;
+        group.cycles = Some(count.to_string());
+    }
+    anyhow::ensure!(
+        cycles.is_empty(),
+        "canonical cycles result contains groups absent from transaction: {cycles:?}"
+    );
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedDependencyCell {
@@ -591,7 +641,7 @@ mod tests {
             status: None,
             consumed_by_tx: None,
         };
-        let groups = script_groups(&[input.clone(), input], &[output]).unwrap();
+        let mut groups = script_groups(&[input.clone(), input], &[output]).unwrap();
         assert_eq!(groups.len(), 3);
         assert_eq!(groups[0].input_indices, vec![0, 1]);
         assert_eq!(groups[0].witness_index, Some(0));
@@ -599,6 +649,49 @@ mod tests {
         assert_eq!(groups[1].output_indices, vec![0]);
         assert!(!groups[2].ran);
         assert_eq!(groups[2].output_indices, vec![0]);
+        use ckbadger_common::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
+        let hash: [u8; 32] = hex::decode(groups[0].script_hash.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let result = TransactionCycles {
+            block_hash: [0; 32],
+            cycles: 150,
+            groups: vec![
+                ScriptGroupCycles {
+                    script_hash: hash,
+                    group_type: ScriptGroupKind::Lock,
+                    cycles: 100,
+                },
+                ScriptGroupCycles {
+                    script_hash: hash,
+                    group_type: ScriptGroupKind::Type,
+                    cycles: 50,
+                },
+            ],
+        };
+        apply_group_cycles(&mut groups, false, Some(&result)).unwrap();
+        assert_eq!(groups[0].cycles.as_deref(), Some("100"));
+        assert_eq!(groups[1].cycles.as_deref(), Some("50"));
+        assert!(groups[2].cycles.is_none());
+        let missing = TransactionCycles {
+            groups: result.groups[..1].to_vec(),
+            ..result.clone()
+        };
+        assert!(
+            apply_group_cycles(&mut groups.clone(), false, Some(&missing))
+                .unwrap_err()
+                .to_string()
+                .contains("missing executed type")
+        );
+        let mut foreign = result;
+        foreign.groups[0].script_hash = [0xff; 32];
+        assert!(apply_group_cycles(&mut groups.clone(), false, Some(&foreign)).is_err());
+        let mut cellbase = groups.clone();
+        apply_group_cycles(&mut cellbase, true, None).unwrap();
+        assert!(cellbase
+            .iter()
+            .all(|group| !group.ran && group.witness_index.is_none() && group.cycles.is_none()));
         assert_eq!(cell_type(None).unwrap(), "plain");
         assert_eq!(cell_type(Some(&groups[0].script)).unwrap(), "typed");
     }

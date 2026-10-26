@@ -96,6 +96,25 @@ describe('api', () => {
       await api.getTransactions({ blockNumber: 12345 });
     });
 
+    it('serializes transaction activity filters for committed and pool queries', async () => {
+      const paths: string[] = [];
+      server.use(
+        http.get('/api/:network/v1/transactions', ({ request }) => {
+          const url = new URL(request.url);
+          paths.push(url.searchParams.get('activity_type') ?? 'missing');
+          return HttpResponse.json({ data: [], limit: 20, nextCursor: null });
+        }),
+        http.get('/api/:network/v1/transactions/pool', ({ request }) => {
+          const url = new URL(request.url);
+          paths.push(url.searchParams.get('activity_type') ?? 'missing');
+          return HttpResponse.json({ data: [], total: 0, limit: 20, nextCursor: null });
+        })
+      );
+      await api.getTransactions({ activityType: 'identity' });
+      await api.getPoolTransactions({ activityType: 'script' });
+      expect(paths).toEqual(['identity', 'script']);
+    });
+
     it('builds query params for getLiveCells with filters', async () => {
       server.use(
         http.get('/api/:network/v1/cells/live', ({ request }) => {

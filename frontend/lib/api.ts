@@ -201,6 +201,15 @@ interface HardforkActivation {
   resources?: HardforkResource[];
 }
 
+type TransactionActivityType =
+  | 'ckb'
+  | 'script'
+  | 'cellbase'
+  | 'dao'
+  | 'token'
+  | 'object'
+  | 'identity';
+
 interface Transaction {
   value: string;
   outputCapacity?: string;
@@ -2760,20 +2769,28 @@ export const api = {
   },
 
   getTransactions: (
-    params: CursorQueryParams & { blockNumber?: number } = {}
+    params: CursorQueryParams & {
+      blockNumber?: number;
+      activityType?: TransactionActivityType;
+    } = {}
   ): Promise<CursorPaginatedResponse<Transaction>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
+    if (params.activityType) query.set('activity_type', params.activityType);
     if (params.blockNumber !== undefined) query.set('block_number', String(params.blockNumber));
     if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/transactions?${query}`);
   },
 
   getPoolTransactions: (
-    params: CursorQueryParams & { status?: PoolStatus | 'all' } = {}
+    params: CursorQueryParams & {
+      status?: PoolStatus | 'all';
+      activityType?: TransactionActivityType;
+    } = {}
   ): Promise<PoolTransactionsResponse> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
+    if (params.activityType) query.set('activity_type', params.activityType);
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.status) query.set('status', params.status);
     return fetchApi(`/transactions/pool?${query}`);

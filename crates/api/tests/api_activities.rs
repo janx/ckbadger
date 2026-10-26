@@ -2307,3 +2307,125 @@ async fn redesign_block_feed_and_direct_activity_share_exact_participants() {
     let (status, _) = get_json(&app, "/activities?blockNumber=42&cursor=43:1").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn block_and_direct_cellbase_activity_derive_the_exact_paid_outputs() {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x11; 32]))
+        .hash_type(1u8.into())
+        .args(Bytes::from(vec![0x22; 20]).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(100))
+        .witness(
+            packed::CellbaseWitness::new_builder()
+                .lock(lock.clone())
+                .build()
+                .as_bytes()
+                .pack(),
+        )
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity(12_300_000_000u64.pack())
+                .lock(lock.clone())
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    assert!(tx.is_cellbase());
+    let hash: [u8; 32] = tx.hash().unpack();
+    let block = BlockBuilder::default()
+        .number(100u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .transaction(tx)
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: block_hash.to_vec(),
+            parent_hash: vec![0; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.put_tx_hash_map(&hash, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            tx_hash: hash,
+            is_cellbase: true,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_lock_script(
+        lock.calc_script_hash().as_slice(),
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: vec![0x11; 32],
+            hash_type: 1,
+            args: vec![0x22; 20],
+        },
+    );
+    batch.commit().unwrap();
+    assert!(store.get_tx_actions(100, 0, &hash).unwrap().is_none());
+    let unavailable = create_router(test_config(store.clone())).await;
+    let (status, missing) = get_json(&unavailable, "/activities?blockNumber=100").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{missing}");
+    assert!(missing["message"].as_str().unwrap().contains("CKB RocksDB"));
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, body) = get_json(&app, "/activities?blockNumber=100").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"].as_array().unwrap().len(),
+        1,
+        "cellbase reward is part of block activity"
+    );
+    let row = &body["data"][0];
+    assert_eq!(row["isCellbase"], true);
+    assert_eq!(row["participants"][0]["ckbDelta"], "12300000000");
+    assert_eq!(row["participants"][0]["usedDelta"], "6100000000");
+    let (status, direct) = get_json(
+        &app,
+        &format!("/transactions/0x{}/activity", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{direct}");
+    assert_eq!(direct, *row);
+    let (_, global) = get_json(&app, "/activities").await;
+    assert!(
+        global["data"].as_array().unwrap().is_empty(),
+        "global activity semantics still exclude cellbase"
+    );
+}

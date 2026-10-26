@@ -4,7 +4,6 @@ use axum::{
     Extension, Router,
 };
 use ckb_store_reader::RpcTransactionView;
-use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::time::Instant;
@@ -113,6 +112,7 @@ pub struct ListParams {
     limit: i64,
     block_number: Option<i64>,
     cursor: Option<String>,
+    activity_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,7 +173,7 @@ pub(crate) fn tx_cycles_status(cycles: Option<i64>) -> TxCyclesStatus {
 
 fn display_cycles(
     cycles: Option<i64>,
-    is_cellbase: bool,
+    execution_exempt: bool,
     tx_hash: &[u8],
 ) -> Result<(Option<i64>, String), ApiRouteError> {
     if cycles.is_some_and(|cycles| cycles < -1) {
@@ -182,7 +182,13 @@ fn display_cycles(
             hex::encode(tx_hash)
         )));
     }
-    if is_cellbase {
+    if execution_exempt {
+        if cycles.is_some_and(|value| value != 0) {
+            return Err(ApiError::internal(format!(
+                "execution-exempt transaction 0x{} has nonzero stored cycles {cycles:?}",
+                hex::encode(tx_hash)
+            )));
+        }
         return Ok((Some(0), "complete".into()));
     }
     Ok(match tx_cycles_status(cycles) {
@@ -286,7 +292,11 @@ fn transaction_response(
     } else {
         None
     };
-    let (cycles, cycles_status) = display_cycles(entry.cycles, entry.is_cellbase, &entry.tx_hash)?;
+    let (cycles, cycles_status) = display_cycles(
+        entry.cycles,
+        entry.is_cellbase || block == 0,
+        &entry.tx_hash,
+    )?;
     Ok(TransactionResponse {
         value,
         activity,
@@ -307,11 +317,70 @@ fn transaction_response(
     })
 }
 
+pub(crate) fn transaction_activity_filter(
+    filter: Option<&str>,
+) -> Result<Option<&str>, ApiRouteError> {
+    match filter {
+        None | Some("") | Some("all") => Ok(None),
+        Some(value @ ("ckb" | "script" | "cellbase" | "dao" | "token" | "object" | "identity")) => Ok(Some(value)),
+        Some(value) => Err(ApiError::bad_request(format!("invalid activity_type '{value}'; expected ckb, script, cellbase, dao, token, object, or identity"))),
+    }
+}
+
+/// Cellbase has no persisted TxActions row: scan the existing canonical index.
+fn list_canonical_cellbase_page(
+    store: &ckbadger_store::CkbadgerStore,
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+) -> anyhow::Result<Vec<TxListEntry>> {
+    let mut from = Some(cursor.map(|(block, _)| block).unwrap_or(i64::MAX));
+    let mut rows = Vec::with_capacity(limit);
+    while let Some(block_cursor) = from {
+        let blocks = store.list_blocks_desc(Some(block_cursor), 128)?;
+        if blocks.is_empty() {
+            break;
+        }
+        for (block, header) in &blocks {
+            if cursor
+                .is_some_and(|(last_block, last_index)| *block == last_block && last_index == 0)
+            {
+                continue;
+            }
+            // Consensus fixes cellbase at position zero; do not scan every
+            // transaction in a block to discover the same position again.
+            let entry = store.get_tx_index(*block, 0)?.ok_or_else(|| {
+                anyhow::anyhow!("canonical block {block} lacks its cellbase transaction index")
+            })?;
+            anyhow::ensure!(
+                entry.is_cellbase,
+                "canonical block {block} transaction zero is not cellbase"
+            );
+            anyhow::ensure!(
+                store.get_tx_location(&entry.tx_hash)? == Some((*block, 0)),
+                "cellbase canonical location mismatch at {block}:0"
+            );
+            rows.push((*block, header.hash.clone(), 0, entry));
+            if rows.len() == limit {
+                return Ok(rows);
+            }
+        }
+        let last_block = blocks.last().expect("nonempty block chunk").0;
+        from = if last_block == 0 {
+            None
+        } else {
+            Some(last_block - 1)
+        };
+    }
+    Ok(rows)
+}
+
 async fn list_transactions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let limit = params.limit.clamp(1, 100);
+    let activity_filter =
+        transaction_activity_filter(params.activity_type.as_deref())?.map(str::to_owned);
 
     // Validate before any store access: `get_block_header` encodes the number
     // into a store key, and a negative one trips an assert that aborts the
@@ -320,6 +389,69 @@ async fn list_transactions(
         .block_number
         .map(|bn| validate_block_number(bn, "block_number"))
         .transpose()?;
+
+    if block_number.is_none() {
+        if let Some(filter) = activity_filter.clone() {
+            let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
+            let store = state.store.clone();
+            let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<TxListEntry>> {
+                if filter == "cellbase" {
+                    return list_canonical_cellbase_page(&store, limit as usize + 1, cursor);
+                }
+                super::activities::list_canonical_global_actions_page(
+                    &store,
+                    limit as usize + 1,
+                    cursor,
+                    Some(&filter),
+                )?
+                .into_iter()
+                .map(|actions| {
+                    let entry = store
+                        .get_tx_index(actions.block_number, actions.tx_index)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "canonical filtered transaction missing index at {}:{}",
+                                actions.block_number,
+                                actions.tx_index
+                            )
+                        })?;
+                    let header =
+                        store
+                            .get_block_header(actions.block_number)?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "canonical filtered transaction missing block {}",
+                                    actions.block_number
+                                )
+                            })?;
+                    Ok((actions.block_number, header.hash, actions.tx_index, entry))
+                })
+                .collect()
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+            let has_more = rows.len() > limit as usize;
+            let page: Vec<_> = rows.into_iter().take(limit as usize).collect();
+            let next_cursor = if has_more {
+                page.last()
+                    .map(|(block, _, index, _)| encode_cursor(*block, *index))
+            } else {
+                None
+            };
+            let rows = page
+                .into_iter()
+                .map(|(block, hash, index, entry)| {
+                    transaction_response(&state, block, index, &entry, &hash, None)
+                })
+                .collect::<Result<_, _>>()?;
+            return ok(CursorPaginatedResponse::without_total(
+                rows,
+                limit,
+                next_cursor,
+            ));
+        }
+    }
 
     let count_store = state.store.clone();
     let (total, selected_block_hash) =
@@ -374,8 +506,38 @@ async fn list_transactions(
         let fetch_limit = (limit + 1) as usize;
 
         let store_c = store.clone();
-        let page_txs = tokio::task::spawn_blocking(move || {
-            store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)
+        let filter = activity_filter.clone();
+        let page_txs = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            if let Some(filter) = filter {
+                let mut rows = Vec::with_capacity(fetch_limit);
+                for (index, entry) in store_c.list_block_txs(block_number)? {
+                    if index <= after_tx_idx {
+                        continue;
+                    }
+                    let matches = if entry.is_cellbase {
+                        filter == "cellbase"
+                    } else {
+                        let actions = store_c
+                            .get_tx_actions(block_number, index, &entry.tx_hash)?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "missing actions for block {block_number} transaction {index}"
+                                )
+                            })?;
+                        super::activities::matches_global_activity_filter(&actions, Some(&filter))
+                    };
+                    if matches {
+                        rows.push((index, entry));
+                    }
+
+                    if rows.len() == fetch_limit {
+                        break;
+                    }
+                }
+                Ok(rows)
+            } else {
+                store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)
+            }
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -414,7 +576,11 @@ async fn list_transactions(
             })
             .collect::<Result<_, _>>()?;
 
-        ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
+        ok(if activity_filter.is_some() {
+            CursorPaginatedResponse::without_total(txs, limit, next_cursor)
+        } else {
+            CursorPaginatedResponse::new(txs, total, limit, next_cursor)
+        })
     } else {
         // List latest transactions (DESC order across blocks)
         let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
@@ -1026,7 +1192,20 @@ async fn get_transaction_detail(
                 ApiError::internal(format!("pool transaction {hash} cycles exceed i64"))
             })?;
         let pool_is_cellbase = resolved.is_cellbase;
-        let (cycles, cycles_status) = display_cycles(pool_cycles, pool_is_cellbase, &hash_bytes)?;
+        let (cycles, cycles_status) = display_cycles(
+            pool_cycles,
+            pool_is_cellbase || tx_lookup.block_number == Some(0),
+            &hash_bytes,
+        )?;
+        let mut script_groups =
+            super::transaction_structure::script_groups(&io.inputs, &io.outputs)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        super::transaction_structure::apply_group_cycles(
+            &mut script_groups,
+            pool_is_cellbase || tx_lookup.block_number == Some(0),
+            None,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         return ok(TransactionDetailResponse {
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
@@ -1054,8 +1233,7 @@ async fn get_transaction_detail(
             outputs_capacity: Some(io.outputs_capacity.to_string()),
             inputs_used_capacity: Some(io.inputs_used_capacity.to_string()),
             outputs_used_capacity: Some(io.outputs_used_capacity.to_string()),
-            script_groups: super::transaction_structure::script_groups(&io.inputs, &io.outputs)
-                .map_err(|e| ApiError::internal(e.to_string()))?,
+            script_groups,
             witness_details: super::transaction_structure::witness_details(&io.witnesses)
                 .map_err(|e| ApiError::internal(e.to_string()))?,
             inputs: io.inputs,
@@ -1069,7 +1247,8 @@ async fn get_transaction_detail(
     let tx_hash_hex = format!("0x{}", hex::encode(&hash_bytes));
     let is_cellbase = entry.is_cellbase;
     let tx_size = entry.tx_size;
-    let (cycles, cycles_status) = display_cycles(entry.cycles, is_cellbase, &hash_bytes)?;
+    let (cycles, cycles_status) =
+        display_cycles(entry.cycles, is_cellbase || block_number == 0, &hash_bytes)?;
     let inputs_count = entry.inputs_count as i32;
     let outputs_count = entry.outputs_count as i32;
 
@@ -1181,6 +1360,23 @@ async fn get_transaction_detail(
 
     let fee_rate = final_tx_size.map(|size| tx_fee_rate(fee_value, size));
 
+    let mut script_groups = super::transaction_structure::script_groups(&inputs, &outputs)
+        .map_err(|e| ApiError::internal(format!("transaction {tx_hash_hex} groups: {e}")))?;
+    let group_result = if is_cellbase || block_number == 0 {
+        None
+    } else {
+        state
+            .store
+            .get_tx_cycles_result(&hash_bytes)
+            .map_err(|e| ApiError::internal(format!("transaction {tx_hash_hex} cycles: {e}")))?
+    };
+    super::transaction_structure::apply_group_cycles(
+        &mut script_groups,
+        is_cellbase || block_number == 0,
+        group_result.as_ref(),
+    )
+    .map_err(|e| ApiError::internal(format!("transaction {tx_hash_hex} group cycles: {e}")))?;
+
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         status: "committed".to_string(),
@@ -1205,8 +1401,7 @@ async fn get_transaction_detail(
         outputs_capacity: Some(outputs_capacity.to_string()),
         inputs_used_capacity: Some(inputs_occupied_capacity.to_string()),
         outputs_used_capacity: Some(outputs_occupied_capacity.to_string()),
-        script_groups: super::transaction_structure::script_groups(&inputs, &outputs)
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        script_groups,
         witness_details: super::transaction_structure::witness_details(&witnesses)
             .map_err(|e| ApiError::internal(e.to_string()))?,
         inputs,
@@ -1863,198 +2058,130 @@ async fn get_cycles_status(
     Path(hash): Path<String>,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
-
-    let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
-        Some(state) => state,
-        None => {
-            return ok(CyclesStatusResponse {
-                status: CyclesStatus::NotFound,
-                cycles: None,
-                error: Some("Transaction not found".to_string()),
-            });
-        }
-    };
-
-    if is_cellbase {
-        return ok(CyclesStatusResponse {
-            status: CyclesStatus::Done,
-            cycles: Some(0),
-            error: None,
-        });
+    if let Some(response) = stored_cycles_response(load_tx_cycles_state(&state, &hash_bytes).await?)
+    {
+        return ok(response);
     }
-
-    match db_cycles {
-        Some(cycles) if cycles > 0 => ok(CyclesStatusResponse {
-            status: CyclesStatus::Done,
-            cycles: Some(cycles),
-            error: None,
-        }),
-        Some(-1) => ok(CyclesStatusResponse {
+    if !state.cycles_client.is_enabled() {
+        return ok(CyclesStatusResponse {
             status: CyclesStatus::Failed,
             cycles: None,
-            error: Some("Calculation failed".to_string()),
-        }),
-        _ => {
-            if !state.cycles_client.is_enabled() {
-                return ok(CyclesStatusResponse {
-                    status: CyclesStatus::Failed,
-                    cycles: None,
-                    error: Some(
-                        "Cycles task dispatch unavailable: worker not connected".to_string(),
-                    ),
-                });
-            }
-
-            match state.cycles_client.get_task_result(&hash).await {
-                Ok(Some(result)) => ok(cycles_response_from_task(result)),
-                Ok(None) => ok(cycles_enqueue_response(
-                    state.cycles_client.enqueue_task(&hash).await,
-                )),
-                Err(e) => ok(CyclesStatusResponse {
-                    status: CyclesStatus::Failed,
-                    cycles: None,
-                    error: Some(e),
-                }),
-            }
-        }
+            error: Some("Cycles task dispatch unavailable: worker not connected".into()),
+        });
     }
+    ok(cycles_enqueue_response(
+        state.cycles_client.enqueue_task(&hash).await,
+    ))
 }
 
 async fn trigger_cycles_calculation(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
-    // Optional so the handler still works in routers built without the
-    // read-view middleware (unit tests mounting `routes()` directly).
     read_view: Option<Extension<RequestReadView>>,
     wait: RequestWait,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
-
-    let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
-        Some(state) => state,
-        None => {
-            return ok(CyclesStatusResponse {
-                status: CyclesStatus::NotFound,
-                cycles: None,
-                error: Some("Transaction not found".to_string()),
-            });
-        }
-    };
-
-    if is_cellbase {
+    if let Some(response) = stored_cycles_response(load_tx_cycles_state(&state, &hash_bytes).await?)
+    {
+        return ok(response);
+    }
+    if let Err(error) = state.cycles_client.enqueue_task(&hash).await {
         return ok(CyclesStatusResponse {
-            status: CyclesStatus::Done,
-            cycles: Some(0),
-            error: None,
+            status: CyclesStatus::Failed,
+            cycles: None,
+            error: Some(error),
         });
     }
+    // Completion is the canonical indexer-written group record, not an IPC
+    // notification whose RocksDB secondary view may not yet be visible. Drop
+    // this request's pin before waiting for catch-up to reveal that record.
+    if let Some(Extension(view)) = read_view {
+        view.release();
+    }
+    ok(wait_cycles_result(&state, &hash_bytes, &wait).await?)
+}
 
-    match db_cycles {
-        Some(cycles) if cycles > 0 => ok(CyclesStatusResponse {
+#[derive(Debug, Clone, Copy)]
+enum StoredCycles {
+    Complete(i64),
+    Failed,
+    Pending,
+}
+
+fn stored_cycles_response(state: Option<StoredCycles>) -> Option<CyclesStatusResponse> {
+    Some(match state {
+        Some(StoredCycles::Complete(cycles)) => CyclesStatusResponse {
             status: CyclesStatus::Done,
             cycles: Some(cycles),
             error: None,
-        }),
-        Some(-1) => ok(CyclesStatusResponse {
+        },
+        Some(StoredCycles::Failed) => CyclesStatusResponse {
             status: CyclesStatus::Failed,
             cycles: None,
-            error: Some("Calculation previously failed".to_string()),
-        }),
-        _ => {
-            if let Ok(Some(result)) = state.cycles_client.get_task_result(&hash).await {
-                return ok(cycles_response_from_task(result));
-            }
-
-            if let Err(e) = state.cycles_client.enqueue_task(&hash).await {
-                return ok(CyclesStatusResponse {
-                    status: CyclesStatus::Failed,
-                    cycles: None,
-                    error: Some(e),
-                });
-            }
-
-            // This is the one handler whose contract is to observe the *next*
-            // view: it waits for the indexer to write the cycles result, which
-            // only becomes visible after a catch-up. Keeping the request's pin
-            // would block that catch-up and guarantee a timeout, so release it
-            // before waiting. Everything read above was pinned. The wait itself
-            // goes through `wait`, so the request log does not call it slow.
-            if let Some(Extension(view)) = read_view {
-                view.release();
-            }
-
-            ok(wait_cycles_result(&state, &hash, &hash_bytes, &wait).await?)
-        }
-    }
+            error: Some("Calculation failed".into()),
+        },
+        Some(StoredCycles::Pending) => return None,
+        None => CyclesStatusResponse {
+            status: CyclesStatus::NotFound,
+            cycles: None,
+            error: Some("Transaction not found".into()),
+        },
+    })
 }
 
 async fn load_tx_cycles_state(
     state: &Arc<AppState>,
     hash_bytes: &[u8],
-) -> Result<Option<(Option<i64>, bool)>, ApiRouteError> {
+) -> Result<Option<StoredCycles>, ApiRouteError> {
     let store = state.store.clone();
-    let hash_c = hash_bytes.to_vec();
-    let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    Ok(row.map(|(_, _, entry)| (entry.cycles, entry.is_cellbase)))
+    let hash = hash_bytes.to_vec();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Every poll pins only its bounded multi-CF read, never the sleep.
+        let _view = ckbadger_store::read_view::acquire_read();
+        let Some((block, _, entry)) = store.get_tx_by_hash(&hash)? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            !entry.cycles.is_some_and(|cycles| cycles < -1),
+            "invalid stored cycles {:?} for transaction 0x{}",
+            entry.cycles,
+            hex::encode(&hash)
+        );
+        if entry.is_cellbase || block == 0 {
+            anyhow::ensure!(
+                entry.cycles.is_none_or(|cycles| cycles == 0),
+                "execution-exempt transaction 0x{} at block {block} has nonzero stored cycles {:?}",
+                hex::encode(&hash),
+                entry.cycles
+            );
+            return Ok(Some(StoredCycles::Complete(0)));
+        }
+        if let Some(result) = store.get_tx_cycles_result(&hash)? {
+            return Ok(Some(StoredCycles::Complete(result.cycles)));
+        }
+        Ok(Some(if entry.cycles == Some(-1) {
+            StoredCycles::Failed
+        } else {
+            StoredCycles::Pending
+        }))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))
 }
 
 async fn wait_cycles_result(
     state: &Arc<AppState>,
-    hash: &str,
     hash_bytes: &[u8],
     wait: &RequestWait,
 ) -> Result<CyclesStatusResponse, ApiRouteError> {
     let deadline = Instant::now() + state.cycles_client.wait_timeout();
-
     loop {
-        match load_tx_cycles_state(state, hash_bytes).await? {
-            Some((Some(cycles), _)) if cycles > 0 => {
-                return Ok(CyclesStatusResponse {
-                    status: CyclesStatus::Done,
-                    cycles: Some(cycles),
-                    error: None,
-                });
-            }
-            Some((Some(-1), _)) => {
-                return Ok(CyclesStatusResponse {
-                    status: CyclesStatus::Failed,
-                    cycles: None,
-                    error: Some("Calculation failed".to_string()),
-                });
-            }
-            Some((_cycles, true)) => {
-                return Ok(CyclesStatusResponse {
-                    status: CyclesStatus::Done,
-                    cycles: Some(0),
-                    error: None,
-                });
-            }
-            Some(_) => {}
-            None => {
-                return Ok(CyclesStatusResponse {
-                    status: CyclesStatus::NotFound,
-                    cycles: None,
-                    error: Some("Transaction not found".to_string()),
-                });
-            }
+        if let Some(response) =
+            stored_cycles_response(load_tx_cycles_state(state, hash_bytes).await?)
+        {
+            return Ok(response);
         }
-
-        match state.cycles_client.get_task_result(hash).await {
-            Ok(Some(result)) => return Ok(cycles_response_from_task(result)),
-            Ok(None) => {}
-            Err(e) => {
-                return Ok(CyclesStatusResponse {
-                    status: CyclesStatus::Failed,
-                    cycles: None,
-                    error: Some(e),
-                });
-            }
-        }
-
         if Instant::now() >= deadline {
             return Ok(CyclesStatusResponse {
                 status: CyclesStatus::Calculating,
@@ -2062,32 +2189,7 @@ async fn wait_cycles_result(
                 error: None,
             });
         }
-
         wait.sleep(state.cycles_client.poll_interval()).await;
-    }
-}
-
-fn cycles_response_from_task(result: CyclesTaskResult) -> CyclesStatusResponse {
-    match result.status {
-        CyclesTaskStatus::Done => CyclesStatusResponse {
-            status: CyclesStatus::Done,
-            cycles: result.cycles,
-            error: None,
-        },
-        CyclesTaskStatus::Failed => CyclesStatusResponse {
-            status: CyclesStatus::Failed,
-            cycles: None,
-            error: result
-                .error
-                .or_else(|| Some("Calculation failed".to_string())),
-        },
-        CyclesTaskStatus::NotFound => CyclesStatusResponse {
-            status: CyclesStatus::NotFound,
-            cycles: None,
-            error: result
-                .error
-                .or_else(|| Some("Transaction not found".to_string())),
-        },
     }
 }
 
@@ -2415,7 +2517,6 @@ async fn get_transaction_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 
     /// Regression: the `txSize` a response serves and the `feeRate` it serves
     /// must be reproducible from each other. They were not — `feeRate` used the
@@ -2675,32 +2776,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cycles_response_from_task_done() {
-        let response = cycles_response_from_task(CyclesTaskResult {
-            status: CyclesTaskStatus::Done,
-            cycles: Some(42),
-            error: None,
-            updated_at: 1_700_000_000,
-        });
-        assert_eq!(response.status, CyclesStatus::Done);
-        assert_eq!(response.cycles, Some(42));
-        assert!(response.error.is_none());
+    fn stored_complete_cycles_keep_exact_value_including_zero() {
+        for cycles in [0, 42] {
+            let response = stored_cycles_response(Some(StoredCycles::Complete(cycles))).unwrap();
+            assert_eq!(response.status, CyclesStatus::Done);
+            assert_eq!(response.cycles, Some(cycles));
+            assert!(response.error.is_none());
+        }
+        assert!(stored_cycles_response(Some(StoredCycles::Pending)).is_none());
     }
 
     #[test]
-    fn test_cycles_response_from_task_failed_uses_default_message() {
-        let response = cycles_response_from_task(CyclesTaskResult {
-            status: CyclesTaskStatus::Failed,
-            cycles: None,
-            error: None,
-            updated_at: 1_700_000_000,
-        });
-        assert_eq!(response.status, CyclesStatus::Failed);
-        assert_eq!(response.cycles, None);
-        assert!(response
-            .error
-            .unwrap_or_default()
-            .contains("Calculation failed"));
+    fn stored_failed_cycles_and_missing_transactions_are_explicit() {
+        let failed = stored_cycles_response(Some(StoredCycles::Failed)).unwrap();
+        assert_eq!(failed.status, CyclesStatus::Failed);
+        assert_eq!(failed.cycles, None);
+        assert_eq!(failed.error.as_deref(), Some("Calculation failed"));
+        let missing = stored_cycles_response(None).unwrap();
+        assert_eq!(missing.status, CyclesStatus::NotFound);
+        assert_eq!(missing.cycles, None);
     }
 
     #[test]
@@ -2797,6 +2891,19 @@ mod tests {
         let error = display_cycles(Some(-2), false, &[0x11; 32]).unwrap_err();
         assert!(error.1 .0.message.contains("invalid stored cycles"));
         assert!(error.1 .0.message.contains(&hex::encode([0x11; 32])));
+    }
+
+    #[test]
+    fn execution_exempt_cycles_reject_nonzero_state() {
+        for cycles in [-1, 1, 42] {
+            let error = display_cycles(Some(cycles), true, &[0x71; 32]).unwrap_err();
+            assert!(error.1 .0.message.contains("execution-exempt"));
+            assert!(error.1 .0.message.contains(&hex::encode([0x71; 32])));
+        }
+        assert_eq!(
+            display_cycles(Some(0), true, &[0x71; 32]).unwrap(),
+            (Some(0), "complete".into())
+        );
     }
 
     // ── `.cell` records on the tx page ───────────────────────────────────
