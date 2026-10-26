@@ -17,7 +17,9 @@ use crate::response::{
     ScriptFamilyListItemResponse, ScriptObservedReferenceResponse, ScriptVersionDeploymentResponse,
     ScriptVersionDetailResponse,
 };
-use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
+use crate::utils::script_resolution::{
+    has_observed_type_id_lineage, resolve_dep_cells_for_transaction,
+};
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
@@ -861,8 +863,8 @@ fn canonical_reference_set(
 /// their reference sets through [`reference_form_member_version`] over the
 /// persisted reference forms, so counters and charts cannot diverge.
 ///
-/// A canonical reference that fails to resolve into the set is an invariant
-/// violation and is reported as an error.
+/// Observed native TypeID history may outlive its executable binding. Other
+/// canonical metadata without a mapping remains an invariant violation.
 fn family_member_reference_forms(
     state: &AppState,
     membership_context: &str,
@@ -890,6 +892,12 @@ fn family_member_reference_forms(
             Some(_) => continue,
             None => {
                 if canonical_references.contains(&(hash_type, reference_hash.clone())) {
+                    if hash_type == 1
+                        && has_observed_type_id_lineage(&state.store, &reference_hash)
+                            .map_err(|e| ApiError::internal(e.to_string()))?
+                    {
+                        continue;
+                    }
                     return Err(ApiError::internal(format!(
                         "script family detail is missing reference->version mapping: context={}, reference_hash=0x{}, hash_type={}",
                         membership_context,

@@ -1877,6 +1877,217 @@ async fn test_get_script_fails_when_relevant_canonical_reference_mapping_missing
         .contains("missing reference->version mapping"));
 }
 
+async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
+    let store = test_store();
+    let reference = vec![0x31; 32];
+    let binary = vec![0x41; 32];
+    let history = ScriptVersionInfo {
+        version_hash: binary.clone(),
+        family_id: Some("retired-family".to_string()),
+        name: Some("Retired family".to_string()),
+        canonical_reference_hash: Some(reference.clone()),
+        canonical_hash_type: Some(1),
+        type_id_deployments: vec![(reference.clone(), 10)],
+        ..Default::default()
+    };
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        "retired-family",
+        &ScriptFamilyInfo {
+            family_id: "retired-family".to_string(),
+            name: "Retired family".to_string(),
+            versions_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Retired family", "retired-family");
+    batch.put_script_version(&binary, &history);
+    batch.put_script_version_by_family("retired-family", &binary);
+    batch.put_script_reference_info(
+        1,
+        &reference,
+        &ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
+            // Cells using the retired code can remain live; these are not code cells.
+            lock_live_cells_count: 6,
+            lock_cells_count: 8,
+            ..Default::default()
+        },
+    );
+    if retired_payload {
+        batch.put_cell(
+            &[0x61; 32],
+            0,
+            &LiveCellInfo {
+                type_script_hash: Some(reference.clone()),
+                data_hash: Some(vec![0x51; 32]),
+                data_size: 31_560,
+                capacity: 3_200_000_000_000,
+                occupied_capacity: 3_164_000_000_000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_code_hash: Some(
+                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                ),
+                type_hash_type: Some(1),
+                type_args: Some(vec![0x13; 32]),
+                udt_amount: None,
+            },
+            20,
+        );
+        batch.put_cell_by_type(&reference, 20, &[0x61; 32], 0);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store.clone())).await;
+    for uri in [
+        "/api/v1/scripts/Retired%20family".to_string(),
+        "/api/v1/scripts/Retired%20family/charts/capacity-history".to_string(),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{uri}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        if json.get("versions").is_some() {
+            assert_eq!(
+                json["versions"][0]["versionHash"],
+                format!("0x{}", hex::encode(&binary))
+            );
+            assert_eq!(json["versions"][0]["references"], serde_json::json!([]));
+        }
+    }
+    for suffix in ["", "&hash_type=type"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/scripts/code-cells?code_hash=0x{}{suffix}",
+                        hex::encode(&reference)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["resolvedVersionHash"].is_null(), "{json}");
+        assert_eq!(json["codeCells"], serde_json::json!([]));
+    }
+    assert_eq!(
+        store
+            .get_script_reference_version_hash(1, &reference)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store.get_script_version(&binary).unwrap(),
+        Some(history.clone())
+    );
+
+    // Reactivation adds a new observed binary and publishes its exact binding.
+    // Historical provenance stays intact and only the new version owns usage.
+    let active_binary = vec![0x71; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_version(
+        &active_binary,
+        &ScriptVersionInfo {
+            version_hash: active_binary.clone(),
+            type_id_deployments: vec![(reference.clone(), 30)],
+            lock_live_cells_count: 6,
+            lock_cells_count: 8,
+            ..history.clone()
+        },
+    );
+    batch.put_script_version_by_family("retired-family", &active_binary);
+    batch.put_script_reference_to_version(1, &reference, &active_binary);
+    batch.put_script_family(
+        "retired-family",
+        &ScriptFamilyInfo {
+            family_id: "retired-family".to_string(),
+            name: "Retired family".to_string(),
+            versions_count: 2,
+            live_cells_count: 6,
+            cells_count: 8,
+            lock_cells_count: 8,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store.clone())).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Retired%20family")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let versions = json["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 2);
+    let active = versions
+        .iter()
+        .find(|version| version["versionHash"] == format!("0x{}", hex::encode(&active_binary)))
+        .unwrap();
+    assert_eq!(
+        active["references"][0]["referenceHash"],
+        format!("0x{}", hex::encode(&reference))
+    );
+    assert_eq!(active["liveCellsCount"], 6);
+    for suffix in ["", "&hash_type=type"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/scripts/code-cells?code_hash=0x{}{suffix}",
+                        hex::encode(&reference)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["resolvedVersionHash"],
+            format!("0x{}", hex::encode(&active_binary))
+        );
+    }
+    assert_eq!(store.get_script_version(&binary).unwrap(), Some(history));
+}
+
+#[tokio::test]
+async fn test_type_id_retirement_family_and_current_code_endpoints() {
+    assert_type_id_history_without_current_binding(true).await;
+}
+
+#[tokio::test]
+async fn test_type_id_burn_family_and_current_code_endpoints() {
+    assert_type_id_history_without_current_binding(false).await;
+}
+
 #[tokio::test]
 async fn test_get_script_ignores_unrelated_unresolved_reference_info() {
     let store = test_store();

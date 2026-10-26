@@ -473,6 +473,21 @@ pub fn persisted_reference_version_candidate(
     Ok(Some(version_hash))
 }
 
+/// Observed native TypeID deployments retain provenance after retirement or
+/// burn. For these references, only the indexer's canonical mapping identifies
+/// a current executable; a live typed cell may now carry non-executable data.
+pub fn has_observed_type_id_lineage(
+    store: &CkbadgerStore,
+    reference_hash: &[u8],
+) -> anyhow::Result<bool> {
+    Ok(store.list_script_versions()?.iter().any(|(_, version)| {
+        version
+            .type_id_deployments
+            .iter()
+            .any(|(reference, _)| reference == reference_hash)
+    }))
+}
+
 /// Resolve which version an observed reference form belongs to, for
 /// family-membership purposes.
 ///
@@ -513,8 +528,8 @@ pub fn reference_form_member_version(
 /// Membership itself is not recomputed here: it reuses
 /// [`reference_form_member_version`] (persisted candidate, then a data-family
 /// self-reference) with "a code cell carries this bytecode" as the
-/// admissible-version rule, then -- for type forms only, which have no
-/// self-reference branch -- falls back to live type-referenced code cells.
+/// admissible-version rule. Observed native TypeIDs use only the canonical
+/// mapping; other type forms retain live typed-code discovery.
 pub fn resolve_script_form_by_hash(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
@@ -549,7 +564,7 @@ pub fn resolve_script_form_by_hash(
         )));
     }
 
-    if hash_type != 1 {
+    if hash_type != 1 || has_observed_type_id_lineage(store, reference_hash)? {
         return Ok(CurrentScriptVersionResolution::NotFound);
     }
 
@@ -582,12 +597,9 @@ pub fn resolve_script_form_by_hash(
     }
 }
 
-/// Resolve a script hash to a version using cell indexes.
-///
-/// Resolution order:
-/// 1. Type reference: code cells whose type_script_hash matches -> data_hash is version
-/// 2. Data-family: CF_SCRIPT_INFO has an entry -> reference_hash is the version
-/// 3. Direct version lookup: CF_SCRIPT_VERSIONS has an entry (from labels)
+/// Resolve canonical bindings or a direct historical binary hash. Observed
+/// native TypeIDs without a binding have no current executable; only other
+/// type references use live typed-code discovery.
 pub fn resolve_script_by_hash(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
@@ -631,7 +643,11 @@ pub fn resolve_script_by_hash(
         )));
     }
 
-    let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+    let type_matches = if has_observed_type_id_lineage(store, reference_hash)? {
+        Vec::new()
+    } else {
+        resolve_live_type_reference_matches(store, cells_store, reference_hash)?
+    };
     if let Some(version_info) = direct_version {
         let mut unique_versions: Vec<Vec<u8>> = {
             let mut seen = HashSet::new();
@@ -717,6 +733,91 @@ pub fn list_version_code_cells(
 mod tests {
     use super::*;
     use ckbadger_store::{batch::StoreBatch, types::LiveCellInfo, CkbadgerStore};
+
+    #[test]
+    fn type_id_retirement_keeps_history_without_promoting_non_executable_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = vec![0x31; 32];
+        let historical_binary = vec![0x41; 32];
+        let replacement_data = vec![0x51; 32];
+        let tx = vec![0x61; 32];
+        let history = ScriptVersionInfo {
+            version_hash: historical_binary.clone(),
+            canonical_reference_hash: Some(reference.clone()),
+            canonical_hash_type: Some(1),
+            type_id_deployments: vec![(reference.clone(), 10)],
+            ..Default::default()
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_script_version(&historical_binary, &history);
+        batch.put_cell(
+            &tx,
+            0,
+            &LiveCellInfo {
+                type_script_hash: Some(reference.clone()),
+                data_hash: Some(replacement_data),
+                data_size: 31_560,
+                capacity: 3_200_000_000_000,
+                occupied_capacity: 3_164_000_000_000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_code_hash: Some(
+                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                ),
+                type_hash_type: Some(1),
+                type_args: Some(vec![0x13; 32]),
+                udt_amount: None,
+            },
+            20,
+        );
+        batch.put_cell_by_type(&reference, 20, &tx, 0);
+        batch.commit().unwrap();
+
+        assert!(has_observed_type_id_lineage(&store, &reference).unwrap());
+        assert!(!has_observed_type_id_lineage(&store, &[0x99; 32]).unwrap());
+        for hash_type in [None, Some(1)] {
+            let result = match hash_type {
+                None => resolve_script_by_hash(&store, &store, &reference),
+                Some(kind) => resolve_script_form_by_hash(&store, &store, kind, &reference),
+            }
+            .unwrap();
+            assert_eq!(result, CurrentScriptVersionResolution::NotFound);
+        }
+        let historical = resolve_script_by_hash(&store, &store, &historical_binary).unwrap();
+        assert!(
+            matches!(historical, CurrentScriptVersionResolution::Resolved(version)
+            if version.version_hash == historical_binary && version.version_info == Some(history.clone()))
+        );
+        assert_eq!(
+            store.get_script_version(&historical_binary).unwrap(),
+            Some(history)
+        );
+        assert_eq!(
+            store
+                .get_script_reference_version_hash(1, &reference)
+                .unwrap(),
+            None
+        );
+
+        // A fresh chain observation reactivates the reference through its
+        // canonical binding, never by inspecting the current typed payload.
+        let reactivated = vec![0x71; 32];
+        store
+            .put_script_reference_to_version_direct(1, &reference, &reactivated)
+            .unwrap();
+        for result in [
+            resolve_script_by_hash(&store, &store, &reference).unwrap(),
+            resolve_script_form_by_hash(&store, &store, 1, &reference).unwrap(),
+        ] {
+            assert!(
+                matches!(result, CurrentScriptVersionResolution::Resolved(version)
+                if version.version_hash == reactivated)
+            );
+        }
+    }
 
     #[test]
     fn test_merge_reference_uses_known_metadata() {
