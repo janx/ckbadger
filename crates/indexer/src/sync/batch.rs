@@ -3012,11 +3012,12 @@ impl Indexer {
                         let das_action = das_action_cache.get(&tx_data.hash).cloned();
                         let mut created_ids = HashSet::new();
                         for account in &dotbit_accounts {
-                            self.writer.insert_dotbit_account_with_state(
+                            self.writer.insert_dotbit_account_with_action(
                                 account,
                                 &tx_data.hash,
                                 parsed.number,
                                 stats_time_ms,
+                                das_action.as_deref(),
                                 &mut data_batch,
                                 &mut dotbit_state,
                             )?;
@@ -3969,8 +3970,10 @@ impl Indexer {
             let script_rollup_started = Instant::now();
             self.perf.mark_writer_phase();
             self.writer
-                .materialize_script_versions_and_families(
+                .materialize_script_versions_and_families_with_chain(
                     &updated_script_references,
+                    &all_tx_data,
+                    &batch_undo_seq,
                     &mut data_batch,
                 )
                 .with_context(|| {
@@ -4101,6 +4104,11 @@ impl Indexer {
             // above. This only re-derives the tip-scoped DAO singletons and the
             // still-incomplete tip day.
             self.writer.refresh_latest_dao_statistics()?;
+            // Reorg history is reconciled only after live canonical replay.
+            // The fresh-store bulk engine never enters this path.
+            if !bulk_sync_mode {
+                self.writer.reconcile_reorg_events()?;
+            }
             if let Some(cache) = self.writer.cache_invalidator() {
                 let hash_hex = format!("0x{}", hex::encode(block_hash));
                 cache

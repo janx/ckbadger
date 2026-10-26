@@ -81,7 +81,11 @@ pub fn analyze_spore_media_profile(
 
     dedupe_and_limit_sources(&mut sources, MAX_MEDIA_SOURCES);
 
-    let tier = resolve_tier(&sources);
+    let tier = if normalized_type.starts_with("dob/") && (skip_dob_decode || sources.is_empty()) {
+        CompositionTier::DecodePending
+    } else {
+        resolve_tier(&sources)
+    };
     SporeMediaProfile {
         tier,
         sources,
@@ -791,6 +795,13 @@ pub fn build_dob1_svg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undecoded_dob_profile_is_pending_not_pure() {
+        let profile = analyze_spore_media_profile("dob/0", b"00aabb", None, true);
+        assert_eq!(profile.tier.as_str(), "decode_pending");
+        assert!(profile.sources.is_empty());
+    }
 
     #[test]
     fn classifies_http_as_centralized_dependency() {

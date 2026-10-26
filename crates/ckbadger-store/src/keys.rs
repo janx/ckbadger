@@ -1922,6 +1922,8 @@ pub mod sync_meta_keys {
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     pub const ROLLBACK_CLEANUP_IN_PROGRESS: &[u8] = b"rollback_cleanup_in_progress";
+    /// Automatic fork event awaiting canonical replay and reversal reconciliation.
+    pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
     pub const CELL_DIST_TRACKER: &[u8] = b"cell_dist_tracker";

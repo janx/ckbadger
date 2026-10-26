@@ -4965,7 +4965,9 @@ impl CkbadgerStore {
                                 CompositionTier::CentralizedMixture => {
                                     &mut agg.centralized_mixture_count
                                 }
-                                CompositionTier::Unknown => &mut agg.unknown_count,
+                                CompositionTier::Unknown | CompositionTier::DecodePending => {
+                                    &mut agg.unknown_count
+                                }
                             };
                             *tier_slot = tier_slot.checked_add(1).ok_or_else(|| {
                                 anyhow::anyhow!(
@@ -5077,7 +5079,9 @@ impl CkbadgerStore {
                                 CompositionTier::CentralizedMixture => {
                                     &mut agg.centralized_mixture_count
                                 }
-                                CompositionTier::Unknown => &mut agg.unknown_count,
+                                CompositionTier::Unknown | CompositionTier::DecodePending => {
+                                    &mut agg.unknown_count
+                                }
                             };
                             *tier_slot = tier_slot.checked_add(1).ok_or_else(|| {
                                 anyhow::anyhow!(

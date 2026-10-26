@@ -21,6 +21,79 @@ fn next_reorg_event_key() -> Result<String> {
 }
 
 impl BatchWriter {
+    /// Reconcile the latest automatic switch only after replay proves the
+    /// observed winning tip is canonical. A marker makes the normal live
+    /// path one point read and survives a restart between rollback and replay.
+    pub(crate) fn reconcile_reorg_events(&self) -> Result<()> {
+        let Some(event_key) = self.store.get_cf(
+            self.store.cf_sync_meta(),
+            sync_meta_keys::REORG_RECONCILE_PENDING,
+        )?
+        else {
+            return Ok(());
+        };
+        keys::decode_reorg_event_key(&event_key)?;
+        let event_key_str = std::str::from_utf8(&event_key)?;
+        let bytes = self
+            .store
+            .get_cf(self.store.cf_sync_meta(), &event_key)?
+            .ok_or_else(|| anyhow!("pending reorg event is missing: key={event_key_str}"))?;
+        let mut current: ReorgEvent = bincode::deserialize(&bytes)?;
+        if current.kind != ReorgEventKind::Automatic {
+            return Err(anyhow!(
+                "pending reconciliation is not an automatic fork: key={event_key_str}"
+            ));
+        }
+        let (tip, _) = self.store.get_sync_tip()?;
+        if tip < current.new_tip {
+            return Ok(());
+        }
+        let winning_header = self.store.get_block_header(current.new_tip)?
+            .ok_or_else(|| anyhow!("canonical header missing during fork reconciliation: event={event_key_str} block={} tip={tip}", current.new_tip))?;
+        if winning_header.hash != current.new_tip_hash {
+            return Err(anyhow!("replayed fork tip differs from observation: event={event_key_str} block={} expected=0x{} actual=0x{}", current.new_tip, hex::encode(&current.new_tip_hash), hex::encode(&winning_header.hash)));
+        }
+        let mut batch = StoreBatch::new(&self.store);
+        let mut complete = true;
+        // Fork events are observations, intentionally retained across rollback.
+        // Compare actual canonical ancestry, not equal-height tip guesses.
+        for mut prior in self.store.list_reorg_events(usize::MAX, None)? {
+            if prior.key == event_key_str
+                || prior.event.kind != ReorgEventKind::Automatic
+                || prior.event.reverted_by_event.is_some()
+                || prior.event.old_tip <= current.fork_point
+            {
+                continue;
+            }
+            if prior.event.old_tip > tip {
+                complete = false;
+                continue;
+            }
+            let header = self.store.get_block_header(prior.event.old_tip)?
+                .ok_or_else(|| anyhow!("canonical header missing while reconciling abandoned fork: event={} block={} tip={tip}", prior.key, prior.event.old_tip))?;
+            if header.hash != prior.event.old_tip_hash {
+                continue;
+            }
+            prior.event.reverted_by_event = Some(event_key_str.to_string());
+            if !current.reverses_events.contains(&prior.key) {
+                current.reverses_events.push(prior.key.clone());
+            }
+            batch.put_sync_meta(prior.key.as_bytes(), &bincode::serialize(&prior.event)?);
+        }
+        current.reverses_events.sort();
+        let next_bytes = bincode::serialize(&current)?;
+        if next_bytes != bytes {
+            batch.put_sync_meta(&event_key, &next_bytes);
+        }
+        if complete {
+            batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
+        }
+        if !batch.is_empty() {
+            batch.commit()?;
+        }
+        Ok(())
+    }
+
     pub fn record_deep_fork(
         &self,
         fork_point: i64,
@@ -48,6 +121,8 @@ impl BatchWriter {
             // orphaned yet.
             orphaned_blocks: 0,
             orphaned_txs: 0,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
         };
         let event_key = next_reorg_event_key()?;
         let event_bytes = bincode::serialize(&event)?;
@@ -201,6 +276,8 @@ impl BatchWriter {
             depth,
             orphaned_blocks,
             orphaned_txs,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
         };
         let event_key = next_reorg_event_key()?;
         let event_bytes = bincode::serialize(&event)?;
@@ -210,6 +287,10 @@ impl BatchWriter {
         let status_bytes = bincode::serialize(&status)?;
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_sync_meta(
+            sync_meta_keys::REORG_RECONCILE_PENDING,
+            event_key.as_bytes(),
+        );
         batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
         batch.commit()?;
 
@@ -259,6 +340,147 @@ mod tests {
     use crate::db::writer::BatchWriter;
 
     use super::next_reorg_event_key;
+
+    #[test]
+    fn switchback_links_reversal_after_canonical_replay_with_extended_tip() {
+        use ckbadger_store::types::{CachedBlockHeader, ReorgEvent};
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        let first_key = keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
+        let reversal_key = keys::encode_reorg_event_key(2000, &[2; 16]).unwrap();
+        let unrelated_key = keys::encode_reorg_event_key(500, &[3; 16]).unwrap();
+        let deep_key = keys::encode_reorg_event_key(750, &[4; 16]).unwrap();
+        let first = ReorgEvent {
+            detected_at: 1,
+            kind: ReorgEventKind::Automatic,
+            fork_point: 9,
+            fork_point_hash: vec![9; 32],
+            old_tip: 10,
+            old_tip_hash: vec![0xaa; 32],
+            new_tip: 11,
+            new_tip_hash: vec![0xbb; 32],
+            depth: 1,
+            orphaned_blocks: 1,
+            orphaned_txs: 3,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
+        };
+        let reversal = ReorgEvent {
+            detected_at: 2,
+            old_tip: 11,
+            old_tip_hash: vec![0xbb; 32],
+            new_tip: 12,
+            new_tip_hash: vec![0xcc; 32],
+            depth: 2,
+            ..first.clone()
+        };
+        let unrelated = ReorgEvent {
+            old_tip_hash: vec![0xdd; 32],
+            ..first.clone()
+        };
+        let deep = ReorgEvent {
+            kind: ReorgEventKind::Deep,
+            ..first.clone()
+        };
+        let mut batch = StoreBatch::new(&store);
+        for (key, event) in [
+            (&first_key, &first),
+            (&reversal_key, &reversal),
+            (&unrelated_key, &unrelated),
+            (&deep_key, &deep),
+        ] {
+            batch.put_sync_meta(key.as_bytes(), &bincode::serialize(event).unwrap());
+        }
+        batch.put_sync_meta(b"reorg_reconcile_pending", reversal_key.as_bytes());
+        for (height, hash) in [(10, vec![0xaa; 32]), (12, vec![0xcc; 32])] {
+            batch.put_block_header(
+                height,
+                &CachedBlockHeader {
+                    hash,
+                    parent_hash: vec![9; 32],
+                    timestamp: 0,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 100,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms: 0,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        store.update_sync_tip(11, &[0xbb; 32], 0).unwrap();
+        writer.reconcile_reorg_events().unwrap();
+        assert!(store
+            .get_reorg_event(1000)
+            .unwrap()
+            .unwrap()
+            .event
+            .reverted_by_event
+            .is_none());
+        assert!(store
+            .get_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::REORG_RECONCILE_PENDING
+            )
+            .unwrap()
+            .is_some());
+        store.update_sync_tip(12, &[0xcc; 32], 0).unwrap();
+        let immutable_key = [7; 36];
+        append
+            .put_cf(append.cf_cells(), &immutable_key, b"immutable cell payload")
+            .unwrap();
+        writer.reconcile_reorg_events().unwrap();
+        let first_after = store.get_reorg_event(1000).unwrap().unwrap();
+        let reversal_after = store.get_reorg_event(2000).unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&first_after.event).unwrap()["reverted_by_event"],
+            reversal_key
+        );
+        assert_eq!(
+            serde_json::to_value(&reversal_after.event).unwrap()["reverses_events"],
+            serde_json::json!([first_key])
+        );
+        assert!(store
+            .get_reorg_event(750)
+            .unwrap()
+            .unwrap()
+            .event
+            .reverted_by_event
+            .is_none());
+        assert_eq!(first_after.event.old_tip_hash, first.old_tip_hash);
+        assert_eq!(first_after.event.orphaned_txs, 3);
+        assert!(
+            serde_json::to_value(store.get_reorg_event(500).unwrap().unwrap().event).unwrap()
+                ["reverted_by_event"]
+                .is_null()
+        );
+        assert!(store
+            .get_cf(store.cf_sync_meta(), b"reorg_reconcile_pending")
+            .unwrap()
+            .is_none());
+        writer.reconcile_reorg_events().unwrap();
+        assert_eq!(
+            serde_json::to_value(store.get_reorg_event(2000).unwrap().unwrap().event).unwrap()
+                ["reverses_events"],
+            serde_json::json!([first_key])
+        );
+        assert_eq!(
+            append
+                .get_cf(append.cf_cells(), &immutable_key)
+                .unwrap()
+                .unwrap(),
+            b"immutable cell payload"
+        );
+    }
 
     fn reorg_event_count(store: &CkbadgerStore) -> usize {
         store

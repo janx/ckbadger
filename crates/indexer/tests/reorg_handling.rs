@@ -1983,6 +1983,8 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
         total_deposited: 10_200_000_000,
         total_depositors: 1,
         active_deposits: 1,
+        deposit_cells_count: 1,
+        withdrawal_request_cells_count: 0,
         total_compensation_paid: 0,
         unclaimed_compensation: 0,
         average_deposit_days: Some("1 days".to_string()),

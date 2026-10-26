@@ -66,7 +66,7 @@ pub(crate) struct ObjectOwner {
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
     bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
-    dotbit_outpoints_by_account: BTreeSet<Vec<u8>>,
+    dotbit_outpoints_by_account: BTreeMap<Vec<u8>, u8>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
     /// Daily capacity deltas keyed by (collection_id, date_yyyymmdd).
@@ -74,6 +74,13 @@ pub(crate) struct ObjectOwner {
     object_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
     spore_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
     cluster_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
+}
+
+struct ConsumedObjectActions<'a> {
+    spores: &'a BTreeSet<Vec<u8>>,
+    mnft_tokens: &'a BTreeSet<Vec<u8>>,
+    dotbit_accounts: &'a BTreeMap<Vec<u8>, Vec<u8>>,
+    identities: &'a BTreeMap<Vec<u8>, IdentityEntry>,
 }
 
 impl BulkReducer for ObjectOwner {
@@ -113,7 +120,25 @@ impl BulkReducer for ObjectOwner {
             })
             .collect::<BTreeMap<_, _>>();
 
+        let mut consumed_for_actions = BTreeMap::new();
         for input in &tx.resolved_inputs {
+            let id: Option<&[u8]> = match &input.protocol_facts {
+                Some(CellProtocolFacts::Dotbit(item)) => Some(&item.account_id),
+                Some(CellProtocolFacts::DidCkb(item)) => Some(&item.did_id),
+                Some(CellProtocolFacts::BitCell(item)) => Some(&item.identity_id),
+                _ => None,
+            };
+            if let Some(id) = id {
+                let previous = self.identities.get(id).ok_or_else(|| {
+                    anyhow!(
+                        "missing identity input for item action: item=0x{} block={} tx=0x{}",
+                        hex::encode(id),
+                        tx.block_number,
+                        hex::encode(tx.tx_hash)
+                    )
+                })?;
+                consumed_for_actions.insert(id.to_vec(), previous.clone());
+            }
             if let Some(collection_id) =
                 classify_nft_collection_from_protocol(&input.protocol_facts)
             {
@@ -175,9 +200,12 @@ impl BulkReducer for ObjectOwner {
                 cell,
                 ctx,
                 tx,
-                &spores_consumed_in_tx,
-                &mnft_tokens_consumed_in_tx,
-                &dotbit_accounts_consumed_in_tx,
+                &ConsumedObjectActions {
+                    spores: &spores_consumed_in_tx,
+                    mnft_tokens: &mnft_tokens_consumed_in_tx,
+                    dotbit_accounts: &dotbit_accounts_consumed_in_tx,
+                    identities: &consumed_for_actions,
+                },
             )?;
         }
 
@@ -245,8 +273,12 @@ impl ObjectOwner {
                 value.clone(),
             ))?;
         }
-        for key in &self.dotbit_outpoints_by_account {
-            emit(MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new()))?;
+        for (key, action) in &self.dotbit_outpoints_by_account {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                vec![*action],
+            ))?;
         }
         for (key, count) in &self.dotbit_hourly_transfers {
             emit(MaterializedRow::new(
@@ -556,7 +588,7 @@ impl ObjectOwner {
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_outpoints,
             )
-            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_outpoints_by_account,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
@@ -705,9 +737,7 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
-        spores_consumed_in_tx: &BTreeSet<Vec<u8>>,
-        mnft_tokens_consumed_in_tx: &BTreeSet<Vec<u8>>,
-        dotbit_accounts_consumed_in_tx: &BTreeMap<Vec<u8>, Vec<u8>>,
+        consumed: &ConsumedObjectActions<'_>,
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
             return Ok(());
@@ -715,13 +745,19 @@ impl ObjectOwner {
 
         match protocol {
             CellProtocolFacts::Cluster(cluster) => self.insert_cluster(cluster, cell, ctx, tx),
-            CellProtocolFacts::DidCkb(did) => self.insert_did(did, cell, ctx, tx),
+            CellProtocolFacts::DidCkb(did) => self.insert_did(
+                did,
+                cell,
+                ctx,
+                tx,
+                consumed.identities.get(did.did_id.as_slice()),
+            ),
             CellProtocolFacts::Spore(spore) => self.insert_spore(
                 spore,
                 cell,
                 ctx,
                 tx,
-                spores_consumed_in_tx.contains(spore.spore_id.as_slice()),
+                consumed.spores.contains(spore.spore_id.as_slice()),
             ),
             CellProtocolFacts::MnftIssuer(issuer) => self.insert_mnft_issuer(issuer, cell, ctx, tx),
             CellProtocolFacts::MnftClass(class) => self.insert_mnft_class(class, cell, ctx, tx),
@@ -730,18 +766,26 @@ impl ObjectOwner {
                 cell,
                 ctx,
                 tx,
-                mnft_tokens_consumed_in_tx.contains(token.token_id.as_slice()),
+                consumed.mnft_tokens.contains(token.token_id.as_slice()),
             ),
             CellProtocolFacts::Dotbit(dotbit) => self.insert_dotbit(
                 dotbit,
                 cell,
                 ctx,
                 tx,
-                dotbit_accounts_consumed_in_tx
+                consumed
+                    .dotbit_accounts
                     .get(dotbit.account_id.as_slice())
                     .map(Vec::as_slice),
+                consumed.identities.get(dotbit.account_id.as_slice()),
             ),
-            CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(bit_cell, cell, ctx, tx),
+            CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(
+                bit_cell,
+                cell,
+                ctx,
+                tx,
+                consumed.identities.get(bit_cell.identity_id.as_slice()),
+            ),
             CellProtocolFacts::DotCell(facts) => self.insert_dotcell(facts, cell, tx),
         }
     }
@@ -818,6 +862,7 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
+        consumed_for_action: Option<&IdentityEntry>,
     ) -> Result<()> {
         let did_id = did.did_id.clone();
         // Same guard as the live writer, checked before any state mutation so
@@ -837,6 +882,22 @@ impl ObjectOwner {
         )?;
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
         let existing = self.identities.get(&did_id).cloned();
+        let previous =
+            consumed_for_action.or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let item_action = crate::db::writer::dotbit::classify_identity_output_action(
+            previous,
+            &owner_lock,
+            None,
+            None,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "identity action item=0x{} block={} tx=0x{}: {error}",
+                hex::encode(&did_id),
+                tx.block_number,
+                hex::encode(tx.tx_hash)
+            )
+        })?;
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
             existing
@@ -913,6 +974,14 @@ impl ObjectOwner {
             agg,
         )?;
         self.insert_spore_outpoint_rows(&did_id, cell)?;
+        self.stats_spore_rows.insert(
+            keys::encode_spore_outpoint_by_id_key(
+                &did_id,
+                &cell.outpoint.tx_hash,
+                Self::as_i16_outpoint_index(&cell.outpoint, "identity action")?,
+            ),
+            vec![item_action.compact()],
+        );
         Ok(())
     }
 
@@ -1741,10 +1810,27 @@ impl ObjectOwner {
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
         consumed_in_same_tx_owner: Option<&[u8]>,
+        consumed_for_action: Option<&IdentityEntry>,
     ) -> Result<()> {
         let account_id = dotbit.account_id.to_vec();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
         let existing = self.identities.get(&account_id).cloned();
+        let previous =
+            consumed_for_action.or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let item_action = crate::db::writer::dotbit::classify_identity_output_action(
+            previous,
+            &owner_lock,
+            dotbit.expired_at,
+            tx.dotbit_action.as_deref(),
+        )
+        .map_err(|error| {
+            anyhow!(
+                "identity action item=0x{} block={} tx=0x{}: {error}",
+                hex::encode(&account_id),
+                tx.block_number,
+                hex::encode(tx.tx_hash)
+            )
+        })?;
         if existing
             .as_ref()
             .is_some_and(|entry| entry.standard != IdentityStandard::DotBit)
@@ -1854,7 +1940,7 @@ impl ObjectOwner {
         if transfer_from_owner.is_some() && transfer_from_owner != Some(owner_lock.as_slice()) {
             self.increment_dotbit_hourly_transfer(&account_id, tx.chain_time_ms, tx.block_number)?;
         }
-        self.insert_dotbit_outpoint_rows(&account_id, cell)?;
+        self.insert_dotbit_outpoint_rows(&account_id, cell, item_action)?;
         Ok(())
     }
 
@@ -1864,10 +1950,27 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
+        consumed_for_action: Option<&IdentityEntry>,
     ) -> Result<()> {
         let identity_id = bit_cell.identity_id.to_vec();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
         let existing = self.identities.get(&identity_id).cloned();
+        let previous =
+            consumed_for_action.or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let item_action = crate::db::writer::dotbit::classify_identity_output_action(
+            previous,
+            &owner_lock,
+            Some(bit_cell.expired_at),
+            None,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "identity action item=0x{} block={} tx=0x{}: {error}",
+                hex::encode(&identity_id),
+                tx.block_number,
+                hex::encode(tx.tx_hash)
+            )
+        })?;
         if existing
             .as_ref()
             .is_some_and(|entry| entry.standard != IdentityStandard::BitCell)
@@ -1968,6 +2071,14 @@ impl ObjectOwner {
             ".bit Cell",
         )?;
         self.insert_spore_outpoint_rows(&identity_id, cell)?;
+        self.stats_spore_rows.insert(
+            keys::encode_spore_outpoint_by_id_key(
+                &identity_id,
+                &cell.outpoint.tx_hash,
+                Self::as_i16_outpoint_index(&cell.outpoint, "identity action")?,
+            ),
+            vec![item_action.compact()],
+        );
         Ok(())
     }
 
@@ -2676,7 +2787,12 @@ impl ObjectOwner {
         Ok(())
     }
 
-    fn insert_dotbit_outpoint_rows(&mut self, account_id: &[u8], cell: &CellFacts) -> Result<()> {
+    fn insert_dotbit_outpoint_rows(
+        &mut self,
+        account_id: &[u8],
+        cell: &CellFacts,
+        action: ckbadger_store::AssetAction,
+    ) -> Result<()> {
         let output_index = Self::as_i16_outpoint_index(&cell.outpoint, ".bit")?;
         self.dotbit_outpoints.insert(
             keys::encode_dotbit_account_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
@@ -2689,6 +2805,7 @@ impl ObjectOwner {
                 output_index,
             )
             .to_vec(),
+            action.compact(),
         );
         Ok(())
     }
@@ -2712,7 +2829,7 @@ impl ObjectOwner {
             CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
             CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
             CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
-            CompositionTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::Unknown | CompositionTier::DecodePending => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow!(
@@ -2766,7 +2883,7 @@ impl ObjectOwner {
             CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
             CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
             CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
-            CompositionTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::Unknown | CompositionTier::DecodePending => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow!(

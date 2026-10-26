@@ -124,6 +124,46 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
     }
 }
 
+/// Per-item action, shared by bulk and live. Transaction-wide ActionData
+/// cannot turn an unchanged neighbour into a mint, transfer or recycle.
+pub(crate) fn classify_identity_output_action(
+    previous: Option<&IdentityEntry>,
+    next_owner: &[u8],
+    next_expiry: Option<u64>,
+    das_action: Option<&str>,
+) -> Result<AssetAction> {
+    if let Some(action) = das_action {
+        if matches!(classify_das_action(action), DasActionKind::Unknown) {
+            bail!("unrecognized .bit ActionData while classifying item output: {action}");
+        }
+    }
+    let Some(previous) = previous else {
+        return Ok(AssetAction::Mint);
+    };
+    let owner = previous.owner_lock_hash.as_deref().ok_or_else(|| {
+        anyhow!(
+            "identity action missing prior owner: standard={} created_at_block={}",
+            previous.standard.as_str(),
+            previous.created_at_block
+        )
+    })?;
+    if owner != next_owner {
+        return Ok(AssetAction::Transfer);
+    }
+    let previous_expiry = match previous.extra {
+        IdentityExtra::DotBit { expired_at, .. } => expired_at,
+        IdentityExtra::BitCell { expired_at, .. } => Some(expired_at),
+        _ => None,
+    };
+    if previous_expiry
+        .zip(next_expiry)
+        .is_some_and(|(old, new)| new > old)
+    {
+        return Ok(AssetAction::Renew);
+    }
+    Ok(AssetAction::Update)
+}
+
 /// Convenience: extract the mapped AssetAction (if any).
 pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
     match classify_das_action(action) {
@@ -276,6 +316,7 @@ struct OwnerTransitionContext<'a> {
 #[derive(Default)]
 pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<IdentityEntry>>,
+    consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityEntry>,
     stats: SharedEntityStatsOverlay,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
@@ -605,12 +646,34 @@ impl BatchWriter {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_dotbit_account_with_state(
+        &self,
+        account: &ParsedDotbitAccountOutput,
+        tx_hash: &[u8],
+        block_number: i64,
+        timestamp_ms: i64,
+        batch: &mut StoreBatch,
+        state: &mut DotbitBatchState,
+    ) -> Result<()> {
+        self.insert_dotbit_account_with_action(
+            account,
+            tx_hash,
+            block_number,
+            timestamp_ms,
+            None,
+            batch,
+            state,
+        )
+    }
+
+    pub(crate) fn insert_dotbit_account_with_action(
         &self,
         account_output: &ParsedDotbitAccountOutput,
         tx_hash: &[u8],
         block_number: i64,
         timestamp_ms: i64,
+        das_action: Option<&str>,
         batch: &mut StoreBatch,
         state: &mut DotbitBatchState,
     ) -> Result<()> {
@@ -620,6 +683,25 @@ impl BatchWriter {
             .clone()
             .unwrap_or_else(|| format!("0x{}", hex::encode(&account.account_id)));
         let existing = state.get_account(self.store.as_ref(), &account.account_id)?;
+        let consumed = state
+            .consumed_for_actions
+            .remove(&(account.account_id.clone(), tx_hash.to_vec()));
+        let previous = consumed
+            .as_ref()
+            .or_else(|| existing.as_ref().filter(|entry| entry.is_live));
+        let action = classify_identity_output_action(
+            previous,
+            &account.owner_lock_hash,
+            account.expired_at,
+            das_action,
+        )
+        .map_err(|error| {
+            anyhow!(
+                ".bit item=0x{} block={block_number} tx=0x{}: {error}",
+                hex::encode(&account.account_id),
+                hex::encode(tx_hash)
+            )
+        })?;
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
             existing
@@ -789,6 +871,7 @@ impl BatchWriter {
             tx_hash,
             account_output.output_index,
         );
+        batch.put_raw_cf_by_name(CF_STATS_MNFT, &rev_key, &[action.compact()])?;
         Ok(())
     }
 
@@ -824,6 +907,10 @@ impl BatchWriter {
             }
             // Snapshot entry state before mutation for diagnostic context
             let entry_snapshot = entry.clone();
+            state.consumed_for_actions.insert(
+                (account_id.to_vec(), tx_hash.to_vec()),
+                entry_snapshot.clone(),
+            );
             entry.is_live = false;
             entry.owner_lock_hash = None;
             self.record_dotbit_identity_undo(
@@ -1032,6 +1119,85 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         }
+    }
+
+    #[test]
+    fn item_actions_use_owner_and_expiry_not_the_transaction_neighbour_action() {
+        let previous = IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(vec![1; 32]),
+            name: Some("valar.bit".into()),
+            is_live: true,
+            created_at_block: 12,
+            created_at_tx: vec![2; 32],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(100),
+                registered_at: Some(1),
+                status: Some(153),
+            },
+        };
+        assert_eq!(
+            classify_identity_output_action(None, &[1; 32], Some(100), Some("confirm_proposal"))
+                .unwrap(),
+            AssetAction::Mint
+        );
+        for action in [
+            "edit_records",
+            "edit_manager",
+            "transfer_account",
+            "recycle_expired_account",
+            "confirm_proposal",
+            "enable_sub_account",
+        ] {
+            assert_eq!(
+                classify_identity_output_action(Some(&previous), &[1; 32], Some(100), Some(action))
+                    .unwrap(),
+                AssetAction::Update,
+                "{action}"
+            );
+        }
+        assert_eq!(
+            classify_identity_output_action(
+                Some(&previous),
+                &[2; 32],
+                Some(100),
+                Some("transfer_account")
+            )
+            .unwrap(),
+            AssetAction::Transfer
+        );
+        assert_eq!(
+            classify_identity_output_action(
+                Some(&previous),
+                &[1; 32],
+                Some(200),
+                Some("renew_account")
+            )
+            .unwrap(),
+            AssetAction::Renew
+        );
+        assert!(classify_identity_output_action(
+            Some(&previous),
+            &[1; 32],
+            Some(100),
+            Some("invented_action")
+        )
+        .is_err());
+        for action in [
+            AssetAction::Mint,
+            AssetAction::Transfer,
+            AssetAction::Burn,
+            AssetAction::Recycle,
+            AssetAction::Renew,
+            AssetAction::Update,
+        ] {
+            assert_eq!(
+                AssetAction::from_compact(&[action.compact()]).unwrap(),
+                action
+            );
+        }
+        assert!(AssetAction::from_compact(&[]).is_err());
+        assert!(AssetAction::from_compact(&[255]).is_err());
     }
 
     #[test]

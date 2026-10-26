@@ -9,7 +9,7 @@ use ckbadger_store::{
 use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
-use crate::db::writer::build_script_reference_rollup_state;
+use crate::db::writer::{build_script_reference_rollup_state_with_lineage, TypeIdCodeVersion};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::interner::IdentityInterner;
@@ -23,6 +23,7 @@ pub(crate) struct ScriptOwner {
     reference_infos: FxHashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     type_reference_live_versions: FxHashMap<Vec<u8>, FxHashMap<Vec<u8>, u32>>,
     type_reference_versions: FxHashMap<Vec<u8>, Option<Vec<u8>>>,
+    type_id_lineage: FxHashMap<(Vec<u8>, Vec<u8>), Vec<i64>>,
     daily_deltas: FxHashMap<(Vec<u8>, u8, bool, u32), ScriptDailyDelta>,
 }
 
@@ -70,7 +71,8 @@ impl ScriptOwner {
                         .map(crate::sync::bulk_build::accounting::bytes_vec_bytes)
                         .unwrap_or(0)
             },
-        ) + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
+        ) + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.type_id_lineage)
+            + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
     }
 
     fn apply_type_reference_live_version_delta(
@@ -326,13 +328,46 @@ impl ScriptOwner {
             .iter()
             .map(|((h, ht), info)| ((h.clone(), *ht), info.clone()))
             .collect();
-        let rollups = build_script_reference_rollup_state(
+        let mut lineage = self
+            .type_id_lineage
+            .iter()
+            .flat_map(|((reference_hash, version_hash), blocks)| {
+                blocks.iter().map(|block| TypeIdCodeVersion {
+                    reference_hash: reference_hash.clone(),
+                    version_hash: version_hash.clone(),
+                    block_number: *block,
+                })
+            })
+            .collect::<Vec<_>>();
+        lineage.sort_by(|a, b| {
+            (a.block_number, &a.reference_hash, &a.version_hash).cmp(&(
+                b.block_number,
+                &b.reference_hash,
+                &b.version_hash,
+            ))
+        });
+        let rollups = build_script_reference_rollup_state_with_lineage(
             domain_store,
             reference_mappings,
             reference_info_map,
+            &lineage,
         )?;
 
         for (version_hash, info) in rollups.versions {
+            if let Some(family) = &info.family_id {
+                all_rows.push(MaterializedRow::new(
+                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+                    keys::encode_script_version_by_family_key(family, &version_hash),
+                    Vec::new(),
+                ));
+            }
+            if let Some(name) = &info.name {
+                all_rows.push(MaterializedRow::new(
+                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
+                    keys::encode_script_version_by_label_key(name, &version_hash),
+                    Vec::new(),
+                ));
+            }
             all_rows.push(MaterializedRow::new(
                 ckbadger_store::CF_SCRIPT_VERSIONS,
                 version_hash,
@@ -372,29 +407,58 @@ impl BulkReducer for ScriptOwner {
         for input in &tx.resolved_inputs {
             apply_input_deltas(input, ctx, &mut deltas, tx)?;
             apply_input_reference_deltas(input, ctx, &mut reference_deltas, tx)?;
-            if let (Some(type_script_hash_id), Some(data_hash)) =
-                (input.type_script_hash_id, input.data_hash)
+            if input
+                .type_code_hash_id
+                .zip(input.type_hash_type)
+                .is_some_and(|(hash, kind)| {
+                    crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
+                })
             {
-                self.apply_type_reference_live_version_delta(
-                    ctx.resolve_identity(type_script_hash_id),
-                    &data_hash,
-                    -1,
-                    tx,
-                )?;
+                if let (Some(reference), Some(data_hash)) =
+                    (input.type_script_hash_id, input.data_hash)
+                {
+                    let reference = ctx.resolve_identity(reference);
+                    if self.type_reference_versions.contains_key(reference) {
+                        self.apply_type_reference_live_version_delta(
+                            reference, &data_hash, -1, tx,
+                        )?;
+                    }
+                }
             }
         }
         for cell in tx.cells.iter() {
             apply_output_deltas(cell, ctx, &mut deltas, tx)?;
             apply_output_reference_deltas(cell, ctx, &mut reference_deltas, tx)?;
-            if let (Some(type_script_hash_id), Some(data_hash)) =
-                (cell.type_script_hash_id, cell.data_hash)
+            if cell
+                .type_code_hash_id
+                .zip(cell.type_hash_type)
+                .is_some_and(|(hash, kind)| {
+                    crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
+                })
             {
-                self.apply_type_reference_live_version_delta(
-                    ctx.resolve_identity(type_script_hash_id),
-                    &data_hash,
-                    1,
-                    tx,
-                )?;
+                let reference = cell.type_script_hash_id.ok_or_else(|| {
+                    anyhow!(
+                        "type-id output lacks type hash at block {}",
+                        tx.block_number
+                    )
+                })?;
+                let reference = ctx.resolve_identity(reference);
+                if cell.data.starts_with(b"\x7fELF") {
+                    let data_hash = cell.data_hash.ok_or_else(|| {
+                        anyhow!(
+                            "ELF type-id output lacks data hash: block={} tx=0x{}",
+                            tx.block_number,
+                            hex::encode(tx.tx_hash)
+                        )
+                    })?;
+                    self.type_id_lineage
+                        .entry((reference.to_vec(), data_hash.to_vec()))
+                        .or_default()
+                        .push(tx.block_number);
+                    self.apply_type_reference_live_version_delta(reference, &data_hash, 1, tx)?;
+                } else if self.type_reference_versions.contains_key(reference) {
+                    bail!("executable type-id lineage replaced by non-ELF payload: reference=0x{} block={} tx=0x{}", hex::encode(reference), tx.block_number, hex::encode(tx.tx_hash));
+                }
             }
         }
 
@@ -1901,13 +1965,16 @@ mod tests {
 
         let reference_hash = vec![0x91; 32];
         let live_version_hash = vec![0xb2; 32];
+        let registered_version_hash = vec![0xa1; 32];
         let family_id = "family/rebound-script";
 
         domain_store
             .put_script_version(
-                &live_version_hash,
+                &registered_version_hash,
                 &ScriptVersionInfo {
-                    version_hash: live_version_hash.clone(),
+                    version_hash: registered_version_hash.clone(),
+                    canonical_reference_hash: Some(reference_hash.clone()),
+                    canonical_hash_type: Some(1),
                     family_id: Some(family_id.to_string()),
                     name: Some("Rebound Script".to_string()),
                     ..Default::default()
@@ -1930,7 +1997,7 @@ mod tests {
         interner.intern_bytes(vec![0x02; 32]);
         interner.intern_bytes(vec![0x03; 20]);
         let reference_hash_id = interner.intern_bytes(reference_hash.clone());
-        interner.intern_bytes(vec![0x04; 32]);
+        interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
         interner.intern_bytes(vec![0x05; 20]);
         interner.intern_bytes(vec![0x06; 32]);
         interner.intern_bytes(vec![0x07; 20]);
@@ -1966,7 +2033,7 @@ mod tests {
                     type_args_id: Some(InternId::new(5)),
                     occupied_capacity: 80_00000000,
                     data_size: 0,
-                    data: Vec::new(),
+                    data: b"\x7fELF".to_vec(),
                     data_hash: Some(initial_version_hash),
                     udt_amount: None,
                     semantic_tag: crate::sync::CellSemanticTag::Plain,
@@ -2045,7 +2112,7 @@ mod tests {
                 type_args_id: Some(InternId::new(5)),
                 occupied_capacity: 80_00000000,
                 data_size: 0,
-                data: Vec::new(),
+                data: b"\x7fELF".to_vec(),
                 data_hash: Some(final_version_hash),
                 udt_amount: None,
                 semantic_tag: crate::sync::CellSemanticTag::Plain,
@@ -2055,6 +2122,15 @@ mod tests {
             .into(),
         };
 
+        let mut state_only = tx0.clone();
+        state_only.cells.to_mut()[0].data.clear();
+        let mut state_owner = ScriptOwner::default();
+        state_owner.apply_tx(&state_only, &ctx).unwrap();
+        assert!(
+            state_owner.type_id_lineage.is_empty(),
+            "mutable non-ELF state is not code history"
+        );
+        assert!(state_owner.type_reference_live_versions.is_empty());
         let mut owner = ScriptOwner::default();
         owner.apply_tx(&tx0, &ctx).unwrap();
         owner.apply_tx(&tx1, &ctx).unwrap();
@@ -2078,7 +2154,25 @@ mod tests {
         assert_eq!(version.lock_owned_capacity_sum, 150_00000000);
 
         let family = domain_store.get_script_family(family_id).unwrap().unwrap();
-        assert_eq!(family.versions_count, 1);
+        assert_eq!(family.versions_count, 2);
+        assert_eq!(version.family_id.as_deref(), Some(family_id));
+        assert_eq!(
+            version.type_id_deployments,
+            vec![(reference_hash.clone(), 401)]
+        );
+        let old = domain_store
+            .get_script_version(&registered_version_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(old.type_id_deployments, vec![(reference_hash.clone(), 400)]);
+        assert_eq!(old.lock_live_cells_count, 0);
+        assert_eq!(
+            domain_store
+                .list_script_version_hashes_by_family(family_id)
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(family.cells_count, 1);
         assert_eq!(family.live_cells_count, 1);
     }
@@ -2128,7 +2222,7 @@ mod tests {
         interner.intern_bytes(vec![0x12; 32]);
         interner.intern_bytes(vec![0x13; 20]);
         let reference_hash_id = interner.intern_bytes(reference_hash.clone());
-        interner.intern_bytes(vec![0x14; 32]);
+        interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
         interner.intern_bytes(vec![0x15; 20]);
         interner.intern_bytes(vec![0x16; 32]);
         interner.intern_bytes(vec![0x17; 20]);
@@ -2161,7 +2255,7 @@ mod tests {
                     type_args_id: Some(InternId::new(5)),
                     occupied_capacity: 80_00000000,
                     data_size: 0,
-                    data: Vec::new(),
+                    data: b"\x7fELF".to_vec(),
                     data_hash: Some([0xa3; 32]),
                     udt_amount: None,
                     semantic_tag: crate::sync::CellSemanticTag::Plain,
@@ -2219,7 +2313,7 @@ mod tests {
                 type_args_id: Some(InternId::new(5)),
                 occupied_capacity: 80_00000000,
                 data_size: 0,
-                data: Vec::new(),
+                data: b"\x7fELF".to_vec(),
                 data_hash: Some([0xb3; 32]),
                 udt_amount: None,
                 semantic_tag: crate::sync::CellSemanticTag::Plain,
