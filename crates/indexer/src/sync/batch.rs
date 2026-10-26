@@ -4104,6 +4104,11 @@ impl Indexer {
             // above. This only re-derives the tip-scoped DAO singletons and the
             // still-incomplete tip day.
             self.writer.refresh_latest_dao_statistics()?;
+            // Reorg history is reconciled only after live canonical replay.
+            // The fresh-store bulk engine never enters this path.
+            if !bulk_sync_mode {
+                self.writer.reconcile_reorg_events()?;
+            }
             if let Some(cache) = self.writer.cache_invalidator() {
                 let hash_hex = format!("0x{}", hex::encode(block_hash));
                 cache

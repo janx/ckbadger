@@ -348,6 +348,8 @@ mod tests {
                 depth: 3,
                 orphaned_blocks: 3,
                 orphaned_txs: 7,
+                reverted_by_event: None,
+                reverses_events: Vec::new(),
             },
         }
     }

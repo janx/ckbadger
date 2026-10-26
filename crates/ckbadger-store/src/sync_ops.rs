@@ -1245,6 +1245,8 @@ mod tests {
             depth: 3,
             orphaned_blocks: 3,
             orphaned_txs: 6,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
         };
         let key = keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
         store

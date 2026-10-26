@@ -1784,9 +1784,9 @@ pub enum ReorgEventKind {
 
 /// One persisted reorg observation.
 ///
-/// This is a log record, so it stores the observation verbatim: every field is
-/// what the writer was handed at detection time, and nothing is re-derived at
-/// read time from chain state that may since have moved. `/forks` reports these
+/// Detection facts remain verbatim. The writer adds reversal links only when
+/// later canonical replay proves an abandoned tip has been restored; readers
+/// never infer a historical reversal from the current chain. `/forks` reports these
 /// fields directly, so a field that is not recorded here cannot be reported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReorgEvent {
@@ -1808,6 +1808,11 @@ pub struct ReorgEvent {
     pub orphaned_blocks: i64,
     /// Transactions actually removed by the rollback.
     pub orphaned_txs: i64,
+    /// Later automatic switch that restored this event's abandoned tip.
+    /// Full history key, never a guessed current-canonical flag.
+    pub reverted_by_event: Option<String>,
+    /// Prior observations reversed by this switch, proved after canonical replay.
+    pub reverses_events: Vec<String>,
 }
 
 /// One history row: the persisted event plus the identity of its history key.

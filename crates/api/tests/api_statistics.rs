@@ -3328,6 +3328,8 @@ fn seed_reorg_event_of_kind(
         depth,
         orphaned_blocks: i64::from(depth),
         orphaned_txs: i64::from(depth) * 2,
+        reverted_by_event: None,
+        reverses_events: Vec::new(),
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
     store
