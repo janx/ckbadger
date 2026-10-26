@@ -121,26 +121,23 @@ impl ScriptFamilyUsage {
                     )
                 })
         };
-        let add_i128 = |metric: &str,
-                        current: i128,
-                        left: i128,
-                        right: i128|
-         -> anyhow::Result<i128> {
-            anyhow::ensure!(
-                left >= 0 && right >= 0,
-                "negative family {metric}: {} left={left} right={right}",
-                context()
-            );
-            current
-                .checked_add(left)
-                .and_then(|n| n.checked_add(right))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
+        let add_i128 =
+            |metric: &str, current: i128, left: i128, right: i128| -> anyhow::Result<i128> {
+                anyhow::ensure!(
+                    left >= 0 && right >= 0,
+                    "negative family {metric}: {} left={left} right={right}",
+                    context()
+                );
+                current
+                    .checked_add(left)
+                    .and_then(|n| n.checked_add(right))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
                         "family {metric} overflow: {} current={current} left={left} right={right}",
                         context()
                     )
-                })
-        };
+                    })
+            };
         for (side, used, capacity, knowledge, owned) in [
             (
                 "lock",

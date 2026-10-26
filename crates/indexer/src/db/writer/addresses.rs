@@ -224,23 +224,6 @@ fn checked_add_family_i64(family_id: &str, metric: &str, current: i64, delta: i6
     })
 }
 
-fn checked_add_family_i128(
-    family_id: &str,
-    metric: &str,
-    current: i128,
-    delta: i128,
-) -> Result<i128> {
-    current.checked_add(delta).ok_or_else(|| {
-        anyhow::anyhow!(
-            "script family {} overflow: family_id={}, current={}, delta={}",
-            metric,
-            family_id,
-            current,
-            delta
-        )
-    })
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct TypeIdCodeChange {
     pub reference_hash: Vec<u8>,
@@ -547,42 +530,38 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         }
         family.versions_count =
             checked_add_family_i64(family_id, "versions_count", family.versions_count, 1)?;
-        family.live_cells_count = checked_add_family_i64(
-            family_id,
-            "live_cells_count",
-            family.live_cells_count,
-            version.lock_live_cells_count + version.type_live_cells_count,
-        )?;
-        family.cells_count = checked_add_family_i64(
-            family_id,
-            "cells_count",
-            family.cells_count,
-            version.lock_cells_count + version.type_cells_count,
-        )?;
-        family.lock_cells_count = checked_add_family_i64(
-            family_id,
-            "lock_cells_count",
-            family.lock_cells_count,
-            version.lock_cells_count,
-        )?;
-        family.type_cells_count = checked_add_family_i64(
-            family_id,
-            "type_cells_count",
-            family.type_cells_count,
-            version.type_cells_count,
-        )?;
-        family.owned_capacity_sum = checked_add_family_i128(
-            family_id,
-            "owned_capacity_sum",
-            family.owned_capacity_sum,
-            version.lock_owned_capacity_sum + version.type_owned_capacity_sum,
-        )?;
-        family.owned_knowledge_sum = checked_add_family_i128(
-            family_id,
-            "owned_knowledge_sum",
-            family.owned_knowledge_sum,
-            version.lock_owned_knowledge_sum + version.type_owned_knowledge_sum,
-        )?;
+    }
+
+    // Family membership is stable provenance; a current binary mapping may be
+    // absent after retirement. Sum each canonical reference form once instead
+    // of summing version counters, which describe current binary resolution.
+    let membership = ckbadger_store::ScriptFamilyMembershipIndex::new(version_map.values())?;
+    let mut family_usage: HashMap<String, ckbadger_store::ScriptFamilyUsage> = HashMap::new();
+    for ((reference, hash_type), current) in &reference_mappings {
+        if let Some(family) =
+            membership.resolve_family(reference, *hash_type, current.as_deref())?
+        {
+            let info = reference_info_map
+                .get(&(reference.clone(), *hash_type))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing family reference info: family={} reference=0x{} hash_type={}",
+                        family,
+                        hex::encode(reference),
+                        hash_type
+                    )
+                })?;
+            family_usage
+                .entry(family.to_owned())
+                .or_default()
+                .add_reference(info)?;
+        }
+    }
+    for (family_id, usage) in family_usage {
+        let family = family_map.get_mut(&family_id).ok_or_else(|| {
+            anyhow::anyhow!("missing family metadata for observed membership: family={family_id}")
+        })?;
+        usage.apply_to(family);
     }
 
     let mut versions = version_map.into_iter().collect::<Vec<_>>();
@@ -2161,6 +2140,15 @@ mod tests {
                 .versions_count,
             2
         );
+        let family = store.get_script_family("cells-account").unwrap().unwrap();
+        assert_eq!(
+            family.live_cells_count, 79,
+            "retirement cannot erase still-live family users"
+        );
+        assert_eq!(
+            family.cells_count, 254,
+            "retirement cannot erase cumulative family users"
+        );
         let non_elf_hash = retired.cells[0].data_hash;
         let mut non_elf_input = input_cell.clone();
         non_elf_input.cell.data_hash = Some(non_elf_hash.to_vec());
@@ -2218,6 +2206,22 @@ mod tests {
                 .versions_count,
             3
         );
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .live_cells_count,
+            79
+        );
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .cells_count,
+            254
+        );
         let mut active_input = input_cell;
         active_input.cell.data_hash = Some(reactivated_hash.to_vec());
         // Exercise the same-batch prefetched input map too.
@@ -2253,6 +2257,22 @@ mod tests {
                 .unwrap()
                 .versions_count,
             3
+        );
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .live_cells_count,
+            79
+        );
+        assert_eq!(
+            store
+                .get_script_family("cells-account")
+                .unwrap()
+                .unwrap()
+                .cells_count,
+            254
         );
         store.rollback_via_undo_log(&append, 22).unwrap();
         writer.refresh_script_reference_rollups().unwrap();
@@ -2473,6 +2493,15 @@ mod tests {
                 expected,
                 "fork={fork}"
             );
+            let family = store.get_script_family("family").unwrap().unwrap();
+            assert_eq!(
+                family.live_cells_count, 6,
+                "retired/active family users at fork={fork}"
+            );
+            assert_eq!(
+                family.cells_count, 8,
+                "one reference form must count once at fork={fork}"
+            );
             let new = store.get_script_version(&new_hash).unwrap();
             if fork >= 22 {
                 let info = new.unwrap();
@@ -2547,7 +2576,7 @@ mod tests {
         let family_id = "default-lock";
         let version_hash = vec![0x41; 32];
         let type_reference_hash = vec![0x51; 32];
-        let data_reference_hash = vec![0x61; 32];
+        let data_reference_hash = version_hash.clone();
 
         store
             .put_script_family_direct(
@@ -2673,7 +2702,7 @@ mod tests {
         let family_id = "default-lock";
         let version_hash = vec![0x41; 32];
         let type_reference_hash = vec![0x51; 32];
-        let data_reference_hash = vec![0x61; 32];
+        let data_reference_hash = version_hash.clone();
 
         store
             .put_script_family_direct(
@@ -2778,7 +2807,9 @@ mod tests {
         let baseline_version = store.get_script_version(&version_hash).unwrap().unwrap();
         assert_eq!(baseline_version.type_capacity_sum, 200);
         let baseline_family = store.get_script_family(family_id).unwrap().unwrap();
-        assert_eq!(baseline_family.owned_capacity_sum, 90);
+        // A known data-hash reference retains family provenance even when no
+        // executable cell currently resolves its version mapping.
+        assert_eq!(baseline_family.owned_capacity_sum, 270);
 
         // One reference changes -> only the version and family rows it feeds.
         // The reference->version mappings are unchanged and must not be
@@ -2816,8 +2847,8 @@ mod tests {
         assert_eq!(version.type_owned_capacity_sum, 190);
         assert_eq!(version.type_owned_knowledge_sum, 95);
         let family = store.get_script_family(family_id).unwrap().unwrap();
-        assert_eq!(family.owned_capacity_sum, 190);
-        assert_eq!(family.owned_knowledge_sum, 95);
+        assert_eq!(family.owned_capacity_sum, 370);
+        assert_eq!(family.owned_knowledge_sum, 205);
     }
 
     #[test]

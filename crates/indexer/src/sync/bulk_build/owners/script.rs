@@ -2241,6 +2241,12 @@ mod tests {
                 .versions_count,
             2
         );
+        let retired_family = retired_store.get_script_family(family_id).unwrap().unwrap();
+        assert_eq!(
+            retired_family.live_cells_count, 1,
+            "retired code does not erase the live family user"
+        );
+        assert_eq!(retired_family.cells_count, 1);
 
         let mut reactivated = retired.clone();
         reactivated.tx_hash = [0x64; 32];
@@ -2470,9 +2476,12 @@ mod tests {
 
         let family = domain_store.get_script_family(family_id).unwrap().unwrap();
         assert_eq!(family.versions_count, 2);
-        assert_eq!(family.cells_count, 0);
-        assert_eq!(family.live_cells_count, 0);
-        assert_eq!(family.owned_capacity_sum, 0);
-        assert_eq!(family.owned_knowledge_sum, 0);
+        // Ambiguous executable resolution does not erase the observed family:
+        // both code candidates establish the same family for this reference.
+        // Its one user must not be counted once per historical version.
+        assert_eq!(family.cells_count, 1);
+        assert_eq!(family.live_cells_count, 1);
+        assert_eq!(family.owned_capacity_sum, 150_00000000);
+        assert_eq!(family.owned_knowledge_sum, 61_00000000);
     }
 }
