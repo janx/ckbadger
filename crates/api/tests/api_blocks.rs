@@ -1,6 +1,89 @@
 mod common;
 use common::*;
 
+/// Node-backed block routes now require actual serialized evidence. These
+/// fixtures retain each test's canonical hashes and economics while seeding
+/// the node's independent read-only database with matching transactions.
+fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
+    use ckb_types::{core, packed, prelude::*};
+    let mut blocks = Vec::new();
+    for &number in numbers {
+        let mut header = config.store.get_block_header(number).unwrap().unwrap();
+        if header.transactions_count == 0 {
+            header.transactions_count = 1;
+        }
+        let lock = packed::Script::new_builder()
+            .code_hash(packed::Byte32::new([0x99; 32]))
+            .hash_type(1u8.into())
+            .args(ckb_types::bytes::Bytes::from(vec![0x11; 20]).pack())
+            .build();
+        let witness = packed::CellbaseWitness::new_builder()
+            .lock(lock)
+            .message(ckb_types::bytes::Bytes::from_static(b"ckb 0.210.0").pack())
+            .build();
+        let cellbase = core::TransactionBuilder::default()
+            .input(packed::CellInput::new_cellbase_input(number as u64))
+            .output(packed::CellOutput::new_builder().build())
+            .output_data(ckb_types::bytes::Bytes::new().pack())
+            .witness(witness.as_bytes().pack())
+            .build();
+        let mut transactions = vec![cellbase];
+        for index in 1..header.transactions_count {
+            transactions.push(
+                core::TransactionBuilder::default()
+                    .header_dep(packed::Byte32::new([index as u8; 32]))
+                    .build(),
+            );
+        }
+        let mut batch = StoreBatch::new(&config.store);
+        if number > 0 && config.store.get_block_header(number - 1).unwrap().is_none() {
+            let mut parent = header.clone();
+            parent.hash = header.parent_hash.clone();
+            parent.timestamp -= 10_000;
+            parent.chain_time_ms = parent.timestamp;
+            batch.put_block_header(number - 1, &parent);
+        }
+        for (index, tx) in transactions.iter().enumerate() {
+            batch.put_tx_index(
+                number,
+                index as i32,
+                &TxIndexEntry {
+                    tx_hash: tx.hash().unpack(),
+                    is_cellbase: index == 0,
+                    timestamp: header.timestamp,
+                    inputs_count: tx.inputs().len() as i16,
+                    outputs_count: tx.outputs().len() as i16,
+                    fee: if index == 0 { 0 } else { 12345 },
+                    tx_size: tx.data().as_slice().len() as i32,
+                    cycles: if index == 0 { None } else { Some(1234567) },
+                    semantic_tags: 0,
+                },
+            );
+        }
+        batch.put_block_header(number, &header);
+        batch.commit().unwrap();
+        let block = core::BlockBuilder::default()
+            .number((number as u64).pack())
+            .timestamp((header.timestamp as u64).pack())
+            .epoch(
+                core::EpochNumberWithFraction::new(
+                    header.epoch_number as u64,
+                    header.epoch_index as u64,
+                    header.epoch_length as u64,
+                )
+                .pack(),
+            )
+            .set_transactions(transactions)
+            .build()
+            .fake_hash(packed::Byte32::from_slice(&header.hash).unwrap());
+        blocks.push(block);
+    }
+    let chain = seed_ckb_chain(&blocks);
+    config.ckb_db_path = chain.path;
+    config.ckb_db_cleanup = Some(chain.cleanup);
+    config
+}
+
 #[tokio::test]
 async fn test_blocks_list_empty_db() {
     let store = test_store();
@@ -14,6 +97,19 @@ async fn test_blocks_list_empty_db() {
 
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn block_list_requires_node_evidence_instead_of_zero_header_fields() {
+    let store = test_store();
+    seed_proposer_header(&store, 440, &[0x44; 32]);
+    let app = create_router_without_warmup(test_config(store));
+    let (status, json) = get_json(&app, "/blocks").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"].as_str().unwrap().contains("ckb_db_path"),
+        "{json}"
+    );
 }
 
 #[tokio::test]
@@ -160,6 +256,7 @@ async fn test_get_block_includes_hardfork_activation() {
     mount_block_economic_state_not_finalized(&server).await;
     let mut config = test_config_with_append_only(core_store, append_only_store);
     config.ckb_rpc_url = server.uri();
+    let config = attach_block_evidence(config, &[8_775_638]);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks/8775638")
@@ -246,7 +343,11 @@ async fn test_blocks_list_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    config.ckb_rpc_url = server.uri();
+    let config = attach_block_evidence(config, &[8_775_638, 8_775_639]);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks?limit=2")
@@ -676,7 +777,7 @@ fn seed_finalizing_index(store: &Arc<CkbadgerStore>, block: &ckb_types::core::Bl
 }
 
 #[tokio::test]
-async fn mining_reward_uses_indexed_cellbase_without_optional_node_reader() {
+async fn block_detail_requires_node_evidence_even_when_reward_is_indexed() {
     let finalizing = build_finalizing_block(511);
     let store = test_store();
     seed_proposer_header(&store, 500, &[0x50; 32]);
@@ -695,13 +796,10 @@ async fn mining_reward_uses_indexed_cellbase_without_optional_node_reader() {
     config.ckb_rpc_url = server.uri();
     let app = create_router(config).await;
     let (status, json) = get_json(&app, "/blocks/500").await;
-    assert_eq!(status, StatusCode::OK, "{json}");
-    assert_eq!(
-        json["miningRewardTxHash"],
-        format!(
-            "0x{}",
-            hex::encode(finalizing.transactions()[0].hash().raw_data())
-        )
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"].as_str().unwrap().contains("ckb_db_path"),
+        "{json}"
     );
 }
 
@@ -733,6 +831,7 @@ async fn test_mining_reward_names_the_finalizing_cellbase() {
         Some(chain.cleanup.clone()),
     );
     config.ckb_rpc_url = server.uri();
+    let config = attach_block_evidence(config, &[500]);
     let app = create_router(config).await;
 
     let (status, json) = get_json(&app, "/blocks/500").await;
@@ -761,6 +860,7 @@ async fn test_mining_reward_bad_finalized_at_is_error() {
     .await;
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
+    let config = attach_block_evidence(config, &[500]);
     let app = create_router(config).await;
 
     let (status, json) = get_json(&app, "/blocks/500").await;
@@ -789,6 +889,7 @@ async fn test_mining_reward_waits_until_finalizing_block_is_indexed() {
     // Neither the node reader nor the domain index has reached the paying block.
     let mut config = test_config(store.clone());
     config.ckb_rpc_url = server.uri();
+    let config = attach_block_evidence(config, &[500]);
     let app = create_router(config).await;
 
     let (status, json) = get_json(&app, "/blocks/500").await;
@@ -806,4 +907,102 @@ async fn test_mining_reward_waits_until_finalizing_block_is_indexed() {
             hex::encode(finalizing.transactions()[0].hash().raw_data())
         )
     );
+}
+
+#[tokio::test]
+async fn block_list_and_detail_share_exact_evidence_and_reward_breakdown() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    let mut header = store.get_block_header(500).unwrap().unwrap();
+    header.transactions_count = 2;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(500, &header);
+    batch.commit().unwrap();
+    let finalizing = build_finalizing_block(511);
+    seed_finalizing_index(&store, &finalizing);
+    let server = MockServer::start().await;
+    mount_block_economic_state_rpc(
+        &server,
+        &[(
+            &format!("0x{}", hex::encode([0x50; 32])),
+            &format!("0x{}", hex::encode(finalizing.hash().raw_data())),
+        )],
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(attach_block_evidence(config, &[500])).await;
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let (status, page) = get_json(&app, "/blocks?cursor=501&limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["data"][0], detail);
+    assert_eq!(detail["totalFees"], "12345");
+    assert_eq!(detail["cycles"], "1234567");
+    assert_eq!(detail["cyclesStatus"], "complete");
+    assert_eq!(
+        detail["size"].as_u64().unwrap(),
+        detail["userTransactionsSize"].as_u64().unwrap() + detail["overheadSize"].as_u64().unwrap()
+    );
+    assert_eq!(detail["transactionSizes"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        detail["userTransactionsSize"],
+        detail["transactionSizes"][1]
+    );
+    assert!(detail["minerAddress"].as_str().unwrap().starts_with("ckb1"));
+    let reward: u128 = ["primary", "secondary", "committed", "proposal"]
+        .into_iter()
+        .map(|field| {
+            detail["rewardBreakdown"][field]
+                .as_str()
+                .unwrap()
+                .parse::<u128>()
+                .unwrap()
+        })
+        .sum();
+    assert_eq!(detail["miningReward"], reward.to_string());
+    assert_eq!(detail["rewardPaidAtBlock"], 511);
+    assert_eq!(detail["rewardFinalizesAt"], 511);
+    assert_eq!(detail["maxBlockBytes"], 597_000);
+    assert_eq!(detail["maxBlockCycles"], "3500000000");
+    assert_eq!(detail["minerMessageText"], "ckb 0.210.0");
+    assert_eq!(detail["confirmations"], 12);
+    assert_eq!(detail["parentTimestamp"], "2023-11-14T22:13:10+00:00");
+    assert_eq!(detail["rawHeader"]["dao"], format!("0x{}", "00".repeat(32)));
+}
+
+#[tokio::test]
+async fn block_cycles_do_not_present_partial_or_failed_execution_as_a_total() {
+    for (marker, expected_status) in [(None, "pending"), (Some(-1), "failed")] {
+        let store = test_store();
+        seed_proposer_header(&store, 500, &[0x50; 32]);
+        let mut batch = StoreBatch::new(&store);
+        for (index, cycles) in [(0, Some(100)), (1, marker)] {
+            batch.put_tx_index(
+                500,
+                index,
+                &TxIndexEntry {
+                    tx_hash: [index as u8; 32],
+                    is_cellbase: false,
+                    timestamp: 1_700_000_000_000,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 100,
+                    tx_size: 100,
+                    cycles,
+                    semantic_tags: 0,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/blocks/500/fee-stats").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert!(
+            json["totalCycles"].is_null(),
+            "partial cycles are not a block total: {json}"
+        );
+        assert_eq!(json["cyclesStatus"], expected_status);
+        assert_eq!(json["cyclesPending"], expected_status == "pending");
+    }
 }

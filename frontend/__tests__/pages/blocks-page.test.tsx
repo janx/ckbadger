@@ -1,3 +1,4 @@
+import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
@@ -19,6 +20,7 @@ vi.mock('@/components/layout/header', () => ({
 const mockBlocksResponse = {
   data: [
     {
+      ...blockEvidence,
       number: 8_775_639,
       hash: `0x${'22'.repeat(32)}`,
       parentHash: `0x${'11'.repeat(32)}`,
@@ -42,6 +44,7 @@ const mockBlocksResponse = {
       version: 0,
     },
     {
+      ...blockEvidence,
       number: 8_775_638,
       hash: `0x${'44'.repeat(32)}`,
       parentHash: `0x${'22'.repeat(32)}`,
@@ -93,6 +96,11 @@ describe('BlocksPage', () => {
       expect(screen.getAllByText('HF · MIRANA').length).toBeGreaterThan(0);
     });
 
+    expect(screen.getByRole('table', { name: 'Latest blocks' })).toHaveTextContent('0.00012345');
+    expect(
+      screen.getAllByRole('img', { name: /Cellbase, 1 user transactions/ }).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('Browse all blocks on the CKB network')).not.toBeInTheDocument();
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Blocks')).toBeInTheDocument();
     expect(screen.getAllByText('#8,775,638').length).toBeGreaterThan(0);

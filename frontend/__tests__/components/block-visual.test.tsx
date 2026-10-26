@@ -1,0 +1,35 @@
+import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { BlockContents, ResourceBar, resourceScale } from '@/components/blocks/block-visual';
+
+describe('block evidence visuals', () => {
+  it('keeps square area proportional to exact transaction bytes and labels every count', () => {
+    const { container } = render(
+      <BlockContents transactionSizes={[100, 100, 400]} proposalsCount={3} unclesCount={1} />
+    );
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'Cellbase, 2 user transactions, 3 proposals, 1 uncles'
+    );
+    const squares = container.querySelectorAll('rect');
+    expect(Number(squares[1].getAttribute('width')) ** 2).toBe(
+      Number(squares[0].getAttribute('width')) ** 2 * 4
+    );
+  });
+  it('labels overhead and user bytes without replacing the block total', () => {
+    render(<ResourceBar label="Size, bytes" value={3205} overhead={883} scale={4000} />);
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'Size, bytes: 3,205, 883 overhead, 2,322 user transactions'
+    );
+    expect(screen.getByText('3,205')).toBeInTheDocument();
+    expect(resourceScale([640, 3917])).toBeGreaterThanOrEqual(3917);
+  });
+  it('rejects missing or contradictory evidence', () => {
+    expect(() =>
+      BlockContents({ transactionSizes: [], proposalsCount: 0, unclesCount: 0 })
+    ).toThrow('exact positive size');
+    expect(() => ResourceBar({ label: 'bytes', value: 100, overhead: 101, scale: 1000 })).toThrow(
+      'overhead'
+    );
+    expect(() => resourceScale([NaN])).toThrow('exact integers');
+  });
+});

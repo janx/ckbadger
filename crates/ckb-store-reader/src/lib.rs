@@ -33,6 +33,7 @@ const COLUMN_TRANSACTION_INFO: &str = "5";
 const COLUMN_BLOCK_EXT: &str = "6";
 const COLUMN_BLOCK_PROPOSAL_IDS: &str = "7";
 const COLUMN_CELL_DATA: &str = "12";
+const COLUMN_BLOCK_EXTENSION: &str = "15";
 
 /// All 19 column families used by CKB's RocksDB.
 const ALL_COLUMN_FAMILIES: &[&str] = &[
@@ -259,6 +260,13 @@ impl CkbChainReader {
         let uncles = self.get_block_uncles_packed(hash)?;
         let transactions = self.get_block_body_packed(hash);
         let proposals = self.get_block_proposals_packed(hash)?;
+        // Extensions are stored separately by the node. Omitting one changes
+        // the serialized block and underreports its byte size.
+        let extension_cf = self.db.cf_handle(COLUMN_BLOCK_EXTENSION)?;
+        let extension = match self.db.get_cf(&extension_cf, hash).ok()? {
+            Some(bytes) => Some(packed::Bytes::from_slice(&bytes).ok()?),
+            None => None,
+        };
 
         // Build transaction views preserving the hashes from the stored TransactionView
         let tx_views: Vec<ckb_types::core::TransactionView> = transactions
@@ -287,7 +295,11 @@ impl CkbChainReader {
         let tx_hashes: Vec<packed::Byte32> = tx_views.iter().map(|tv| tv.hash()).collect();
 
         // Use into_view and fake_hash since into_view_with_hashes may not be available
-        let mut view = block.into_view();
+        let mut view = block
+            .into_view()
+            .as_advanced_builder()
+            .extension(extension)
+            .build();
         view = view.fake_hash(packed::Byte32::new(*hash));
 
         // The block's into_view() computes tx hashes from data, but we already have the correct
@@ -906,6 +918,40 @@ mod tests {
         assert!(reader.get_blocks_batch(&[]).is_empty());
         assert!(reader.get_block_exts_batch(&[]).is_empty());
         assert!(secondary_path.exists());
+    }
+
+    #[test]
+    fn block_read_preserves_extension_and_serialized_size() {
+        let primary_dir = tempdir().unwrap();
+        let mut options = Options::default();
+        options.create_if_missing(true);
+        options.create_missing_column_families(true);
+        let descriptors = ALL_COLUMN_FAMILIES
+            .iter()
+            .map(|name| ColumnFamilyDescriptor::new(*name, Options::default()));
+        let primary = DB::open_cf_descriptors(&options, primary_dir.path(), descriptors).unwrap();
+        let extension = ckb_types::bytes::Bytes::from(vec![0x42; 32]).pack();
+        let block = ckb_types::core::BlockBuilder::default()
+            .extension(Some(extension.clone()))
+            .build();
+        let hash: [u8; 32] = block.hash().unpack();
+        for (name, bytes) in [
+            ("1", block.header().pack().as_slice().to_vec()),
+            ("3", block.uncles().pack().as_slice().to_vec()),
+            ("7", block.data().proposals().as_slice().to_vec()),
+            ("15", extension.as_slice().to_vec()),
+        ] {
+            let cf = primary.cf_handle(name).unwrap();
+            primary.put_cf(&cf, hash, bytes).unwrap();
+            primary.flush_cf(&cf).unwrap();
+        }
+        let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+        let actual = reader.get_block(&hash).unwrap();
+        assert_eq!(actual.extension(), Some(extension));
+        assert_eq!(
+            actual.data().as_slice().len(),
+            block.data().as_slice().len()
+        );
     }
 
     #[test]

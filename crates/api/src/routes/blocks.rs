@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use ckb_store_reader::CkbChainReader;
-use ckb_types::utilities::compact_to_difficulty;
+use ckb_types::{prelude::*, utilities::compact_to_difficulty};
 use ckbadger_common::hardforks_for_network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -79,6 +79,66 @@ pub struct BlockResponse {
     pub hardfork_activation: Option<HardforkActivationResponse>,
     pub compact_target: String,
     pub version: i32,
+    #[serde(flatten)]
+    pub metrics: BlockMetricsResponse,
+    pub reward_breakdown: Option<RewardBreakdownResponse>,
+    pub reward_paid_at_block: Option<i64>,
+    pub reward_finalizes_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewardBreakdownResponse {
+    pub primary: String,
+    pub secondary: String,
+    pub committed: String,
+    pub proposal: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlockCyclesStatus {
+    Complete,
+    Pending,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockMetricsResponse {
+    pub max_block_bytes: u64,
+    pub max_block_cycles: String,
+    pub miner_message_text: Option<String>,
+    pub size: usize,
+    pub user_transactions_size: usize,
+    pub overhead_size: usize,
+    pub total_fees: String,
+    pub cycles: Option<String>,
+    pub cycles_status: BlockCyclesStatus,
+    pub transaction_sizes: Vec<usize>,
+    pub confirmations: i64,
+    pub parent_timestamp: Option<String>,
+    pub raw_header: RawBlockHeaderResponse,
+    pub uncles: Vec<UncleBlockResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawBlockHeaderResponse {
+    pub epoch: String,
+    pub dao: String,
+    pub proposals_hash: String,
+    pub extra_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleBlockResponse {
+    pub number: u64,
+    pub hash: String,
+    pub parent_hash: String,
+    pub timestamp: String,
+    pub proposal_ids: Vec<String>,
 }
 
 async fn list_blocks(
@@ -116,7 +176,6 @@ async fn list_blocks(
 
     let store = state.store.clone();
     let stats_store = state.store.clone();
-    let ckb_store = state.ckb_store.clone();
     let hardfork_activation_by_block = tokio::task::spawn_blocking({
         let stats_store = stats_store.clone();
         move || resolve_hardfork_activation_blocks(&network, &stats_store)
@@ -139,24 +198,18 @@ async fn list_blocks(
         None
     };
 
-    let blocks: Vec<BlockResponse> = rows
-        .into_iter()
-        .map(|(block_num, header)| {
-            let header_info = enrich_from_rocksdb(&ckb_store, &header.hash);
-            cached_header_to_block_response(
+    let mut blocks = Vec::with_capacity(rows.len());
+    for (block_num, header) in rows {
+        blocks.push(
+            build_block_response(
+                &state,
                 block_num,
                 header,
-                header_info,
-                BlockExtra {
-                    miner_address: None,
-                    miner_message: None,
-                    mining_reward: None,
-                    mining_reward_tx_hash: None,
-                    hardfork_activation: hardfork_activation_by_block.get(&block_num).cloned(),
-                },
+                hardfork_activation_by_block.get(&block_num).cloned(),
             )
-        })
-        .collect::<Result<_, _>>()?;
+            .await?,
+        );
+    }
 
     let response = CursorPaginatedResponse::new(blocks, total, limit, next_cursor);
 
@@ -214,20 +267,10 @@ struct BlockExtra {
     mining_reward: Option<String>,
     mining_reward_tx_hash: Option<String>,
     hardfork_activation: Option<HardforkActivationResponse>,
-}
-
-/// Try to read header info from CKB node's RocksDB for fields not in our store.
-fn enrich_from_rocksdb(
-    ckb_store: &Option<Arc<CkbChainReader>>,
-    block_hash: &[u8],
-) -> Option<ckb_store_reader::BlockHeaderInfo> {
-    let store = ckb_store.as_ref()?;
-    if block_hash.len() != 32 {
-        return None;
-    }
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(block_hash);
-    store.get_block_header_info(&hash)
+    metrics: BlockMetricsResponse,
+    reward_breakdown: Option<RewardBreakdownResponse>,
+    reward_paid_at_block: Option<i64>,
+    reward_finalizes_at: Option<i64>,
 }
 
 fn cached_header_to_block_response(
@@ -237,14 +280,19 @@ fn cached_header_to_block_response(
     extra: BlockExtra,
 ) -> Result<BlockResponse, ApiRouteError> {
     let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
-    let (nonce, transactions_root, version) = match header_info {
-        Some(ref info) => (
-            format!("{:#x}", info.nonce),
-            format!("0x{}", hex::encode(info.transactions_root)),
-            info.version as i32,
-        ),
-        None => ("0x0".to_string(), "0x".to_string(), 0),
-    };
+    let info = header_info.ok_or_else(|| {
+        ApiError::internal(format!(
+            "block {block_num} header evidence missing from node DB; configure ckb_db_path"
+        ))
+    })?;
+    let nonce = format!("{:#x}", info.nonce);
+    let transactions_root = format!("0x{}", hex::encode(info.transactions_root));
+    let version = i32::try_from(info.version).map_err(|_| {
+        ApiError::internal(format!(
+            "block {block_num} version {} exceeds i32",
+            info.version
+        ))
+    })?;
     // Difficulty is derived from the header's stored compact_target — the
     // single source of truth for per-block PoW difficulty.
     let compact_target = format!("{:#x}", header.compact_target);
@@ -285,6 +333,10 @@ fn cached_header_to_block_response(
         hardfork_activation: extra.hardfork_activation,
         compact_target,
         version,
+        metrics: extra.metrics,
+        reward_breakdown: extra.reward_breakdown,
+        reward_paid_at_block: extra.reward_paid_at_block,
+        reward_finalizes_at: extra.reward_finalizes_at,
     })
 }
 
@@ -335,13 +387,334 @@ fn resolve_hardfork_activation(
     Ok(None)
 }
 
+/// Both list and detail read the same block evidence. Nothing is written by
+/// this path; the node owns serialized bytes and the indexer owns metadata.
+async fn build_block_response(
+    state: &Arc<AppState>,
+    block_num: i64,
+    header: ckbadger_store::CachedBlockHeader,
+    hardfork_activation: Option<HardforkActivationResponse>,
+) -> Result<BlockResponse, ApiRouteError> {
+    let node = state.ckb_store.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "block {block_num} requires the node DB; configure ckb_db_path"
+        ))
+    })?;
+    let hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "block {block_num}: stored hash has {} bytes, expected 32",
+            header.hash.len()
+        ))
+    })?;
+    let store = state.store.clone();
+    let network = state.ckb_network.clone();
+    let cached = header.clone();
+    let consensus = state.consensus().await?;
+    let limits = consensus.clone();
+    let (info, metrics, miner_address, miner_message) = tokio::task::spawn_blocking(move || {
+        read_block_evidence(&node, &store, block_num, &cached, &network, &limits)
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("block {block_num} evidence task: {e}")))??;
+    let reward_finalizes_at = if block_num == 0 {
+        None
+    } else {
+        Some(
+            block_num
+                .checked_add(consensus.tx_proposal_window.farthest())
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "block {block_num} reward finalization height overflow"
+                    ))
+                })?,
+        )
+    };
+    let reward = if block_num == 0 {
+        None
+    } else {
+        get_mining_reward(&state.ckb_rpc_url, &hash, state.store.clone(), &state.cache).await?
+    };
+    let (mining_reward, mining_reward_tx_hash, reward_breakdown, reward_paid_at_block) =
+        match reward {
+            Some(reward) => (
+                Some(reward.reward),
+                Some(reward.cellbase_tx_hash),
+                Some(reward.breakdown),
+                Some(reward.paid_at_block),
+            ),
+            None => (None, None, None, None),
+        };
+    if metrics.cycles_status == BlockCyclesStatus::Pending && state.cycles_client.is_enabled() {
+        let client = state.cycles_client.clone();
+        tokio::spawn(async move {
+            if let Err(error) = client.enqueue_block(block_num).await {
+                tracing::warn!(block_num, %error, "could not request pending block cycles");
+            }
+        });
+    }
+    cached_header_to_block_response(
+        block_num,
+        header,
+        Some(info),
+        BlockExtra {
+            miner_address,
+            miner_message,
+            mining_reward,
+            mining_reward_tx_hash,
+            hardfork_activation,
+            metrics,
+            reward_breakdown,
+            reward_paid_at_block,
+            reward_finalizes_at,
+        },
+    )
+}
+
+fn read_block_evidence(
+    node: &CkbChainReader,
+    store: &ckbadger_store::CkbadgerStore,
+    block_num: i64,
+    header: &ckbadger_store::CachedBlockHeader,
+    network: &str,
+    consensus: &crate::consensus::ConsensusParams,
+) -> Result<
+    (
+        ckb_store_reader::BlockHeaderInfo,
+        BlockMetricsResponse,
+        Option<String>,
+        Option<Vec<u8>>,
+    ),
+    ApiRouteError,
+> {
+    let context = format!("block {block_num} 0x{}", hex::encode(&header.hash));
+    let error = |detail: String| ApiError::internal(format!("{context}: {detail}"));
+    let hash: [u8; 32] = header
+        .hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| error("invalid stored hash".into()))?;
+    let block = node
+        .get_block(&hash)
+        .ok_or_else(|| error("indexed block is unavailable or malformed in the node DB".into()))?;
+    if block.number() != block_num as u64
+        || block.transactions().len() != header.transactions_count as usize
+    {
+        return Err(error(format!(
+            "node block metadata mismatch: number={}, transactions={}, indexed transactions={}",
+            block.number(),
+            block.transactions().len(),
+            header.transactions_count
+        )));
+    }
+    let info = ckb_store_reader::BlockHeaderInfo {
+        parent_hash: block.parent_hash().unpack(),
+        nonce: block.header().nonce(),
+        transactions_root: block.header().transactions_root().unpack(),
+        version: block.header().version(),
+    };
+    let (miner_address, miner_message) = if block_num == 0 {
+        (None, None)
+    } else {
+        let (lock, message) = node
+            .get_cellbase_witness(&hash)
+            .ok_or_else(|| error("missing or malformed cellbase witness".into()))?;
+        let address = script_to_address(
+            lock.code_hash().as_slice(),
+            i16::from(lock.hash_type().as_slice()[0]),
+            &lock.args().raw_data(),
+            network,
+        )
+        .map_err(|e| error(format!("miner witness lock: {e}")))?;
+        (Some(address), Some(message))
+    };
+    let txs = store
+        .list_block_txs(block_num)
+        .map_err(|e| error(e.to_string()))?;
+    if txs.len() != block.transactions().len() {
+        return Err(error(format!(
+            "transaction index has {} rows, node has {}",
+            txs.len(),
+            block.transactions().len()
+        )));
+    }
+    let mut transaction_sizes = Vec::with_capacity(txs.len());
+    let mut user_transactions_size = 0usize;
+    let mut total_fees = 0u128;
+    for (position, ((index, entry), tx)) in txs.iter().zip(block.transactions().iter()).enumerate()
+    {
+        if *index != position as i32 || entry.tx_hash.as_slice() != tx.hash().as_slice() {
+            return Err(error(format!(
+                "transaction index/hash mismatch at index {position}"
+            )));
+        }
+        if entry.is_cellbase != (position == 0) {
+            return Err(error(format!(
+                "transaction {index} has inconsistent cellbase marker {}",
+                entry.is_cellbase
+            )));
+        }
+        let size = tx.data().serialized_size_in_block();
+        if entry.tx_size <= 0 || tx_serialized_size_in_block(entry.tx_size) as usize != size {
+            return Err(error(format!(
+                "transaction {index} byte size mismatch: indexed={}, node={size}",
+                entry.tx_size
+            )));
+        }
+        transaction_sizes.push(size);
+        if !entry.is_cellbase {
+            user_transactions_size = user_transactions_size
+                .checked_add(size)
+                .ok_or_else(|| error("transaction size sum overflow".into()))?;
+            let fee = u128::try_from(entry.fee).map_err(|_| {
+                error(format!(
+                    "transaction {index} has negative fee {}",
+                    entry.fee
+                ))
+            })?;
+            total_fees = total_fees
+                .checked_add(fee)
+                .ok_or_else(|| error("fee sum overflow".into()))?;
+        }
+    }
+    let tip = store
+        .get_sync_tip_block()
+        .map_err(|e| error(e.to_string()))?
+        .ok_or_else(|| error("indexed block exists without a canonical tip".into()))?
+        .0;
+    let confirmations = tip
+        .checked_sub(block_num)
+        .and_then(|n| n.checked_add(1))
+        .filter(|n| *n > 0)
+        .ok_or_else(|| error(format!("invalid canonical tip {tip}")))?;
+    let timestamp = |ms: i64| {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .map(|date| date.to_rfc3339())
+            .ok_or_else(|| error(format!("invalid timestamp {ms}")))
+    };
+    let parent_timestamp = if block_num == 0 {
+        None
+    } else {
+        let parent = store
+            .get_block_header(block_num - 1)
+            .map_err(|e| error(e.to_string()))?
+            .ok_or_else(|| error(format!("missing canonical parent at {}", block_num - 1)))?;
+        Some(timestamp(parent.timestamp)?)
+    };
+    let miner_message_text = miner_message
+        .as_ref()
+        .and_then(|message| std::str::from_utf8(message).ok())
+        .map(str::to_owned);
+    let raw_header = RawBlockHeaderResponse {
+        epoch: format!("{:#x}", block.epoch().full_value()),
+        dao: format!("0x{}", hex::encode(block.header().dao().as_slice())),
+        proposals_hash: format!(
+            "0x{}",
+            hex::encode(block.header().proposals_hash().as_slice())
+        ),
+        extra_hash: format!("0x{}", hex::encode(block.header().extra_hash().as_slice())),
+    };
+    let uncles = block
+        .uncles()
+        .into_iter()
+        .map(|uncle| {
+            let ms = i64::try_from(uncle.header().timestamp())
+                .map_err(|_| error("uncle timestamp exceeds i64".into()))?;
+            Ok(UncleBlockResponse {
+                number: uncle.number(),
+                hash: format!("0x{}", hex::encode(uncle.hash().as_slice())),
+                parent_hash: format!("0x{}", hex::encode(uncle.header().parent_hash().as_slice())),
+                timestamp: timestamp(ms)?,
+                proposal_ids: uncle
+                    .data()
+                    .proposals()
+                    .into_iter()
+                    .map(|id| format!("0x{}", hex::encode(id.as_slice())))
+                    .collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    let size = block.data().as_slice().len();
+    let overhead_size = size
+        .checked_sub(user_transactions_size)
+        .ok_or_else(|| error("user transaction bytes exceed block size".into()))?;
+    let (cycles, cycles_status) = resolve_block_cycles(block_num, header.cycles, &txs)?;
+    Ok((
+        info,
+        BlockMetricsResponse {
+            max_block_bytes: consensus.max_block_bytes,
+            max_block_cycles: consensus.max_block_cycles.to_string(),
+            miner_message_text,
+            size,
+            user_transactions_size,
+            overhead_size,
+            total_fees: total_fees.to_string(),
+            cycles: cycles.map(|n| n.to_string()),
+            cycles_status,
+            transaction_sizes,
+            confirmations,
+            parent_timestamp,
+            raw_header,
+            uncles,
+        },
+        miner_address,
+        miner_message,
+    ))
+}
+
+/// The single cycle aggregation path for list, detail and fee statistics.
+fn resolve_block_cycles(
+    block_num: i64,
+    header_cycles: Option<i64>,
+    txs: &[(i32, ckbadger_store::TxIndexEntry)],
+) -> Result<(Option<i64>, BlockCyclesStatus), ApiRouteError> {
+    if let Some(cycles) = header_cycles {
+        if cycles < 0 {
+            return Err(ApiError::internal(format!(
+                "block {block_num} has negative aggregate cycles {cycles}"
+            )));
+        }
+        return Ok((Some(cycles), BlockCyclesStatus::Complete));
+    }
+    let mut sum = 0i64;
+    let mut status = BlockCyclesStatus::Complete;
+    for (index, entry) in txs.iter().filter(|(_, entry)| !entry.is_cellbase) {
+        match entry.cycles {
+            Some(-1) => status = BlockCyclesStatus::Failed,
+            None | Some(0) => {
+                if status != BlockCyclesStatus::Failed {
+                    status = BlockCyclesStatus::Pending;
+                }
+            }
+            Some(cycles) if cycles > 0 => {
+                sum = sum.checked_add(cycles).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "block {block_num} cycles sum overflow at tx {index}"
+                    ))
+                })?
+            }
+            Some(cycles) => {
+                return Err(ApiError::internal(format!(
+                    "block {block_num} tx {index} invalid cycles marker {cycles}"
+                )))
+            }
+        }
+    }
+    Ok((
+        if status == BlockCyclesStatus::Complete {
+            Some(sum)
+        } else {
+            None
+        },
+        status,
+    ))
+}
+
 async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
     let store = state.store.clone();
-    let ckb_store = state.ckb_store.clone();
-
     let block_result: Option<(i64, ckbadger_store::CachedBlockHeader)> = if id.starts_with("0x") {
         let hash = parse_hash32(&id, "block hash")?;
 
@@ -374,39 +747,6 @@ async fn get_block(
 
     match block_result {
         Some((block_num, header)) => {
-            let block_hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
-                ApiError::internal(format!(
-                    "block {block_num} hash in the store is {} bytes, not 32",
-                    header.hash.len()
-                ))
-            })?;
-            let header_info = enrich_from_rocksdb(&ckb_store, &header.hash);
-
-            // Get miner message from CKB's RocksDB
-            let miner_message = ckb_store
-                .as_ref()
-                .and_then(|s| s.get_miner_message(&block_hash));
-
-            // The block's own miner, from the cellbase witness lock.
-            let miner_address = get_miner_address_from_store(
-                &ckb_store,
-                block_num,
-                &header.hash,
-                &state.ckb_network,
-            );
-
-            let reward_info = get_mining_reward(
-                &state.ckb_rpc_url,
-                &block_hash,
-                state.store.clone(),
-                &state.cache,
-            )
-            .await?;
-            // Pending until the node finalizes and the indexer reaches the paying block.
-            let (mining_reward, mining_reward_tx_hash) = match reward_info {
-                Some(info) => (Some(info.reward), Some(info.cellbase_tx_hash)),
-                None => (None, None),
-            };
             let activation = {
                 let stats_store_c = state.store.clone();
                 let network = state.ckb_network.clone();
@@ -427,66 +767,10 @@ async fn get_block(
                 .map_err(|e| ApiError::internal(e.to_string()))?
             };
 
-            ok(cached_header_to_block_response(
-                block_num,
-                header,
-                header_info,
-                BlockExtra {
-                    miner_address,
-                    miner_message,
-                    mining_reward,
-                    mining_reward_tx_hash,
-                    hardfork_activation: activation,
-                },
-            )?)
+            ok(build_block_response(&state, block_num, header, activation).await?)
         }
         None => Err(ApiError::not_found("Block not found")),
     }
-}
-
-/// Get the block's own miner address from its cellbase witness in CKB's
-/// RocksDB. Per RFC-0022 the first cellbase witness is a `CellbaseWitness`
-/// molecule whose `lock` identifies the block's miner. (The cellbase OUTPUT
-/// lock instead pays the finalized reward of the block 11 confirmations back —
-/// using it here mis-attributed every block to the N-11 miner.)
-fn get_miner_address_from_store(
-    ckb_store: &Option<Arc<CkbChainReader>>,
-    block_num: i64,
-    block_hash: &[u8],
-    network: &str,
-) -> Option<String> {
-    // The genesis block is not mined; its witness carries the zero script.
-    if block_num == 0 {
-        return None;
-    }
-    let store = ckb_store.as_ref()?;
-    if block_hash.len() != 32 {
-        return None;
-    }
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(block_hash);
-
-    let (lock, _message) = store.get_cellbase_witness(&hash)?;
-
-    let code_hash: Vec<u8> = lock.code_hash().raw_data().to_vec();
-    let hash_type_byte = lock.hash_type().as_bytes()[0];
-    let hash_type: i16 = match hash_type_byte {
-        0 => 0,
-        1 => 1,
-        2 => 2,
-        4 => 4,
-        _ => {
-            tracing::error!(
-                "unknown hash_type byte {} in miner witness lock script for block 0x{}",
-                hash_type_byte,
-                hex::encode(block_hash)
-            );
-            return None;
-        }
-    };
-    let args: Vec<u8> = lock.args().raw_data().to_vec();
-
-    script_to_address(&code_hash, hash_type, &args, network).ok()
 }
 
 #[derive(Debug, Deserialize)]
@@ -549,6 +833,8 @@ pub(crate) struct MinerReward {
 struct MiningRewardInfo {
     reward: String,
     cellbase_tx_hash: String,
+    breakdown: RewardBreakdownResponse,
+    paid_at_block: i64,
 }
 
 fn parse_hex_u128(hex: &str, field_name: &str) -> Result<u128, String> {
@@ -653,6 +939,9 @@ async fn get_mining_reward(
         return Ok(None);
     };
     let finalized_at = economic_state.finalized_at;
+    let paid_at_block = store
+        .get_block_number_by_hash(&finalized_at)
+        .map_err(|e| ApiError::internal(format!("reward paying block: {e}")))?;
     let cellbase_tx_hash =
         tokio::task::spawn_blocking(move || get_cellbase_tx_hash(&store, &finalized_at))
             .await
@@ -665,6 +954,15 @@ async fn get_mining_reward(
     let info = MiningRewardInfo {
         reward: economic_state.miner_reward_total.to_string(),
         cellbase_tx_hash,
+        breakdown: RewardBreakdownResponse {
+            primary: economic_state.miner_reward.primary.to_string(),
+            secondary: economic_state.miner_reward.secondary.to_string(),
+            committed: economic_state.miner_reward.committed.to_string(),
+            proposal: economic_state.miner_reward.proposal.to_string(),
+        },
+        paid_at_block: paid_at_block.ok_or_else(|| {
+            ApiError::internal("reward cellbase resolved without its canonical block number")
+        })?,
     };
 
     cache.set(&cache_key, &info, CacheTtl::MINING_REWARD).await;
@@ -718,7 +1016,7 @@ fn get_cellbase_tx_hash(
 pub struct BlockFeeStatsResponse {
     pub block_number: i64,
     pub total_size: i64,
-    pub total_cycles: i64,
+    pub total_cycles: Option<i64>,
     /// Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples.
     pub avg_fee_rate: Option<String>,
     pub min_fee_rate: Option<String>,
@@ -726,6 +1024,7 @@ pub struct BlockFeeStatsResponse {
     pub transaction_count: i32,
     #[serde(default)]
     pub cycles_pending: bool,
+    pub cycles_status: BlockCyclesStatus,
 }
 
 fn indexed_block_fee_rate(
@@ -810,8 +1109,6 @@ async fn get_block_fee_stats(
     let mut fee_rates: Vec<FeeRate> = Vec::new();
     let mut non_cellbase_count: i32 = 0;
 
-    let mut summed_cycles: i64 = 0;
-    let mut missing_cycles = false;
     for (tx_idx, entry) in &txs {
         if entry.is_cellbase {
             continue;
@@ -825,24 +1122,10 @@ async fn get_block_fee_stats(
                     "block {block_number} total transaction size overflows i64"
                 ))
             })?;
-        if header_cycles.is_none() {
-            match entry.cycles {
-                Some(c) if c > 0 => {
-                    summed_cycles = summed_cycles.checked_add(c).ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "block {block_number} total cycles overflow i64"
-                        ))
-                    })?;
-                }
-                Some(_) | None => missing_cycles = true,
-            }
-        }
         fee_rates.push(fee_rate);
     }
-    let (total_cycles, cycles_pending) = match header_cycles {
-        Some(cycles) => (cycles, false),
-        None => (summed_cycles, missing_cycles),
-    };
+    let (total_cycles, cycles_status) = resolve_block_cycles(block_number, header_cycles, &txs)?;
+    let cycles_pending = cycles_status == BlockCyclesStatus::Pending;
 
     // Fire-and-forget block cycles request if pending
     if cycles_pending && state.cycles_client.is_enabled() {
@@ -868,6 +1151,7 @@ async fn get_block_fee_stats(
         max_fee_rate,
         transaction_count: non_cellbase_count,
         cycles_pending,
+        cycles_status,
     })
 }
 
@@ -984,6 +1268,38 @@ async fn get_block_proposals(
 mod tests {
     use super::*;
 
+    fn test_metrics() -> BlockMetricsResponse {
+        BlockMetricsResponse {
+            max_block_bytes: 597_000,
+            max_block_cycles: "3500000000".into(),
+            miner_message_text: None,
+            size: 640,
+            user_transactions_size: 0,
+            overhead_size: 640,
+            total_fees: "0".into(),
+            cycles: Some("0".into()),
+            cycles_status: BlockCyclesStatus::Complete,
+            transaction_sizes: vec![100],
+            confirmations: 1,
+            parent_timestamp: None,
+            raw_header: RawBlockHeaderResponse {
+                epoch: "0x0".into(),
+                dao: format!("0x{}", "00".repeat(32)),
+                proposals_hash: format!("0x{}", "00".repeat(32)),
+                extra_hash: format!("0x{}", "00".repeat(32)),
+            },
+            uncles: vec![],
+        }
+    }
+    fn test_header_info() -> ckb_store_reader::BlockHeaderInfo {
+        ckb_store_reader::BlockHeaderInfo {
+            parent_hash: [0x11; 32],
+            nonce: 0,
+            transactions_root: [0x33; 32],
+            version: 0,
+        }
+    }
+
     /// Regression: block responses must expose the header's real compact_target,
     /// exact difficulty, and proposals/uncles counts (previously hardcoded to 0).
     /// Vector: mainnet block 12,000,000 — compact_target 0x190df964, explorer
@@ -1009,13 +1325,17 @@ mod tests {
         let resp = cached_header_to_block_response(
             12_000_000,
             header,
-            None,
+            Some(test_header_info()),
             BlockExtra {
                 miner_address: None,
                 miner_message: None,
                 mining_reward: None,
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
+                metrics: test_metrics(),
+                reward_breakdown: None,
+                reward_paid_at_block: None,
+                reward_finalizes_at: Some(11),
             },
         )
         .unwrap();
@@ -1062,6 +1382,10 @@ mod tests {
                 mining_reward: None,
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
+                metrics: test_metrics(),
+                reward_breakdown: None,
+                reward_paid_at_block: None,
+                reward_finalizes_at: Some(11),
             },
         )
         .unwrap();
@@ -1090,13 +1414,17 @@ mod tests {
         let error = cached_header_to_block_response(
             42,
             header,
-            None,
+            Some(test_header_info()),
             BlockExtra {
                 miner_address: None,
                 miner_message: None,
                 mining_reward: None,
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
+                metrics: test_metrics(),
+                reward_breakdown: None,
+                reward_paid_at_block: None,
+                reward_finalizes_at: Some(11),
             },
         )
         .unwrap_err();
@@ -1188,6 +1516,10 @@ mod tests {
             hardfork_activation: None,
             compact_target: "0x0".to_string(),
             version: 0,
+            metrics: test_metrics(),
+            reward_breakdown: None,
+            reward_paid_at_block: None,
+            reward_finalizes_at: Some(111),
         };
 
         let json = serde_json::to_value(&response).unwrap();
@@ -1208,12 +1540,13 @@ mod tests {
         let resp = BlockFeeStatsResponse {
             block_number: 100,
             total_size: 5000,
-            total_cycles: 1000000,
+            total_cycles: Some(1000000),
             avg_fee_rate: Some("1.50".to_string()),
             min_fee_rate: Some("0.50".to_string()),
             max_fee_rate: Some("3.00".to_string()),
             transaction_count: 10,
             cycles_pending: false,
+            cycles_status: BlockCyclesStatus::Complete,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["blockNumber"], 100);
@@ -1226,12 +1559,13 @@ mod tests {
         let resp = BlockFeeStatsResponse {
             block_number: 200,
             total_size: 3000,
-            total_cycles: 0,
+            total_cycles: None,
             avg_fee_rate: None,
             min_fee_rate: None,
             max_fee_rate: None,
             transaction_count: 5,
             cycles_pending: true,
+            cycles_status: BlockCyclesStatus::Pending,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["cyclesPending"], true);
@@ -1240,7 +1574,7 @@ mod tests {
         assert!(json["maxFeeRate"].is_null());
 
         // Deserialize without cyclesPending field should default to false
-        let without_pending = r#"{"blockNumber":300,"totalSize":100,"totalCycles":50,"avgFeeRate":"1.00","minFeeRate":"0.50","maxFeeRate":"1.50","transactionCount":2}"#;
+        let without_pending = r#"{"blockNumber":300,"totalSize":100,"totalCycles":50,"avgFeeRate":"1.00","minFeeRate":"0.50","maxFeeRate":"1.50","transactionCount":2,"cyclesStatus":"complete"}"#;
         let deserialized: BlockFeeStatsResponse = serde_json::from_str(without_pending).unwrap();
         assert!(!deserialized.cycles_pending);
     }

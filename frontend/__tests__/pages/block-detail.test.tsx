@@ -1,3 +1,4 @@
+import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
@@ -16,7 +17,9 @@ vi.mock('@/lib/api', () => ({
     getBlockFeeStats: vi.fn(),
     getBlockProposals: vi.fn(),
     getHardforks: vi.fn(),
+    getGlobalActivities: vi.fn(),
   },
+  isNotFoundApiError: vi.fn(() => false),
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
@@ -38,6 +41,7 @@ vi.mock('@/src/navigation', () => ({
 }));
 
 const mockBlock = {
+  ...blockEvidence,
   number: 8_775_638,
   hash: BLOCK_HASH,
   parentHash: `0x${'bb'.repeat(32)}`,
@@ -53,7 +57,7 @@ const mockBlock = {
   nonce: '0x1',
   transactionsRoot: `0x${'cc'.repeat(32)}`,
   minerAddress: 'ckb1qyqz683v8g0kz6r2gz7g3q6v3c4x4cv8j7ysf30a0g',
-  minerMessage: null,
+  minerMessage: '0x636b6220302e3231302e30',
   miningReward: '10000000000',
   miningRewardTxHash: `0x${'dd'.repeat(32)}`,
   compactTarget: '0x1',
@@ -67,6 +71,12 @@ describe('BlockDetailPage', () => {
     pushMock.mockReset();
     paramsIdRef.current = BLOCK_ID;
     vi.mocked(api.getBlock).mockResolvedValue(mockBlock);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    });
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
         {
@@ -77,6 +87,9 @@ describe('BlockDetailPage', () => {
           inputsCount: 1,
           outputsCount: 1,
           fee: '1000',
+          value: '100000000',
+          txSize: 226,
+          cycles: 5000000,
           isCellbase: false,
           timestamp: mockBlock.timestamp,
         },
@@ -89,6 +102,7 @@ describe('BlockDetailPage', () => {
       blockNumber: mockBlock.number,
       totalSize: 1200,
       totalCycles: 5_000_000,
+      cyclesStatus: 'complete',
       avgFeeRate: '1000.00',
       minFeeRate: '900.00',
       maxFeeRate: '1100.00',
@@ -235,7 +249,7 @@ describe('BlockDetailPage', () => {
     ]);
 
     render(<BlockDetailPage />);
-    fireEvent.click(await screen.findByText('Proposals (2)'));
+    await screen.findByText('Proposals (2)');
 
     const uncleRow = (await screen.findByText('0xaabbccddeeff00112233')).closest(
       '[data-testid="block-proposal-row"]'
@@ -260,7 +274,7 @@ describe('BlockDetailPage', () => {
     ]);
 
     render(<BlockDetailPage />);
-    fireEvent.click(await screen.findByText('Proposals (0)'));
+    await screen.findByText('Proposals (0)');
 
     const row = (await screen.findByText('0xaabbccddeeff00112233')).closest(
       '[data-testid="block-proposal-row"]'
@@ -274,7 +288,7 @@ describe('BlockDetailPage', () => {
     vi.mocked(api.getBlockProposals).mockResolvedValue([]);
 
     render(<BlockDetailPage />);
-    fireEvent.click(await screen.findByText('Proposals (0)'));
+    await screen.findByText('Proposals (0)');
 
     expect(await screen.findByText('No proposals in this block')).toBeInTheDocument();
     expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
@@ -287,7 +301,7 @@ describe('BlockDetailPage', () => {
     );
 
     render(<BlockDetailPage />);
-    fireEvent.click(await screen.findByText('Proposals (3)'));
+    await screen.findByText('Proposals (3)');
 
     const row = await screen.findByTestId('block-proposals-error');
     expect(row).toHaveTextContent('ckb_db_path');
@@ -309,5 +323,29 @@ describe('BlockDetailPage', () => {
         limit: 100,
       });
     });
+  });
+
+  it('shows block activities first and puts exact developer evidence below the shared tier boundary', async () => {
+    render(<BlockDetailPage />);
+    expect(await screen.findByRole('button', { name: 'Activities' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(api.getGlobalActivities).toHaveBeenCalledWith({
+      blockNumber: 8775638,
+      limit: 100,
+      cursor: undefined,
+    });
+    expect(screen.getByText(/0.20% of 597,000/)).toBeInTheDocument();
+    expect(screen.getByText('ckb 0.210.0')).toBeInTheDocument();
+    expect(screen.getByText(/10 s after its parent/)).toBeInTheDocument();
+    expect(screen.getByText('Block evidence').closest('[data-tier="2"]')).toHaveClass('mt-[72px]');
+    expect(
+      screen.getByRole('img', { name: 'Size, bytes: 1,200, 974 overhead, 226 user transactions' })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Transactions (1)' }));
+    expect(
+      await screen.findByRole('table', { name: 'Transactions in this block' })
+    ).toBeInTheDocument();
   });
 });
