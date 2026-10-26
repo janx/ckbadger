@@ -214,6 +214,34 @@ Created output locks are a separate case.
 
 The family relation comes from imported metadata. It must not be inferred from chain data.
 
+### Family Provenance After Code Retirement
+
+A registered family's Type ID reference keeps its family provenance when its code cell is
+replaced with non-ELF data or burned. Imported metadata defines the registered references;
+observed deployments on those references establish the versions in that registered lineage.
+An arbitrary Type ID can copy a known binary and later switch to a different program. Such a
+deployment is chain evidence, but does not register the reference as a permanent family member.
+
+- The reference-to-version mapping answers only which executable is current. Retirement removes
+  that mapping, while preserving observed deployments and version metadata.
+- Family usage aggregates each member reference form once, including references whose current
+  executable is absent. Cells can still use such references, and their earlier capacity deltas
+  remain part of the family's history.
+- Current version usage and executable lookup do not assign those cells to the last historical
+  binary. Family totals can therefore include reference usage with no current version attribution.
+- Reactivation restores the current executable binding without adding a second copy of the
+  reference to family totals. Reorg handling restores both lineage and binding before rebuilding
+  the same aggregates.
+- Registration preserves every explicitly imported reference, including multiple references for
+  one binary. Observing another deployment must not replace those registered anchors.
+- An unregistered reference can have a current family through its active binary. Its deployment
+  history alone does not establish a permanent family after retirement.
+- A registered reference resolving outside its observed family is an invariant violation, not a
+  reason to guess a different family or binary.
+
+This family provenance does not identify the exact binary executed by a historical transaction;
+that still requires the transaction's actual dependencies as described above.
+
 ## Recommended Explorer Model
 
 Use these four entities:

@@ -240,10 +240,18 @@ and `stats_mnft` (.bit AccountCell). Their value is now one `AssetAction` byte: 
 burn 2, recycle 3, renew 4, update 5. Bulk and live use the same prior-owner/expiry classifier;
 transaction-wide .bit actions cannot turn a recreated neighbour into a mint or transfer.
 
-Domain `ScriptVersionInfo.type_id_deployments` stores exact `(type_script_hash, block_number)`
-observations of ELF code. The indexer binds newly observed binaries to the registered Type ID
-family, rejecting conflicting family resolution. Bulk excludes non-executable state cells;
-live changes record undo for version metadata, family/label indexes and reference mapping.
+Domain `ScriptVersionInfo.registered_references` preserves all `(reference_hash, hash_type)`
+forms explicitly imported for a binary, including multiple Type ID references. Chain observations
+never add registrations or replace the imported preferred canonical reference. The first metadata
+entry for that binary is the preferred display reference; the complete registration set is sorted
+and deduplicated independently of that preference.
+`ScriptVersionInfo.type_id_deployments` separately stores exact `(type_script_hash, block_number)`
+observations of ELF code. Only registered Type ID lineage propagates permanent family membership
+to newly observed binaries. An unregistered Type ID may deploy binaries from different families;
+its active binary determines its current family without creating a permanent registration.
+Bulk excludes non-executable state cells; live changes record undo for version metadata,
+family/label indexes and reference mapping. Retirement clears the executable mapping while
+preserving deployment history and the registered family's reference usage.
 
 ### `sync_meta` Fixed Keys
 
@@ -274,7 +282,6 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   canonical replay. Once the winning tip is replayed, the indexer verifies abandoned-tip
   ancestry and atomically adds full event-key `reverted_by_event` / `reverses_events` links.
   Historical detection fields remain unchanged, and these observation links are not undo state.
-
 
 #### `entity_stats_undo_contract`
 
