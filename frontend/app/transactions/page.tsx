@@ -111,7 +111,7 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      minWidth: 190,
+      minWidth: 176,
       render: (tx) => (
         <div className="space-y-1">
           <Link href={`/tx/${tx.hash}`}>
@@ -130,7 +130,7 @@ export default function TransactionsPage() {
     {
       key: 'activity',
       label: 'What it does',
-      minWidth: 200,
+      minWidth: 180,
       render: (tx) =>
         tx.activity ? (
           activityHeadline(tx.activity)
@@ -141,7 +141,7 @@ export default function TransactionsPage() {
     {
       key: 'status',
       label: 'State',
-      minWidth: 100,
+      minWidth: 90,
       render: (tx) => (
         <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text-dim'}>
           {poolStatusLabel(tx.status)}
@@ -151,56 +151,58 @@ export default function TransactionsPage() {
     {
       key: 'time',
       label: 'Seen',
-      minWidth: 90,
+      minWidth: 80,
       render: (tx) => formatTimeAgo(new Date(Number(tx.timestamp))),
     },
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 75,
+      minWidth: 64,
       numeric: true,
       render: (tx) => `${tx.inputsCount} → ${tx.outputsCount}`,
     },
     {
       key: 'value',
       label: 'Value',
-      minWidth: 180,
+      minWidth: 164,
       numeric: true,
       render: (tx) =>
         tx.value === null ? (
-          <span className="text-text-dim">Interpretation partial</span>
+          <span className="text-text-dim whitespace-normal">Interpretation partial</span>
         ) : (
           <ExactCkb
             shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
             signed={false}
             tone="plain"
+            wrap
           />
         ),
     },
     {
       key: 'fee',
       label: 'Fee',
-      minWidth: 150,
+      minWidth: 128,
       numeric: true,
       render: (tx) => (
         <ExactCkb
           shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
           signed={false}
           tone="plain"
+          wrap
         />
       ),
     },
     {
       key: 'feeRate',
       label: 'Fee rate, shannon/KB',
-      minWidth: 155,
+      minWidth: 130,
       numeric: true,
       render: (tx) => BigInt(tx.feeRate).toLocaleString('en-US'),
     },
     {
       key: 'size',
       label: 'Size, bytes',
-      minWidth: 100,
+      minWidth: 90,
       numeric: true,
       render: (tx) => tx.txSize.toLocaleString('en-US'),
     },

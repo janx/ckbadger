@@ -109,6 +109,52 @@ describe('TransactionsPage', () => {
 });
 
 describe('Transactions pool view', () => {
+  it('keeps full pool evidence inside the desktop width budget without shortening exact amounts', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      summary: {
+        size: '226',
+        cycles: '3500000000',
+        minFeeRate: '54623',
+        maxFeeRate: '54623',
+        newestSeenAt: '1792886400000',
+      },
+      total: 1,
+      totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'proposed',
+          value: '18446744073709551615',
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '3500000000',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'complete', reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'In the pool' }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
+    expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
+    expect(table).toHaveTextContent('0.00012345 CKB');
+    expect(table).toHaveTextContent('3,500,000,000');
+    expect(table.querySelectorAll('[data-ckb-amount]')).toHaveLength(2);
+    for (const amount of table.querySelectorAll('[data-ckb-amount]'))
+      expect(amount).toHaveClass('flex-wrap');
+  });
   it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
