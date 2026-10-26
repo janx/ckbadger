@@ -6,9 +6,20 @@ import Link from '@/components/ui/link';
 import { BarChart, ChartFigure, type Bar } from '@/components/home/mini-chart';
 import { RankedBars, type RankedRow } from '@/components/home/ranked-bars';
 import { SECTION_HEADING_CLASS, bodyOf, derive, viewOf } from '@/components/home/section';
-import { activityTypeShares, scriptShares, totalActivities } from '@/lib/activity-stats';
-import { api, type ActivitySummary24h, type DailyActivityStats } from '@/lib/api';
+import {
+  activityTypeShares,
+  nonCellbaseCount,
+  scriptShares,
+  totalActivities,
+} from '@/lib/activity-stats';
+import {
+  api,
+  type ActivitySummary24h,
+  type DailyActivityStats,
+  type ChartResponse,
+} from '@/lib/api';
 import { dayLabel } from '@/lib/daily-series';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatCkbCompact } from '@/lib/utils';
 
@@ -132,15 +143,29 @@ interface DailyView {
   max: number;
 }
 
-/** Activity kind occurrences per day, oldest first; the last day is the headline. Days must be in order. */
-export function dailyActivityView(days: DailyActivityStats[]): DailyView | null {
+/** Activities per day, oldest first; the last day is the headline. Days must be in order. */
+export function dailyActivityView(
+  days: DailyActivityStats[],
+  transactions: ChartResponse
+): DailyView | null {
   if (days.length === 0) return null;
   for (let i = 1; i < days.length; i++) {
     if (days[i].date <= days[i - 1].date) {
       throw new Error(`daily activity days out of order: ${days[i - 1].date} then ${days[i].date}`);
     }
   }
-  const totals = days.map(totalActivities);
+  const counts = new Map<string, string>();
+  for (const point of transactions.data) {
+    const date = point.date.replaceAll('-', '');
+    if (counts.has(date)) throw new Error(`Duplicate daily transaction count for ${date}`);
+    counts.set(date, point.value);
+  }
+  const totals = days.map((day) => {
+    const value = counts.get(day.date.replaceAll('-', ''));
+    if (value === undefined) throw new Error(`Missing daily transaction count for ${day.date}`);
+    const count = Number(exactUnsignedInteger(value, `transaction count on ${day.date}`));
+    return nonCellbaseCount(count, day.coinbaseCount, day.date);
+  });
   const bars = days.map((day, i) => ({
     label: dayLabel(day.date),
     value: totals[i],
@@ -158,13 +183,24 @@ export function dailyActivityView(days: DailyActivityStats[]): DailyView | null 
 
 function DailyActivityFigure() {
   const { data, error } = useQuery({
-    queryKey: ['daily-activity-stats', 30],
-    queryFn: () => api.getDailyActivityStats(30),
+    queryKey: ['home-daily-activity', 30],
+    queryFn: async () => {
+      const [days, transactions] = await Promise.all([
+        api.getDailyActivityStats(30),
+        api.getTransactionCountChart(),
+      ]);
+      return { days, transactions };
+    },
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
   const d = useMemo(
-    () => derive({ data, error }, dailyActivityView, 'No daily activity yet'),
+    () =>
+      derive(
+        { data, error },
+        ({ days, transactions }) => dailyActivityView(days, transactions),
+        'No daily activity yet'
+      ),
     [data, error]
   );
   const v = viewOf(d);
@@ -174,15 +210,13 @@ function DailyActivityFigure() {
       testId="home-daily-activity"
       title="Daily activity"
       href="/charts/activity-volume"
-      subtitle={
-        v ? `kind occurrences per day, ${v.first} to ${v.last.label}` : 'kind occurrences per day'
-      }
+      subtitle={v ? `activities per day, ${v.first} to ${v.last.label}` : 'activities per day'}
       headline={v ? n(v.last.value) : undefined}
       body={bodyOf(d, (view) => (
         <BarChart
           bars={view.bars}
           formatValue={n}
-          ariaLabel={`Activity kind occurrences per day, ${view.first} to ${view.last.label}, between ${n(view.min)} and ${n(view.max)}, ${n(view.last.value)} on ${view.last.label}`}
+          ariaLabel={`Activities per day, ${view.first} to ${view.last.label}, between ${n(view.min)} and ${n(view.max)}, ${n(view.last.value)} on ${view.last.label}`}
         />
       ))}
     />

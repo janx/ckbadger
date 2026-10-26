@@ -252,6 +252,13 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
   };
 });
 
+/** Exact complete daily transaction counts, including 9,800 cellbases each day. */
+export const dailyTransactionCountChart: ChartResponse = chart(
+  'Transaction Count',
+  isoDays(29).map((_, i) => String(9800 + (i === 28 ? 6691 : 6200 + ((i * 397) % 1500)))),
+  'Transactions'
+);
+
 const ADDRS = [
   'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfkcv576ccddnn4quf2ga65xee2m26h7nq3q7ue',
   'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2qf8keemy2p5uu0g0gn8cd4ju23s5269qsv05e',

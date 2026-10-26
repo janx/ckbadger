@@ -5,6 +5,7 @@ import {
   averageBlockTimeChart,
   ckbytesAllocation,
   dailyActivities,
+  dailyTransactionCountChart,
   daoStatistics,
   hashRateChart,
   knowledgeSizeChart,
@@ -175,6 +176,9 @@ export const handlers = [
   http.get(`${API_BASE}/statistics/ckbytes-allocation`, () => HttpResponse.json(ckbytesAllocation)),
   http.get(`${API_BASE}/statistics/tx-stats`, () => HttpResponse.json(txStats)),
   http.get(`${API_BASE}/stats/activity-summary-24h`, () => HttpResponse.json(activitySummary24h)),
+  http.get(`${API_BASE}/charts/transaction-count`, () =>
+    HttpResponse.json(dailyTransactionCountChart)
+  ),
   http.get(`${API_BASE}/stats/daily-activities`, () => HttpResponse.json(dailyActivities)),
   http.get(`${API_BASE}/activities/latest`, ({ request }) => {
     const limit = Number(new URL(request.url).searchParams.get('limit') ?? '8');
