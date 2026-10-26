@@ -12,6 +12,9 @@ import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import { TransactionTable } from '@/components/transaction/transaction-table';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
+import { BlockPosition } from '@/components/blocks/block-position';
+import { decodeDaoHeader } from '@/lib/dao-header';
+import { formatScaledInteger } from '@/lib/exact-integer';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
@@ -134,6 +137,7 @@ export default function BlockDetailPage() {
     extraHash: block.rawHeader.extraHash,
     dao: block.rawHeader.dao,
   };
+  const dao = decodeDaoHeader(block.rawHeader.dao, `Block ${block.number}`);
   const sizeScale = resourceScale([block.size]);
   const parentElapsedMs =
     block.parentTimestamp === null
@@ -238,26 +242,15 @@ export default function BlockDetailPage() {
                 </dl>
               </DetailSection>
               <DetailSection title="Position in the chain">
-                <nav
-                  aria-label="Chain position"
-                  className="flex flex-wrap items-center gap-4 text-xs"
-                >
-                  {block.number > 0 && (
-                    <Link href={`/blocks/${block.parentHash}`}>
-                      #{(block.number - 1).toLocaleString('en-US')}
-                    </Link>
-                  )}
-                  <span>→</span>
-                  <span className="text-jade">#{block.number.toLocaleString('en-US')}</span>
-                  {block.confirmations > 1 && (
-                    <>
-                      <span>→</span>
-                      <Link href={`/blocks/${block.number + 1}`}>
-                        #{(block.number + 1).toLocaleString('en-US')}
-                      </Link>
-                    </>
-                  )}
-                </nav>
+                <BlockPosition
+                  block={block}
+                  transactions={transactions.data?.data}
+                  proposals={proposals}
+                  page={pagination.page}
+                  hasMore={transactions.data?.hasMore ?? false}
+                  transactionsError={transactions.error?.message}
+                  proposalsError={proposalsError?.message}
+                />
               </DetailSection>
               <DetailSection
                 title="Reward breakdown"
@@ -395,6 +388,30 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim">{key}</dt>
                   <dd className="break-all">
                     {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
+                    {key === 'dao' && (
+                      <div className="mt-2 space-y-2" aria-label="Decoded DAO header">
+                        <p>
+                          <span className="text-text-dim">C · total issued </span>
+                          <ExactCkb shannons={dao.C} signed={false} tone="plain" />
+                        </p>
+                        <p>
+                          <span className="text-text-dim">AR · accumulated rate </span>
+                          {formatScaledInteger(dao.AR, BigInt('10000000000000000'), 16)}
+                        </p>
+                        <p>
+                          <span className="text-text-dim">S · unissued secondary pool </span>
+                          <ExactCkb shannons={dao.S} signed={false} tone="plain" />
+                        </p>
+                        <p>
+                          <span className="text-text-dim">U · protocol occupied </span>
+                          <ExactCkb shannons={dao.U} signed={false} tone="plain" />
+                        </p>
+                        <p className="text-text-dim">
+                          U includes genesis virtual occupied capacity. These are the four
+                          little-endian u64 header fields.
+                        </p>
+                      </div>
+                    )}
                   </dd>
                 </div>
               ))}

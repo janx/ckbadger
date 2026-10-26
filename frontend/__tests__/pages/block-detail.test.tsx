@@ -1,7 +1,7 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { render } from '@/__tests__/utils/test-utils';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 
@@ -118,6 +118,25 @@ describe('BlockDetailPage', () => {
       tipBlock: 19000000,
       events: [],
     });
+  });
+
+  it('shows exact decoded DAO fields alongside the raw 32-byte header', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      rawHeader: {
+        ...mockBlock.rawHeader,
+        dao: '0x28341e52bbf1665b9cb7fbb823dd2a0077f0143eecc3870a00e95a770f4f3407',
+      },
+    });
+    render(<BlockDetailPage />);
+    await screen.findByText('Position in the chain');
+    fireEvent.click(screen.getByText('Raw data'));
+    const decoded = screen.getByLabelText('Decoded DAO header');
+    expect(decoded).toHaveTextContent('65,862,172,919.14818600');
+    expect(decoded).toHaveTextContent('1.2065094518945692');
+    expect(decoded).toHaveTextContent('7,587,904,816.56475767');
+    expect(decoded).toHaveTextContent('5,191,267,849.00000000');
+    expect(decoded).toHaveTextContent('U includes genesis virtual occupied capacity');
   });
 
   it('shows hardfork activation badge on activation block', async () => {
