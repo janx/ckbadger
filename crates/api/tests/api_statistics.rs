@@ -2279,7 +2279,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
         json["uniqueAddressCount"], 2,
         "same lock across hours counts once"
     );
-    assert_eq!(json["totalCkbMoved"], "695");
+    assert_eq!(json["totalCkbMoved"], "645");
     assert_eq!(json["hoursCovered"], 2);
 
     // A shallow reorg can replace the same-number tip before the TTL expires.
@@ -2303,7 +2303,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     let (status, after_reorg) = get_json(&app, "/stats/activity-summary-24h").await;
     assert_eq!(status, StatusCode::OK, "{after_reorg}");
     assert_eq!(after_reorg["uniqueAddressCount"], 3);
-    assert_eq!(after_reorg["totalCkbMoved"], "696");
+    assert_eq!(after_reorg["totalCkbMoved"], "646");
 }
 
 // ============================================================
@@ -3442,6 +3442,8 @@ fn seed_dao_latest(
         total_deposited: dao_capacity,
         total_depositors: 1,
         active_deposits: 1,
+        deposit_cells_count: 1,
+        withdrawal_request_cells_count: 0,
         total_compensation_paid: 0,
         unclaimed_compensation: 0,
         average_deposit_days: Some("1 days".to_string()),
@@ -3608,4 +3610,86 @@ async fn test_ckbytes_allocation_answers_right_after_a_rollback() {
     // Block 11's C − burnt − S and U − virtual_occupied.
     assert_eq!(json["circulating"], "3920000000900000000", "{json}");
     assert_eq!(json["knowledge"], "15967746800000000", "{json}");
+}
+
+#[tokio::test]
+async fn redesign_fork_detail_fails_when_node_evidence_is_unavailable() {
+    let store = test_store();
+    let id = 1_754_000_000_000;
+    seed_reorg_event(&store, id, 17_100, 3, 0xA1);
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/forks/{id}")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body["message"].as_str().unwrap().contains("CKB RocksDB"));
+}
+
+#[tokio::test]
+async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
+    use ckb_types::{
+        core::{BlockBuilder, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    let parent = [0x33; 32];
+    let tx = TransactionBuilder::default()
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity(123456u64.pack())
+                .build(),
+        )
+        .output_data(Vec::<u8>::new().pack())
+        .build();
+    let tx_hash = tx.hash();
+    let block = BlockBuilder::default()
+        .number(11u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .parent_hash(packed::Byte32::new(parent))
+        .timestamp(1700000000000u64.pack())
+        .transaction(tx)
+        .build();
+    let block_hash = block.hash();
+    let chain = seed_ckb_chain(&[block]);
+    let id = 1754000000000;
+    let event = ReorgEvent {
+        detected_at: id / 1000,
+        kind: ckbadger_store::types::ReorgEventKind::Automatic,
+        fork_point: 10,
+        fork_point_hash: parent.to_vec(),
+        old_tip: 11,
+        old_tip_hash: block_hash.as_slice().to_vec(),
+        new_tip: 12,
+        new_tip_hash: vec![0x44; 32],
+        depth: 1,
+        orphaned_blocks: 1,
+        orphaned_txs: 1,
+        reverted_by_event: None,
+        reverses_events: vec![],
+    };
+    let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            key.as_bytes(),
+            &bincode::serialize(&event).unwrap(),
+        )
+        .unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, json) = get_json(&app, &format!("/forks/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["orphanedBlocks"][0]["hash"],
+        format!("0x{}", hex::encode(block_hash.as_slice()))
+    );
+    assert_eq!(
+        json["orphanedTransactions"][0]["hash"],
+        format!("0x{}", hex::encode(tx_hash.as_slice()))
+    );
+    assert_eq!(json["orphanedTransactions"][0]["totalCapacity"], "123456");
 }

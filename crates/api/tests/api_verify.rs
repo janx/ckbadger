@@ -715,6 +715,8 @@ fn poisoned_token_entry(id: &str) -> ckbadger_api::warmup::CachedAssetEntry {
         icon_url: None,
         holders_count: 0,
         transfers_count: 0,
+        live_count: None,
+        activities_count: None,
         transfers_24h: 0,
         decimals: Some(8),
         total_supply: None,

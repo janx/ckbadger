@@ -545,6 +545,8 @@ async fn get_token_holders(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenActivityResponse {
+    /// Per-token, per-block sequence used by the transfer cursor.
+    pub transfer_sequence: i32,
     pub tx_hash: String,
     pub block_number: i64,
     pub tx_index: i32,
@@ -656,7 +658,13 @@ async fn get_token_activities(
 
     let activities: Vec<TokenActivityResponse> = page
         .into_iter()
-        .map(|(_, tx_idx, entry)| {
+        .map(|(block_number, transfer_sequence, entry)| -> Result<_, crate::response::ApiRouteError> {
+            let (tx_block, tx_index) = state.store.get_tx_location(&entry.tx_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| ApiError::internal(format!("token transfer references missing transaction: token={} block={} sequence={} tx=0x{}", type_hash, block_number, transfer_sequence, hex::encode(&entry.tx_hash))))?;
+            if tx_block != block_number {
+                return Err(ApiError::internal(format!("token transfer transaction block mismatch: token={} transfer_block={} tx_block={} tx=0x{}", type_hash, block_number, tx_block, hex::encode(&entry.tx_hash))));
+            }
             let actions: Vec<String> = entry
                 .actions
                 .iter()
@@ -690,16 +698,17 @@ async fn get_token_activities(
                 })
                 .collect();
 
-            TokenActivityResponse {
+            Ok(TokenActivityResponse {
+                transfer_sequence,
                 tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
                 block_number: entry.block_number,
-                tx_index: tx_idx,
+                tx_index,
                 timestamp: entry.timestamp_ms.to_string(),
                 actions,
                 transfers,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         activities,
@@ -998,6 +1007,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 4,
                 transfers_count: 10,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 1,
                 decimals: Some(8),
                 total_supply: Some("500".to_string()),
@@ -1025,6 +1036,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 3,
                 transfers_count: 10,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 1,
                 decimals: Some(8),
                 total_supply: Some("500".to_string()),
@@ -1052,6 +1065,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 2,
                 transfers_count: 10,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 1,
                 decimals: Some(8),
                 total_supply: Some("500".to_string()),
@@ -1079,6 +1094,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 1,
                 transfers_count: 10,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 1,
                 decimals: Some(8),
                 total_supply: Some("500".to_string()),
@@ -1141,6 +1158,8 @@ mod tests {
             icon_url: None,
             holders_count: 1,
             transfers_count: 0,
+            live_count: None,
+            activities_count: None,
             transfers_24h: 0,
             decimals: Some(8),
             total_supply: Some("0".to_string()),
@@ -1198,6 +1217,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 10,
                 transfers_count: 0,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 0,
                 decimals: Some(8),
                 total_supply: Some("1".to_string()),
@@ -1225,6 +1246,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 10,
                 transfers_count: 0,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 0,
                 decimals: Some(8),
                 total_supply: Some("1".to_string()),
@@ -1252,6 +1275,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 9,
                 transfers_count: 0,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 0,
                 decimals: Some(8),
                 total_supply: Some("1".to_string()),
@@ -1340,6 +1365,8 @@ mod tests {
             icon_url: None,
             holders_count: 1,
             transfers_count: 1,
+            live_count: None,
+            activities_count: None,
             transfers_24h: 0,
             decimals: None,
             total_supply: Some("500".to_string()),

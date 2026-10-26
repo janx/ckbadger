@@ -16,10 +16,10 @@ use super::assets::{
     build_nft_item_activities_response, decode_activity_cursor, decode_item_id,
     decode_object_item_cursor, get_live_bit_cell_outpoints_by_identity_ids,
     list_canonical_nft_collection_activities_page, list_identity_items_inner,
-    normalize_activity_action_filter, normalize_identity_activity_action_filter,
-    normalize_nft_items_search, normalize_nft_items_status, CollectionActivitiesParams,
-    CollectionActivityResponse, CollectionHolderResponse, CollectionItemResponse,
-    MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
+    normalize_identity_activity_action_filter, normalize_nft_items_search,
+    normalize_nft_items_status, CollectionActivitiesParams, CollectionActivityResponse,
+    CollectionHolderResponse, CollectionItemResponse, MnftItemActivitiesParams,
+    MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{
@@ -615,7 +615,7 @@ async fn list_dotbit_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_identity_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
     // Validated before the existence lookup: request shape is a boundary
     // concern, so whether a malformed cursor is reported must not depend on
@@ -656,7 +656,7 @@ async fn list_did_ckb_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_identity_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
     // Validated before the existence lookup: request shape is a boundary
     // concern, so whether a malformed cursor is reported must not depend on
@@ -694,7 +694,7 @@ async fn list_bit_cell_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_identity_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
     // Validated before the existence lookup: request shape is a boundary
     // concern, so whether a malformed cursor is reported must not depend on
@@ -1345,7 +1345,7 @@ async fn list_dotcell_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_identity_activity_action_filter(params.action.as_deref())?;
     let identity_id = decode_dotcell_item_ref(&id_or_name)?;
     let cursor = params
         .cursor

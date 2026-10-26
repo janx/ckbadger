@@ -89,6 +89,10 @@ pub(crate) fn tx_fee_rate_value(fee: u128, size_in_block: i32) -> u128 {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/transactions", get(list_transactions))
+        .route(
+            "/transactions/pool",
+            get(super::pool_transactions::list_pool_transactions),
+        )
         .route("/transactions/{hash}", get(get_transaction))
         .route("/transactions/{hash}/detail", get(get_transaction_detail))
         .route("/transactions/{hash}/cell-deps", get(get_cell_deps))
@@ -114,6 +118,12 @@ pub struct ListParams {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionResponse {
+    /// Sum of positive participant CKB deltas; cellbase excluded.
+    pub value: String,
+    pub output_capacity: String,
+    pub activity: Option<super::activities::GlobalActivityResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_origin: Option<ProposalOrigin>,
     pub hash: String,
     pub block_number: i64,
     pub block_hash: String,
@@ -123,10 +133,23 @@ pub struct TransactionResponse {
     pub fee: String,
     pub tx_size: Option<i32>,
     pub cycles: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cycles_status: Option<String>,
+    pub cycles_status: String,
     pub is_cellbase: bool,
     pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalOrigin {
+    pub block_number: i64,
+    pub distance: i64,
+    pub uncle: Option<ProposalOriginUncle>,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalOriginUncle {
+    pub number: i64,
+    pub hash: String,
 }
 
 /// Where a committed transaction's cycles stand, from the store's value.
@@ -148,15 +171,25 @@ pub(crate) fn tx_cycles_status(cycles: Option<i64>) -> TxCyclesStatus {
     }
 }
 
-fn derive_cycles_status(cycles: Option<i64>, is_cellbase: bool) -> Option<String> {
+fn display_cycles(
+    cycles: Option<i64>,
+    is_cellbase: bool,
+    tx_hash: &[u8],
+) -> Result<(Option<i64>, String), ApiRouteError> {
+    if cycles.is_some_and(|cycles| cycles < -1) {
+        return Err(ApiError::internal(format!(
+            "invalid stored cycles {cycles:?} for transaction 0x{}",
+            hex::encode(tx_hash)
+        )));
+    }
     if is_cellbase {
-        return None;
+        return Ok((Some(0), "complete".into()));
     }
-    match tx_cycles_status(cycles) {
-        TxCyclesStatus::Done => None,
-        TxCyclesStatus::Failed => Some("failed".to_string()),
-        TxCyclesStatus::Pending => Some("pending".to_string()),
-    }
+    Ok(match tx_cycles_status(cycles) {
+        TxCyclesStatus::Done => (cycles, "complete".into()),
+        TxCyclesStatus::Failed => (None, "failed".into()),
+        TxCyclesStatus::Pending => (None, "pending".into()),
+    })
 }
 
 fn required_tx_block_hash(state: &AppState, block_number: i64) -> Result<Vec<u8>, ApiRouteError> {
@@ -188,6 +221,90 @@ fn required_tx_timestamp(
             "transaction block={block_number} index={tx_index} has invalid timestamp {timestamp_ms}"
         ))
         })
+}
+
+fn transaction_response(
+    state: &AppState,
+    block: i64,
+    index: i32,
+    entry: &ckbadger_store::TxIndexEntry,
+    block_hash: &[u8],
+    window: Option<ProposalWindow>,
+) -> Result<TransactionResponse, ApiRouteError> {
+    let (value, activity) = if entry.is_cellbase {
+        ("0".into(), None)
+    } else {
+        let actions = state.store.get_tx_actions(block, index, &entry.tx_hash)
+            .map_err(|error| ApiError::internal(format!("tx actions block={block} index={index}: {error}")))?
+            .ok_or_else(|| ApiError::internal(format!("transaction requires missing canonical actions: block={block} index={index} tx=0x{}", hex::encode(entry.tx_hash))))?;
+        let activity = super::activities::build_global_activity_response(
+            &state.store,
+            &state.append_only_store,
+            &state.ckb_network,
+            &actions,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+        )
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+        (actions.ckb_moved().to_string(), Some(activity))
+    };
+    let mut output_capacity = 0u128;
+    for output in 0..entry.outputs_count {
+        let key = ckbadger_store::keys::encode_outpoint(&entry.tx_hash, output);
+        let cell = state
+            .append_only_store
+            .get_cell_by_outpoint_key(&key)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing canonical output payload 0x{}:{output}",
+                    hex::encode(entry.tx_hash)
+                ))
+            })?;
+        let capacity = u128::try_from(cell.capacity)
+            .map_err(|_| ApiError::internal("negative output capacity"))?;
+        output_capacity = output_capacity
+            .checked_add(capacity)
+            .ok_or_else(|| ApiError::internal("output capacity overflow"))?;
+    }
+    let proposal_origin = if entry.is_cellbase || block == 0 {
+        None
+    } else if let Some(window) = window {
+        let reader = state.ckb_store.as_ref().ok_or_else(|| {
+            ApiError::internal("block transaction proposal origin requires CKB RocksDB reader")
+        })?;
+        let hit = find_proposal_window_hit(&state.store, reader, window, block, &entry.tx_hash)?
+            .ok_or_else(|| ApiError::internal(format!("committed transaction 0x{} at block {block} has no proposal in consensus window", hex::encode(entry.tx_hash))))?;
+        Some(ProposalOrigin {
+            block_number: hit.block_number,
+            distance: block - hit.block_number,
+            uncle: hit.uncle.map(|(number, hash)| ProposalOriginUncle {
+                number,
+                hash: format!("0x{}", hex::encode(hash)),
+            }),
+        })
+    } else {
+        None
+    };
+    let (cycles, cycles_status) = display_cycles(entry.cycles, entry.is_cellbase, &entry.tx_hash)?;
+    Ok(TransactionResponse {
+        value,
+        activity,
+        output_capacity: output_capacity.to_string(),
+        proposal_origin,
+        hash: format!("0x{}", hex::encode(entry.tx_hash)),
+        block_number: block,
+        block_hash: format!("0x{}", hex::encode(block_hash)),
+        index,
+        inputs_count: i32::from(entry.inputs_count),
+        outputs_count: i32::from(entry.outputs_count),
+        fee: entry.fee.to_string(),
+        tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
+        cycles,
+        cycles_status,
+        is_cellbase: entry.is_cellbase,
+        timestamp: required_tx_timestamp(entry.timestamp, block, index)?,
+    })
 }
 
 async fn list_transactions(
@@ -277,27 +394,23 @@ async fn list_transactions(
             None
         };
 
+        if state.ckb_store.is_none() {
+            return Err(ApiError::internal(
+                "block transaction evidence requires CKB RocksDB reader",
+            ));
+        }
+        let window = state.consensus().await?.tx_proposal_window;
         let txs: Vec<TransactionResponse> = page
             .into_iter()
             .map(|(tx_idx, entry)| -> Result<_, ApiRouteError> {
-                let tx_hash = format!("0x{}", hex::encode(entry.tx_hash));
-
-                let timestamp = required_tx_timestamp(entry.timestamp, block_number, tx_idx)?;
-
-                Ok(TransactionResponse {
-                    hash: tx_hash,
+                transaction_response(
+                    &state,
                     block_number,
-                    block_hash: format!("0x{}", hex::encode(&block_hash)),
-                    index: tx_idx,
-                    inputs_count: entry.inputs_count as i32,
-                    outputs_count: entry.outputs_count as i32,
-                    fee: entry.fee.to_string(),
-                    tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
-                    cycles: entry.cycles,
-                    cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
-                    is_cellbase: entry.is_cellbase,
-                    timestamp,
-                })
+                    tx_idx,
+                    &entry,
+                    &block_hash,
+                    Some(window),
+                )
             })
             .collect::<Result<_, _>>()?;
 
@@ -374,22 +487,7 @@ async fn list_transactions(
             .into_iter()
             .map(
                 |(block_num, block_hash, tx_idx, entry)| -> Result<_, ApiRouteError> {
-                    let timestamp = required_tx_timestamp(entry.timestamp, block_num, tx_idx)?;
-
-                    Ok(TransactionResponse {
-                        hash: format!("0x{}", hex::encode(entry.tx_hash)),
-                        block_number: block_num,
-                        block_hash: format!("0x{}", hex::encode(&block_hash)),
-                        index: tx_idx,
-                        inputs_count: entry.inputs_count as i32,
-                        outputs_count: entry.outputs_count as i32,
-                        fee: entry.fee.to_string(),
-                        tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
-                        cycles: entry.cycles,
-                        cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
-                        is_cellbase: entry.is_cellbase,
-                        timestamp,
-                    })
+                    transaction_response(&state, block_num, tx_idx, &entry, &block_hash, None)
                 },
             )
             .collect::<Result<_, _>>()?;
@@ -415,22 +513,14 @@ async fn get_transaction(
     match tx_result {
         Some((block_num, tx_idx, entry)) => {
             let block_hash = required_tx_block_hash(&state, block_num)?;
-            let timestamp = required_tx_timestamp(entry.timestamp, block_num, tx_idx)?;
-
-            ok(TransactionResponse {
-                hash: format!("0x{}", hex::encode(&hash_bytes)),
-                block_number: block_num,
-                block_hash: format!("0x{}", hex::encode(&block_hash)),
-                index: tx_idx,
-                inputs_count: entry.inputs_count as i32,
-                outputs_count: entry.outputs_count as i32,
-                fee: entry.fee.to_string(),
-                tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
-                cycles: entry.cycles,
-                cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
-                is_cellbase: entry.is_cellbase,
-                timestamp,
-            })
+            ok(transaction_response(
+                &state,
+                block_num,
+                tx_idx,
+                &entry,
+                &block_hash,
+                None,
+            )?)
         }
         None => {
             let ckb_block_number =
@@ -446,9 +536,13 @@ pub struct TransactionInputResponse {
     pub previous_output: Option<PreviousOutput>,
     pub since: String,
     pub capacity: Option<String>,
+    /// Exact occupied bytes, matching output commonKnowledgeSize.
+    #[serde(rename = "commonKnowledgeSize")]
+    pub used_capacity: Option<String>,
     pub lock: Option<ScriptResponse>,
     pub r#type: Option<ScriptResponse>,
     pub address: Option<String>,
+    pub cell_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -474,6 +568,8 @@ pub struct TransactionOutputResponse {
     pub lock: Option<ScriptResponse>,
     pub r#type: Option<ScriptResponse>,
     pub address: Option<String>,
+    pub status: Option<String>,
+    pub consumed_by_tx: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -504,8 +600,7 @@ pub struct TransactionDetailResponse {
     pub fee_rate: Option<String>,
     pub tx_size: Option<i32>,
     pub cycles: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cycles_status: Option<String>,
+    pub cycles_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmations: Option<i64>,
     pub is_cellbase: bool,
@@ -527,6 +622,8 @@ pub struct TransactionDetailResponse {
     pub outputs_used_capacity: Option<String>,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,
+    pub script_groups: Vec<super::transaction_structure::ScriptGroupResponse>,
+    pub witness_details: Vec<super::transaction_structure::WitnessResponse>,
     pub witnesses: Vec<String>,
     pub witnesses_available: bool,
     /// The `.cell` names this transaction creates, each with the records
@@ -921,8 +1018,15 @@ async fn get_transaction_detail(
             .map(tx_serialized_size_in_block);
         let fee_rate = pending_tx_size.map(|size| tx_fee_rate(fee_value, size));
 
-        let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
+        let pool_cycles = tx_lookup
+            .cycles
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| {
+                ApiError::internal(format!("pool transaction {hash} cycles exceed i64"))
+            })?;
         let pool_is_cellbase = resolved.is_cellbase;
+        let (cycles, cycles_status) = display_cycles(pool_cycles, pool_is_cellbase, &hash_bytes)?;
         return ok(TransactionDetailResponse {
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
@@ -941,8 +1045,8 @@ async fn get_transaction_detail(
             fee,
             fee_rate,
             tx_size: pending_tx_size,
-            cycles: pool_cycles,
-            cycles_status: derive_cycles_status(pool_cycles, pool_is_cellbase),
+            cycles,
+            cycles_status,
             confirmations: None,
             is_cellbase: pool_is_cellbase,
             timestamp: None,
@@ -950,6 +1054,10 @@ async fn get_transaction_detail(
             outputs_capacity: Some(io.outputs_capacity.to_string()),
             inputs_used_capacity: Some(io.inputs_used_capacity.to_string()),
             outputs_used_capacity: Some(io.outputs_used_capacity.to_string()),
+            script_groups: super::transaction_structure::script_groups(&io.inputs, &io.outputs)
+                .map_err(|e| ApiError::internal(e.to_string()))?,
+            witness_details: super::transaction_structure::witness_details(&io.witnesses)
+                .map_err(|e| ApiError::internal(e.to_string()))?,
             inputs: io.inputs,
             outputs: io.outputs,
             witnesses: io.witnesses,
@@ -961,7 +1069,7 @@ async fn get_transaction_detail(
     let tx_hash_hex = format!("0x{}", hex::encode(&hash_bytes));
     let is_cellbase = entry.is_cellbase;
     let tx_size = entry.tx_size;
-    let cycles = entry.cycles;
+    let (cycles, cycles_status) = display_cycles(entry.cycles, is_cellbase, &hash_bytes)?;
     let inputs_count = entry.inputs_count as i32;
     let outputs_count = entry.outputs_count as i32;
 
@@ -995,7 +1103,7 @@ async fn get_transaction_detail(
     // Read full transaction from CKB node's RocksDB for inputs/outputs
     let (
         inputs,
-        outputs,
+        mut outputs,
         inputs_capacity,
         outputs_capacity,
         inputs_occupied_capacity,
@@ -1003,29 +1111,60 @@ async fn get_transaction_detail(
         witnesses,
         witnesses_available,
         dotcell_names,
-    ) = if let Some(ref ckb_store) = state.ckb_store {
-        if hash_bytes.len() == 32 {
-            let mut tx_hash_arr = [0u8; 32];
-            tx_hash_arr.copy_from_slice(&hash_bytes);
-            if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
-                build_inputs_outputs_from_ckb(
-                    &tx_view,
-                    &state.store,
-                    &state.append_only_store,
-                    &state.store,
-                    &state.ckb_network,
-                    block_number,
-                    state.genesis_baseline()?.virtual_occupied,
-                )?
-            } else {
-                empty_inputs_outputs()
-            }
-        } else {
-            empty_inputs_outputs()
-        }
-    } else {
-        empty_inputs_outputs()
+    ) = {
+        let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
+            ApiError::internal(format!(
+                "transaction {tx_hash_hex} details unavailable: CKB RocksDB reader is not open"
+            ))
+        })?;
+        let tx_hash_arr: [u8; 32] = hash_bytes
+            .as_slice()
+            .try_into()
+            .expect("validated transaction hash");
+        let tx_view = ckb_store.get_transaction(&tx_hash_arr).ok_or_else(|| ApiError::internal(format!(
+            "canonical transaction {tx_hash_hex} at block {block_number}:{tx_idx} is missing from CKB RocksDB"
+        )))?;
+        build_inputs_outputs_from_ckb(
+            &tx_view,
+            &state.store,
+            &state.append_only_store,
+            &state.store,
+            &state.ckb_network,
+            block_number,
+            state.genesis_baseline()?.virtual_occupied,
+        )?
     };
+
+    for (index, output) in outputs.iter_mut().enumerate() {
+        let index =
+            i16::try_from(index).map_err(|_| ApiError::internal("output index exceeds i16"))?;
+        let outpoint = ckbadger_store::keys::encode_outpoint(&hash_bytes, index);
+        if state
+            .store
+            .get_cf(state.store.cf_live_cells(), &outpoint)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .is_some()
+        {
+            output.status = Some("live".into());
+        } else if let Some(consumed) = state
+            .store
+            .get_consumed_cell_info(&hash_bytes, index, &state.append_only_store)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            output.status = Some("consumed".into());
+            output.consumed_by_tx =
+                Some(format!(
+                    "0x{}",
+                    hex::encode(consumed.consumed_by_tx.ok_or_else(|| ApiError::internal(
+                        format!("missing consuming transaction for {tx_hash_hex}:{index}")
+                    ))?)
+                ));
+        } else {
+            return Err(ApiError::internal(format!(
+                "missing canonical output state for {tx_hash_hex}:{index}"
+            )));
+        }
+    }
 
     // The fee persisted by the indexer is the single source of truth; the
     // write path already accounts for DAO phase-2 compensation, so there is
@@ -1058,7 +1197,7 @@ async fn get_transaction_detail(
         fee_rate,
         tx_size: final_tx_size,
         cycles,
-        cycles_status: derive_cycles_status(cycles, is_cellbase),
+        cycles_status,
         confirmations: Some(confirmations),
         is_cellbase,
         timestamp: Some(timestamp),
@@ -1066,16 +1205,16 @@ async fn get_transaction_detail(
         outputs_capacity: Some(outputs_capacity.to_string()),
         inputs_used_capacity: Some(inputs_occupied_capacity.to_string()),
         outputs_used_capacity: Some(outputs_occupied_capacity.to_string()),
+        script_groups: super::transaction_structure::script_groups(&inputs, &outputs)
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+        witness_details: super::transaction_structure::witness_details(&witnesses)
+            .map_err(|e| ApiError::internal(e.to_string()))?,
         inputs,
         outputs,
         witnesses,
         witnesses_available,
         dotcell_names,
     })
-}
-
-fn empty_inputs_outputs() -> TxIoBundle {
-    (vec![], vec![], 0, 0, 0, 0, vec![], false, vec![])
 }
 
 /// Build the `/tx/{hash}` response's inputs and outputs from a transaction the
@@ -1139,9 +1278,11 @@ fn build_inputs_outputs_from_pool_tx(
                     previous_output,
                     since: input.since.clone(),
                     capacity: None,
+                    used_capacity: None,
                     lock: None,
                     r#type: None,
                     address: None,
+                    cell_type: None,
                 });
             };
 
@@ -1156,13 +1297,14 @@ fn build_inputs_outputs_from_pool_tx(
                     ))
                 })?;
             }
-            inputs_occupied_capacity += occupied_capacity_bytes(
+            let occupied_bytes = occupied_capacity_bytes(
                 cell.lock_args.len(),
                 cell.type_code_hash
                     .as_ref()
                     .map(|_| cell.type_args.as_deref().unwrap_or(&[]).len()),
                 cell.data.len(),
-            ) as u128;
+            );
+            inputs_occupied_capacity += occupied_bytes as u128;
 
             let lock_hash_type_str = hash_type_to_str(cell.lock_hash_type).ok_or_else(|| {
                 ApiError::internal(format!(
@@ -1208,7 +1350,11 @@ fn build_inputs_outputs_from_pool_tx(
                 previous_output,
                 since: input.since.clone(),
                 capacity: Some(cell.capacity.to_string()),
+                used_capacity: Some(occupied_bytes.to_string()),
                 lock,
+                cell_type: Some(super::transaction_structure::cell_type(
+                    type_script.as_ref(),
+                )?),
                 r#type: type_script,
                 address: script_to_address(
                     &cell.lock_code_hash,
@@ -1277,10 +1423,17 @@ fn build_inputs_outputs_from_pool_tx(
                     Some(virtual_occupied.to_string()),
                 )
             } else {
-                (None, None)
+                (
+                    Some(super::transaction_structure::cell_type(
+                        type_script.as_ref(),
+                    )?),
+                    None,
+                )
             };
 
             Ok(TransactionOutputResponse {
+                status: Some("pending".into()),
+                consumed_by_tx: None,
                 capacity: cell.capacity.to_string(),
                 used_capacity: occupied.to_string(),
                 virtual_used_capacity: virtual_occupied_capacity,
@@ -1426,8 +1579,8 @@ fn build_inputs_outputs_from_ckb(
             // No previous cell exists to look up.
             let is_cellbase_input = prev_tx_hash_bytes.iter().all(|&b| b == 0);
 
-            let (capacity, lock, type_script, address) = if is_cellbase_input {
-                (None, None, None, None)
+            let (capacity, used_capacity, lock, type_script, address) = if is_cellbase_input {
+                (None, None, None, None, None)
             } else {
                 // Try live cells first, then consumed cells in our store
                 let prev_index_i16 = i16::try_from(prev_index).map_err(|_| {
@@ -1497,7 +1650,13 @@ fn build_inputs_outputs_from_ckb(
                 )
                 .ok();
 
-                (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
+                (
+                    Some(cap.to_string()),
+                    Some(occ.to_string()),
+                    Some(lock_resp),
+                    type_resp,
+                    addr,
+                )
             };
 
             Ok(TransactionInputResponse {
@@ -1506,7 +1665,15 @@ fn build_inputs_outputs_from_ckb(
                     index: prev_index as i32,
                 }),
                 since: since.clone(),
+                cell_type: if capacity.is_some() {
+                    Some(super::transaction_structure::cell_type(
+                        type_script.as_ref(),
+                    )?)
+                } else {
+                    None
+                },
                 capacity,
+                used_capacity,
                 lock,
                 r#type: type_script,
                 address,
@@ -1592,10 +1759,15 @@ fn build_inputs_outputs_from_ckb(
                         Some(virtual_occupied.to_string()),
                     )
                 } else {
-                    (None, None)
+                    (
+                        Some(super::transaction_structure::cell_type(type_resp.as_ref())?),
+                        None,
+                    )
                 };
 
                 Ok(TransactionOutputResponse {
+                    status: None,
+                    consumed_by_tx: None,
                     capacity: cap.to_string(),
                     used_capacity: occ.to_string(),
                     virtual_used_capacity: virtual_occupied_capacity,
@@ -1621,20 +1793,14 @@ fn build_inputs_outputs_from_ckb(
     ))
 }
 
-/// Parse an out-point index as served by the CKB store reader (hex, usually
-/// `0x`-prefixed). The value is node-derived, so a parse failure means
-/// corrupted upstream data and must surface as an error, never as index 0.
-fn parse_out_point_index(raw: &str) -> Result<i32, String> {
-    let idx_str = raw.strip_prefix("0x").unwrap_or(raw);
-    i32::from_str_radix(idx_str, 16).map_err(|e| e.to_string())
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CellDepResponse {
     pub out_point_tx_hash: String,
     pub out_point_index: i32,
     pub dep_type: String,
+    pub resolved_cells: Vec<super::transaction_structure::ResolvedDependencyCell>,
+    pub script_hashes: Vec<String>,
 }
 
 async fn get_cell_deps(
@@ -1644,6 +1810,18 @@ async fn get_cell_deps(
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
     let mut tx_hash = [0u8; 32];
     tx_hash.copy_from_slice(&hash_bytes);
+
+    if state
+        .store
+        .get_tx_location(&hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .is_none()
+        && state.pool_mirror.load().records.contains_key(&tx_hash)
+    {
+        return Err(ApiError::bad_request(format!(
+            "Cell deps for pending transaction {hash} are not committed"
+        )));
+    }
 
     // Cell deps are read from the CKB node's own RocksDB. Without that reader
     // the endpoint has no data source at all, so fail loudly instead of
@@ -1656,44 +1834,27 @@ async fn get_cell_deps(
     };
 
     if let Some(tx_view) = store.get_transaction(&tx_hash) {
-        let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
-        let cell_deps: Vec<CellDepResponse> = rpc_tx
-            .cell_deps
-            .into_iter()
-            .map(|dep| {
-                let out_point_index = parse_out_point_index(&dep.out_point.index).map_err(|e| {
-                    ApiError::internal(format!(
-                        "malformed cell dep out_point index {:?} in tx {}: {}",
-                        dep.out_point.index, hash, e
-                    ))
-                })?;
-                Ok(CellDepResponse {
-                    out_point_tx_hash: dep.out_point.tx_hash,
-                    out_point_index,
-                    dep_type: dep.dep_type,
-                })
-            })
-            .collect::<Result<_, crate::response::ApiRouteError>>()?;
-        return ok(cell_deps);
+        return ok(
+            super::transaction_structure::resolved_dependencies(&tx_view, store)
+                .map_err(|e| ApiError::internal(format!("cell deps for {hash}: {e}")))?,
+        );
     }
 
-    // Not in the node's chain data: either still in the mempool, or nonexistent.
-    match fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
-        .await
-        .map_err(ApiError::internal)?
+    if state
+        .store
+        .get_tx_location(&hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .is_some()
     {
-        Some(tx_lookup) if tx_lookup.is_pending_like() => Err(ApiError::bad_request(
-            pending_transaction_resource_error(&hash, tx_lookup.status_str(), "Cell deps"),
-        )),
-        Some(tx_lookup) if tx_lookup.is_committed() => {
-            // The node RPC sees the tx committed but the secondary reader does
-            // not: catch-up lag or a stale reader path. A 404 would be a lie.
-            Err(ApiError::internal(format!(
-                "transaction {} is committed per node RPC but missing from the CKB RocksDB reader; reader catch-up lag or stale CKB db path",
-                hash
-            )))
-        }
-        _ => Err(ApiError::not_found("Transaction not found")),
+        Err(ApiError::internal(format!(
+            "canonical transaction {hash} missing from CKB RocksDB"
+        )))
+    } else if state.pool_mirror.load().records.contains_key(&tx_hash) {
+        Err(ApiError::bad_request(format!(
+            "Cell deps for pending transaction {hash} are not committed"
+        )))
+    } else {
+        Err(ApiError::not_found("Transaction not found"))
     }
 }
 
@@ -2045,6 +2206,57 @@ impl From<ProposalWindow> for CommitmentWindow {
     }
 }
 
+fn find_proposal_window_hit(
+    store: &ckbadger_store::CkbadgerStore,
+    ckb_store: &ckb_store_reader::CkbChainReader,
+    window: ProposalWindow,
+    commit_block_number: i64,
+    hash_bytes: &[u8],
+) -> Result<Option<ProposalWindowHit>, ApiRouteError> {
+    let short_hash = &hash_bytes[..10];
+    let mut headers = std::collections::HashMap::new();
+    let zone_of = |bn: i64| -> Result<Option<Vec<ZoneProposal>>, ApiRouteError> {
+        let context = format!(
+            "transaction 0x{} proposal block {bn}",
+            hex::encode(hash_bytes)
+        );
+        let header = store
+            .get_block_header(bn)
+            .map_err(|error| ApiError::internal(format!("{context} header read: {error}")))?
+            .ok_or_else(|| ApiError::internal(format!("{context}: missing header")))?;
+        let hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+            ApiError::internal(format!(
+                "{context}: invalid header hash length {}",
+                header.hash.len()
+            ))
+        })?;
+        let block = ckb_store.get_block(&hash).ok_or_else(|| {
+            ApiError::internal(format!(
+                "{context}: block 0x{} missing from node DB",
+                hex::encode(hash)
+            ))
+        })?;
+        headers.insert(bn, (header.hash, header.timestamp));
+        Ok(Some(block_proposal_zone(&block)))
+    };
+    let Some(hit) = earliest_proposal_in_window(window, commit_block_number, short_hash, zone_of)?
+    else {
+        return Ok(None);
+    };
+    let (block_hash, timestamp) = headers.remove(&hit.block_number).ok_or_else(|| {
+        ApiError::internal(format!(
+            "proposal hit missing its header: block={}",
+            hit.block_number
+        ))
+    })?;
+    Ok(Some(ProposalWindowHit {
+        block_number: hit.block_number,
+        block_hash,
+        timestamp,
+        uncle: hit.uncle.map(|uncle| (uncle.number, uncle.hash.to_vec())),
+    }))
+}
+
 #[instrument(skip(state), level = "debug")]
 async fn get_transaction_lifecycle(
     State(state): State<Arc<AppState>>,
@@ -2154,48 +2366,7 @@ async fn get_transaction_lifecycle(
     let store = state.store.clone();
     let proposed_in = tokio::task::spawn_blocking(
         move || -> Result<Option<ProposalWindowHit>, ApiRouteError> {
-            let mut headers = std::collections::HashMap::new();
-            let zone_of = |bn: i64| -> Result<Option<Vec<ZoneProposal>>, ApiRouteError> {
-                let context = format!(
-                    "transaction 0x{} proposal block {bn}",
-                    hex::encode(&hash_bytes)
-                );
-                let header = store
-                    .get_block_header(bn)
-                    .map_err(|error| ApiError::internal(format!("{context} header read: {error}")))?
-                    .ok_or_else(|| ApiError::internal(format!("{context}: missing header")))?;
-                let hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
-                    ApiError::internal(format!(
-                        "{context}: invalid header hash length {}",
-                        header.hash.len()
-                    ))
-                })?;
-                let block = ckb_store.get_block(&hash).ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "{context}: block 0x{} missing from node DB",
-                        hex::encode(hash)
-                    ))
-                })?;
-                headers.insert(bn, (header.hash, header.timestamp));
-                Ok(Some(block_proposal_zone(&block)))
-            };
-            let Some(hit) =
-                earliest_proposal_in_window(window, commit_block_number, &short_hash, zone_of)?
-            else {
-                return Ok(None);
-            };
-            let (block_hash, timestamp) = headers.remove(&hit.block_number).ok_or_else(|| {
-                ApiError::internal(format!(
-                    "proposal hit missing its header: block={}",
-                    hit.block_number
-                ))
-            })?;
-            Ok(Some(ProposalWindowHit {
-                block_number: hit.block_number,
-                block_hash,
-                timestamp,
-                uncle: hit.uncle.map(|uncle| (uncle.number, uncle.hash.to_vec())),
-            }))
+            find_proposal_window_hit(&store, &ckb_store, window, commit_block_number, &hash_bytes)
         },
     )
     .await
@@ -2246,18 +2417,6 @@ mod tests {
     use super::*;
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 
-    #[test]
-    fn test_parse_out_point_index_valid_and_malformed() {
-        assert_eq!(parse_out_point_index("0x0"), Ok(0));
-        assert_eq!(parse_out_point_index("0x2"), Ok(2));
-        assert_eq!(parse_out_point_index("0xff"), Ok(255));
-        assert_eq!(parse_out_point_index("5"), Ok(5));
-        // Malformed node-derived data must error, never default to index 0.
-        assert!(parse_out_point_index("0xzz").is_err());
-        assert!(parse_out_point_index("").is_err());
-        assert!(parse_out_point_index("0x").is_err());
-    }
-
     /// Regression: the `txSize` a response serves and the `feeRate` it serves
     /// must be reproducible from each other. They were not — `feeRate` used the
     /// protocol's serialized-size-in-block while `txSize` reported the bare
@@ -2287,6 +2446,10 @@ mod tests {
     #[test]
     fn test_transaction_response_serialization() {
         let resp = TransactionResponse {
+            output_capacity: "0".into(),
+            activity: None,
+            proposal_origin: None,
+            value: "0".to_string(),
             hash: "0xabc".to_string(),
             block_number: 100,
             block_hash: "0xdef".to_string(),
@@ -2296,7 +2459,7 @@ mod tests {
             fee: "1000".to_string(),
             tx_size: Some(200),
             cycles: Some(5000),
-            cycles_status: None,
+            cycles_status: "complete".into(),
             is_cellbase: false,
             timestamp: "2024-01-01T00:00:00Z".to_string(),
         };
@@ -2415,6 +2578,8 @@ mod tests {
     #[test]
     fn test_transaction_input_response_serializes_type_script() {
         let input = TransactionInputResponse {
+            used_capacity: Some("61".into()),
+            cell_type: Some("plain".into()),
             previous_output: Some(PreviousOutput {
                 tx_hash: "0x01".to_string(),
                 index: 0,
@@ -2456,7 +2621,7 @@ mod tests {
             fee_rate: Some("1000".to_string()),
             tx_size: Some(123),
             cycles: Some(456),
-            cycles_status: None,
+            cycles_status: "complete".into(),
             confirmations: Some(7),
             is_cellbase: false,
             timestamp: Some("2024-01-01T00:00:00Z".to_string()),
@@ -2466,6 +2631,8 @@ mod tests {
             outputs_used_capacity: Some("9".to_string()),
             inputs: vec![],
             outputs: vec![],
+            script_groups: vec![],
+            witness_details: vec![],
             witnesses: vec!["0x".to_string(), "0x1234".to_string()],
             witnesses_available: true,
             dotcell_names: vec![],
@@ -2488,6 +2655,8 @@ mod tests {
     #[test]
     fn test_cell_dep_response_serialization() {
         let resp = CellDepResponse {
+            resolved_cells: vec![],
+            script_hashes: vec![],
             out_point_tx_hash: "0xabc".to_string(),
             out_point_index: 0,
             dep_type: "code".to_string(),
@@ -2613,19 +2782,21 @@ mod tests {
     /// total.
     #[test]
     fn test_derive_cycles_status_never_reports_failed_replay_as_done() {
-        assert_eq!(
-            derive_cycles_status(Some(-1), false),
-            Some("failed".to_string())
-        );
-        // Not yet calculated stays pending, so the worker can pick it up.
-        assert_eq!(
-            derive_cycles_status(None, false),
-            Some("pending".to_string())
-        );
-        // A successful replay is the only case that reports a number.
-        assert_eq!(derive_cycles_status(Some(3_380_228), false), None);
-        // Cellbase transactions run no scripts; consensus counts them as 0.
-        assert_eq!(derive_cycles_status(Some(0), true), None);
+        for (stored, cellbase, value, status) in [
+            (Some(-1), false, None, "failed"),
+            (None, false, None, "pending"),
+            (Some(0), false, None, "pending"),
+            (Some(3_380_228), false, Some(3_380_228), "complete"),
+            (None, true, Some(0), "complete"),
+        ] {
+            assert_eq!(
+                display_cycles(stored, cellbase, &[0x11; 32]).unwrap(),
+                (value, status.into())
+            );
+        }
+        let error = display_cycles(Some(-2), false, &[0x11; 32]).unwrap_err();
+        assert!(error.1 .0.message.contains("invalid stored cycles"));
+        assert!(error.1 .0.message.contains(&hex::encode([0x11; 32])));
     }
 
     // ── `.cell` records on the tx page ───────────────────────────────────

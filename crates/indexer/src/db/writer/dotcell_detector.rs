@@ -455,7 +455,7 @@ pub(crate) fn action_name(kind: &DotCellTransitionKind) -> Option<&'static str> 
 /// one is an invariant violation — a transition kind that gained no mapping —
 /// and must stop the batch rather than quietly cost the collection one feed
 /// entry.
-pub(crate) fn dotcell_asset_action(action: &str) -> Result<AssetAction> {
+pub fn dotcell_asset_action(action: &str) -> Result<AssetAction> {
     Ok(match action {
         "register" | "register_subname" | "takeover" => AssetAction::Mint,
         "transfer" | "buy" => AssetAction::Transfer,

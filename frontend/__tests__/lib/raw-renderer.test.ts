@@ -38,6 +38,8 @@ describe('renderRawPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: `0x${'a'.repeat(64)}`,
       status: 'committed',
+      cycles: null,
+      cyclesStatus: 'pending',
       pendingSince: null,
       blockNumber: 123,
       blockHash: `0x${'b'.repeat(64)}`,
@@ -90,6 +92,8 @@ describe('renderRawPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: `0x${'a'.repeat(64)}`,
       status: 'committed',
+      cycles: null,
+      cyclesStatus: 'pending',
       pendingSince: null,
       blockNumber: 123,
       blockHash: `0x${'b'.repeat(64)}`,
@@ -131,6 +135,8 @@ describe('renderRawPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: txHash,
       status: 'committed',
+      cycles: null,
+      cyclesStatus: 'pending',
       pendingSince: null,
       blockNumber: 123,
       blockHash: `0x${'b'.repeat(64)}`,
@@ -200,6 +206,8 @@ describe('renderRawPage', () => {
                 transaction: null,
                 tx_status: {
                   status: 'committed',
+                  cycles: null,
+                  cyclesStatus: 'pending',
                   block_hash:
                     payload.params?.[0] === inputTxHash ? inputCommitBlockHash : depCommitBlockHash,
                 },
@@ -684,6 +692,8 @@ describe('renderRawPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: txHash,
       status: 'committed',
+      cycles: null,
+      cyclesStatus: 'pending',
       pendingSince: null,
       blockNumber: 123,
       blockHash: `0x${'b'.repeat(64)}`,

@@ -1430,7 +1430,21 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &mint_tx, 0),
+            &[0],
+        )
+        .unwrap();
     batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
+            &[1],
+        )
+        .unwrap();
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -1538,7 +1552,21 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &mint_tx, 0),
+            &[0],
+        )
+        .unwrap();
     batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
+            &[1],
+        )
+        .unwrap();
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -1909,7 +1937,21 @@ async fn test_assets_bit_cell_item_activities() {
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_spore_outpoint(&mint_tx, 0, &identity_id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&identity_id, &mint_tx, 0),
+            &[0],
+        )
+        .unwrap();
     batch.put_spore_outpoint(&transfer_tx, 0, &identity_id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&identity_id, &transfer_tx, 0),
+            &[1],
+        )
+        .unwrap();
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -2556,8 +2598,30 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     core_batch.put_identity_by_collection(&collection_id, &account_id);
     core_batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
     core_batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
+    core_batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &mint_tx,
+                0,
+            ),
+            &[0],
+        )
+        .unwrap();
     core_batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
     core_batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0);
+    core_batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &transfer_tx,
+                0,
+            ),
+            &[1],
+        )
+        .unwrap();
     core_batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -3101,10 +3165,43 @@ async fn test_assets_nft_item_activities_dotbit() {
     );
     batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
+    batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &mint_tx,
+                0,
+            ),
+            &[0],
+        )
+        .unwrap();
     batch.put_dotbit_account_outpoint(&transfer_tx_1, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_1, 0);
+    batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &transfer_tx_1,
+                0,
+            ),
+            &[1],
+        )
+        .unwrap();
     batch.put_dotbit_account_outpoint(&transfer_tx_2, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_2, 0);
+    batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &transfer_tx_2,
+                0,
+            ),
+            &[1],
+        )
+        .unwrap();
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -3271,7 +3368,7 @@ async fn test_assets_nft_item_activities_dotbit() {
 }
 
 #[tokio::test]
-async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
+async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
     let store = test_store();
     let account_id = [0x31u8; 20];
     let owner_a = vec![0x21u8; 32];
@@ -3299,8 +3396,30 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     );
     batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
+    batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &mint_tx,
+                0,
+            ),
+            &[0],
+        )
+        .unwrap();
     batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
     batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0);
+    batch
+        .put_raw_cf_by_name(
+            "stats_mnft",
+            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
+                &account_id,
+                &transfer_tx,
+                0,
+            ),
+            &[1],
+        )
+        .unwrap();
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -3412,7 +3531,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
 
     assert_eq!(json["data"].as_array().unwrap().len(), 3);
     assert_eq!(json["data"][0]["blockNumber"], 260);
-    assert_eq!(json["data"][0]["actions"][0], "burn");
+    assert_eq!(json["data"][0]["actions"][0], "recycle");
     assert_eq!(json["data"][1]["actions"][0], "transfer");
     assert_eq!(json["data"][2]["actions"][0], "mint");
 }
@@ -4816,6 +4935,16 @@ async fn dotcell_item_ref_is_case_insensitive() {
                 semantic_tags: 0,
             },
         );
+        let mut actions =
+            make_test_tx_actions(&[0x11; 32], &[0xd1; 32], &[0x22; 32], 20_518_306, 0, 0, 0);
+        actions
+            .protocol_actions
+            .push(ckbadger_store::ProtocolAction::new(
+                "dotcell",
+                "register",
+                serde_json::json!({"id":SUPPORT_ID}),
+            ));
+        batch.put_tx_actions(&actions);
         batch.commit().unwrap();
     }
     let config = test_config(store);
@@ -5021,4 +5150,70 @@ async fn dotcell_owner_with_an_unencodable_lock_script_is_a_500() {
             .contains(SUPPORT_OWNER_LOCK_HASH.trim_start_matches("0x")),
         "{body}"
     );
+}
+
+#[tokio::test]
+async fn redesign_collection_counts_are_not_token_transfers() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_mnft_collection_aggregate(
+        &[0x39; 32],
+        &MnftCollectionAggregate {
+            standard: ObjectStandard::MnftToken,
+            total_count: 7,
+            live_count: 0,
+            activities_count: 12,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, "/assets?type=object").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"][0]["totalSupply"], "7");
+    assert_eq!(body["data"][0]["liveCount"], 0);
+    assert_eq!(body["data"][0]["activitiesCount"], 12);
+    assert!(body["data"][0].get("transfersCount").is_none(), "{body}");
+}
+
+#[tokio::test]
+async fn redesign_identity_item_uses_persisted_update_action() {
+    let store = test_store();
+    let id = [0x31; 20];
+    let tx = [0x42; 32];
+    seed_committed_activity(&store, &[0x11; 32], &tx, 100, 1, 0, 0);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x11; 32]),
+            name: None,
+            is_live: true,
+            created_at_block: 99,
+            created_at_tx: vec![0x21; 32],
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.put_spore_outpoint(&tx, 0, &id);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &tx, 0),
+            &[5],
+        )
+        .unwrap();
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/activities?action=update",
+            hex::encode(id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"], serde_json::json!(["update"]));
 }

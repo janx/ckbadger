@@ -62,6 +62,7 @@ function mockTx(hash: string, blockNumber: number): Transaction {
     fee: '1000',
     txSize: 400,
     cycles: 2_000_000,
+    cyclesStatus: 'complete',
     isCellbase: false,
     timestamp: '2024-01-15T10:30:00Z',
   };

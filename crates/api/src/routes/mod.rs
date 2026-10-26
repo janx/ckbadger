@@ -56,3 +56,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(forks::routes())
         .merge(verify::routes())
 }
+
+mod pool_transactions;
+
+mod transaction_structure;

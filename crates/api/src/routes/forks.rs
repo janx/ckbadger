@@ -5,6 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
+use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -28,6 +29,8 @@ pub struct ReorgEventResponse {
     /// Detection time in milliseconds; the stable id of the event.
     pub id: i64,
     pub detected_at: String,
+    pub reverted_by_event: Option<i64>,
+    pub reverses_events: Vec<i64>,
     pub fork_point_number: i64,
     pub fork_point_hash: String,
     pub old_tip_number: i64,
@@ -71,8 +74,7 @@ pub struct OrphanedTransactionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ReorgDetailResponse {
     pub event: ReorgEventResponse,
-    /// Rollback deletes the orphaned blocks and transactions, so only their
-    /// counts on the event survive; the bodies are intentionally not retained.
+    /// Historical branch evidence retained by the node, even after local rollback.
     pub orphaned_blocks: Vec<OrphanedBlockResponse>,
     pub orphaned_transactions: Vec<OrphanedTransactionResponse>,
 }
@@ -153,6 +155,20 @@ fn rfc3339_from_unix_seconds(seconds: i64, context: &str) -> Result<String, ApiR
 fn reorg_event_response(record: &ReorgEventRecord) -> Result<ReorgEventResponse, ApiRouteError> {
     let detected_at = rfc3339_from_unix_seconds(record.event.detected_at, &record.key)?;
     Ok(ReorgEventResponse {
+        reverted_by_event: record
+            .event
+            .reverted_by_event
+            .as_ref()
+            .map(|key| ckbadger_store::keys::decode_reorg_event_key(key.as_bytes()))
+            .transpose()
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+        reverses_events: record
+            .event
+            .reverses_events
+            .iter()
+            .map(|key| ckbadger_store::keys::decode_reorg_event_key(key.as_bytes()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| ApiError::internal(e.to_string()))?,
         id: record.detected_at_ms,
         detected_at,
         fork_point_number: record.event.fork_point,
@@ -250,11 +266,101 @@ async fn get_fork_detail(
         return Err(ApiError::not_found("Reorg event not found"));
     };
 
+    let (orphaned_blocks, orphaned_transactions) = if record.event.orphaned_blocks == 0 {
+        (Vec::new(), Vec::new())
+    } else {
+        let reader = state.ckb_store.clone().ok_or_else(|| {
+            ApiError::internal(format!(
+                "fork {} evidence unavailable: CKB RocksDB reader is not open",
+                id
+            ))
+        })?;
+        let event = record.event.clone();
+        tokio::task::spawn_blocking(move || read_orphaned_branch(&reader, &event))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(format!("fork {id}: {e:#}")))?
+    };
     ok(ReorgDetailResponse {
         event: reorg_event_response(&record)?,
-        orphaned_blocks: Vec::new(),
-        orphaned_transactions: Vec::new(),
+        orphaned_blocks,
+        orphaned_transactions,
     })
+}
+
+fn read_orphaned_branch(
+    reader: &ckb_store_reader::CkbChainReader,
+    event: &ckbadger_store::ReorgEvent,
+) -> anyhow::Result<(Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>)> {
+    let mut hash: [u8; 32] = event
+        .old_tip_hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid old tip hash"))?;
+    let mut blocks = Vec::new();
+    let mut transactions = Vec::new();
+    for expected_number in ((event.fork_point + 1)..=event.old_tip).rev() {
+        let block = reader.get_block(&hash).ok_or_else(|| {
+            anyhow::anyhow!(
+                "CKB RocksDB is missing historical block {} 0x{}",
+                expected_number,
+                hex::encode(hash)
+            )
+        })?;
+        anyhow::ensure!(
+            block.number() == expected_number as u64,
+            "historical block height mismatch at 0x{}: expected={} actual={}",
+            hex::encode(hash),
+            expected_number,
+            block.number()
+        );
+        let timestamp = chrono::DateTime::from_timestamp_millis(i64::try_from(block.timestamp())?)
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid historical block timestamp at {}", expected_number)
+            })?
+            .to_rfc3339();
+        let miner_lock_hash = reader
+            .get_cellbase_witness(&hash)
+            .map(|(lock, _)| hex0x(lock.calc_script_hash().as_slice()));
+        blocks.push(OrphanedBlockResponse {
+            number: expected_number,
+            hash: hex0x(&hash),
+            parent_hash: hex0x(block.parent_hash().as_slice()),
+            timestamp,
+            transactions_count: i32::try_from(block.transactions().len())?,
+            miner_lock_hash,
+        });
+        for (index, tx) in block.transactions().iter().enumerate() {
+            let total_capacity = tx.outputs().into_iter().try_fold(0u128, |total, output| {
+                let capacity: u64 = output.capacity().unpack();
+                total
+                    .checked_add(u128::from(capacity))
+                    .ok_or_else(|| anyhow::anyhow!("orphan capacity overflow"))
+            })?;
+            transactions.push(OrphanedTransactionResponse {
+                hash: hex0x(tx.hash().as_slice()),
+                block_number: expected_number,
+                block_hash: hex0x(&hash),
+                tx_index: i32::try_from(index)?,
+                inputs_count: Some(i16::try_from(tx.inputs().len())?),
+                outputs_count: Some(i16::try_from(tx.outputs().len())?),
+                total_capacity: Some(total_capacity.to_string()),
+            });
+        }
+        hash.copy_from_slice(block.parent_hash().as_slice());
+    }
+    anyhow::ensure!(
+        hash.as_slice() == event.fork_point_hash.as_slice(),
+        "historical branch does not reach recorded fork point {}",
+        event.fork_point
+    );
+    anyhow::ensure!(
+        blocks.len() as i64 == event.orphaned_blocks,
+        "historical branch block count mismatch: recorded={} actual={}",
+        event.orphaned_blocks,
+        blocks.len()
+    );
+    Ok((blocks, transactions))
 }
 
 async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<RecentReorgResponse> {
@@ -352,6 +458,21 @@ mod tests {
                 reverses_events: Vec::new(),
             },
         }
+    }
+
+    #[test]
+    fn event_links_keep_exact_public_ids() {
+        let mut event = record(1_700_000_000_000, ReorgEventKind::Automatic);
+        event.event.reverted_by_event = Some(format!("reorg:1700000000123:{}", "ab".repeat(16)));
+        event.event.reverses_events = vec![format!("reorg:1699999999123:{}", "cd".repeat(16))];
+        let json = serde_json::to_value(reorg_event_response(&event).unwrap()).unwrap();
+        assert_eq!(json["revertedByEvent"], 1_700_000_000_123i64);
+        assert_eq!(
+            json["reversesEvents"],
+            serde_json::json!([1_699_999_999_123i64])
+        );
+        event.event.reverted_by_event = Some("invalid".into());
+        assert!(reorg_event_response(&event).is_err());
     }
 
     #[test]

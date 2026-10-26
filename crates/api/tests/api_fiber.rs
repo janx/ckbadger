@@ -53,3 +53,41 @@ async fn test_fiber_channel_delay_epoch_is_an_exact_decimal_string() {
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["delayEpoch"], "11529496521045180422", "{detail}");
 }
+
+#[tokio::test]
+async fn redesign_fiber_timeline_matches_frontend_and_delay_is_decoded() {
+    let store = test_store();
+    let id = [0x6b; 32];
+    let channel = FiberChannel {
+        funding_tx_hash: vec![0x11; 32],
+        funding_output_index: 0,
+        state: FiberChannelState::ForceClosed,
+        capacity: 100_000_000_000,
+        udt_type_hash: None,
+        udt_amount: None,
+        open_block: 10,
+        open_timestamp: 1_700_000_000_000,
+        close_tx_hash: Some(vec![0x22; 32]),
+        close_block: Some(20),
+        close_timestamp: Some(1_700_000_100_000),
+        commitment_tx_hash: Some(vec![0x33; 32]),
+        commitment_output_index: Some(0),
+        delay_epoch: Some(0xa000_0100_0000_0001),
+        settlement_tx_hash: None,
+        settlement_block: None,
+        settlement_timestamp: None,
+        participants: vec![],
+        funding_lock_args: vec![0x44; 20],
+    };
+    let mut batch = StoreBatch::new(&store);
+    batch.put_fiber_channel(&id, &channel);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/fiber/channels/0x{}", hex::encode(id))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["timeline"][0]["blockNumber"], 10);
+    assert_eq!(body["delayEpochDecoded"]["relative"], true);
+    assert_eq!(body["delayEpochDecoded"]["epochs"], 1);
+    assert_eq!(body["delayEpochDecoded"]["index"], 0);
+    assert_eq!(body["delayEpochDecoded"]["length"], 1);
+}

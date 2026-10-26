@@ -1384,8 +1384,11 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let name = obj.name.clone().unwrap_or_else(|| collection_id.clone());
-        let entity_key = format!("object:{collection_id}");
-        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "object"));
+        let entity_key = format!("{}:{collection_id}", obj.asset_type);
+        labels_by_key.insert(
+            entity_key.clone(),
+            format_asset_label(&name, &obj.asset_type),
+        );
         if used_cap > total_cells_capacity {
             return Err(ApiError::internal(format!(
                 "Object common knowledge size exceeds total for {}: used={}, total={}",

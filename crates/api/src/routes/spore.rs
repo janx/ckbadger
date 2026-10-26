@@ -234,6 +234,7 @@ pub struct SporeMediaProfileResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SporeResponse {
     pub spore_id: String,
+    pub created_at_tx: String,
     pub tx_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_index: Option<i32>,
@@ -356,6 +357,7 @@ fn spore_to_response(
     };
     Ok(SporeResponse {
         spore_id: format!("0x{}", hex::encode(spore_id)),
+        created_at_tx: format!("0x{}", hex::encode(&entry.created_at_tx)),
         tx_hash: format!("0x{}", hex::encode(&entry.created_at_tx)),
         output_index: None, // ObjectEntry does not store output_index; needs schema addition
         cluster_id: entry
@@ -1210,8 +1212,58 @@ async fn get_spore(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let (owned_capacity, owned_knowledge) =
                 spore_owned_capacity(&id, entry.is_live, daily)?;
+            let mut spore = spore_to_response(&id, &entry)?;
+            spore.owner_address = entry
+                .owner_lock_hash
+                .as_deref()
+                .map(|owner| {
+                    crate::utils::address::resolve_lock_address(
+                        &state.store,
+                        owner,
+                        &state.ckb_network,
+                    )
+                })
+                .transpose()
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .flatten()
+                .map(|resolved| resolved.address);
+            if entry.is_live {
+                let mut live = None;
+                for (tx_hash, output_index) in state
+                    .store
+                    .list_spore_outpoints_by_spore_id(&id)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                {
+                    let key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
+                    if let Some(marker) = state
+                        .store
+                        .get_cf(state.store.cf_live_cells(), &key)
+                        .map_err(|e| ApiError::internal(e.to_string()))?
+                    {
+                        if marker.len() != 8 {
+                            return Err(ApiError::internal(format!(
+                                "spore {} has invalid live marker at 0x{}:{}",
+                                spore_id,
+                                hex::encode(&tx_hash),
+                                output_index
+                            )));
+                        }
+                        if live.replace((tx_hash, output_index)).is_some() {
+                            return Err(ApiError::internal(format!(
+                                "spore {} has multiple live outpoints",
+                                spore_id
+                            )));
+                        }
+                    }
+                }
+                let (tx_hash, output_index) = live.ok_or_else(|| {
+                    ApiError::internal(format!("live spore {} has no live outpoint", spore_id))
+                })?;
+                spore.tx_hash = format!("0x{}", hex::encode(tx_hash));
+                spore.output_index = Some(i32::from(output_index));
+            }
             ok(SporeDetailResponse {
-                spore: spore_to_response(&id, &entry)?,
+                spore,
                 owned_capacity: owned_capacity.to_string(),
                 owned_knowledge: owned_knowledge.to_string(),
             })
@@ -1998,6 +2050,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 0,
                 transfers_count: 7,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 0,
                 decimals: None,
                 total_supply: None,
@@ -2025,6 +2079,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 0,
                 transfers_count: 3,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 0,
                 decimals: None,
                 total_supply: None,
@@ -2138,6 +2194,8 @@ mod tests {
                 icon_url: None,
                 holders_count: 0,
                 transfers_count: 1,
+                live_count: None,
+                activities_count: None,
                 transfers_24h: 0,
                 decimals: None,
                 total_supply: None,

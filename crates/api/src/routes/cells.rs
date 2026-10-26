@@ -142,9 +142,72 @@ pub struct CellDataGuess {
 #[serde(rename_all = "camelCase")]
 pub struct CellDataAnalysis {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<CellTokenDecode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deterministic: Option<CellDeterministicDecode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub heuristic_guesses: Vec<CellDataGuess>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellTokenDecode {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+    pub raw_amount: String,
+    pub formatted_amount: Option<String>,
+}
+
+fn enrich_token_decode(
+    analysis: &mut CellDataAnalysis,
+    token: &ckbadger_store::TokenInfo,
+) -> anyhow::Result<()> {
+    let Some(decode) = analysis
+        .deterministic
+        .as_mut()
+        .filter(|d| d.kind == "udt_amount")
+    else {
+        return Ok(());
+    };
+    let amount = decode
+        .segments
+        .iter_mut()
+        .find(|segment| segment.label == "amount")
+        .ok_or_else(|| anyhow::anyhow!("UDT decode is missing amount segment"))?;
+    let raw = amount.human_value.clone();
+    anyhow::ensure!(
+        raw.chars().all(|c| c.is_ascii_digit()),
+        "invalid raw UDT amount {raw}"
+    );
+    let decimals = token
+        .decimals
+        .map(u8::try_from)
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("invalid token decimals {:?}", token.decimals))?;
+    let formatted = decimals.map(|decimals| {
+        let decimals = usize::from(decimals);
+        if decimals == 0 {
+            return raw.clone();
+        }
+        let padded = format!("{:0>width$}", raw, width = decimals + 1);
+        let at = padded.len() - decimals;
+        format!("{}.{}", &padded[..at], &padded[at..])
+    });
+    if let Some(formatted) = &formatted {
+        amount.human_value = match &token.symbol {
+            Some(symbol) => format!("{formatted} {symbol}"),
+            None => formatted.clone(),
+        };
+    }
+    analysis.token = Some(CellTokenDecode {
+        name: token.name.clone(),
+        symbol: token.symbol.clone(),
+        decimals,
+        raw_amount: raw,
+        formatted_amount: formatted,
+    });
+    Ok(())
 }
 
 /// The registry protocol each of a cell's scripts belongs to, as the
@@ -830,11 +893,8 @@ fn maybe_parse_dao_decode(
 }
 
 fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
-    match PROTOCOL_REGISTRY.get(code_hash) {
-        Some(ProtocolScript::Sudt) => Some("sudt"),
-        Some(ProtocolScript::Xudt) => Some("xudt"),
-        _ => None,
-    }
+    ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, 0)
+        .map(|standard| standard.as_str())
 }
 
 fn maybe_parse_udt_decode(
@@ -1618,7 +1678,11 @@ fn analyze_cell_data(
             })
     };
 
-    let mut heuristic_guesses = build_heuristic_guesses(data);
+    let mut heuristic_guesses = if deterministic.is_none() {
+        build_heuristic_guesses(data)
+    } else {
+        Vec::new()
+    };
     if deterministic.is_none() {
         if let Some(script_hint) = build_script_hint_guess(info, data) {
             heuristic_guesses.insert(0, script_hint);
@@ -1626,6 +1690,7 @@ fn analyze_cell_data(
     }
 
     Ok(CellDataAnalysis {
+        token: None,
         deterministic,
         heuristic_guesses,
     })
@@ -3178,15 +3243,48 @@ async fn get_cell(
         })?,
     );
 
-    // For cell data (e.g. dep groups), read from CKB direct store if available
-    let cell_data = state.ckb_store.as_ref().and_then(|ckb| {
-        if hash_bytes.len() == 32 {
-            let mut tx_h = [0u8; 32];
-            tx_h.copy_from_slice(&hash_bytes);
-            ckb.get_cell_data(&tx_h, output_index as u32)
-        } else {
-            None
+    // Empty payloads are proven by the canonical payload size. Nonempty bytes
+    // have one source: the original transaction in the node's RocksDB.
+    let cell_data = Some(if info.data_size == 0 {
+        Vec::new()
+    } else {
+        if info.data_size < 0 {
+            return Err(ApiError::internal(format!(
+                "negative data size for {outpoint}"
+            )));
         }
+        let reader = state.ckb_store.as_ref().ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell data for {outpoint} requires CKB RocksDB reader"
+            ))
+        })?;
+        let hash: [u8; 32] = hash_bytes
+            .as_slice()
+            .try_into()
+            .expect("validated cell transaction hash");
+        let tx = reader.get_transaction(&hash).ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell data transaction for {outpoint} missing from CKB RocksDB"
+            ))
+        })?;
+        let data = tx
+            .outputs_data()
+            .get(output_index as usize)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cell data output for {outpoint} missing from CKB RocksDB"
+                ))
+            })?
+            .raw_data()
+            .to_vec();
+        if data.len() != info.data_size as usize {
+            return Err(ApiError::internal(format!(
+                "cell data size mismatch for {outpoint}: payload={} node={}",
+                info.data_size,
+                data.len()
+            )));
+        }
+        data
     });
 
     let dep_group_result = cell_data
@@ -3213,7 +3311,7 @@ async fn get_cell(
         None
     };
 
-    let data_analysis = cell_data
+    let mut data_analysis = cell_data
         .as_ref()
         .map(|d| analyze_cell_data(&info, d, info.data_size))
         .transpose()
@@ -3222,6 +3320,25 @@ async fn get_cell(
                 "cell data analysis failed: outpoint={outpoint}: {e:#}"
             ))
         })?;
+
+    if let (Some(analysis), Some(type_hash)) = (&mut data_analysis, &info.type_script_hash) {
+        if analysis
+            .deterministic
+            .as_ref()
+            .is_some_and(|decode| decode.kind == "udt_amount")
+        {
+            let token = state
+                .store
+                .get_token(type_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "recognized token cell {outpoint} lacks indexed TokenInfo"
+                    ))
+                })?;
+            enrich_token_decode(analysis, &token).map_err(|e| ApiError::internal(e.to_string()))?;
+        }
+    }
 
     let occupied_capacity_breakdown = estimated_occupied_capacity_breakdown(&info);
     let occupied_capacity = if info.occupied_capacity > 0 {
@@ -4218,6 +4335,64 @@ mod tests {
     }
 
     #[test]
+    fn token_decode_formats_decimals_without_rounding_or_guessing() {
+        let mut analysis = CellDataAnalysis {
+            token: None,
+            heuristic_guesses: vec![],
+            deterministic: Some(CellDeterministicDecode {
+                kind: "udt_amount".into(),
+                summary: String::new(),
+                segments: vec![CellDataSegment {
+                    label: "amount".into(),
+                    start: 0,
+                    end: 16,
+                    meaning: String::new(),
+                    human_value: "123456789012345678901234567890".into(),
+                }],
+            }),
+        };
+        let token = ckbadger_store::TokenInfo {
+            type_code_hash: vec![0; 32],
+            hash_type: 1,
+            type_args: vec![],
+            standard: "xudt".into(),
+            name: Some("USDI".into()),
+            symbol: Some("USDI".into()),
+            decimals: Some(6),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        enrich_token_decode(&mut analysis, &token).unwrap();
+        assert_eq!(
+            analysis.token.as_ref().unwrap().formatted_amount.as_deref(),
+            Some("123456789012345678901234.567890")
+        );
+        assert_eq!(
+            analysis.deterministic.unwrap().segments[0].human_value,
+            "123456789012345678901234.567890 USDI"
+        );
+    }
+
+    #[test]
+    fn redesign_usdi_uses_indexer_token_classification_without_heuristics() {
+        let info = positioned(LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode("cc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037")
+                    .unwrap(),
+            ),
+            type_script_hash: Some(vec![0x11; 32]),
+            data_size: 16,
+            ..make_payload()
+        });
+        let analysis = analyze_cell_data(&info, &300_000_000u128.to_le_bytes(), 16).unwrap();
+        assert_eq!(analysis.deterministic.unwrap().kind, "udt_amount");
+        assert!(analysis.heuristic_guesses.is_empty());
+    }
+
+    #[test]
     fn test_analyze_cell_data_detects_udt_amount_segments() {
         let info = LiveCellInfo {
             type_code_hash: Some(hex::decode(SUDT_CODE_HASH.trim_start_matches("0x")).unwrap()),
@@ -5100,14 +5275,14 @@ mod tests {
     }
 
     #[test]
-    fn test_analyze_cell_data_dotcell_heuristics_still_listed() {
+    fn test_analyze_cell_data_dotcell_exact_decode_has_no_guesses() {
         let data = hex_bytes(DOTCELL_SUPPORT_DATA);
         let info = dotcell_name_info(&data);
 
         let analysis =
             analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         assert!(analysis.deterministic.is_some());
-        assert!(!analysis.heuristic_guesses.is_empty());
+        assert!(analysis.heuristic_guesses.is_empty());
         assert!(
             analysis
                 .heuristic_guesses

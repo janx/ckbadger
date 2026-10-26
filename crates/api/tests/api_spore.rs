@@ -544,6 +544,10 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
         )
         .unwrap();
 
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&[0xbb; 32], 0, &spore_id);
+    batch.put_live_cell_marker_by_outpoint(&[0xbb; 32], 0, 321);
+    batch.commit().unwrap();
     let config = test_config(store);
     let app = create_router(config).await;
 
@@ -1351,6 +1355,10 @@ async fn test_spore_lists_omit_owned_capacity_and_the_detail_requires_it() {
             },
         )
         .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&[0xbb; 32], 0, &spore_id);
+    batch.put_live_cell_marker_by_outpoint(&[0xbb; 32], 0, 321);
+    batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
 
     let (status, list) = get_json(&app, "/spore/objects").await;
@@ -1439,4 +1447,35 @@ async fn test_melted_spore_with_a_capacity_remainder_is_an_error() {
             .contains(&hex::encode(spore_id)),
         "{json}"
     );
+}
+
+#[tokio::test]
+async fn redesign_spore_detail_returns_live_outpoint_and_separate_mint() {
+    let store = test_store();
+    let id = [0x81; 32];
+    let live_tx = [0x92; 32];
+    store
+        .put_spore_direct(&id, &plain_spore_entry(true))
+        .unwrap();
+    store
+        .put_spore_daily_delta(
+            &id,
+            20240115,
+            &SporeDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 61,
+            },
+        )
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_spore_outpoint(&[0xbb; 32], 0, &id);
+    batch.put_spore_outpoint(&live_tx, 1, &id);
+    batch.put_live_cell_marker_by_outpoint(&live_tx, 1, 400);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/spore/objects/0x{}", hex::encode(id))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["createdAtTx"], format!("0x{}", "bb".repeat(32)));
+    assert_eq!(body["txHash"], format!("0x{}", hex::encode(live_tx)));
+    assert_eq!(body["outputIndex"], 1);
 }

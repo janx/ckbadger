@@ -203,6 +203,13 @@ interface HardforkActivation {
 
 interface Transaction {
   value: string;
+  outputCapacity?: string;
+  activity?: GlobalActivity | null;
+  proposalOrigin?: {
+    blockNumber: number;
+    distance: number;
+    uncle?: { number: number; hash: string } | null;
+  } | null;
   hash: string;
   blockNumber: number;
   blockHash: string;
@@ -211,8 +218,8 @@ interface Transaction {
   outputsCount: number;
   fee: string;
   txSize?: number;
-  cycles?: number;
-  cyclesStatus?: 'pending' | 'failed' | null;
+  cycles: number | null;
+  cyclesStatus: 'complete' | 'pending' | 'failed';
   isCellbase: boolean;
   timestamp: string;
 }
@@ -263,6 +270,8 @@ interface DeepForkStatus {
 }
 
 interface ReorgEvent {
+  revertedByEvent?: number | null;
+  reversesEvents?: number[];
   id: number;
   eventType: string;
   depth: number;
@@ -400,6 +409,13 @@ interface PoolTransaction {
   > | null;
 }
 interface PoolTransactionsResponse {
+  summary: {
+    size: string;
+    cycles: string;
+    minFeeRate: string | null;
+    maxFeeRate: string | null;
+    newestSeenAt: string | null;
+  };
   data: PoolTransaction[];
   total: number;
   limit: number;
@@ -427,8 +443,8 @@ interface TransactionDetail extends Omit<
   index: number | null;
   feeRate?: string;
   txSize?: number;
-  cycles?: number;
-  cyclesStatus?: 'pending' | 'failed' | null;
+  cycles: number | null;
+  cyclesStatus: 'complete' | 'pending' | 'failed';
   timestamp: string | null;
   confirmations: number | null;
   inputsCapacity: string | null;
@@ -560,6 +576,13 @@ interface CellDataGuess {
 }
 
 interface CellDataAnalysis {
+  token?: {
+    name: string | null;
+    symbol: string | null;
+    decimals: number | null;
+    rawAmount: string;
+    formattedAmount: string | null;
+  };
   deterministic?: CellDeterministicDecode;
   heuristicGuesses: CellDataGuess[];
 }
@@ -1055,7 +1078,8 @@ interface Asset {
     | 'pure_ckb'
     | 'decentralized_mixture'
     | 'centralized_mixture'
-    | 'unknown';
+    | 'unknown'
+    | 'decode_pending';
   fullyOnchainRatio?: string | null;
   fullyOnchainCount?: number | null;
   hMultiplier: string | null;
@@ -1227,7 +1251,13 @@ interface SporeCluster {
   /** Shannons; null when the index holds no aggregate for the cluster. */
   ownedKnowledge: string | null;
   composition?: {
-    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
+    tier:
+      | 'btc_ckb'
+      | 'pure_ckb'
+      | 'decentralized_mixture'
+      | 'centralized_mixture'
+      | 'unknown'
+      | 'decode_pending';
     fullyOnchainCount: number;
     pureCkbCount: number;
     decentralizedMixtureCount: number;
@@ -1250,7 +1280,13 @@ interface SporeNft {
   isLive: boolean;
   createdAtBlock: number;
   mediaProfile?: {
-    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
+    tier:
+      | 'btc_ckb'
+      | 'pure_ckb'
+      | 'decentralized_mixture'
+      | 'centralized_mixture'
+      | 'unknown'
+      | 'decode_pending';
     sources: Array<{
       uri: string;
       scheme: string;
@@ -1309,7 +1345,13 @@ interface ObjectCollection {
   ownedCapacity: string | null;
   ownedKnowledge: string | null;
   composition?: {
-    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
+    tier:
+      | 'btc_ckb'
+      | 'pure_ckb'
+      | 'decentralized_mixture'
+      | 'centralized_mixture'
+      | 'unknown'
+      | 'decode_pending';
     fullyOnchainCount: number;
     pureCkbCount: number;
     decentralizedMixtureCount: number;
@@ -1498,6 +1540,8 @@ interface MnftLifecycleEvent {
 }
 
 interface MnftItemDetail {
+  createdAtTx?: string;
+  ownerAddress?: string | null;
   nftId: string;
   standard: string;
   isLive: boolean;
@@ -1513,7 +1557,13 @@ interface MnftItemDetail {
   issuer: MnftIssuerSummary;
   lifecycle: MnftLifecycleEvent[];
   composition?: {
-    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
+    tier:
+      | 'btc_ckb'
+      | 'pure_ckb'
+      | 'decentralized_mixture'
+      | 'centralized_mixture'
+      | 'unknown'
+      | 'decode_pending';
     onchainCount: number;
     pureCkbCount: number;
     decentralizedMixtureCount: number;

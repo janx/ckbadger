@@ -2253,3 +2253,57 @@ async fn pending_tx_spending_a_never_seen_lock_shows_its_real_address() {
         .unwrap_or_else(|| panic!("the sender is a party of the row: {json}"));
     assert_eq!(party["address"], expected, "{json}");
 }
+
+#[tokio::test]
+async fn redesign_block_feed_and_direct_activity_share_exact_participants() {
+    let store = test_store();
+    let lock = [0x12; 32];
+    seed_committed_activity(&store, &lock, &[0xa1; 32], 42, 1, 800, 0);
+    seed_committed_activity(&store, &lock, &[0xa2; 32], 42, 2, -900, 0);
+    seed_committed_activity(&store, &lock, &[0xa3; 32], 43, 1, 100, 0);
+    let code_hash = vec![0x65; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &lock,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: code_hash.clone(),
+            hash_type: 1,
+            args: vec![0x11; 20],
+        },
+    );
+    batch.put_script_info(
+        &code_hash,
+        &ScriptInfo {
+            code_hash: code_hash.clone(),
+            hash_type: 1,
+            name: Some("JoyID".into()),
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, first) = get_json(&app, "/activities?blockNumber=42&limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["data"][0]["txIndex"], 2);
+    assert_eq!(first["data"][0]["participants"][0]["lockKind"], "JoyID");
+    let (status, direct) = get_json(
+        &app,
+        &format!("/transactions/0x{}/activity", "a2".repeat(32)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{direct}");
+    assert_eq!(direct, first["data"][0]);
+    let (status, second) = get_json(
+        &app,
+        &format!(
+            "/activities?blockNumber=42&limit=1&cursor={}",
+            first["nextCursor"].as_str().unwrap()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["data"][0]["txIndex"], 1);
+    assert!(second["nextCursor"].is_null());
+    let (status, _) = get_json(&app, "/activities?blockNumber=42&cursor=43:1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

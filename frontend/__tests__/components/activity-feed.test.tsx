@@ -23,6 +23,8 @@ function tx(i: number): Transaction {
     outputsCount: 3,
     value: '7000000000',
     fee: '10000',
+    cycles: null,
+    cyclesStatus: 'pending',
     isCellbase: false,
     timestamp: String(Date.now() - i * 10_000),
   };

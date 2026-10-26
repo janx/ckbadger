@@ -1126,6 +1126,7 @@ async fn test_token_transfers_and_activities_resolve_addresses_from_lock_scripts
             args: to_lock_args.clone(),
         },
     );
+    batch.put_tx_hash_map(&[0xCC; 32], 100, 3);
     batch.put_token_transfer(
         &type_hash,
         100,
@@ -1448,4 +1449,41 @@ async fn test_get_token_reports_pre_fork_capacity_after_real_writer_rollback() {
          and not the deleted-bucket null"
     );
     assert_eq!(json["totalCommonKnowledgeSize"], "18300000000");
+}
+
+#[tokio::test]
+async fn redesign_transfer_sequence_is_distinct_from_transaction_index() {
+    let store = test_store();
+    let token_hash = [0x7a; 32];
+    let tx_hash = [0x77; 32];
+    store
+        .put_token_direct(&token_hash, &placeholder_token_without_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_tx_hash_map(&tx_hash, 100, 3);
+    batch.put_token_transfer(
+        &token_hash,
+        100,
+        0,
+        &ckbadger_store::types::TokenTransferRecord {
+            tx_hash: tx_hash.to_vec(),
+            block_number: 100,
+            from_lock_hash: None,
+            to_lock_hash: vec![0x31; 32],
+            amount: 5,
+            is_mint: true,
+            is_burn: false,
+            timestamp: 1_700_000_000_000,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/tokens/0x{}/activities", hex::encode(token_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"][0]["txIndex"], 3);
+    assert_eq!(body["data"][0]["transferSequence"], 0);
 }

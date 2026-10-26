@@ -46,9 +46,40 @@ pub struct FiberChannelResponse {
     /// its relative-epoch flag bits put it above 2^53, where a JSON number is
     /// rounded by every browser.
     pub delay_epoch: Option<String>,
+    pub delay_epoch_decoded: Option<FiberEpochDelay>,
     pub settlement_tx_hash: Option<String>,
     pub settlement_block: Option<i64>,
     pub settlement_timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiberEpochDelay {
+    pub relative: bool,
+    pub epochs: u64,
+    pub index: u64,
+    pub length: u64,
+}
+
+fn decode_epoch_delay(raw: u64) -> Result<FiberEpochDelay, String> {
+    if raw & 0x6000_0000_0000_0000 != 0x2000_0000_0000_0000 || raw & 0x1f00_0000_0000_0000 != 0 {
+        return Err(format!(
+            "Fiber commitment delay is not a valid epoch since: {raw:#x}"
+        ));
+    }
+    let index = (raw >> 24) & 0xffff;
+    let length = (raw >> 40) & 0xffff;
+    if length == 0 || index >= length {
+        return Err(format!(
+            "Fiber commitment delay has invalid epoch fraction: {raw:#x} ({index}/{length})"
+        ));
+    }
+    Ok(FiberEpochDelay {
+        relative: raw >> 63 != 0,
+        epochs: raw & 0xff_ffff,
+        index,
+        length,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +95,7 @@ pub struct FiberChannelDetailResponse {
 pub struct FiberTimelineEvent {
     pub event: String,
     pub tx_hash: String,
+    #[serde(rename = "blockNumber")]
     pub block: i64,
     pub timestamp: String,
 }
@@ -130,8 +162,8 @@ fn format_participant(lock_hash: &[u8]) -> String {
 fn build_channel_response(
     channel_id: &[u8],
     ch: &ckbadger_store::types::FiberChannel,
-) -> FiberChannelResponse {
-    FiberChannelResponse {
+) -> Result<FiberChannelResponse, String> {
+    Ok(FiberChannelResponse {
         channel_id: format_hex(channel_id),
         state: state_to_str(ch.state).to_string(),
         capacity: ch.capacity.to_string(),
@@ -151,10 +183,11 @@ fn build_channel_response(
         close_timestamp: ch.close_timestamp.map(|t| t.to_string()),
         commitment_tx_hash: ch.commitment_tx_hash.as_ref().map(|h| format_hex(h)),
         delay_epoch: ch.delay_epoch.map(|delay| delay.to_string()),
+        delay_epoch_decoded: ch.delay_epoch.map(decode_epoch_delay).transpose()?,
         settlement_tx_hash: ch.settlement_tx_hash.as_ref().map(|h| format_hex(h)),
         settlement_block: ch.settlement_block,
         settlement_timestamp: ch.settlement_timestamp.map(|t| t.to_string()),
-    }
+    })
 }
 
 fn build_timeline(
@@ -253,7 +286,8 @@ async fn list_channels(
     let data: Vec<FiberChannelResponse> = page
         .iter()
         .map(|(id, ch)| build_channel_response(id, ch))
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(ApiError::internal)?;
 
     ok(CursorPaginatedResponse::without_total(
         data,
@@ -277,7 +311,7 @@ async fn get_channel(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Fiber channel not found"))?;
 
-    let resp = build_channel_response(&id_bytes, &channel);
+    let resp = build_channel_response(&id_bytes, &channel).map_err(ApiError::internal)?;
     let timeline = build_timeline(&channel)
         .map_err(|error| ApiError::internal(format!("fiber channel {}: {error}", channel_id)))?;
 
@@ -312,7 +346,8 @@ async fn get_address_channels(
     let data: Vec<FiberChannelResponse> = rows
         .iter()
         .map(|(id, ch)| build_channel_response(id, ch))
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(ApiError::internal)?;
 
     ok(data)
 }
@@ -441,7 +476,7 @@ mod tests {
             funding_lock_args: vec![0xCC; 20],
         };
         let id = [0xFF; 32];
-        let resp = build_channel_response(&id, &channel);
+        let resp = build_channel_response(&id, &channel).unwrap();
 
         assert_eq!(resp.channel_id, format_hex(&id));
         assert_eq!(resp.state, "open");
@@ -531,7 +566,7 @@ mod tests {
             close_timestamp: Some(2000),
             commitment_tx_hash: Some(vec![0x33; 32]),
             commitment_output_index: Some(0),
-            delay_epoch: Some(10),
+            delay_epoch: Some(0xa000_0100_0000_000a),
             settlement_tx_hash: Some(vec![0x44; 32]),
             settlement_block: Some(30),
             settlement_timestamp: Some(3000),
@@ -569,6 +604,7 @@ mod tests {
             close_timestamp: None,
             commitment_tx_hash: None,
             delay_epoch: None,
+            delay_epoch_decoded: None,
             settlement_tx_hash: None,
             settlement_block: None,
             settlement_timestamp: None,
@@ -612,6 +648,7 @@ mod tests {
             close_timestamp: None,
             commitment_tx_hash: None,
             delay_epoch: None,
+            delay_epoch_decoded: None,
             settlement_tx_hash: None,
             settlement_block: None,
             settlement_timestamp: None,

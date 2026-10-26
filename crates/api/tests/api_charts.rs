@@ -1217,3 +1217,46 @@ async fn test_daily_chart_cache_drops_a_day_that_a_rollback_reopened() {
         "a reopened day must not be served from the cache: {json}"
     );
 }
+
+#[tokio::test]
+async fn redesign_utilized_chart_retains_identity_category() {
+    let store = test_store();
+    let id = ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_collection_aggregate(
+        &id,
+        &IdentityCollectionAggregate {
+            name: Some(".bit".into()),
+            standard: IdentityStandard::DotBit,
+            total_count: 1,
+            live_count: 1,
+            holders_count: 1,
+            activities_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+    store
+        .put_mnft_daily_delta(
+            &id,
+            20240101,
+            &MnftDailyDelta {
+                owned_capacity_delta: 700,
+                owned_knowledge_delta: 600,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/most-utilized-assets").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let series = json["usedShare"]["series"].as_array().unwrap();
+    assert!(
+        series.iter().any(|row| row["label"] == ".bit (identity)"),
+        "{json}"
+    );
+    assert!(
+        !series.iter().any(|row| row["label"]
+            .as_str()
+            .is_some_and(|label| label.contains(".bit (object)"))),
+        "{json}"
+    );
+}

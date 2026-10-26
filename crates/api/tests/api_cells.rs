@@ -1,6 +1,44 @@
 mod common;
 use common::*;
 
+fn cell_bytes_config(
+    store: Arc<CkbadgerStore>,
+    hash: &[u8],
+    index: usize,
+    data: Vec<u8>,
+) -> AppConfig {
+    use ckb_types::{
+        core::{BlockBuilder, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let mut builder = TransactionBuilder::default();
+    for output in 0..=index {
+        builder = builder.output(packed::CellOutput::default()).output_data(
+            if output == index {
+                data.clone()
+            } else {
+                vec![]
+            }
+            .pack(),
+        );
+    }
+    let tx = builder
+        .build()
+        .fake_hash(packed::Byte32::from_slice(hash).unwrap());
+    let chain = seed_ckb_chain(&[BlockBuilder::default()
+        .number(123u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .transaction(tx)
+        .build()]);
+    test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    )
+}
+
 #[tokio::test]
 async fn test_live_cell_summary_returns_exact_constant_size_projection() {
     let store = test_store();
@@ -172,7 +210,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     );
     batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = cell_bytes_config(store, &tx_hash, 1, vec![0; 42]);
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -306,15 +344,9 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
 /// frontend never compares code hashes to recognise `.cell` / did:ckb cells.
 #[tokio::test]
 async fn test_cell_detail_exposes_registry_protocol_slugs() {
-    let store = test_store();
-    let tx_hash = vec![0xc1; 32];
-
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_cell(&tx_hash, 0, &dotcell_name_cell_info(105), 123);
-    batch.commit().unwrap();
-
-    let app = create_router(test_config(store)).await;
-    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(&tx_hash))).await;
+    let (app, tx_hash, _chain) =
+        dotcell_name_cell_app(hex::decode(DOTCELL_SUPPORT_DATA).unwrap()).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
     assert_eq!(status, StatusCode::OK, "got {json}");
     assert_eq!(json["protocolScript"]["lock"], "dotcell-account-lock");
     assert_eq!(json["protocolScript"]["type"], "dotcell-account");
@@ -1065,7 +1097,7 @@ async fn get_cell_json(tx_hash: &[u8], cell: LiveCellInfo) -> (StatusCode, serde
     batch.put_cell(tx_hash, 1, &cell, 123);
     batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = cell_bytes_config(store, tx_hash, 1, vec![0; 42]);
     let app = create_router(config).await;
     get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx_hash))).await
 }
@@ -1820,4 +1852,36 @@ async fn test_address_dotcell_names_lists_names_owned_by_prefix() {
         "0x62d71147ac82b83c8531126cacb0d2f072bfd94a"
     );
     assert_eq!(rows[0]["expiredAt"], 1_821_507_678u64);
+}
+
+#[tokio::test]
+async fn redesign_cell_data_requires_node_bytes() {
+    let store = test_store();
+    let tx = [0xaa; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx,
+        0,
+        &LiveCellInfo {
+            capacity: 10000000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 16,
+            occupied_capacity: 7700000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        10,
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(json["message"].as_str().unwrap().contains("CKB RocksDB"));
 }

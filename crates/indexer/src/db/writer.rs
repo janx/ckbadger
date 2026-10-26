@@ -14,6 +14,8 @@ use crate::cache::CacheInvalidator;
 use crate::sync::types::UndoSeqScope;
 use crate::sync::undo::SharedUndoSeq;
 
+pub use dotcell_detector::dotcell_asset_action;
+
 #[derive(Clone)]
 pub struct BatchWriter {
     pub(super) store: Arc<CkbadgerStore>,
@@ -601,3 +603,5 @@ mod undo_seq_tests {
         );
     }
 }
+
+// Shared read contract: item and collection feeds classify the same persisted action.

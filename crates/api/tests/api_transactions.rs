@@ -2,7 +2,7 @@ mod common;
 use common::*;
 
 #[tokio::test]
-async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
+async fn block_transaction_list_requires_node_proposal_evidence() {
     let store = test_store();
     let hash = [0xA7u8; 32];
     let second_hash = [0xA8u8; 32];
@@ -59,7 +59,9 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
         },
     );
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let mut config = test_config(store);
+    config.ckb_db_path = "/missing/redesign-node-test".into();
+    let app = create_router(config).await;
     let response = app
         .clone()
         .oneshot(
@@ -70,30 +72,10 @@ async fn block_transaction_list_uses_domain_hash_without_direct_ckb_reader() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["data"][0]["hash"], format!("0x{}", hex::encode(hash)));
-    let cursor = json["nextCursor"].as_str().expect("second page cursor");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/api/v1/transactions?block_number=7&limit=1&cursor={cursor}"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(
-        json["data"][0]["hash"],
-        format!("0x{}", hex::encode(second_hash))
-    );
-    assert!(json["nextCursor"].is_null());
+    assert!(json["message"].as_str().unwrap().contains("CKB RocksDB"));
 }
 
 #[tokio::test]
@@ -162,6 +144,9 @@ async fn committed_detail_uses_transaction_output_data_without_cell_data_cf() {
             semantic_tags: 0,
         },
     );
+    for output in 0..1 {
+        batch.put_live_cell_marker_by_outpoint(&tx_hash, output, 7);
+    }
     batch.commit().unwrap();
     let app = create_router(test_config_with_ckb_db_path(
         store.clone(),
@@ -486,7 +471,7 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     assert_eq!(json["outputs"][0]["capacity"], "100000000000");
     // This output is at block 0 but its lock args are not the Satoshi dead
     // address, so it must NOT be tagged as a genesis special burn cell.
-    assert_eq!(json["outputs"][0]["cellType"], serde_json::Value::Null);
+    assert_eq!(json["outputs"][0]["cellType"], "plain");
     assert_eq!(
         json["outputs"][0]["virtualCommonKnowledgeSize"],
         serde_json::Value::Null
@@ -574,7 +559,7 @@ async fn pending_tx_paying_the_satoshi_address_is_not_a_genesis_burn() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["outputs"][0]["cellType"], serde_json::Value::Null);
+    assert_eq!(json["outputs"][0]["cellType"], "plain");
     assert_eq!(
         json["outputs"][0]["virtualCommonKnowledgeSize"],
         serde_json::Value::Null
@@ -934,13 +919,74 @@ async fn pending_dao_withdrawal_is_served_with_its_exact_fee() {
 #[tokio::test]
 async fn test_transaction_detail_prefers_committed_store_over_mempool() {
     let store = test_store();
+    seed_genesis_baseline(&store);
     let server = MockServer::start().await;
     let hash = pending_tx_hash_hex();
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap()).unwrap();
     insert_committed_transaction(&store, &hash_bytes);
     mount_pending_transaction_rpc(&server, &hash, "pending").await;
 
-    let mut config = test_config(store);
+    use ckb_types::{
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x11; 32]))
+        .hash_type(1u8.into())
+        .args(ckb_types::bytes::Bytes::from(vec![0; 20]).pack())
+        .build();
+    let node_tx = TransactionBuilder::default()
+        .input(
+            packed::CellInput::new_builder()
+                .previous_output(
+                    packed::OutPoint::new_builder()
+                        .tx_hash(packed::Byte32::new([0xab; 32]))
+                        .index(0u32.pack())
+                        .build(),
+                )
+                .build(),
+        )
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity(10_000_000_000u64.pack())
+                .lock(lock.clone())
+                .build(),
+        )
+        .output_data(ckb_types::bytes::Bytes::new().pack())
+        .build()
+        .fake_hash(packed::Byte32::from_slice(&hash_bytes).unwrap());
+    let mut batch = StoreBatch::new(store.as_ref());
+    let cell = LiveCellInfo {
+        capacity: 10_000_001_234,
+        lock_script_hash: lock.calc_script_hash().as_slice().to_vec(),
+        lock_code_hash: vec![0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0; 20],
+        type_script_hash: None,
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        occupied_capacity: 6_100_000_000,
+        udt_amount: None,
+        data_hash: None,
+    };
+    batch.put_cell(&[0xab; 32], 0, &cell, 320);
+    batch.put_live_cell_marker_by_outpoint(&hash_bytes, 0, 321);
+    batch.commit().unwrap();
+    let block = BlockBuilder::default()
+        .number(321u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .transaction(node_tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
     config.ckb_rpc_url = server.uri();
     let app = create_router(config).await;
 
@@ -970,6 +1016,9 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
         "feeRate must be reproducible from the served txSize"
     );
     assert_eq!(json["cycles"], 333);
+    assert_eq!(json["cyclesStatus"], "complete");
+    assert_eq!(json["inputs"].as_array().unwrap().len(), 1);
+    assert_eq!(json["outputs"][0]["status"], "live");
 }
 
 #[tokio::test]
@@ -981,7 +1030,17 @@ async fn test_pending_transaction_committed_only_routes_return_explicit_error() 
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
-    let app = create_router(config).await;
+    let state = test_app_state(config);
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &hex::decode(hash.trim_start_matches("0x")).unwrap(),
+            &[0x11; 32],
+            0,
+            1,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let app = router_from_state(state);
 
     let cell_deps_request = Request::builder()
         .uri(format!("/api/v1/transactions/{hash}/cell-deps"))
@@ -1169,6 +1228,35 @@ fn seed_lifecycle_fixture(
             semantic_tags: 0,
         },
     );
+    batch.put_tx_actions(&make_test_tx_actions(
+        &[0x21; 32],
+        tx_hash,
+        &[0xC0; 32],
+        commit_block,
+        0,
+        1000,
+        0,
+    ));
+    batch.put_cell(
+        tx_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 10_000_000_000,
+            lock_script_hash: vec![0x21; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 6_100_000_000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        commit_block,
+    );
     batch.commit().unwrap();
     store
         .update_sync_status(|s| {
@@ -1288,6 +1376,15 @@ async fn test_transaction_lifecycle_honours_uncle_proposal_zone() {
     assert_eq!(json["commitmentDistance"], commit_block - 440);
     assert_eq!(json["proposedInUncle"]["blockNumber"], 438);
     assert_eq!(json["committedIn"]["blockNumber"], commit_block);
+    let (status, rows) =
+        get_json(&app, &format!("/transactions?block_number={commit_block}")).await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    assert_eq!(rows["data"][0]["proposalOrigin"]["blockNumber"], 440);
+    assert_eq!(rows["data"][0]["proposalOrigin"]["distance"], 2);
+    assert_eq!(rows["data"][0]["proposalOrigin"]["uncle"]["number"], 438);
+    assert_eq!(rows["data"][0]["outputCapacity"], "10000000000");
+    assert_eq!(rows["data"][0]["cycles"], 1000);
+    assert_eq!(rows["data"][0]["cyclesStatus"], "complete");
 }
 
 #[tokio::test]
@@ -1480,7 +1577,26 @@ async fn test_cell_deps_committed_tx_returns_deps_from_ckb_store() {
 
     let store = test_store();
 
-    let dep_tx_hash = [0xAB; 32];
+    let code = ckb_types::core::TransactionBuilder::default()
+        .output(ckb_types::packed::CellOutput::default())
+        .output_data([1u8, 2, 3].pack())
+        .build();
+    let code_hash = code.hash();
+    let group_data = ckb_types::packed::OutPointVec::new_builder()
+        .push(
+            ckb_types::packed::OutPoint::new_builder()
+                .tx_hash(code_hash.clone())
+                .index(0u32.pack())
+                .build(),
+        )
+        .build();
+    let group = ckb_types::core::TransactionBuilder::default()
+        .output(ckb_types::packed::CellOutput::default())
+        .output_data(Vec::<u8>::new().pack())
+        .output(ckb_types::packed::CellOutput::default())
+        .output_data(group_data.as_bytes().pack())
+        .build();
+    let dep_tx_hash: [u8; 32] = group.hash().unpack();
     let tx = ckb_types::core::TransactionBuilder::default()
         .cell_dep(
             ckb_types::packed::CellDep::new_builder()
@@ -1500,6 +1616,8 @@ async fn test_cell_deps_committed_tx_returns_deps_from_ckb_store() {
     let block = ckb_types::core::BlockBuilder::default()
         .number(77u64.pack())
         .epoch(epoch.pack())
+        .transaction(code)
+        .transaction(group)
         .transaction(tx)
         .build();
     let chain = seed_ckb_chain(&[block]);
@@ -1526,6 +1644,19 @@ async fn test_cell_deps_committed_tx_returns_deps_from_ckb_store() {
     );
     assert_eq!(deps[0]["outPointIndex"], 1);
     assert_eq!(deps[0]["depType"], "dep_group");
+    assert_eq!(
+        deps[0]["resolvedCells"][0]["txHash"],
+        format!("0x{}", hex::encode(code_hash.as_slice()))
+    );
+    assert_eq!(deps[0]["resolvedCells"][0]["index"], 0);
+    assert_eq!(
+        deps[0]["resolvedCells"][0]["dataHash"],
+        format!(
+            "0x{}",
+            hex::encode(ckb_types::packed::CellOutput::calc_data_hash(&[1u8, 2, 3]).as_slice())
+        )
+    );
+    assert_eq!(deps[0]["scriptHashes"], serde_json::json!([]));
 }
 
 // ── `.cell` records decoded from the creating transaction's witness ──────
@@ -1719,6 +1850,9 @@ async fn test_transaction_detail_decodes_dotcell_records_from_witness() {
             block_number - 1,
             block_number,
         );
+    }
+    for output in 0..4 {
+        batch.put_live_cell_marker_by_outpoint(&tx_hash, output, block_number);
     }
     batch.commit().unwrap();
     store
@@ -1961,5 +2095,162 @@ async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
         waited_ms > 0 && waited_ms <= latency_ms,
         "the log reports the wait within the latency: {}",
         completed[0]
+    );
+}
+
+#[tokio::test]
+async fn redesign_pool_pages_newest_first_with_exact_values_and_interpretation() {
+    use ckbadger_api::pool::PoolStatus;
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![
+        make_test_pool_record(&[0x11; 32], &[0x21; 32], 700, 1000, PoolStatus::Pending),
+        make_test_pool_record(&[0x12; 32], &[0x21; 32], -800, 2000, PoolStatus::Proposed),
+    ]));
+    let app = router_from_state(state);
+    let (status, first) = get_json(&app, "/transactions/pool?limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["data"][0]["hash"], format!("0x{}", "12".repeat(32)));
+    assert_eq!(first["data"][0]["value"], "0");
+    assert_eq!(first["data"][0]["interpretation"]["status"], "complete");
+    assert_eq!(first["totals"]["pending"], 1);
+    assert_eq!(first["totals"]["proposed"], 1);
+    assert_eq!(first["data"][0]["feeRate"], "2000");
+    assert_eq!(
+        first["summary"],
+        serde_json::json!({"size":"1000","cycles":"400000","minFeeRate":"2000","maxFeeRate":"2000","newestSeenAt":"2000"})
+    );
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let (status, second) =
+        get_json(&app, &format!("/transactions/pool?limit=1&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["data"][0]["value"], "700");
+    assert_eq!(second["summary"], first["summary"]);
+    assert!(second["nextCursor"].is_null());
+    assert!(
+        second["data"][0]["activity"].get("blockNumber").is_none(),
+        "pool activity must not invent a committing block"
+    );
+}
+
+#[tokio::test]
+async fn redesign_pool_unhealthy_is_not_reported_as_empty() {
+    let state = test_app_state(test_config(test_store()));
+    let app = router_from_state(state);
+    let (status, _) = get_json(&app, "/transactions/pool").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn redesign_committed_detail_requires_node_transaction_bytes() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let hash = [0x37; 32];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_tx_hash_map(&hash, 10, 1);
+    batch.put_tx_index(
+        10,
+        1,
+        &TxIndexEntry {
+            tx_hash: hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 100,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0x41; 32],
+            parent_hash: vec![0x42; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 2,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body["message"].as_str().unwrap().contains("CKB RocksDB"));
+}
+
+#[tokio::test]
+async fn redesign_transaction_list_value_is_positive_participant_sum() {
+    let store = test_store();
+    let tx = [0x61; 32];
+    seed_committed_activity(&store, &[0x11; 32], &tx, 100, 1, -850, 0);
+    let mut actions = store.get_tx_actions(100, 1, &tx).unwrap().unwrap();
+    actions
+        .participants
+        .push(make_test_participant(0x12, 700, 0));
+    actions
+        .participants
+        .push(make_test_participant(0x13, 50, 0));
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_actions(&actions);
+    batch.put_cell(
+        &tx,
+        0,
+        &LiveCellInfo {
+            capacity: 9900000000,
+            lock_script_hash: vec![0x12; 32],
+            lock_code_hash: vec![0x21; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 6100000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        100,
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/transactions?limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "750");
+    assert_eq!(json["data"][0]["outputCapacity"], "9900000000");
+    assert_eq!(json["data"][0]["txSize"], 226);
+    assert_eq!(
+        json["data"][0]["activity"]["participants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn redesign_empty_healthy_pool_has_exact_zero_summary_and_no_rates() {
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![]));
+    let (status, body) = get_json(&router_from_state(state), "/transactions/pool").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 0);
+    assert_eq!(
+        body["summary"],
+        serde_json::json!({"size":"0","cycles":"0","minFeeRate":null,"maxFeeRate":null,"newestSeenAt":null})
     );
 }

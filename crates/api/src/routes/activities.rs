@@ -75,7 +75,25 @@ pub struct ParticipantRef {
     pub address: Option<String>,
     pub lock_hash: Option<String>,
     pub lock_hash_prefix: Option<String>,
+    pub lock_kind: Option<String>,
     pub roles: Vec<&'static str>,
+}
+
+fn participant_lock_kind(
+    store: &CkbadgerStore,
+    lock_hash: &[u8; 32],
+    pool_record: Option<&PoolTxRecord>,
+) -> anyhow::Result<Option<String>> {
+    let code_hash = if let Some(lock) = pool_record.and_then(|record| record.lock_script(lock_hash))
+    {
+        Some(lock.code_hash)
+    } else {
+        store.get_lock_script(lock_hash)?.map(|lock| lock.code_hash)
+    };
+    code_hash
+        .map(|hash| store.get_script_info(&hash))
+        .transpose()
+        .map(|info| normalized_script_name(info.flatten().as_ref()))
 }
 
 fn participant_ref(
@@ -91,6 +109,7 @@ fn participant_ref(
             address: resolve_party_address(store, network, &hash, pool_record, cache)?,
             lock_hash: Some(format!("0x{}", hex::encode(hash))),
             lock_hash_prefix: None,
+            lock_kind: participant_lock_kind(store, &hash, pool_record)?,
             roles,
         }),
         // A protocol-named prefix resolves at read time through the chain
@@ -106,12 +125,16 @@ fn participant_ref(
                 )?),
                 lock_hash: Some(format!("0x{}", hex::encode(hash))),
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
+                lock_kind: normalized_script_name(
+                    store.get_script_info(&entry.code_hash)?.as_ref(),
+                ),
                 roles,
             }),
             None => Ok(ParticipantRef {
                 address: None,
                 lock_hash: None,
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
+                lock_kind: None,
                 roles,
             }),
         },
@@ -123,6 +146,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/addresses/{addr}/activities", get(get_address_activities))
         .route("/activities", get(get_global_activities))
         .route("/activities/latest", get(get_latest_activities))
+        .route(
+            "/transactions/{hash}/activity",
+            get(get_transaction_activity),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +158,8 @@ pub struct ActivityParams {
     limit: i64,
     cursor: Option<String>,
     filter: Option<String>,
+    #[serde(rename = "blockNumber", alias = "block_number")]
+    block_number: Option<i64>,
 }
 
 /// Per-address activity response: shows one participant's perspective of a transaction.
@@ -259,6 +288,7 @@ pub struct ParticipantResponse {
     pub address: Option<String>,
     pub lock_hash: Option<String>,
     pub lock_hash_prefix: Option<String>,
+    pub lock_kind: Option<String>,
     pub roles: Vec<&'static str>,
     pub ckb_delta: String,
     pub used_delta: String,
@@ -703,13 +733,34 @@ pub(crate) fn build_global_activity_response(
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<GlobalActivityResponse> {
-    let mut token_cache: HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>> = HashMap::new();
+    build_global_activity_response_with_pool(
+        store,
+        _ao_store,
+        network,
+        actions,
+        script_info_cache,
+        address_cache,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_global_activity_response_with_pool(
+    store: &CkbadgerStore,
+    _ao_store: &CkbadgerStore,
+    network: &str,
+    actions: &TxActions,
+    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    address_cache: &mut HashMap<Vec<u8>, Option<String>>,
+    pool_record: Option<&PoolTxRecord>,
+) -> anyhow::Result<GlobalActivityResponse> {
+    let mut token_cache = HashMap::new();
 
     let participants = actions
         .participants
         .iter()
         .map(|p| {
-            let reference = participant_ref(store, network, p, None, address_cache)?;
+            let reference = participant_ref(store, network, p, pool_record, address_cache)?;
             let item_deltas = p
                 .item_deltas
                 .iter()
@@ -719,6 +770,7 @@ pub(crate) fn build_global_activity_response(
                 address: reference.address,
                 lock_hash: reference.lock_hash,
                 lock_hash_prefix: reference.lock_hash_prefix,
+                lock_kind: reference.lock_kind,
                 roles: reference.roles,
                 ckb_delta: p.ckb_delta.to_string(),
                 used_delta: p.used_delta.to_string(),
@@ -1140,6 +1192,41 @@ async fn get_address_activities(
     })
 }
 
+async fn get_transaction_activity(
+    State(state): State<Arc<AppState>>,
+    Path(hash): Path<String>,
+) -> ApiResult<Option<GlobalActivityResponse>> {
+    let hash = parse_hash32(&hash, "transaction hash")?;
+    let (block, index, tx) = state
+        .store
+        .get_tx_by_hash(&hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Committed transaction not found"))?;
+    if tx.is_cellbase {
+        return ok(None);
+    }
+    let actions = state
+        .store
+        .get_tx_actions(block, index, &hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "transaction activity missing: block={block} index={index} tx=0x{}",
+                hex::encode(hash)
+            ))
+        })?;
+    let activity = build_global_activity_response(
+        &state.store,
+        &state.append_only_store,
+        &state.ckb_network,
+        &actions,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    ok(Some(activity))
+}
+
 async fn get_global_activities(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ActivityParams>,
@@ -1149,17 +1236,33 @@ async fn get_global_activities(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "activity cursor")?;
 
+    let block_number = params
+        .block_number
+        .map(|n| crate::utils::validate_block_number(n, "blockNumber"))
+        .transpose()?;
+    if let (Some(block), Some((cursor_block, _))) = (block_number, cursor) {
+        if block != cursor_block {
+            return Err(ApiError::bad_request(
+                "activity cursor belongs to another block",
+            ));
+        }
+    }
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let filter = params.filter.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let results = list_canonical_global_activities_page(
-            store.as_ref(),
-            limit + 1,
-            cursor,
-            filter.as_deref(),
-        )?;
+        let results = if let Some(block) = block_number {
+            let mut rows = Vec::new();
+            for (index, tx) in store.list_block_txs(block)?.into_iter().rev() {
+                if tx.is_cellbase || cursor.is_some_and(|(_,last)| index >= last) { continue; }
+                let actions = store.get_tx_actions(block, index, &tx.tx_hash)?
+                    .ok_or_else(|| anyhow::anyhow!("block activity missing canonical actions: block={block} index={index} tx=0x{}",hex::encode(tx.tx_hash)))?;
+                if matches_global_activity_filter(&actions, filter.as_deref()) { rows.push(actions); }
+                if rows.len() > limit { break; }
+            }
+            rows
+        } else { list_canonical_global_activities_page(store.as_ref(), limit + 1, cursor, filter.as_deref())? };
 
         let has_more = results.len() > limit;
         let page: Vec<_> = results.into_iter().take(limit).collect();

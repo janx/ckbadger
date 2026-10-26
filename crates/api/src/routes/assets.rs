@@ -317,7 +317,10 @@ pub struct AssetResponse {
     pub famous: bool,
     pub tags: Option<Vec<String>>,
     pub holders_count: i64,
-    pub transfers_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfers_count: Option<i64>,
+    pub live_count: Option<i64>,
+    pub activities_count: Option<i64>,
     pub transfers_24h: i64,
     pub decimals: Option<i16>,
     pub total_supply: Option<String>,
@@ -422,6 +425,8 @@ pub struct MnftLifecycleEventResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MnftItemDetailResponse {
+    pub created_at_tx: String,
+    pub owner_address: Option<String>,
     pub nft_id: String,
     pub standard: String,
     pub is_live: bool,
@@ -1694,6 +1699,17 @@ async fn get_object_item_detail(
         })?;
 
     ok(MnftItemDetailResponse {
+        created_at_tx: format!("0x{}", hex::encode(&entry.created_at_tx)),
+        owner_address: entry
+            .owner_lock_hash
+            .as_deref()
+            .map(|hash| {
+                crate::utils::address::resolve_lock_address(&state.store, hash, &state.ckb_network)
+            })
+            .transpose()
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .flatten()
+            .map(|resolved| resolved.address),
         nft_id: format!("0x{}", hex::encode(&object_id_bytes)),
         standard: "m-nft".to_string(),
         is_live: entry.is_live,
@@ -1742,6 +1758,18 @@ pub(super) enum NftLifecycleStandard {
     Spore,
 }
 
+fn asset_action_name(action: ckbadger_store::AssetAction) -> &'static str {
+    use ckbadger_store::AssetAction::*;
+    match action {
+        Mint => "mint",
+        Transfer => "transfer",
+        Burn => "burn",
+        Recycle => "recycle",
+        Renew => "renew",
+        Update => "update",
+    }
+}
+
 fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
@@ -1764,6 +1792,27 @@ fn collect_nft_item_lifecycle_actions(
             .list_spore_outpoints_by_spore_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
+
+    let mut exact_created = HashMap::new();
+    for (tx_hash, index) in &outpoints {
+        let action = match standard {
+            NftLifecycleStandard::DotBit => Some(state.store.get_dotbit_item_action(
+                nft_id_bytes,
+                tx_hash,
+                *index,
+            )),
+            NftLifecycleStandard::DidCkb | NftLifecycleStandard::BitCell => Some(
+                state
+                    .store
+                    .get_identity_item_action(nft_id_bytes, tx_hash, *index),
+            ),
+            _ => None,
+        };
+        if let Some(action) = action {
+            let action = action.map_err(|error| ApiError::internal(error.to_string()))?;
+            exact_created.insert(tx_hash.clone(), action);
+        }
+    }
 
     let mut created_txs: HashSet<Vec<u8>> = HashSet::new();
     let mut consumed_txs: HashSet<Vec<u8>> = HashSet::new();
@@ -1798,12 +1847,68 @@ fn collect_nft_item_lifecycle_actions(
 
     let mut rows = Vec::with_capacity(lifecycle_txs.len());
     for tx_hash in lifecycle_txs {
+        let exact = if matches!(standard, NftLifecycleStandard::DotCell) {
+            let (block, index) = state
+                .store
+                .get_tx_location(&tx_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "missing .cell action transaction 0x{}",
+                        hex::encode(&tx_hash)
+                    ))
+                })?;
+            let actions = state
+                .store
+                .get_tx_actions(block, index, &tx_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "missing .cell canonical actions 0x{}",
+                        hex::encode(&tx_hash)
+                    ))
+                })?;
+            let item_id = format!("0x{}", hex::encode(nft_id_bytes));
+            let mut item_actions = Vec::new();
+            for action in actions
+                .protocol_actions
+                .iter()
+                .filter(|action| action.protocol == "dotcell")
+            {
+                let metadata = action
+                    .metadata_value()
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                if metadata["id"].as_str() == Some(item_id.as_str()) {
+                    item_actions.push(
+                        ckbadger_indexer::db::dotcell_asset_action(&action.action)
+                            .map_err(|e| ApiError::internal(e.to_string()))?,
+                    );
+                }
+            }
+            if item_actions.is_empty() {
+                continue;
+            } // Ring infrastructure has no item action.
+            if item_actions.len() != 1 {
+                return Err(ApiError::internal(format!(
+                    "multiple .cell actions for {item_id} in 0x{}",
+                    hex::encode(&tx_hash)
+                )));
+            }
+            item_actions.pop()
+        } else {
+            exact_created.get(&tx_hash).copied()
+        };
+        if let Some(action) = exact {
+            rows.push((tx_hash, asset_action_name(action).to_string()));
+            continue;
+        }
         let action = match (
             created_txs.contains(&tx_hash),
             consumed_txs.contains(&tx_hash),
         ) {
             (true, true) => "transfer",
             (true, false) => "mint",
+            (false, true) if matches!(standard, NftLifecycleStandard::DotBit) => "recycle",
             (false, true) => "burn",
             (false, false) => {
                 return Err(ApiError::internal(format!(
