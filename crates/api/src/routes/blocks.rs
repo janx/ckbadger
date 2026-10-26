@@ -682,6 +682,26 @@ fn resolve_block_cycles(
     header_cycles: Option<i64>,
     txs: &[(i32, ckbadger_store::TxIndexEntry)],
 ) -> Result<(Option<i64>, BlockCyclesStatus), ApiRouteError> {
+    // Consensus accepts genesis without running its scripts, including the
+    // system-script transaction after cellbase. A stored nonzero result is an
+    // invariant violation, not evidence of a historical execution.
+    if block_num == 0 {
+        if header_cycles.is_some_and(|cycles| cycles != 0) {
+            return Err(ApiError::internal(format!(
+                "genesis block 0 has aggregate cycles {header_cycles:?}; expected no script execution"
+            )));
+        }
+        for (index, entry) in txs {
+            if entry.cycles.is_some_and(|cycles| cycles != 0) {
+                return Err(ApiError::internal(format!(
+                    "genesis block 0 tx {index} 0x{} has cycles {:?}; expected no script execution",
+                    hex::encode(entry.tx_hash),
+                    entry.cycles
+                )));
+            }
+        }
+        return Ok((Some(0), BlockCyclesStatus::Complete));
+    }
     if let Some(cycles) = header_cycles {
         if cycles < 0 {
             return Err(ApiError::internal(format!(
@@ -1281,6 +1301,46 @@ async fn get_block_proposals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn genesis_has_no_script_execution_even_for_non_cellbase_transactions() {
+        let tx = ckbadger_store::TxIndexEntry {
+            tx_hash: [0x11; 32],
+            is_cellbase: false,
+            timestamp: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        for cycles in [None, Some(0)] {
+            let mut entry = tx.clone();
+            entry.cycles = cycles;
+            assert_eq!(
+                resolve_block_cycles(0, None, &[(1, entry)]).unwrap(),
+                (Some(0), BlockCyclesStatus::Complete)
+            );
+        }
+        for cycles in [-1, 1] {
+            let mut entry = tx.clone();
+            entry.cycles = Some(cycles);
+            let error = resolve_block_cycles(0, None, &[(1, entry)])
+                .unwrap_err()
+                .1
+                 .0
+                .message;
+            assert!(error.contains("genesis"), "{error}");
+            assert!(error.contains("tx 1"), "{error}");
+        }
+        let error = resolve_block_cycles(0, Some(1), &[(1, tx)])
+            .unwrap_err()
+            .1
+             .0
+            .message;
+        assert!(error.contains("genesis"), "{error}");
+    }
 
     fn test_metrics() -> BlockMetricsResponse {
         BlockMetricsResponse {
