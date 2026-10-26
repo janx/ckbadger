@@ -518,7 +518,7 @@ impl BatchWriter {
             CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
             CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
             CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
-            CompositionTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::Unknown | CompositionTier::DecodePending => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow::anyhow!(
@@ -763,7 +763,15 @@ impl BatchWriter {
         let effective_cluster = new_cluster
             .clone()
             .or_else(|| Some(SOLE_SPORES_SENTINEL_COLLECTION.to_vec()));
-        let media_profile = if let Some(precomputed) = &spore.media_profile {
+        // Spore content/DNA is immutable. A transfer must retain the worker's
+        // decoded dependencies instead of replacing them with an undecoded profile.
+        let media_profile = if let Some(ObjectEntry {
+            extra: ObjectExtra::Spore { media_profile, .. },
+            ..
+        }) = &existing
+        {
+            media_profile.clone()
+        } else if let Some(precomputed) = &spore.media_profile {
             precomputed.clone()
         } else {
             let cluster_description = if let Some(cluster_id) = new_cluster.as_ref() {
@@ -1848,6 +1856,103 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.spore_id, vec![0x44; 32]);
         assert_eq!(loaded.cluster_id, Some(vec![0x55; 32]));
+    }
+
+    #[test]
+    fn transferring_dob_keeps_decoded_bitcoin_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let cluster_id = vec![0x11; 32];
+        let spore_id = vec![0x22; 32];
+        let owner_a = vec![0xA1; 32];
+        let owner_b = vec![0xB2; 32];
+
+        {
+            let mut seed = StoreBatch::new(&store);
+            let mut entry = make_spore_entry(&cluster_id, &owner_a);
+            if let ObjectExtra::Spore {
+                media_profile,
+                content_type,
+                ..
+            } = &mut entry.extra
+            {
+                *content_type = "dob/0".to_string();
+                media_profile.tier = CompositionTier::BtcCkb;
+                media_profile
+                    .sources
+                    .push(ckbadger_store::SporeMediaSource {
+                        uri: "btcfs://inscription".into(),
+                        scheme: "btcfs".into(),
+                        source_location: "dob_decoded_trait".into(),
+                        dependency_tier: CompositionTier::BtcCkb,
+                    });
+            }
+            seed.put_spore(&spore_id, &entry);
+            seed.put_cluster_aggregate(
+                &cluster_id,
+                &ClusterAggregate {
+                    total_count: 1,
+                    live_count: 1,
+                    owner_count: 1,
+                    btc_ckb_count: 1,
+                    ..Default::default()
+                },
+            );
+            seed.put_cluster_owner_count(&cluster_id, &owner_a, 1);
+            seed.commit().unwrap();
+        }
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state =
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        writer
+            .insert_spore_cell(
+                &make_parsed_spore(&spore_id, &cluster_id, &owner_b),
+                &[0x01; 32],
+                0,
+                10,
+                3_600_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .insert_spore_cell(
+                &make_parsed_spore(&spore_id, &cluster_id, &owner_a),
+                &[0x02; 32],
+                0,
+                10,
+                3_600_001,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(agg.owner_count, 1);
+        assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.btc_ckb_count, 1);
+        let entry = store.get_spore(&spore_id).unwrap().unwrap();
+        let ObjectExtra::Spore { media_profile, .. } = entry.extra else {
+            panic!("not a spore")
+        };
+        assert_eq!(media_profile.tier, CompositionTier::BtcCkb);
+        assert_eq!(media_profile.sources[0].uri, "btcfs://inscription");
+        assert_eq!(
+            store
+                .get_cluster_owner_count(&cluster_id, &owner_a)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .get_cluster_owner_count(&cluster_id, &owner_b)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

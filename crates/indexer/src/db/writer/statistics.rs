@@ -1280,6 +1280,8 @@ impl BatchWriter {
         let mut dao_free_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
+        let mut deposit_cells_count = 0i32;
+        let mut withdrawal_request_cells_count = 0i32;
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, i128)> = HashMap::new();
         let mut weighted_deposit_ms: i128 = 0;
         let mut avg_total_capacity: i128 = 0;
@@ -1299,7 +1301,9 @@ impl BatchWriter {
         for scan_status in [0i16, 1] {
             self.store
                 .scan_dao_deposits_by_status(scan_status, |outpoint, entry| {
-                    active_deposits += 1;
+                    active_deposits = active_deposits.checked_add(1).context("live DAO cell count overflow")?;
+                    let count = if scan_status == 0 { &mut deposit_cells_count } else { &mut withdrawal_request_cells_count };
+                    *count = count.checked_add(1).with_context(|| format!("DAO phase {scan_status} cell count overflow at tip {tip_block_number}"))?;
 
                     // The live DAO cell is the deposit (phase 0) or the
                     // withdraw-request cell (phase 1), which keeps the
@@ -1494,6 +1498,8 @@ impl BatchWriter {
             total_deposited,
             total_depositors,
             active_deposits,
+            deposit_cells_count,
+            withdrawal_request_cells_count,
             total_compensation_paid,
             unclaimed_compensation,
             average_deposit_days,
@@ -2843,6 +2849,9 @@ mod tests {
 
         // active_deposits still counts both status=0 and status=1
         assert_eq!(latest.active_deposits, 2);
+        let json = serde_json::to_value(&latest).unwrap();
+        assert_eq!(json["deposit_cells_count"], 1);
+        assert_eq!(json["withdrawal_request_cells_count"], 1);
         // total_deposited = status=0 only: 200_00000000
         assert_eq!(latest.total_deposited, 200_00000000);
         // 1 unique depositor (only status=0 lock hash 0x01)
@@ -3754,7 +3763,7 @@ mod activity_stats_tests {
         accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.coinbase_count, 0);
-        assert_eq!(stats.total_ckb_moved, 100_00000000);
+        assert_eq!(stats.total_ckb_moved, 0);
     }
 
     #[test]
@@ -3937,11 +3946,11 @@ mod activity_stats_tests {
         );
         assert_eq!(stats.transfer_count, 2);
         assert_eq!(stats.coinbase_count, 1);
-        assert_eq!(stats.total_ckb_moved, 80_00000000);
+        assert_eq!(stats.total_ckb_moved, 30_00000000);
     }
 
     #[test]
-    fn test_negative_delta_uses_absolute_value() {
+    fn test_negative_delta_is_not_received_capacity() {
         let mut stats = DailyActivityStats::default();
         let actions = make_tx_actions(
             false,
@@ -3950,7 +3959,7 @@ mod activity_stats_tests {
             vec![],
         );
         accumulate_tx_actions_stats(&actions, &mut stats);
-        assert_eq!(stats.total_ckb_moved, 999_00000000);
+        assert_eq!(stats.total_ckb_moved, 0);
     }
 
     #[test]

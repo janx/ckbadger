@@ -2712,7 +2712,7 @@ impl ObjectOwner {
             CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
             CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
             CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
-            CompositionTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::Unknown | CompositionTier::DecodePending => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow!(
@@ -2766,7 +2766,7 @@ impl ObjectOwner {
             CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
             CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
             CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
-            CompositionTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::Unknown | CompositionTier::DecodePending => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow!(

@@ -424,7 +424,7 @@ impl DobDecodeWorker {
             CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
             CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
             CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
-            CompositionTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::Unknown | CompositionTier::DecodePending => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow::anyhow!(
@@ -1003,8 +1003,8 @@ fn merge_media_sources(profile: &mut SporeMediaProfile, new_sources: &[SporeMedi
         }
     }
 
-    if added {
-        // Recalculate tier from merged sources
+    if added || profile.tier == CompositionTier::DecodePending {
+        // A successful decode also resolves self-contained rendered output.
         profile.tier = resolve_tier(&profile.sources);
     }
 }

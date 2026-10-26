@@ -461,6 +461,7 @@ pub fn dao_treasury_split(secondary_pool: i128, unclaimed: i128) -> anyhow::Resu
 pub struct DaoDailySnapshot {
     pub date: String,
     pub total_deposited: i128,
+    /// Current unique locks with phase-0 deposit cells, not cell count.
     pub depositors_count: i64,
     pub new_deposits: i64,
     pub withdrawals: i64,
@@ -527,7 +528,10 @@ pub struct DaoLatestStatistics {
     pub tip_block_number: i64,
     pub total_deposited: i128,
     pub total_depositors: i32,
+    /// Legacy total live DAO cells (phase 0 plus phase 1).
     pub active_deposits: i32,
+    pub deposit_cells_count: i32,
+    pub withdrawal_request_cells_count: i32,
     pub total_compensation_paid: i128,
     pub unclaimed_compensation: i128,
     /// None when no DAO cell contributes a deposit duration.
@@ -631,6 +635,8 @@ pub enum CompositionTier {
     CentralizedMixture,
     #[default]
     Unknown,
+    /// Immutable DOB DNA awaits the lazy decoder; composition is not yet known.
+    DecodePending,
 }
 
 impl CompositionTier {
@@ -641,6 +647,7 @@ impl CompositionTier {
             CompositionTier::DecentralizedMixture => "decentralized_mixture",
             CompositionTier::CentralizedMixture => "centralized_mixture",
             CompositionTier::Unknown => "unknown",
+            CompositionTier::DecodePending => "decode_pending",
         }
     }
 
@@ -2122,6 +2129,29 @@ pub struct TxActions {
     pub participants: Vec<ParticipantDelta>,
 }
 
+impl TxActions {
+    /// Capacity actually received by participants, in shannons. Sender outflow,
+    /// self-change and fees are not counted a second time; issuance is excluded.
+    /// Shared by transaction Value, activity aggregates and rollback.
+    pub fn ckb_moved(&self) -> u128 {
+        if self.is_cellbase {
+            return 0;
+        }
+        self.participants
+            .iter()
+            .filter(|p| p.ckb_delta > 0)
+            .fold(0u128, |total, p| {
+                total.checked_add(p.ckb_delta as u128).unwrap_or_else(|| {
+                    panic!(
+                        "CKB moved overflow: block={} tx=0x{}",
+                        self.block_number,
+                        hex::encode(&self.tx_hash)
+                    )
+                })
+            })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeCallEntry {
     pub type_code_hash: Vec<u8>,
@@ -2276,7 +2306,7 @@ pub struct DailyActivityStats {
     pub coinbase_count: u32,
     /// Number of unique addresses active this day
     pub unique_address_count: u32,
-    /// Sum of absolute CKB deltas in shannons
+    /// Sum of positive participant CKB deltas in shannons, excluding cellbase
     pub total_ckb_moved: u128,
     /// Per-script activity counts: hex code_hash -> count
     #[serde(default)]
@@ -2298,13 +2328,16 @@ impl DailyActivityStats {
             return;
         }
 
-        // Total CKB moved (absolute value of all participants) — excludes coinbase
-        for p in &tx_actions.participants {
-            self.total_ckb_moved = self
-                .total_ckb_moved
-                .checked_add(p.ckb_delta.unsigned_abs())
-                .expect("total_ckb_moved overflow in accumulate_from_tx_actions");
-        }
+        self.total_ckb_moved = self
+            .total_ckb_moved
+            .checked_add(tx_actions.ckb_moved())
+            .unwrap_or_else(|| {
+                panic!(
+                    "total_ckb_moved overflow: block={} tx=0x{}",
+                    tx_actions.block_number,
+                    hex::encode(&tx_actions.tx_hash)
+                )
+            });
 
         // Count each involved script from type_calls and lock_calls — excludes coinbase
         for tc in &tx_actions.type_calls {
@@ -2669,6 +2702,40 @@ mod tests {
         let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.magnitude, u128::MAX);
         assert!(decoded.negative);
+    }
+
+    #[test]
+    fn ckb_moved_counts_received_capacity_once_and_excludes_cellbase() {
+        let mut actions = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 19,
+            tx_index: 1,
+            timestamp: 0,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: [-110, 80, 20, 0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, delta)| ParticipantDelta {
+                    id: ParticipantId::Lock([i as u8; 32]),
+                    ckb_delta: delta,
+                    used_delta: 0,
+                    item_deltas: vec![],
+                    tags: 0,
+                    roles: 0,
+                })
+                .collect(),
+        };
+        let mut stats = DailyActivityStats::default();
+        stats.accumulate_from_tx_actions(&actions);
+        assert_eq!(stats.total_ckb_moved, 100, "exclude sender, change and fee");
+        assert_eq!(actions.ckb_moved(), 100);
+        actions.is_cellbase = true;
+        stats.accumulate_from_tx_actions(&actions);
+        assert_eq!(stats.total_ckb_moved, 100, "issuance is not movement");
     }
 
     #[test]

@@ -1304,12 +1304,21 @@ impl CkbadgerStore {
         let mut by_phase2_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
             HashMap::new();
         let mut prior_ever_deposited: HashSet<Vec<u8>> = HashSet::new();
+        let mut active_counts: HashMap<Vec<u8>, i64> = HashMap::new();
 
         self.scan_dao_deposits(|_key, entry| {
             // For cumulative_depositors delta: any deposit with deposit_block_number
             // strictly before our day_start_block counts as "previously seen".
             if entry.deposit_block_number < day_start_block {
                 prior_ever_deposited.insert(entry.lock_script_hash.clone());
+                if entry
+                    .withdraw_request_block
+                    .is_none_or(|block| block >= day_start_block)
+                {
+                    *active_counts
+                        .entry(entry.lock_script_hash.clone())
+                        .or_default() += 1;
+                }
             }
             if entry.deposit_block_number >= day_start_block
                 && entry.deposit_block_number <= day_end_block
@@ -1410,13 +1419,16 @@ impl CkbadgerStore {
                                 )
                             })?;
                     }
-                    running_total_depositors =
-                        running_total_depositors.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "depositors_count overflow during recompute: block_num={}",
-                                block_num
-                            )
-                        })?;
+                    let count = active_counts.entry(d.lock_script_hash.clone()).or_default();
+                    if *count == 0 {
+                        running_total_depositors += 1;
+                    }
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "active DAO cell count overflow: block={block_num} lock=0x{}",
+                            hex::encode(&d.lock_script_hash)
+                        )
+                    })?;
                 }
             }
 
@@ -1432,13 +1444,24 @@ impl CkbadgerStore {
                                 block_num
                             )
                         })?;
-                    running_total_depositors =
-                        running_total_depositors.checked_sub(1).ok_or_else(|| {
+                    let count = active_counts.get_mut(&p.lock_script_hash).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing active DAO depositor: block={block_num} lock=0x{}",
+                            hex::encode(&p.lock_script_hash)
+                        )
+                    })?;
+                    *count = count
+                        .checked_sub(1)
+                        .filter(|count| *count >= 0)
+                        .ok_or_else(|| {
                             anyhow::anyhow!(
-                                "depositors_count phase-1 underflow during recompute: block_num={}",
-                                block_num
+                                "active DAO depositor count underflow: block={block_num} lock=0x{}",
+                                hex::encode(&p.lock_script_hash)
                             )
                         })?;
+                    if *count == 0 {
+                        running_total_depositors -= 1;
+                    }
                 }
             }
 
@@ -2513,6 +2536,58 @@ mod dao_daily_snapshot_recompute_tests {
         let s = secondary_block_issuance(epoch_index, epoch_length, TEST_SECONDARY_EPOCH_REWARD)
             .unwrap();
         calculate_miner_secondary_issuance(s, i128::from(TEST_C), i128::from(TEST_U)).unwrap()
+    }
+
+    #[test]
+    fn dao_daily_current_depositors_count_locks_not_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar = 10_000_000_000_000_000u64;
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(
+            0,
+            &header_with_dao(
+                0,
+                utc8_ms(date, 0, 10),
+                dao_field(TEST_C, ar, 50_000_000_000, TEST_U),
+            ),
+        );
+        for index in 0..2 {
+            batch.put_dao_deposit(
+                &keys::encode_outpoint(&[0xAA; 32], index),
+                &active_dao_deposit(
+                    100_000_000_000,
+                    10_200_000_000,
+                    0,
+                    ar as i64,
+                    vec![0xA1; 32],
+                ),
+            );
+        }
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 0,
+                tip_block_hash: vec![0; 32],
+                ..Default::default()
+            })
+            .unwrap();
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        store
+            .recompute_dao_daily_snapshot_for_date(date, 0, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+        let snapshot = store.get_dao_daily_snapshot("20260310").unwrap().unwrap();
+        assert_eq!(snapshot.new_deposits, 2);
+        assert_eq!(
+            snapshot.depositors_count, 1,
+            "two cells under one lock are one depositor"
+        );
+        assert_eq!(snapshot.cumulative_depositors, 1);
     }
 
     #[test]
