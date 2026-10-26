@@ -1,6 +1,7 @@
 import { Tooltip } from '@/components/spore/cluster-description';
 
 const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
+  decode_pending: 'Awaiting DOB execution. Storage composition has not been classified yet.',
   pure_ckb:
     'All content is stored directly on the CKB blockchain (on-chain data or ckbfs://). Fully verifiable and permanent.',
   btc_ckb:
@@ -10,7 +11,7 @@ const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
   centralized_mixture:
     'Some content depends on centralized servers (http/https). Data availability relies on the server operator.',
   unknown:
-    'Composition could not be determined. The content storage method for objects in this cluster is unverified.',
+    'Composition could not be determined. The content storage method is unverified.',
 };
 
 const TOOLTIP_BTN_BASE =
@@ -22,6 +23,13 @@ export function compositionTierCardStyle(tier: string): {
   text: string;
   tooltipButton?: string;
 } {
+  if (tier === 'decode_pending') {
+    return {
+      card: 'border-base-border rounded border p-3',
+      label: 'text-text-dim',
+      text: 'text-text-dim',
+    };
+  }
   if (tier === 'btc_ckb') {
     return {
       card: 'storage-card-no-crt storage-card-both rounded border border-[#222840] bg-[#10131c] p-3',

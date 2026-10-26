@@ -33,6 +33,16 @@ const tx: Transaction = {
   timestamp: '2026-10-25T00:00:00Z',
 };
 describe('TransactionTable', () => {
+  it('renders a neutral transaction hash that navigates without a copy affordance', () => {
+    render(<TransactionTable transactions={[tx]} />);
+    for (const hash of screen.getAllByTitle(tx.hash)) {
+      expect(hash).toHaveClass('text-text', 'text-xs');
+      expect(hash).toHaveTextContent('0xababababab...ababab');
+      expect(hash.children).toHaveLength(0);
+      expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/${tx.hash}`);
+    }
+    expect(screen.queryByTitle(/Click to copy/)).not.toBeInTheDocument();
+  });
   it('renders the exact API Value and byte/cycle evidence with network-aware links', () => {
     render(<TransactionTable transactions={[tx]} />);
     expect(screen.getByRole('table', { name: 'Committed transactions' })).toHaveTextContent(
@@ -52,6 +62,40 @@ describe('TransactionTable', () => {
       'href',
       '/mainnet/blocks/497'
     );
+  });
+  it('fits block evidence into a narrower column budget with stacked resource bars', () => {
+    render(
+      <TransactionTable
+        transactions={[
+          {
+            ...tx,
+            outputCapacity: '18446744073709551615',
+            fee: '123456789012345',
+            cycles: 3500000000,
+          },
+        ]}
+        showBlock={false}
+      />
+    );
+    const table = screen.getByRole('table');
+    expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(928);
+    expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
+    expect(table).toHaveTextContent('1,234,567.89012345 CKB');
+    expect(
+      screen.getAllByRole('img', { name: 'Cycles: 3,500,000,000' })[0].parentElement
+    ).toHaveClass('flex-col');
+    expect(table.querySelector('[data-ckb-amount]')).toHaveClass('flex-wrap');
+  });
+  it('renders genesis non-cellbase transactions without inventing a proposal origin', () => {
+    render(
+      <TransactionTable
+        transactions={[{ ...tx, blockNumber: 0, proposalOrigin: null, cycles: 0 }]}
+        showBlock={false}
+      />
+    );
+    expect(screen.getByRole('table')).toHaveTextContent('Genesis');
+    expect(screen.queryByRole('link', { name: '#497' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'Cycles: 0' })).toHaveLength(2);
   });
   it('renders a pending replay explicitly and rejects missing byte evidence', () => {
     render(<TransactionTable transactions={[{ ...tx, cycles: null, cyclesStatus: 'pending' }]} />);

@@ -48,8 +48,10 @@ export function formatCompositionTier(
     | 'decentralized_mixture'
     | 'centralized_mixture'
     | 'unknown'
+    | 'decode_pending'
     | string
 ): string {
+  if (tier === 'decode_pending') return 'Decode pending';
   if (tier === 'pure_ckb') return 'Pure CKB';
   if (tier === 'btc_ckb') return 'BTC+CKB';
   if (tier === 'decentralized_mixture') return 'Decentralized Mixture';

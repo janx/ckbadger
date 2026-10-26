@@ -2,7 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { HexDisplay } from '@/components/ui/hex-display';
+import { Hash } from '@/components/ui/hash';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
@@ -27,7 +27,7 @@ export function TransactionTable({
       throw new Error(`Transaction ${tx.hash} has inconsistent cycle evidence`);
     if (!showBlock && tx.outputCapacity === undefined)
       throw new Error(`Transaction ${tx.hash} is missing its output capacity`);
-    if (!showBlock && !tx.isCellbase && !tx.proposalOrigin)
+    if (!showBlock && tx.blockNumber !== 0 && !tx.isCellbase && !tx.proposalOrigin)
       throw new Error(`Transaction ${tx.hash} is missing its proposal origin`);
     if (showBlock && !tx.isCellbase && !tx.activity)
       throw new Error(`Transaction ${tx.hash} is missing its activity`);
@@ -40,11 +40,17 @@ export function TransactionTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      minWidth: 190,
+      minWidth: showBlock ? 190 : 176,
       render: (tx) => (
         <div className="space-y-1">
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
-            <HexDisplay value={tx.hash} startChars={10} endChars={6} />
+            <Hash
+              hash={tx.hash}
+              startChars={12}
+              endChars={6}
+              copyable={false}
+              className="text-xs"
+            />
           </Link>
           {showBlock && (
             <Link
@@ -67,10 +73,12 @@ export function TransactionTable({
     {
       key: showBlock ? 'time' : 'proposal',
       label: showBlock ? 'Age' : 'Proposed in',
-      minWidth: 105,
+      minWidth: showBlock ? 105 : 108,
       render: (tx) =>
         showBlock ? (
           <span className="text-text-dim">{formatTimeAgo(tx.timestamp)}</span>
+        ) : tx.blockNumber === 0 ? (
+          <span className="text-text-dim">Genesis</span>
         ) : tx.isCellbase ? (
           <span className="text-text-dim">—</span>
         ) : (
@@ -82,7 +90,7 @@ export function TransactionTable({
               #{tx.proposalOrigin!.blockNumber.toLocaleString('en-US')}
             </Link>
             <span className="text-text-dim block text-[11px]">
-              {tx.proposalOrigin!.distance} blocks earlier
+              {tx.proposalOrigin!.distance} blocks back
               {tx.proposalOrigin!.uncle ? ' · uncle' : ''}
             </span>
           </div>
@@ -91,7 +99,7 @@ export function TransactionTable({
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 75,
+      minWidth: showBlock ? 75 : 64,
       numeric: true,
       render: (tx) => (
         <span>
@@ -104,7 +112,7 @@ export function TransactionTable({
     {
       key: 'value',
       label: showBlock ? 'Value' : 'Output capacity',
-      minWidth: 180,
+      minWidth: showBlock ? 180 : 164,
       numeric: true,
       render: (tx) => (
         <ExactCkb
@@ -114,33 +122,42 @@ export function TransactionTable({
           )}
           signed={false}
           tone="plain"
+          wrap={!showBlock}
         />
       ),
     },
     {
       key: 'fee',
       label: 'Fee',
-      minWidth: 150,
+      minWidth: showBlock ? 150 : 128,
       numeric: true,
       render: (tx) => (
         <ExactCkb
           shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
           signed={false}
           tone="plain"
+          wrap={!showBlock}
         />
       ),
     },
     {
       key: 'size',
       label: 'Size, bytes',
-      minWidth: 155,
+      minWidth: showBlock ? 155 : 106,
       numeric: true,
-      render: (tx) => <ResourceBar label="Size, bytes" value={tx.txSize!} scale={sizeScale} />,
+      render: (tx) => (
+        <ResourceBar
+          label="Size, bytes"
+          value={tx.txSize!}
+          scale={sizeScale}
+          stacked={!showBlock}
+        />
+      ),
     },
     {
       key: 'cycles',
       label: 'Cycles',
-      minWidth: 180,
+      minWidth: showBlock ? 180 : 116,
       numeric: true,
       render: (tx) =>
         tx.cycles === null ? (
@@ -148,7 +165,7 @@ export function TransactionTable({
             {tx.cyclesStatus === 'failed' ? 'Replay failed' : 'Not yet run'}
           </span>
         ) : (
-          <ResourceBar label="Cycles" value={tx.cycles} scale={cycleScale} />
+          <ResourceBar label="Cycles" value={tx.cycles} scale={cycleScale} stacked={!showBlock} />
         ),
     },
   ];

@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { HexDisplay } from '@/components/ui/hex-display';
+import { Hash } from '@/components/ui/hash';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { TransactionTable } from '@/components/transaction/transaction-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
@@ -115,7 +115,13 @@ export default function TransactionsPage() {
       render: (tx) => (
         <div className="space-y-1">
           <Link href={`/tx/${tx.hash}`}>
-            <HexDisplay value={tx.hash} startChars={10} endChars={6} />
+            <Hash
+              hash={tx.hash}
+              startChars={12}
+              endChars={6}
+              copyable={false}
+              className="text-xs"
+            />
           </Link>
           <PoolInterpretationNotice interpretation={tx.interpretation} />
         </div>

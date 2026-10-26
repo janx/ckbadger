@@ -790,10 +790,13 @@ export function ExactCkb({
   shannons,
   signed = true,
   tone = 'sign',
+  wrap = false,
 }: {
   shannons: bigint;
   signed?: boolean;
   tone?: 'sign' | 'plain';
+  /** Allow a line break before the decimal or unit, preserving every digit. */
+  wrap?: boolean;
 }) {
   const parts = splitCkbAmount(shannons);
   const color =
@@ -805,14 +808,26 @@ export function ExactCkb({
           ? 'text-negative'
           : 'text-text';
   return (
-    <span data-ckb-amount className={cn('whitespace-nowrap tabular-nums', color)}>
-      {signed ? parts.sign : ''}
-      {parts.integer}
-      <span className="opacity-[0.78]">{parts.fraction}</span>
-      <span data-ghost className="text-text-ghost">
-        {parts.ghost}
+    <span
+      data-ckb-amount
+      className={cn(
+        wrap
+          ? 'inline-flex max-w-full flex-wrap justify-end tabular-nums'
+          : 'whitespace-nowrap tabular-nums',
+        color
+      )}
+    >
+      <span className="whitespace-nowrap">
+        {signed ? parts.sign : ''}
+        {parts.integer}
       </span>
-      <span className="text-text-dim text-[11px]"> CKB</span>
+      <span className="whitespace-nowrap">
+        <span className="opacity-[0.78]">{parts.fraction}</span>
+        <span data-ghost className="text-text-ghost">
+          {parts.ghost}
+        </span>
+      </span>
+      <span className="text-text-dim whitespace-pre text-[11px]"> CKB</span>
     </span>
   );
 }

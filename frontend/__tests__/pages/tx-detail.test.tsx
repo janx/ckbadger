@@ -301,6 +301,20 @@ describe('TransactionDetailPage', () => {
       expect(useCyclesCalculation).toHaveBeenLastCalledWith(TX_HASH, 1000, false, 'complete', true);
     });
   });
+  it('marks genesis transactions as outside canonical replay and keeps zero cycles', async () => {
+    const tx = createCommittedTransactionDetail();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...tx,
+      blockNumber: 0,
+      cycles: 0,
+      cyclesStatus: 'complete',
+      scriptGroups: tx.scriptGroups!.map((group) => ({ ...group, ran: false, cycles: null })),
+    });
+    render(<TransactionDetailPage />);
+    await waitFor(() => {
+      expect(useCyclesCalculation).toHaveBeenLastCalledWith(TX_HASH, 0, true, 'complete', false);
+    });
+  });
 
   it('renders pending placeholders while committed-only queries stay disabled', async () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());

@@ -48,7 +48,7 @@ describe('TransactionsPage', () => {
     vi.clearAllMocks();
   });
 
-  it('renders transaction and block links from fetched transactions', async () => {
+  it('renders neutral transaction hashes and block links from fetched transactions', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
         {
@@ -95,23 +95,21 @@ describe('TransactionsPage', () => {
         .every((link) => link.getAttribute('href') === '/mainnet/blocks/123456')
     ).toBe(true);
 
-    expect(screen.getAllByTitle(/Click to copy: 0xaaaaaaaa/i)).toHaveLength(2);
-    expect(
-      screen
-        .getAllByTitle(/Click to copy: 0xaaaaaaaa/i)
-        .every(
-          (hashDisplay) =>
-            hashDisplay.closest('a')?.getAttribute('href') ===
-            '/mainnet/tx/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-        )
-    ).toBe(true);
+    const hash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(screen.getAllByTitle(hash)).toHaveLength(2);
+    for (const hashDisplay of screen.getAllByTitle(hash)) {
+      expect(hashDisplay).toHaveClass('text-text', 'text-xs');
+      expect(hashDisplay.children).toHaveLength(0);
+      expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
+    }
+    expect(screen.queryByTitle(/Click to copy/)).not.toBeInTheDocument();
     expect(screen.getAllByText('2')).toHaveLength(2);
     expect(screen.getAllByText('3')).toHaveLength(2);
   });
 });
 
 describe('Transactions pool view', () => {
-  it('reads the paged pool and keeps partial interpretation explicit', async () => {
+  it('reads the paged pool with neutral hashes and keeps partial interpretation explicit', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -161,6 +159,12 @@ describe('Transactions pool view', () => {
     expect(screen.getByLabelText('Pool summary')).toHaveTextContent('226 bytes');
     expect(screen.getByLabelText('Pool summary')).toHaveTextContent('1,709,221');
     expect(screen.getByLabelText('Pool summary')).toHaveTextContent('54,623–54,623 shannon/KB');
+    for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
+      expect(hash).toHaveClass('text-text', 'text-xs');
+      expect(hash).toHaveTextContent('0xababababab...ababab');
+      expect(hash.children).toHaveLength(0);
+      expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);
+    }
   });
 });
 

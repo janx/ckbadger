@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { render } from '@/__tests__/utils/test-utils';
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
 
@@ -130,6 +130,9 @@ function encodeSporeData(contentType: string, contentText: string) {
 }
 
 describe('SporeDetailPage', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mockParams = {
@@ -295,6 +298,93 @@ describe('SporeDetailPage', () => {
     // break-all lets the unbreakable IPFS token wrap inside its grid column
     // instead of overflowing into the neighbouring "Created" card.
     expect(contentTypeValue).toHaveClass('break-all');
+  });
+
+  it('refreshes composition after pending DOB execution completes and stops polling', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const pending = {
+      ...mockSpore,
+      contentType: 'dob/1',
+      mediaProfile: { tier: 'decode_pending' as const, sources: [], issues: [] },
+    };
+    vi.mocked(api.getSporeObject)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValue({
+        ...pending,
+        mediaProfile: { ...pending.mediaProfile, tier: 'pure_ckb' },
+      });
+    const decoded = {
+      status: 'decoded',
+      sporeId: mockSpore.sporeId,
+      contentType: 'dob/1',
+      dnaHex: null,
+      traits: [],
+      media: [],
+      issues: [],
+    };
+    vi.mocked(api.getSporeObjectDecoded)
+      .mockResolvedValueOnce({ ...decoded, status: 'pending' })
+      .mockResolvedValue(decoded);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+    expect(await screen.findByText('Decode pending')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2200);
+    });
+    expect(await screen.findByText('Pure CKB')).toBeInTheDocument();
+    expect(api.getSporeObject).toHaveBeenCalledTimes(2);
+    expect(api.getSporeObjectDecoded).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(api.getSporeObjectDecoded).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['failed', 'error'] as const)(
+    'stops polling pending DOB execution after %s',
+    async (outcome) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.mocked(api.getSporeObject).mockResolvedValue({
+        ...mockSpore,
+        contentType: 'dob/1',
+        mediaProfile: { tier: 'decode_pending', sources: [], issues: [] },
+      });
+      const decoded = {
+        status: 'pending',
+        sporeId: mockSpore.sporeId,
+        contentType: 'dob/1',
+        dnaHex: null,
+        traits: [],
+        media: [],
+        issues: [],
+      };
+      const request = vi.mocked(api.getSporeObjectDecoded).mockResolvedValueOnce(decoded);
+      if (outcome === 'failed')
+        request.mockResolvedValue({ ...decoded, status: 'failed', issues: ['Execution failed'] });
+      else request.mockRejectedValue(new Error('Decoder unavailable'));
+      render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+      await screen.findByText('Decode pending');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2200);
+      });
+      expect(api.getSporeObjectDecoded).toHaveBeenCalledTimes(2);
+      expect(api.getSporeObject).toHaveBeenCalledTimes(outcome === 'failed' ? 2 : 1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(api.getSporeObjectDecoded).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('shows neutral decode pending until DOB composition evidence is available', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      mediaProfile: { tier: 'decode_pending', sources: [], issues: [] },
+    });
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+    const label = await screen.findByText('Decode pending');
+    expect(label).toHaveClass('text-text-dim');
+    expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
+    expect(screen.queryByText('Pure CKB')).not.toBeInTheDocument();
   });
 
   it('labels the spore composition card as Object Composition', async () => {

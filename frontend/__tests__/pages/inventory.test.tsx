@@ -525,6 +525,27 @@ describe('Objects Inventory Page', () => {
     });
   });
 
+  it('keeps decode pending visible and neutral in collection table and cards', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockClusterAssets,
+      data: [
+        {
+          ...mockClusterAssets.data[0],
+          compositionTier: 'decode_pending',
+          fullyOnchainRatio: null,
+          fullyOnchainCount: null,
+        },
+      ],
+    });
+    render(<ObjectsPage />);
+    const labels = await screen.findAllByText('Decode pending');
+    expect(labels).toHaveLength(2);
+    for (const label of labels) {
+      expect(label).toHaveClass('text-text-dim');
+      expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
+    }
+  });
+
   it('maps composition tier filters to API query', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 

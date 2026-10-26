@@ -436,7 +436,7 @@ export default function TransactionDetailPage() {
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
     tx?.cycles,
-    (tx?.isCellbase ?? false) || isProvisional,
+    (tx?.isCellbase ?? false) || isProvisional || tx?.blockNumber === 0,
     tx?.cyclesStatus,
     !isProvisional && tx?.scriptGroups?.some((group) => group.ran && group.cycles === null) === true
   );

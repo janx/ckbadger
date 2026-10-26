@@ -23,6 +23,13 @@ describe('block evidence visuals', () => {
     expect(screen.getByText('3,205')).toBeInTheDocument();
     expect(resourceScale([640, 3917])).toBeGreaterThanOrEqual(3917);
   });
+  it('uses stacked resource bars without shortening an exact cycle count', () => {
+    render(<ResourceBar label="Cycles" value={3500000000} scale={4000000000} stacked />);
+    const bar = screen.getByRole('img', { name: 'Cycles: 3,500,000,000' });
+    expect(bar.parentElement).toHaveClass('flex-col', 'items-end');
+    expect(screen.getByText('3,500,000,000')).toHaveClass('order-first');
+    expect(bar.lastElementChild).toHaveStyle({ width: '87.5%' });
+  });
   it('rejects missing or contradictory evidence', () => {
     expect(() =>
       BlockContents({ transactionSizes: [], proposalsCount: 0, unclesCount: 0 })

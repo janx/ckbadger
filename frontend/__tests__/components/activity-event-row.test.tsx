@@ -666,6 +666,16 @@ describe('quiet call expressions', () => {
 });
 
 describe('ExactCkb', () => {
+  it('wraps exact amounts at the decimal or unit without dropping digits', () => {
+    const { container } = render(
+      <ExactCkb shannons={BigInt('18446744073709551615')} signed={false} wrap />
+    );
+    const amount = container.querySelector('[data-ckb-amount]');
+    expect(amount).toHaveTextContent('184,467,440,737.09551615 CKB');
+    expect(amount).toHaveClass('inline-flex', 'flex-wrap', 'justify-end');
+    expect(amount?.children[1]).toHaveClass('whitespace-nowrap');
+    expect(amount?.children[1]).toHaveTextContent('.09551615');
+  });
   it('keeps all 8 decimals, ghosting the trailing zeros, coloured by sign', () => {
     const { container } = render(
       <>

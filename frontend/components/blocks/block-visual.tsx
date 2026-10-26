@@ -63,10 +63,12 @@ interface ResourceBarProps {
   value: number;
   scale: number;
   overhead?: number;
+  /** Keep the exact count above its bar when a table column is narrow. */
+  stacked?: boolean;
 }
 
 /** Geometry uses numbers; the printed resource count stays an exact integer. */
-export function ResourceBar({ label, value, scale, overhead }: ResourceBarProps) {
+export function ResourceBar({ label, value, scale, overhead, stacked = false }: ResourceBarProps) {
   if (
     !Number.isSafeInteger(value) ||
     value < 0 ||
@@ -83,11 +85,17 @@ export function ResourceBar({ label, value, scale, overhead }: ResourceBarProps)
     throw new Error(`${label}: overhead ${overhead} exceeds resource value ${value}`);
   }
   return (
-    <span className="flex min-w-0 items-center justify-end gap-3">
+    <span
+      className={
+        stacked
+          ? 'flex min-w-0 flex-col items-end gap-1.5'
+          : 'flex min-w-0 items-center justify-end gap-3'
+      }
+    >
       <span
         role="img"
         aria-label={`${label}: ${value.toLocaleString('en-US')}${overhead === undefined ? '' : `, ${overhead.toLocaleString('en-US')} overhead, ${(value - overhead).toLocaleString('en-US')} user transactions`}`}
-        className="bg-base-elevated flex h-2 w-20 shrink-0 overflow-hidden"
+        className="bg-base-elevated flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
       >
         {overhead !== undefined && (
           <span className="bg-[#3a4258]" style={{ width: `${(overhead / scale) * 100}%` }} />
@@ -99,7 +107,13 @@ export function ResourceBar({ label, value, scale, overhead }: ResourceBarProps)
           }}
         />
       </span>
-      <span className="whitespace-nowrap tabular-nums">{value.toLocaleString('en-US')}</span>
+      <span
+        className={
+          stacked ? 'order-first whitespace-nowrap tabular-nums' : 'whitespace-nowrap tabular-nums'
+        }
+      >
+        {value.toLocaleString('en-US')}
+      </span>
     </span>
   );
 }

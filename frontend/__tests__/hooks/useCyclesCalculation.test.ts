@@ -72,6 +72,16 @@ describe('useCyclesCalculation', () => {
     expect(api.triggerCyclesCalculation).not.toHaveBeenCalled();
     expect(result.current.isCalculating).toBe(false);
   });
+  it('preserves complete zero cycles for genesis without enqueueing replay', () => {
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xgenesis', 0, true, 'complete', false),
+      { wrapper: createWrapper() }
+    );
+    expect(result.current.cycles).toBe(0);
+    expect(result.current.hasCycles).toBe(true);
+    expect(result.current.isCalculating).toBe(false);
+    expect(api.triggerCyclesCalculation).not.toHaveBeenCalled();
+  });
 
   it('requests missing group cycles while preserving the exact transaction total', async () => {
     vi.useFakeTimers();

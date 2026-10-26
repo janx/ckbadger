@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
@@ -246,6 +246,7 @@ export interface SporeDetailPageProps {
   sporeId: string;
 }
 export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
+  const queryClient = useQueryClient();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -338,7 +339,15 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     queryFn: () => api.getSporeObjectDecoded(assetId),
     enabled: !!spore && spore.contentType.toLowerCase().startsWith('dob/'),
     retry: false,
+    refetchInterval: (query) =>
+      query.state.status !== 'error' && query.state.data?.status === 'pending' ? 2000 : false,
   });
+  useEffect(() => {
+    // The worker owns both the decode result and the persisted media classification.
+    if (decodedDobByApi?.status === 'decoded' || decodedDobByApi?.status === 'failed') {
+      void queryClient.invalidateQueries({ queryKey: ['spore', rawAssetId], exact: true });
+    }
+  }, [decodedDobByApi?.status, queryClient, rawAssetId]);
   const { data: sporeTxDetail } = useQuery({
     queryKey: ['spore-tx-detail', spore?.txHash],
     queryFn: () => api.getTransactionDetail(spore!.txHash),

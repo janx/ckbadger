@@ -4,6 +4,7 @@ import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-pa
 import { formatNumber } from '@/lib/utils';
 import { formatCompositionTier } from '@/lib/asset-utils';
 import { formatDecimal } from '@/lib/exact-integer';
+import { CompositionTierTooltip, compositionTierCardStyle } from '@/components/object/storage-tier';
 
 interface ObjectCollectionStatCardsProps {
   totalCount: number;
@@ -58,8 +59,11 @@ export function ObjectCollectionStatCards({
             <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
               Storage Integrity
             </div>
-            <div className="text-gold text-base font-semibold">
-              {formatCompositionTier(compositionTier)}
+            <div className="flex items-center gap-1 text-base font-semibold">
+              <span className={compositionTierCardStyle(compositionTier).text}>
+                {formatCompositionTier(compositionTier)}
+              </span>
+              <CompositionTierTooltip tier={compositionTier} />
             </div>
             {storageOnchainRatio && (
               <div className="text-text-dim font-mono text-xs">

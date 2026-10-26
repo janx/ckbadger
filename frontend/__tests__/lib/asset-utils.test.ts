@@ -77,6 +77,9 @@ describe('normalizeActivityAction', () => {
 });
 
 describe('formatCompositionTier', () => {
+  it('keeps DOB decode pending distinct from unknown or pure storage', () => {
+    expect(formatCompositionTier('decode_pending')).toBe('Decode pending');
+  });
   it('formats btc_ckb', () => {
     expect(formatCompositionTier('btc_ckb')).toBe('BTC+CKB');
   });

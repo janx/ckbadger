@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
-import { render } from '../utils/test-utils';
+import { render } from '@/__tests__/utils/test-utils';
 
 describe('ObjectCollectionStatCards', () => {
+  it('shows decode pending with neutral styling and an execution explanation', () => {
+    render(<ObjectCollectionStatCards totalCount={10} compositionTier="decode_pending" />);
+    expect(screen.getByText('Decode pending')).toHaveClass('text-text-dim');
+    expect(screen.queryByText('Pure CKB')).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByRole('button', { name: 'More info' }));
+    expect(screen.getByText(/Awaiting DOB execution/)).toBeInTheDocument();
+  });
+
   it('renders default count card', () => {
     render(<ObjectCollectionStatCards totalCount={500} />);
 
