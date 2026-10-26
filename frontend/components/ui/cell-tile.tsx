@@ -19,14 +19,16 @@ export interface CellTileData {
   occupied: string;
   state: string;
   anatomy?: CellAnatomy;
+  testId?: string;
 }
 export interface CellTileProps {
   cell: CellTileData;
   highlighted?: boolean;
   dimmed?: boolean;
   onHover?: (id: string | null) => void;
+  onClick?: () => void;
 }
-export function CellTile({ cell, highlighted, dimmed, onHover }: CellTileProps) {
+export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTileProps) {
   const capacity = exactUnsignedInteger(cell.capacity, `${cell.id}: capacity`);
   const occupied = exactUnsignedInteger(cell.occupied, `${cell.id}: occupied`);
   if (capacity === BigInt(0) || occupied > capacity)
@@ -36,6 +38,8 @@ export function CellTile({ cell, highlighted, dimmed, onHover }: CellTileProps) 
   return (
     <article
       data-cell-id={cell.id}
+      data-testid={cell.testId}
+      onClick={onClick}
       data-highlighted={Boolean(highlighted)}
       onMouseEnter={() => onHover?.(cell.id)}
       onMouseLeave={() => onHover?.(null)}
@@ -43,7 +47,9 @@ export function CellTile({ cell, highlighted, dimmed, onHover }: CellTileProps) 
       onBlur={() => onHover?.(null)}
       className={cn(
         'bg-base-surface min-w-0 rounded-md border px-3 py-2 text-xs transition-colors',
-        highlighted ? 'border-jade' : 'border-base-border-subtle',
+        highlighted
+          ? 'border-jade io-linked-highlight border-emphasis/70'
+          : 'border-base-border-subtle',
         dimmed && 'opacity-30'
       )}
     >

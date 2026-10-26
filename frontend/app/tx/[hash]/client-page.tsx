@@ -1,2069 +1,1045 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Link from '@/components/ui/link';
-import dynamic from '@/lib/dynamic-client';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
-import { DataField, DataGrid } from '@/components/ui/data-field';
-import { UsageBar } from '@/components/ui/progress-bar';
-import { HexDisplay } from '@/components/ui/hex-display';
-import { Capacity } from '@/components/ui/capacity';
-import { Address } from '@/components/ui/address';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import Link from '@/components/ui/link';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { ListTable } from '@/components/ui/list-table';
+import { HexMap } from '@/components/ui/hex-map';
+import { Hash } from '@/components/ui/hash';
+import { ActivityRow } from '@/components/activity/activity-row';
+import { ExactCkb, ItemDeltaFact } from '@/components/activity-event-row';
+import { ParticipantRefView } from '@/components/participant-ref';
+import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
+import type { CellTileData } from '@/components/ui/cell-tile';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
+import { poolStatusLabel } from '@/components/ui/pool-status';
+import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import {
   api,
   isServiceUnavailableError,
-  type CellDep,
-  type GraphNode,
-  type ScriptLookupResponse,
   type TransactionDetail,
+  type TransactionScriptGroup,
+  type TransactionWitness,
+  type ScriptLookupResponse,
+  type GlobalActivity,
+  type CellDep,
 } from '@/lib/api';
-import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
-import { getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
-import { poolStatusLabel } from '@/components/ui/pool-status';
-import { analyzeWitness, buildScriptGroupLens } from '@/lib/witness-analysis';
-import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { getScriptDetailHref, getIdentityItemDetailHref } from '@/lib/detail-routes';
+import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import dynamic from '@/lib/dynamic-client';
 
-type TxGraphView = 'flow' | 'graph';
-const SECTION_TAB_VALUES = ['io', 'scripts', 'celldeps', 'graph'] as const;
-type SectionTab = (typeof SECTION_TAB_VALUES)[number];
-const DETAIL_PENDING_REFETCH_INTERVAL_MS = 3000;
-const SECTION_TAB_TITLES: Record<SectionTab, string> = {
-  io: 'Inputs/Outputs',
-  scripts: 'Scripts',
-  celldeps: 'Cell Deps',
-  graph: 'Graph',
-};
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
-  loading: () => (
-    <div className="border-base-border/70 bg-base-surface/70 flex h-[240px] items-center justify-center rounded border">
-      <p className="text-text-dim text-sm">Loading graph section...</p>
-    </div>
-  ),
+  loading: () => <p className="text-text-dim text-xs">Loading graph section...</p>,
 });
-const WITNESS_BYTES_PER_ROW = 24;
-const WITNESS_SEGMENT_TONES = [
-  {
-    dot: 'bg-emphasis',
-    activePill: 'border-emphasis/70 bg-emphasis/15 text-emphasis',
-    valueText: 'text-emphasis',
-    byte: 'rounded bg-emphasis/15 text-emphasis/70',
-    byteActive: 'rounded bg-emphasis/25 text-emphasis ring-1 ring-emphasis/70',
-    byteHover: 'byte-hover-breathe ring-1 ring-emphasis/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]',
-    asciiActive: 'rounded-sm bg-emphasis/20 text-emphasis',
-    asciiHover:
-      'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]',
-  },
-  {
-    dot: 'bg-info',
-    activePill: 'border-info/70 bg-info/15 text-info',
-    valueText: 'text-info',
-    byte: 'rounded bg-info/15 text-info-dim',
-    byteActive: 'rounded bg-info/25 text-info ring-1 ring-info/70',
-    byteHover: 'byte-hover-breathe ring-1 ring-info/80 shadow-[0_0_10px_rgba(58,110,160,0.35)]',
-    asciiActive: 'rounded-sm bg-info/20 text-info',
-    asciiHover: 'rounded-sm bg-info/30 text-info shadow-[inset_0_0_0_1px_rgba(58,110,160,0.5)]',
-  },
-  {
-    dot: 'bg-warning-400',
-    activePill: 'border-warning-400/70 bg-warning/15 text-warning',
-    valueText: 'text-warning',
-    byte: 'rounded bg-warning/15 text-warning',
-    byteActive: 'rounded bg-warning/25 text-warning ring-1 ring-warning/70',
-    byteHover: 'byte-hover-breathe ring-1 ring-warning/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
-    asciiActive: 'rounded-sm bg-warning/20 text-warning',
-    asciiHover:
-      'rounded-sm bg-warning/30 text-warning-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
-  },
-  {
-    dot: 'bg-[#9a5090]',
-    activePill: 'border-[#9a5090]/70 bg-[#9a5090]/15 text-[#7a4070]',
-    valueText: 'text-[#7a4070]',
-    byte: 'rounded bg-[#9a5090]/15 text-[#7a4070]',
-    byteActive: 'rounded bg-[#9a5090]/25 text-[#6a3060] ring-1 ring-[#9a5090]/70',
-    byteHover:
-      'byte-hover-breathe ring-1 ring-[#9a5090]/80 shadow-[0_0_10px_rgba(154,80,144,0.35)]',
-    asciiActive: 'rounded-sm bg-[#9a5090]/20 text-[#6a3060]',
-    asciiHover:
-      'rounded-sm bg-[#9a5090]/30 text-[#6a3060] shadow-[inset_0_0_0_1px_rgba(154,80,144,0.5)]',
-  },
-] as const;
-function getWitnessSegmentTone(segmentIndex: number) {
-  return WITNESS_SEGMENT_TONES[Math.abs(segmentIndex) % WITNESS_SEGMENT_TONES.length];
-}
-function getPreferredSegmentLabelsByScriptGroupKind(kind: 'lock' | 'type'): string[] {
-  return kind === 'lock' ? ['lock'] : ['inputType', 'outputType'];
-}
-function findPreferredSegmentIndex(
-  kind: 'lock' | 'type',
-  segments: Array<{ label: string }>
-): number | null {
-  const labels = getPreferredSegmentLabelsByScriptGroupKind(kind);
-  const index = segments.findIndex((segment) =>
-    labels.some((label) => segment.label === label || segment.label.startsWith(`${label}.`))
-  );
-  return index >= 0 ? index : null;
-}
-function isSectionTabValue(value: string | null): value is SectionTab {
-  return value !== null && (SECTION_TAB_VALUES as readonly string[]).includes(value);
-}
-function parseNonNegativeInt(value: string | null): number | null {
-  if (value === null || !/^\d+$/.test(value)) return null;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) return null;
-  return parsed;
-}
-function getErrorMessage(error: unknown): string | null {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim();
-  }
-  if (typeof error === 'string' && error.trim().length > 0) {
-    return error.trim();
-  }
-  return null;
-}
-/**
- * A transaction this explorer has not indexed yet: still in the node's pool, or
- * committed by the node in a block the store has not reached. Its block time,
- * confirmations and derived sections do not exist here yet, so the page shows
- * placeholders and keeps polling until the indexed record replaces it.
- */
-function isProvisionalTransaction(tx: TransactionDetail | undefined): boolean {
-  if (!tx) return false;
+const POLL_MS = 3000;
+function provisional(tx: TransactionDetail | undefined): boolean {
   return (
-    tx.status === 'pending' ||
-    tx.status === 'proposed' ||
-    tx.poolStatus === 'committed_awaiting_index'
+    !!tx &&
+    (tx.status === 'pending' ||
+      tx.status === 'proposed' ||
+      tx.poolStatus === 'committed_awaiting_index')
   );
 }
-function getTransactionStatusLabel(tx: TransactionDetail): string {
-  if (tx.poolStatus === 'committed_awaiting_index') return poolStatusLabel(tx.poolStatus);
-  return tx.status === 'proposed' ? 'Proposed' : tx.status === 'pending' ? 'Pending' : 'Committed';
-}
-function requireTransactionField<T>(
-  value: T | null | undefined,
-  hash: string,
-  fieldName: string
-): T {
-  if (value === null || value === undefined) {
-    throw new Error(`Transaction ${hash} missing required field "${fieldName}"`);
-  }
+function required<T>(value: T | null | undefined, hash: string, field: string): T {
+  if (value === null || value === undefined)
+    throw new Error(`Transaction ${hash} missing required field "${field}"`);
   return value;
 }
-function PendingValue({ text = 'pending...' }: { text?: string }) {
-  return <span className="status-marquee-shine italic">{text}</span>;
+function groupKey(group: TransactionScriptGroup): string {
+  return `${group.kind}:${group.ran ? 'run' : 'attached'}:${group.scriptHash}`;
 }
-function PendingSectionPlaceholder({ label }: { label: string }) {
+function indexParam(value: string | null): number | null {
+  if (value === null) return null;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
+    throw new Error(`Invalid witness index ${value}`);
+  return Number(value);
+}
+function PendingValue() {
+  return <span className="text-text-dim">pending...</span>;
+}
+function ScriptName({
+  group,
+  lookup,
+}: {
+  group: TransactionScriptGroup;
+  lookup: ScriptLookupResponse | undefined;
+}) {
+  const info = lookup?.[group.script.codeHash];
+  const name = info?.name;
   return (
-    <div className="flex min-h-[220px] items-center justify-center p-6 text-center">
-      <div className="space-y-2">
-        <div className="text-text-bright font-mono text-sm uppercase tracking-[0.2em]">{label}</div>
-        <p className="text-text-dim text-sm">
-          <PendingValue /> available once this transaction is committed and indexed.
-        </p>
+    <Link
+      href={getScriptDetailHref({
+        name,
+        codeHash: group.script.codeHash,
+        hashType: group.script.hashType,
+        scriptKind: group.kind,
+      })}
+      className="hover:text-jade"
+    >
+      {name && name.toLowerCase() !== 'unknown' ? name : truncateHash(group.script.codeHash, 10, 6)}
+    </Link>
+  );
+}
+function kindOf(cell: {
+  type?: { codeHash: string };
+  cellType?: string | null;
+}): CellTileData['kind'] {
+  switch (cell.cellType) {
+    case 'nervos-dao':
+      return 'dao';
+    case 'udt':
+    case 'sudt':
+    case 'xudt':
+      return 'tokens';
+    case 'spore':
+    case 'm-nft':
+      return 'objects';
+    case 'bit-account':
+    case 'bit-cell':
+    case 'did-ckb':
+    case 'dotcell-account':
+      return 'identities';
+    default:
+      return cell.type ? 'other' : 'ckb';
+  }
+}
+function cellTiles(
+  tx: TransactionDetail,
+  lookup: ScriptLookupResponse | undefined
+): { inputs: CellTileData[]; outputs: CellTileData[] } {
+  const inputs = required(tx.inputs, tx.hash, 'inputs');
+  const outputs = required(tx.outputs, tx.hash, 'outputs');
+  const owner = (address: string | undefined, context: string) => (
+    <Link
+      href={`/address/${required(address, tx.hash, `${context}.address`)}`}
+      className="text-text hover:text-jade"
+    >
+      {truncateHash(address!, 10, 6)}
+    </Link>
+  );
+  const lockKind = (codeHash: string | undefined) => {
+    const name = codeHash ? lookup?.[codeHash]?.name : undefined;
+    return name && name.toLowerCase() !== 'unknown' ? name : null;
+  };
+  const content = (cell: { type?: { codeHash: string }; cellType?: string | null }) => {
+    const kind = kindOf(cell);
+    const name = cell.type ? lookup?.[cell.type.codeHash]?.name : undefined;
+    return name && name.toLowerCase() !== 'unknown'
+      ? name
+      : kind === 'ckb'
+        ? 'CKB'
+        : kind === 'tokens'
+          ? 'Token'
+          : kind === 'objects'
+            ? 'Object'
+            : kind === 'identities'
+              ? 'Identity'
+              : kind === 'dao'
+                ? 'Nervos DAO'
+                : 'Type script';
+  };
+  return {
+    inputs: tx.isCellbase
+      ? []
+      : inputs.map((cell, i) => {
+          const out = required(cell.previousOutput, tx.hash, `input ${i} outpoint`);
+          return {
+            id: `in:${i}`,
+            testId: `tx-io-input-${i}`,
+            href: `/cell/${out.txHash}-${out.index}`,
+            label: `input ${i}`,
+            owner: owner(cell.address, `input ${i}`),
+            lockKind: lockKind(cell.lock?.codeHash),
+            kind: kindOf(cell),
+            content: content(cell),
+            capacity: required(cell.capacity, tx.hash, `input ${i} capacity`),
+            occupied: (
+              exactUnsignedInteger(
+                required(cell.commonKnowledgeSize, tx.hash, `input ${i} occupied`),
+                `${tx.hash}: input ${i} occupied bytes`
+              ) * BigInt(100000000)
+            ).toString(),
+            state: 'consumed',
+          };
+        }),
+    outputs: outputs.map((cell, i) => ({
+      id: `out:${i}`,
+      testId: `tx-io-output-${i}`,
+      href: `/cell/${tx.hash}-${i}`,
+      label: `output ${i}`,
+      owner: owner(cell.address, `output ${i}`),
+      lockKind: lockKind(cell.lock?.codeHash),
+      kind: kindOf(cell),
+      content: content(cell),
+      capacity: cell.capacity,
+      occupied: (
+        exactUnsignedInteger(cell.commonKnowledgeSize, `${tx.hash}: output ${i} occupied bytes`) *
+        BigInt(100000000)
+      ).toString(),
+      state: required(cell.status, tx.hash, `output ${i} status`),
+    })),
+  };
+}
+function WitnessInspector({
+  tx,
+  witness,
+  onSelect,
+  onHover,
+}: {
+  tx: TransactionDetail;
+  witness: TransactionWitness | null;
+  onSelect: (index: number) => void;
+  onHover: (index: number | null) => void;
+}) {
+  const details = required(tx.witnessDetails, tx.hash, 'witnessDetails');
+  if (!tx.witnessesAvailable)
+    return (
+      <p data-testid="tx-witness-tab" className="text-text-dim text-xs">
+        Witness bytes are unavailable
+      </p>
+    );
+  return (
+    <div data-testid="tx-witness-tab" className="space-y-4">
+      <div className="divide-base-elevated divide-y">
+        {details.map((w) => (
+          <button
+            key={w.index}
+            type="button"
+            data-testid={`tx-witness-item-${w.index}`}
+            aria-pressed={witness?.index === w.index}
+            onClick={() => onSelect(w.index)}
+            onMouseEnter={() => onHover(w.index)}
+            onMouseLeave={() => onHover(null)}
+            onFocus={() => onHover(w.index)}
+            onBlur={() => onHover(null)}
+            className={cn(
+              'flex w-full flex-wrap justify-between gap-2 py-3 text-left text-xs',
+              witness?.index === w.index ? 'text-text-bright' : 'text-text'
+            )}
+          >
+            <span>
+              Witness #{w.index}{' '}
+              <span className="text-text-dim">{w.kind.replaceAll('_', ' ')}</span>
+              {tx.dotcellNames?.some((name) => name.outputIndex === w.index) && (
+                <span className="text-text-dim ml-2">.cell records</span>
+              )}
+            </span>
+            <span className="text-text-dim">{w.size.toLocaleString('en-US')} B</span>
+          </button>
+        ))}
       </div>
+      {witness ? (
+        <div data-testid="tx-witness-deterministic-section" className="space-y-4">
+          <h3 className="text-text-bright text-xs">
+            {witness.kind === 'witness_args'
+              ? 'WitnessArgs'
+              : witness.kind === 'opaque'
+                ? 'Opaque witness bytes'
+                : witness.kind.replaceAll('_', ' ')}
+          </h3>
+          <HexMap
+            subject={`transaction ${tx.hash} witness ${witness.index}`}
+            hex={required(tx.witnesses[witness.index], tx.hash, `witness ${witness.index} bytes`)}
+            fields={witness.fields
+              .filter((field) => field.end > field.start)
+              .map((field, i) => ({
+                id: `${witness.index}:${i}`,
+                label: field.name,
+                offset: field.start,
+                length: field.end - field.start,
+                description: `${field.name}: ${field.hex}`,
+              }))}
+          />
+          {tx.dotcellNames
+            ?.filter((name) => name.outputIndex === witness.index)
+            .map((name) => (
+              <div key={name.identityId} data-testid="tx-witness-dotcell-records">
+                <p className="text-text-dim mb-3 text-xs">
+                  records payload of{' '}
+                  <Link
+                    href={getIdentityItemDetailHref('dotcell', name.label)}
+                    className="text-text hover:text-jade"
+                  >
+                    {name.name}
+                  </Link>{' '}
+                  (output #{name.outputIndex})
+                </p>
+                <DotCellRecordsTable records={name.records} />
+              </div>
+            ))}
+        </div>
+      ) : (
+        <p data-testid="tx-witness-selection-empty" className="text-text-dim text-xs">
+          Select a witness to inspect its bytes.
+        </p>
+      )}
+    </div>
+  );
+}
+function BalanceChanges({ activity }: { activity: GlobalActivity }) {
+  const rows = activity.participants.map((participant, i) => ({
+    ...participant,
+    key: `${participant.lockHash ?? participant.lockHashPrefix ?? participant.address}:${i}`,
+  }));
+  return (
+    <DetailSection title="Balance changes">
+      <ListTable
+        label="Balance changes"
+        rows={rows}
+        rowKey={(row) => row.key}
+        columns={[
+          {
+            key: 'participant',
+            label: 'Participant',
+            minWidth: 220,
+            render: (row) => <ParticipantRefView participant={row} compact quiet />,
+          },
+          {
+            key: 'ckb',
+            label: 'CKB',
+            minWidth: 210,
+            numeric: true,
+            render: (row) => <ExactCkb shannons={BigInt(row.ckbDelta)} />,
+          },
+          {
+            key: 'occupied',
+            label: 'Occupied',
+            minWidth: 140,
+            numeric: true,
+            render: (row) => <ExactCkb shannons={BigInt(row.usedDelta)} />,
+          },
+          {
+            key: 'items',
+            label: 'Items',
+            minWidth: 230,
+            render: (row) => (
+              <div className="flex flex-wrap gap-2">
+                {row.itemDeltas.map((item, i) => (
+                  <ItemDeltaFact key={i} item={item} />
+                ))}
+              </div>
+            ),
+          },
+        ]}
+      />
+    </DetailSection>
+  );
+}
+function Dependencies({
+  deps,
+  activeHashes,
+  onHover,
+}: {
+  deps: CellDep[];
+  activeHashes: string[];
+  onHover: (hashes: string[] | null) => void;
+}) {
+  return (
+    <div className="divide-base-elevated divide-y">
+      {deps.map((dep, i) => (
+        <div
+          key={`${dep.outPointTxHash}:${dep.outPointIndex}`}
+          id={`tx-dep-${i}`}
+          onMouseEnter={() => onHover(dep.scriptHashes)}
+          onMouseLeave={() => onHover(null)}
+          onFocus={() => onHover(dep.scriptHashes)}
+          onBlur={() => onHover(null)}
+          className={cn(
+            'flex flex-wrap justify-between gap-3 py-3 text-xs',
+            activeHashes.some((h) => dep.scriptHashes.includes(h)) && 'bg-base-surface'
+          )}
+        >
+          <Link
+            href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
+            className="text-text hover:text-jade"
+          >
+            dep {i} · {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
+          </Link>
+          <span className="text-text-dim">{dep.depType} · read, not consumed</span>
+          {dep.depType === 'dep_group' && (
+            <div className="w-full space-y-2 pl-3">
+              {dep.resolvedCells.map((cell) => (
+                <Link
+                  key={`${cell.txHash}:${cell.index}`}
+                  href={`/cell/${cell.txHash}-${cell.index}`}
+                  className="text-text-dim hover:text-jade block"
+                >
+                  ↳ {truncateHash(cell.txHash, 10, 6)}:{cell.index}
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
 export default function TransactionDetailPage() {
-  const params = useParams();
+  const { hash } = useParams() as { hash: string };
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const hash = params.hash as string;
-  const tabFromQuery = searchParams.get('tab');
-  const [activeSectionTab, setActiveSectionTab] = useState<SectionTab>(() =>
-    isSectionTabValue(tabFromQuery) ? tabFromQuery : 'io'
-  );
   const {
     data: tx,
-    isLoading,
     error,
+    isLoading,
   } = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
-    // A 503 `service_unavailable` (a pending transaction whose parent the node
-    // does not know yet) is provisional too: it passes in seconds.
-    refetchInterval: (query) =>
-      isProvisionalTransaction(query.state.data) || isServiceUnavailableError(query.state.error)
-        ? DETAIL_PENDING_REFETCH_INTERVAL_MS
-        : false,
+    refetchInterval: (q) =>
+      provisional(q.state.data) || isServiceUnavailableError(q.state.error) ? POLL_MS : false,
     refetchIntervalInBackground: true,
   });
+  const isProvisional = provisional(tx);
   const awaitingInputs = isServiceUnavailableError(error);
-  const errorMessage = getErrorMessage(error);
-  const isNotFoundError = errorMessage?.startsWith('API error: 404') ?? false;
-  const isProvisional = isProvisionalTransaction(tx);
-  const statusLabel = tx ? getTransactionStatusLabel(tx) : null;
+  const { data: activity, error: activityError } = useQuery({
+    queryKey: ['transaction-activity', hash],
+    queryFn: () => api.getTransactionActivity(hash),
+    enabled: !!tx && !isProvisional && !tx.isCellbase,
+  });
+  const { data: deps, error: depsError } = useQuery({
+    queryKey: ['txCellDeps', hash],
+    queryFn: () => api.getTransactionCellDeps(hash),
+    enabled: !!tx && !isProvisional,
+  });
+  const { data: lifecycle } = useQuery({
+    queryKey: ['txLifecycle', hash],
+    queryFn: () => api.getTransactionLifecycle(hash),
+    enabled: !!tx && !isProvisional && !tx.isCellbase,
+  });
+  const [graphOpen, setGraphOpen] = useState(searchParams.get('tab') === 'graph');
+  const { data: graph, error: graphError } = useQuery({
+    queryKey: ['txGraph', hash],
+    queryFn: () => api.getTransactionGraph(hash),
+    enabled: !!tx && !isProvisional && graphOpen,
+  });
+  const codeHashes = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...(tx?.inputs ?? []), ...(tx?.outputs ?? [])]
+            .flatMap((c) => [c.lock?.codeHash, c.type?.codeHash])
+            .filter((v): v is string => v !== undefined)
+        )
+      ),
+    [tx]
+  );
+  const { data: lookup } = useQuery({
+    queryKey: ['scriptLookup', codeHashes, hash],
+    queryFn: () => api.lookupScripts(codeHashes, hash),
+    enabled: codeHashes.length > 0,
+    staleTime: Infinity,
+  });
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
     tx?.cycles,
     (tx?.isCellbase ?? false) || isProvisional,
     tx?.cyclesStatus
   );
-  const { data: graphData } = useQuery({
-    queryKey: ['txGraph', hash],
-    queryFn: () => api.getTransactionGraph(hash),
-    enabled: !!hash && !!tx && !isProvisional,
-  });
-  const [txGraphView, setTxGraphView] = useState<TxGraphView>('flow');
-  const { data: cellDeps, isLoading: cellDepsLoading } = useQuery({
-    queryKey: ['txCellDeps', hash],
-    queryFn: () => api.getTransactionCellDeps(hash),
-    enabled: !!hash && !!tx && !isProvisional,
-  });
-  const { data: lifecycle } = useQuery({
-    queryKey: ['txLifecycle', hash],
-    queryFn: () => api.getTransactionLifecycle(hash),
-    enabled: !!hash && !!tx && !isProvisional && !tx.isCellbase,
-  });
-  const codeHashes = useMemo(() => {
-    if (!tx) return [];
-    const hashes = new Set<string>();
-    tx.inputs?.forEach((input) => {
-      if (input.lock?.codeHash) hashes.add(input.lock.codeHash);
-      if (input.type?.codeHash) hashes.add(input.type.codeHash);
-    });
-    tx.outputs?.forEach((output) => {
-      if (output.lock?.codeHash) hashes.add(output.lock.codeHash);
-      if (output.type?.codeHash) hashes.add(output.type.codeHash);
-    });
-    return Array.from(hashes);
-  }, [tx]);
-  const { data: scriptLookup } = useQuery({
-    queryKey: ['scriptLookup', codeHashes, hash],
-    queryFn: () => api.lookupScripts(codeHashes, hash),
-    enabled: codeHashes.length > 0,
-    staleTime: Infinity,
-  });
-  const graphInsights = useMemo(() => {
-    if (!graphData) {
-      return {
-        nodeCount: 0,
-        linkCount: 0,
-        inputLinkCount: 0,
-        outputLinkCount: 0,
-        outputNodes: [] as Array<{
-          outputIndex: number;
-          status: string | null;
-          capacity: string | null;
-        }>,
-        graphHeight: 240,
-      };
-    }
-    const inputLinkCount = graphData.links.filter(
-      (link) => link.linkType === 'input' || link.linkType === 'consumed_by'
-    ).length;
-    const outputLinkCount = graphData.links.filter(
-      (link) => link.linkType === 'output' || link.linkType === 'creates'
-    ).length;
-    const outputNodes = graphData.nodes
-      .filter(
-        (node) =>
-          node.nodeType === 'cell' &&
-          node.data?.txHash === hash &&
-          node.data?.outputIndex !== undefined
-      )
-      .map((node) => ({
-        outputIndex: node.data?.outputIndex ?? 0,
-        status: node.data?.status ?? null,
-        capacity: node.data?.capacity ?? null,
-      }))
-      .sort((a, b) => a.outputIndex - b.outputIndex);
-    const graphHeight = Math.min(
-      340,
-      Math.max(220, 200 + graphData.nodes.length * 10 + graphData.links.length * 6)
-    );
-    return {
-      nodeCount: graphData.nodes.length,
-      linkCount: graphData.links.length,
-      inputLinkCount,
-      outputLinkCount,
-      outputNodes,
-      graphHeight,
-    };
-  }, [graphData, hash]);
-  const handleGraphNodeClick = (node: GraphNode) => {
-    if (node.nodeType === 'transaction' && node.data?.hash) {
-      router.push(`/tx/${node.data.hash}`);
-    } else if (
-      node.nodeType === 'cell' &&
-      node.data?.txHash !== undefined &&
-      node.data?.outputIndex !== undefined
-    ) {
-      router.push(`/cell/${node.data.txHash}-${node.data.outputIndex}`);
-    }
-  };
-  useEffect(() => {
-    const nextTab = isSectionTabValue(tabFromQuery) ? tabFromQuery : 'io';
-    if (nextTab !== activeSectionTab) {
-      setActiveSectionTab(nextTab);
-    }
-  }, [activeSectionTab, tabFromQuery]);
-  const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
-    const nextParams = new URLSearchParams(searchParams.toString());
-    mutator(nextParams);
-    const nextQuery = nextParams.toString();
-    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
-  };
-  const handleSectionTabChange = (nextValue: string) => {
-    if (!isSectionTabValue(nextValue)) return;
-    setActiveSectionTab(nextValue);
-    updateSearchParams((nextParams) => {
-      if (nextValue === 'io') {
-        nextParams.delete('tab');
-      } else {
-        nextParams.set('tab', nextValue);
-      }
-    });
-  };
-  const clearLinkedWitnessSelection = () => {
-    setLinkedWitnessIndex(null);
-    setLinkedScriptGroupKey(null);
-    updateSearchParams((nextParams) => {
-      nextParams.delete('witness');
-      nextParams.delete('wg');
-    });
-  };
-  const selectedWitnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
-  const selectedScriptGroupFromQuery = searchParams.get('wg');
-  const [linkedWitnessIndex, setLinkedWitnessIndex] = useState<number | null>(
-    selectedWitnessFromQuery
+  const [selectedWitness, setSelectedWitness] = useState<number | null>(() =>
+    indexParam(searchParams.get('witness'))
   );
-  const [linkedScriptGroupKey, setLinkedScriptGroupKey] = useState<string | null>(
-    selectedScriptGroupFromQuery
-  );
+  const [hoveredCells, setHoveredCells] = useState<string[] | null>(null);
+  const [hoveredCell, setHoveredCell] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(searchParams.get('wg'));
   useEffect(() => {
-    setLinkedWitnessIndex(selectedWitnessFromQuery);
-    setLinkedScriptGroupKey(selectedScriptGroupFromQuery);
-  }, [hash, selectedScriptGroupFromQuery, selectedWitnessFromQuery]);
-  const ioHighlightState = useMemo(() => {
-    const highlightedInputIndices = new Set<number>();
-    const highlightedOutputIndices = new Set<number>();
-    if (!tx) return { highlightedInputIndices, highlightedOutputIndices };
-    const groups = buildScriptGroupLens(tx);
-    const focusedGroup =
-      linkedScriptGroupKey !== null
-        ? (groups.find((group) => group.key === linkedScriptGroupKey) ?? null)
-        : null;
-    const associatedGroups =
-      focusedGroup !== null
-        ? [focusedGroup]
-        : linkedWitnessIndex !== null
-          ? groups.filter((group) => group.witnessIndex === linkedWitnessIndex)
-          : [];
-    associatedGroups.forEach((group) => {
-      group.inputIndices.forEach((inputIndex) => highlightedInputIndices.add(inputIndex));
-    });
-    if (associatedGroups.length === 0 && linkedWitnessIndex !== null && tx.inputs) {
-      if (linkedWitnessIndex >= 0 && linkedWitnessIndex < tx.inputs.length) {
-        highlightedInputIndices.add(linkedWitnessIndex);
-      }
-    }
-    if (associatedGroups.length > 0 && tx.outputs) {
-      tx.outputs.forEach((output, outputIndex) => {
-        const isLinked = associatedGroups.some((group) => {
-          const script = group.kind === 'lock' ? output.lock : output.type;
-          if (!script) return false;
-          if (!script.codeHash || !script.hashType || script.args === undefined) {
-            throw new Error(
-              `transaction ${tx.hash} output ${outputIndex} ${group.kind}: incomplete script identity`
-            );
-          }
-          return (
-            script.codeHash === group.codeHash &&
-            script.hashType === group.hashType &&
-            script.args === group.args
-          );
-        });
-        if (isLinked) highlightedOutputIndices.add(outputIndex);
-      });
-    }
-    return { highlightedInputIndices, highlightedOutputIndices };
-  }, [linkedScriptGroupKey, linkedWitnessIndex, tx]);
-  if (isLoading) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-4">
-          <div className="animate-pulse space-y-8">
-            <div className="bg-base-surface h-20 w-full rounded" />
-            <div className="bg-base-surface h-64 w-full rounded" />
-            <div className="bg-base-surface h-96 w-full rounded" />
-          </div>
-        </main>
-      </div>
-    );
-  }
-  if (awaitingInputs && !tx) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-4">
-          <PageHeader
-            title="Transaction"
-            hash={hash}
-            badge={<Badge variant="blue">Pending</Badge>}
-          />
-          <TerminalPanel>
-            <TerminalPanelContent className="py-12 text-center">
-              <div data-testid="tx-inputs-not-yet-resolvable">
-                <p className="text-text-dim text-sm">
-                  <PendingValue text="waiting for the node..." /> the inputs of this unconfirmed
-                  transaction cannot be resolved yet. Retrying automatically.
-                </p>
-                <p className="text-text-dim mt-3 break-all text-xs">{error.apiMessage}</p>
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </main>
-      </div>
-    );
-  }
-  // A transient 503 on a later poll leaves the last good answer on screen.
-  if ((error && !awaitingInputs) || !tx) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-4">
-          <TerminalPanel>
-            <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-dim text-xl">
-                {isNotFoundError ? 'Transaction not found' : 'Failed to load transaction'}
-              </h2>
-              {!isNotFoundError && errorMessage && (
-                <p className="text-text-dim mt-3 break-all text-sm">{errorMessage}</p>
-              )}
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </main>
-      </div>
-    );
-  }
-  // The node reports the committing block before this explorer indexes it, so a
-  // committed transaction always has one, provisional or not.
-  const committedBlockNumber =
-    tx.status === 'committed'
-      ? requireTransactionField(tx.blockNumber, tx.hash, 'blockNumber')
-      : null;
-  const committedTimestamp = isProvisional
-    ? null
-    : requireTransactionField(tx.timestamp, tx.hash, 'timestamp');
-  const committedConfirmations = isProvisional
-    ? null
-    : requireTransactionField(tx.confirmations, tx.hash, 'confirmations');
-  const carriedCapacity = isProvisional
-    ? null
-    : (
-        BigInt(requireTransactionField(tx.outputsCapacity, tx.hash, 'outputsCapacity')) +
-        BigInt(tx.fee)
-      ).toString();
-  const commonKnowledgeSizeChange = isProvisional
-    ? null
-    : (() => {
-        const inputUsed = BigInt(
-          requireTransactionField(
-            tx.inputsCommonKnowledgeSize,
-            tx.hash,
-            'inputsCommonKnowledgeSize'
-          )
-        );
-        const outputUsed = BigInt(
-          requireTransactionField(
-            tx.outputsCommonKnowledgeSize,
-            tx.hash,
-            'outputsCommonKnowledgeSize'
-          )
-        );
-        return outputUsed - inputUsed;
-      })();
-  const committedCommonKnowledgeSizeChange = isProvisional
-    ? null
-    : requireTransactionField(commonKnowledgeSizeChange, tx.hash, 'commonKnowledgeSizeChange');
-  return (
+    setSelectedWitness(indexParam(searchParams.get('witness')));
+    setSelectedGroup(searchParams.get('wg'));
+  }, [hash, searchParams]);
+  const select = (index: number | null, group: string | null) => {
+    setSelectedWitness(index);
+    setSelectedGroup(group);
+    const next = new URLSearchParams(searchParams.toString());
+    if (index === null) next.delete('witness');
+    else next.set('witness', String(index));
+    if (group === null) next.delete('wg');
+    else next.set('wg', group);
+    router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
+  };
+  const shell = (children: ReactNode) => (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-4">
-        <PageHeader
-          title="Transaction"
-          hash={tx.hash}
-          badge={
-            isProvisional ? (
-              <Badge variant={tx.status === 'proposed' ? 'gold' : 'blue'}>{statusLabel}</Badge>
+      <main className="container mx-auto px-4 py-8">{children}</main>
+    </div>
+  );
+  if (isLoading) return shell(<div className="bg-base-surface h-72 animate-pulse" />);
+  if (awaitingInputs && !tx)
+    return shell(
+      <DetailLayout
+        title="Transaction"
+        identity={hash}
+        status={<span className="text-text-dim text-xs">Pending</span>}
+      >
+        <div data-testid="tx-inputs-not-yet-resolvable" className="text-text-dim space-y-3 text-xs">
+          <p>
+            waiting for the node... the inputs of this unconfirmed transaction cannot be resolved
+            yet. Retrying automatically.
+          </p>
+          <p className="break-all">{error.apiMessage}</p>
+        </div>
+      </DetailLayout>
+    );
+  if ((error && !awaitingInputs) || !tx) {
+    const message = error instanceof Error ? error.message : 'Transaction response is empty';
+    const missing = message.startsWith('API error: 404');
+    return shell(
+      <DetailLayout title={missing ? 'Transaction not found' : 'Failed to load transaction'}>
+        <p role="alert" className="text-text-dim break-words text-xs">
+          {message}
+        </p>
+      </DetailLayout>
+    );
+  }
+  const status =
+    tx.poolStatus === 'committed_awaiting_index'
+      ? poolStatusLabel(tx.poolStatus)
+      : tx.status === 'pending'
+        ? 'Pending'
+        : tx.status === 'proposed'
+          ? 'Proposed'
+          : 'Committed';
+  const groups = isProvisional ? [] : required(tx.scriptGroups, hash, 'scriptGroups');
+  const witnesses = isProvisional ? [] : required(tx.witnessDetails, hash, 'witnessDetails');
+  const chosenWitness =
+    selectedWitness === null || isProvisional
+      ? null
+      : required(
+          witnesses.find((w) => w.index === selectedWitness),
+          hash,
+          `witness ${selectedWitness}`
+        );
+  if (
+    !isProvisional &&
+    selectedGroup !== null &&
+    !groups.some((g) => groupKey(g) === selectedGroup)
+  )
+    throw new Error(`Transaction ${hash}: unknown script group ${selectedGroup}`);
+  const tiles = isProvisional ? null : cellTiles(tx, lookup);
+  const activeIds = groups
+    .filter((g) =>
+      selectedGroup !== null
+        ? groupKey(g) === selectedGroup
+        : selectedWitness !== null && g.witnessIndex === selectedWitness
+    )
+    .flatMap((g) => [
+      ...g.inputIndices.map((i) => `in:${i}`),
+      ...g.outputIndices.map((i) => `out:${i}`),
+    ]);
+  const evidenceCells = hoveredCells ?? (hoveredCell ? [hoveredCell] : activeIds);
+  const activeHashes = groups
+    .filter((g) =>
+      [...g.inputIndices.map((i) => `in:${i}`), ...g.outputIndices.map((i) => `out:${i}`)].some(
+        (id) => evidenceCells.includes(id)
+      )
+    )
+    .map((g) => g.scriptHash);
+  const groupCells = (g: TransactionScriptGroup) => [
+    ...g.inputIndices.map((i) => `in:${i}`),
+    ...g.outputIndices.map((i) => `out:${i}`),
+  ];
+  const structureGroups: TxStructureGroup[] = groups.map((g) => {
+    const key = groupKey(g);
+    const info = lookup?.[g.script.codeHash];
+    return {
+      id: key,
+      kind: g.kind,
+      label:
+        info?.name && info.name.toLowerCase() !== 'unknown'
+          ? info.name
+          : truncateHash(g.script.codeHash, 10, 6),
+      href: getScriptDetailHref({
+        name: info?.name,
+        codeHash: g.script.codeHash,
+        hashType: g.script.hashType,
+        scriptKind: g.kind,
+      }),
+      cellIds: [...g.inputIndices.map((i) => `in:${i}`), ...g.outputIndices.map((i) => `out:${i}`)],
+      executed: g.ran,
+      witness:
+        g.witnessIndex === null ? (
+          <span className="text-text-dim">No witness</span>
+        ) : (
+          <button
+            type="button"
+            className="hover:text-jade"
+            onClick={() => select(g.witnessIndex, selectedGroup === key ? null : key)}
+          >
+            Witness #{g.witnessIndex}
+          </button>
+        ),
+      dependency: (
+        <span className="text-text-dim">
+          {!g.ran
+            ? 'Runs when spent'
+            : deps
+              ? deps.some((d) => d.scriptHashes.includes(g.scriptHash))
+                ? deps.flatMap((d, i) =>
+                    d.scriptHashes.includes(g.scriptHash)
+                      ? [
+                          <a key={i} href={`#tx-dep-${i}`} className="hover:text-jade mr-2">
+                            dep {i}
+                          </a>,
+                        ]
+                      : []
+                  )
+                : 'No matching dep'
+              : 'Resolving code...'}
+        </span>
+      ),
+      cycles: g.cycles,
+    };
+  });
+  const raw = (
+    <div className="space-y-5">
+      <details>
+        <summary className="text-text-dim cursor-pointer">Cells</summary>
+        <pre className="mt-3 whitespace-pre-wrap break-all">
+          {JSON.stringify({ inputs: tx.inputs, outputs: tx.outputs }, null, 2)}
+        </pre>
+      </details>
+      <details>
+        <summary className="text-text-dim cursor-pointer">Scripts</summary>
+        <div className="mt-3 space-y-3">
+          {groups.map((g) => (
+            <div key={groupKey(g)}>
+              <ScriptName group={g} lookup={lookup} />
+              <pre className="mt-2 whitespace-pre-wrap break-all">
+                {JSON.stringify(g.script, null, 2)}
+              </pre>
+            </div>
+          ))}
+        </div>
+      </details>
+      <details open={graphOpen} onToggle={(e) => setGraphOpen(e.currentTarget.open)}>
+        <summary className="text-text-dim cursor-pointer">Cell graph</summary>
+        {isProvisional ? (
+          <PendingValue />
+        ) : graphError ? (
+          <p role="alert">{graphError.message}</p>
+        ) : graph ? (
+          <DeferredCellGraph
+            nodes={graph.nodes}
+            links={graph.links}
+            height={340}
+            onNodeClick={(node) => {
+              if (node.nodeType === 'transaction' && node.data?.hash)
+                router.push(`/tx/${node.data.hash}`);
+              if (
+                node.nodeType === 'cell' &&
+                node.data?.txHash !== undefined &&
+                node.data.outputIndex !== undefined
+              )
+                router.push(`/cell/${node.data.txHash}-${node.data.outputIndex}`);
+            }}
+          />
+        ) : (
+          <p className="text-text-dim py-4">Loading graph...</p>
+        )}
+      </details>
+      <details>
+        <summary className="text-text-dim cursor-pointer">JSON</summary>
+        <pre className="mt-3 whitespace-pre-wrap break-all">{JSON.stringify(tx, null, 2)}</pre>
+      </details>
+    </div>
+  );
+  return shell(
+    <DetailLayout
+      title="Transaction"
+      identity={<Hash hash={tx.hash} truncate={false} />}
+      status={
+        <span className={cn('text-xs', tx.status === 'proposed' ? 'text-gold' : 'text-text-dim')}>
+          {status}
+          {!isProvisional && (
+            <>
+              {' '}
+              · {required(tx.confirmations, hash, 'confirmations').toLocaleString('en-US')}{' '}
+              Confirmations
+            </>
+          )}
+        </span>
+      }
+      tier2={
+        <>
+          <DetailSection
+            title="Script groups"
+            actions={
+              <span className="text-text-dim text-[11px]">
+                {groups.filter((g) => g.ran).length} ran
+              </span>
+            }
+          >
+            {isProvisional ? (
+              <PendingValue />
             ) : (
-              <Badge variant="green">
-                {requireTransactionField(
-                  committedConfirmations,
-                  tx.hash,
-                  'confirmations'
-                ).toLocaleString()}{' '}
-                Confirmations
-              </Badge>
-            )
-          }
-        />
-        <TerminalPanel className="mb-8" glow>
-          <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
-          <TerminalPanelContent>
-            <DataGrid>
-              <DataField label="Block">
-                {committedBlockNumber === null ? (
-                  <PendingValue />
-                ) : isProvisional || tx.isCellbase ? (
-                  <Link
-                    href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
-                    className="text-interactive hover:underline"
-                  >
-                    #
-                    {requireTransactionField(
-                      committedBlockNumber,
-                      tx.hash,
-                      'blockNumber'
-                    ).toLocaleString()}
-                  </Link>
-                ) : lifecycle?.proposedIn ? (
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-text-dim text-xs">Proposed</span>
-                      <Link
-                        href={`/blocks/${lifecycle.proposedIn.blockNumber}`}
-                        className="text-text hover:text-text-bright hover:underline"
-                      >
-                        #{lifecycle.proposedIn.blockNumber.toLocaleString()}
-                      </Link>
-                    </div>
-                    <span className="text-text-dim">→</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-text-dim text-xs">Committed</span>
-                      <Link
-                        href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
-                        className="text-interactive font-medium hover:underline"
-                      >
-                        #
-                        {requireTransactionField(
-                          committedBlockNumber,
-                          tx.hash,
-                          'blockNumber'
-                        ).toLocaleString()}
-                      </Link>
-                    </div>
-                    {lifecycle.commitmentDistance !== null && (
-                      <Badge
-                        variant={
-                          lifecycle.commitmentDistance <= 4
-                            ? 'green'
-                            : lifecycle.commitmentDistance <= 7
-                              ? 'gold'
-                              : 'red'
-                        }
-                      >
-                        +{lifecycle.commitmentDistance}
-                      </Badge>
+              <div className="space-y-3">
+                <p className="text-text-dim text-xs">
+                  Cells with the same script form a group, and each group runs once.
+                </p>
+                <div className="text-text-dim border-base-elevated hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px_180px] gap-4 border-b py-2 text-[11px] lg:grid">
+                  <span>Script group</span>
+                  <span>Cells</span>
+                  <span>Witness it reads</span>
+                  <span>Code, from</span>
+                </div>
+                {groups.map((g, i) => (
+                  <div
+                    key={groupKey(g)}
+                    onMouseEnter={() => setHoveredCells(groupCells(g))}
+                    onMouseLeave={() => setHoveredCells(null)}
+                    onFocus={() => setHoveredCells(groupCells(g))}
+                    onBlur={() => setHoveredCells(null)}
+                    data-script-group={groupKey(g)}
+                    data-highlighted={groupCells(g).some((id) => evidenceCells.includes(id))}
+                    className={cn(
+                      'border-base-elevated grid gap-3 border-b py-3 text-xs sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px_180px]',
+                      groupCells(g).some((id) => evidenceCells.includes(id)) && 'bg-base-surface'
                     )}
-                  </div>
-                ) : (
-                  <Link
-                    href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
-                    className="text-interactive hover:underline"
                   >
-                    #
-                    {requireTransactionField(
-                      committedBlockNumber,
-                      tx.hash,
-                      'blockNumber'
-                    ).toLocaleString()}
-                  </Link>
+                    <div>
+                      <span className="text-text-dim mr-2">{g.kind}</span>
+                      <ScriptName group={g} lookup={lookup} />
+                      <span className="text-text-dim mt-1 block">
+                        {g.ran
+                          ? g.cycles === null
+                            ? 'runs here · cycles not available'
+                            : `${g.cycles} cycles`
+                          : 'attached, runs when spent'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`tx-script-group-focus-${g.witnessIndex ?? 'none'}-${g.kind}`}
+                      className="text-text hover:text-jade text-left"
+                      onClick={() =>
+                        selectedGroup === groupKey(g)
+                          ? select(null, null)
+                          : select(g.witnessIndex, groupKey(g))
+                      }
+                    >
+                      {g.inputIndices
+                        .map((i) => `input ${i}`)
+                        .concat(g.outputIndices.map((i) => `output ${i}`))
+                        .join(', ')}
+                    </button>
+                    <div>{structureGroups[i].witness}</div>
+                    <div>{structureGroups[i].dependency}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DetailSection>
+          <DetailSection
+            title={`Witnesses${tx.witnessesAvailable ? ` · ${witnesses.length}` : ' · unavailable'}`}
+          >
+            {isProvisional ? (
+              <PendingValue />
+            ) : (
+              <>
+                <WitnessInspector
+                  tx={tx}
+                  witness={chosenWitness}
+                  onHover={(index) =>
+                    setHoveredCells(
+                      index === null
+                        ? null
+                        : groups.filter((g) => g.witnessIndex === index).flatMap(groupCells)
+                    )
+                  }
+                  onSelect={(index) =>
+                    selectedWitness === index ? select(null, null) : select(index, null)
+                  }
+                />
+                {selectedGroup && (
+                  <p
+                    data-testid="tx-witness-focused-group"
+                    className="text-text-dim mt-3 break-all text-xs"
+                  >
+                    Focused script group: {selectedGroup}{' '}
+                    <button
+                      type="button"
+                      className="text-text hover:text-jade"
+                      onClick={() => select(selectedWitness, null)}
+                    >
+                      Clear focus
+                    </button>
+                  </p>
                 )}
-              </DataField>
-              <DataField
-                label="Timestamp"
-                copyValue={
-                  committedTimestamp ? new Date(committedTimestamp).toISOString() : undefined
+                {selectedWitness !== null && (
+                  <button
+                    type="button"
+                    data-testid="tx-witness-clear-selection"
+                    className="text-text-dim hover:text-jade mt-3 text-xs"
+                    onClick={() => select(null, null)}
+                  >
+                    Clear witness selection
+                  </button>
+                )}
+              </>
+            )}
+          </DetailSection>
+          <DetailSection
+            title="Cell deps"
+            actions={
+              deps && (
+                <span className="text-text-dim text-[11px]">
+                  {deps.length} · read, not consumed
+                </span>
+              )
+            }
+          >
+            {isProvisional ? (
+              <PendingValue />
+            ) : depsError ? (
+              <p role="alert" className="text-xs">
+                {depsError.message}
+              </p>
+            ) : deps ? (
+              <Dependencies
+                deps={deps}
+                activeHashes={activeHashes}
+                onHover={(hashes) =>
+                  setHoveredCells(
+                    hashes === null
+                      ? null
+                      : groups.filter((g) => hashes.includes(g.scriptHash)).flatMap(groupCells)
+                  )
                 }
-              >
+              />
+            ) : (
+              <p className="text-text-dim text-xs">Resolving cell deps...</p>
+            )}
+          </DetailSection>
+          <dl className="grid gap-5 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-text-dim">Proposed, then committed</dt>
+              <dd className="mt-2">
+                {lifecycle?.proposedIn && (
+                  <>
+                    <Link href={`/blocks/${lifecycle.proposedIn.blockNumber}`}>
+                      #{lifecycle.proposedIn.blockNumber.toLocaleString('en-US')}
+                    </Link>{' '}
+                    →{' '}
+                  </>
+                )}
+                {tx.blockNumber !== null ? (
+                  <Link href={`/blocks/${tx.blockNumber}`}>
+                    #{tx.blockNumber.toLocaleString('en-US')}
+                  </Link>
+                ) : (
+                  <PendingValue />
+                )}
+                {lifecycle?.commitmentDistance !== null &&
+                  lifecycle?.commitmentDistance !== undefined && (
+                    <span className="text-text-dim">
+                      {' '}
+                      · position {lifecycle.commitmentDistance} · window{' '}
+                      {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
+                    </span>
+                  )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-text-dim">Size · cycles</dt>
+              <dd className="mt-2">
+                {tx.txSize === undefined ? (
+                  <PendingValue />
+                ) : (
+                  <>{tx.txSize.toLocaleString('en-US')} B</>
+                )}{' '}
+                ·{' '}
+                {hasCycles && cycles !== null ? (
+                  cycles.toLocaleString('en-US')
+                ) : isCalculating ? (
+                  'Calculating...'
+                ) : hasFailed ? (
+                  'Calculation failed'
+                ) : isProvisional ? (
+                  <PendingValue />
+                ) : tx.isCellbase ? (
+                  'Cellbase does not execute scripts'
+                ) : (
+                  'Not available'
+                )}
+                {tx.feeRate !== undefined && (
+                  <span className="text-text-dim mt-1 block">
+                    fee rate{' '}
+                    {exactUnsignedInteger(tx.feeRate, `${hash}: fee rate`).toLocaleString('en-US')}{' '}
+                    shannon/KB
+                  </span>
+                )}
+              </dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-text-dim">Capacity</dt>
+              <dd className="mt-2 flex flex-wrap items-baseline gap-2">
                 {isProvisional ? (
                   <PendingValue />
                 ) : (
                   <>
-                    {new Date(
-                      requireTransactionField(committedTimestamp, tx.hash, 'timestamp')
-                    ).toLocaleString()}{' '}
-                    (
-                    {formatTimeAgo(
-                      requireTransactionField(committedTimestamp, tx.hash, 'timestamp')
-                    )}
-                    )
+                    <ExactCkb
+                      shannons={exactUnsignedInteger(
+                        required(tx.inputsCapacity, hash, 'inputsCapacity'),
+                        `${hash}: inputs capacity`
+                      )}
+                      signed={false}
+                      tone="plain"
+                    />{' '}
+                    in →{' '}
+                    <ExactCkb
+                      shannons={exactUnsignedInteger(
+                        required(tx.outputsCapacity, hash, 'outputsCapacity'),
+                        `${hash}: outputs capacity`
+                      )}
+                      signed={false}
+                      tone="plain"
+                    />{' '}
+                    out
                   </>
                 )}
-              </DataField>
-              {isProvisional && tx.pendingSince && (
-                <DataField
-                  label="Pending Since"
-                  copyValue={new Date(tx.pendingSince).toISOString()}
-                >
-                  {new Date(tx.pendingSince).toLocaleString()} ({formatTimeAgo(tx.pendingSince)})
-                </DataField>
-              )}
-              <DataField label="Type">
-                {tx.isCellbase ? (
-                  <Badge variant="neutral">Cellbase (Mining Reward)</Badge>
-                ) : (
-                  <Badge variant="neutral">Normal Transaction</Badge>
-                )}
-              </DataField>
-              <DataField label="Fee">
-                <div className="flex flex-col items-end gap-1">
-                  <span className="text-text-bright">
-                    <Capacity value={tx.fee} className="text-text-bright" />
-                    <span className="text-text ml-2 font-mono text-sm tabular-nums">
-                      ({BigInt(tx.fee).toLocaleString()} shannon)
-                    </span>
-                  </span>
-                  {tx.feeRate && (
-                    <span className="text-text font-mono text-xs tabular-nums">
-                      {BigInt(tx.feeRate).toLocaleString()} shannon/KB
-                    </span>
-                  )}
-                </div>
-              </DataField>
-              {tx.txSize && (
-                <DataField label="Size">
-                  <UsageBar value={tx.txSize} max={512000} unit="Bytes" />
-                </DataField>
-              )}
-              {!tx.isCellbase && (
-                <DataField label="Cycles">
-                  {hasCycles && cycles !== null ? (
-                    <UsageBar value={cycles} max={3_500_000_000} />
-                  ) : isCalculating ? (
-                    <span className="text-text inline-flex items-center gap-2 italic">
-                      <span className="border-base-border inline-block h-3 w-3 animate-spin rounded-full border-2 border-t-transparent" />
-                      <span className="cycles-calculating-marquee">Calculating ...</span>
-                    </span>
-                  ) : isProvisional ? (
-                    <PendingValue />
-                  ) : hasFailed ? (
-                    <span className="text-negative italic">Calculation failed</span>
-                  ) : (
-                    <span className="text-text-dim italic">Not available</span>
-                  )}
-                </DataField>
-              )}
-              <DataField label="Carried Capacity">
-                {isProvisional ? (
-                  <PendingValue />
-                ) : (
-                  <Capacity
-                    value={requireTransactionField(carriedCapacity, tx.hash, 'carriedCapacity')}
-                    className="text-text-bright"
-                  />
-                )}
-              </DataField>
-              <DataField label="Common Knowledge Change">
-                {isProvisional ? (
-                  <PendingValue />
-                ) : (
-                  (() => {
-                    const change = requireTransactionField(
-                      committedCommonKnowledgeSizeChange,
-                      tx.hash,
-                      'commonKnowledgeSizeChange'
-                    );
-                    const zero = BigInt(0);
-                    const isIncrease = change > zero;
-                    const isDecrease = change < zero;
-                    const absChange = change < zero ? -change : change;
-                    const f = formatCkbAmount(absChange);
-                    return (
-                      <div className="flex items-center justify-end gap-2">
-                        {isIncrease && (
-                          <span className="border-positive/30 bg-positive/10 text-positive inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
-                            +{f.integer}
-                            <span className="text-positive/60 text-[0.85em]">.{f.decimal}</span>
-                            <span className="ml-1 text-[0.85em]">CKB</span>
-                          </span>
-                        )}
-                        {isDecrease && (
-                          <span className="border-negative/30 bg-negative/10 text-negative inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
-                            -{f.integer}
-                            <span className="text-negative/60 text-[0.85em]">.{f.decimal}</span>
-                            <span className="ml-1 text-[0.85em]">CKB</span>
-                          </span>
-                        )}
-                        {!isIncrease && !isDecrease && (
-                          <span className="border-base-border bg-base-elevated text-text inline-flex items-center rounded border px-2 py-1 text-sm">
-                            No change
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()
-                )}
-              </DataField>
-            </DataGrid>
-          </TerminalPanelContent>
-        </TerminalPanel>
-        <TerminalPanel className="mb-8">
-          <Tabs value={activeSectionTab} onValueChange={handleSectionTabChange}>
-            <TerminalPanelHeader
-              indicator="active"
-              actions={
-                <TabsList>
-                  <TabsTrigger value="io">
-                    Inputs/Outputs ({tx.inputsCount} {'->'} {tx.outputsCount})
-                  </TabsTrigger>
-                  <TabsTrigger value="scripts">Scripts</TabsTrigger>
-                  <TabsTrigger value="celldeps">Cell Deps</TabsTrigger>
-                  <TabsTrigger value="graph">Graph</TabsTrigger>
-                </TabsList>
-              }
-            >
-              {SECTION_TAB_TITLES[activeSectionTab]}
-            </TerminalPanelHeader>
-            <TerminalPanelContent className="p-0">
-              <TabsContent value="io" className="mt-0 p-0">
-                <InputsOutputsTab
-                  tx={tx}
-                  scriptLookup={scriptLookup}
-                  highlightedInputIndices={ioHighlightState.highlightedInputIndices}
-                  highlightedOutputIndices={ioHighlightState.highlightedOutputIndices}
-                  onHighlightedItemClick={clearLinkedWitnessSelection}
-                />
-              </TabsContent>
-              <TabsContent value="scripts" className="mt-0 p-0">
-                <ScriptsSummaryTab tx={tx} scriptLookup={scriptLookup} />
-              </TabsContent>
-              <TabsContent value="celldeps" className="mt-0 p-0">
-                <CellDepsTab
-                  cellDeps={cellDeps}
-                  isLoading={cellDepsLoading}
-                  isPending={isProvisional}
-                />
-              </TabsContent>
-              <TabsContent
-                value="graph"
-                className="border-base-border/80 bg-base-surface/40 mt-0 rounded border p-4"
-              >
-                {isProvisional ? (
-                  <PendingSectionPlaceholder label="Graph" />
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="border-base-border/70 bg-base-surface/60 inline-flex rounded border p-1">
-                        <button
-                          type="button"
-                          className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                            txGraphView === 'flow'
-                              ? 'bg-emphasis/15 text-emphasis'
-                              : 'text-text hover:text-text-bright'
-                          }`}
-                          onClick={() => setTxGraphView('flow')}
-                        >
-                          Flow View
-                        </button>
-                        <button
-                          type="button"
-                          className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                            txGraphView === 'graph'
-                              ? 'bg-emphasis/15 text-emphasis'
-                              : 'text-text hover:text-text-bright'
-                          }`}
-                          onClick={() => setTxGraphView('graph')}
-                        >
-                          Graph View
-                        </button>
-                      </div>
-                      {graphInsights.nodeCount > 0 && (
-                        <span className="text-text-dim text-xs">
-                          {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
-                        </span>
-                      )}
-                    </div>
-                    {txGraphView === 'flow' ? (
-                      <div data-testid="tx-relationship-flow" className="space-y-3">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                            <div className="text-text text-xs uppercase tracking-wide">
-                              Inputs in Graph
-                            </div>
-                            <div className="text-text-bright mt-1 font-mono text-lg">
-                              {graphInsights.inputLinkCount}
-                            </div>
-                          </div>
-                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                            <div className="text-text text-xs uppercase tracking-wide">
-                              Outputs in Graph
-                            </div>
-                            <div className="text-text-bright mt-1 font-mono text-lg">
-                              {graphInsights.outputNodes.length}
-                            </div>
-                          </div>
-                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                            <div className="text-text text-xs uppercase tracking-wide">
-                              Live Outputs
-                            </div>
-                            <div className="text-emphasis mt-1 font-mono text-lg">
-                              {
-                                graphInsights.outputNodes.filter((node) => node.status === 'live')
-                                  .length
-                              }
-                            </div>
-                          </div>
-                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                            <div className="text-text text-xs uppercase tracking-wide">
-                              Dead Outputs
-                            </div>
-                            <div className="text-negative mt-1 font-mono text-lg">
-                              {
-                                graphInsights.outputNodes.filter((node) => node.status === 'dead')
-                                  .length
-                              }
-                            </div>
-                          </div>
-                        </div>
-                        <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text text-xs uppercase tracking-wide">
-                            Transaction Flow Snapshot
-                          </div>
-                          <div className="text-text mt-2 text-sm">
-                            Inputs:{' '}
-                            <span className="text-text-bright font-mono">{tx.inputsCount}</span>{' '}
-                            {'->'} Outputs:{' '}
-                            <span className="text-text-bright font-mono">{tx.outputsCount}</span> |
-                            Graph Edges:{' '}
-                            <span className="text-text-bright font-mono">
-                              {graphInsights.outputLinkCount}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ) : graphData && graphData.nodes.length > 0 ? (
-                      <DeferredCellGraph
-                        nodes={graphData.nodes}
-                        links={graphData.links}
-                        onNodeClick={handleGraphNodeClick}
-                        width={undefined}
-                        height={graphInsights.graphHeight}
-                      />
-                    ) : (
-                      <p className="text-text-dim py-8 text-center">Loading graph...</p>
-                    )}
-                  </div>
-                )}
-              </TabsContent>
-            </TerminalPanelContent>
-          </Tabs>
-        </TerminalPanel>
-        <TerminalPanel>
-          <TerminalPanelHeader indicator="active">
-            Witness ({tx.witnessesAvailable ? tx.witnesses.length : '—'})
-          </TerminalPanelHeader>
-          <TerminalPanelContent className="p-0">
-            <WitnessTab
-              tx={tx}
-              scriptLookup={scriptLookup}
-              onSelectionChange={(witnessIndex, groupKey) => {
-                setLinkedWitnessIndex(witnessIndex);
-                setLinkedScriptGroupKey(groupKey);
-              }}
-            />
-          </TerminalPanelContent>
-        </TerminalPanel>
-      </main>
-    </div>
-  );
-}
-interface TabProps {
-  tx: NonNullable<Awaited<ReturnType<typeof api.getTransactionDetail>>>;
-  scriptLookup?: ScriptLookupResponse;
-}
-interface InputsOutputsTabProps extends TabProps {
-  highlightedInputIndices?: Set<number>;
-  highlightedOutputIndices?: Set<number>;
-  onHighlightedItemClick?: () => void;
-}
-interface WitnessTabProps extends TabProps {
-  onSelectionChange?: (witnessIndex: number | null, groupKey: string | null) => void;
-}
-const UNKNOWN_SCRIPT_NAME = 'unknown';
-function hasKnownScriptName(name: string | null | undefined): boolean {
-  return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
-}
-function getScriptHref({
-  codeHash,
-  hashType,
-  scriptKind,
-  scriptName,
-}: {
-  codeHash: string;
-  hashType: string | null | undefined;
-  scriptKind: 'lock' | 'type';
-  scriptName: string | null | undefined;
-}): string {
-  if (hasKnownScriptName(scriptName)) {
-    return `/scripts/${encodeURIComponent(scriptName!.trim())}`;
-  }
-  return `/script/${codeHash}?hashType=${encodeURIComponent(getScriptRefQueryHashType(hashType))}&kind=${scriptKind}`;
-}
-function ScriptLabel({
-  script,
-  scriptLookup,
-  type,
-}: {
-  script: { codeHash: string; hashType?: string } | undefined;
-  scriptLookup?: ScriptLookupResponse;
-  type: 'lock' | 'type';
-}) {
-  if (!script) return null;
-  const info = scriptLookup?.[script.codeHash];
-  const trimmedScriptName = info?.name?.trim();
-  if (!trimmedScriptName || trimmedScriptName.toLowerCase() === UNKNOWN_SCRIPT_NAME) return null;
-  const label = trimmedScriptName;
-  const href = getScriptHref({
-    codeHash: script.codeHash,
-    hashType: info?.hashType ?? script.hashType,
-    scriptKind: type,
-    scriptName: trimmedScriptName,
-  });
-  return (
-    <Link href={href}>
-      <Badge variant="neutral" className="hover:opacity-80">
-        {label}
-      </Badge>
-    </Link>
-  );
-}
-function InputsOutputsTab({
-  tx,
-  scriptLookup,
-  highlightedInputIndices,
-  highlightedOutputIndices,
-  onHighlightedItemClick,
-}: InputsOutputsTabProps) {
-  return (
-    <div className="grid gap-6 p-4 lg:grid-cols-2">
-      <div>
-        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
-          Inputs ({tx.inputsCount})
-        </h4>
-        {tx.inputs && tx.inputs.length > 0 ? (
-          <div className="border-base-border bg-base-surface/50 rounded-lg border">
-            {tx.inputs.map((input, index) => {
-              const isHighlighted = highlightedInputIndices?.has(index) ?? false;
-              return (
-                <TerminalRow
-                  key={index}
-                  data-testid={`tx-io-input-${index}`}
-                  onClick={(event) => {
-                    if (!isHighlighted) return;
-                    const clickedElement = event.target as HTMLElement | null;
-                    if (clickedElement?.closest('a')) return;
-                    onHighlightedItemClick?.();
-                  }}
-                  className={`flex flex-col gap-2 ${
-                    isHighlighted
-                      ? 'io-linked-highlight border-emphasis/70 bg-emphasis/10 ring-emphasis/30 cursor-pointer ring-1'
-                      : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-text-dim font-mono text-xs">#{index}</span>
-                      <ScriptLabel script={input.lock} scriptLookup={scriptLookup} type="lock" />
-                      <ScriptLabel script={input.type} scriptLookup={scriptLookup} type="type" />
-                    </div>
-                    {input.previousOutput && (
-                      <Link
-                        href={`/cell/${input.previousOutput.txHash}-${input.previousOutput.index}`}
-                        className="hover:text-interactive text-text group flex items-center gap-1 font-mono text-xs"
-                      >
-                        <HexDisplay
-                          value={input.previousOutput.txHash}
-                          startChars={8}
-                          endChars={6}
-                          size="sm"
-                          copyable={false}
-                        />
-                        <span>:{input.previousOutput.index}</span>
-                      </Link>
-                    )}
-                  </div>
-                  {(input.address || input.capacity) && (
-                    <div className="flex items-center justify-between">
-                      {input.address ? (
-                        <Address address={input.address} />
-                      ) : (
-                        <span className="text-negative text-sm">Address error</span>
-                      )}
-                      {input.capacity && (
-                        <Capacity value={input.capacity} className="text-text text-sm" />
-                      )}
-                    </div>
-                  )}
-                </TerminalRow>
-              );
-            })}
-          </div>
-        ) : tx.isCellbase ? (
-          <p className="text-text-dim text-sm">Cellbase has no inputs</p>
-        ) : (
-          <p className="text-text-dim text-sm">Loading inputs...</p>
-        )}
-      </div>
-      <div>
-        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
-          Outputs ({tx.outputsCount})
-        </h4>
-        {tx.outputs && tx.outputs.length > 0 ? (
-          <div className="border-base-border bg-base-surface/50 rounded-lg border">
-            {tx.outputs.map((output, index) => {
-              const isHighlighted = highlightedOutputIndices?.has(index) ?? false;
-              return (
-                <TerminalRow
-                  key={index}
-                  data-testid={`tx-io-output-${index}`}
-                  onClick={(event) => {
-                    if (!isHighlighted) return;
-                    const clickedElement = event.target as HTMLElement | null;
-                    if (clickedElement?.closest('a')) return;
-                    onHighlightedItemClick?.();
-                  }}
-                  className={`flex flex-col gap-2 ${
-                    isHighlighted
-                      ? 'io-linked-highlight border-emphasis/70 bg-emphasis/10 ring-emphasis/30 cursor-pointer ring-1'
-                      : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-text-dim font-mono text-xs">#{index}</span>
-                      <ScriptLabel script={output.lock} scriptLookup={scriptLookup} type="lock" />
-                      <ScriptLabel script={output.type} scriptLookup={scriptLookup} type="type" />
-                    </div>
-                    <Link
-                      href={`/cell/${tx.hash}-${index}`}
-                      className="text-interactive font-mono text-xs hover:underline"
-                    >
-                      View Cell
-                    </Link>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    {output.address ? (
-                      <Address address={output.address} />
-                    ) : (
-                      <span className="text-negative text-sm">Address error</span>
-                    )}
-                    <Capacity value={output.capacity} className="text-text" />
-                  </div>
-                </TerminalRow>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-text-dim text-sm">Loading outputs...</p>
-        )}
-      </div>
-    </div>
-  );
-}
-function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const witnesses = tx.witnesses;
-  const witnessesAvailable = tx.witnessesAvailable;
-  const witnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
-  const scriptGroupFromQuery = searchParams.get('wg');
-  const witnessAnalyses = useMemo(
-    () => witnesses.map((witness, index) => analyzeWitness(witness, index, tx.inputsCount)),
-    [tx.inputsCount, witnesses]
-  );
-  // `.cell` records live in the witness at the name cell's own output index;
-  // the API decodes them (hash-verified) and says which witness that is.
-  const dotcellByWitness = useMemo(
-    () => new Map((tx.dotcellNames ?? []).map((name) => [name.outputIndex, name])),
-    [tx.dotcellNames]
-  );
-  const scriptGroupLens = useMemo(() => buildScriptGroupLens(tx), [tx]);
-  const [activeWitnessIndex, setActiveWitnessIndex] = useState<number | null>(
-    () => witnessFromQuery
-  );
-  const [hoveredSegmentIndex, setHoveredSegmentIndex] = useState<number | null>(null);
-  const [pinnedSegmentIndex, setPinnedSegmentIndex] = useState<number | null>(null);
-  const [hoveredByteOffset, setHoveredByteOffset] = useState<number | null>(null);
-  const [expandedHeuristicIndex, setExpandedHeuristicIndex] = useState<number | null>(null);
-  const [activeScriptGroupKey, setActiveScriptGroupKey] = useState<string | null>(
-    () => scriptGroupFromQuery
-  );
-  useEffect(() => {
-    setActiveWitnessIndex(witnessFromQuery);
-    setHoveredSegmentIndex(null);
-    setPinnedSegmentIndex(null);
-    setHoveredByteOffset(null);
-    setExpandedHeuristicIndex(null);
-    setActiveScriptGroupKey(scriptGroupFromQuery);
-  }, [scriptGroupFromQuery, tx.hash, witnessFromQuery]);
-  useEffect(() => {
-    setHoveredSegmentIndex(null);
-    setPinnedSegmentIndex(null);
-    setHoveredByteOffset(null);
-    setExpandedHeuristicIndex(null);
-  }, [activeWitnessIndex]);
-  useEffect(() => {
-    if (activeWitnessIndex === null) return;
-    if (witnessAnalyses.length === 0) {
-      setActiveWitnessIndex(null);
-      return;
-    }
-    if (activeWitnessIndex < witnessAnalyses.length) return;
-    setActiveWitnessIndex(witnessAnalyses.length - 1);
-  }, [activeWitnessIndex, witnessAnalyses.length]);
-  useEffect(() => {
-    const normalizedGroupKey =
-      scriptGroupFromQuery && scriptGroupLens.some((group) => group.key === scriptGroupFromQuery)
-        ? scriptGroupFromQuery
-        : null;
-    if (normalizedGroupKey !== activeScriptGroupKey) {
-      setActiveScriptGroupKey(normalizedGroupKey);
-    }
-  }, [activeScriptGroupKey, scriptGroupFromQuery, scriptGroupLens]);
-  useEffect(() => {
-    if (activeScriptGroupKey === null) return;
-    const linkedGroup = scriptGroupLens.find((group) => group.key === activeScriptGroupKey);
-    if (!linkedGroup) return;
-    if (linkedGroup.witnessIndex !== activeWitnessIndex) {
-      setActiveWitnessIndex(linkedGroup.witnessIndex);
-    }
-  }, [activeScriptGroupKey, activeWitnessIndex, scriptGroupLens]);
-  const activeWitness =
-    activeWitnessIndex !== null ? (witnessAnalyses[activeWitnessIndex] ?? null) : null;
-  const activeDotcell =
-    activeWitnessIndex !== null ? (dotcellByWitness.get(activeWitnessIndex) ?? null) : null;
-  const activeScriptGroup =
-    activeScriptGroupKey !== null
-      ? (scriptGroupLens.find((group) => group.key === activeScriptGroupKey) ?? null)
-      : null;
-  const activeDeterministic = activeWitness?.deterministic ?? null;
-  const syncWitnessQuery = (nextWitnessIndex: number | null, nextGroupKey: string | null) => {
-    const nextParams = new URLSearchParams(searchParams.toString());
-    if (nextWitnessIndex === null) {
-      nextParams.delete('witness');
-      nextParams.delete('wg');
-    } else {
-      nextParams.set('witness', String(nextWitnessIndex));
-      if (nextGroupKey) {
-        nextParams.set('wg', nextGroupKey);
-      } else {
-        nextParams.delete('wg');
-      }
-    }
-    const nextQuery = nextParams.toString();
-    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
-  };
-  useEffect(() => {
-    if (!activeScriptGroup || !activeDeterministic) return;
-    if (activeWitnessIndex === null || activeScriptGroup.witnessIndex !== activeWitnessIndex)
-      return;
-    const preferredSegmentIndex = findPreferredSegmentIndex(
-      activeScriptGroup.kind,
-      activeDeterministic.segments
-    );
-    if (preferredSegmentIndex === null) return;
-    setPinnedSegmentIndex(preferredSegmentIndex);
-    setHoveredSegmentIndex(null);
-  }, [activeScriptGroup, activeDeterministic, activeWitnessIndex]);
-  if (!witnessesAvailable && witnessAnalyses.length === 0) {
-    return (
-      <div className="p-4" data-testid="tx-witness-tab">
-        <div className="border-base-border bg-base-surface/60 text-text rounded border p-4 text-sm">
-          Witness bytes are unavailable in current API mode. Set `[ckb].data_path` in
-          `ckbadger.toml` to enable witness inspection.
-        </div>
-      </div>
-    );
-  }
-  if (witnessAnalyses.length === 0) {
-    return (
-      <div className="p-4" data-testid="tx-witness-tab">
-        <div className="border-base-border bg-base-surface/60 text-text rounded border p-4 text-sm">
-          This transaction has no witness entries.
-        </div>
-      </div>
-    );
-  }
-  const deterministicAnalysis = activeDeterministic;
-  const heuristicGuesses = activeWitness?.heuristicGuesses ?? [];
-  const dataSegments = deterministicAnalysis?.segments ?? [];
-  const segmentOffsetMap = new Array<number>(activeWitness?.previewBytes ?? 0).fill(-1);
-  dataSegments.forEach((segment, segmentIndex) => {
-    const start = Math.max(0, segment.start);
-    const end = Math.min(activeWitness?.previewBytes ?? 0, segment.end);
-    for (let offset = start; offset < end; offset += 1) {
-      segmentOffsetMap[offset] = segmentIndex;
-    }
-  });
-  const focusedSegmentIndex =
-    pinnedSegmentIndex !== null ? pinnedSegmentIndex : hoveredSegmentIndex;
-  const activeSegment =
-    focusedSegmentIndex !== null &&
-    focusedSegmentIndex >= 0 &&
-    focusedSegmentIndex < dataSegments.length
-      ? dataSegments[focusedSegmentIndex]
-      : null;
-  const activeSegmentTone =
-    focusedSegmentIndex !== null ? getWitnessSegmentTone(focusedSegmentIndex) : null;
-  const activeSegmentHex = (() => {
-    if (!activeSegment || !activeWitness) return null;
-    const start = Math.max(0, Math.min(activeSegment.start, activeWitness.previewBytes));
-    const end = Math.max(start, Math.min(activeSegment.end, activeWitness.previewBytes));
-    const hexSlice = activeWitness.previewHex.slice(start * 2, end * 2);
-    if (!hexSlice) return null;
-    const maxChars = 256;
-    if (hexSlice.length <= maxChars) {
-      return {
-        value: `0x${hexSlice}`,
-        truncated: false,
-      };
-    }
-    return {
-      value: `0x${hexSlice.slice(0, maxChars)}...`,
-      truncated: true,
-    };
-  })();
-  const rows = [];
-  if (activeWitness) {
-    for (let i = 0; i < activeWitness.previewHex.length; i += WITNESS_BYTES_PER_ROW * 2) {
-      rows.push(activeWitness.previewHex.slice(i, i + WITNESS_BYTES_PER_ROW * 2));
-    }
-  }
-  const clearSelection = () => {
-    setActiveScriptGroupKey(null);
-    setActiveWitnessIndex(null);
-    setHoveredSegmentIndex(null);
-    setPinnedSegmentIndex(null);
-    setHoveredByteOffset(null);
-    setExpandedHeuristicIndex(null);
-    onSelectionChange?.(null, null);
-    syncWitnessQuery(null, null);
-  };
-  const selectWitness = (witnessIndex: number) => {
-    if (activeWitnessIndex === witnessIndex) {
-      clearSelection();
-      return;
-    }
-    setActiveScriptGroupKey(null);
-    setActiveWitnessIndex(witnessIndex);
-    onSelectionChange?.(witnessIndex, null);
-    syncWitnessQuery(witnessIndex, null);
-  };
-  const toggleScriptGroupFocus = (groupKey: string, witnessIndex: number) => {
-    if (activeScriptGroupKey === groupKey) {
-      clearSelection();
-      return;
-    }
-    setActiveScriptGroupKey(groupKey);
-    setActiveWitnessIndex(witnessIndex);
-    onSelectionChange?.(witnessIndex, groupKey);
-    syncWitnessQuery(witnessIndex, groupKey);
-  };
-  const inputWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'input').length;
-  const extraWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'extra').length;
-  return (
-    <div className="space-y-4 p-4" data-testid="tx-witness-tab">
-      <div className={`grid gap-3 ${scriptGroupLens.length > 0 ? 'md:grid-cols-2' : ''}`}>
-        <div className="border-base-border bg-base-surface/50 rounded border p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-text-dim text-[11px] uppercase tracking-wider">
-              Witness Entries
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                type="button"
-                data-testid="tx-witness-clear-selection"
-                onClick={clearSelection}
-                disabled={activeWitnessIndex === null && activeScriptGroupKey === null}
-                className={`rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
-                  activeWitnessIndex === null && activeScriptGroupKey === null
-                    ? 'border-base-border text-text-dim cursor-not-allowed'
-                    : 'border-base-border/70 text-text hover:text-text-bright hover:border-base-border/80'
-                }`}
-              >
-                clear
-              </button>
-              <span className="border-base-border/70 bg-base-surface/80 text-text rounded border px-1.5 py-0.5 font-mono text-[11px]">
-                total {witnessAnalyses.length}
-              </span>
-              <span className="border-emphasis/30 bg-emphasis/10 text-emphasis rounded border px-1.5 py-0.5 font-mono text-[11px]">
-                input {inputWitnessCount}
-              </span>
-              <span className="border-info/30 bg-info/10 text-info rounded border px-1.5 py-0.5 font-mono text-[11px]">
-                extra {extraWitnessCount}
-              </span>
-            </div>
-          </div>
-          <div className="grid gap-1 sm:grid-cols-2">
-            {witnessAnalyses.map((witness) => (
-              <button
-                key={witness.index}
-                type="button"
-                data-testid={`tx-witness-item-${witness.index}`}
-                onClick={() => selectWitness(witness.index)}
-                className={`rounded border px-2 py-1.5 text-left transition ${
-                  witness.index === activeWitnessIndex
-                    ? 'border-emphasis/70 bg-emphasis/10'
-                    : 'border-base-border/70 bg-base-surface/70 hover:border-base-border/70'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-text-bright font-mono text-[11px]">#{witness.index}</div>
-                  <Badge variant={witness.role === 'input' ? 'green' : 'gray'}>
-                    {witness.role}
-                  </Badge>
-                </div>
-                <div className="text-text mt-1 flex items-center gap-1.5 font-mono text-[11px]">
-                  <span>{witness.byteLength.toLocaleString()} bytes</span>
-                  {dotcellByWitness.has(witness.index) && (
-                    <Badge variant="gold">.cell records</Badge>
-                  )}
-                </div>
-                <div className="text-text-dim mt-0.5 truncate font-mono text-[11px]">
-                  {witness.previewHex ? `0x${witness.previewHex.slice(0, 40)}` : '0x'}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-        {scriptGroupLens.length > 0 && (
-          <div className="border-base-border bg-base-surface/50 rounded border p-3">
-            <div className="text-text-dim mb-2 text-[11px] uppercase tracking-wider">
-              Script Groups
-            </div>
-            <div className="grid gap-1.5">
-              {scriptGroupLens.map((group) => {
-                const groupScriptName = scriptLookup?.[group.codeHash]?.name ?? null;
-                const isFocused = activeScriptGroup?.key === group.key;
-                return (
-                  <div
-                    key={group.key}
-                    role="button"
-                    tabIndex={0}
-                    data-testid={`tx-script-group-focus-${group.witnessIndex}-${group.kind}`}
-                    onClick={() => toggleScriptGroupFocus(group.key, group.witnessIndex)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        toggleScriptGroupFocus(group.key, group.witnessIndex);
-                      }
-                    }}
-                    className={`rounded border px-2 py-1.5 ${
-                      isFocused
-                        ? 'border-info/70 bg-info/10'
-                        : group.witnessIndex === activeWitnessIndex
-                          ? 'border-emphasis/70 bg-emphasis/10'
-                          : 'border-base-border/70 bg-base-surface/70'
-                    } hover:border-base-border/80 cursor-pointer transition`}
-                  >
-                    <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                      <Badge variant="gray">{group.kind}</Badge>
-                      <Badge variant="gray">{getScriptRefBadgeLabel(group.hashType)}</Badge>
-                      <span className="text-emphasis font-mono text-xs">
-                        {isFocused ? 'focused' : `witness #${group.witnessIndex}`}
-                      </span>
-                    </div>
-                    {hasKnownScriptName(groupScriptName) ? (
-                      <Link
-                        href={getScriptHref({
-                          codeHash: group.codeHash,
-                          hashType: group.hashType,
-                          scriptKind: group.kind,
-                          scriptName: groupScriptName,
-                        })}
-                        onClick={(event) => event.stopPropagation()}
-                        className="text-interactive text-sm hover:underline"
-                      >
-                        {groupScriptName}
-                      </Link>
-                    ) : (
-                      <Link
-                        href={getScriptHref({
-                          codeHash: group.codeHash,
-                          hashType: group.hashType,
-                          scriptKind: group.kind,
-                          scriptName: groupScriptName,
-                        })}
-                        onClick={(event) => event.stopPropagation()}
-                        className="group"
-                      >
-                        <HexDisplay
-                          value={group.codeHash}
-                          size="sm"
-                          className="group-hover:underline"
-                        />
-                      </Link>
-                    )}
-                    <div className="text-text-dim mt-1 font-mono text-[11px]">
-                      inputs: [{group.inputIndices.join(', ')}]
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-      {activeScriptGroup && (
-        <div
-          data-testid="tx-witness-focused-group"
-          className="border-info/30 bg-info/10 flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2"
-        >
-          <div className="text-info text-xs">
-            Focused script group: <span className="font-mono">{activeScriptGroup.kind}</span> {'->'}
-            witness #{activeScriptGroup.witnessIndex}
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveScriptGroupKey(null);
-              const nextWitnessIndex = activeWitnessIndex ?? activeScriptGroup.witnessIndex;
-              onSelectionChange?.(nextWitnessIndex, null);
-              syncWitnessQuery(nextWitnessIndex, null);
-            }}
-            className="border-info/30 text-info hover:bg-info/20 rounded border px-2 py-1 font-mono text-xs"
-          >
-            Clear focus
-          </button>
-        </div>
-      )}
-      {activeWitness ? (
-        <>
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-            <div className="border-base-border/70 bg-base-surface/70 inline-flex items-center gap-2 rounded border px-2.5 py-1.5">
-              <span className="text-text uppercase tracking-wide">Active</span>
-              <span className="text-text-bright font-mono">#{activeWitness.index}</span>
-              <Badge variant={activeWitness.role === 'input' ? 'green' : 'gray'}>
-                {activeWitness.role}
-              </Badge>
-            </div>
-            <div className="border-base-border/70 bg-base-surface/70 inline-flex items-center gap-2 rounded border px-2.5 py-1.5">
-              <span className="text-text uppercase tracking-wide">Size</span>
-              <span className="text-text-bright font-mono">
-                {activeWitness.byteLength.toLocaleString()}B
-              </span>
-            </div>
-            <div
-              className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
-                activeWitness.isPreviewTruncated
-                  ? 'border-warning/30 bg-warning/10'
-                  : 'border-emphasis/25 bg-emphasis/5'
-              }`}
-            >
-              <span className="text-text uppercase tracking-wide">Preview</span>
-              {activeWitness.isPreviewTruncated ? (
-                <span className="text-warning font-mono">
-                  Truncated at {activeWitness.previewBytes.toLocaleString()}B
-                </span>
-              ) : (
-                <span className="text-emphasis">Full witness shown</span>
+              </dd>
+              {!isProvisional && (
+                <dd className="text-text-dim mt-1">
+                  occupied{' '}
+                  {exactUnsignedInteger(
+                    required(tx.inputsCommonKnowledgeSize, hash, 'inputsCommonKnowledgeSize'),
+                    `${hash}: input occupied bytes`
+                  ).toLocaleString('en-US')}{' '}
+                  →{' '}
+                  {exactUnsignedInteger(
+                    required(tx.outputsCommonKnowledgeSize, hash, 'outputsCommonKnowledgeSize'),
+                    `${hash}: output occupied bytes`
+                  ).toLocaleString('en-US')}{' '}
+                  bytes
+                </dd>
               )}
             </div>
-          </div>
-          {activeDotcell && (
-            <div
-              data-testid="tx-witness-dotcell-records"
-              className="border-base-border bg-base-bg/70 mb-3 rounded border"
-            >
-              <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 text-xs">
-                <Badge variant="gold">.cell records</Badge>
-                <span className="text-text">
-                  records payload of{' '}
-                  <Link
-                    href={getIdentityItemDetailHref('dotcell', activeDotcell.label)}
-                    className="text-emphasis font-mono hover:underline"
-                  >
-                    {activeDotcell.name}
-                  </Link>{' '}
-                  (output #{activeDotcell.outputIndex})
-                </span>
-              </div>
-              <DotCellRecordsTable records={activeDotcell.records} />
-              <div className="border-base-border text-text-dim flex min-w-0 items-center gap-2 border-t px-3 py-2 font-mono text-xs">
-                <span className="uppercase tracking-wider">Records Hash</span>
-                <HexDisplay value={activeDotcell.recordsHash} size="sm" />
-              </div>
-            </div>
-          )}
-          {deterministicAnalysis && (
-            <div
-              data-testid="tx-witness-deterministic-section"
-              className="border-base-border bg-base-bg/70 rounded border p-2"
-            >
-              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                <span className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
-                  Deterministic Decode
-                </span>
-                <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
-                <span className="border-base-border/80 bg-base-surface/70 text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                  {deterministicAnalysis.segments.length} segments
-                </span>
-                {pinnedSegmentIndex !== null && (
-                  <span data-testid="tx-witness-segment-pinned">
-                    <Badge variant="gold">Pinned</Badge>
-                  </span>
-                )}
-              </div>
-              <div className="text-text mb-1.5 text-[11px] leading-4">
-                {deterministicAnalysis.summary}
-              </div>
-              <div className="grid gap-2 md:grid-cols-2">
-                <div className="border-base-border bg-base-bg/60 rounded border p-1.5">
-                  <div className="text-text-dim mb-1 text-[10px] uppercase tracking-[0.12em]">
-                    Parsed Segments
-                  </div>
-                  <div
-                    className="flex flex-wrap gap-1"
-                    onMouseLeave={() => setHoveredSegmentIndex(null)}
-                  >
-                    {deterministicAnalysis.segments.map((segment, idx) => {
-                      const inPreview =
-                        segment.start < activeWitness.previewBytes && segment.end > 0;
-                      const isActive = idx === focusedSegmentIndex;
-                      const segmentTone = getWitnessSegmentTone(idx);
-                      return (
-                        <button
-                          key={`${segment.label}-${segment.start}-${segment.end}`}
-                          type="button"
-                          data-testid={`tx-witness-segment-item-${idx}`}
-                          onMouseEnter={() => setHoveredSegmentIndex(idx)}
-                          onClick={() =>
-                            setPinnedSegmentIndex((prev) => (prev === idx ? null : idx))
-                          }
-                          title={segment.meaning}
-                          className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
-                            isActive
-                              ? segmentTone.activePill
-                              : inPreview
-                                ? 'border-base-border/70 bg-base-surface/60 text-text hover:border-base-border/70'
-                                : 'border-base-border/70 bg-base-surface/40 text-text-dim'
-                          }`}
-                        >
-                          <span
-                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`}
-                          />
-                          <span className="truncate">{segment.label}</span>
-                          <span className="text-text-dim shrink-0 text-[10px]">
-                            [{segment.start}..{segment.end})
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div
-                  data-testid="tx-witness-active-segment"
-                  className="border-base-border bg-base-bg/70 h-[132px] overflow-y-auto rounded border p-2 sm:h-[144px]"
-                >
-                  {activeSegment ? (
-                    <>
-                      <div className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
-                        Segment Detail
-                      </div>
-                      <div className="text-text mt-1 font-mono text-[11px]">
-                        {activeSegment.label}
-                      </div>
-                      <div className="text-text mt-0.5 text-[10px] leading-4">
-                        {activeSegment.meaning}
-                      </div>
-                      <div
-                        data-testid="tx-witness-active-segment-value"
-                        className={`mt-1 break-all font-mono text-sm ${activeSegmentTone?.valueText ?? 'text-emphasis'}`}
-                      >
-                        {activeSegment.humanValue}
-                      </div>
-                      <div className="text-text mt-1.5 font-mono text-[11px]">
-                        [{activeSegment.start}..{activeSegment.end})
-                      </div>
-                      {activeSegmentHex && (
-                        <div
-                          data-testid="tx-witness-active-segment-hex"
-                          className={`mt-1 break-all font-mono text-[11px] ${activeSegmentTone?.valueText ?? 'text-emphasis'}`}
-                        >
-                          {activeSegmentHex.value}
-                        </div>
-                      )}
-                      {activeSegmentHex?.truncated && (
-                        <div className="text-text-dim mt-1 text-[11px]">
-                          Hex preview truncated for readability.
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
-                        Segment Detail
-                      </div>
-                      <div className="text-text-dim mt-1 text-xs">
-                        Hover a segment/byte to preview it, or click a segment to pin it.
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-          {heuristicGuesses.length > 0 && (
-            <div
-              data-testid="tx-witness-heuristics-list"
-              className="border-base-border bg-base-bg/70 rounded border p-2"
-            >
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <div className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
-                  Heuristic Guesses
-                </div>
-                <span className="border-base-border/80 bg-base-surface/70 text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                  {heuristicGuesses.length}
-                </span>
-              </div>
-              <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
-                {heuristicGuesses.map((guess, idx) => {
-                  const guessTone = getWitnessSegmentTone(idx);
-                  const isExpanded = expandedHeuristicIndex === idx;
-                  return (
-                    <button
-                      key={`${guess.kind}-${idx}`}
-                      type="button"
-                      data-testid={`tx-witness-heuristic-item-${idx}`}
-                      onClick={() =>
-                        setExpandedHeuristicIndex((prev) => (prev === idx ? null : idx))
-                      }
-                      className={`rounded border p-1 text-left transition ${
-                        isExpanded
-                          ? `${guessTone.activePill} bg-opacity-100`
-                          : 'border-base-border/80 bg-base-surface/70 hover:border-base-border/80'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-1">
-                            <span
-                              className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`}
-                            />
-                            <span className="text-text font-mono text-[11px]">{guess.kind}</span>
-                            <Badge
-                              variant={
-                                guess.confidence === 'high'
-                                  ? 'green'
-                                  : guess.confidence === 'medium'
-                                    ? 'gold'
-                                    : 'gray'
-                              }
-                            >
-                              {guess.confidence}
-                            </Badge>
-                          </div>
-                        </div>
-                        <span className="text-text-dim font-mono text-[10px]">
-                          {isExpanded ? '[-]' : '[+]'}
-                        </span>
-                      </div>
-                      {isExpanded && (
-                        <div
-                          data-testid={`tx-witness-heuristic-detail-${idx}`}
-                          className="border-base-border/80 mt-1 border-t pt-1"
-                        >
-                          <div className="text-text text-[10px] leading-4">{guess.reason}</div>
-                          {guess.humanValue && (
-                            <div
-                              className={`mt-0.5 break-all font-mono text-[11px] ${guessTone.valueText}`}
-                            >
-                              {guess.humanValue}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
-            {activeWitness.previewHex.length === 0 ? (
-              <div className="text-text-dim">No bytes to render for this witness.</div>
-            ) : (
-              <div
-                data-testid="tx-witness-bytes-grid"
-                className="min-w-max"
-                onMouseLeave={() => {
-                  setHoveredSegmentIndex(null);
-                  setHoveredByteOffset(null);
-                }}
-              >
-                {rows.map((rowHex, rowIndex) => {
-                  const offset = (rowIndex * WITNESS_BYTES_PER_ROW).toString(16).padStart(4, '0');
-                  const bytes = [];
-                  for (let i = 0; i < rowHex.length; i += 2) {
-                    bytes.push(rowHex.slice(i, i + 2));
-                  }
-                  const byteEntries = bytes.map((byteHex, colIndex) => {
-                    const absoluteOffset = rowIndex * WITNESS_BYTES_PER_ROW + colIndex;
-                    const segmentIndex =
-                      absoluteOffset < segmentOffsetMap.length
-                        ? segmentOffsetMap[absoluteOffset]
-                        : -1;
-                    const segmentTone =
-                      segmentIndex >= 0 ? getWitnessSegmentTone(segmentIndex) : null;
-                    const isActiveSegment =
-                      segmentIndex >= 0 && segmentIndex === focusedSegmentIndex;
-                    const isHoveredByte = absoluteOffset === hoveredByteOffset;
-                    const hasActiveSegment = focusedSegmentIndex !== null;
-                    const byteClass =
-                      segmentIndex < 0
-                        ? hasActiveSegment
-                          ? 'text-text-dim'
-                          : 'rounded bg-base-elevated/70 text-text'
-                        : isActiveSegment
-                          ? (segmentTone?.byteActive ??
-                            'rounded bg-emphasis/25 text-emphasis ring-1 ring-emphasis/70')
-                          : hasActiveSegment
-                            ? 'text-text-dim opacity-40'
-                            : (segmentTone?.byte ?? 'rounded bg-emphasis/15 text-emphasis/70');
-                    const asciiClass =
-                      segmentIndex < 0
-                        ? hasActiveSegment
-                          ? 'text-text-dim'
-                          : 'text-text-dim'
-                        : isActiveSegment
-                          ? (segmentTone?.asciiActive ?? 'rounded-sm bg-emphasis/20 text-emphasis')
-                          : hasActiveSegment
-                            ? 'text-text-dim opacity-40'
-                            : 'text-text-dim';
-                    const asciiHoverClass = isHoveredByte
-                      ? segmentIndex >= 0
-                        ? (segmentTone?.asciiHover ??
-                          'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
-                        : 'rounded-sm bg-base-border/50 text-text'
-                      : '';
-                    const hoverBreatheClass = isHoveredByte
-                      ? segmentIndex >= 0
-                        ? (segmentTone?.byteHover ??
-                          'byte-hover-breathe ring-1 ring-emphasis/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
-                        : 'byte-hover-breathe ring-1 ring-base-border/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
-                      : '';
-                    const title =
-                      segmentIndex >= 0 && segmentIndex < dataSegments.length
-                        ? dataSegments[segmentIndex].label
-                        : undefined;
-                    const code = parseInt(byteHex, 16);
-                    const asciiChar = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
-                    return {
-                      byteHex,
-                      asciiChar,
-                      absoluteOffset,
-                      segmentIndex,
-                      title,
-                      byteClass,
-                      asciiClass,
-                      asciiHoverClass,
-                      hoverBreatheClass,
-                    };
-                  });
-                  const padCount = WITNESS_BYTES_PER_ROW - bytes.length;
-                  return (
-                    <div
-                      key={rowIndex}
-                      data-row-index={rowIndex}
-                      className="hover:bg-base-elevated/50 flex py-0.5"
-                    >
-                      <span className="text-text-dim mr-4 select-none">0x{offset}:</span>
-                      <div className="text-emphasis/70 mr-6 flex gap-1.5">
-                        {byteEntries.map((entry) => (
-                          <span
-                            key={entry.absoluteOffset}
-                            data-testid={`tx-witness-byte-${entry.absoluteOffset}`}
-                            className={`${entry.byteClass} ${
-                              entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
-                            } ${entry.hoverBreatheClass}`}
-                            title={entry.title}
-                            onMouseEnter={() => {
-                              setHoveredByteOffset(entry.absoluteOffset);
-                              setHoveredSegmentIndex(
-                                entry.segmentIndex >= 0 ? entry.segmentIndex : null
-                              );
-                            }}
-                            onClick={() => {
-                              if (entry.segmentIndex < 0) return;
-                              setPinnedSegmentIndex((prev) =>
-                                prev === entry.segmentIndex ? null : entry.segmentIndex
-                              );
-                            }}
-                          >
-                            {entry.byteHex}
-                          </span>
-                        ))}
-                        {Array.from({ length: padCount }).map((_, i) => (
-                          <span key={`pad-${i}`} className="opacity-0">
-                            00
-                          </span>
-                        ))}
-                      </div>
-                      <div className="border-base-border border-l pl-4">
-                        {byteEntries.map((entry) => (
-                          <span
-                            key={`ascii-${entry.absoluteOffset}`}
-                            data-testid={`tx-witness-ascii-byte-${entry.absoluteOffset}`}
-                            className={`inline-flex w-2.5 justify-center rounded-sm transition-colors duration-100 ${
-                              entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
-                            } ${entry.asciiClass} ${entry.asciiHoverClass}`}
-                            title={entry.title}
-                            onMouseEnter={() => {
-                              setHoveredByteOffset(entry.absoluteOffset);
-                              setHoveredSegmentIndex(
-                                entry.segmentIndex >= 0 ? entry.segmentIndex : null
-                              );
-                            }}
-                            onClick={() => {
-                              if (entry.segmentIndex < 0) return;
-                              setPinnedSegmentIndex((prev) =>
-                                prev === entry.segmentIndex ? null : entry.segmentIndex
-                              );
-                            }}
-                          >
-                            {entry.asciiChar}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-                {activeWitness.remainingBytes > 0 && (
-                  <div className="text-text-dim mt-2 select-none italic">
-                    ... {activeWitness.remainingBytes.toLocaleString()} more bytes
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          </dl>
         </>
+      }
+      rawData={raw}
+      rawOpen={graphOpen}
+    >
+      {isProvisional ? (
+        <p className="text-text-dim text-xs">
+          Activity and canonical cell structure are available once this transaction is committed and
+          indexed.
+        </p>
+      ) : tx.isCellbase ? (
+        <DetailSection title="Mining reward">
+          <p className="text-text text-xs">Cellbase carries this block’s mining reward outputs.</p>
+        </DetailSection>
+      ) : activityError ? (
+        <p role="alert" className="text-xs">
+          Cannot read activity for {hash}: {activityError.message}
+        </p>
+      ) : activity === undefined ? (
+        <div className="bg-base-surface h-24 animate-pulse" />
+      ) : activity === null ? (
+        <p role="alert" className="text-xs">
+          Transaction {hash} has no indexed activity.
+        </p>
       ) : (
-        <div
-          data-testid="tx-witness-selection-empty"
-          className="border-base-border bg-base-surface/60 text-text rounded border p-4 text-sm"
-        >
-          Select a witness entry or script group to inspect deterministic decode and bytes.
-        </div>
+        <>
+          <ActivityRow
+            activity={activity}
+            showParticipants={false}
+            showEvidence={false}
+            showScriptDetails={false}
+          />
+          <BalanceChanges activity={activity} />
+        </>
       )}
-    </div>
-  );
-}
-interface ScriptInfo {
-  codeHash: string;
-  hashType: string;
-  name: string | null;
-  count: number;
-}
-function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
-  const scriptSummary = useMemo(() => {
-    const lockScripts = new Map<string, ScriptInfo>();
-    const typeScripts = new Map<string, ScriptInfo>();
-    const addScript = (
-      map: Map<string, ScriptInfo>,
-      codeHash: string,
-      hashType: string,
-      name: string | null
-    ) => {
-      const key = `${codeHash}:${hashType}`;
-      const existing = map.get(key);
-      map.set(key, {
-        codeHash,
-        hashType,
-        name,
-        count: (existing?.count ?? 0) + 1,
-      });
-    };
-    tx.inputs?.forEach((input) => {
-      if (input.lock?.codeHash && input.lock?.hashType) {
-        const name = scriptLookup?.[input.lock.codeHash]?.name ?? null;
-        addScript(lockScripts, input.lock.codeHash, input.lock.hashType, name);
-      }
-    });
-    tx.outputs?.forEach((output) => {
-      if (output.lock?.codeHash && output.lock?.hashType) {
-        const name = scriptLookup?.[output.lock.codeHash]?.name ?? null;
-        addScript(lockScripts, output.lock.codeHash, output.lock.hashType, name);
-      }
-      if (output.type?.codeHash && output.type?.hashType) {
-        const name = scriptLookup?.[output.type.codeHash]?.name ?? null;
-        addScript(typeScripts, output.type.codeHash, output.type.hashType, name);
-      }
-    });
-    return { lockScripts, typeScripts };
-  }, [tx, scriptLookup]);
-  return (
-    <div className="grid gap-6 p-4 lg:grid-cols-2">
-      <div>
-        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
-          Lock Scripts
-        </h4>
-        <div className="border-base-border bg-base-surface/50 rounded-lg border">
-          {Array.from(scriptSummary.lockScripts.values()).map((script) => (
-            <TerminalRow
-              key={`${script.codeHash}:${script.hashType}`}
-              className="flex items-center justify-between"
-            >
-              <div className="min-w-0 flex-1">
-                {hasKnownScriptName(script.name) ? (
-                  <Link
-                    href={getScriptHref({
-                      codeHash: script.codeHash,
-                      hashType: script.hashType,
-                      scriptKind: 'lock',
-                      scriptName: script.name,
-                    })}
-                    className="text-interactive hover:underline"
-                  >
-                    {script.name!.trim()}
-                  </Link>
-                ) : (
-                  <Link
-                    href={getScriptHref({
-                      codeHash: script.codeHash,
-                      hashType: script.hashType,
-                      scriptKind: 'lock',
-                      scriptName: script.name,
-                    })}
-                    className="group"
-                  >
-                    <HexDisplay
-                      value={script.codeHash}
-                      truncate
-                      className="group-hover:underline"
-                    />
-                  </Link>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="gray">{getScriptRefBadgeLabel(script.hashType)}</Badge>
-                <Badge variant="gray">
-                  {script.count} cell{script.count > 1 ? 's' : ''}
-                </Badge>
-              </div>
-            </TerminalRow>
-          ))}
-          {scriptSummary.lockScripts.size === 0 && (
-            <div className="text-text-dim p-4 text-center text-sm">No lock scripts</div>
-          )}
-        </div>
-      </div>
-      <div>
-        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
-          Type Scripts
-        </h4>
-        <div className="border-base-border bg-base-surface/50 rounded-lg border">
-          {Array.from(scriptSummary.typeScripts.values()).map((script) => (
-            <TerminalRow
-              key={`${script.codeHash}:${script.hashType}`}
-              className="flex items-center justify-between"
-            >
-              <div className="min-w-0 flex-1">
-                {hasKnownScriptName(script.name) ? (
-                  <Link
-                    href={getScriptHref({
-                      codeHash: script.codeHash,
-                      hashType: script.hashType,
-                      scriptKind: 'type',
-                      scriptName: script.name,
-                    })}
-                    className="text-interactive hover:underline"
-                  >
-                    {script.name!.trim()}
-                  </Link>
-                ) : (
-                  <Link
-                    href={getScriptHref({
-                      codeHash: script.codeHash,
-                      hashType: script.hashType,
-                      scriptKind: 'type',
-                      scriptName: script.name,
-                    })}
-                    className="group"
-                  >
-                    <HexDisplay
-                      value={script.codeHash}
-                      truncate
-                      className="group-hover:underline"
-                    />
-                  </Link>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="gray">{getScriptRefBadgeLabel(script.hashType)}</Badge>
-                <Badge variant="gray">
-                  {script.count} cell{script.count > 1 ? 's' : ''}
-                </Badge>
-              </div>
-            </TerminalRow>
-          ))}
-          {scriptSummary.typeScripts.size === 0 && (
-            <div className="text-text-dim p-4 text-center text-sm">No type scripts</div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-interface CellDepsTabProps {
-  cellDeps?: CellDep[];
-  isLoading: boolean;
-  isPending: boolean;
-}
-function CellDepsTab({ cellDeps, isLoading, isPending }: CellDepsTabProps) {
-  if (isPending) {
-    return <PendingSectionPlaceholder label="Cell deps" />;
-  }
-  if (isLoading) {
-    return <p className="text-text-dim py-8 text-center">Loading cell deps...</p>;
-  }
-  if (!cellDeps || cellDeps.length === 0) {
-    return <p className="text-text-dim py-8 text-center">No cell dependencies</p>;
-  }
-  return (
-    <div className="border-base-border bg-base-surface/50 m-4 rounded-lg border">
-      {cellDeps.map((cellDep, index) => (
-        <TerminalRow
-          key={`${cellDep.outPointTxHash}-${cellDep.outPointIndex}`}
-          className="flex items-center justify-between"
+      {tiles && (
+        <DetailSection
+          title={`${tiles.inputs.length} cells consumed → ${tiles.outputs.length} cells created`}
         >
-          <div className="flex items-center gap-3">
-            <span className="text-text-dim font-mono text-xs">#{index}</span>
-            <Link
-              href={`/cell/${cellDep.outPointTxHash}-${cellDep.outPointIndex}`}
-              className="hover:text-interactive group flex items-center gap-1"
-            >
-              <HexDisplay
-                value={cellDep.outPointTxHash}
-                startChars={10}
-                endChars={8}
-                copyable={false}
-              />
-              <span className="group-hover:text-interactive text-text-dim">:</span>
-              <span className="group-hover:text-interactive text-text font-mono text-sm">
-                {cellDep.outPointIndex}
-              </span>
-            </Link>
+          <p className="text-text-dim mb-4 text-xs">
+            A transaction spends whole cells and creates new ones.
+          </p>
+          <TxStructure
+            txHash={hash}
+            inputs={tiles.inputs}
+            outputs={tiles.outputs}
+            fee={tx.fee}
+            groups={structureGroups}
+            hideGroups
+            focusedCellIds={hoveredCells ?? activeIds}
+            onCellHover={setHoveredCell}
+            poolCapacity={
+              tx.isCellbase ? undefined : required(tx.inputsCapacity, hash, 'inputsCapacity')
+            }
+            continuity={groups
+              .filter(
+                (g) =>
+                  g.kind === 'type' &&
+                  g.inputIndices.length === 1 &&
+                  g.outputIndices.length === 1 &&
+                  ['objects', 'identities'].includes(tiles.inputs[g.inputIndices[0]].kind)
+              )
+              .map((g) => ({
+                from: `in:${g.inputIndices[0]}`,
+                to: `out:${g.outputIndices[0]}`,
+                label: `same ${tiles.inputs[g.inputIndices[0]].kind === 'objects' ? 'object' : 'identity'}`,
+                kind: tiles.inputs[g.inputIndices[0]].kind,
+              }))}
+            onClearFocus={() => select(null, null)}
+          />
+        </DetailSection>
+      )}
+      <dl className="grid gap-x-8 gap-y-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <dt className="text-text-dim">State</dt>
+          <dd className="text-text-bright mt-1">{status}</dd>
+        </div>
+        <div>
+          <dt className="text-text-dim">Time</dt>
+          <dd className="text-text-bright mt-1">
+            {isProvisional ? (
+              <PendingValue />
+            ) : (
+              <time dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}>
+                {new Date(required(tx.timestamp, hash, 'timestamp'))
+                  .toISOString()
+                  .replace('T', ' ')
+                  .replace('.000Z', ' UTC')}
+              </time>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-text-dim">Block</dt>
+          <dd className="text-text-bright mt-1">
+            {tx.blockNumber !== null ? (
+              <Link href={`/blocks/${tx.blockNumber}`}>
+                #{tx.blockNumber.toLocaleString('en-US')}
+              </Link>
+            ) : (
+              <PendingValue />
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-text-dim">Fee</dt>
+          <dd className="mt-1">
+            <ExactCkb
+              shannons={exactUnsignedInteger(tx.fee, `${hash}: fee`)}
+              signed={false}
+              tone="plain"
+            />
+          </dd>
+        </div>
+        {isProvisional && tx.pendingSince && (
+          <div>
+            <dt className="text-text-dim">Pending Since</dt>
+            <dd className="mt-1">
+              {new Date(tx.pendingSince).toISOString()} · {formatTimeAgo(tx.pendingSince)}
+            </dd>
           </div>
-          <Badge variant="neutral">{cellDep.depType}</Badge>
-        </TerminalRow>
-      ))}
-    </div>
+        )}
+      </dl>
+    </DetailLayout>
   );
 }

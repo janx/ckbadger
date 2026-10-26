@@ -36,6 +36,7 @@ describe('protocolActionMeta', () => {
       depositBlock: null,
       channelOutpoint: '0xabc:0',
       btcTxid: null,
+      btcOutputIndex: null,
     });
   });
 
@@ -100,4 +101,15 @@ describe('protocolActionMeta — the facts each DAO step must carry', () => {
       }).capacity
     ).toBeNull();
   });
+});
+
+it('reads an exact Bitcoin output index without numeric coercion', () => {
+  expect(
+    protocolActionMeta({
+      protocol: 'rgbpp',
+      protocolName: 'RGB++',
+      action: 'transfer',
+      metadata: { btcTxid: '0xabc', outIndex: '4294967295' },
+    }).btcOutputIndex
+  ).toBe(BigInt('4294967295'));
 });
