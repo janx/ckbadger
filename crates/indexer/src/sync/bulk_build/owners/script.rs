@@ -1974,6 +1974,7 @@ mod tests {
                 &ScriptVersionInfo {
                     version_hash: registered_version_hash.clone(),
                     canonical_reference_hash: Some(reference_hash.clone()),
+                    registered_references: vec![(reference_hash.clone(), 1)],
                     canonical_hash_type: Some(1),
                     family_id: Some(family_id.to_string()),
                     name: Some("Rebound Script".to_string()),
@@ -2323,6 +2324,7 @@ mod tests {
                         version_hash: version_hash.clone(),
                         family_id: Some(family_id.to_string()),
                         name: Some("Ambiguous Script".to_string()),
+                        registered_references: vec![(reference_hash.clone(), 1)],
                         ..Default::default()
                     },
                 )

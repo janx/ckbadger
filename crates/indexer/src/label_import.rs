@@ -381,6 +381,7 @@ fn import_all(
     tokens: &[TokenMetadata],
     scripts: &[ScriptMetadata],
 ) -> Result<LabelImportResult> {
+    validate_script_registrations(store, scripts, network)?;
     let mut result = LabelImportResult::default();
     for token in tokens {
         if token.disabled {
@@ -538,6 +539,110 @@ fn upsert_token_label(
     Ok(true)
 }
 
+fn selected_script_deployments(
+    script: &ScriptMetadata,
+    network: &str,
+) -> (Vec<ImportDeployment>, Vec<ImportDeployment>) {
+    let mainnet = script
+        .mainnet
+        .as_ref()
+        .map(ScriptNetworkMetadata::import_deployments)
+        .unwrap_or_default();
+    let testnet = script
+        .testnet
+        .as_ref()
+        .map(ScriptNetworkMetadata::import_deployments)
+        .unwrap_or_default();
+    match network {
+        "mainnet" => (mainnet, testnet),
+        "testnet" => (testnet, mainnet),
+        _ => (mainnet.into_iter().chain(testnet).collect(), Vec::new()),
+    }
+}
+
+struct ImportedVersionRegistration {
+    references: Vec<(Vec<u8>, u8)>,
+    preferred: (Vec<u8>, u8),
+}
+
+fn registered_versions(
+    deployments: &[ImportDeployment],
+) -> Result<std::collections::BTreeMap<Vec<u8>, ImportedVersionRegistration>> {
+    let mut versions = std::collections::BTreeMap::<Vec<u8>, ImportedVersionRegistration>::new();
+    for deployment in deployments {
+        let ImportDeployment::Version(version) = deployment else {
+            continue;
+        };
+        let VersionAttachment::Attachable(hash) = version_attachment(version)? else {
+            continue;
+        };
+        let reference = (
+            decode_hex(&version.canonical_ref_hash)?,
+            ScriptParser::parse_hash_type(version.canonical_hash_type.as_str()),
+        );
+        let registration = versions
+            .entry(hash)
+            .or_insert_with(|| ImportedVersionRegistration {
+                references: Vec::new(),
+                preferred: reference.clone(),
+            });
+        registration.references.push(reference);
+    }
+    for registration in versions.values_mut() {
+        registration.references.sort();
+        registration.references.dedup();
+    }
+    Ok(versions)
+}
+
+fn validate_existing_family(
+    store: &CkbadgerStore,
+    family: &str,
+    registrations: &std::collections::BTreeMap<Vec<u8>, ImportedVersionRegistration>,
+) -> Result<()> {
+    for hash in registrations.keys() {
+        if let Some(existing) = store
+            .get_script_version(hash)?
+            .and_then(|version| version.family_id)
+        {
+            anyhow::ensure!(existing == family, "binary registered in conflicting families: binary=0x{} existing_family={} imported_family={}; correct metadata and rebuild", hex::encode(hash), existing, family);
+        }
+    }
+    Ok(())
+}
+
+fn validate_script_registrations(
+    store: &CkbadgerStore,
+    scripts: &[ScriptMetadata],
+    network: &str,
+) -> Result<()> {
+    let mut binaries = std::collections::HashMap::new();
+    let mut references = std::collections::HashMap::new();
+    for script in scripts.iter().filter(|script| !script.disabled) {
+        let family = script_family_id(script)?;
+        let (active, _) = selected_script_deployments(script, network);
+        let registrations = registered_versions(&active)?;
+        validate_existing_family(store, family, &registrations)?;
+        for (hash, registration) in registrations {
+            if let Some(previous) = binaries.insert(hash.clone(), family) {
+                anyhow::ensure!(
+                    previous == family,
+                    "binary registered in conflicting families: binary=0x{} families={}/{}",
+                    hex::encode(&hash),
+                    previous,
+                    family
+                );
+            }
+            for (reference, kind) in registration.references {
+                if let Some(previous) = references.insert((reference.clone(), kind), family) {
+                    anyhow::ensure!(previous == family, "reference registered in conflicting families: reference=0x{} hash_type={} families={}/{}", hex::encode(reference), kind, previous, family);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn upsert_script_label(
     store: &CkbadgerStore,
     script: &ScriptMetadata,
@@ -545,52 +650,9 @@ fn upsert_script_label(
 ) -> Result<()> {
     // Only import deployments for the configured network.
     let family_id = script_family_id(script)?;
-    let (active, excluded): (Vec<ImportDeployment>, Vec<ImportDeployment>) = match network {
-        "mainnet" => (
-            script
-                .mainnet
-                .as_ref()
-                .map(ScriptNetworkMetadata::import_deployments)
-                .unwrap_or_default(),
-            script
-                .testnet
-                .as_ref()
-                .map(ScriptNetworkMetadata::import_deployments)
-                .unwrap_or_default(),
-        ),
-        "testnet" => (
-            script
-                .testnet
-                .as_ref()
-                .map(ScriptNetworkMetadata::import_deployments)
-                .unwrap_or_default(),
-            script
-                .mainnet
-                .as_ref()
-                .map(ScriptNetworkMetadata::import_deployments)
-                .unwrap_or_default(),
-        ),
-        _ => {
-            let all_deployments: Vec<ImportDeployment> = script
-                .mainnet
-                .as_ref()
-                .into_iter()
-                .flat_map(ScriptNetworkMetadata::import_deployments)
-                .chain(
-                    script
-                        .testnet
-                        .as_ref()
-                        .into_iter()
-                        .flat_map(ScriptNetworkMetadata::import_deployments),
-                )
-                .collect();
-            upsert_script_family(store, script, family_id, &all_deployments)?;
-            for deployment in &all_deployments {
-                import_single_deployment(store, script, family_id, deployment)?;
-            }
-            return Ok(());
-        }
-    };
+    let (active, excluded) = selected_script_deployments(script, network);
+    let registrations = registered_versions(&active)?;
+    validate_existing_family(store, family_id, &registrations)?;
 
     // Only create/update the family when there are active deployments for this
     // network. Without this guard, scripts with deployments on only the other
@@ -638,6 +700,7 @@ fn upsert_script_label(
                             version_info.website = None;
                             version_info.canonical_reference_hash = None;
                             version_info.canonical_hash_type = None;
+                            version_info.registered_references.clear();
                             store.put_script_version(&data_hash, &version_info)?;
                         }
                     }
@@ -646,8 +709,31 @@ fn upsert_script_label(
         }
     }
 
+    // Registrations are a complete metadata declaration, not an append-only
+    // history. Removing a whole version must revoke its anchors as well.
+    // Chain-derived versions without imported anchors retain their display
+    // metadata, observations and usage.
+    for version_hash in store.list_script_version_hashes_by_family(family_id)? {
+        if registrations.contains_key(&version_hash) {
+            continue;
+        }
+        let mut version = store.get_script_version(&version_hash)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "family version index points to missing version: family={} binary=0x{}",
+                family_id,
+                hex::encode(&version_hash)
+            )
+        })?;
+        if !version.registered_references.is_empty() {
+            version.registered_references.clear();
+            version.canonical_reference_hash = None;
+            version.canonical_hash_type = None;
+            store.put_script_version(&version_hash, &version)?;
+        }
+    }
+
     for deployment in &active {
-        import_single_deployment(store, script, family_id, deployment)?;
+        import_single_deployment(store, script, family_id, deployment, &registrations)?;
     }
     Ok(())
 }
@@ -695,6 +781,7 @@ fn import_single_deployment(
     script: &ScriptMetadata,
     family_id: &str,
     deployment: &ImportDeployment,
+    registrations: &std::collections::BTreeMap<Vec<u8>, ImportedVersionRegistration>,
 ) -> Result<()> {
     let (code_hash_hex, hash_type) = match deployment {
         ImportDeployment::Version(version) => (
@@ -779,11 +866,6 @@ fn import_single_deployment(
             ..Default::default()
         }
     });
-    if let Some(existing_family_id) = version_info.family_id.as_deref() {
-        if existing_family_id != family_id {
-            store.delete_script_version_by_family_direct(existing_family_id, &version_hash)?;
-        }
-    }
     if let Some(existing_name) = version_info.name.as_deref() {
         if existing_name != script.name {
             store.delete_script_version_by_label(existing_name, &version_hash)?;
@@ -796,12 +878,16 @@ fn import_single_deployment(
     version_info.category = script.category.clone();
     version_info.description = script.description.clone();
     version_info.website = script.website.clone();
-    if let ImportDeployment::Version(version) = deployment {
-        version_info.canonical_reference_hash = Some(code_hash.clone());
-        version_info.canonical_hash_type = Some(ScriptParser::parse_hash_type(
-            version.canonical_hash_type.as_str(),
-        ));
-    }
+    let registration = registrations.get(&version_hash).ok_or_else(|| {
+        anyhow::anyhow!(
+            "missing imported registration: family={} binary=0x{}",
+            family_id,
+            hex::encode(&version_hash)
+        )
+    })?;
+    version_info.registered_references = registration.references.clone();
+    version_info.canonical_reference_hash = Some(registration.preferred.0.clone());
+    version_info.canonical_hash_type = Some(registration.preferred.1);
     store.put_script_version(&version_hash, &version_info)?;
     store.insert_script_version_by_label(&script.name, &version_hash)?;
     store.put_script_version_by_family_direct(family_id, &version_hash)?;
@@ -1296,6 +1382,105 @@ disabled = true
     }
 
     #[test]
+    fn removed_version_registration_preserves_observations_and_usage() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut script: ScriptMetadata = serde_json::from_value(serde_json::json!({
+            "metadata_slug": "registered-family", "name": "Registered Family",
+            "mainnet": {"versions": [
+                {"version_hash": format!("0x{}", "41".repeat(32)), "canonical_ref_hash": format!("0x{}", "51".repeat(32)), "canonical_hash_type": "type"},
+                {"version_hash": format!("0x{}", "42".repeat(32)), "canonical_ref_hash": format!("0x{}", "52".repeat(32)), "canonical_hash_type": "type"}
+            ]}
+        })).unwrap();
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        let mut previous = store.get_script_version(&[0x42; 32]).unwrap().unwrap();
+        previous.type_id_deployments = vec![(vec![0x52; 32], 123)];
+        previous.lock_cells_count = 17;
+        previous.lock_live_cells_count = 6;
+        store.put_script_version(&[0x42; 32], &previous).unwrap();
+        script.mainnet.as_mut().unwrap().versions.truncate(1);
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        let current = store.get_script_version(&[0x42; 32]).unwrap().unwrap();
+        previous.registered_references.clear();
+        previous.canonical_reference_hash = None;
+        previous.canonical_hash_type = None;
+        assert_eq!(
+            current, previous,
+            "only revoked imported registration is cleared"
+        );
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        assert_eq!(
+            store.get_script_version(&[0x42; 32]).unwrap().unwrap(),
+            current
+        );
+    }
+
+    #[test]
+    fn registered_references_preserve_preferred_order_replace_removed_and_clear_excluded() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut script: ScriptMetadata = serde_json::from_value(serde_json::json!({
+            "metadata_slug": "registered-family", "name": "Registered Family",
+            "mainnet": {"versions": [
+                {"version_hash": format!("0x{}", "41".repeat(32)), "canonical_ref_hash": format!("0x{}", "61".repeat(32)), "canonical_hash_type": "type"},
+                {"version_hash": format!("0x{}", "41".repeat(32)), "canonical_ref_hash": format!("0x{}", "51".repeat(32)), "canonical_hash_type": "type"},
+                {"version_hash": format!("0x{}", "41".repeat(32)), "canonical_ref_hash": format!("0x{}", "61".repeat(32)), "canonical_hash_type": "type"}
+            ]}
+        })).unwrap();
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        let version = store.get_script_version(&[0x41; 32]).unwrap().unwrap();
+        assert_eq!(
+            version.registered_references,
+            vec![(vec![0x51; 32], 1), (vec![0x61; 32], 1)]
+        );
+        assert_eq!(
+            version.canonical_reference_hash,
+            Some(vec![0x61; 32]),
+            "first declaration is preferred, independent of sorted set"
+        );
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        assert_eq!(
+            store.get_script_version(&[0x41; 32]).unwrap().unwrap(),
+            version
+        );
+        script.mainnet.as_mut().unwrap().versions.truncate(1);
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        assert_eq!(
+            store
+                .get_script_version(&[0x41; 32])
+                .unwrap()
+                .unwrap()
+                .registered_references,
+            vec![(vec![0x61; 32], 1)]
+        );
+        upsert_script_label(&store, &script, "testnet").unwrap();
+        let excluded = store.get_script_version(&[0x41; 32]).unwrap().unwrap();
+        assert!(excluded.registered_references.is_empty());
+        assert!(excluded.family_id.is_none());
+    }
+
+    #[test]
+    fn conflicting_imported_families_fail_before_any_metadata_write() {
+        for (second_binary, expected) in
+            [("41", "binary registered"), ("42", "reference registered")]
+        {
+            let dir = TempDir::new().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+            let scripts: Vec<ScriptMetadata> = [("one", "41"), ("two", second_binary)].into_iter().map(|(family, binary)| {
+                serde_json::from_value(serde_json::json!({
+                    "metadata_slug": family, "name": family,
+                    "mainnet": {"versions": [{"version_hash": format!("0x{}", binary.repeat(32)), "canonical_ref_hash": format!("0x{}", "51".repeat(32)), "canonical_hash_type": "type"}]}
+                })).unwrap()
+            }).collect();
+            let error = super::import_all(&store, "mainnet", &[], &scripts).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error:#}");
+            assert!(store.list_script_versions().unwrap().is_empty());
+            assert!(store.list_script_families().unwrap().is_empty());
+            assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+        }
+    }
+
+    #[test]
     fn test_label_import_writes_family_and_versions() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
@@ -1355,6 +1540,7 @@ disabled = true
                 )
                 .unwrap()),
                 canonical_hash_type: Some(ScriptParser::parse_hash_type("type")),
+                registered_references: vec![(hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap(), 1)],
                 ..Default::default()
             }
         );

@@ -264,8 +264,13 @@ fn apply_type_id_lineage(
             version.description = template.description.clone();
         }
     }
-    version.canonical_reference_hash = Some(observed.reference_hash.clone());
-    version.canonical_hash_type = Some(1);
+    // Imported canonical metadata is not changed by arbitrary code copies.
+    // A newly discovered registered-lineage version may display that anchor,
+    // but it does not acquire an imported registration of its own.
+    if template.is_some() && version.canonical_reference_hash.is_none() {
+        version.canonical_reference_hash = Some(observed.reference_hash.clone());
+        version.canonical_hash_type = Some(1);
+    }
     let deployment = (observed.reference_hash.clone(), observed.block_number);
     if !version.type_id_deployments.contains(&deployment) {
         version.type_id_deployments.push(deployment);
@@ -280,21 +285,20 @@ fn type_id_family_templates(
     let mut ordered: Vec<_> = versions.iter().collect();
     ordered.sort_by_key(|(hash, _)| *hash);
     for (_, version) in ordered {
-        if version.canonical_hash_type != Some(1) || version.family_id.is_none() {
+        if version.family_id.is_none() {
             continue;
         }
-        let reference = version.canonical_reference_hash.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "registered type-id family lacks reference hash: binary=0x{}",
-                hex::encode(&version.version_hash)
-            )
-        })?;
-        if let Some(previous) = templates.get(reference) {
-            if previous.family_id != version.family_id {
-                bail!("type-id reference registered in conflicting families: reference=0x{} families={:?}/{:?}", hex::encode(reference), previous.family_id, version.family_id);
+        for (reference, kind) in &version.registered_references {
+            if *kind != 1 {
+                continue;
             }
-        } else {
-            templates.insert(reference.clone(), version.clone());
+            if let Some(previous) = templates.get(reference) {
+                if previous.family_id != version.family_id {
+                    bail!("type-id reference registered in conflicting families: reference=0x{} families={:?}/{:?}", hex::encode(reference), previous.family_id, version.family_id);
+                }
+            } else {
+                templates.insert(reference.clone(), version.clone());
+            }
         }
     }
     Ok(templates)
@@ -1936,6 +1940,129 @@ mod tests {
     }
 
     #[test]
+    fn real_mainnet_type_id_deployments_preserve_imported_family_boundaries() {
+        // Exact native Type ID ELF outputs at heights 0..=12,000,000, collected
+        // read-only from the node. Each tuple is (type hash, binary hash, block).
+        let tuples: Vec<(String, String, i64)> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/native_typeid_lineage_mainnet_0_12m.json"
+        )))
+        .unwrap();
+        assert_eq!(tuples.len(), 471);
+        let observations: Vec<_> = tuples
+            .into_iter()
+            .map(|(reference, binary, block)| TypeIdCodeChange {
+                reference_hash: hex::decode(reference).unwrap(),
+                version_hash: Some(hex::decode(binary).unwrap()),
+                block_number: block,
+            })
+            .collect();
+        assert!(observations
+            .windows(2)
+            .all(|pair| pair[0].block_number <= pair[1].block_number));
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let result = crate::label_import::run_label_import_bundled(&store, "mainnet").unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let imported: HashMap<_, _> = store.list_script_versions().unwrap().into_iter().collect();
+        let rollup = build_script_reference_rollup_state_with_lineage(
+            &store,
+            vec![],
+            HashMap::new(),
+            &observations,
+        )
+        .unwrap();
+        let versions: HashMap<_, _> = rollup.versions.into_iter().collect();
+        let membership =
+            ckbadger_store::ScriptFamilyMembershipIndex::new(versions.values()).unwrap();
+        let copy = hex::decode("e305abb02155db4393497ac45377808b7210bee5a0fe9b28f3e793d35714fec2")
+            .unwrap();
+        assert!(versions.values().all(|version| !version
+            .registered_references
+            .iter()
+            .any(|(reference, _)| reference == &copy)));
+        let mut copied_families = std::collections::BTreeSet::new();
+        let mut copy_observations = 0;
+        for observation in &observations {
+            let hash = observation.version_hash.as_ref().unwrap();
+            let version = &versions[hash];
+            assert!(version
+                .type_id_deployments
+                .contains(&(observation.reference_hash.clone(), observation.block_number)));
+            if observation.reference_hash == copy {
+                copy_observations += 1;
+                assert_eq!(
+                    membership.resolve_family(&copy, 1, Some(hash)).unwrap(),
+                    version.family_id.as_deref()
+                );
+                if let Some(family) = &version.family_id {
+                    copied_families.insert(family.as_str());
+                }
+            }
+        }
+        assert_eq!(copy_observations, 6);
+        assert_eq!(
+            copied_families,
+            std::collections::BTreeSet::from(["bit-account", "bit-lock"])
+        );
+        assert_eq!(
+            membership.resolve_family(&copy, 1, None).unwrap(),
+            None,
+            "unregistered copy has no permanent family after retirement"
+        );
+        for (hash, version) in &versions {
+            match imported.get(hash) {
+                Some(seed) => {
+                    assert_eq!(version.registered_references, seed.registered_references);
+                    assert_eq!(
+                        version.canonical_reference_hash,
+                        seed.canonical_reference_hash
+                    );
+                    assert_eq!(version.canonical_hash_type, seed.canonical_hash_type);
+                }
+                None => assert!(
+                    version.registered_references.is_empty(),
+                    "chain discovery must never invent registration"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn unregistered_type_id_copy_preserves_imported_canonical_reference() {
+        let version_hash = vec![0x41; 32];
+        let registered = vec![0x51; 32];
+        let copy = vec![0xe3; 32];
+        let original = ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            family_id: Some("family".into()),
+            registered_references: vec![(registered.clone(), 1)],
+            canonical_reference_hash: Some(registered.clone()),
+            canonical_hash_type: Some(1),
+            ..Default::default()
+        };
+        let mut versions = HashMap::from([(version_hash.clone(), original)]);
+        let templates = super::type_id_family_templates(&versions).unwrap();
+        super::apply_type_id_lineage(
+            &mut versions,
+            &templates,
+            &super::TypeIdCodeChange {
+                reference_hash: copy.clone(),
+                version_hash: Some(version_hash.clone()),
+                block_number: 4_872_142,
+            },
+        )
+        .unwrap();
+        let result = &versions[&version_hash];
+        assert_eq!(result.canonical_reference_hash, Some(registered.clone()));
+        assert_eq!(result.registered_references, vec![(registered, 1)]);
+        assert_eq!(result.type_id_deployments, vec![(copy.clone(), 4_872_142)]);
+        assert!(!super::type_id_family_templates(&versions)
+            .unwrap()
+            .contains_key(&copy));
+    }
+
+    #[test]
     fn live_type_id_upgrade_adds_family_version_inline_and_undo_removes_it() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
@@ -1951,6 +2078,7 @@ mod tests {
                     family_id: Some("cells-account".into()),
                     name: Some("Cells Account".into()),
                     canonical_reference_hash: Some(reference.clone()),
+                    registered_references: vec![(reference.clone(), 1)],
                     canonical_hash_type: Some(1),
                     type_id_deployments: vec![(reference.clone(), 10)],
                     ..Default::default()
@@ -2366,6 +2494,7 @@ mod tests {
                 canonical_hash_type: Some(1),
                 family_id: Some("family".into()),
                 name: Some("Family".into()),
+                registered_references: vec![(reference.clone(), 1)],
                 type_id_deployments: vec![(reference.clone(), 10)],
                 ..Default::default()
             },
@@ -2544,6 +2673,7 @@ mod tests {
                     version_hash: vec![0x81; 32],
                     family_id: Some("cells-account".into()),
                     canonical_reference_hash: Some(reference.clone()),
+                    registered_references: vec![(reference.clone(), 1)],
                     canonical_hash_type: Some(1),
                     ..Default::default()
                 },
@@ -2595,6 +2725,7 @@ mod tests {
                     version_hash: version_hash.clone(),
                     family_id: Some(family_id.to_string()),
                     canonical_reference_hash: Some(type_reference_hash.clone()),
+                    registered_references: vec![(type_reference_hash.clone(), 1)],
                     canonical_hash_type: Some(1),
                     ..Default::default()
                 },
@@ -2721,6 +2852,7 @@ mod tests {
                     version_hash: version_hash.clone(),
                     family_id: Some(family_id.to_string()),
                     canonical_reference_hash: Some(type_reference_hash.clone()),
+                    registered_references: vec![(type_reference_hash.clone(), 1)],
                     canonical_hash_type: Some(1),
                     ..Default::default()
                 },
