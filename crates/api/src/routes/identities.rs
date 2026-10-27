@@ -431,7 +431,7 @@ async fn list_identity_collection_items(
         cursor_bytes,
         search_lower.as_deref(),
         status_filter,
-        &obj_agg,
+        &obj_agg.into(),
     )
 }
 

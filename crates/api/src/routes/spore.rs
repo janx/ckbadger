@@ -1040,51 +1040,46 @@ async fn get_spores_by_cluster(
     ))
 }
 
-/// One existence/source contract for detail, insights and full feeds. A
-/// cluster may be empty, inferred from Spore membership, or virtual (sole).
-pub(crate) fn read_cluster(
-    state: &AppState,
+type ResolvedCluster = (
+    Option<ckbadger_store::ObjectEntry>,
+    Option<ckbadger_store::ClusterAggregate>,
+);
+
+/// One existence/source contract for native and generic collection endpoints.
+/// A cluster may be empty, inferred from membership, or virtual (sole).
+pub(super) fn resolve_cluster(
+    store: &ckbadger_store::CkbadgerStore,
     id: &[u8],
-) -> Result<
-    (
-        Option<ckbadger_store::ObjectEntry>,
-        Option<ckbadger_store::ClusterAggregate>,
-    ),
-    ApiRouteError,
-> {
-    let entry = state
-        .store
-        .get_spore(id)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+) -> anyhow::Result<Option<ResolvedCluster>> {
+    let entry = store.get_spore(id)?;
     if entry
         .as_ref()
         .is_some_and(|entry| entry.standard != ckbadger_store::ObjectStandard::SporeCluster)
     {
-        return Err(ApiError::not_found("Cluster not found"));
+        return Ok(None);
     }
-    let aggregate = state
-        .store
-        .get_cluster_aggregate(id)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let aggregate = store.get_cluster_aggregate(id)?;
     if aggregate.is_none() {
-        let count = state
-            .store
-            .count_spores_in_cluster(id)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        if count > 0 {
-            return Err(ApiError::internal(format!(
-                "missing aggregate for cluster 0x{} with {count} indexed spores",
-                hex::encode(id)
-            )));
-        }
+        let count = store.count_spores_in_cluster(id)?;
+        anyhow::ensure!(
+            count == 0,
+            "missing aggregate for cluster 0x{} with {count} indexed spores",
+            hex::encode(id)
+        );
     }
     if entry.is_none()
         && !aggregate.as_ref().is_some_and(|agg| agg.total_count > 0)
         && !is_sole_spores_sentinel(id)
     {
-        return Err(ApiError::not_found("Cluster not found"));
+        return Ok(None);
     }
-    Ok((entry, aggregate))
+    Ok(Some((entry, aggregate)))
+}
+
+pub(crate) fn read_cluster(state: &AppState, id: &[u8]) -> Result<ResolvedCluster, ApiRouteError> {
+    resolve_cluster(&state.store, id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Cluster not found"))
 }
 
 async fn get_cluster(

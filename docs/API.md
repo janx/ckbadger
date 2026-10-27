@@ -140,6 +140,8 @@ Each item a transaction moves is one `ItemDeltaResponse`, tagged by `kind`:
 
 The summary's request pins its canonical view. `/assets` remains a warmup snapshot, so separate list and summary requests do not claim a shared anchor. Summary reads token metadata, checks only enough canonical holder rows to establish positive membership for unlabelled tokens, scans collection aggregates and live Spore pending evidence; it does not run all token capacity/history/holder-sum scans. `composition_tier` additionally accepts `decode_pending`; filtering precedes pagination and `total` covers the entire matching snapshot.
 
+Collection detail's `activitiesCount` counts canonical collection transactions, not individual item actions or transferred items. Spore detail and Inventory reuse the existing canonical-history counter (five-minute in-memory TTL); mNFT and identity collections use their owning persisted counters. Separate responses and the independently refreshed Inventory snapshot do not promise the same tip. A known Spore cluster with no indexed members, including the virtual Sole Spores collection, has a valid empty detail/items/holders/history/feed surface even before its first member is minted. A member index with a missing aggregate is an invariant error, not an empty collection; an unknown ID remains 404.
+
 **Params**
 
 - `ListParams` — `limit`, `type` (token|object|identity), `standard`, `cursor`, `search`, `sort_key`, `sort_direction`, `composition_tier`

@@ -5231,6 +5231,14 @@ async fn redesign_collection_counts_are_not_token_transfers() {
     assert_eq!(body["data"][0]["liveCount"], 0);
     assert_eq!(body["data"][0]["activitiesCount"], 12);
     assert!(body["data"][0].get("transfersCount").is_none(), "{body}");
+    // mNFT still reads its owning persisted count, not Spore history rows.
+    let (status, detail) = get_json(
+        &app,
+        &format!("/assets/objects/0x{}", hex::encode([0x39; 32])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["activitiesCount"], 12, "{detail}");
 }
 
 #[tokio::test]
@@ -5273,4 +5281,209 @@ async fn redesign_identity_item_uses_persisted_update_action() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["actions"], serde_json::json!(["update"]));
+}
+
+fn regression_cluster_metadata() -> ObjectEntry {
+    ObjectEntry {
+        standard: ObjectStandard::SporeCluster,
+        collection_id: None,
+        token_id: None,
+        owner_lock_hash: Some(vec![0x11; 32]),
+        name: Some("Canonical collection".to_string()),
+        description: None,
+        is_live: true,
+        created_at_block: 0,
+        created_at_tx: vec![0x98; 32],
+        extra: ObjectExtra::SporeCluster,
+    }
+}
+
+#[tokio::test]
+async fn regression_spore_collection_activity_count_matches_canonical_surfaces() {
+    let store = test_store();
+    let id = [0xc1; 32];
+    store
+        .put_spore_direct(&id, &regression_cluster_metadata())
+        .unwrap();
+    for (block, tx) in [(1, [0x21; 32]), (2, [0x22; 32])] {
+        seed_committed_activity(&store, &[0x11; 32], &tx, block, 0, 1, 0);
+    }
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cluster_aggregate(
+        &id,
+        &ClusterAggregate {
+            total_count: 2,
+            live_count: 0,
+            ..Default::default()
+        },
+    );
+    for (block, tx, block_hash, actions) in [
+        (
+            1,
+            [0x21; 32],
+            [0xba; 32],
+            vec![AssetAction::Mint, AssetAction::Burn],
+        ),
+        (2, [0x22; 32], [0xba; 32], vec![AssetAction::Transfer]),
+        // A reverted transaction with no canonical location.
+        (3, [0x23; 32], [0xbc; 32], vec![AssetAction::Mint]),
+        // The same canonical transaction left at a competing branch location.
+        (4, [0x22; 32], [0xbd; 32], vec![AssetAction::Transfer]),
+    ] {
+        batch.put_object_collection_activity(
+            &id,
+            block,
+            0,
+            &ObjectCollectionActivityEntry {
+                tx_hash: tx.to_vec(),
+                block_hash: block_hash.to_vec(),
+                timestamp_ms: 1_700_000_000_000 + block,
+                actions,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let id = format!("0x{}", hex::encode(id));
+    let (status, inventory) = get_json(&app, "/assets?type=object").await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+    let row = inventory["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["activitiesCount"], 2);
+    let (status, spore) = get_json(&app, &format!("/spore/clusters/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{spore}");
+    assert_eq!(spore["activitiesCount"], 2);
+    for prefix in ["spore/clusters", "assets/objects"] {
+        let (status, feed) = get_json(&app, &format!("/{prefix}/{id}/activity-feed?limit=1")).await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        assert_eq!(feed["total"], 2);
+        assert_eq!(feed["data"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            feed["data"][0]["txHash"],
+            format!("0x{}", hex::encode([0x22; 32]))
+        );
+    }
+    let (status, detail) = get_json(&app, &format!("/assets/objects/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["activitiesCount"], 2, "{detail}");
+}
+
+#[tokio::test]
+async fn regression_spore_empty_collection_shared_source_contract() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-16T00:00:00Z"))]);
+    let empty_id = [0xc2; 32];
+    store
+        .put_spore_direct(&empty_id, &regression_cluster_metadata())
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let mut failures = Vec::new();
+    for id in [
+        empty_id,
+        ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION,
+    ] {
+        let id = format!("0x{}", hex::encode(id));
+        for suffix in [
+            "",
+            "/items",
+            "/holders",
+            "/activities",
+            "/activity-feed",
+            "/transactions",
+            "/charts/capacity-history?from=2024-01-15&to=2024-01-15",
+        ] {
+            let path = format!("/assets/objects/{id}{suffix}");
+            let (status, json) = get_json(&app, &path).await;
+            if status != StatusCode::OK {
+                failures.push(format!("{path}: {status} {json}"));
+                continue;
+            }
+            if suffix.is_empty() {
+                assert_eq!(json["totalCount"], 0, "{json}");
+                assert_eq!(json["liveCount"], 0, "{json}");
+                assert_eq!(json["holdersCount"], 0, "{json}");
+                assert_eq!(json["activitiesCount"], 0, "{json}");
+                assert_eq!(json["ownedCapacity"], "0", "{json}");
+                assert!(json["composition"]["onchainRatio"].is_null(), "{json}");
+            } else if !suffix.starts_with("/charts") {
+                assert!(json["data"].as_array().unwrap().is_empty(), "{json}");
+                if suffix != "/activities" {
+                    assert_eq!(json["total"], 0, "{json}");
+                }
+            } else {
+                assert!(
+                    json["data"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|row| row["values"]
+                            .as_object()
+                            .unwrap()
+                            .values()
+                            .all(|value| value == "0")),
+                    "{json}"
+                );
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
+async fn regression_spore_collection_missing_aggregate_is_not_empty() {
+    let store = test_store();
+    let id = [0xc3; 32];
+    store
+        .put_spore_direct(&id, &regression_cluster_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_spore_by_cluster(&id, &[0x51; 32]);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let mut failures = Vec::new();
+    for suffix in [
+        "",
+        "/items",
+        "/holders",
+        "/activities",
+        "/activity-feed",
+        "/transactions",
+        "/charts/capacity-history",
+    ] {
+        let path = format!("/assets/objects/0x{}{suffix}", hex::encode(id));
+        let (status, json) = get_json(&app, &path).await;
+        if status != StatusCode::INTERNAL_SERVER_ERROR
+            || !json["message"].as_str().is_some_and(|text| {
+                text.contains("missing aggregate") && text.contains(&hex::encode(id))
+            })
+        {
+            failures.push(format!("{path}: {status} {json}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
+async fn regression_spore_unknown_collection_still_not_found() {
+    let app = create_router(test_config(test_store())).await;
+    for suffix in [
+        "",
+        "/items",
+        "/holders",
+        "/activities",
+        "/activity-feed",
+        "/transactions",
+        "/charts/capacity-history",
+    ] {
+        let (status, json) = get_json(
+            &app,
+            &format!("/assets/objects/0x{}{suffix}", hex::encode([0xc4; 32])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{suffix}: {json}");
+    }
 }

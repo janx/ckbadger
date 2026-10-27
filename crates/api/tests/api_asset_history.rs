@@ -1536,6 +1536,7 @@ async fn same_spore_producer_detail_protocol_genetics_and_cell_versions_agree() 
     assert_eq!(status, StatusCode::OK, "{collection}");
     capture_producer("object-collection-detail", &collection);
     assert_eq!(collection["ownedCapacity"], cluster["ownedCapacity"]);
+    assert_eq!(collection["activitiesCount"], cluster["activitiesCount"]);
 }
 
 #[tokio::test]
