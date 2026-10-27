@@ -402,6 +402,7 @@ interface HardforkTimelineResponse {
   tipEpoch: number;
   tipBlock: number;
   events: HardforkEvent[];
+  consensusFeatures: Array<{ rfc: string; activationEpoch: number | null }>;
 }
 
 interface CursorQueryParams {
@@ -3381,6 +3382,26 @@ export interface NetworkDistributions {
   protocols: LabelCount[];
 }
 
+export interface NetworkMap {
+  roundId: number | null;
+  verifiedRetained: number;
+  located: number;
+  locationUnavailable: number;
+  points: Array<{
+    peerId: string;
+    country: string;
+    lat: number;
+    lon: number;
+    reachable: boolean;
+    clientVersion: string;
+    asn: string | null;
+    firstSeen: number;
+    lastSeen: number;
+    advertiserCount: number;
+    localSessionObserved: boolean;
+  }>;
+}
+
 export interface NetworkHistoryPoint {
   ts: number;
   scalar: number;
@@ -3391,6 +3412,27 @@ export interface NetworkHistory {
   metric: string;
   granularity: string;
   points: NetworkHistoryPoint[];
+  dailyCoverage: Array<{
+    ts: number;
+    hasRetainedObservation: boolean;
+    roundsPerDay: number | null;
+  }>;
+  coverageFrom: number | null;
+  coverageTo: number | null;
+  roundCountAvailability: 'notRecorded';
+}
+
+export interface NetworkRoundAdvertisements {
+  roundId: number | null;
+  finishedAt: number | null;
+  coverage: 'noCompletedRound' | 'retainedLatestObservationOnly';
+  distinctPeerPairs: number;
+  edges: Array<{
+    advertiserPeerId: string;
+    targetPeerId: string;
+    alias: string;
+    observedAt: number;
+  }>;
 }
 
 export type NetworkPeerDisplayState =
@@ -4702,8 +4744,13 @@ export const api = {
 
   getNetworkSummary: async (): Promise<NetworkSummary> => fetchApi('/network/summary'),
 
+  getNetworkAdvertisements: async (): Promise<NetworkRoundAdvertisements> =>
+    fetchApi('/network/advertisements'),
+
   getNetworkDistributions: async (): Promise<NetworkDistributions> =>
     fetchApi('/network/distributions'),
+
+  getNetworkMap: async (): Promise<NetworkMap> => fetchApi('/network/map'),
 
   getNetworkHistory: async (
     metric: string,

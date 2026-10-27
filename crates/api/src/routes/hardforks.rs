@@ -7,6 +7,7 @@ use ckbadger_common::{hardforks_for_network, normalize_network};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::consensus::{load_hardfork_features, HardforkFeature};
 use crate::response::{ok, ApiError, ApiResult};
 use crate::AppState;
 
@@ -44,6 +45,7 @@ pub struct HardforkTimelineResponse {
     pub tip_epoch: i64,
     pub tip_block: i64,
     pub events: Vec<HardforkEventResponse>,
+    pub consensus_features: Vec<HardforkFeature>,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -61,6 +63,12 @@ async fn list_hardforks(
             network_raw
         ))
     })?;
+    if normalize_network(&state.ckb_network) != Some(network) {
+        return Err(ApiError::bad_request(format!(
+            "requested network '{}' differs from this node's configured network '{}'",
+            network, state.ckb_network
+        )));
+    }
 
     let hardforks = hardforks_for_network(network).ok_or_else(|| {
         ApiError::internal(format!(
@@ -69,6 +77,24 @@ async fn list_hardforks(
         ))
     })?;
 
+    let consensus_features = load_hardfork_features(&state.ckb_rpc_url)
+        .await
+        .map_err(ApiError::internal)?;
+    for (rfc, expected) in [
+        ("0032", hardforks[0].activation_epoch),
+        ("0049", hardforks[1].activation_epoch),
+    ] {
+        let actual = consensus_features
+            .iter()
+            .find(|feature| feature.rfc == rfc)
+            .and_then(|feature| feature.activation_epoch);
+        if actual != Some(expected as u64) {
+            return Err(ApiError::internal(format!(
+                "get_consensus RFC {rfc} activation {:?} disagrees with {} edition epoch {expected}",
+                actual, network
+            )));
+        }
+    }
     let store = state.store.clone();
     let network_owned = network.to_string();
     let hardforks_owned: Vec<_> = hardforks.to_vec();
@@ -115,6 +141,7 @@ async fn list_hardforks(
             tip_epoch,
             tip_block,
             events,
+            consensus_features,
         })
     })
     .await

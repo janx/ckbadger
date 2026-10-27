@@ -10,6 +10,17 @@ use ckbadger_store::{
 };
 use common::*;
 
+fn export_d7_fixture(name: &str, value: &serde_json::Value) {
+    if let Ok(dir) = std::env::var("D7_FIXTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join(name),
+            serde_json::to_vec_pretty(value).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn summary_reports_disabled_and_no_data_by_default() {
     let app = create_router_without_warmup(test_config(test_store()));
@@ -19,6 +30,107 @@ async fn summary_reports_disabled_and_no_data_by_default() {
     assert_eq!(body["hasData"], false);
     assert!(body["lastRound"].is_null());
     assert!(body["activeRound"].is_null());
+}
+
+#[tokio::test]
+async fn advertisement_graph_uses_only_retained_latest_completed_round_evidence() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (code, graph) = get_json(&app, "/network/advertisements").await;
+    export_d7_fixture("network-advertisements.json", &graph);
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(graph["roundId"], 5);
+    assert_eq!(graph["finishedAt"], 200);
+    assert_eq!(graph["coverage"], "retainedLatestObservationOnly");
+    assert_eq!(graph["distinctPeerPairs"], 1);
+    let edges = graph["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0]["advertiserPeerId"], "7065657241");
+    assert_eq!(edges[0]["targetPeerId"], "7065657243");
+    assert_eq!(edges[0]["alias"], "addrpeerC");
+    assert_eq!(edges[0]["observedAt"], 200);
+}
+
+#[tokio::test]
+async fn advertisement_graph_reports_no_completed_round_when_disabled_and_empty() {
+    let app = create_router_without_warmup(test_config(test_store()));
+    let (code, graph) = get_json(&app, "/network/advertisements").await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(graph["roundId"].is_null());
+    assert_eq!(graph["coverage"], "noCompletedRound");
+    assert!(graph["edges"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn map_counts_unlocated_verified_peers_without_inventing_coordinates() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (status, map) = get_json(&app, "/network/map").await;
+    export_d7_fixture("network-map.json", &map);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(map["verifiedRetained"], 2);
+    assert_eq!(map["located"], 1);
+    assert_eq!(map["locationUnavailable"], 1);
+    assert_eq!(map["points"][0]["peerId"], "7065657241");
+    assert_eq!(map["points"][0]["country"], "US");
+    assert_eq!(map["roundId"], 5);
+    assert_eq!(map["points"][0]["clientVersion"], "0.119.0");
+}
+
+#[tokio::test]
+async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() {
+    use ckbadger_store::network_keys::{Granularity, Metric};
+    use ckbadger_store::{CkbadgerStore, HistoryPoint};
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    for day in [10, 12] {
+        network
+            .put_history_point(
+                Metric::VerifiedPeers,
+                Granularity::Day,
+                day,
+                &HistoryPoint {
+                    scalar: 7,
+                    buckets: vec![],
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (code, history) = get_json(
+        &app,
+        "/network/history?metric=verifiedPeers&granularity=day&to=1123200",
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(history["roundCountAvailability"], "notRecorded");
+    export_d7_fixture("network-history-gaps.json", &history);
+    let coverage = history["dailyCoverage"].as_array().unwrap();
+    assert_eq!(coverage.len(), 3);
+    assert_eq!(coverage[0]["hasRetainedObservation"], true);
+    assert_eq!(coverage[1]["hasRetainedObservation"], false);
+    assert_eq!(coverage[2]["hasRetainedObservation"], true);
+    assert!(coverage.iter().all(|day| day["roundsPerDay"].is_null()));
+    assert_eq!(history["coverageFrom"], 864000);
+    assert_eq!(history["coverageTo"], 1036800);
+    let (_, bounded) = get_json(
+        &app,
+        "/network/history?metric=verifiedPeers&granularity=day&from=777600&to=1382400",
+    )
+    .await;
+    let bounded_days = bounded["dailyCoverage"].as_array().unwrap();
+    assert_eq!(bounded_days.len(), 7);
+    assert_eq!(bounded["coverageFrom"], 777600);
+    assert_eq!(bounded["coverageTo"], 1296000);
+    assert_eq!(bounded_days[0]["hasRetainedObservation"], false);
+    assert_eq!(bounded_days[6]["hasRetainedObservation"], false);
 }
 
 #[tokio::test]
@@ -158,6 +270,9 @@ async fn active_round_remains_separate_from_completed_candidate_evidence() {
     let (_, detail) = get_json(&app, "/network/peers/7065657243").await;
     assert_eq!(detail["lastCompleted"]["roundId"], 5);
     assert_eq!(detail["active"]["roundId"], 6);
+    let (_, graph) = get_json(&app, "/network/advertisements").await;
+    assert_eq!(graph["roundId"], 5);
+    assert_eq!(graph["edges"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

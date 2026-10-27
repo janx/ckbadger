@@ -6,8 +6,6 @@ import { api, NetworkHistory, StackedAreaDataPoint, StackedAreaSeries } from '@/
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { getChartPaletteColor } from '@/lib/chart-colors';
 
-const MAX_SHARE_SERIES = 8;
-
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -77,39 +75,6 @@ export function mergePeerCounts(
   return { data, error: null };
 }
 
-// Turn per-day label buckets into stacked-area series. Series are the top-N labels by total
-// count across the whole window, so the stack is stable across days.
-function bucketsToStacked(history: NetworkHistory | undefined): {
-  data: StackedAreaDataPoint[];
-  series: StackedAreaSeries[];
-} {
-  const points = history?.points ?? [];
-  const totals = new Map<string, number>();
-  for (const p of points) {
-    for (const b of p.buckets) {
-      totals.set(b.label, (totals.get(b.label) ?? 0) + b.count);
-    }
-  }
-  const topLabels = [...totals.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, MAX_SHARE_SERIES)
-    .map(([label]) => label);
-  const series: StackedAreaSeries[] = topLabels.map((label, i) => ({
-    key: label,
-    label,
-    color: getChartPaletteColor(i),
-  }));
-  const data: StackedAreaDataPoint[] = points.map((p) => {
-    const values: Record<string, string> = {};
-    for (const label of topLabels) {
-      const found = p.buckets.find((b) => b.label === label);
-      values[label] = String(found?.count ?? 0);
-    }
-    return { date: formatDay(p.ts), values };
-  });
-  return { data, series };
-}
-
 function ChartLegend({ series }: { series: StackedAreaSeries[] }) {
   return (
     <div className="mt-4 flex flex-wrap items-center justify-center gap-4">
@@ -125,23 +90,66 @@ function ChartLegend({ series }: { series: StackedAreaSeries[] }) {
 
 function TrendPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border-base-border bg-base-surface rounded border p-4">
-      <h3 className="text-text-bright mb-3 font-mono text-sm font-bold">{title}</h3>
+    <div className="border-base-border-subtle min-w-0 border-t pt-4">
+      <h3 className="text-text-bright mb-3 font-mono text-[13px] font-medium">{title}</h3>
       {children}
     </div>
   );
 }
 
-function ShareTrend({ title, history }: { title: string; history: NetworkHistory | undefined }) {
-  const { data, series } = bucketsToStacked(history);
+function ShareTrend({
+  title,
+  history,
+  error,
+}: {
+  title: string;
+  history: NetworkHistory | undefined;
+  error: boolean;
+}) {
+  const byDay = new Map(history?.points.map((point) => [point.ts, point]) ?? []);
   return (
     <TrendPanel title={title}>
-      {series.length === 0 ? (
-        <p className="text-text-dim font-mono text-xs">No data yet</p>
+      {error ? (
+        <p role="alert" className="text-negative text-[12px]">
+          Failed to load {title.toLowerCase()}.
+        </p>
+      ) : !history ? (
+        <p className="text-text-dim text-[12px]">Loading observations…</p>
+      ) : history.points.length === 0 ? (
+        <p className="text-text-dim text-[12px]">No completed daily crawler observations yet.</p>
       ) : (
         <>
-          <StackedAreaChart data={data} series={series} isPercentage height={260} />
-          <ChartLegend series={series} />
+          <p className="text-text-dim mb-3 text-[11px]">
+            Retained top-label counts per observed day. The historical total and omitted labels were
+            not recorded, so percentages are unavailable.
+          </p>
+          <div
+            className="max-h-72 overflow-y-auto"
+            role="list"
+            aria-label={title + ' daily observations'}
+          >
+            {history.dailyCoverage.map((day) => {
+              const point = byDay.get(day.ts);
+              if (day.hasRetainedObservation !== Boolean(point))
+                throw new Error(title + ' coverage disagrees with point at ' + formatDay(day.ts));
+              return (
+                <div
+                  role="listitem"
+                  key={day.ts}
+                  className="border-base-border-subtle grid grid-cols-[6rem_minmax(0,1fr)] gap-3 border-t py-2 text-[11px]"
+                >
+                  <span className="text-text-dim">{formatDay(day.ts)}</span>
+                  <span className="text-text min-w-0 break-words">
+                    {point
+                      ? point.buckets
+                          .map((bucket) => bucket.label + ' ' + bucket.count.toLocaleString())
+                          .join(' · ') || 'No retained labels'
+                      : 'No retained round observation'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
     </TrendPanel>
@@ -183,6 +191,13 @@ export function NetworkTrends() {
     },
   ];
   const peerCounts = mergePeerCounts(verifiedPeers.data, reachablePeers.data);
+  const coverage = verifiedPeers.data?.dailyCoverage ?? [];
+  const hasGap = coverage.some((day) => !day.hasRetainedObservation);
+  const countsByDay = new Map(peerCounts.data.map((point) => [point.date, point.values]));
+  const maxVerified = Math.max(
+    1,
+    ...(verifiedPeers.data?.points ?? []).map((point) => point.scalar)
+  );
   const peerHistoryError =
     verifiedPeers.isError || reachablePeers.isError
       ? 'Failed to load verified peer history.'
@@ -190,27 +205,109 @@ export function NetworkTrends() {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-text-bright font-mono text-lg font-bold">Trends</h2>
+      <h2 className="text-text-bright font-mono text-[15px] font-medium">Over time</h2>
       <p className="text-text-dim font-mono text-xs">
-        Daily history of retained verified peers. The current (incomplete) day is excluded.
+        Daily history of retained verified peers. The current (incomplete) day is excluded. Round
+        counts were not recorded.
+        {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
+          <>
+            {' '}
+            Coverage: {formatDay(verifiedPeers.data.coverageFrom)} through{' '}
+            {formatDay(verifiedPeers.data.coverageTo)}.
+          </>
+        )}
       </p>
 
       <TrendPanel title="Retained verification state (daily)">
         {peerHistoryError ? (
           <p className="text-negative font-mono text-xs">{peerHistoryError}</p>
         ) : peerCounts.data.length === 0 ? (
-          <p className="text-text-dim font-mono text-xs">No data yet</p>
+          <p className="text-text-dim font-mono text-xs">
+            No completed daily crawler observations yet.
+          </p>
         ) : (
           <>
-            <StackedAreaChart data={peerCounts.data} series={peerSeries} height={260} />
+            {hasGap ? (
+              <div
+                role="list"
+                aria-label="Daily verified peer observations and missing days"
+                className="border-base-border-subtle flex h-56 min-w-0 gap-px overflow-x-auto border-b"
+              >
+                {coverage.map((day) => {
+                  const date = formatDay(day.ts);
+                  const values = countsByDay.get(date);
+                  if (day.hasRetainedObservation && !values)
+                    throw new Error('coverage has no peer point at ' + date);
+                  const reachable = values ? Number(values.sameNetworkReachable) : 0;
+                  const unavailable = values ? Number(values.verifiedUnavailable) : 0;
+                  return (
+                    <div
+                      role="listitem"
+                      key={day.ts}
+                      title={
+                        values
+                          ? date +
+                            ': ' +
+                            reachable +
+                            ' reachable, ' +
+                            unavailable +
+                            ' verified unavailable'
+                          : date + ': no retained round observation'
+                      }
+                      aria-label={
+                        values
+                          ? date +
+                            ': ' +
+                            reachable +
+                            ' reachable, ' +
+                            unavailable +
+                            ' verified unavailable'
+                          : date + ': no retained round observation'
+                      }
+                      className={
+                        'flex min-w-[8px] flex-1 flex-col justify-end ' +
+                        (values ? '' : 'bg-base-elevated')
+                      }
+                    >
+                      {values && (
+                        <>
+                          <div
+                            className="bg-aqua"
+                            style={{ height: (unavailable / maxVerified) * 100 + '%' }}
+                          />
+                          <div
+                            className="bg-jade"
+                            style={{ height: (reachable / maxVerified) * 100 + '%' }}
+                          />
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <StackedAreaChart data={peerCounts.data} series={peerSeries} height={260} />
+            )}
             <ChartLegend series={peerSeries} />
+            <p className="text-text-dim mt-2 text-[11px]">
+              Shaded days have no retained round observation. Rounds per day are unavailable because
+              the crawler did not record counts.
+            </p>
           </>
         )}
       </TrendPanel>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <ShareTrend title="Client Version Share" history={versionShare.data} />
-        <ShareTrend title="Country Share" history={countryShare.data} />
+        <ShareTrend
+          title="Client Version Share"
+          history={versionShare.data}
+          error={versionShare.isError}
+        />
+        <ShareTrend
+          title="Country Share"
+          history={countryShare.data}
+          error={countryShare.isError}
+        />
       </div>
     </section>
   );

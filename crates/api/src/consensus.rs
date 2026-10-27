@@ -117,6 +117,54 @@ pub struct ConsensusParams {
     pub max_block_proposals_limit: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardforkFeature {
+    pub rfc: String,
+    pub activation_epoch: Option<u64>,
+}
+
+pub fn parse_hardfork_features(result: &serde_json::Value) -> Result<Vec<HardforkFeature>, String> {
+    let entries = result
+        .get("hardfork_features")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "get_consensus.hardfork_features must be an array".to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    let mut features = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let rfc = entry
+            .get("rfc")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .ok_or_else(|| format!("get_consensus.hardfork_features[{index}].rfc is invalid"))?;
+        if !seen.insert(rfc) {
+            return Err(format!(
+                "get_consensus.hardfork_features has duplicate RFC {rfc}"
+            ));
+        }
+        let epoch = entry.get("epoch_number").ok_or_else(|| {
+            format!("get_consensus.hardfork_features[{index}].epoch_number is missing")
+        })?;
+        let activation_epoch = if epoch.is_null() {
+            None
+        } else {
+            let hex = epoch.as_str().ok_or_else(|| {
+                format!("get_consensus.hardfork_features[{index}].epoch_number is not hex")
+            })?;
+            Some(parse_hex_u64(
+                hex,
+                &format!("get_consensus.hardfork_features[{index}].epoch_number"),
+            )?)
+        };
+        features.push(HardforkFeature {
+            rfc: rfc.to_string(),
+            activation_epoch,
+        });
+    }
+    features.sort_by(|left, right| left.rfc.cmp(&right.rfc));
+    Ok(features)
+}
+
 /// The `get_consensus` fields this crate reads. Everything else the node
 /// returns is ignored.
 #[derive(Debug, Deserialize)]
@@ -200,6 +248,16 @@ struct RpcError {
 /// transport, RPC error, empty result, malformed field — is an error that
 /// names `get_consensus`.
 pub async fn load_consensus(rpc_url: &str) -> Result<ConsensusParams, String> {
+    let result = fetch_consensus_result(rpc_url).await?;
+    ConsensusParams::from_get_consensus(&result)
+}
+
+pub async fn load_hardfork_features(rpc_url: &str) -> Result<Vec<HardforkFeature>, String> {
+    let result = fetch_consensus_result(rpc_url).await?;
+    parse_hardfork_features(&result)
+}
+
+async fn fetch_consensus_result(rpc_url: &str) -> Result<serde_json::Value, String> {
     let response: RpcResponse = crate::utils::shared_http_client()
         .post(rpc_url)
         .json(&RpcRequest {
@@ -224,7 +282,7 @@ pub async fn load_consensus(rpc_url: &str) -> Result<ConsensusParams, String> {
     let result = response
         .result
         .ok_or_else(|| format!("{GET_CONSENSUS} returned no result"))?;
-    ConsensusParams::from_get_consensus(&result)
+    Ok(result)
 }
 
 /// Process-wide holder of the node's consensus parameters: loaded on first use,
@@ -252,6 +310,44 @@ impl ConsensusCell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hardfork_features_preserve_epoch_zero_and_reject_duplicate_or_malformed_evidence() {
+        let result: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/mainnet_get_consensus.json"))
+                .unwrap();
+        let features = parse_hardfork_features(&result).unwrap();
+        assert_eq!(
+            features
+                .iter()
+                .find(|feature| feature.rfc == "0029")
+                .unwrap()
+                .activation_epoch,
+            Some(0)
+        );
+        assert_eq!(
+            features
+                .iter()
+                .find(|feature| feature.rfc == "0049")
+                .unwrap()
+                .activation_epoch,
+            Some(12293)
+        );
+        let mut malformed = result.clone();
+        malformed["hardfork_features"][0]["epoch_number"] = serde_json::json!("bad-hex");
+        assert!(parse_hardfork_features(&malformed)
+            .unwrap_err()
+            .contains("epoch_number"));
+        let mut duplicate = result;
+        let first = duplicate["hardfork_features"][0].clone();
+        duplicate["hardfork_features"]
+            .as_array_mut()
+            .unwrap()
+            .push(first);
+        assert!(parse_hardfork_features(&duplicate)
+            .unwrap_err()
+            .contains("duplicate RFC"));
+    }
     use wiremock::matchers::{body_partial_json, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

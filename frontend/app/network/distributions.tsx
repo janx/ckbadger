@@ -14,8 +14,8 @@ function DistributionBars({ title, items }: { title: string; items: LabelCount[]
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
 
   return (
-    <div className="border-base-border bg-base-surface rounded border p-4">
-      <h3 className="text-text-bright mb-3 font-mono text-sm font-bold">{title}</h3>
+    <div className="border-base-border-subtle border-t pt-4">
+      <h3 className="text-text-bright mb-3 font-mono text-[13px] font-medium">{title}</h3>
       {top.length === 0 ? (
         <p className="text-text-dim font-mono text-xs">No data yet</p>
       ) : (
@@ -42,8 +42,10 @@ function DistributionBars({ title, items }: { title: string; items: LabelCount[]
 function ReachabilityStat({ data }: { data: NetworkDistributionsData }) {
   const { sameNetworkReachable, verifiedUnavailable, verifiedRetained } = data;
   return (
-    <div className="border-base-border bg-base-surface rounded border p-4">
-      <h3 className="text-text-bright mb-3 font-mono text-sm font-bold">Retained verification</h3>
+    <div className="border-base-border-subtle border-t pt-4">
+      <h3 className="text-text-bright mb-3 font-mono text-[13px] font-medium">
+        Retained verification
+      </h3>
       <ProgressBar
         value={sameNetworkReachable}
         max={verifiedRetained}
@@ -72,8 +74,10 @@ export function NetworkDistributions() {
   }
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-text-bright font-mono text-lg font-bold">Distributions</h2>
+    <section className="space-y-5">
+      <h2 className="text-text-bright font-mono text-[15px] font-medium">
+        Which software they run
+      </h2>
       <ReachabilityStat data={data} />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <DistributionBars title="Client Versions" items={data.versions} />

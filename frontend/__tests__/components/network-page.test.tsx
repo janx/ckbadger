@@ -112,6 +112,14 @@ describe('NetworkClientPage', () => {
     expect(screen.queryByText('Failed Peer Candidates')).not.toBeInTheDocument();
     expect(screen.queryByText(/crawling/i)).not.toBeInTheDocument();
     expect(screen.getByText(/an advertised candidate is not verified/i)).toBeInTheDocument();
+    expect(
+      await screen.findByRole('list', { name: /Directed advertiser to advertised endpoint graph/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/retained endpoint alias observations/i)).toHaveTextContent('round #5');
+    expect(screen.getByRole('img', { name: /Approximate GeoIP locations/i })).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 of 2 retained verified peers have approximate GeoIP coordinates/i)
+    ).toBeInTheDocument();
   });
 
   it('shows active progress separately from the last completed round', async () => {

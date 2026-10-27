@@ -18,6 +18,11 @@ vi.mock('@/components/layout/header', () => ({
 
 const mockTimeline = {
   network: 'mainnet',
+  consensusFeatures: [
+    { rfc: '0029', activationEpoch: 0 },
+    { rfc: '0032', activationEpoch: 5414 },
+    { rfc: '0049', activationEpoch: 12293 },
+  ],
   tipEpoch: 13000,
   tipBlock: 19000000,
   events: [
@@ -60,19 +65,19 @@ describe('HardforksPage', () => {
     render(<HardforksPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('CKB Hardfork Timeline')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Hardforks' })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(getHardforksMock).toHaveBeenCalled();
       expect(screen.getByText('CKB Edition Meepo')).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Network: mainnet/)).toBeInTheDocument();
-    expect(screen.getByText(/Tip epoch: 13,000/)).toBeInTheDocument();
-    expect(screen.getByText(/Tip block: #19,000,000/)).toBeInTheDocument();
+    expect(screen.getByText(/mainnet · tip epoch 13,000/)).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: /VM version by hash type/i })).toBeInTheDocument();
+    expect(screen.getByText('RFC 0032')).toBeInTheDocument();
     expect(screen.getByText('CKB Edition Mirana')).toBeInTheDocument();
-    expect(screen.getAllByText('ACTIVATED').length).toBeGreaterThanOrEqual(2);
-    const activationLinks = screen.getAllByRole('link', { name: 'View activation block' });
+    expect(screen.getAllByText('activated').length).toBeGreaterThanOrEqual(2);
+    const activationLinks = screen.getAllByRole('link', { name: /View activation block/ });
     expect(activationLinks.length).toBe(2);
     expect(activationLinks[0]).toHaveAttribute('href', '/mainnet/blocks/18430000');
     expect(activationLinks[1]).toHaveAttribute('href', '/mainnet/blocks/8775638');
@@ -89,7 +94,7 @@ describe('HardforksPage', () => {
     render(<HardforksPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to load hardfork timeline')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to load hardfork timeline');
     });
   });
 });

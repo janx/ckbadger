@@ -323,7 +323,10 @@ async fn test_uncle_rate_rejects_zero_block_daily_row() {
 #[tokio::test]
 async fn test_hardforks_endpoint_returns_default_timeline() {
     let store = test_store();
-    let config = test_config(store);
+    let mut config = test_config(store);
+    let rpc = MockServer::start().await;
+    mount_consensus_rpc(&rpc, mainnet_get_consensus_result()).await;
+    config.ckb_rpc_url = rpc.uri();
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -338,11 +341,25 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["network"], "mainnet");
+    if let Ok(dir) = std::env::var("D7_FIXTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("hardforks-mainnet.json"),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+    }
     assert_eq!(json["tipEpoch"], 0);
     assert_eq!(json["tipBlock"], 0);
     assert!(json["events"].as_array().unwrap().len() >= 2);
     assert_eq!(json["events"][0]["status"], "upcoming");
     assert_eq!(json["events"][1]["status"], "upcoming");
+    assert_eq!(json["consensusFeatures"].as_array().unwrap().len(), 9);
+    assert!(json["consensusFeatures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|feature| feature["rfc"] == "0032" && feature["activationEpoch"] == 5414));
 }
 
 #[tokio::test]
@@ -387,7 +404,10 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_append_only(core_store, append_only_store);
+    let mut config = test_config_with_append_only(core_store, append_only_store);
+    let rpc = MockServer::start().await;
+    mount_consensus_rpc(&rpc, mainnet_get_consensus_result()).await;
+    config.ckb_rpc_url = rpc.uri();
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/hardforks")
@@ -422,6 +442,41 @@ async fn test_hardforks_endpoint_rejects_unknown_network() {
 
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_hardforks_endpoint_uses_testnet_consensus_and_rejects_cross_network_tip() {
+    let mut result = mainnet_get_consensus_result();
+    result["id"] = serde_json::json!("ckb_testnet");
+    for feature in result["hardfork_features"].as_array_mut().unwrap() {
+        match feature["rfc"].as_str().unwrap() {
+            "0032" | "0028" => feature["epoch_number"] = serde_json::json!("0xc29"),
+            "0049" | "0048" => feature["epoch_number"] = serde_json::json!("0x25da"),
+            _ => {}
+        }
+    }
+    let rpc = MockServer::start().await;
+    mount_consensus_rpc(&rpc, result).await;
+    let mut config = test_config(test_store());
+    config.ckb_network = "testnet".into();
+    config.ckb_rpc_url = rpc.uri();
+    let app = create_router(config).await;
+    let (status, body) = get_json(&app, "/hardforks?network=testnet").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["network"], "testnet");
+    assert_eq!(body["events"][0]["activationEpoch"], 3113);
+    assert_eq!(body["events"][1]["activationEpoch"], 9690);
+    assert_eq!(
+        body["consensusFeatures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|feature| feature["rfc"] == "0049")
+            .unwrap()["activationEpoch"],
+        9690
+    );
+    let (cross_status, _) = get_json(&app, "/hardforks?network=mainnet").await;
+    assert_eq!(cross_status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

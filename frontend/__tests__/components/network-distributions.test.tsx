@@ -68,16 +68,55 @@ describe('NetworkDistributions', () => {
 });
 
 describe('NetworkTrends', () => {
+  it('renders missing retained days as a visual gap with unavailable round counts', async () => {
+    const days = [1751328000, 1751414400, 1751500800];
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric') ?? '';
+        const scalar = metric === 'reachablePeers' ? 6 : 10;
+        return HttpResponse.json({
+          metric,
+          granularity: 'day',
+          points: [days[0], days[2]].map((ts) => ({ ts, scalar, buckets: [] })),
+          dailyCoverage: days.map((ts, index) => ({
+            ts,
+            hasRetainedObservation: index !== 1,
+            roundsPerDay: null,
+          })),
+          roundCountAvailability: 'notRecorded',
+        });
+      })
+    );
+    render(<NetworkTrends />);
+    expect(
+      await screen.findByRole('list', {
+        name: /Daily verified peer observations and missing days/i,
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('listitem', { name: /no retained round observation/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Rounds per day are unavailable/i)).toBeInTheDocument();
+  });
+
   it('derives a disjoint reachable/unavailable stack from paired verified histories', () => {
     const merged = mergePeerCounts(
       {
         metric: 'verifiedPeers',
         granularity: 'day',
+        dailyCoverage: [{ ts: 1751328000, hasRetainedObservation: true, roundsPerDay: null }],
+        coverageFrom: 1751328000,
+        coverageTo: 1751328000,
+        roundCountAvailability: 'notRecorded',
         points: [{ ts: 1751328000, scalar: 100, buckets: [] }],
       },
       {
         metric: 'reachablePeers',
         granularity: 'day',
+        dailyCoverage: [{ ts: 1751328000, hasRetainedObservation: true, roundsPerDay: null }],
+        coverageFrom: 1751328000,
+        coverageTo: 1751328000,
+        roundCountAvailability: 'notRecorded',
         points: [{ ts: 1751328000, scalar: 60, buckets: [] }],
       }
     );
@@ -89,9 +128,15 @@ describe('NetworkTrends', () => {
     });
   });
 
-  it('renders the daily disjoint peer stack and version/country share areas from the MSW points', async () => {
+  it('renders daily peer state and retained version/country counts without invented shares', async () => {
     // Points already exclude the current day (mirrors the server dropping the current-day bucket).
     const days = [1751328000, 1751414400, 1751500800];
+    const coverage = {
+      dailyCoverage: days.map((ts) => ({ ts, hasRetainedObservation: true, roundsPerDay: null })),
+      coverageFrom: days[0],
+      coverageTo: days[2],
+      roundCountAvailability: 'notRecorded',
+    };
     server.use(
       http.get(`${API_BASE}/network/history`, ({ request }) => {
         const metric = new URL(request.url).searchParams.get('metric') ?? '';
@@ -99,6 +144,7 @@ describe('NetworkTrends', () => {
           return HttpResponse.json({
             metric,
             granularity: 'day',
+            ...coverage,
             points: days.map((ts, i) => ({ ts, scalar: 100 + i * 10, buckets: [] })),
           });
         }
@@ -106,6 +152,7 @@ describe('NetworkTrends', () => {
           return HttpResponse.json({
             metric,
             granularity: 'day',
+            ...coverage,
             points: days.map((ts, i) => ({ ts, scalar: 60 + i * 5, buckets: [] })),
           });
         }
@@ -113,6 +160,7 @@ describe('NetworkTrends', () => {
           return HttpResponse.json({
             metric,
             granularity: 'day',
+            ...coverage,
             points: days.map((ts) => ({
               ts,
               scalar: 0,
@@ -127,6 +175,7 @@ describe('NetworkTrends', () => {
         return HttpResponse.json({
           metric,
           granularity: 'day',
+          ...coverage,
           points: days.map((ts) => ({
             ts,
             scalar: 0,
@@ -144,10 +193,10 @@ describe('NetworkTrends', () => {
     expect(await screen.findByText('Retained verification state (daily)')).toBeInTheDocument();
     expect((await screen.findAllByText('Same-network reachable')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Verified unavailable').length).toBeGreaterThan(0);
-    // Version-share stacked area legend (series derived from the per-point buckets).
-    expect(screen.getByText('0.114.0')).toBeInTheDocument();
-    // Country-share stacked area legend.
-    expect(screen.getByText('United States')).toBeInTheDocument();
+    // Historical totals were not persisted, so these are exact retained counts rather than shares.
+    expect(screen.getAllByText(/0.114.0 4 · 0.113.0 2/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/United States 3 · Germany 2/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/percentages are unavailable/).length).toBeGreaterThan(0);
   });
 
   it('passes to=now on every daily query so the API drops the current-day bucket', async () => {
@@ -203,5 +252,28 @@ describe('NetworkTrends', () => {
     render(<NetworkTrends />);
 
     expect(await screen.findByText(/reachablePeers 5 exceeds verifiedPeers 4/)).toBeInTheDocument();
+  });
+
+  it('shows a version-history request failure instead of an empty share', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric');
+        if (metric === 'versionShare')
+          return HttpResponse.json({ error: 'unavailable' }, { status: 503 });
+        return HttpResponse.json({
+          metric,
+          granularity: 'day',
+          points: [],
+          dailyCoverage: [],
+          coverageFrom: null,
+          coverageTo: null,
+          roundCountAvailability: 'notRecorded',
+        });
+      })
+    );
+    render(<NetworkTrends />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Failed to load client version share.'
+    );
   });
 });

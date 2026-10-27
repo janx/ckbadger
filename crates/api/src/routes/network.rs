@@ -211,9 +211,246 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/network/summary", get(summary))
         .route("/network/distributions", get(distributions))
+        .route("/network/map", get(map))
         .route("/network/history", get(history))
+        .route("/network/advertisements", get(advertisements))
         .route("/network/peers", get(peers))
         .route("/network/peers/{peer_id}", get(peer_by_id))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkMapPoint {
+    pub peer_id: String,
+    pub country: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub reachable: bool,
+    pub client_version: String,
+    pub asn: Option<String>,
+    pub first_seen: u64,
+    pub last_seen: u64,
+    pub advertiser_count: u64,
+    pub local_session_observed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkMap {
+    pub round_id: Option<u64>,
+    pub verified_retained: u64,
+    pub located: u64,
+    pub location_unavailable: u64,
+    pub points: Vec<NetworkMapPoint>,
+}
+
+async fn map(State(state): State<Arc<AppState>>) -> ApiResult<NetworkMap> {
+    let Some(store) = state.network_store.load_full() else {
+        return ok(NetworkMap {
+            round_id: None,
+            verified_retained: 0,
+            located: 0,
+            location_unavailable: 0,
+            points: Vec::new(),
+        });
+    };
+    let nodes = store
+        .scan_nodes()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let status = store
+        .get_network_status()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    if !nodes.is_empty() && status.is_none() {
+        return Err(ApiError::internal(
+            "network nodes exist without a completed crawl status",
+        ));
+    }
+    let candidates: BTreeMap<Vec<u8>, CrawlCandidate> = store
+        .scan_crawl_candidates()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .into_iter()
+        .collect();
+    let verified_retained = u64::try_from(nodes.len())
+        .map_err(|_| ApiError::internal("network node count does not fit u64"))?;
+    let mut points = Vec::new();
+    for (peer_id, record) in nodes {
+        let candidate = candidates.get(&peer_id).ok_or_else(|| {
+            ApiError::internal(format!(
+                "verified map peer lacks candidate evidence: peer_id={}",
+                hex(&peer_id)
+            ))
+        })?;
+        let completed_round = status.as_ref().map(|status| status.round_id);
+        let advertisers: std::collections::BTreeSet<_> = candidate
+            .advertisements
+            .iter()
+            .filter(|evidence| Some(evidence.last_observed_round) == completed_round)
+            .map(|evidence| &evidence.advertiser_peer_id)
+            .collect();
+        let advertiser_count = u64::try_from(advertisers.len()).map_err(|_| {
+            ApiError::internal(format!(
+                "advertiser count overflow: peer_id={}",
+                hex(&peer_id)
+            ))
+        })?;
+        let local_session_observed = status
+            .as_ref()
+            .and_then(|status| {
+                status
+                    .local_observer
+                    .as_ref()
+                    .map(|observer| (status.round_id, observer))
+            })
+            .is_some_and(|(round_id, observer)| {
+                candidate.direct_sessions.iter().any(|session| {
+                    session.last_observed_round == round_id
+                        && session.observer_peer_id == observer.peer_id
+                })
+            });
+        if let Some(geo) = record.geo {
+            match (geo.lat, geo.lon) {
+                (Some(lat), Some(lon))
+                    if lat.is_finite()
+                        && lon.is_finite()
+                        && (-90.0..=90.0).contains(&lat)
+                        && (-180.0..=180.0).contains(&lon) =>
+                {
+                    points.push(NetworkMapPoint {
+                        peer_id: hex(&peer_id),
+                        country: geo.country,
+                        lat,
+                        lon,
+                        reachable: record.reachable,
+                        client_version: record.client_version,
+                        asn: record
+                            .asn
+                            .map(|asn| format!("AS{} {}", asn.number, asn.org)),
+                        first_seen: record.first_seen,
+                        last_seen: record.last_seen,
+                        advertiser_count,
+                        local_session_observed,
+                    });
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(ApiError::internal(format!(
+                        "network geo coordinates invalid or incomplete: peer_id={}",
+                        hex(&peer_id)
+                    )))
+                }
+            }
+        }
+    }
+    let located = u64::try_from(points.len())
+        .map_err(|_| ApiError::internal("located network node count does not fit u64"))?;
+    let location_unavailable = verified_retained
+        .checked_sub(located)
+        .ok_or_else(|| ApiError::internal("located network nodes exceed verified nodes"))?;
+    ok(NetworkMap {
+        round_id: status.map(|status| status.round_id),
+        verified_retained,
+        located,
+        location_unavailable,
+        points,
+    })
+}
+
+/// Retained positive Discovery observations whose last observation was in the
+/// latest completed round. This is address-book gossip, never a connection map.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundAdvertisement {
+    pub advertiser_peer_id: String,
+    pub target_peer_id: String,
+    pub alias: String,
+    pub observed_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundAdvertisements {
+    pub round_id: Option<u64>,
+    pub finished_at: Option<u64>,
+    pub coverage: &'static str,
+    pub edges: Vec<RoundAdvertisement>,
+    pub distinct_peer_pairs: u64,
+}
+
+async fn advertisements(State(state): State<Arc<AppState>>) -> ApiResult<RoundAdvertisements> {
+    let Some(store) = state.network_store.load_full() else {
+        return ok(RoundAdvertisements {
+            round_id: None,
+            finished_at: None,
+            coverage: "noCompletedRound",
+            edges: Vec::new(),
+            distinct_peer_pairs: 0,
+        });
+    };
+    let Some(status) = store
+        .get_network_status()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+    else {
+        return ok(RoundAdvertisements {
+            round_id: None,
+            finished_at: None,
+            coverage: "noCompletedRound",
+            edges: Vec::new(),
+            distinct_peer_pairs: 0,
+        });
+    };
+    let mut edges = Vec::new();
+    for (target_peer_id, candidate) in store
+        .scan_crawl_candidates()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+    {
+        for evidence in candidate.advertisements {
+            if evidence.last_observed_round > status.round_id {
+                return Err(ApiError::internal(format!(
+                    "advertisement exceeds completed round: target_peer_id={}, evidence_round={}, completed_round={}",
+                    hex(&target_peer_id), evidence.last_observed_round, status.round_id
+                )));
+            }
+            if evidence.last_observed_round == status.round_id {
+                if evidence.last_observed_at < status.started
+                    || evidence.last_observed_at > status.finished
+                {
+                    return Err(ApiError::internal(format!(
+                        "advertisement outside completed round clock: target_peer_id={}, evidence_round={}, observed_at={}, started={}, finished={}",
+                        hex(&target_peer_id), status.round_id, evidence.last_observed_at,
+                        status.started, status.finished
+                    )));
+                }
+                edges.push(RoundAdvertisement {
+                    advertiser_peer_id: hex(&evidence.advertiser_peer_id),
+                    target_peer_id: hex(&target_peer_id),
+                    alias: evidence.alias,
+                    observed_at: evidence.last_observed_at,
+                });
+            }
+        }
+    }
+    edges.sort_by(|left, right| {
+        (&left.advertiser_peer_id, &left.target_peer_id, &left.alias).cmp(&(
+            &right.advertiser_peer_id,
+            &right.target_peer_id,
+            &right.alias,
+        ))
+    });
+    let distinct_peer_pairs = u64::try_from(
+        edges
+            .iter()
+            .map(|edge| (&edge.advertiser_peer_id, &edge.target_peer_id))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+    )
+    .map_err(|_| ApiError::internal("advertisement pair count exceeds u64"))?;
+    ok(RoundAdvertisements {
+        round_id: Some(status.round_id),
+        finished_at: Some(status.finished),
+        coverage: "retainedLatestObservationOnly",
+        edges,
+        distinct_peer_pairs,
+    })
 }
 
 async fn summary(State(state): State<Arc<AppState>>) -> ApiResult<NetworkSummary> {
@@ -353,6 +590,78 @@ pub struct NetworkHistory {
     pub metric: String,
     pub granularity: String,
     pub points: Vec<HistoryPointResponse>,
+    /// Day-by-day retained observation coverage. A missing point is a gap,
+    /// never a measurement of zero peers or a proven zero-round day.
+    pub daily_coverage: Vec<DayCoverageResponse>,
+    pub coverage_from: Option<u64>,
+    pub coverage_to: Option<u64>,
+    pub round_count_availability: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DayCoverageResponse {
+    pub ts: u64,
+    pub has_retained_observation: bool,
+    pub rounds_per_day: Option<u64>,
+}
+
+fn daily_coverage(
+    points: &[HistoryPointResponse],
+    requested_from: Option<u64>,
+    last_complete_day: u64,
+) -> Result<Vec<DayCoverageResponse>, ApiRouteError> {
+    let Some(start_day) = requested_from
+        .map(|ts| ts / 86_400)
+        .or_else(|| points.first().map(|point| point.ts / 86_400))
+    else {
+        return Ok(Vec::new());
+    };
+    if start_day > last_complete_day {
+        return Ok(Vec::new());
+    }
+    let day_count = last_complete_day - start_day + 1;
+    if day_count > 10_000 {
+        return Err(ApiError::bad_request(format!(
+            "network daily coverage window is too wide: from_day={start_day}, to_day={last_complete_day}, max_days=10000"
+        )));
+    }
+    let mut by_day = BTreeMap::new();
+    for point in points {
+        if point.ts % 86_400 != 0 || by_day.insert(point.ts, ()).is_some() {
+            return Err(ApiError::internal(format!(
+                "network daily history has invalid or duplicate day timestamp: ts={}",
+                point.ts
+            )));
+        }
+    }
+    let mut coverage = Vec::new();
+    let mut ts = start_day.checked_mul(86_400).ok_or_else(|| {
+        ApiError::internal(format!(
+            "network coverage start timestamp overflow: day={start_day}"
+        ))
+    })?;
+    let end_ts = last_complete_day.checked_mul(86_400).ok_or_else(|| {
+        ApiError::internal(format!(
+            "network coverage end timestamp overflow: day={last_complete_day}"
+        ))
+    })?;
+    loop {
+        coverage.push(DayCoverageResponse {
+            ts,
+            has_retained_observation: by_day.contains_key(&ts),
+            rounds_per_day: None,
+        });
+        if ts == end_ts {
+            break;
+        }
+        ts = ts.checked_add(86_400).ok_or_else(|| {
+            ApiError::internal(format!(
+                "network daily coverage timestamp overflow: ts={ts}"
+            ))
+        })?;
+    }
+    Ok(coverage)
 }
 
 fn parse_metric(metric: &str) -> Option<Metric> {
@@ -433,10 +742,34 @@ async fn history(
                 .collect::<Result<Vec<_>, _>>()?
         }
     };
+    let daily_coverage = if granularity == Granularity::Day {
+        let reference = match query.to {
+            Some(timestamp) => timestamp,
+            None => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| {
+                    ApiError::internal(format!("system clock before UNIX epoch: {error}"))
+                })?
+                .as_secs(),
+        };
+        let current_day = bucket_of(reference, Granularity::Day);
+        match current_day.checked_sub(1) {
+            Some(last_complete_day) => daily_coverage(&points, query.from, last_complete_day)?,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let coverage_from = daily_coverage.first().map(|day| day.ts);
+    let coverage_to = daily_coverage.last().map(|day| day.ts);
     ok(NetworkHistory {
         metric: query.metric,
         granularity: query.granularity,
         points,
+        daily_coverage,
+        coverage_from,
+        coverage_to,
+        round_count_availability: "notRecorded",
     })
 }
 

@@ -3,25 +3,22 @@
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
-import { PageHeader, Badge } from '@/components/ui/page-header';
+import { Badge } from '@/components/ui/page-header';
 import { StatBlock, StatGrid } from '@/components/ui/stat-block';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
 import { PeersTable } from '@/app/network/nodes-table';
+import { AdvertisementGraph } from '@/app/network/advertisement-graph';
+import { NetworkMapView } from '@/app/network/network-map';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-4">
-        <PageHeader
-          title="Peers"
-          subtitle="CKB L1 peer advertisements and same-network reachability evidence from this crawler"
-        />
-        {children}
-      </main>
+      <main className="container mx-auto px-4 py-4">{children}</main>
     </div>
   );
 }
@@ -135,14 +132,25 @@ function MaxMindAttribution() {
 function PeersDashboard({
   lastRound,
   activeRound,
+  enabled,
 }: {
   lastRound: NetworkLastRound;
   activeRound: NetworkActiveRound | null;
+  enabled: boolean;
 }) {
   const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
 
   return (
-    <div className="space-y-4">
+    <DetailLayout
+      title="Where the nodes are"
+      kind="topic"
+      identity="As this crawler saw the CKB L1 network. Reachability, advertisements and local peer sessions are distinct evidence."
+    >
+      {!enabled && (
+        <p role="status" className="text-warning text-[12px]">
+          Crawler disabled. This retained evidence is not live.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-text-dim font-mono text-xs">
           Round #{lastRound.roundId} · updated {updatedAgo}
@@ -182,28 +190,64 @@ function PeersDashboard({
 
       <ReachabilityCaveat />
 
+      <DetailSection title="Verified peers across the world">
+        <NetworkMapView />
+      </DetailSection>
       <NetworkDistributions />
       <NetworkTrends />
-      <PeersTable />
       <MaxMindAttribution />
-    </div>
+      <div className="mt-[72px] space-y-8" data-tier="2">
+        <DetailSection title="Who advertised whom">
+          <AdvertisementGraph roundId={lastRound.roundId} />
+        </DetailSection>
+        <DetailSection title="Peer evidence">
+          <PeersTable />
+        </DetailSection>
+      </div>
+    </DetailLayout>
   );
 }
 
 export function NetworkClientPage() {
-  const { data: summary, isLoading } = useQuery({
+  const {
+    data: summary,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['network', 'summary'],
     queryFn: api.getNetworkSummary,
     refetchInterval: 30000,
   });
 
   let content: ReactNode;
-  if (isLoading || !summary) {
+  if (error) {
+    content = (
+      <DetailLayout title="Where the nodes are" kind="topic">
+        <p role="alert" className="text-negative">
+          Crawler summary unavailable: {String(error)}
+        </p>
+      </DetailLayout>
+    );
+  } else if (isLoading || !summary) {
     content = <LoadingSkeleton />;
-  } else if (!summary.enabled || !summary.hasData || !summary.lastRound) {
-    content = <PeersOnboarding enabled={summary.enabled} activeRound={summary.activeRound} />;
+  } else if (!summary.hasData || !summary.lastRound) {
+    content = (
+      <DetailLayout
+        title="Where the nodes are"
+        kind="topic"
+        identity="As this crawler saw the CKB L1 network."
+      >
+        <PeersOnboarding enabled={summary.enabled} activeRound={summary.activeRound} />
+      </DetailLayout>
+    );
   } else {
-    content = <PeersDashboard lastRound={summary.lastRound} activeRound={summary.activeRound} />;
+    content = (
+      <PeersDashboard
+        lastRound={summary.lastRound}
+        activeRound={summary.activeRound}
+        enabled={summary.enabled}
+      />
+    );
   }
 
   return <PageShell>{content}</PageShell>;

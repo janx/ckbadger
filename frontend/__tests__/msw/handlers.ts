@@ -701,15 +701,46 @@ export const handlers = [
     });
   }),
 
+  http.get(`${API_BASE}/network/map`, () =>
+    HttpResponse.json({
+      roundId: 5,
+      verifiedRetained: 2,
+      located: 1,
+      locationUnavailable: 1,
+      points: [
+        {
+          peerId: 'aaaaaaaa'.repeat(8),
+          country: 'US',
+          lat: 40.7,
+          lon: -74,
+          reachable: true,
+          clientVersion: 'ckb/0.114.0',
+          asn: 'AS1 Example',
+          firstSeen: 1751328000,
+          lastSeen: 1751500800,
+          advertiserCount: 2,
+          localSessionObserved: true,
+        },
+      ],
+    })
+  ),
+
   http.get(`${API_BASE}/network/history`, ({ request }) => {
     const metric = new URL(request.url).searchParams.get('metric') ?? 'verifiedPeers';
     // Canned daily points that already exclude the current (incomplete) day.
     const days = [1751328000, 1751414400, 1751500800];
+    const coverage = {
+      dailyCoverage: days.map((ts) => ({ ts, hasRetainedObservation: true, roundsPerDay: null })),
+      coverageFrom: days[0],
+      coverageTo: days[2],
+      roundCountAvailability: 'notRecorded',
+    };
 
     if (metric === 'versionShare') {
       return HttpResponse.json({
         metric,
         granularity: 'day',
+        ...coverage,
         points: days.map((ts) => ({
           ts,
           scalar: 0,
@@ -724,6 +755,7 @@ export const handlers = [
       return HttpResponse.json({
         metric,
         granularity: 'day',
+        ...coverage,
         points: days.map((ts) => ({
           ts,
           scalar: 0,
@@ -739,9 +771,27 @@ export const handlers = [
     return HttpResponse.json({
       metric,
       granularity: 'day',
+      ...coverage,
       points: days.map((ts, i) => ({ ts, scalar: base + i * 10, buckets: [] })),
     });
   }),
+
+  http.get(`${API_BASE}/network/advertisements`, () =>
+    HttpResponse.json({
+      roundId: 5,
+      finishedAt: 1751500800,
+      coverage: 'retainedLatestObservationOnly',
+      distinctPeerPairs: 1,
+      edges: [
+        {
+          advertiserPeerId: 'aaaaaaaa'.repeat(8),
+          targetPeerId: 'bbbbbbbb'.repeat(8),
+          alias: '/ip4/5.6.7.8/tcp/8115',
+          observedAt: 1751500800,
+        },
+      ],
+    })
+  ),
 
   http.get(`${API_BASE}/network/peers`, ({ request }) => {
     // One currently reachable verified peer and one advertised candidate that has never completed
