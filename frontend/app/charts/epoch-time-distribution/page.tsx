@@ -1,14 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function EpochTimeDistributionPage() {
-  return (
-    <ChartPage
-      title="Epoch Time Distribution"
-      queryKey="chart-epoch-time-distribution"
-      queryFn={api.getEpochTimeDistributionChart}
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="epoch-time-distribution" />;
 }

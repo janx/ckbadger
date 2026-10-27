@@ -1,14 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function NominalApcPage() {
-  return (
-    <ChartPage
-      title="Nominal DAO Compensation Rate"
-      queryKey="chart-nominal-apc"
-      queryFn={api.getNominalApcChart}
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="nominal-apc" />;
 }

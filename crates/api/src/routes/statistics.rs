@@ -19,9 +19,12 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
-use crate::utils::daily_series::{certify_blockless_daily_gap, consecutive_daily_chart};
+use crate::utils::daily_series::{
+    certify_blockless_daily_gap, consecutive_daily_chart, consecutive_daily_records,
+};
 use crate::utils::stats_bucket::{
-    complete_days_cache_key, is_complete_day_key, load_chain_time, parse_day_key, ChainTime,
+    complete_days_cache_key, is_complete_day_key, is_complete_iso_day, load_chain_time,
+    parse_day_key, ChainTime,
 };
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
@@ -720,7 +723,7 @@ pub struct StackedAreaChartResponse {
     pub title: String,
 }
 
-/// Secondary issuance keeps the UI's whole-CKB stacked values while exposing
+/// Secondary issuance exposes exact decimal-CKB stacked values alongside
 /// exact shannon values needed by agents and integrity checks. The phase-1
 /// amount is the semantic overlap in CKB Explorer's legacy treasury partition;
 /// exposing the materialized lifecycle value lets verification normalize that
@@ -774,13 +777,6 @@ enum UtilizationMetric {
 struct EntityState {
     total_cells_capacity: i128,
     used_capacity: i128,
-}
-
-#[derive(Debug, Clone)]
-struct ScriptEntity {
-    key: String,
-    final_total_cells_capacity: i128,
-    final_used_capacity: i128,
 }
 
 #[derive(Debug, Clone)]
@@ -888,6 +884,72 @@ where
     }
 
     Ok((total_cells_capacity, used_capacity))
+}
+
+/// Rank and plot the same complete-day history. Current live totals can differ
+/// during the tip day, so they must not choose which identities appear in a
+/// historical top-20 chart.
+fn complete_utilization_history(
+    chain: Option<ChainTime>,
+    series: &str,
+    deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>>,
+) -> Result<(BTreeMap<u32, Vec<(String, i128, i128)>>, Vec<AssetEntity>), ApiRouteError> {
+    let mut complete = BTreeMap::new();
+    let mut states: HashMap<String, EntityState> = HashMap::new();
+    for (date, deltas) in deltas_by_date {
+        if !is_complete_day_key(chain, series, &format!("{date:08}"))? {
+            continue;
+        }
+        for (key, capacity_delta, used_delta) in &deltas {
+            let state = states.entry(key.clone()).or_insert(EntityState {
+                total_cells_capacity: 0,
+                used_capacity: 0,
+            });
+            (state.total_cells_capacity, state.used_capacity) = apply_capacity_delta_i128(
+                state.total_cells_capacity,
+                state.used_capacity,
+                *capacity_delta,
+                *used_delta,
+                &format!("{series} {key} on {date}"),
+            )?;
+        }
+        complete.insert(date, deltas);
+    }
+    if let Some((&first_date, _)) = complete.first_key_value() {
+        let chain = chain.ok_or_else(|| {
+            ApiError::internal(format!(
+                "{series} has complete daily deltas but no indexed tip block"
+            ))
+        })?;
+        let last = chain.last_complete_day()?;
+        let mut date = parse_day_key(series, &format!("{first_date:08}"))?;
+        while date <= last {
+            let key = date
+                .format("%Y%m%d")
+                .to_string()
+                .parse::<u32>()
+                .map_err(|e| {
+                    ApiError::internal(format!("invalid {series} calendar date {date}: {e}"))
+                })?;
+            complete.entry(key).or_default();
+            date = date.succ_opt().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "{series} calendar exceeds supported date range after {date}"
+                ))
+            })?;
+        }
+    }
+    let entities = states
+        .into_iter()
+        .filter_map(|(key, state)| {
+            (state.total_cells_capacity > 0 || state.used_capacity > 0).then_some(AssetEntity {
+                key,
+                final_total_cells_capacity: state.total_cells_capacity,
+                final_used_capacity: state.used_capacity,
+            })
+        })
+        .collect();
+    Ok((complete, entities))
 }
 
 fn build_most_utilized_share_chart(
@@ -1004,10 +1066,11 @@ fn build_most_utilized_share_chart(
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
-    let cache_key = "chart:most-utilized-scripts:v5";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v6", chain)?;
     if let Some(cached) = state
         .cache
-        .get::<MostUtilizedScriptsChartResponse>(cache_key)
+        .get::<MostUtilizedScriptsChartResponse>(&cache_key)
         .await
     {
         return ok(cached);
@@ -1039,15 +1102,13 @@ async fn get_most_utilized_scripts_chart(
         .collect();
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
-    let mut usage_by_key: HashMap<String, ckbadger_store::ScriptFamilyUsage> = HashMap::new();
     let mut entity_key_by_form: HashMap<(Vec<u8>, u8), String> = HashMap::new();
     let mut code_hashes: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
 
-    for ((reference_hash, hash_type), reference_info) in
-        state
-            .store
-            .list_script_reference_infos()
-            .map_err(|e| ApiError::internal(e.to_string()))?
+    for ((reference_hash, hash_type), _reference_info) in state
+        .store
+        .list_script_reference_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
     {
         let member_version = crate::utils::reference_form_member_version(
             &state.store,
@@ -1113,11 +1174,6 @@ async fn get_most_utilized_scripts_chart(
         };
 
         labels_by_key.insert(key.clone(), label);
-        usage_by_key
-            .entry(key.clone())
-            .or_default()
-            .add_reference(&reference_info)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
         entity_key_by_form.insert((reference_hash.clone(), hash_type), key);
         code_hashes.insert(reference_hash);
     }
@@ -1147,18 +1203,8 @@ async fn get_most_utilized_scripts_chart(
         }
     }
 
-    let entities_unfiltered: Vec<ScriptEntity> = usage_by_key
-        .iter()
-        .map(|(key, usage)| ScriptEntity {
-            key: key.clone(),
-            final_total_cells_capacity: usage.owned_capacity_sum,
-            final_used_capacity: usage.owned_knowledge_sum,
-        })
-        .collect();
-    let entities: Vec<ScriptEntity> = entities_unfiltered
-        .into_iter()
-        .filter(|entity| entity.final_total_cells_capacity > 0 || entity.final_used_capacity > 0)
-        .collect();
+    let (deltas_by_date, entities) =
+        complete_utilization_history(chain, "most-utilized scripts daily deltas", deltas_by_date)?;
 
     let top_used_keys = top_keys_by_metric(
         &entities,
@@ -1199,24 +1245,27 @@ async fn get_most_utilized_scripts_chart(
         capacity_share,
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    state
+        .cache
+        .set(&cache_key, &response, CacheTtl::CHART)
+        .await;
     ok(response)
 }
 
 async fn get_most_utilized_assets_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedAssetsChartResponse> {
-    let cache_key = "chart:most-utilized-assets:v2";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v3", chain)?;
     if let Some(cached) = state
         .cache
-        .get::<MostUtilizedAssetsChartResponse>(cache_key)
+        .get::<MostUtilizedAssetsChartResponse>(&cache_key)
         .await
     {
         return ok(cached);
     }
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
-    let mut entities: Vec<AssetEntity> = Vec::new();
     let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
 
     let token_assets = state.load_token_cache().ok_or_else(|| {
@@ -1242,9 +1291,6 @@ async fn get_most_utilized_assets_chart(
                 .iter()
                 .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )?;
-        if total_cells_capacity <= 0 && used_cap <= 0 {
-            continue;
-        }
         let id = token.id;
         let name = token
             .symbol
@@ -1259,11 +1305,6 @@ async fn get_most_utilized_assets_chart(
                 entity_key, used_cap, total_cells_capacity
             )));
         }
-        entities.push(AssetEntity {
-            key: entity_key.clone(),
-            final_total_cells_capacity: total_cells_capacity,
-            final_used_capacity: used_cap,
-        });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
                 entity_key.clone(),
@@ -1295,9 +1336,6 @@ async fn get_most_utilized_assets_chart(
                     .iter()
                     .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
             )?;
-            if total_cells_capacity <= 0 && used_cap <= 0 {
-                continue;
-            }
             let name = obj.name.clone().unwrap_or_else(|| cluster_id.clone());
             let entity_key = format!("dob:{cluster_id}");
             labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "object"));
@@ -1307,11 +1345,6 @@ async fn get_most_utilized_assets_chart(
                     entity_key, used_cap, total_cells_capacity
                 )));
             }
-            entities.push(AssetEntity {
-                key: entity_key.clone(),
-                final_total_cells_capacity: total_cells_capacity,
-                final_used_capacity: used_cap,
-            });
             for (date, delta) in deltas {
                 deltas_by_date.entry(date).or_default().push((
                     entity_key.clone(),
@@ -1344,9 +1377,6 @@ async fn get_most_utilized_assets_chart(
                 .iter()
                 .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )?;
-        if total_cells_capacity <= 0 && used_cap <= 0 {
-            continue;
-        }
         let name = obj.name.clone().unwrap_or_else(|| collection_id.clone());
         let entity_key = format!("{}:{collection_id}", obj.asset_type);
         labels_by_key.insert(
@@ -1359,11 +1389,6 @@ async fn get_most_utilized_assets_chart(
                 entity_key, used_cap, total_cells_capacity
             )));
         }
-        entities.push(AssetEntity {
-            key: entity_key.clone(),
-            final_total_cells_capacity: total_cells_capacity,
-            final_used_capacity: used_cap,
-        });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
                 entity_key.clone(),
@@ -1373,6 +1398,8 @@ async fn get_most_utilized_assets_chart(
         }
     }
 
+    let (deltas_by_date, entities) =
+        complete_utilization_history(chain, "most-utilized assets daily deltas", deltas_by_date)?;
     let top_used_keys = top_keys_by_metric(
         &entities,
         UtilizationMetric::Used,
@@ -1412,7 +1439,10 @@ async fn get_most_utilized_assets_chart(
         capacity_share,
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    state
+        .cache
+        .set(&cache_key, &response, CacheTtl::CHART)
+        .await;
     ok(response)
 }
 
@@ -3470,8 +3500,13 @@ fn snapshot_secondary_cumulative(
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:total-supply";
-    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:total-supply:v2", chain)?;
+    if let Some(cached) = state
+        .cache
+        .get::<StackedAreaChartResponse>(&cache_key)
+        .await
+    {
         return ok(cached);
     }
 
@@ -3484,6 +3519,9 @@ async fn get_total_supply_chart(
     let genesis_burnt = state.genesis_baseline()?.burnt;
     let mut data = Vec::with_capacity(snapshots.len());
     for snapshot in &snapshots {
+        if !is_complete_iso_day(chain, "total supply daily snapshot", &snapshot.date)? {
+            continue;
+        }
         let Some(supply) =
             dao_supply(snapshot, genesis_burnt).map_err(|e| ApiError::internal(e.to_string()))?
         else {
@@ -3496,21 +3534,30 @@ async fn get_total_supply_chart(
         let mut values = std::collections::HashMap::new();
         values.insert(
             "circulating".to_string(),
-            (supply.liquid / SHANNONS_PER_CKB).to_string(),
+            shannon_to_ckb_string(supply.liquid),
         );
         values.insert(
             "nervosdao".to_string(),
-            (supply.dao_locked / SHANNONS_PER_CKB).to_string(),
+            shannon_to_ckb_string(supply.dao_locked),
         );
-        values.insert(
-            "burnt".to_string(),
-            (supply.burnt / SHANNONS_PER_CKB).to_string(),
-        );
+        values.insert("burnt".to_string(), shannon_to_ckb_string(supply.burnt));
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
             values,
         });
     }
+    let data = consecutive_daily_records(
+        state.store.clone(),
+        chain,
+        "total supply",
+        data,
+        |point| &point.date,
+        |point, date| StackedAreaDataPoint {
+            date,
+            ..point.clone()
+        },
+    )
+    .await?;
 
     let series = vec![
         StackedAreaSeries {
@@ -3536,12 +3583,11 @@ async fn get_total_supply_chart(
         title: "Total Supply".to_string(),
     };
 
-    // Short TTL: includes the current incomplete day whose cumulative values
-    // change every block.  Must stay fresh enough to match dao/statistics
-    // (verified by S16 with a 10K CKB tolerance).
+    // The complete-day boundary is part of the cache key, so a new canonical
+    // day and a rollback across its boundary cannot serve a partial row.
     state
         .cache
-        .set(cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .set(&cache_key, &response, CacheTtl::CHART)
         .await;
 
     ok(response)
@@ -3600,10 +3646,11 @@ fn calculate_nominal_apc(year: f64, genesis_supply_ckb: f64) -> f64 {
 async fn get_secondary_issuance_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<SecondaryIssuanceChartResponse> {
-    let cache_key = "chart:secondary-issuance:v2";
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:secondary-issuance:v3", chain)?;
     if let Some(cached) = state
         .cache
-        .get::<SecondaryIssuanceChartResponse>(cache_key)
+        .get::<SecondaryIssuanceChartResponse>(&cache_key)
         .await
     {
         return ok(cached);
@@ -3615,13 +3662,28 @@ async fn get_secondary_issuance_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data = snapshots
+    let data: Vec<SecondaryIssuanceDataPoint> = snapshots
         .iter()
-        .map(secondary_issuance_data_point)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+        .filter_map(|snapshot| {
+            match is_complete_iso_day(chain, "secondary issuance daily snapshot", &snapshot.date) {
+                Ok(true) => Some(secondary_issuance_data_point(snapshot)),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let data = consecutive_daily_records(
+        state.store.clone(),
+        chain,
+        "secondary issuance",
+        data,
+        |point| &point.date,
+        |point, date| SecondaryIssuanceDataPoint {
+            date,
+            ..point.clone()
+        },
+    )
+    .await?;
 
     let series = vec![
         StackedAreaSeries {
@@ -3647,12 +3709,11 @@ async fn get_secondary_issuance_chart(
         title: "Secondary Issuance".to_string(),
     };
 
-    // Short TTL: includes the current incomplete day whose cumulative values
-    // change every block.  Must stay fresh enough to match dao/statistics
-    // (verified by S16 with a 10K CKB tolerance).
+    // Cache only complete daily snapshots; current live DAO data has its own
+    // endpoint and does not masquerade as a finished historical bucket.
     state
         .cache
-        .set(cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .set(&cache_key, &response, CacheTtl::CHART)
         .await;
 
     ok(response)
@@ -3717,13 +3778,9 @@ fn snapshot_total_secondary_issuance(
 
 fn secondary_issuance_data_point(
     snapshot: &ckbadger_store::DaoDailySnapshot,
-) -> Result<Option<SecondaryIssuanceDataPoint>, ApiRouteError> {
+) -> Result<SecondaryIssuanceDataPoint, ApiRouteError> {
     let (cum_miner, cum_dao, _) = snapshot_secondary_cumulative(snapshot)?;
     let treasury = dao_treasury(snapshot).map_err(|e| ApiError::internal(e.to_string()))?;
-    if cum_miner <= 0 && cum_dao <= 0 && treasury <= 0 {
-        return Ok(None);
-    }
-
     let protocol_total = snapshot_total_secondary_issuance(snapshot)?;
     if snapshot.frozen_phase1_compensation < 0 {
         return Err(ApiError::internal(format!(
@@ -3740,26 +3797,17 @@ fn secondary_issuance_data_point(
         )));
     }
     let values = HashMap::from([
-        (
-            "compensation".to_string(),
-            (cum_dao / SHANNONS_PER_CKB).to_string(),
-        ),
-        (
-            "mining".to_string(),
-            (cum_miner / SHANNONS_PER_CKB).to_string(),
-        ),
-        (
-            "burnt".to_string(),
-            (treasury / SHANNONS_PER_CKB).to_string(),
-        ),
+        ("compensation".to_string(), shannon_to_ckb_string(cum_dao)),
+        ("mining".to_string(), shannon_to_ckb_string(cum_miner)),
+        ("burnt".to_string(), shannon_to_ckb_string(treasury)),
     ]);
 
-    Ok(Some(SecondaryIssuanceDataPoint {
+    Ok(SecondaryIssuanceDataPoint {
         date: snapshot.date.clone(),
         values,
         protocol_total_shannons: protocol_total.to_string(),
         phase1_compensation_shannons: snapshot.frozen_phase1_compensation.to_string(),
-    }))
+    })
 }
 
 fn build_inflation_rate_response<F>(
@@ -4847,9 +4895,7 @@ mod tests {
         s.unclaimed_compensation = 20 * CKB;
         s.cum_treasury = 30 * CKB;
 
-        let point = secondary_issuance_data_point(&s)
-            .unwrap()
-            .expect("non-zero point");
+        let point = secondary_issuance_data_point(&s).unwrap();
 
         assert_eq!(point.protocol_total_shannons, (100 * CKB).to_string());
         assert_eq!(point.values.get("mining").map(String::as_str), Some("40"));
@@ -4858,6 +4904,87 @@ mod tests {
             Some("30")
         );
         assert_eq!(point.values.get("burnt").map(String::as_str), Some("30"));
+    }
+
+    #[test]
+    fn secondary_issuance_chart_keeps_fractional_ckb() {
+        let mut s = snapshot("2026-08-08", 100, 100_000_000_000, 350_000_003, 0);
+        s.cum_miner_secondary = 150_000_001;
+        s.cum_dao_compensation = 250_000_002;
+        s.cum_treasury = 350_000_003;
+        let point = secondary_issuance_data_point(&s).unwrap();
+        assert_eq!(point.values["mining"], "1.50000001");
+        assert_eq!(point.values["compensation"], "2.50000002");
+        assert_eq!(point.values["burnt"], "3.50000003");
+    }
+
+    #[test]
+    fn utilization_history_ranks_the_last_complete_day_not_live_tip() {
+        let tip_ms = chrono::DateTime::parse_from_rfc3339("2026-10-28T08:00:00+08:00")
+            .unwrap()
+            .timestamp_millis();
+        let chain = ChainTime::from_window(&[(0, tip_ms)]).unwrap();
+        let deltas = BTreeMap::from([
+            (
+                20261027,
+                vec![("A".to_string(), 100, 70), ("B".to_string(), 40, 20)],
+            ),
+            (
+                20261028,
+                vec![("A".to_string(), -100, -70), ("B".to_string(), 200, 100)],
+            ),
+        ]);
+        let (complete, entities) =
+            complete_utilization_history(Some(chain), "test utilized daily deltas", deltas)
+                .unwrap();
+        assert_eq!(complete.keys().copied().collect::<Vec<_>>(), vec![20261027]);
+        let ranked = top_keys_by_metric(
+            &entities,
+            UtilizationMetric::Used,
+            |entity| &entity.key,
+            |entity| entity.final_used_capacity,
+            |entity| entity.final_total_cells_capacity,
+        );
+        assert_eq!(ranked, ["A", "B"]);
+    }
+
+    #[test]
+    fn utilization_history_carries_quiet_complete_days_including_trailing_days() {
+        let tip_ms = chrono::DateTime::parse_from_rfc3339("2024-01-04T08:00:00+08:00")
+            .unwrap()
+            .timestamp_millis();
+        let chain = ChainTime::from_window(&[(0, tip_ms)]).unwrap();
+        let (history, entities) = complete_utilization_history(
+            Some(chain),
+            "utilized script daily deltas",
+            BTreeMap::from([(20240101, vec![("A".to_string(), 500, 300)])]),
+        )
+        .unwrap();
+        assert_eq!(
+            history.keys().copied().collect::<Vec<_>>(),
+            [20240101, 20240102, 20240103]
+        );
+        assert!(history[&20240102].is_empty());
+        assert!(history[&20240103].is_empty());
+        let chart = build_most_utilized_share_chart(
+            "Used".to_string(),
+            UtilizationMetric::Used,
+            &["A".to_string()],
+            &HashMap::from([("A".to_string(), "Alpha".to_string())]),
+            &history.keys().copied().collect::<Vec<_>>(),
+            &history,
+        )
+        .unwrap();
+        assert_eq!(
+            chart
+                .data
+                .iter()
+                .map(|point| point.date.as_str())
+                .collect::<Vec<_>>(),
+            ["2024-01-01", "2024-01-02", "2024-01-03"]
+        );
+        assert!(chart.data.iter().all(|point| point.values["top0"] == "300"));
+        assert_eq!(entities[0].final_used_capacity, 300);
     }
 
     #[test]

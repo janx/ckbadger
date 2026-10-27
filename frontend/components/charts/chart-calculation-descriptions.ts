@@ -30,12 +30,17 @@ function bySeriesLabels(
 const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   'dao-chart-total-deposit': ({ yAxisLabel }) => ({
     overview:
-      'Shows the running total of CKB locked in DAO deposits at each daily snapshot on canonical chain data.',
+      'Shows the capacity of live phase-0 Nervos DAO deposit cells at each complete daily snapshot, alongside the current depositor count.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Total Deposit',
         description:
-          'For each day: sum common knowledge size of all live DAO deposit cells as of end-of-day state.',
+          'For each day: sum full capacity of live phase-0 DAO deposit cells as of end-of-day state.',
+      },
+      {
+        label: 'Current depositors',
+        description:
+          'Number of addresses with a live phase-0 DAO deposit at that daily snapshot; not cumulative-ever depositors.',
       },
     ],
   }),
@@ -258,21 +263,23 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     ),
   }),
   'chart-nominal-apc': ({ yAxisLabel }) => ({
-    overview: 'Shows nominal annual compensation rate trend for DAO economics.',
+    overview:
+      'Shows a protocol-rate model by years since genesis, rather than a sequence of observed daily chain snapshots.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Nominal APC',
         description:
-          'For each period: (annualized secondary issuance allocated to compensation / circulating supply) × 100%.',
+          'For each modeled quarter-year: fixed annual secondary issuance divided by modeled total issued supply after the primary issuance halvings, multiplied by 100%. The genesis issuance base comes from this network.',
       },
     ],
   }),
   'chart-secondary-issuance': ({ seriesLabels }) => ({
-    overview: 'Shows secondary issuance allocation split by destination category.',
+    overview:
+      'Shows cumulative secondary issuance components in CKB at complete daily snapshots. The headline protocol total comes independently from the canonical DAO fields; frozen phase-1 compensation can overlap the legacy component partition.',
     legendItems: bySeriesLabels(
       seriesLabels,
       (label) =>
-        `For each period: ("${label}" secondary issuance / total secondary issuance) × 100%.`
+        `For each complete day: exact cumulative CKB in the "${label}" secondary issuance component.`
     ),
   }),
   'chart-inflation-rate': ({ yAxisLabel }) => ({
@@ -297,6 +304,47 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
         label: 'Holder Count',
         description:
           'For each day: count of unique addresses holding positive balance in indexed data.',
+      },
+    ],
+  }),
+  'chart-activity-volume': () => ({
+    overview:
+      'Counts indexed activity events in each canonical chain day, across transfers, DAO changes, tokens, objects, identities and script calls.',
+    legendItems: [
+      {
+        label: 'Activities',
+        description:
+          'Sum the daily counts of each indexed activity category; one transaction can yield more than one activity.',
+      },
+    ],
+  }),
+  'chart-activity-type-breakdown': ({ seriesLabels }) => ({
+    overview:
+      'Splits each indexed chain day’s activity count by the event category recorded by the activity index.',
+    legendItems: bySeriesLabels(
+      seriesLabels,
+      (label) => `Daily indexed ${label.toLowerCase()} activity count.`
+    ),
+  }),
+  'chart-active-addresses': () => ({
+    overview:
+      'Counts distinct addresses participating in indexed activities for each canonical chain day.',
+    legendItems: [
+      {
+        label: 'Addresses',
+        description:
+          'Each address contributes once to a day, regardless of its number of activities.',
+      },
+    ],
+  }),
+  'chart-ckb-volume': () => ({
+    overview:
+      'Sums the exact CKB capacity moved by indexed transfer activities for each canonical chain day.',
+    legendItems: [
+      {
+        label: 'CKB moved',
+        description:
+          'The activity index records moved capacity in shannons; the chart converts it exactly to CKB.',
       },
     ],
   }),

@@ -1,10 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function UncleRatePage() {
-  return (
-    <ChartPage title="Uncle Rate" queryKey="chart-uncle-rate" queryFn={api.getUncleRateChart} />
-  );
+export default function Page() {
+  return <ChartDetail slug="uncle-rate" />;
 }

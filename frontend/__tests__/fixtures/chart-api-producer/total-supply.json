@@ -1,0 +1,126 @@
+{
+  "data": [
+    {
+      "date": "2020-05-12",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-13",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-14",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-15",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-16",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-17",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-18",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-19",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-20",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-21",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "876.99999999",
+        "nervosdao": "123.00000001"
+      }
+    },
+    {
+      "date": "2020-05-22",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "879.99999998",
+        "nervosdao": "120.00000002"
+      }
+    },
+    {
+      "date": "2020-05-23",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "879.99999998",
+        "nervosdao": "120.00000002"
+      }
+    },
+    {
+      "date": "2020-05-24",
+      "values": {
+        "burnt": "8400000000",
+        "circulating": "879.99999998",
+        "nervosdao": "120.00000002"
+      }
+    }
+  ],
+  "series": [
+    {
+      "color": "#00c389",
+      "key": "circulating",
+      "label": "Circulating"
+    },
+    {
+      "color": "#3b82f6",
+      "key": "nervosdao",
+      "label": "Nervos DAO Locked"
+    },
+    {
+      "color": "#6b7280",
+      "key": "burnt",
+      "label": "Burnt"
+    }
+  ],
+  "title": "Total Supply"
+}

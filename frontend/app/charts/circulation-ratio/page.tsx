@@ -1,14 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function CirculationRatioPage() {
-  return (
-    <ChartPage
-      title="Deposit to Circulation Ratio"
-      queryKey="dao-chart-circulation-ratio"
-      queryFn={api.getDaoCirculationRatioChart}
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="circulation-ratio" />;
 }

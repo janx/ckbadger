@@ -1,14 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function AverageBlockTimePage() {
-  return (
-    <ChartPage
-      title="Average Block Time"
-      queryKey="chart-average-block-time"
-      queryFn={api.getAverageBlockTimeChart}
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="average-block-time" />;
 }

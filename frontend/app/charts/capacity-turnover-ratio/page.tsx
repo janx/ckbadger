@@ -1,14 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function CapacityTurnoverRatioPage() {
-  return (
-    <ChartPage
-      title="Capacity Turnover Ratio"
-      queryKey="chart-capacity-turnover-ratio"
-      queryFn={api.getCapacityTurnoverRatioChart}
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="capacity-turnover-ratio" />;
 }

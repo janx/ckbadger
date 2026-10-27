@@ -19,6 +19,30 @@ pub(crate) async fn consecutive_daily_chart(
     series: &'static str,
     points: Vec<ChartDataPoint>,
 ) -> Result<Vec<ChartDataPoint>, ApiRouteError> {
+    consecutive_daily_records(
+        store,
+        chain,
+        series,
+        points,
+        |point| &point.date,
+        |point, date| ChartDataPoint {
+            date,
+            ..point.clone()
+        },
+    )
+    .await
+}
+
+/// The one blockless-day certification and carry path for cumulative daily
+/// records, including single-series and stacked/evidence chart DTOs.
+pub(crate) async fn consecutive_daily_records<T: Clone + Send + 'static>(
+    store: Arc<CkbadgerStore>,
+    chain: Option<ChainTime>,
+    series: &'static str,
+    points: Vec<T>,
+    date_of: fn(&T) -> &str,
+    at_date: fn(&T, String) -> T,
+) -> Result<Vec<T>, ApiRouteError> {
     if points.is_empty() {
         return Ok(points);
     }
@@ -28,29 +52,38 @@ pub(crate) async fn consecutive_daily_chart(
     tokio::task::spawn_blocking(move || {
         let mut data = Vec::with_capacity(points.len());
         for point in points {
-            let date = parse_iso_day(series, &point.date)?;
-            append_blockless_days(&store, series, &mut data, date)?;
+            let date = parse_iso_day(series, date_of(&point))?;
+            append_blockless_days(&store, series, &mut data, date, date_of, at_date)?;
             data.push(point);
         }
         // The tip day is the exclusive bound, including when the last
         // observed complete row precedes several blockless days.
-        append_blockless_days(&store, series, &mut data, chain.tip_day()?)?;
+        append_blockless_days(
+            &store,
+            series,
+            &mut data,
+            chain.tip_day()?,
+            date_of,
+            at_date,
+        )?;
         Ok(data)
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
 }
 
-fn append_blockless_days(
+fn append_blockless_days<T: Clone>(
     store: &CkbadgerStore,
     series: &str,
-    data: &mut Vec<ChartDataPoint>,
+    data: &mut Vec<T>,
     next_date: NaiveDate,
+    date_of: fn(&T) -> &str,
+    at_date: fn(&T, String) -> T,
 ) -> Result<(), ApiRouteError> {
     let Some(previous) = data.last() else {
         return Ok(());
     };
-    let previous_date = parse_iso_day(series, &previous.date)?;
+    let previous_date = parse_iso_day(series, date_of(previous))?;
     if previous_date >= next_date {
         return Err(ApiError::internal(format!(
             "{series} dates are not strictly increasing before {next_date}: previous_date={previous_date}"
@@ -64,10 +97,7 @@ fn append_blockless_days(
     certify_blockless_daily_gap(store, series, date, next_date)?;
     let previous = previous.clone();
     while date < next_date {
-        data.push(ChartDataPoint {
-            date: date.format("%Y-%m-%d").to_string(),
-            ..previous.clone()
-        });
+        data.push(at_date(&previous, date.format("%Y-%m-%d").to_string()));
         date += chrono::Duration::days(1);
     }
     Ok(())

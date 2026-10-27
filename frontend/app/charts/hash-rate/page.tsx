@@ -1,8 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function HashRatePage() {
-  return <ChartPage title="Hash Rate" queryKey="chart-hash-rate" queryFn={api.getHashRateChart} />;
+export default function Page() {
+  return <ChartDetail slug="hash-rate" />;
 }

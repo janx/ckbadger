@@ -1447,6 +1447,7 @@ async fn test_secondary_issuance_chart_exposes_exact_verifier_values() {
             &bincode::serialize(&snapshot).unwrap(),
         )
         .unwrap();
+    seed_tip_block_on_utc8_day(&core_store, 1, "2026-08-08");
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;

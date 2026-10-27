@@ -1,14 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function BlockTimeDistributionPage() {
-  return (
-    <ChartPage
-      title="Block Time Distribution"
-      queryKey="chart-block-time-distribution"
-      queryFn={api.getBlockTimeDistributionChart}
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="block-time-distribution" />;
 }

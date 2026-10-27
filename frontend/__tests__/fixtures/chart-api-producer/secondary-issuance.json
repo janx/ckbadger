@@ -1,0 +1,152 @@
+{
+  "data": [
+    {
+      "date": "2020-05-12",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-13",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-14",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-15",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-16",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-17",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-18",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-19",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-20",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-21",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-22",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-23",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    },
+    {
+      "date": "2020-05-24",
+      "phase1CompensationShannons": "0",
+      "protocolTotalShannons": "150000001",
+      "values": {
+        "burnt": "0",
+        "compensation": "0",
+        "mining": "1.50000001"
+      }
+    }
+  ],
+  "series": [
+    {
+      "color": "#00c389",
+      "key": "compensation",
+      "label": "Deposit Compensation"
+    },
+    {
+      "color": "#8b5cf6",
+      "key": "mining",
+      "label": "Mining Reward"
+    },
+    {
+      "color": "#6b7280",
+      "key": "burnt",
+      "label": "Burnt"
+    }
+  ],
+  "title": "Secondary Issuance"
+}

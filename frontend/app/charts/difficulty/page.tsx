@@ -1,10 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function DifficultyPage() {
-  return (
-    <ChartPage title="Difficulty" queryKey="chart-difficulty" queryFn={api.getDifficultyChart} />
-  );
+export default function Page() {
+  return <ChartDetail slug="difficulty" />;
 }

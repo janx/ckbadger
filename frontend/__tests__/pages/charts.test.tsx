@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ChartsPage from '@/app/charts/page';
 import { api, MostUtilizedAssetsChartResponse, MostUtilizedScriptsChartResponse } from '@/lib/api';
+import secondaryProducer from '@/__tests__/fixtures/chart-api-producer/secondary-issuance.json';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -32,6 +33,10 @@ vi.mock('@/lib/api', () => ({
     getSecondaryIssuanceChart: vi.fn(),
     getInflationRateChart: vi.fn(),
     getHodlWaveChart: vi.fn(),
+    getActivityVolumeChart: vi.fn(),
+    getActivityTypeBreakdownChart: vi.fn(),
+    getActiveAddressesChart: vi.fn(),
+    getCkbVolumeChart: vi.fn(),
     getHardforks: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
@@ -42,9 +47,9 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-vi.mock('@/components/ui/stacked-area-chart', () => ({
-  StackedAreaChart: ({ isPercentage }: { isPercentage?: boolean }) => (
-    <div data-testid={isPercentage ? 'stacked-area-percentage' : 'stacked-area-absolute'} />
+vi.mock('@/components/ui/chart', () => ({
+  Chart: ({ title, unit }: { title: string; unit: string }) => (
+    <div data-testid={`chart-${unit}`} aria-label={title} />
   ),
 }));
 
@@ -248,9 +253,19 @@ describe('ChartsPage', () => {
     );
     vi.mocked(api.getTotalSupplyChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getNominalApcChart).mockResolvedValue(mockChartResponse);
-    vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue(secondaryProducer);
     vi.mocked(api.getInflationRateChart).mockResolvedValue(mockChartResponse);
-    vi.mocked(api.getHodlWaveChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getHodlWaveChart).mockResolvedValue({
+      ...mockStackedAreaResponse,
+      data: mockStackedAreaResponse.data.map((point) => ({
+        ...point,
+        values: { ...point.values, holderCount: '100' },
+      })),
+    });
+    vi.mocked(api.getActivityVolumeChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getActivityTypeBreakdownChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getActiveAddressesChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCkbVolumeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getHardforks).mockResolvedValue(mockHardforkTimeline);
   });
 
@@ -262,13 +277,20 @@ describe('ChartsPage', () => {
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Charts')).toBeInTheDocument();
 
-    expect(screen.getByText('Proof of Work')).toBeInTheDocument();
-    expect(screen.getByText('Nervos DAO & Economics')).toBeInTheDocument();
-    expect(screen.getByText('Block')).toBeInTheDocument();
-    expect(screen.getByText('Activities')).toBeInTheDocument();
-    expect(screen.getByText('Common Knowledge Bytes')).toBeInTheDocument();
-    expect(screen.getByText('Scripts Used & Total CKBytes')).toBeInTheDocument();
-    expect(screen.getByText('Assets Used & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByText('Proof of work')).toBeInTheDocument();
+    expect(screen.getByText('Nervos DAO & economics')).toBeInTheDocument();
+    expect(screen.getByText('Blocks')).toBeInTheDocument();
+    expect(screen.getByText('Activity')).toBeInTheDocument();
+    expect(screen.getByText('Common knowledge')).toBeInTheDocument();
+    expect(screen.getAllByRole('article').length).toBe(28);
+    expect(screen.getByRole('link', { name: 'Scripts' })).toHaveAttribute(
+      'href',
+      '/mainnet/charts/most-utilized-scripts'
+    );
+    expect(screen.getByRole('link', { name: 'Assets' })).toHaveAttribute(
+      'href',
+      '/mainnet/charts/most-utilized-assets'
+    );
 
     expect(screen.queryByText('Hardfork Markers on Epoch Time Length')).not.toBeInTheDocument();
   });
@@ -283,14 +305,14 @@ describe('ChartsPage', () => {
     });
   });
 
-  it('uses percentage mode in overview previews that are percentage charts', async () => {
+  it('keeps percentage and CKB previews on distinct units', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
 
     render(<ChartsPage />);
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('stacked-area-percentage').length).toBeGreaterThan(0);
-      expect(screen.getAllByTestId('stacked-area-absolute').length).toBeGreaterThan(0);
+      expect(screen.getAllByTestId('chart-%').length).toBeGreaterThan(0);
+      expect(screen.getAllByTestId('chart-CKB').length).toBeGreaterThan(0);
     });
   });
 });

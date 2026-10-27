@@ -4404,16 +4404,18 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        value: String(
-          s.transferCount +
-            s.daoDepositCount +
-            s.daoWithdrawRequestCount +
-            s.daoWithdrawCompleteCount +
-            s.tokenCount +
-            s.objectCount +
-            s.identityCount +
-            s.scriptCallCount
-        ),
+        value: [
+          s.transferCount,
+          s.daoDepositCount,
+          s.daoWithdrawRequestCount,
+          s.daoWithdrawCompleteCount,
+          s.tokenCount,
+          s.objectCount,
+          s.identityCount,
+          s.scriptCallCount,
+        ]
+          .reduce((sum, count) => sum + BigInt(count), BigInt(0))
+          .toString(),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -4427,7 +4429,11 @@ export const api = {
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
         values: {
           transfer: String(s.transferCount),
-          dao: String(s.daoDepositCount + s.daoWithdrawRequestCount + s.daoWithdrawCompleteCount),
+          dao: (
+            BigInt(s.daoDepositCount) +
+            BigInt(s.daoWithdrawRequestCount) +
+            BigInt(s.daoWithdrawCompleteCount)
+          ).toString(),
           token: String(s.tokenCount),
           object: String(s.objectCount),
           identity: String(s.identityCount),

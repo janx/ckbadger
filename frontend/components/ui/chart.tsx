@@ -34,6 +34,7 @@ export interface ChartProps {
   /** Physical display unit, e.g. PH/s, seconds, CKB. Scale values before passing them. */
   unit: string;
   kind?: 'line' | 'area' | 'stacked' | 'bars' | 'ranked';
+  yScale?: 'linear' | 'log';
   height?: number;
   markers?: readonly ChartMarker[];
   /** Receives the original exact decimal, never geometry converted through Number. */
@@ -54,6 +55,7 @@ export function Chart({
   series,
   unit,
   kind = 'line',
+  yScale = 'linear',
   height = 220,
   markers = [],
   formatValue = (v) => v,
@@ -103,6 +105,11 @@ export function Chart({
       return value;
     })
   );
+  if (
+    yScale === 'log' &&
+    (kind !== 'line' || values.some((row) => row.some((value) => value <= 0)))
+  )
+    throw new Error(`${title}: logarithmic scale requires a positive line series`);
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
@@ -113,14 +120,20 @@ export function Chart({
   const selected = data[activeIndex === null ? data.length - 1 : activeIndex];
   const plotValues =
     kind === 'stacked' ? values.map((row) => row.reduce((s, v) => s + v, 0)) : values.flat();
-  const ticks = plotValues.length
+  const geometryValues =
+    yScale === 'log' ? plotValues.map((value) => Math.log10(value)) : plotValues;
+  const ticks = geometryValues.length
     ? niceTicks(
-        kind === 'line' ? Math.min(...plotValues) : Math.min(0, ...plotValues),
-        kind === 'line' ? Math.max(...plotValues) : Math.max(0, ...plotValues),
+        kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
+        kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
         4
       )
     : null;
-  const labels = ticks?.values.map((v) => `${formatAxis(v, ticks.step)} ${unit}`) ?? [];
+  const tickLabel = (value: number, step: number) =>
+    yScale === 'log'
+      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
+      : `${formatAxis(value, step)} ${unit}`;
+  const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
   const left = plotLeft ?? Math.max(48, ...labels.map((s) => s.length * 6 + 8));
   const right = width === null ? null : width - 10,
     top = 16,
@@ -136,6 +149,11 @@ export function Chart({
         : i / (data.length - 1)) *
       ((right as number) - left);
   const y = (v: number) =>
+    bottom -
+    (((yScale === 'log' ? Math.log10(v) : v) - (lo as number)) /
+      ((hi as number) - (lo as number))) *
+      (bottom - top);
+  const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
   return (
     <figure className="m-0 min-w-0">
@@ -227,9 +245,9 @@ export function Chart({
             >
               {ticks.values.map((v) => (
                 <g key={v}>
-                  <line x1={left} x2={right} y1={y(v)} y2={y(v)} stroke="#1a1f30" />
-                  <text x={left - 8} y={y(v) + 3} textAnchor="end" fill="#7c849c" fontSize="10">
-                    {formatAxis(v, ticks.step)} {unit}
+                  <line x1={left} x2={right} y1={yTick(v)} y2={yTick(v)} stroke="#1a1f30" />
+                  <text x={left - 8} y={yTick(v) + 3} textAnchor="end" fill="#7c849c" fontSize="10">
+                    {tickLabel(v, ticks.step)}
                   </text>
                 </g>
               ))}

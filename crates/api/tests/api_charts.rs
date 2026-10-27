@@ -2,6 +2,109 @@ mod common;
 use common::*;
 
 #[tokio::test]
+async fn supply_and_secondary_history_exclude_in_progress_tip_day() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    for mut snapshot in store.list_dao_daily_snapshots().unwrap() {
+        snapshot.cum_miner_secondary = 150_000_001;
+        let date_key = snapshot.date.replace('-', "");
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&snapshot).unwrap(),
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    for path in ["total-supply", "secondary-issuance"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/charts/{path}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if let Ok(directory) = std::env::var("CKBADGER_CHART_FIXTURE_DIR") {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                format!("{directory}/{path}.json"),
+                serde_json::to_vec_pretty(&json).unwrap(),
+            )
+            .unwrap();
+        }
+        let dates: Vec<_> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| point["date"].as_str().unwrap())
+            .collect();
+        let expected: Vec<_> = (12..=24).map(|day| format!("2020-05-{day:02}")).collect();
+        assert_eq!(
+            dates,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "{path}"
+        );
+        assert_eq!(
+            json["data"][1]["values"], json["data"][0]["values"],
+            "blockless day must carry the exact previous state: {path}"
+        );
+        assert_eq!(
+            json["data"][12]["values"], json["data"][10]["values"],
+            "trailing blockless days must carry exact state: {path}"
+        );
+        if path == "total-supply" {
+            assert_eq!(json["data"][0]["values"]["nervosdao"], "123.00000001");
+        }
+        if path == "secondary-issuance" {
+            assert_eq!(json["data"][0]["values"]["mining"], "1.50000001");
+            assert_eq!(json["data"][0]["protocolTotalShannons"], "150000001");
+            assert_eq!(
+                json["data"][1]["protocolTotalShannons"],
+                json["data"][0]["protocolTotalShannons"]
+            );
+            assert_eq!(
+                json["data"][1]["phase1CompensationShannons"],
+                json["data"][0]["phase1CompensationShannons"]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn supply_and_secondary_history_reject_missing_block_bearing_snapshot() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20200522",
+    );
+    store.delete_cf(store.cf_stats_dao(), &key).unwrap();
+    let app = create_router(test_config(store)).await;
+    for path in ["total-supply", "secondary-issuance"] {
+        let (status, json) = get_json(&app, &format!("/charts/{path}")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing_date=2020-05-22"),
+            "{path}: {json}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_charts_average_block_time_empty_db() {
     let store = test_store();
     let config = test_config(store);
@@ -194,6 +297,7 @@ async fn test_removed_cell_age_chart_routes_return_not_found() {
 #[tokio::test]
 async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
 
     let code_hash_a1 = vec![0x11; 32];
     let code_hash_a2 = vec![0x12; 32];
@@ -327,6 +431,20 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
             },
         )
         .unwrap();
+    // The in-progress tip day would change both ranking and final values if
+    // it leaked into the historical chart.
+    store
+        .put_script_daily_delta(
+            &code_hash_b,
+            1,
+            false,
+            20240102,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 10_000,
+                owned_knowledge_delta: 10_000,
+            },
+        )
+        .unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -394,6 +512,7 @@ async fn test_most_utilized_scripts_chart_groups_family_members_like_usage() {
     // ScriptInfo label (the USDI-inside-xUDT case). Loose references without a
     // family keep their own label.
     let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
 
     let version_hash = vec![0x1c; 32];
     let r_main = vec![0x2a; 32];
@@ -506,6 +625,7 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
     // is keyed by code_hash, so the junk form inherits the family-named label)
     // must stay its own entity instead of folding back into the family bucket.
     let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
 
     let version_hash = vec![0x1c; 32];
     let r_main = vec![0x9b; 32];
@@ -648,6 +768,7 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
 #[tokio::test]
 async fn test_most_utilized_scripts_keeps_retired_family_provenance_once() {
     let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
     let binary = vec![0x21; 32];
     let first = vec![0x31; 32];
     let second = vec![0x41; 32];
@@ -737,6 +858,7 @@ async fn test_most_utilized_scripts_keeps_retired_family_provenance_once() {
 #[tokio::test]
 async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
 
     let token_a = vec![0x41; 32];
     let token_b = vec![0x42; 32];
@@ -799,6 +921,16 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             &TokenDailyDelta {
                 owned_capacity_delta: 900,
                 owned_knowledge_delta: 100,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &token_b,
+            20240102,
+            &TokenDailyDelta {
+                owned_capacity_delta: 10_000,
+                owned_knowledge_delta: 10_000,
             },
         )
         .unwrap();
@@ -874,6 +1006,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     assert_eq!(used_series[4]["label"], "Others");
 
     let used_data = used_share["data"].as_array().unwrap();
+    assert_eq!(used_data.len(), 1);
     assert_eq!(used_data[0]["date"], "2024-01-01");
     assert_eq!(used_data[0]["values"]["top0"], "600");
     assert_eq!(used_data[0]["values"]["top1"], "400");
@@ -1310,6 +1443,7 @@ async fn test_daily_chart_cache_drops_a_day_that_a_rollback_reopened() {
 #[tokio::test]
 async fn redesign_utilized_chart_retains_identity_category() {
     let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
     let id = ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_identity_collection_aggregate(

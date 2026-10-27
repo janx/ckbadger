@@ -1,15 +1,7 @@
 'use client';
 
-import { ChartPage } from '@/components/charts/chart-page';
-import { api } from '@/lib/api';
+import { ChartDetail } from '@/components/charts/chart-detail';
 
-export default function TransactionCountPage() {
-  return (
-    <ChartPage
-      title="Transaction Count"
-      queryKey="chart-transaction-count"
-      queryFn={api.getTransactionCountChart}
-      defaultLogScale
-    />
-  );
+export default function Page() {
+  return <ChartDetail slug="transaction-count" />;
 }
