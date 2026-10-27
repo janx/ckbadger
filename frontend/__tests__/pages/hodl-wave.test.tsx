@@ -1,22 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import HodlWavePage from '@/app/charts/hodl-wave/page';
 import { api } from '@/lib/api';
 
+const chartMock = vi.fn(({ title }: { title: string }) => <div role="img" aria-label={title} />);
 vi.mock('@/lib/api', () => ({
   api: {
     getHodlWaveChart: vi.fn(),
+    getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
+    getHardforks: vi.fn().mockResolvedValue({ events: [] }),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
+vi.mock('@/components/ui/chart', () => ({ Chart: (props: never) => chartMock(props) }));
+vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
+vi.mock('@/components/charts/chart-small-multiple', () => ({ ChartSmallMultiple: () => null }));
 
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div data-testid="header">Header</div>,
-}));
-
-const mockHodlWaveResponse = {
+const response = {
   title: 'CKB HODL Wave',
   data: [
     {
@@ -30,7 +31,7 @@ const mockHodlWaveResponse = {
         '6m1y': '15.00',
         '1y3y': '20.00',
         gt3y: '15.00',
-        holderCount: '42000',
+        holderCount: '9007199254740993',
       },
     },
   ],
@@ -50,60 +51,35 @@ describe('HodlWavePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-
-  it('renders header and back link', () => {
-    vi.mocked(api.getHodlWaveChart).mockResolvedValue(mockHodlWaveResponse);
-
+  it('shows the shared title, navigation, eight exact age bands and separate holder count', async () => {
+    vi.mocked(api.getHodlWaveChart).mockResolvedValue(response);
     render(<HodlWavePage />);
-
-    expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('← Back to Charts')).toBeInTheDocument();
+    expect(await screen.findByText('HODL wave')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /All charts/ })).toHaveAttribute(
+      'href',
+      '/mainnet/charts'
+    );
+    await waitFor(() => expect(chartMock).toHaveBeenCalledTimes(2));
+    const [ages, holders] = chartMock.mock.calls.map(([props]) => props);
+    expect(ages).toMatchObject({
+      kind: 'stacked',
+      series: response.series.map(({ key, label }) => ({ key, label })),
+      data: [{ label: '2024-01-01', values: expect.objectContaining({ gt3y: '15.00' }) }],
+    });
+    expect(holders).toMatchObject({
+      title: 'Holder count',
+      unit: 'holders',
+      data: [{ label: '2024-01-01', values: { holders: '9007199254740993' } }],
+    });
   });
-
-  it('renders chart title', async () => {
-    vi.mocked(api.getHodlWaveChart).mockResolvedValue(mockHodlWaveResponse);
-
-    render(<HodlWavePage />);
-
-    expect(screen.getByText('CKB HODL Wave')).toBeInTheDocument();
-  });
-
-  it('shows loading state initially', () => {
-    vi.mocked(api.getHodlWaveChart).mockReturnValue(new Promise(() => {}));
-
-    render(<HodlWavePage />);
-
-    // Loading skeleton should be visible
-    const skeleton = document.querySelector('.animate-pulse');
-    expect(skeleton).toBeInTheDocument();
-  });
-
-  it('shows error state on failure', async () => {
+  it('shows loading separately from a failed request', async () => {
+    vi.mocked(api.getHodlWaveChart).mockReturnValueOnce(new Promise(() => {}));
+    const view = render(<HodlWavePage />);
+    expect(screen.getByLabelText('HODL wave loading')).toBeInTheDocument();
+    view.unmount();
     vi.mocked(api.getHodlWaveChart).mockRejectedValue(new Error('Network error'));
-
     render(<HodlWavePage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Failed to load chart data')).toBeInTheDocument();
-    });
-  });
-
-  it('renders legend with all age bands and holder count', async () => {
-    vi.mocked(api.getHodlWaveChart).mockResolvedValue(mockHodlWaveResponse);
-
-    render(<HodlWavePage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('24h')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('1d-1w')).toBeInTheDocument();
-    expect(screen.getByText('1w-1m')).toBeInTheDocument();
-    expect(screen.getByText('1m-3m')).toBeInTheDocument();
-    expect(screen.getByText('3m-6m')).toBeInTheDocument();
-    expect(screen.getByText('6m-1y')).toBeInTheDocument();
-    expect(screen.getByText('1y-3y')).toBeInTheDocument();
-    expect(screen.getByText('> 3y')).toBeInTheDocument();
-    expect(screen.getByText('Holder Count')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Network error'));
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });

@@ -279,4 +279,55 @@ describe('28 chart variants', () => {
     expect(model.contextFacts).toContainEqual({ label: 'Frozen phase-1 overlap', value: '1 CKB' });
     expect(model.points[0].values).toEqual({ compensation: '2', burnt: '3' });
   });
+
+  it('preserves signed exact knowledge flow above the safe integer range', () => {
+    const model = chartModel(CHART_BY_SLUG.get('knowledge-size')!, {
+      title: 'Common Knowledge Size',
+      yAxisLabel: 'CKB',
+      y2AxisLabel: 'Utilization (%)',
+      data: [
+        { date: '2026-02-18', value: '9007199254740993.00000003', value2: '10' },
+        { date: '2026-02-19', value: '9007199254740993.00000001', value2: '10' },
+      ],
+    });
+    expect(model.dailyFlow?.points).toEqual([
+      { label: '2026-02-19', values: { flow: '-0.00000002' } },
+    ]);
+    expect(model.secondary?.title).toBe('Utilization');
+  });
+
+  it('retains miner address and unresolved lock-hash identities in ranking links', () => {
+    const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+      title: 'Miners',
+      totalBlocks: 10,
+      windowDays: 7,
+      fromDate: '2026-07-23',
+      toDate: '2026-07-29',
+      data: [
+        {
+          minerLockHash: `0x${'a'.repeat(64)}`,
+          address: 'ckb1resolved',
+          minerName: 'Resolved Pool',
+          blocksMined: 6,
+          percentage: '60.0000',
+        },
+        {
+          minerLockHash: `0x${'b'.repeat(64)}`,
+          address: null,
+          minerName: null,
+          blocksMined: 4,
+          percentage: '40.0000',
+        },
+      ],
+    });
+    expect(model.rankedRows?.[0]).toMatchObject({
+      href: '/address/ckb1resolved',
+      identity: 'Address',
+    });
+    expect(model.rankedRows?.[1]).toMatchObject({
+      href: `/address/${'b'.repeat(64)}`,
+      identity: 'Lock hash',
+    });
+    expect(model.coverage).toContain('2026-07-23–2026-07-29');
+  });
 });

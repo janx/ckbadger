@@ -1,20 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@/__tests__/utils/test-utils';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import KnowledgeSizePage from '@/app/charts/knowledge-size/page';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
-  api: { getKnowledgeSizeChart: vi.fn() },
+  api: {
+    getKnowledgeSizeChart: vi.fn(),
+    getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
+    getHardforks: vi.fn().mockResolvedValue({ events: [] }),
+  },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
+vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
+vi.mock('@/components/charts/chart-small-multiple', () => ({ ChartSmallMultiple: () => null }));
 
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div>Header</div>,
-}));
-
-describe('KnowledgeSizePage with the real line chart', () => {
-  it('renders a falling knowledge size as signed net flow with an exact hover value', async () => {
+describe('KnowledgeSizePage with the real chart', () => {
+  it('shows a falling exact signed daily flow through keyboard readout', async () => {
+    stubChartWidth(600);
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue({
       title: 'Common Knowledge Size',
       yAxisLabel: 'CKB',
@@ -25,12 +29,12 @@ describe('KnowledgeSizePage with the real line chart', () => {
       ],
     });
     const { container } = render(<KnowledgeSizePage />);
-    const charts = await screen.findAllByTestId('line-series-primary');
-    expect(charts).toHaveLength(2);
-    expect(charts[1].getAttribute('d')).not.toMatch(/NaN/);
-    const svg = container.querySelectorAll('svg')[1];
-    Object.defineProperty(svg, 'getBoundingClientRect', { value: () => ({ left: 0, width: 600 }) });
-    fireEvent.mouseMove(svg, { clientX: 580 });
-    expect(screen.getByText('-30.00')).toBeInTheDocument();
+    const svg = await screen.findByRole('img', { name: 'Net knowledge flow, CKB/day' });
+    const path = svg.querySelector('path')?.getAttribute('d');
+    expect(path).toMatch(/^M/);
+    expect(path).not.toMatch(/NaN|Infinity/);
+    fireEvent.keyDown(svg, { key: 'ArrowLeft' });
+    expect(screen.getByText('-30')).toBeInTheDocument();
+    expect(container).toHaveTextContent('Exact signed change in occupied CKB');
   });
 });

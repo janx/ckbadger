@@ -23,7 +23,9 @@ export interface ChartModel {
   latest: { label: string; raw: string; display: string } | null;
   /** Exact, signed change between the final two returned points. */
   delta: string | null;
-  rankedRows?: { label: string; value: string; share: string }[];
+  rankedRows?: { label: string; value: string; share: string; href?: string; identity?: string }[];
+  /** Exact signed day-over-day change in occupied CKB, when the source is knowledge size. */
+  dailyFlow?: { points: ChartPoint[]; series: ChartSeries[]; unit: string; title: string };
   /** Exact daily histories from both distinct utilization scopes. */
   historicalShares?: { title: string; points: ChartPoint[]; series: ChartSeries[]; unit: string }[];
   summaryLabel?: string;
@@ -198,6 +200,24 @@ function singleChart(
     unit: definition.unit,
     kind: definition.visual === 'bars' ? 'bars' : 'line',
     secondary,
+    dailyFlow:
+      definition.slug === 'knowledge-size'
+        ? {
+            title: 'Net knowledge flow',
+            unit: 'CKB/day',
+            series: [{ key: 'flow', label: 'Daily net flow', color: '#68ccf0' }],
+            points: points.slice(1).map((point, index) => ({
+              label: point.label,
+              values: {
+                flow: exactDelta(
+                  points[index].values.primary,
+                  point.values.primary,
+                  `knowledge size at ${point.label}`
+                ).replace(/^\+/, ''),
+              },
+            })),
+          }
+        : undefined,
     latest: summaryPoint
       ? {
           label: summaryPoint.label,
@@ -528,6 +548,10 @@ function minerRows(
       label: miner.minerName ?? miner.address ?? miner.minerLockHash,
       value: String(miner.blocksMined),
       share: `${miner.percentage}%`,
+      href: miner.address
+        ? `/address/${miner.address}`
+        : `/address/${miner.minerLockHash.replace(/^0x/, '')}`,
+      identity: miner.address ? 'Address' : 'Lock hash',
     };
   });
   return {

@@ -72,7 +72,15 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
           <li key={`${row.label}:${index}`} className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 text-xs">
               <span className="text-text-bright min-w-0 break-all">
-                {index + 1}. {row.label}
+                {index + 1}.{' '}
+                {row.href ? (
+                  <Link href={row.href} className="text-jade hover:underline">
+                    {row.label}
+                  </Link>
+                ) : (
+                  row.label
+                )}
+                {row.identity && <span className="text-text-dim ml-2">({row.identity})</span>}
               </span>
               <span className="shrink-0 tabular-nums">
                 {row.value} {model.unit} · {row.share}
@@ -236,6 +244,22 @@ function DetailBody({
             series={model.secondary.series}
             unit={model.secondary.unit}
             kind={definition.visual === 'bars' ? 'bars' : 'line'}
+            height={220}
+          />
+        </DetailSection>
+      )}
+      {model.dailyFlow && model.dailyFlow.points.length > 0 && (
+        <DetailSection title={model.dailyFlow.title}>
+          <p className="text-text-dim mb-3 text-xs">
+            Exact signed change in occupied CKB from the preceding returned day.
+          </p>
+          <Chart
+            title={model.dailyFlow.title}
+            subtitle="Daily change in common knowledge"
+            data={rangePoints(model.dailyFlow.points, range)}
+            series={model.dailyFlow.series}
+            unit={model.dailyFlow.unit}
+            kind="line"
             height={220}
           />
         </DetailSection>

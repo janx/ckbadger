@@ -1,40 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '../utils/test-utils';
+import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import EpochTimeLengthPage from '@/app/charts/epoch-time-length/page';
+import { api } from '@/lib/api';
 
-const chartPageMock = vi.hoisted(() => vi.fn());
-const getHardforksMock = vi.hoisted(() => vi.fn());
-
+const chartMock = vi.fn(({ title }: { title: string }) => <div role="img" aria-label={title} />);
 vi.mock('@/lib/api', () => ({
   api: {
     getEpochTimeLengthChart: vi.fn(),
-    getHardforks: getHardforksMock,
+    getHardforks: vi.fn(),
+    getNetworkStats: vi.fn().mockResolvedValue({ syncStatus: { chartDataMayBeIncomplete: false } }),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
-
-vi.mock('@/components/charts/chart-page', () => ({
-  ChartPage: (props: unknown) => {
-    chartPageMock(props);
-    const { title, queryKey, markers } = props as {
-      title: string;
-      queryKey: string;
-      markers?: Array<{ label: string; href?: string }>;
-    };
-    return (
-      <div>
-        <span>{title}</span>
-        <span>{queryKey}</span>
-        <span data-testid="markers-count">{markers?.length ?? 0}</span>
-      </div>
-    );
-  },
-}));
+vi.mock('@/components/ui/chart', () => ({ Chart: (props: never) => chartMock(props) }));
+vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
+vi.mock('@/components/charts/chart-small-multiple', () => ({ ChartSmallMultiple: () => null }));
 
 describe('EpochTimeLengthPage', () => {
-  it('passes hardfork markers to ChartPage', async () => {
-    getHardforksMock.mockResolvedValue({
+  it('places activated hardforks on their exact epoch observations', async () => {
+    chartMock.mockClear();
+    vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      title: 'Epoch Time Length',
+      yAxisLabel: 'hours',
+      data: [
+        { date: '5413', value: '4' },
+        { date: '5414', value: '4.1' },
+        { date: '12293', value: '3.9' },
+      ],
+    });
+    vi.mocked(api.getHardforks).mockResolvedValue({
       network: 'mainnet',
       tipEpoch: 13000,
       tipBlock: 19000000,
@@ -65,22 +60,19 @@ describe('EpochTimeLengthPage', () => {
         },
       ],
     });
-
     render(<EpochTimeLengthPage />);
-
-    expect(screen.getByText('Epoch Time Length')).toBeInTheDocument();
-    expect(screen.getByText('chart-epoch-time-length')).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('markers-count')).toHaveTextContent('2');
+    expect(await screen.findByText('Epoch length')).toBeInTheDocument();
+    await waitFor(() => expect(chartMock).toHaveBeenCalled());
+    expect(chartMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      markers: [
+        { index: 1, label: 'Mirana', href: '/hardforks' },
+        { index: 2, label: 'Meepo', href: '/hardforks' },
+      ],
+      data: [
+        { label: '5413', values: { primary: '4' } },
+        { label: '5414', values: { primary: '4.1' } },
+        { label: '12293', values: { primary: '3.9' } },
+      ],
     });
-
-    const lastProps = chartPageMock.mock.calls.at(-1)?.[0] as {
-      markers?: Array<{ x: string; label: string; color: string; href?: string }>;
-    };
-    expect(lastProps.markers).toEqual([
-      { x: '5414', label: 'MIRANA', color: '#f59e0b', href: '/blocks/8775638' },
-      { x: '12293', label: 'MEEPO', color: '#f59e0b', href: '/blocks/18430000' },
-    ]);
   });
 });
