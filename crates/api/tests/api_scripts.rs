@@ -125,8 +125,9 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
         }
     }
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let app = create_router(test_config(store.clone())).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/scripts/Multisig%20Evidence")
@@ -2488,6 +2489,7 @@ async fn assert_retired_family_usage_and_utilization(app: &axum::Router, active:
 
 async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     let store = test_store();
+    seed_block_headers_at(&store, &[(30, 1_704_153_601_000), (40, 1_704_153_602_000)]);
     let reference = vec![0x31; 32];
     let binary = vec![0x41; 32];
     let history = ScriptVersionInfo {
@@ -2683,6 +2685,33 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     batch.put_script_version_by_family("retired-family", &active_binary);
     batch.put_script_reference_to_version(1, &reference, &active_binary);
+    batch.delete_cell(&[0x61; 32], 0);
+    let active_tx = vec![0x72; 32];
+    batch.put_cell(
+        &active_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            occupied_capacity: 61_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x12; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference.clone()),
+            type_code_hash: Some(
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            ),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x13; 32]),
+            data_size: 32,
+            data_hash: Some(active_binary.clone()),
+            udt_amount: None,
+        },
+        30,
+    );
+    batch.put_cell_by_type(&reference, 30, &active_tx, 0);
+    batch.put_cell_by_data_hash(&active_binary, 30, &active_tx, 0);
+    batch.put_tx_hash_map(&active_tx, 30, 1);
     batch.put_script_family(
         "retired-family",
         &ScriptFamilyInfo {
@@ -2783,6 +2812,36 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         },
     );
     batch.put_script_reference_to_version(1, &reference, &binary);
+    batch.delete_cell(&[0x72; 32], 0);
+    let consuming_tx = vec![0x74; 32];
+    batch.put_consumed_cell_meta(&[0x72; 32], 0, 30, 40, Some(&consuming_tx));
+    batch.put_tx_hash_map(&consuming_tx, 40, 0);
+    let reactivated_tx = vec![0x75; 32];
+    batch.put_cell(
+        &reactivated_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            occupied_capacity: 61_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x12; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference.clone()),
+            type_code_hash: Some(
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            ),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x13; 32]),
+            data_size: 32,
+            data_hash: Some(binary.clone()),
+            udt_amount: None,
+        },
+        40,
+    );
+    batch.put_cell_by_type(&reference, 40, &reactivated_tx, 0);
+    batch.put_cell_by_data_hash(&binary, 40, &reactivated_tx, 0);
+    batch.put_tx_hash_map(&reactivated_tx, 40, 1);
     batch.commit().unwrap();
     assert_retired_family_usage_and_utilization(&app, true).await;
     let mut inconsistent_family = store.get_script_family("retired-family").unwrap().unwrap();
@@ -4020,6 +4079,14 @@ async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
 #[tokio::test]
 async fn test_unregistered_type_id_copy_changes_current_family_without_permanent_membership() {
     let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (10, 1_704_153_601_000),
+            (11, 1_704_153_602_000),
+            (12, 1_704_153_603_000),
+        ],
+    );
     let reference = vec![0x31; 32];
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
     let anchors = [vec![0x61; 32], vec![0x71; 32]];
@@ -4064,6 +4131,48 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                 .unwrap();
         }
         let mut batch = StoreBatch::new(store.as_ref());
+        if active != Some(0) {
+            let previous = if active == Some(1) { 0 } else { 1 };
+            let previous_tx = vec![0x81 + previous as u8; 32];
+            let consuming_tx = vec![0x91 + previous as u8; 32];
+            batch.delete_cell(&previous_tx, 0);
+            batch.put_consumed_cell_meta(
+                &previous_tx,
+                0,
+                10 + previous as i64,
+                11 + previous as i64,
+                Some(&consuming_tx),
+            );
+            batch.put_tx_hash_map(&consuming_tx, 11 + previous as i64, 0);
+        }
+        if let Some(index) = active {
+            let tx = vec![0x81 + index as u8; 32];
+            batch.put_cell(
+                &tx,
+                0,
+                &LiveCellInfo {
+                    capacity: 100_00000000,
+                    occupied_capacity: 61_00000000,
+                    lock_script_hash: vec![0x11; 32],
+                    lock_code_hash: vec![0x12; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_script_hash: Some(reference.clone()),
+                    type_code_hash: Some(
+                        hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                    ),
+                    type_hash_type: Some(1),
+                    type_args: Some(vec![0x13; 32]),
+                    data_size: 32,
+                    data_hash: Some(binaries[index].clone()),
+                    udt_amount: None,
+                },
+                10 + index as i64,
+            );
+            batch.put_cell_by_type(&reference, 10 + index as i64, &tx, 0);
+            batch.put_cell_by_data_hash(&binaries[index], 10 + index as i64, &tx, 0);
+            batch.put_tx_hash_map(&tx, 10 + index as i64, 1);
+        }
         for (index, family) in families.iter().enumerate() {
             let owns = active == Some(index);
             batch.put_script_family(
@@ -4440,4 +4549,120 @@ async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound
     let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, true, 0).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(body.contains("outside canonical output count"), "{body}");
+}
+
+#[tokio::test]
+async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_code() {
+    let store = test_store();
+    let reference = vec![0x31; 32];
+    let mapped_binary = vec![0x41; 32];
+    let actual_binary = vec![0x42; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        "binding-conflict",
+        &ScriptFamilyInfo {
+            family_id: "binding-conflict".to_string(),
+            name: "Binding Conflict".to_string(),
+            versions_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Binding Conflict", "binding-conflict");
+    batch.put_script_version_by_family("binding-conflict", &mapped_binary);
+    batch.put_script_version(
+        &mapped_binary,
+        &ScriptVersionInfo {
+            version_hash: mapped_binary.clone(),
+            family_id: Some("binding-conflict".to_string()),
+            type_id_deployments: vec![(reference.clone(), 10)],
+            registered_references: vec![(reference.clone(), 1)],
+            canonical_reference_hash: Some(reference.clone()),
+            canonical_hash_type: Some(1),
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_info(
+        1,
+        &reference,
+        &ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(1, &reference, &mapped_binary);
+    batch.put_cell(
+        &[0x61; 32],
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            occupied_capacity: 61_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x12; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference.clone()),
+            type_code_hash: Some(
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            ),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x13; 32]),
+            data_size: 32,
+            data_hash: Some(actual_binary),
+            udt_amount: None,
+        },
+        10,
+    );
+    batch.put_cell_by_type(&reference, 10, &[0x61; 32], 0);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store.clone())).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Binding%20Conflict")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body.contains("conflicts with live native Type ID code"),
+        "{body}"
+    );
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.delete_cell(&[0x61; 32], 0);
+    batch.commit().unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Binding%20Conflict")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("has no live code cell"), "{body}");
 }

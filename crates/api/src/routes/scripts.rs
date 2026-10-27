@@ -21,7 +21,9 @@ use crate::response::{
     ScriptObservedReferenceResponse, ScriptRoleCountsResponse, ScriptVersionDeploymentResponse,
     ScriptVersionDetailResponse,
 };
-use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
+use crate::utils::script_resolution::{
+    has_observed_type_id_lineage, resolve_dep_cells_for_transaction,
+};
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
@@ -609,9 +611,9 @@ fn reference_custody(
                     hex::encode(reference_hash)
                 ))
             })?;
-            if current.is_none() {
+            let Some(current) = current else {
                 return Ok(custody_without_witness("retired", None));
-            }
+            };
             let cells = state
                 .store
                 .list_cells_by_type(reference_hash, usize::MAX, None, &state.append_only_store)
@@ -622,8 +624,17 @@ fn reference_custody(
                     ))
                 })?;
             if cells.is_empty() {
+                if has_observed_type_id_lineage(&state.store, reference_hash)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                {
+                    return Err(ApiError::internal(format!("persisted native Type ID binding 0x{} for reference 0x{} has no live code cell", hex::encode(&current), hex::encode(reference_hash))));
+                }
                 return Ok(custody_without_witness("retired", None));
             }
+            let native_type_id_hash =
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).map_err(|e| {
+                    ApiError::internal(format!("invalid native Type ID code hash: {e}"))
+                })?;
             let mut version = None;
             let mut owners: BTreeMap<(Vec<u8>, i16, Vec<u8>), (String, Vec<String>, bool)> =
                 BTreeMap::new();
@@ -636,6 +647,16 @@ fn reference_custody(
                         hex::encode(reference_hash)
                     ))
                 })?;
+                if cell.type_code_hash.as_deref() == Some(native_type_id_hash.as_slice())
+                    && cell.type_hash_type == Some(1)
+                    && current != *data_hash
+                {
+                    return Err(ApiError::internal(format!(
+                        "persisted binding 0x{} for type reference 0x{} conflicts with live native Type ID code 0x{} at 0x{}:{}",
+                        hex::encode(&current), hex::encode(reference_hash),
+                        hex::encode(data_hash), hex::encode(&tx_hash), output_index
+                    )));
+                }
                 if version
                     .as_ref()
                     .is_some_and(|previous| previous != data_hash)
@@ -1076,6 +1097,7 @@ fn script_family_to_response(
     state: &AppState,
     family_id: &str,
     info: &ckbadger_store::types::ScriptFamilyInfo,
+    code_classes: Vec<ScriptCodeClassTotalResponse>,
 ) -> Result<ScriptFamilyListItemResponse, ApiRouteError> {
     let (owned_capacity, owned_knowledge) = checked_family_totals(info, "script family response")?;
     Ok(ScriptFamilyListItemResponse {
@@ -1090,7 +1112,7 @@ fn script_family_to_response(
         owned_capacity_sum: owned_capacity.to_string(),
         owned_knowledge_sum: owned_knowledge.to_string(),
         versions_count: info.versions_count,
-        code_classes: family_code_classes(state, family_id)?,
+        code_classes,
     })
 }
 
@@ -1182,37 +1204,46 @@ fn class_totals_for_members(
         .collect())
 }
 
-fn family_members(
+fn family_classes_for_list(
     state: &AppState,
-    family_id: &str,
-) -> Result<Vec<FamilyMemberForm>, ApiRouteError> {
+    included_families: &HashSet<String>,
+) -> Result<HashMap<String, Vec<ScriptCodeClassTotalResponse>>, ApiRouteError> {
     let versions = state
         .store
         .list_script_versions()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let family_versions: Vec<_> = versions
+        .map_err(|e| ApiError::internal(format!("list script versions for class summary: {e}")))?;
+    let membership = ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
+        .map_err(|e| ApiError::internal(format!("list script family membership: {e}")))?;
+    let allowed_versions: HashSet<Vec<u8>> =
+        versions.iter().map(|(hash, _)| hash.clone()).collect();
+    let registered = registered_reference_set(&versions);
+    let references = state.store.list_script_reference_infos().map_err(|e| {
+        ApiError::internal(format!("list script references for class summary: {e}"))
+    })?;
+    let mut members_by_family: HashMap<String, Vec<FamilyMemberForm>> = HashMap::new();
+    for ((reference_hash, hash_type), info) in references {
+        let (family_id, member) = resolve_member_form(
+            state,
+            &membership,
+            &allowed_versions,
+            reference_hash,
+            hash_type,
+            info,
+        )?;
+        if family_id.is_none()
+            && member.current_version_hash.is_none()
+            && registered.contains(&(member.hash_type, member.reference_hash.clone()))
+        {
+            return Err(ApiError::internal(format!("script list registered reference 0x{} type {} lacks current binding and family lineage", hex::encode(&member.reference_hash), member.hash_type)));
+        }
+        if let Some(family_id) = family_id.filter(|id| included_families.contains(id)) {
+            members_by_family.entry(family_id).or_default().push(member);
+        }
+    }
+    members_by_family
         .into_iter()
-        .filter(|(_, info)| info.family_id.as_deref() == Some(family_id))
-        .collect();
-    let allowed_versions = family_versions
-        .iter()
-        .map(|(hash, _)| hash.clone())
-        .collect();
-    let registered = registered_reference_set(&family_versions);
-    family_member_reference_forms(
-        state,
-        family_id,
-        Some(family_id),
-        &allowed_versions,
-        &registered,
-    )
-}
-
-fn family_code_classes(
-    state: &AppState,
-    family_id: &str,
-) -> Result<Vec<ScriptCodeClassTotalResponse>, ApiRouteError> {
-    class_totals_for_members(state, &family_members(state, family_id)?)
+        .map(|(family, members)| Ok((family, class_totals_for_members(state, &members)?)))
+        .collect()
 }
 
 fn checked_version_totals(
@@ -1407,6 +1438,49 @@ struct FamilyMemberForm {
     info: ckbadger_store::types::ScriptReferenceInfo,
 }
 
+fn resolve_member_form(
+    state: &AppState,
+    membership: &ScriptFamilyMembershipIndex,
+    allowed_versions: &HashSet<Vec<u8>>,
+    reference_hash: Vec<u8>,
+    hash_type: u8,
+    info: ckbadger_store::types::ScriptReferenceInfo,
+) -> Result<(Option<String>, FamilyMemberForm), ApiRouteError> {
+    let current_version_hash = reference_form_member_version(
+        &state.store,
+        &state.append_only_store,
+        hash_type,
+        &reference_hash,
+        &|hash| allowed_versions.contains(hash),
+    )
+    .map_err(|e| {
+        ApiError::internal(format!(
+            "resolve script reference 0x{} type {}: {e}",
+            hex::encode(&reference_hash),
+            hash_type
+        ))
+    })?;
+    let family_id = membership
+        .resolve_family(&reference_hash, hash_type, current_version_hash.as_deref())
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "resolve family for script reference 0x{} type {}: {e}",
+                hex::encode(&reference_hash),
+                hash_type
+            ))
+        })?
+        .map(str::to_string);
+    Ok((
+        family_id,
+        FamilyMemberForm {
+            reference_hash,
+            hash_type,
+            current_version_hash,
+            info,
+        },
+    ))
+}
+
 fn registered_reference_set(
     versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
 ) -> HashSet<(u8, Vec<u8>)> {
@@ -1442,49 +1516,44 @@ fn family_member_reference_forms(
         .list_script_reference_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
-        let current_version_hash = reference_form_member_version(
-            &state.store,
-            &state.append_only_store,
+        let (resolved_family, member) = resolve_member_form(
+            state,
+            &membership,
+            allowed_versions,
+            reference_hash,
             hash_type,
-            &reference_hash,
-            &|hash: &[u8]| allowed_versions.contains(hash),
-        )
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let resolved_family = membership
-            .resolve_family(&reference_hash, hash_type, current_version_hash.as_deref())
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            info,
+        )?;
         let is_member = match family_id {
-            Some(family_id) => resolved_family == Some(family_id),
-            None => current_version_hash
+            Some(family_id) => resolved_family.as_deref() == Some(family_id),
+            None => member
+                .current_version_hash
                 .as_ref()
                 .is_some_and(|hash| allowed_versions.contains(hash)),
         };
         if !is_member {
-            if current_version_hash.is_none()
-                && registered_references.contains(&(hash_type, reference_hash.clone()))
+            if member.current_version_hash.is_none()
+                && registered_references
+                    .contains(&(member.hash_type, member.reference_hash.clone()))
             {
                 return Err(ApiError::internal(format!(
                     "script family detail is missing reference->version mapping: context={}, reference_hash=0x{}, hash_type={}",
-                    membership_context, hex::encode(&reference_hash), hash_type
+                    membership_context, hex::encode(&member.reference_hash), member.hash_type
                 )));
             }
             continue;
         }
-        if current_version_hash
+        if member
+            .current_version_hash
             .as_ref()
             .is_some_and(|hash| !allowed_versions.contains(hash))
         {
             return Err(ApiError::internal(format!(
                 "script family membership resolved to an unlisted version: context={}, reference_hash=0x{}, hash_type={}",
-                membership_context, hex::encode(&reference_hash), hash_type
+                membership_context, hex::encode(&member.reference_hash), member.hash_type
             )));
         }
-        members.push(FamilyMemberForm {
-            reference_hash,
-            hash_type,
-            current_version_hash,
-            info,
-        });
+        members.push(member);
     }
     Ok(members)
 }
@@ -2426,9 +2495,18 @@ async fn list_scripts(
     });
 
     let total = filtered.len() as i64;
+    let included_families: HashSet<String> = filtered.iter().map(|(id, _)| id.clone()).collect();
+    let mut classes_by_family = family_classes_for_list(&state, &included_families)?;
     let all_items = filtered
         .iter()
-        .map(|(family_id, info)| script_family_to_response(&state, family_id, info))
+        .map(|(family_id, info)| {
+            script_family_to_response(
+                &state,
+                family_id,
+                info,
+                classes_by_family.remove(family_id).unwrap_or_default(),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let mut class_totals: BTreeMap<String, (i64, i128, i64)> = BTreeMap::new();
     for item in &all_items {
