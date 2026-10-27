@@ -1855,3 +1855,226 @@ async fn cluster_capacity_chart_rejects_spore_item_namespace() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
 }
+
+#[derive(Clone, Copy)]
+enum DecoderCellCase {
+    LiveWithoutUsageMapping,
+    LiveWithUnrelatedUsageMapping,
+    Retired,
+    NonElf,
+    Duplicate,
+    WrongIndexBlock,
+    WrongDataHash,
+    NoLocalReader,
+    MissingRawTransaction,
+}
+
+async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    let cluster = [0x77; 32];
+    let args = [0x83; 32];
+    let code = hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap();
+    let type_hash = compute_script_hash(&code, 1, &args);
+    let elf = include_bytes!("../../dob-decoder/tests/fixtures/nervape3x-98b7af5e.elf");
+    let raw = if matches!(case, DecoderCellCase::NonElf) {
+        b"retired executable".as_slice()
+    } else {
+        elf.as_slice()
+    };
+    let pattern: serde_json::Value = serde_json::from_str(include_str!(
+        "../../dob-decoder/tests/fixtures/nervape3x-pattern.json"
+    ))
+    .unwrap();
+    let description = serde_json::json!({"dob":{"ver":0,"decoder":{"type":"type_id","hash":hex::encode(args)},"pattern":pattern}}).to_string();
+    let mut payload = cell(&args, 10_000_000_000_000, 1);
+    payload.type_code_hash = Some(code.clone());
+    payload.type_script_hash = Some(type_hash.clone());
+    payload.data_size = raw.len() as i32;
+    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
+    payload.data_hash = Some(if matches!(case, DecoderCellCase::WrongDataHash) {
+        vec![0x99; 32]
+    } else {
+        ckb_hash::blake2b_256(raw).to_vec()
+    });
+    let script = |code: &[u8], args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code).unwrap())
+            .hash_type(1u8.into())
+            .args(Bytes::copy_from_slice(args).pack())
+            .build()
+    };
+    let tx = TransactionBuilder::default()
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity((payload.capacity as u64).pack())
+                .lock(script(&payload.lock_code_hash, &payload.lock_args))
+                .type_(Some(script(&code, &args)).pack())
+                .build(),
+        )
+        .output_data(Bytes::copy_from_slice(raw).pack())
+        .build();
+    let hash = tx.hash().as_slice().to_vec();
+    let chain = seed_ckb_chain(&[BlockBuilder::default()
+        .number(100u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build()]);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_spore(
+        &cluster,
+        &ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: None,
+            name: Some("TypeID decoder".into()),
+            description: Some(description),
+            is_live: false,
+            created_at_block: 99,
+            created_at_tx: vec![0x78; 32],
+            extra: ObjectExtra::SporeCluster,
+        },
+    );
+    if !matches!(case, DecoderCellCase::Retired) {
+        batch.put_cell(&hash, 0, &payload, 100);
+        batch.put_cell_by_type(
+            &type_hash,
+            if matches!(case, DecoderCellCase::WrongIndexBlock) {
+                99
+            } else {
+                100
+            },
+            &hash,
+            0,
+        );
+        seed_tx(&mut batch, &hash, 100, 1);
+    }
+    if matches!(
+        case,
+        DecoderCellCase::LiveWithUnrelatedUsageMapping
+            | DecoderCellCase::Retired
+            | DecoderCellCase::NonElf
+    ) {
+        // A usage projection is neither the deployment directory nor this reader's authority.
+        batch.put_script_reference_to_version(
+            1,
+            &type_hash,
+            &if matches!(case, DecoderCellCase::LiveWithUnrelatedUsageMapping) {
+                vec![0x99; 32]
+            } else {
+                ckb_hash::blake2b_256(elf).to_vec()
+            },
+        );
+    }
+    if matches!(case, DecoderCellCase::Duplicate) {
+        batch.put_cell(&[0xff; 32], 0, &payload, 100);
+        batch.put_cell_by_type(&type_hash, 100, &[0xff; 32], 0);
+        seed_tx(&mut batch, &[0xff; 32], 100, 2);
+    }
+    batch.commit().unwrap();
+    if matches!(
+        case,
+        DecoderCellCase::NoLocalReader | DecoderCellCase::MissingRawTransaction
+    ) {
+        let mut config = test_config(store);
+        if matches!(case, DecoderCellCase::NoLocalReader) {
+            config.ckb_db_path = "/nonexistent/ckbadger-type-id-decoder-test".into();
+        }
+        create_router(config).await
+    } else {
+        create_router(test_config_with_ckb_db_path(
+            store.clone(),
+            store,
+            chain.path,
+            Some(chain.cleanup),
+        ))
+        .await
+    }
+}
+
+#[tokio::test]
+async fn type_id_decoder_uses_current_cell_without_usage_mapping() {
+    for case in [
+        DecoderCellCase::LiveWithoutUsageMapping,
+        DecoderCellCase::LiveWithUnrelatedUsageMapping,
+    ] {
+        let app = type_id_decoder_fixture(case).await;
+        let (status, json) = get_json(
+            &app,
+            &format!("/spore/clusters/0x{}/insights", hex::encode([0x77; 32])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let step = &json["currentPattern"]["steps"][0];
+        assert_eq!(
+            step["decoderBinaryHash"],
+            "0x98b7af5e071c0d4af030447b25bb436ee4e9dd687daac7bca4bee7a0393b78e1",
+            "{json}"
+        );
+        assert_eq!(step["description"]["status"], "supported", "{json}");
+        assert_eq!(step["description"]["genes"].as_array().unwrap().len(), 6);
+        assert_eq!(
+            step["decoderReference"]["hash"],
+            format!("0x{}", hex::encode([0x83; 32]))
+        );
+    }
+}
+
+#[tokio::test]
+async fn type_id_decoder_retirement_never_reuses_historical_binary() {
+    for case in [DecoderCellCase::Retired, DecoderCellCase::NonElf] {
+        let app = type_id_decoder_fixture(case).await;
+        let (status, json) = get_json(
+            &app,
+            &format!("/spore/clusters/0x{}/insights", hex::encode([0x77; 32])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let step = &json["currentPattern"]["steps"][0];
+        assert!(step["decoderBinaryHash"].is_null(), "{json}");
+        assert_eq!(step["description"]["status"], "unsupported", "{json}");
+        assert!(
+            step["description"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("current executable cell"),
+            "{json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn type_id_decoder_rejects_corrupt_current_proof_and_missing_raw_source() {
+    for (case, reason) in [
+        (DecoderCellCase::Duplicate, "multiple live"),
+        (DecoderCellCase::WrongIndexBlock, "disagrees"),
+        (DecoderCellCase::WrongDataHash, "data hash mismatch"),
+        (DecoderCellCase::NoLocalReader, "requires local CKB"),
+        (
+            DecoderCellCase::MissingRawTransaction,
+            "transaction missing in CKB store",
+        ),
+    ] {
+        let app = type_id_decoder_fixture(case).await;
+        let (status, json) = get_json(
+            &app,
+            &format!("/spore/clusters/0x{}/insights", hex::encode([0x77; 32])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        assert!(json["message"].as_str().unwrap().contains(reason), "{json}");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains(&hex::encode([0x83; 32])),
+            "{json}"
+        );
+    }
+}

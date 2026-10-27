@@ -1,5 +1,5 @@
 //! Exact protocol descriptions from original cell bytes; no derived writes.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -291,6 +291,44 @@ pub(crate) fn raw_transaction(
     );
     Ok(super::transactions::indexer_tx_view(
         &ckb_store_reader::convert_transaction_view(&tx),
+    ))
+}
+
+/// DOB metadata names native TYPE_ID args, not a script usage reference. A
+/// decoder-only deployment need not occur in the usage-to-version projection.
+/// Read its unique current Cell directly and verify original local node bytes.
+pub(crate) fn current_type_id_binary(
+    state: &crate::AppState,
+    args: &[u8; 32],
+) -> Result<Option<Vec<u8>>> {
+    let code = hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)?;
+    let reference = crate::utils::address::compute_script_hash(&code, 1, args);
+    let Some(version) = super::asset_history::canonical_live_type_version(state, &reference)?
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        version.cell.type_code_hash.as_deref() == Some(code.as_slice())
+            && version.cell.type_hash_type == Some(1)
+            && version.cell.type_args.as_deref() == Some(args.as_slice()),
+        "native Type ID script differs from requested decoder: args=0x{} outpoint={}:{}",
+        hex::encode(args),
+        version.response.tx_hash,
+        version.response.output_index
+    );
+    let tx = raw_transaction(state, &version)?;
+    let data = &tx.outputs_data[version.response.output_index as usize];
+    let bytes = hex::decode(data.strip_prefix("0x").unwrap_or(data))?;
+    // Same executable recognition as the owning script detector. Retirement
+    // may leave a live TYPE_ID cell with non-executable data.
+    if !bytes.starts_with(b"\x7fELF") {
+        return Ok(None);
+    }
+    Ok(Some(
+        version
+            .cell
+            .data_hash
+            .context("validated decoder data hash missing")?,
     ))
 }
 

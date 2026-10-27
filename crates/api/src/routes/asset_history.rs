@@ -476,6 +476,54 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
 }
 
+/// One proof path for a current unique type-script instance. The domain type
+/// index establishes candidate membership; markers, transaction location and
+/// immutable script fields must all agree before returning the Cell.
+pub(crate) fn canonical_live_type_version(
+    state: &AppState,
+    type_hash: &[u8],
+) -> anyhow::Result<Option<CanonicalCellVersion>> {
+    ensure!(
+        type_hash.len() == 32,
+        "live type reference hash width {}",
+        type_hash.len()
+    );
+    let mut found = None;
+    for row in state
+        .store
+        .prefix_iterator_cf(state.store.cf_cell_by_type(), type_hash)
+    {
+        let (key, value) = row?;
+        if !key.starts_with(type_hash) {
+            break;
+        }
+        ensure!(
+            key.len() == 74 && value.is_empty(),
+            "malformed live type index: reference=0x{} key=0x{}",
+            hex::encode(type_hash),
+            hex::encode(&key)
+        );
+        let block = i64::from_be_bytes(key[32..40].try_into()?);
+        let (tx, index) = ckbadger_store::keys::decode_outpoint(&key[40..]);
+        let version = canonical_version_at(state, type_hash, &tx, index)?;
+        ensure!(
+            version.response.is_live
+                && version.response.block_number == block
+                && version.cell.type_script_hash.as_deref() == Some(type_hash),
+            "live type index disagrees with canonical cell: reference=0x{} outpoint=0x{}:{index}",
+            hex::encode(type_hash),
+            hex::encode(tx)
+        );
+        ensure!(
+            found.is_none(),
+            "multiple live cells for unique type reference=0x{}",
+            hex::encode(type_hash)
+        );
+        found = Some(version);
+    }
+    Ok(found)
+}
+
 /// Cluster metadata has no item reverse index. Current physical existence is
 /// instead proved by the canonical live type-instance index, across every
 /// Cluster deployment recognized by the same registry as the owning parser.
@@ -493,24 +541,9 @@ pub(crate) fn cluster_current(
             (0..=u8::MAX).filter(|byte| ckbadger_common::hash_type_label(*byte).is_some())
         {
             let type_hash = crate::utils::address::compute_script_hash(code, hash_type, id);
-            for row in state
-                .store
-                .prefix_iterator_cf(state.store.cf_cell_by_type(), &type_hash)
+            if let Some(version) = canonical_live_type_version(state, &type_hash)
+                .with_context(|| format!("cluster=0x{}", hex::encode(id)))?
             {
-                let (key, value) = row?;
-                if !key.starts_with(&type_hash) {
-                    break;
-                }
-                ensure!(
-                    key.len() == 74 && value.is_empty(),
-                    "malformed cluster live type index: cluster=0x{} key=0x{}",
-                    hex::encode(id),
-                    hex::encode(&key)
-                );
-                let block = i64::from_be_bytes(key[32..40].try_into()?);
-                let (tx, index) = ckbadger_store::keys::decode_outpoint(&key[40..]);
-                let version = canonical_version_at(state, id, &tx, index)?;
-                ensure!(version.response.is_live && version.response.block_number==block && version.cell.type_script_hash.as_deref()==Some(type_hash.as_slice()),"cluster live type index disagrees with canonical cell: cluster=0x{} outpoint=0x{}:{index}",hex::encode(id),hex::encode(tx));
                 ensure!(
                     found.is_none(),
                     "multiple live cluster cells: cluster=0x{}",

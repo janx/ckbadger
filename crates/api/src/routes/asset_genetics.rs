@@ -169,16 +169,8 @@ fn current_pattern(
         let decoder = json!({"type":kind,"hash":reference});
         let binary = match step.decoder_ref {
             DecoderRef::CodeHash(_) => Some(hash.to_vec()),
-            DecoderRef::TypeId(_) => {
-                let code = hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)?;
-                let reference_hash = crate::utils::address::compute_script_hash(&code, 1, &hash);
-                crate::utils::script_resolution::persisted_reference_version_candidate(
-                    &state.store,
-                    &state.append_only_store,
-                    1,
-                    &reference_hash,
-                )?
-            }
+            DecoderRef::TypeId(_) => asset_protocol::current_type_id_binary(state, &hash)
+                .with_context(|| format!("DOB decoder type_id args={reference}"))?,
         };
         let (description, mapped) = if let Some(binary) = &binary {
             let hash: [u8; 32] = binary
@@ -204,7 +196,7 @@ fn current_pattern(
             (
                 ckbadger_dob_decoder::pattern::PatternDescription::Unsupported {
                     reason: format!(
-                        "decoder reference has no current executable mapping: {kind} {reference}"
+                        "decoder reference has no current executable cell: {kind} {reference}"
                     ),
                 },
                 Vec::new(),

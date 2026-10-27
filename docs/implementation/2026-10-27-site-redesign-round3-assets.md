@@ -18,7 +18,7 @@ Baseline: api_assets 62 tests and api_spore 28 tests passed. Add regression-firs
 
 ## Result
 
-Implementation in progress. Re-sync required: no.
+Read contracts implemented in three coherent API slices; root integration and real-chain acceptance are recorded separately. Re-sync required: no.
 
 ## Read evidence and boundaries
 
@@ -40,4 +40,6 @@ Regression-first coverage also rejects mismatched payload script hashes, stale/d
 
 Validation: 31 asset-history endpoint tests, 62 assets tests, and 28 Spore tests; normal commit hooks run formatting and strict workspace Clippy. No persistent write path changes. Re-sync required: no.
 
-The remaining focused follow-up changes current DOB Type ID executable discovery to the canonical live type-instance index. The script-reference usage mapping is not a complete directory of decoder-only deployments; it must not determine whether such a decoder exists.
+The third API slice resolves DOB Type ID decoders directly through the canonical live type-instance index. This is the sole source, not a fallback: the script-reference usage mapping is not a complete directory of decoder-only deployments and is not queried. The shared current-Cell proof validates index shape, canonical markers, transaction location, recomputed scripts, and uniqueness. The native Type ID code/hash type/args must match exactly; original local CKB transaction bytes must agree with stored data hash and be ELF. Retirement or a live non-ELF replacement yields explicit unsupported current-pattern evidence, never the historical executable. Missing or contradictory local evidence errors with decoder args and outpoint context.
+
+Three additional endpoint regression groups use the fixed real `98b7af…78e1` ELF and cover absent/unrelated usage mappings, retirement/non-ELF, duplicate live rows, stale block keys, data-hash mismatch, missing local reader, and missing raw transaction. Final affected suites: 34 asset-history tests and 28 Spore tests. Cached VM traits still do not acquire a fabricated original execution binary or a claim of contemporaneous execution.
