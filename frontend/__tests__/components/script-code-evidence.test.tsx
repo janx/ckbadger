@@ -141,7 +141,7 @@ describe('script code evidence', () => {
     };
     render(<ScriptCapacityEvidenceChart chart={chart} markers={markers} />);
     expect(
-      screen.getAllByRole('link', { name: /deployed · multisig.*2024-01-02/ }).length
+      screen.getAllByRole('link', { name: /code · 3 events · 2024-01-02/ }).length
     ).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByRole('button', { name: /2024-01-02 · deployed · #10/ })[0]);
     expect(screen.getByText(/Never signed: every indexed cell/)).toBeInTheDocument();
@@ -205,5 +205,25 @@ describe('script code evidence', () => {
     expect(screen.getByText(/Retained 1 of 2 previous keys; replaced 1/)).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: /deployed/ })[0]);
     expect(screen.getByText(/Retained 1 of 2 previous keys; replaced 1/)).toBeInTheDocument();
+  });
+
+  it('labels capacity as occupied and free without duplicating CKB units', () => {
+    render(
+      <ScriptCapacityEvidenceChart
+        markers={[]}
+        chart={{
+          title: 'Capacity',
+          series: [
+            { key: 'used', label: 'Used', color: '#f59e0b' },
+            { key: 'unused', label: 'Unused', color: '#00c389' },
+          ],
+          data: [{ date: '2024-01-02', values: { used: '100000000', unused: '200000000' } }],
+        }}
+      />
+    );
+    expect(screen.getByText('Occupied')).toBeInTheDocument();
+    expect(screen.getByText('Free')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('CKB CKB');
+    expect(document.body.textContent).toContain('1.00000000 CKB');
   });
 });

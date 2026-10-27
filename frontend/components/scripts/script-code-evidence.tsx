@@ -232,6 +232,11 @@ export function ScriptCapacityEvidenceChart({
         )
       : null;
   const dateIndex = new Map(chart.data.map((point, index) => [point.date, index]));
+  const displaySeries = chart.series.map((series) => ({
+    ...series,
+    label: series.key === 'used' ? 'Occupied' : series.key === 'unused' ? 'Free' : series.label,
+    color: series.key === 'used' ? '#58a5b5' : series.key === 'unused' ? '#39bba6' : series.color,
+  }));
   const custodyBands = markers
     .filter((marker) => marker.event === 'deployed')
     .flatMap((deployed) => {
@@ -259,18 +264,17 @@ export function ScriptCapacityEvidenceChart({
         },
       ];
     });
-  const chartMarkers = markers.flatMap((marker) => {
+  const chartMarkerGroups = new Map<number, ScriptHistoryMarkerApi[]>();
+  for (const marker of markers) {
     const index = dateIndex.get(marker.indexedDay);
-    return index === undefined
-      ? []
-      : [
-          {
-            index,
-            label: `${marker.event} · ${marker.custody.class} · ${truncateHash(marker.referenceHash, 8, 6)} · ${marker.codeCellOutputIndex}`,
-            href: `/blocks/${marker.blockNumber}`,
-          },
-        ];
-  });
+    if (index !== undefined)
+      chartMarkerGroups.set(index, [...(chartMarkerGroups.get(index) ?? []), marker]);
+  }
+  const chartMarkers = [...chartMarkerGroups].map(([index, dayMarkers]) => ({
+    index,
+    label: `code · ${dayMarkers.length} event${dayMarkers.length === 1 ? '' : 's'}`,
+    href: `/blocks/${dayMarkers[0].blockNumber}`,
+  }));
   return (
     <div className="min-w-0">
       <Chart
@@ -285,13 +289,13 @@ export function ScriptCapacityEvidenceChart({
             ])
           ),
         }))}
-        series={chart.series}
+        series={displaySeries}
         unit="CKB"
         kind="stacked"
         height={240}
         plotLeft={88}
         markers={chartMarkers}
-        formatValue={(value) => `${value} CKB`}
+        formatValue={(value) => value}
       />
       {chart.data.length > 0 && (
         <div
