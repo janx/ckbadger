@@ -459,6 +459,25 @@ describe('ScriptDetailPage', () => {
     expect(document.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
   });
 
+  it('wraps the complete current binary in the compact registered reference row', async () => {
+    setViewportWidth(390);
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
+      ...mockScriptFamilyDetail,
+      references: [
+        {
+          referenceHash: sharedObservedData1Reference,
+          hashType: 'type',
+          currentVersionHash: sharedVersionCodeHash,
+        },
+      ],
+    } as any);
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const compact = await screen.findByRole('list', { name: 'Registered references, compact' });
+    const current = within(compact).getByText(`Current code: ${sharedVersionCodeHash}`);
+    expect(current).toHaveClass('break-all');
+    expect(current).toHaveTextContent(sharedVersionCodeHash);
+  });
+
   it('marks deprecated family and versions without calling them unlabeled', async () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
       ...mockScriptFamilyDetail,

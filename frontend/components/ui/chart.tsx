@@ -22,6 +22,8 @@ export interface ChartSeries {
 export interface ChartMarker {
   index: number;
   label: string;
+  /** Short plot glyph; the full label remains in the accessible legend. */
+  plotLabel?: string;
   href: string;
 }
 export interface ChartProps {
@@ -287,7 +289,7 @@ export function Chart({
                     strokeDasharray="3 3"
                   />
                   <text x={x(m.index)} y="10" textAnchor="middle" fill="#7c849c" fontSize="10">
-                    {m.label}
+                    {m.plotLabel ?? m.label}
                   </text>
                 </g>
               ))}

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import listFixture from '@/__tests__/fixtures/scripts/class-evidence-list.json';
 import detailFixture from '@/__tests__/fixtures/scripts/class-evidence-detail.json';
 import multisigFixture from '@/__tests__/fixtures/scripts/multisig-evidence-detail.json';
@@ -16,6 +17,10 @@ import {
 } from '@/components/scripts/script-code-evidence';
 
 describe('script code evidence', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
   it('sums exact shannons across all classes without dropping unknown custody', () => {
     render(
       <ScriptCodeClassSummary
@@ -149,6 +154,30 @@ describe('script code evidence', () => {
     expect(
       screen.getByLabelText('Custodian band aligned with capacity chart days')
     ).toBeInTheDocument();
+  });
+
+  it('keeps nearby plot marker labels compact while retaining complete event links', () => {
+    stubChartWidth(390);
+    const seed = multisigFixture.history[0] as ScriptHistoryMarkerApi;
+    const markers = [
+      { ...seed, indexedDay: '2024-08-01', blockNumber: 8 },
+      { ...seed, indexedDay: '2024-11-01', blockNumber: 11, codeCellOutputIndex: 1 },
+    ];
+    const chart: StackedAreaChartResponse = {
+      title: 'Capacity',
+      series: [{ key: 'used', label: 'Used', color: '#fff' }],
+      data: [
+        { date: '2024-08-01', values: { used: '100000000' } },
+        { date: '2024-11-01', values: { used: '200000000' } },
+      ],
+    };
+    const { container } = render(<ScriptCapacityEvidenceChart chart={chart} markers={markers} />);
+    expect(
+      [...container.querySelectorAll('svg text')].filter((node) => node.textContent === '◆')
+    ).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: /code · 1 event/ })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /2024-08-01 · deployed/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /2024-11-01 · deployed/ })).toHaveLength(1);
   });
 
   it('pairs upgrade custody only within the same exact reference when a transaction upgrades two anchors', () => {

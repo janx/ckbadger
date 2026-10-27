@@ -1521,7 +1521,9 @@ export default function ScriptDetailPage({
                     <div className="break-all">
                       {row.hashType} · {row.referenceHash}
                     </div>
-                    <div>Current code: {row.currentVersionHash ?? 'retired'}</div>
+                    <div className="break-all">
+                      Current code: {row.currentVersionHash ?? 'retired'}
+                    </div>
                     {row.custody ? (
                       <ScriptCustodyEvidence custody={row.custody} />
                     ) : (

@@ -273,6 +273,7 @@ export function ScriptCapacityEvidenceChart({
   const chartMarkers = [...chartMarkerGroups].map(([index, dayMarkers]) => ({
     index,
     label: `code · ${dayMarkers.length} event${dayMarkers.length === 1 ? '' : 's'}`,
+    plotLabel: '◆',
     href: `/blocks/${dayMarkers[0].blockNumber}`,
   }));
   return (
