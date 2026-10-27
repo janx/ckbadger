@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod fetch;
+pub mod pattern;
 pub mod types;
 pub mod vm;
 
