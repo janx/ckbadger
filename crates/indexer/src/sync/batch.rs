@@ -7621,6 +7621,32 @@ mod tests {
 
         #[tokio::test]
         async fn test_backward_midnight_live_stats_are_batch_independent() {
+            assert_backward_midnight_live_stats(
+                [-10_000, 2_000, -2_000, 10_000],
+                [-10_000, 2_000, 2_000, 10_000],
+                Some(1),
+                3,
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn quiet_block_advances_live_dao_day_before_backward_target_event() {
+            assert_backward_midnight_live_stats(
+                [2_000, -2_000, -1_000, 10_000],
+                [2_000, 2_000, 2_000, 10_000],
+                None,
+                4,
+            )
+            .await;
+        }
+
+        async fn assert_backward_midnight_live_stats(
+            raw_offsets: [i64; 4],
+            expected_clock_offsets: [i64; 4],
+            previous_day_blocks: Option<i32>,
+            next_day_blocks: i32,
+        ) {
             let _detectors =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
             let mut blocks = phase_setup_blocks();
@@ -7628,7 +7654,31 @@ mod tests {
             let midnight = chrono::DateTime::parse_from_rfc3339("2026-10-23T16:00:00Z")
                 .unwrap()
                 .timestamp_millis();
-            for (block, offset) in blocks.iter_mut().zip([-10_000i64, 2_000, -2_000, 10_000]) {
+            // Block 100 is funding-only: it has no DAO input or output. In
+            // the quiet-block case it alone crosses midnight; the later DAO
+            // deposit's raw timestamp still belongs to the preceding day.
+            assert_eq!(blocks[0].block.transactions.len(), 1);
+            assert_eq!(blocks[0].block.transactions[0].inputs.len(), 1);
+            assert_eq!(
+                blocks[0].block.transactions[0].inputs[0]
+                    .previous_output
+                    .index,
+                "0xffffffff"
+            );
+            assert!(blocks[0].block.transactions[0]
+                .outputs
+                .iter()
+                .all(|output| output.type_.is_none()));
+            assert!(blocks[1]
+                .block
+                .transactions
+                .iter()
+                .flat_map(|tx| &tx.outputs)
+                .any(|output| output
+                    .type_
+                    .as_ref()
+                    .is_some_and(|script| script.code_hash == DAO_CODE_HASH)));
+            for (block, offset) in blocks.iter_mut().zip(raw_offsets) {
                 block.block.header.timestamp = format!("0x{:x}", midnight + offset);
             }
 
@@ -7658,6 +7708,38 @@ mod tests {
             )
             .await
             .unwrap();
+
+            let assert_clocks_and_dao_bucket = |store: &CkbadgerStore| {
+                for (index, (&raw_offset, &clock_offset)) in
+                    raw_offsets.iter().zip(&expected_clock_offsets).enumerate()
+                {
+                    let number = 100 + index as i64;
+                    let header = store.get_block_header(number).unwrap().unwrap();
+                    assert_eq!(
+                        header.timestamp,
+                        midnight + raw_offset,
+                        "raw header time at {number}"
+                    );
+                    assert_eq!(
+                        header.chain_time_ms,
+                        midnight + clock_offset,
+                        "canonical clock at {number}"
+                    );
+                }
+                let deposit = stored_dao_entry(store, [0xd1; 32], 0);
+                assert_eq!(
+                    deposit.deposit_chain_time_ms,
+                    midnight + expected_clock_offsets[1]
+                );
+                let day = store.get_dao_daily_snapshot("20261024").unwrap().unwrap();
+                assert_eq!(
+                    day.new_deposits, 1,
+                    "the deposit belongs to the clock's day"
+                );
+                assert_eq!(day.cumulative_deposit_amount, i128::from(DEPOSIT_CAPACITY));
+            };
+            assert_clocks_and_dao_bucket(&single_store);
+            assert_clocks_and_dao_bucket(&batch_store);
 
             let rows = |store: &CkbadgerStore| {
                 [
@@ -7716,9 +7798,8 @@ mod tests {
                 single_store
                     .get_daily_block_stats("20261023")
                     .unwrap()
-                    .unwrap()
-                    .block_count,
-                1
+                    .map(|day| day.block_count),
+                previous_day_blocks
             );
             assert_eq!(
                 single_store
@@ -7726,7 +7807,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .block_count,
-                3
+                next_day_blocks
             );
 
             let cells = |store: &CkbadgerStore| {
@@ -7771,6 +7852,7 @@ mod tests {
                 append_before,
                 "replay must preserve existing CF_CELLS bytes"
             );
+            assert_clocks_and_dao_bucket(&batch_store);
             let replayed_rows = rows(&batch_store)
                 .into_iter()
                 .collect::<std::collections::BTreeMap<_, _>>();

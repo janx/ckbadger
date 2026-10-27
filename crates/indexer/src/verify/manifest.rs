@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 
 use super::checks::EntitySelector;
+use super::entity_history::RecordedCalendar;
 use super::report::{SourceProfileReport, REPORT_SCHEMA_VERSION};
 
 /// How completely one selected entity was verified.
@@ -67,6 +68,13 @@ pub struct VerifyManifest {
     pub budget_seconds: u64,
     pub history_records: usize,
     pub rpc_requests: usize,
+    /// Amounts are independently derived from the qualified CKB RPC records.
+    pub amount_source: String,
+    /// Day assignment is an explicit dependency, not an independent clock proof.
+    pub calendar_source: String,
+    pub calendar_independently_verified: bool,
+    /// The full calendar payload as exported, bound to the top-level anchor.
+    pub calendar: Option<RecordedCalendar>,
     pub entities: Vec<EntityCoverage>,
 }
 
@@ -89,6 +97,10 @@ impl VerifyManifest {
             budget_seconds: 0,
             history_records: 0,
             rpc_requests: 0,
+            amount_source: "ckb_rpc".to_string(),
+            calendar_source: "indexed_chain_time".to_string(),
+            calendar_independently_verified: false,
+            calendar: None,
             entities: Vec::new(),
         }
     }

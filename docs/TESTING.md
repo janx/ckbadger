@@ -213,20 +213,34 @@ the count half of the same invariant before every live commit (the lifecycle's
 status-0/1 count must equal the live-cell summary's DAO class), so this check
 is the per-outpoint, per-capacity and cross-source proof of it.
 
-### Chain-derived Entity Verification (S25)
+### Entity Capacity Verification with an Indexed Calendar (S25)
 
-`entity_capacity_history_matches_chain` recomputes one entity's whole history
-from the chain and compares it against the index, with **zero tolerance** —
+`entity_capacity_history_matches_recorded_calendar` recomputes entity capacity
+amounts from the chain and compares the complete history using the index's
+calendar, with **zero tolerance** —
 `--tolerance` belongs to the explorer comparisons and is not inherited here.
 
-- **Expected values are independent.** The oracle enumerates the entity's full
+- **Capacity amounts are independent.** The oracle enumerates the entity's full
   `[0, H]` history through the CKB node's own indexer (`get_transactions`,
   exact script match, ungrouped, cursor-paged), resolves every input's prevout,
-  and recomputes capacity and occupied capacity from the cells. It reads every
-  canonical node header from genesis through H to reconstruct monotone chain
-  time before assigning UTC+8 days. Sparse entity-touch headers cannot prove
-  that running maximum. It never calls the production writer, parser,
-  `PROTOCOL_REGISTRY`, or ckbadger's persisted chain-time field.
+  and recomputes capacity and occupied capacity from the cells. Amounts never
+  come from the production writer, parser or `PROTOCOL_REGISTRY`.
+- **Calendar dependency is explicit.** The typed export includes UTC+8 date
+  intervals covering every block in `[0, H]`, read from persisted
+  `chain_time_ms` under the same pin as the daily rows. The API finds day
+  boundaries by binary search; the verifier does not fetch a header prefix.
+  Every entity record is assigned to its interval, with gaps, overlaps and
+  malformed dates rejected. This is an exact comparison **given the indexed
+  calendar**, not an independent proof of its dates. If calendar and daily
+  rows share a date error, this runtime check may pass. The manifest and pass
+  detail retain that distinction; `calendarIndependentlyVerified` is false.
+- **Clock rules have separate regression coverage.** Small complete-chain
+  fixtures exercise the production monotone-clock calculation, including
+  quiet blocks crossing midnight, backward raw timestamps, batch boundaries
+  and live rollback/replay. These tests establish the algorithm's behavior
+  on the fixtures; they do not certify every persisted mainnet header.
+  Reading only entity-touch headers would miss a quiet block advancing the
+  clock, so that is not used as an independent date oracle either.
 - **Three facets, one scan.** Per-day deltas and running prefix totals are
   compared against the exported rows; the **current** facet compares the
   chain's _live cell set_ — outputs in `[0, H]` whose outpoint is never
@@ -275,17 +289,14 @@ from the chain and compares it against the index, with **zero tolerance** —
   budget and the spend. Every node call is charged, source qualification and
   the post-walk anchor re-verification included, so the manifest's
   `rpcRequests` is exactly the number of requests the node received.
-  The independent chain-time pass alone requires at least H+1 header RPCs.
-  With the default 1M-request budget, a mainnet anchor near 20.8M blocks is
-  explicitly `inconclusive` before the entity scan and reports the required
-  minimum; raise the request and wall-clock budgets for a full verification.
-  The earlier mainnet measurement at anchor 20,553,546 (2026-09-25) covered
-  eight entities, 1,418,527 records and 566,896 RPC requests in 267 s, but
-  predates the full-prefix chain-time requirement and no longer calibrates
-  the complete oracle workload.
+  The RPC workload follows the selected entities' histories, not the chain's
+  total height. A large anchor alone no longer consumes the request budget.
+  The calendar export is bounded to 8,192 nonempty date intervals and shares
+  the export's 4 MiB budget; an incomplete calendar cannot yield a pass.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
-  fully covered and why.
+  fully covered and why. It also saves the indexed calendar and identifies
+  the chain-derived amount source separately from the calendar dependency.
 
 ```toml
 # work/mainnet/verify-source.toml
@@ -305,9 +316,9 @@ endpoint and update both fields to that exact string. Retain the original
 history provenance only while the index, genesis and unfiltered coverage it
 describes remain unchanged. A version mismatch is correctly `inconclusive`;
 do not remove qualification or claim new history coverage to make it pass.
-Qualifying the source does not increase the history budget: a full mainnet
-chain-time prefix still needs more than 20 million header requests before
-entity enumeration, as described above.
+Qualifying the source does not increase the history budget. Incomplete entity
+enumeration remains inconclusive; the calendar dependency does not permit
+sampling records or skipping prevouts.
 
 > **Coverage limits.** Only the **token** family has an adapter in this
 > delivery. Script, Spore, cluster and object families, independent candidate
@@ -316,6 +327,7 @@ entity enumeration, as described above.
 
 ```bash
 ckbadger verify -C work/mainnet --depth sampling --checks dao_status_index_matches_deposits
+ckbadger verify -C work/mainnet --depth sampling --checks entity_capacity_history_matches_recorded_calendar
 ```
 
 ### Explorer Response Cache

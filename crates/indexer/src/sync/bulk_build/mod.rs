@@ -6234,6 +6234,111 @@ mod tests {
     }
 
     #[test]
+    fn quiet_block_advances_bulk_token_day_across_batch_boundary() {
+        let midnight = chrono::DateTime::parse_from_rfc3339("2026-10-23T16:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let mut token_fixture = bulk_build_token_transfer_fixture();
+        let mut mint = token_fixture.block.transactions.remove(0);
+        mint.outputs[0].capacity = format!("0x{:x}", 400_00000000u64);
+        let mut transfer = token_fixture.block.transactions.remove(0);
+        for output in &mut transfer.outputs {
+            output.capacity = format!("0x{:x}", 200_00000000u64);
+        }
+        let plain_cellbase = |hash_byte: u8| {
+            let mut tx = mint.clone();
+            tx.hash = format!("0x{}", hex::encode([hash_byte; 32]));
+            tx.outputs[0].type_ = None;
+            tx.outputs_data[0] = "0x".to_string();
+            tx
+        };
+        let quiet = plain_cellbase(0xe1);
+        let transfer_cellbase = plain_cellbase(0xe2);
+        // This block has no input or output carrying the target token. Its
+        // header alone must advance the calendar used by the later transfer.
+        assert_eq!(quiet.inputs[0].previous_output.index, "0xffffffff");
+        assert!(quiet.outputs.iter().all(|output| output.type_.is_none()));
+        let mut dao = [0u8; 32];
+        dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+        dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+        dao[16..24].copy_from_slice(&10_000_000_000u64.to_le_bytes());
+        dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+        let raw_offsets = [-10_000i64, 2_000, -2_000];
+        let blocks: Vec<_> = [vec![mint], vec![quiet], vec![transfer_cellbase, transfer]]
+            .into_iter()
+            .enumerate()
+            .map(|(index, transactions)| {
+                let number = 100 + index as u64;
+                let mut header = fixture_header_with_timestamp(
+                    number,
+                    0xa0 + index as u8,
+                    (midnight + raw_offsets[index]) as u64,
+                );
+                header.parent_hash = format!("0x{}", hex::encode([0x9f + index as u8; 32]));
+                header.epoch = format!("0x{:x}", (1800u64 << 40) | ((number - 100) << 24) | 40);
+                header.dao = format!("0x{}", hex::encode(dao));
+                BlockResponseWithCycles {
+                    block: BlockView {
+                        header,
+                        transactions,
+                        uncles: vec![],
+                        proposals: vec![],
+                    },
+                    cycles: None,
+                }
+            })
+            .collect();
+        // These helpers run the real runtime: assign_chain_times_to_facts,
+        // input resolution, TokenOwner, and final domain/append materialization.
+        let single = materialize_bulk_artifacts_for_test(&blocks).unwrap();
+        let split = materialize_bulk_artifacts_from_batches_for_test(
+            &blocks
+                .iter()
+                .cloned()
+                .map(|block| vec![block])
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let token_hash = ScriptParser::compute_script_hash(&fixture_sudt_type_script());
+        for snapshot in [&single, &split] {
+            for (index, expected_clock_offset) in [-10_000i64, 2_000, 2_000].into_iter().enumerate()
+            {
+                let number = 100 + index as i64;
+                let header = &snapshot.block_headers[&number];
+                assert_eq!(header.timestamp, midnight + raw_offsets[index]);
+                assert_eq!(
+                    header.chain_time_ms,
+                    midnight + expected_clock_offset,
+                    "block {number}"
+                );
+            }
+            let days = &snapshot.core.token_state.token_daily_deltas[&token_hash];
+            assert_eq!(days.len(), 2);
+            assert_eq!(days[&20261023].owned_capacity_delta, 400_00000000);
+            // Each token cell occupies 8 + (33+20) + (33+20) + 16 = 130 bytes.
+            assert_eq!(days[&20261023].owned_knowledge_delta, 130_00000000);
+            assert_eq!(days[&20261024].owned_capacity_delta, 0);
+            assert_eq!(
+                days[&20261024].owned_knowledge_delta, 130_00000000,
+                "splitting one token cell into two must stay on the quiet block's new day"
+            );
+        }
+        assert_eq!(
+            single.token_rows, split.token_rows,
+            "all token rows must be batch-independent"
+        );
+        assert_eq!(single.cell_payloads.len(), split.cell_payloads.len());
+        for (outpoint, payload) in &single.cell_payloads {
+            assert_eq!(
+                bincode::serialize(payload).unwrap(),
+                bincode::serialize(&split.cell_payloads[outpoint]).unwrap(),
+                "append-only payload differs at {}",
+                hex::encode(outpoint)
+            );
+        }
+    }
+
+    #[test]
     fn unique_temp_test_dir_builder_avoids_same_timestamp_collisions() {
         let first = build_unique_temp_test_dir("bulk-build-core-owners", 42, 123456789, 0);
         let second = build_unique_temp_test_dir("bulk-build-core-owners", 42, 123456789, 1);

@@ -133,6 +133,8 @@ async fn exports_raw_daily_deltas_as_exact_decimal_strings() {
     assert_eq!(body["anchor"]["blockNumber"], 1_234);
     assert_eq!(body["anchor"]["blockHash"], hex0x(&token_hash(0x01)));
     assert_eq!(body["complete"], true);
+    assert_eq!(body["calendar"], serde_json::Value::Null);
+    assert!(body.as_object().unwrap().contains_key("calendar"));
 
     let entity = &body["entities"][0];
     assert_eq!(entity["kind"], "token");
@@ -799,4 +801,308 @@ fn store_files(root: &std::path::Path) -> Vec<(String, u64)> {
     walk(root, "", &mut out);
     out.sort();
     out
+}
+
+fn calendar_request() -> serde_json::Value {
+    serde_json::json!({
+        "entities": [{ "kind": "token", "id": hex0x(&token_hash(0xce)) }],
+        "includeCalendar": true
+    })
+}
+
+fn seed_calendar_headers(store: &Arc<CkbadgerStore>, blocks: &[(i64, i64)]) {
+    seed_block_headers_at(store, blocks);
+    let tip = blocks.iter().map(|(number, _)| *number).max().unwrap();
+    let header = store.get_block_header(tip).unwrap().unwrap();
+    seed_anchor(store, tip, &header.hash);
+}
+
+#[tokio::test]
+async fn indexed_calendar_preserves_quiet_midnight_and_raw_time_regression() {
+    let store = test_store();
+    seed_calendar_headers(
+        &store,
+        &[
+            (0, utc_ms("2026-01-01T15:59:50Z")),
+            // This block has no token activity, but crosses the calendar boundary.
+            (1, utc_ms("2026-01-01T16:00:02Z")),
+            (2, utc_ms("2026-01-01T15:59:58Z")),
+            // January 3 has no blocks; it must not receive a fabricated interval.
+            (3, utc_ms("2026-01-03T16:00:00Z")),
+            (4, utc_ms("2026-01-03T15:59:58Z")),
+        ],
+    );
+    seed_token(
+        &store,
+        &token_hash(0xce),
+        &[(20260101, 10, 5), (20260104, -10, -5)],
+    );
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = post(app, calendar_request()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["calendar"],
+        serde_json::json!({
+            "source": "indexed_chain_time", "independentlyVerified": false, "complete": true,
+            "buckets": [
+                { "date": 20260101, "startBlock": 0, "endBlock": 0 },
+                { "date": 20260102, "startBlock": 1, "endBlock": 2 },
+                { "date": 20260104, "startBlock": 3, "endBlock": 4 }
+            ]
+        })
+    );
+    assert_eq!(body["complete"], true);
+    assert_eq!(body["entities"][0]["daily"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn indexed_calendar_missing_genesis_or_search_header_is_an_error() {
+    for missing in [0, 1] {
+        let store = test_store();
+        seed_calendar_headers(
+            &store,
+            &[
+                (0, utc_ms("2026-01-01T15:59:50Z")),
+                (1, utc_ms("2026-01-01T16:00:02Z")),
+                (2, utc_ms("2026-01-02T16:00:02Z")),
+            ],
+        );
+        store
+            .delete_cf(
+                store.cf_block_headers(),
+                &ckbadger_store::keys::encode_block_num(missing),
+            )
+            .unwrap();
+        let (status, body) = post(
+            create_router_without_warmup(test_config(store)),
+            calendar_request(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "missing={missing}: {body}"
+        );
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("block={missing}")),
+            "{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn indexed_calendar_requires_header_tip_and_hash_to_match_sync_anchor() {
+    for wrong_height in [false, true] {
+        let store = test_store();
+        seed_calendar_headers(&store, &[(0, utc_ms("2026-01-01T00:00:00Z"))]);
+        seed_anchor(&store, if wrong_height { 1 } else { 0 }, &token_hash(0xf0));
+        let (status, body) = post(
+            create_router_without_warmup(test_config(store)),
+            calendar_request(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("calendar anchor"),
+            "{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn indexed_calendar_rejects_negative_anchor_and_inconsistent_boundary_dates() {
+    let store = test_store();
+    seed_anchor(&store, -1, &token_hash(0x01));
+    let (status, body) = post(
+        create_router_without_warmup(test_config(store)),
+        calendar_request(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("block=-1"),
+        "{body}"
+    );
+
+    let store = test_store();
+    seed_calendar_headers(
+        &store,
+        &[
+            (0, utc_ms("2026-01-01T00:00:00Z")),
+            (1, utc_ms("2026-01-03T00:00:00Z")),
+            (2, utc_ms("2026-01-03T00:00:01Z")),
+        ],
+    );
+    let mut corrupt = store.get_block_header(2).unwrap().unwrap();
+    corrupt.chain_time_ms = utc_ms("2026-01-02T00:00:00Z");
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(2, &corrupt);
+    batch.commit().unwrap();
+    let (status, body) = post(
+        create_router_without_warmup(test_config(store)),
+        calendar_request(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("calendar"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn indexed_calendar_cap_marks_both_calendar_and_export_incomplete() {
+    let store = test_store();
+    let base = utc_ms("2020-01-01T00:00:00Z");
+    let blocks: Vec<_> = (0..=8192)
+        .map(|number| (number, base + number * 86_400_000))
+        .collect();
+    seed_calendar_headers(&store, &blocks);
+    let (status, body) = post(
+        create_router_without_warmup(test_config(store)),
+        calendar_request(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["calendar"]["buckets"].as_array().unwrap().len(), 8192);
+    assert_eq!(body["calendar"]["complete"], false);
+    assert_eq!(body["complete"], false);
+    assert_eq!(body["calendar"]["buckets"][8191]["endBlock"], 8191);
+}
+
+#[tokio::test]
+async fn indexed_calendar_withheld_state_does_not_read_incomplete_headers() {
+    for mismatch in [false, true] {
+        let store = test_store();
+        // Deliberately no headers: withheld state must not try to build a calendar.
+        seed_anchor(&store, 10, &token_hash(0x10));
+        let mut request = calendar_request();
+        if mismatch {
+            request["expectedAnchor"] =
+                serde_json::json!({ "blockNumber": 9, "blockHash": hex0x(&token_hash(9)) });
+        } else {
+            store.set_rollback_cleanup_in_progress(true).unwrap();
+        }
+        let (status, body) = post(create_router_without_warmup(test_config(store)), request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["calendar"], serde_json::Value::Null);
+        assert!(body.as_object().unwrap().contains_key("calendar"));
+        assert_eq!(body["complete"], false);
+    }
+}
+
+#[tokio::test]
+async fn indexed_calendar_and_entities_share_the_secondary_view_without_writes() {
+    let directory = tempfile::tempdir().unwrap();
+    let primary_path = directory.path().join("primary");
+    let secondary_path = directory.path().join("secondary");
+    let primary = Arc::new(CkbadgerStore::open_test_unified(&primary_path).unwrap());
+    seed_calendar_headers(&primary, &[(0, utc_ms("2026-01-01T00:00:00Z"))]);
+    seed_token(&primary, &token_hash(0xce), &[(20260101, 10, 5)]);
+    primary.flush_all_memtables().unwrap();
+    let secondary = Arc::new(
+        CkbadgerStore::open_test_unified_secondary(&primary_path, &secondary_path).unwrap(),
+    );
+    seed_calendar_headers(&primary, &[(1, utc_ms("2026-01-02T00:00:00Z"))]);
+    primary
+        .put_token_daily_delta(
+            &token_hash(0xce),
+            20260102,
+            &TokenDailyDelta {
+                owned_capacity_delta: 20,
+                owned_knowledge_delta: 10,
+            },
+        )
+        .unwrap();
+    primary.flush_all_memtables().unwrap();
+    let before = store_files(&primary_path);
+    let app = create_router_without_warmup(test_config(secondary.clone()));
+    let (status, body) = post(app.clone(), calendar_request()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["anchor"]["blockNumber"], 0);
+    assert_eq!(
+        body["calendar"]["buckets"],
+        serde_json::json!([{ "date": 20260101, "startBlock": 0, "endBlock": 0 }])
+    );
+    assert_eq!(body["entities"][0]["currentCapacity"], "10");
+    assert_eq!(store_files(&primary_path), before);
+
+    secondary.refresh().unwrap();
+    let (status, body) = post(app, calendar_request()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["anchor"]["blockNumber"], 1);
+    assert_eq!(body["calendar"]["buckets"].as_array().unwrap().len(), 2);
+    assert_eq!(body["entities"][0]["currentCapacity"], "30");
+    assert_eq!(store_files(&primary_path), before);
+}
+
+#[tokio::test]
+async fn indexed_calendar_shares_the_response_byte_budget_with_daily_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(CkbadgerStore::open_test_unified(directory.path()).unwrap());
+    let base = utc_ms("2020-01-01T00:00:00Z");
+    let blocks: Vec<_> = (0..8192)
+        .map(|number| (number, base + number * 86_400_000))
+        .collect();
+    seed_calendar_headers(&store, &blocks);
+    let mut entities = Vec::new();
+    for byte in 1..=5 {
+        let hash = token_hash(byte);
+        seed_token(&store, &hash, &[]);
+        for (_, time) in &blocks {
+            let date: u32 = chrono::DateTime::from_timestamp_millis(*time)
+                .unwrap()
+                .format("%Y%m%d")
+                .to_string()
+                .parse()
+                .unwrap();
+            store
+                .put_token_daily_delta(
+                    &hash,
+                    date,
+                    &TokenDailyDelta {
+                        owned_capacity_delta: 10i128.pow(33),
+                        owned_knowledge_delta: 5 * 10i128.pow(32),
+                    },
+                )
+                .unwrap();
+        }
+        entities.push(serde_json::json!({ "kind": "token", "id": hex0x(&hash) }));
+    }
+    let app = create_router_without_warmup(test_config(store));
+    let request = serde_json::json!({ "entities": entities });
+    let (status, without_calendar) = post(app.clone(), request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{without_calendar}");
+    let mut request_with_calendar = request;
+    request_with_calendar["includeCalendar"] = true.into();
+    let (status, with_calendar) = post(app, request_with_calendar).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(with_calendar["calendar"]["complete"], true);
+    assert_eq!(
+        with_calendar["calendar"]["buckets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8192
+    );
+    assert_eq!(with_calendar["complete"], false);
+    let rows = |body: &serde_json::Value| -> usize {
+        body["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entity| entity["daily"].as_array().unwrap().len())
+            .sum()
+    };
+    assert!(
+        rows(&with_calendar) < rows(&without_calendar),
+        "calendar must consume the same budget as daily rows"
+    );
+    assert!(serde_json::to_vec(&with_calendar).unwrap().len() <= 4 * 1024 * 1024);
 }

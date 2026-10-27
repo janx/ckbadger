@@ -3471,6 +3471,50 @@ no service restart or database rebuild is needed for that update.
 
 ---
 
+### VERIFY-006: Entity verification required an unrelated full-chain header replay
+
+**Date**: 2026-10-27
+
+**Symptom**: Mainnet verification completed 63 checks but left entity capacity
+history inconclusive before comparing any entity. At anchor 20,846,536, the
+clock oracle required 20,846,537 header RPCs with only 999,996 requests remaining.
+
+**Root cause**: One runtime check combined two different obligations: independently
+reconstruct every historical calendar boundary, and verify selected entities'
+capacity histories. The first obligation imposed a genesis-to-tip scan even for
+an entity with only a few cells. Fetching headers faster retained that workload.
+Fetching only entity-touch headers would instead be incorrect: a quiet block can
+advance the monotone clock across midnight before a later entity event's raw
+timestamp moves backward.
+
+**Fix**: With the verification scope explicitly agreed, split algorithm testing
+from runtime data comparison. Production clock rules have small complete-window
+fixtures through bulk/live writers, including quiet blocks, backward timestamps,
+batch boundaries and rollback/replay. The renamed runtime check,
+`entity_capacity_history_matches_recorded_calendar`, still enumerates every
+selected entity's chain record and prevout and compares exact daily deltas,
+prefix totals and independently derived live-cell totals. Its date mapping is
+explicitly the indexed calendar, exported as contiguous block intervals under
+the same read pin as the entity rows. The API locates date boundaries by binary
+search, and the verifier requests no header prefix. The manifest preserves that
+mapping with `calendarIndependentlyVerified: false`; a shared calendar/date error
+is outside this runtime check's independent guarantee. Missing or malformed
+calendar evidence cannot silently switch to another calculation path.
+
+**Validation**: Regressions cover a high anchor with a small RPC budget, no header
+requests, required calendar evidence, exact one-shannon and offsetting daily
+errors, final anchor changes and honest reporting of a shared date error. A real
+API-to-verifier test exercises the wire contract using independent node cell
+fixtures. Clock fixtures also assert append-only payloads remain unchanged by
+rollback/replay. Detailed gate logs are retained in
+`.worktrees/recorded-calendar-results/` and `.worktrees/clock-fixture-results/`.
+
+**Re-sync required**: No. This changes read-only verification and tests; there is
+no changed write path in the domain, append-only or network store. API and verifier
+must both use the new build to exchange the required calendar evidence.
+
+---
+
 ## Category: Statistics & Charts
 
 ### STATS-012: The daily hash-rate chart served H/ms under an H/s label

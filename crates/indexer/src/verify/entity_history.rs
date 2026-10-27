@@ -1,19 +1,22 @@
 //! Chain-derived expectation for one entity's capacity history.
 //!
-//! This is the verifier's independent oracle. It takes an entity selector and a
+//! This is the verifier's independent amount oracle. It takes an entity selector and a
 //! qualified CKB node, enumerates every input and output that ever touched that
-//! entity between genesis and the anchor, and recomputes the daily capacity and
-//! occupied-capacity deltas from the cells themselves.
+//! entity between genesis and the anchor, and recomputes capacity and occupied
+//! capacity from the cells themselves. Day assignment comes from the indexed
+//! calendar in the same pinned API export as the values under comparison.
 //!
 //! Independence is the property that makes it worth anything, so:
 //!
 //! * it never calls the production writer, parser or `PROTOCOL_REGISTRY` — the
 //!   selector plus the chain records fully determine the expectation, which is
 //!   why a code hash the registry has never seen produces the same numbers;
-//! * it reuses only shared primitives: `ckb_types` for the script hash,
+//! * amount expectations reuse only shared primitives: `ckb_types` for the script hash,
 //!   `ckbadger_common::dao::occupied_capacity_shannons` for the one definition
-//!   of occupied capacity, the node's complete header prefix for monotone
-//!   chain time, and `ckbadger_common::stats_bucket::stats_day` for UTC+8;
+//!   of occupied capacity;
+//! * the indexed calendar is a declared dependency, not an independent clock
+//!   oracle. Its structure is validated and its full buckets are retained in
+//!   the manifest. This check does not reconstruct or independently verify time;
 //! * arithmetic is checked `i128` throughout, compared with zero tolerance.
 //!   `--tolerance` belongs to the explorer comparisons and is not inherited
 //!   here: one shannon is a failure.
@@ -121,7 +124,7 @@ impl DeltaPair {
     }
 }
 
-/// What the chain says one entity's history is.
+/// Chain-derived amounts grouped by the explicitly recorded indexed calendar.
 #[derive(Debug, Clone, Default)]
 pub struct TokenHistoryExpectation {
     /// Net change per UTC+8 day.
@@ -280,6 +283,119 @@ pub struct EntityStatisticsExport {
     pub anchor: ExportAnchor,
     pub complete: bool,
     pub entities: Vec<ExportedEntity>,
+    pub calendar: Option<RecordedCalendar>,
+}
+
+/// Exact indexed UTC+8 block-to-day mapping from the export's pinned view.
+/// The labels are required wire evidence, never inferred from missing fields.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedCalendar {
+    pub source: String,
+    pub independently_verified: bool,
+    pub complete: bool,
+    pub buckets: Vec<RecordedCalendarBucket>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedCalendarBucket {
+    pub date: u32,
+    pub start_block: i64,
+    pub end_block: i64,
+}
+
+struct ValidatedCalendar<'a> {
+    evidence: &'a RecordedCalendar,
+    anchor: u64,
+}
+
+impl RecordedCalendar {
+    fn validate(&self, anchor: u64) -> anyhow::Result<ValidatedCalendar<'_>> {
+        if self.source != "indexed_chain_time" || self.independently_verified {
+            anyhow::bail!(
+                "calendar at anchor {anchor} must declare source=indexed_chain_time and independentlyVerified=false; got source='{}' independentlyVerified={}",
+                self.source, self.independently_verified
+            );
+        }
+        let mut next_block = 0u64;
+        let mut previous_date = None;
+        for (index, bucket) in self.buckets.iter().enumerate() {
+            let year = i32::try_from(bucket.date / 10_000)?;
+            let month = (bucket.date / 100) % 100;
+            let day = bucket.date % 100;
+            if !(10_000_000..=99_991_231).contains(&bucket.date)
+                || chrono::NaiveDate::from_ymd_opt(year, month, day).is_none()
+            {
+                anyhow::bail!(
+                    "calendar bucket {index} has invalid UTC+8 date {} at anchor {anchor}",
+                    bucket.date
+                );
+            }
+            if previous_date.is_some_and(|previous| bucket.date <= previous) {
+                anyhow::bail!(
+                    "calendar bucket {index} date {} is not strictly increasing at anchor {anchor}",
+                    bucket.date
+                );
+            }
+            let start = u64::try_from(bucket.start_block).with_context(|| {
+                format!(
+                    "calendar bucket {index} has negative startBlock {}",
+                    bucket.start_block
+                )
+            })?;
+            let end = u64::try_from(bucket.end_block).with_context(|| {
+                format!(
+                    "calendar bucket {index} has negative endBlock {}",
+                    bucket.end_block
+                )
+            })?;
+            if start != next_block || end < start || end > anchor {
+                anyhow::bail!(
+                    "calendar bucket {index} range {}..={} does not extend the contiguous prefix at {next_block} within anchor {anchor}",
+                    bucket.start_block, bucket.end_block
+                );
+            }
+            next_block = end
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("calendar block range overflow at {end}"))?;
+            previous_date = Some(bucket.date);
+        }
+        if self.complete
+            && self.buckets.last().map(|bucket| bucket.end_block as u64) != Some(anchor)
+        {
+            anyhow::bail!("complete calendar must cover 0..={anchor}; covered prefix ends before block {next_block}");
+        }
+        Ok(ValidatedCalendar {
+            evidence: self,
+            anchor,
+        })
+    }
+}
+
+impl ValidatedCalendar<'_> {
+    fn date_for_block(&self, block: u64) -> anyhow::Result<u32> {
+        if block > self.anchor {
+            anyhow::bail!(
+                "record block {block} exceeds calendar anchor {}",
+                self.anchor
+            );
+        }
+        let index = self
+            .evidence
+            .buckets
+            .partition_point(|bucket| (bucket.end_block as u64) < block);
+        let bucket = self.evidence.buckets.get(index).ok_or_else(|| {
+            anyhow!(
+                "calendar at anchor {} does not cover record block {block}",
+                self.anchor
+            )
+        })?;
+        if (bucket.start_block as u64) > block {
+            anyhow::bail!("calendar gap at record block {block}");
+        }
+        Ok(bucket.date)
+    }
 }
 
 impl ExportedEntity {
@@ -350,10 +466,10 @@ pub struct HistoryComparison {
     pub uncovered: Vec<String>,
 }
 
-/// Compare the chain-derived expectation against the exported index rows.
+/// Compare chain-derived amounts under the indexed calendar against export rows.
 ///
-/// A day the chain says is non-zero but the index omits is a difference against
-/// zero; a non-zero row the chain does not have is a difference the other way.
+/// A day assigned non-zero chain amounts by that calendar but omitted by the
+/// index is a difference against zero; an extra non-zero row also differs.
 /// A genuinely zero net day may legitimately have no row.
 pub fn compare_token_history(
     expected: &TokenHistoryExpectation,
@@ -473,50 +589,55 @@ pub struct TokenExpectationOutcome {
     pub uncovered: Vec<String>,
 }
 
-/// The run's chain-fact cache and budget.
-///
-/// One collector serves every entity in the run: a transaction or header
-/// fetched for one entity is reused by the next, and every request they make
-/// spends the same run-wide allowance. Per-entity collectors re-fetched shared
-/// facts and silently multiplied the budget by the entity count.
+/// One collector shares chain transactions, the declared indexed calendar and
+/// the run-wide allowance across every selected entity. Calendar lookups do not
+/// fetch headers or establish independent calendar correctness.
 pub(crate) struct Collector<'a> {
     client: &'a CkbRpcClient,
     txs: HashMap<String, crate::rpc::TransactionView>,
-    chain_times: Vec<i64>,
-    last_header_hash: Option<String>,
+    calendar: &'a ValidatedCalendar<'a>,
     budget: &'a mut RunBudget,
 }
 
 #[derive(Debug)]
-struct PrefixBudgetExhausted(String);
+struct HistoryBudgetExhausted(String);
 
-impl std::fmt::Display for PrefixBudgetExhausted {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
+impl std::fmt::Display for HistoryBudgetExhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
-impl std::error::Error for PrefixBudgetExhausted {}
+impl std::error::Error for HistoryBudgetExhausted {}
 
 impl<'a> Collector<'a> {
-    pub(crate) fn new(client: &'a CkbRpcClient, budget: &'a mut RunBudget) -> Self {
+    fn new(
+        client: &'a CkbRpcClient,
+        budget: &'a mut RunBudget,
+        calendar: &'a ValidatedCalendar<'a>,
+    ) -> Self {
         Self {
             client,
             txs: HashMap::new(),
-            chain_times: Vec::new(),
-            last_header_hash: None,
+            calendar,
             budget,
         }
     }
 
-    /// Fetch and cache a committed transaction. `None` means the node does not
-    /// have it, which the caller reports as uncovered rather than as zero.
+    /// Fetch and cache a committed transaction. Missing chain evidence remains
+    /// uncovered; it never becomes an output with zero capacity.
     async fn transaction(
         &mut self,
         hash: &str,
     ) -> anyhow::Result<Option<crate::rpc::TransactionView>> {
         if let Some(tx) = self.txs.get(hash) {
             return Ok(Some(tx.clone()));
+        }
+        if let Some(reason) = self.budget.request_exhausted() {
+            return Err(HistoryBudgetExhausted(format!(
+                "transaction {hash} not fetched: {reason}"
+            ))
+            .into());
         }
         self.budget.charge_request();
         let Some(with_status) = self.client.get_transaction(hash).await? else {
@@ -528,60 +649,6 @@ impl<'a> Collector<'a> {
         self.txs.insert(hash.to_string(), tx.clone());
         Ok(Some(tx))
     }
-
-    /// Reconstruct `t*(b)` from the node's complete canonical header prefix.
-    /// Sparse entity-touch blocks alone cannot determine this running maximum.
-    async fn chain_time_ms(&mut self, block: u64) -> anyhow::Result<Option<i64>> {
-        let block_index = usize::try_from(block).context("block height does not fit usize")?;
-        while self.chain_times.len() <= block_index {
-            let next = u64::try_from(self.chain_times.len())?;
-            if let Some(reason) = self.budget.exhausted() {
-                return Err(PrefixBudgetExhausted(format!(
-                    "independent chain-time header prefix incomplete at block {next}: {reason}"
-                ))
-                .into());
-            }
-            self.budget.charge_request();
-            let Some(header) = self.client.get_header_by_number(next).await? else {
-                return Ok(None);
-            };
-            let header_number = u64::from_str_radix(header.number.trim_start_matches("0x"), 16)
-                .with_context(|| {
-                    format!(
-                        "invalid node header number '{}' at requested block {next}",
-                        header.number
-                    )
-                })?;
-            if header_number != next {
-                anyhow::bail!(
-                    "node returned header block {header_number} for requested block {next}"
-                );
-            }
-            if let Some(previous_hash) = &self.last_header_hash {
-                if !header.parent_hash.eq_ignore_ascii_case(previous_hash) {
-                    anyhow::bail!(
-                        "node header linkage differs at block {next}: parent={} previous={previous_hash}",
-                        header.parent_hash
-                    );
-                }
-            }
-            let raw = i64::from_str_radix(header.timestamp.trim_start_matches("0x"), 16)
-                .with_context(|| {
-                    format!(
-                        "invalid node header timestamp '{}' at block {next}",
-                        header.timestamp
-                    )
-                })?;
-            let chain_time = next_chain_time(self.chain_times.last().copied(), raw);
-            self.chain_times.push(chain_time);
-            self.last_header_hash = Some(header.hash);
-        }
-        Ok(Some(self.chain_times[block_index]))
-    }
-}
-
-fn next_chain_time(previous: Option<i64>, raw_timestamp_ms: i64) -> i64 {
-    previous.map_or(raw_timestamp_ms, |value| value.max(raw_timestamp_ms))
 }
 
 /// Exact occupied capacity of one output, in shannons.
@@ -617,26 +684,6 @@ fn parse_capacity_shannons(raw: &str) -> anyhow::Result<i128> {
     let value = u64::from_str_radix(stripped, 16)
         .with_context(|| format!("capacity '{raw}' is not a hex integer"))?;
     Ok(i128::from(value))
-}
-
-/// The UTC+8 day key for independently reconstructed monotone chain time.
-/// The explicit range check also rejects zero or negative node timestamps.
-fn date_key(timestamp_ms: i64) -> anyhow::Result<u32> {
-    if timestamp_ms <= 0 {
-        anyhow::bail!(
-            "block timestamp {timestamp_ms} ms is not after the Unix epoch: no CKB block \
-             carries such a timestamp"
-        );
-    }
-    let seconds = timestamp_ms.div_euclid(1_000);
-    if chrono::DateTime::from_timestamp(seconds, 0).is_none() {
-        anyhow::bail!("block timestamp {timestamp_ms} ms is outside the representable date range");
-    }
-    ckbadger_common::stats_bucket::stats_day(timestamp_ms)?
-        .format("%Y%m%d")
-        .to_string()
-        .parse()
-        .map_err(|e| anyhow!("timestamp {timestamp_ms} did not format into a date key: {e}"))
 }
 
 /// Collect the full `[0, anchor]` history of one token type script.
@@ -711,17 +758,18 @@ pub(crate) async fn collect_token_expectation(
             continue;
         }
 
-        let Some(timestamp_ms) = collector.chain_time_ms(record.block_number).await? else {
-            complete = false;
-            uncovered.push(format!(
-                "no header for block {} (record {})",
-                record.block_number, record.tx_hash
-            ));
-            continue;
-        };
-        let date = date_key(timestamp_ms)?;
+        let date = collector.calendar.date_for_block(record.block_number)?;
 
-        match resolve_cell(collector, record).await? {
+        let cell = match resolve_cell(collector, record).await {
+            Ok(cell) => cell,
+            Err(error) if error.downcast_ref::<HistoryBudgetExhausted>().is_some() => {
+                complete = false;
+                uncovered.push(error.to_string());
+                break;
+            }
+            Err(error) => return Err(error),
+        };
+        match cell {
             Some(cell) => {
                 let signed = match record.io_type {
                     IndexerIoType::Output => (cell.capacity, cell.occupied),
@@ -973,45 +1021,19 @@ fn default_candidates(ctx: &CheckContext) -> (Vec<EntitySelector>, Option<String
     (candidates, uncovered)
 }
 
-/// The chain-side phase: qualify the source, then enumerate each entity.
+/// Qualified chain identity and amount coverage are independent of the
+/// declared calendar mapping and of whether the run's work budget suffices.
 struct ChainWork {
     qualification: SourceQualification,
-    /// One outcome per script, in the order given. Empty when the source did
-    /// not qualify — an unqualified source must not produce numbers at all.
     outcomes: Vec<TokenExpectationOutcome>,
-    /// Run-wide totals, so the manifest reports what the run actually spent
-    /// rather than the sum of per-entity counters over a shared cache.
+    coverage_gap: Option<String>,
     rpc_requests: usize,
     history_records: usize,
 }
 
-fn prefix_budget_gap(anchor_height: u64, budget: &RunBudget) -> anyhow::Result<Option<String>> {
-    let prefix_requests = anchor_height
-        .checked_add(1)
-        .ok_or_else(|| anyhow!("anchor height {anchor_height} has no successor for prefix scan"))?;
-    let remaining = budget
-        .max_rpc_requests()
-        .checked_sub(budget.rpc_requests)
-        .ok_or_else(|| anyhow!("RPC budget counter exceeded configured maximum"))?;
-    // Reserve the final anchor recheck; transaction/indexer requests need
-    // additional room, so this is only a lower-bound admission test.
-    if prefix_requests >= u64::try_from(remaining)? {
-        return Ok(Some(format!(
-            "independent monotone chain-time oracle requires at least {prefix_requests} canonical header RPCs for prefix 0..={anchor_height}, but only {remaining} requests remain in this run's budget; raise the explicit budget to verify this anchor"
-        )));
-    }
-    Ok(None)
-}
-
-fn scanned_prefix_anchor_mismatch(scanned_hash: &str, anchor: &SourceAnchor) -> Option<String> {
-    if scanned_hash.eq_ignore_ascii_case(&anchor.block_hash) {
-        None
-    } else {
-        Some(format!(
-            "independent header prefix at anchor {} ends in {}, but export anchor is {}; source changed during prefix scan",
-            anchor.block_number, scanned_hash, anchor.block_hash
-        ))
-    }
+struct CalendarScope<'a> {
+    calendar: &'a ValidatedCalendar<'a>,
+    export_complete: bool,
 }
 
 async fn qualify_and_collect(
@@ -1021,94 +1043,58 @@ async fn qualify_and_collect(
     anchor: &SourceAnchor,
     scripts: &[(EntitySelector, Script)],
     budget: &mut RunBudget,
+    scope: CalendarScope<'_>,
 ) -> anyhow::Result<ChainWork> {
-    // Qualification charges each node call it makes.
     let qualification =
         qualify_source(client, budget, declaration, declaration_path, anchor).await?;
-    if matches!(qualification, SourceQualification::Inconclusive(_)) {
-        return Ok(ChainWork {
-            qualification,
-            outcomes: Vec::new(),
-            rpc_requests: budget.rpc_requests,
-            history_records: budget.records,
-        });
+    let mut work = ChainWork {
+        qualification,
+        outcomes: Vec::with_capacity(scripts.len()),
+        coverage_gap: None,
+        rpc_requests: budget.rpc_requests,
+        history_records: budget.records,
+    };
+    if matches!(work.qualification, SourceQualification::Inconclusive(_)) {
+        return Ok(work);
     }
-
-    if let Some(reason) = prefix_budget_gap(anchor.block_number, budget)? {
-        return Ok(ChainWork {
-            qualification: SourceQualification::Inconclusive(reason),
-            outcomes: Vec::new(),
-            rpc_requests: budget.rpc_requests,
-            history_records: budget.records,
-        });
+    if !scope.calendar.evidence.complete || !scope.export_complete {
+        work.coverage_gap = Some(format!(
+            "typed export/calendar is incomplete at anchor {}; export complete={}, calendar complete={}, {} bucket(s) exported; no amount comparison was performed",
+            anchor.block_number, scope.export_complete, scope.calendar.evidence.complete, scope.calendar.evidence.buckets.len()
+        ));
+        return Ok(work);
     }
-
-    let mut outcomes = Vec::with_capacity(scripts.len());
     {
-        let mut collector = Collector::new(client, budget);
-        match collector.chain_time_ms(anchor.block_number).await {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                return Ok(ChainWork {
-                    qualification: SourceQualification::Inconclusive(format!(
-                        "node lacks a canonical header in the complete prefix 0..={} needed for independent chain time",
-                        anchor.block_number
-                    )),
-                    outcomes: Vec::new(),
-                    rpc_requests: collector.budget.rpc_requests,
-                    history_records: collector.budget.records,
-                });
-            }
-            Err(error) if error.downcast_ref::<PrefixBudgetExhausted>().is_some() => {
-                return Ok(ChainWork {
-                    qualification: SourceQualification::Inconclusive(format!(
-                        "independent chain-time prefix scan could not finish: {error:#}"
-                    )),
-                    outcomes: Vec::new(),
-                    rpc_requests: collector.budget.rpc_requests,
-                    history_records: collector.budget.records,
-                });
-            }
-            Err(error) => return Err(error),
-        }
-        let scanned_hash = collector
-            .last_header_hash
-            .as_deref()
-            .ok_or_else(|| anyhow!("complete chain-time prefix scan left no anchor header hash"))?;
-        if let Some(reason) = scanned_prefix_anchor_mismatch(scanned_hash, anchor) {
-            return Ok(ChainWork {
-                qualification: SourceQualification::Inconclusive(reason),
-                outcomes: Vec::new(),
-                rpc_requests: collector.budget.rpc_requests,
-                history_records: collector.budget.records,
-            });
-        }
+        let mut collector = Collector::new(client, budget, scope.calendar);
         for (_, script) in scripts {
-            outcomes.push(
+            work.outcomes.push(
                 collect_token_expectation(&mut collector, script, anchor.block_number).await?,
             );
         }
     }
 
-    // The anchor was canonical when the walk started; a walk can take minutes,
-    // and a reorg underneath it would have the node enumerating a different
-    // chain than the export describes. Re-verifying it here is what keeps a
-    // moved chain from being reported as a proven inconsistency.
-    if let Some(reason) = reverify_anchor(client, budget, anchor).await? {
-        return Ok(ChainWork {
-            qualification: SourceQualification::Inconclusive(reason),
-            outcomes: Vec::new(),
-            rpc_requests: budget.rpc_requests,
-            history_records: budget.records,
-        });
+    // A final RPC anchor/hash and indexer-tip check binds all enumerated chain
+    // records to the same export anchor. Insufficient coverage never changes
+    // the already-established identity of the source.
+    let remaining = budget
+        .max_rpc_requests()
+        .checked_sub(budget.rpc_requests)
+        .ok_or_else(|| anyhow!("RPC budget counter exceeded configured maximum"))?;
+    work.coverage_gap = if let Some(reason) = budget.exhausted() {
+        Some(format!("final anchor recheck not covered: {reason}"))
+    } else if remaining < 2 {
+        Some(format!(
+            "final anchor recheck requires 2 RPC requests, but only {remaining} remain"
+        ))
+    } else {
+        reverify_anchor(client, budget, anchor).await?
+    };
+    if work.coverage_gap.is_some() {
+        work.outcomes.clear();
     }
-
-    Ok(ChainWork {
-        rpc_requests: budget.rpc_requests,
-        history_records: budget.records,
-        qualification,
-        outcomes,
-    })
+    work.rpc_requests = budget.rpc_requests;
+    work.history_records = budget.records;
+    Ok(work)
 }
 
 /// Drive one future to completion on a thread of its own.
@@ -1135,16 +1121,17 @@ where
     })
 }
 
-/// S25: one entity's full capacity history, recomputed from the chain.
+/// S25: full entity capacity amounts from chain records, grouped with the
+/// declared indexed calendar. Calendar correctness is not independently proved.
 pub struct EntityCapacityHistoryMatchesChain;
 
 impl Check for EntityCapacityHistoryMatchesChain {
     fn name(&self) -> &'static str {
-        "entity_capacity_history_matches_chain"
+        "entity_capacity_history_matches_recorded_calendar"
     }
 
     fn description(&self) -> &'static str {
-        "Every daily capacity delta, prefix total and current value of an entity matches the chain"
+        "Chain-derived capacity amounts match daily, prefix and live totals under the indexed calendar (calendar not independently verified)"
     }
 
     fn tier(&self) -> CheckTier {
@@ -1215,19 +1202,28 @@ impl Check for EntityCapacityHistoryMatchesChain {
                 "entities": supported
                     .iter()
                     .map(|s| serde_json::json!({"kind": s.kind, "id": s.id}))
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>(),
+                "includeCalendar": true
             }),
         )?;
 
         let anchor = export.anchor.source_anchor()?;
 
-        if !export.complete {
+        if !export.complete && export.calendar.is_none() {
             return Ok(CheckResult::inconclusive(format!(
                 "the typed export at anchor {} is incomplete; a truncated export cannot be \
                  compared against a full history",
                 anchor.block_number
             )));
         }
+
+        let calendar = export.calendar.as_ref().ok_or_else(|| {
+            anyhow!(
+                "required indexed calendar is missing at anchor {}",
+                anchor.block_number
+            )
+        })?;
+        let validated_calendar = calendar.validate(anchor.block_number)?;
 
         let declaration_path = ctx
             .verify_source_path
@@ -1275,6 +1271,10 @@ impl Check for EntityCapacityHistoryMatchesChain {
             &anchor,
             &scripts,
             &mut budget,
+            CalendarScope {
+                calendar: &validated_calendar,
+                export_complete: export.complete,
+            },
         ))?;
 
         // Publish what the expected values rest on, whether or not it
@@ -1282,15 +1282,6 @@ impl Check for EntityCapacityHistoryMatchesChain {
         *ctx.source_profile
             .lock()
             .expect("verify source profile lock poisoned") = Some(work.qualification.to_report());
-
-        let SourceQualification::Qualified(profile) = &work.qualification else {
-            let SourceQualification::Inconclusive(reason) = &work.qualification else {
-                unreachable!("qualification is one of two variants")
-            };
-            return Ok(CheckResult::inconclusive(format!(
-                "history source not qualified: {reason}"
-            )));
-        };
 
         let mut manifest = VerifyManifest::new(
             ctx.network,
@@ -1301,11 +1292,28 @@ impl Check for EntityCapacityHistoryMatchesChain {
         manifest.budget_records = ctx.entity_budget.max_records;
         manifest.budget_rpc_requests = ctx.entity_budget.max_rpc_requests;
         manifest.budget_seconds = ctx.entity_budget.wall_seconds;
-        manifest.index_start_block = profile.index_start_block;
+        if let SourceQualification::Qualified(profile) = &work.qualification {
+            manifest.index_start_block = profile.index_start_block;
+        }
+        manifest.calendar = Some(calendar.clone());
         // Run-wide, counted once: summing per-entity counters over a shared
         // cache would report requests that were never made.
         manifest.rpc_requests = work.rpc_requests;
         manifest.history_records = work.history_records;
+
+        let coverage_gap = match &work.qualification {
+            SourceQualification::Inconclusive(reason) => {
+                Some(format!("history source not qualified: {reason}"))
+            }
+            SourceQualification::Qualified(_) => work.coverage_gap.clone(),
+        };
+        if let Some(reason) = coverage_gap {
+            inconclusive.extend(
+                scripts
+                    .iter()
+                    .map(|(selector, _)| (selector.clone(), reason.clone())),
+            );
+        }
 
         // Coverage is attached by identity: matching a selector to its reason by
         // substring mis-attributes whenever one id contains another.
@@ -1344,11 +1352,13 @@ impl Check for EntityCapacityHistoryMatchesChain {
                 inconclusive.push((selector.clone(), reason.clone()));
             }
             checked += 1;
-            manifest.entities.push(EntityCoverage::complete(
-                selector,
-                outcome.expectation.records,
-                differences.len(),
-            ));
+            let mut coverage =
+                EntityCoverage::complete(selector, outcome.expectation.records, differences.len());
+            if !comparison.uncovered.is_empty() {
+                coverage.complete = false;
+                coverage.uncovered_reason = Some(comparison.uncovered.join("; "));
+            }
+            manifest.entities.push(coverage);
 
             if !differences.is_empty() {
                 // One entity is one failed item, however many days differ.
@@ -1399,14 +1409,14 @@ impl Check for EntityCapacityHistoryMatchesChain {
         }
         if !inconclusive.is_empty() || candidate_gap.is_some() {
             return Ok(CheckResult::inconclusive(format!(
-                "{checked} entity/entities matched the chain, but the run is not complete: {}",
+                "{checked} entity/entities matched chain-derived amounts under indexed_chain_time (calendar not independently verified), but the run is not complete: {}",
                 uncovered(&inconclusive)
             )));
         }
         Ok(CheckResult::pass_with_detail(
             checked,
             format!(
-                "{checked} entity/entities verified exactly against the chain at anchor {}",
+                "{checked} entity/entities: amounts independently derived from chain records at anchor {}; calendar source indexed_chain_time; calendar not independently verified",
                 anchor.block_number
             ),
         ))
@@ -1845,8 +1855,8 @@ mod tests {
     }
 
     /// V0 requires one fetched chain fact to serve every item that needs it.
-    /// Per-entity caches re-fetch the same transaction and header for each
-    /// entity, which also makes the RPC budget a per-entity budget.
+    /// Per-entity caches re-fetch the same transaction for each entity, which
+    /// also makes the RPC budget a per-entity budget.
     #[tokio::test]
     async fn chain_facts_are_shared_across_entities() {
         let fixture = shared_tx_fixture().await;
@@ -1856,7 +1866,9 @@ mod tests {
             MAX_RPC_REQUESTS,
             Duration::from_secs(MAX_WALL_SECONDS),
         );
-        let mut collector = Collector::new(&client, &mut budget);
+        let calendar = test_calendar();
+        let checked = calendar.validate(100).unwrap();
+        let mut collector = Collector::new(&client, &mut budget, &checked);
 
         collect_token_expectation(&mut collector, &fixture.script_a, 100)
             .await
@@ -1872,46 +1884,55 @@ mod tests {
         );
         assert_eq!(
             fixture.header_calls.load(Ordering::SeqCst),
-            11,
-            "the canonical prefix is fetched once across both entities"
+            0,
+            "amount verification uses recorded calendar without fetching headers"
         );
     }
 
-    #[tokio::test]
-    async fn sparse_entity_event_uses_full_header_prefix_for_chain_time() {
-        let fixture = shared_tx_fixture().await;
-        let client = CkbRpcClient::new(fixture.server.uri());
-        let mut budget = RunBudget::new(1_000, 100, Duration::from_secs(60));
-        let mut collector = Collector::new(&client, &mut budget);
-        let previous = collector.chain_time_ms(4).await.unwrap().unwrap();
-        let backward = collector.chain_time_ms(5).await.unwrap().unwrap();
-        let sparse_touch = collector.chain_time_ms(10).await.unwrap().unwrap();
-        assert_eq!(backward, previous, "raw block 5 is before block 4");
-        assert_eq!(sparse_touch, previous, "block 10 inherits prefix maximum");
-        assert_eq!(fixture.header_calls.load(Ordering::SeqCst), 11);
+    #[test]
+    fn recorded_calendar_assigns_boundaries_and_skips_dates_without_blocks() {
+        let calendar = RecordedCalendar {
+            source: "indexed_chain_time".into(),
+            independently_verified: false,
+            complete: true,
+            buckets: vec![
+                RecordedCalendarBucket {
+                    date: 20260912,
+                    start_block: 0,
+                    end_block: 4,
+                },
+                RecordedCalendarBucket {
+                    date: 20260914,
+                    start_block: 5,
+                    end_block: 100,
+                },
+            ],
+        };
+        let checked = calendar.validate(100).unwrap();
+        for block in [0, 4] {
+            assert_eq!(checked.date_for_block(block).unwrap(), 20260912);
+        }
+        for block in [5, 10, 100] {
+            assert_eq!(checked.date_for_block(block).unwrap(), 20260914);
+        }
+        assert!(checked
+            .date_for_block(101)
+            .unwrap_err()
+            .to_string()
+            .contains("101"));
     }
 
-    #[tokio::test]
-    async fn scanned_prefix_is_rejected_if_its_anchor_hash_differs_from_export() {
-        let fixture = shared_tx_fixture().await;
-        let client = CkbRpcClient::new(fixture.server.uri());
-        let mut budget = RunBudget::new(1_000, 100, Duration::from_secs(60));
-        let mut collector = Collector::new(&client, &mut budget);
-        collector.chain_time_ms(10).await.unwrap().unwrap();
-        let mismatched = SourceAnchor {
-            block_number: 10,
-            block_hash: test_hash(99),
-        };
-        let scanned_hash = collector.last_header_hash.as_deref().unwrap();
-        let reason = scanned_prefix_anchor_mismatch(scanned_hash, &mismatched)
-            .expect("a coherent but different fork must be inconclusive");
-        assert!(reason.contains(&test_hash(10)), "{reason}");
-        assert!(reason.contains(&test_hash(99)), "{reason}");
-        let canonical = SourceAnchor {
-            block_hash: test_hash(10),
-            ..mismatched
-        };
-        assert!(scanned_prefix_anchor_mismatch(scanned_hash, &canonical).is_none());
+    fn test_calendar() -> RecordedCalendar {
+        RecordedCalendar {
+            source: "indexed_chain_time".into(),
+            independently_verified: false,
+            complete: true,
+            buckets: vec![RecordedCalendarBucket {
+                date: 20260912,
+                start_block: 0,
+                end_block: 100,
+            }],
+        }
     }
 
     /// Pagination used to run before the collector existed, so its requests
@@ -1925,7 +1946,9 @@ mod tests {
             MAX_RPC_REQUESTS,
             Duration::from_secs(MAX_WALL_SECONDS),
         );
-        let mut collector = Collector::new(&client, &mut budget);
+        let calendar = test_calendar();
+        let checked = calendar.validate(100).unwrap();
+        let mut collector = Collector::new(&client, &mut budget, &checked);
         collect_token_expectation(&mut collector, &fixture.script_a, 100)
             .await
             .unwrap();
@@ -1933,8 +1956,8 @@ mod tests {
         let pages = fixture.page_calls.load(Ordering::SeqCst);
         assert_eq!(pages, 2, "one page of records plus the terminating page");
         assert_eq!(
-            budget.rpc_requests, 14,
-            "2 pages + 11 canonical headers + 1 transaction all spend the same budget"
+            budget.rpc_requests, 3,
+            "2 pages + 1 transaction all spend the same budget; calendar lookup adds none"
         );
     }
 
@@ -1946,8 +1969,10 @@ mod tests {
         let fixture = shared_tx_fixture().await;
         let client = CkbRpcClient::new(fixture.server.uri());
         // Enough for the first entity's walk, not for a second.
-        let mut budget = RunBudget::new(MAX_HISTORY_RECORDS, 14, Duration::from_secs(600));
-        let mut collector = Collector::new(&client, &mut budget);
+        let mut budget = RunBudget::new(MAX_HISTORY_RECORDS, 3, Duration::from_secs(600));
+        let calendar = test_calendar();
+        let checked = calendar.validate(100).unwrap();
+        let mut collector = Collector::new(&client, &mut budget, &checked);
 
         let first = collect_token_expectation(&mut collector, &fixture.script_a, 100)
             .await
@@ -1968,14 +1993,16 @@ mod tests {
         );
     }
 
-    /// Invalid node timestamps cannot silently acquire a plausible day.
     #[test]
-    fn a_timestamp_the_shared_helper_cannot_represent_is_refused() {
-        assert!(date_key(0).is_err(), "no CKB block predates the epoch");
-        assert!(date_key(-1).is_err());
-        assert!(date_key(i64::MAX).is_err());
-        // A real mainnet-era timestamp still resolves.
-        assert_eq!(date_key(1_789_146_000_000).unwrap(), 20260912);
+    fn malformed_calendar_dates_cannot_acquire_a_plausible_bucket() {
+        for date in [0, 20260001, 20261301, 20260230, 100_000_101] {
+            let mut calendar = test_calendar();
+            calendar.buckets[0].date = date;
+            assert!(calendar.validate(100).is_err(), "{date}");
+        }
+        let mut calendar = test_calendar();
+        calendar.buckets[0].date = 20240229;
+        assert!(calendar.validate(100).is_ok());
     }
 
     #[test]
@@ -2015,13 +2042,14 @@ mod tests {
     }
 
     #[test]
-    fn full_prefix_over_budget_is_explicitly_inconclusive() {
-        let mut budget = RunBudget::new(1_000, 100, Duration::from_secs(60));
-        budget.charge_request(); // source qualification
-        let reason = prefix_budget_gap(100, &budget).unwrap().unwrap();
-        assert!(reason.contains("101 canonical header RPCs"), "{reason}");
-        assert!(reason.contains("99 requests remain"), "{reason}");
-        assert!(prefix_budget_gap(10, &budget).unwrap().is_none());
+    fn recorded_calendar_handles_maximum_export_anchor_without_prefix_allocation() {
+        let mut calendar = test_calendar();
+        calendar.buckets[0].end_block = i64::MAX;
+        let checked = calendar.validate(i64::MAX as u64).unwrap();
+        assert_eq!(checked.date_for_block(i64::MAX as u64).unwrap(), 20260912);
+        assert!(checked.date_for_block(u64::MAX).is_err());
+        calendar.buckets[0].end_block -= 1;
+        assert!(calendar.validate(i64::MAX as u64).is_err());
     }
 
     /// Mainnet's unchanged eight-candidate selection at anchor 20,553,546

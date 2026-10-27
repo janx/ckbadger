@@ -191,6 +191,11 @@ pub async fn qualify_source(
         )));
     }
 
+    if let Some(reason) = budget.request_exhausted() {
+        return Ok(SourceQualification::Inconclusive(format!(
+            "source qualification incomplete: {reason}"
+        )));
+    }
     budget.charge_request();
     let node_version = client.local_node_info().await?.version;
     if node_version != declaration.node_version {
@@ -201,6 +206,11 @@ pub async fn qualify_source(
         )));
     }
 
+    if let Some(reason) = budget.request_exhausted() {
+        return Ok(SourceQualification::Inconclusive(format!(
+            "source qualification incomplete: {reason}"
+        )));
+    }
     budget.charge_request();
     let genesis_hash = client
         .get_block_hash(0)
@@ -213,6 +223,11 @@ pub async fn qualify_source(
         )));
     }
 
+    if let Some(reason) = budget.request_exhausted() {
+        return Ok(SourceQualification::Inconclusive(format!(
+            "source qualification incomplete: {reason}"
+        )));
+    }
     budget.charge_request();
     let indexer_tip = client.get_indexer_tip().await?;
     if indexer_tip.block_number < anchor.block_number {
@@ -222,6 +237,11 @@ pub async fn qualify_source(
         )));
     }
 
+    if let Some(reason) = budget.request_exhausted() {
+        return Ok(SourceQualification::Inconclusive(format!(
+            "source qualification incomplete: {reason}"
+        )));
+    }
     budget.charge_request();
     let anchor_hash = client
         .get_block_hash(anchor.block_number)
@@ -264,12 +284,16 @@ pub async fn qualify_source(
 /// The tip growing is expected and fine; only the hash at `H` and an index
 /// that no longer reaches `H` invalidate the case.
 ///
-/// `Ok(None)` means the anchor still holds. `Ok(Some(reason))` means it moved.
+/// `Ok(None)` means the anchor still holds. `Ok(Some(reason))` means it moved
+/// or the budget did not cover a complete recheck.
 pub async fn reverify_anchor(
     client: &CkbRpcClient,
     budget: &mut RunBudget,
     anchor: &SourceAnchor,
 ) -> anyhow::Result<Option<String>> {
+    if let Some(reason) = budget.request_exhausted() {
+        return Ok(Some(format!("final anchor recheck not covered: {reason}")));
+    }
     budget.charge_request();
     let anchor_hash = client
         .get_block_hash(anchor.block_number)
@@ -287,6 +311,9 @@ pub async fn reverify_anchor(
         )));
     }
 
+    if let Some(reason) = budget.request_exhausted() {
+        return Ok(Some(format!("final anchor recheck not covered: {reason}")));
+    }
     budget.charge_request();
     let indexer_tip = client.get_indexer_tip().await?;
     if indexer_tip.block_number < anchor.block_number {
@@ -297,7 +324,9 @@ pub async fn reverify_anchor(
         )));
     }
 
-    Ok(None)
+    Ok(budget
+        .time_exhausted()
+        .map(|reason| format!("final anchor recheck exceeded time budget: {reason}")))
 }
 
 /// Case-insensitive hash comparison that tolerates a missing `0x`.
@@ -340,13 +369,11 @@ impl RunBudget {
         }
     }
 
-    /// Why the budget is spent, if it is. `None` means there is room left.
+    /// Why history work must stop. RPC requests and time are shared with all
+    /// phases; record allowance additionally bounds entity enumeration.
     pub fn exhausted(&self) -> Option<String> {
-        if self.rpc_requests >= self.max_rpc_requests {
-            return Some(format!(
-                "RPC budget exhausted after {} request(s)",
-                self.rpc_requests
-            ));
+        if let Some(reason) = self.request_exhausted() {
+            return Some(reason);
         }
         if self.records >= self.max_records {
             return Some(format!(
@@ -354,6 +381,24 @@ impl RunBudget {
                 self.records
             ));
         }
+        None
+    }
+
+    /// Check immediately before each node request, including a second prevout
+    /// lookup within one record and the source/final-anchor phases.
+    pub fn request_exhausted(&self) -> Option<String> {
+        if self.rpc_requests >= self.max_rpc_requests {
+            return Some(format!(
+                "RPC budget exhausted after {} request(s)",
+                self.rpc_requests
+            ));
+        }
+        self.time_exhausted()
+    }
+
+    /// A completed final request may exactly use the RPC allowance. Its wall
+    /// deadline is still checked independently after that request returns.
+    pub fn time_exhausted(&self) -> Option<String> {
         if Instant::now() >= self.deadline {
             return Some(format!(
                 "time budget exhausted after {} RPC request(s) and {} record(s)",
@@ -472,6 +517,19 @@ mod tests {
 
     const GENESIS: &str = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5";
     const NODE_VERSION: &str = "0.119.0 (abcdef1 2026-01-01)";
+
+    #[test]
+    fn request_and_time_allowances_are_distinct_from_record_allowance() {
+        let mut budget = RunBudget::new(0, 1, Duration::from_secs(60));
+        assert!(budget.exhausted().unwrap().contains("record budget"));
+        assert!(budget.request_exhausted().is_none());
+        budget.charge_request();
+        assert!(budget.request_exhausted().unwrap().contains("RPC budget"));
+        assert!(budget.time_exhausted().is_none());
+        let expired = RunBudget::new(10, 10, Duration::ZERO);
+        assert!(expired.time_exhausted().unwrap().contains("time budget"));
+        assert_eq!(expired.rpc_requests, 0);
+    }
 
     fn test_budget() -> RunBudget {
         RunBudget::new(100, 10_000, Duration::from_secs(600))

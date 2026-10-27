@@ -3,6 +3,9 @@
 //! `POST /api/v1/verify/entity-statistics` answers with the *stored* daily
 //! deltas for a small set of named entities, together with the sync anchor and
 //! the write-path state that decides whether those numbers mean anything yet.
+//! An optional calendar names nonempty UTC+8 intervals using indexed chain
+//! time. It is explicitly a dependency of the comparison, never a claim that
+//! this endpoint independently verified the chain clock.
 //!
 //! What makes this endpoint different from the public asset endpoints:
 //!
@@ -21,7 +24,9 @@
 //! * **Read-only.** It never writes, never triggers the indexer and never calls
 //!   the node — the indexer stays the only writer of chain stores.
 
+use anyhow::Context;
 use axum::{extract::State, routing::post, Json, Router};
+use ckbadger_common::stats_bucket::{stats_day, utc8_day_end_ms};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -35,7 +40,11 @@ use crate::AppState;
 const MAX_ENTITIES: usize = 16;
 /// Daily rows per entity.
 const MAX_DAILY_ROWS: usize = 8_192;
-/// Approximate response budget for the daily rows themselves.
+/// Nonempty indexed calendar days per response.
+const MAX_CALENDAR_BUCKETS: usize = 8_192;
+/// Shared response budget for daily rows and the optional indexed calendar.
+/// Daily row accounting uses the conservative fixed overhead below; calendar
+/// accounting uses its serialized bytes.
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// Fixed per-row wire overhead used for the byte budget (JSON punctuation, the
 /// `date`, and the two field names). Only the budget uses this; no reported
@@ -58,6 +67,10 @@ pub struct EntityStatisticsRequest {
     pub expected_anchor: Option<AnchorRef>,
     /// Row cap per entity; defaults to (and may not exceed) [`MAX_DAILY_ROWS`].
     pub max_daily_rows: Option<usize>,
+    /// Export the stored chain-time calendar as an explicit dependency, not
+    /// as an independently verified chain clock.
+    #[serde(default)]
+    pub include_calendar: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,14 +303,156 @@ pub struct AnchorMismatch {
 pub struct EntityStatisticsResponse {
     pub anchor: Anchor,
     pub state: ExportState,
-    /// True only when every requested entity was exported completely over a
-    /// settled view.
+    /// True only when every requested entity and optional calendar were
+    /// exported completely over a settled view.
     pub complete: bool,
     /// Present only when `expectedAnchor` did not match, in which case no
     /// numbers were exported at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor_mismatch: Option<AnchorMismatch>,
     pub entities: Vec<EntityStatistics>,
+    pub calendar: Option<IndexedCalendar>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedCalendar {
+    pub source: &'static str,
+    pub independently_verified: bool,
+    /// Whether the exported intervals cover every height from zero to anchor;
+    /// this does not say that the anchor's current calendar day has ended.
+    pub complete: bool,
+    pub buckets: Vec<IndexedCalendarBucket>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedCalendarBucket {
+    pub date: u32,
+    /// Inclusive canonical block range. Empty dates have no bucket.
+    pub start_block: i64,
+    pub end_block: i64,
+}
+
+/// Export the index's calendar, including quiet blocks that never touch an
+/// entity. This deliberately trusts persisted chain time; boundary checks do
+/// not independently establish the running maximum of every raw header.
+/// The caller holds the request pin throughout this O(days * log(height)) walk.
+fn export_indexed_calendar(
+    store: &ckbadger_store::CkbadgerStore,
+    anchor: &Anchor,
+    budget_bytes: &mut usize,
+) -> anyhow::Result<IndexedCalendar> {
+    anyhow::ensure!(
+        anchor.block_number >= 0,
+        "negative calendar anchor: block={} hash={}",
+        anchor.block_number,
+        anchor.block_hash
+    );
+    let (tip, tip_header) = store.get_sync_tip_block()?.with_context(|| {
+        format!(
+            "missing calendar header tip: anchor_block={} anchor_hash={}",
+            anchor.block_number, anchor.block_hash
+        )
+    })?;
+    anyhow::ensure!(tip == anchor.block_number && tip_header.hash.len() == 32 && hex0x(&tip_header.hash) == anchor.block_hash,
+        "calendar anchor does not match header tip: anchor_block={} anchor_hash={} header_block={tip} header_hash={}",
+        anchor.block_number, anchor.block_hash, hex0x(&tip_header.hash));
+
+    let read_header = |block| -> anyhow::Result<ckbadger_store::types::CachedBlockHeader> {
+        store.get_block_header(block)?.with_context(|| {
+            format!(
+                "missing calendar header: block={block} anchor_block={} anchor_hash={}",
+                anchor.block_number, anchor.block_hash
+            )
+        })
+    };
+    let mut start_block = 0;
+    let mut start_header = read_header(start_block)?;
+    let mut calendar = IndexedCalendar {
+        source: "indexed_chain_time",
+        independently_verified: false,
+        complete: false,
+        buckets: Vec::new(),
+    };
+    // Charge the serialized calendar and its outer field, including commas.
+    // `complete:false` is one byte longer than the eventual complete value.
+    let envelope_bytes = serde_json::to_vec(&calendar)?.len() + ",\"calendar\":".len();
+    if envelope_bytes > *budget_bytes {
+        return Ok(calendar);
+    }
+    *budget_bytes -= envelope_bytes;
+    loop {
+        if calendar.buckets.len() == MAX_CALENDAR_BUCKETS {
+            return Ok(calendar);
+        }
+        let day = stats_day(start_header.chain_time_ms)
+            .with_context(|| format!("invalid calendar start date: block={start_block}"))?;
+        let date: u32 = day.format("%Y%m%d").to_string().parse().with_context(|| {
+            format!("calendar date cannot be represented: block={start_block} date={day}")
+        })?;
+        if let Some(previous) = calendar.buckets.last() {
+            anyhow::ensure!(date > previous.date,
+                "calendar dates are not increasing: block={start_block} date={date} previous_date={}", previous.date);
+        }
+        let threshold_ms = utc8_day_end_ms(day).with_context(|| {
+            format!("calendar boundary overflow: block={start_block} date={date}")
+        })?;
+        let next_block = store.find_first_block_at_or_after_chain_time_ms(threshold_ms)
+            .with_context(|| format!("calendar boundary search failed: block={start_block} date={date} threshold_ms={threshold_ms}"))?;
+        let next = match next_block {
+            Some(block) => {
+                anyhow::ensure!(block > start_block && block <= anchor.block_number,
+                    "invalid calendar interval: start_block={start_block} next_block={block} anchor_block={} date={date}", anchor.block_number);
+                let header = read_header(block)?;
+                let next_day = stats_day(header.chain_time_ms)
+                    .with_context(|| format!("invalid calendar next date: block={block}"))?;
+                anyhow::ensure!(next_day > day && header.chain_time_ms >= threshold_ms,
+                    "calendar next boundary date mismatch: block={block} date={next_day} previous_date={date} chain_time_ms={} threshold_ms={threshold_ms}", header.chain_time_ms);
+                Some((block, header))
+            }
+            None => None,
+        };
+        let end_block = match &next {
+            Some((block, _)) => block - 1,
+            None => anchor.block_number,
+        };
+        anyhow::ensure!(end_block >= start_block,
+            "inverted calendar interval: start_block={start_block} end_block={end_block} date={date}");
+        let end_header = if end_block == anchor.block_number {
+            &tip_header
+        } else if end_block == start_block {
+            &start_header
+        } else {
+            &read_header(end_block)?
+        };
+        let end_day = stats_day(end_header.chain_time_ms)
+            .with_context(|| format!("invalid calendar end date: block={end_block}"))?;
+        anyhow::ensure!(end_day == day && end_header.chain_time_ms >= start_header.chain_time_ms,
+            "calendar interval boundary date mismatch: start_block={start_block} start_date={day} end_block={end_block} end_date={end_day} start_chain_time_ms={} end_chain_time_ms={}",
+            start_header.chain_time_ms, end_header.chain_time_ms);
+        let bucket = IndexedCalendarBucket {
+            date,
+            start_block,
+            end_block,
+        };
+        let cost = serde_json::to_vec(&bucket)?.len() + usize::from(!calendar.buckets.is_empty());
+        if cost > *budget_bytes {
+            return Ok(calendar);
+        }
+        *budget_bytes -= cost;
+        calendar.buckets.push(bucket);
+        match next {
+            Some((block, header)) => {
+                start_block = block;
+                start_header = header;
+            }
+            None => {
+                calendar.complete = true;
+                return Ok(calendar);
+            }
+        }
+    }
 }
 
 fn hex0x(bytes: &[u8]) -> String {
@@ -381,6 +536,7 @@ async fn export_entity_statistics(
 
     let store = state.store.clone();
     let expected = request.expected_anchor;
+    let include_calendar = request.include_calendar;
 
     // Every read below runs inside this request's pinned read view, so the
     // anchor, the state flags and the rows are one coherent picture.
@@ -457,6 +613,11 @@ async fn export_entity_statistics(
 
         let withhold = anchor_mismatch.is_some() || export_state.mid_write();
         let mut budget_bytes = MAX_RESPONSE_BYTES;
+        let calendar = if include_calendar && !withhold {
+            Some(export_indexed_calendar(&store, &anchor, &mut budget_bytes)?)
+        } else {
+            None
+        };
         let mut exported = Vec::with_capacity(entities.len());
 
         for entity in &entities {
@@ -544,18 +705,20 @@ async fn export_entity_statistics(
             });
         }
 
-        let complete = !withhold && exported.iter().all(|e| e.complete);
+        let complete = !withhold && exported.iter().all(|e| e.complete)
+            && calendar.as_ref().is_none_or(|calendar| calendar.complete);
         Ok(Ok(EntityStatisticsResponse {
             anchor,
             state: export_state,
             complete,
             anchor_mismatch,
             entities: exported,
+            calendar,
         }))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e: anyhow::Error| ApiError::internal(e.to_string()))?;
+    .map_err(|e: anyhow::Error| ApiError::internal(format!("{e:#}")))?;
 
     ok(response?)
 }
@@ -591,6 +754,7 @@ mod tests {
                 .collect(),
             expected_anchor: None,
             max_daily_rows,
+            include_calendar: false,
         }
     }
 

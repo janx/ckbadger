@@ -1,4 +1,4 @@
-//! `entity_capacity_history_matches_chain` — the first chain-derived check.
+//! Exact chain amounts compared using an explicitly recorded indexed calendar.
 //!
 //! Expected values come from a mock CKB node's own indexer; actual values come
 //! from a mock ckbadger typed export. Nothing in this file calls the production
@@ -13,7 +13,7 @@ use ckbadger_indexer::verify::checks::{
 };
 use ckbadger_indexer::verify::entity_history::EntityCapacityHistoryMatchesChain;
 use serde_json::{json, Value};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const NODE_VERSION: &str = "0.119.0 (test)";
@@ -84,6 +84,38 @@ impl ChainFixture {
             expected: Vec::new(),
             next_seed: 1,
         }
+    }
+
+    fn calendar(&self, anchor: u64) -> Value {
+        let mut events: Vec<_> = self
+            .headers
+            .iter()
+            .filter(|(height, _)| **height <= anchor)
+            .collect();
+        events.sort_unstable_by_key(|(height, _)| **height);
+        let mut buckets: Vec<Value> = Vec::new();
+        let mut date = date_for(0);
+        let mut start = 0;
+        for (height, header) in events {
+            let raw = i64::from_str_radix(
+                header["timestamp"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches("0x"),
+                16,
+            )
+            .unwrap();
+            let observed_date = date_for((raw - day_ms(0)) / 86_400_000);
+            if observed_date > date {
+                if *height > start {
+                    buckets.push(json!({"date":date,"startBlock":start,"endBlock":height-1}));
+                }
+                date = observed_date;
+                start = *height;
+            }
+        }
+        buckets.push(json!({"date":date,"startBlock":start,"endBlock":anchor}));
+        json!({"source":"indexed_chain_time","independentlyVerified":false,"complete":true,"buckets":buckets})
     }
 
     fn type_script(&self) -> Value {
@@ -198,7 +230,6 @@ impl ChainFixture {
 /// Serve the fixture's `get_transactions` page(s) and point lookups.
 struct NodeResponder {
     txs: HashMap<String, Value>,
-    headers: HashMap<u64, Value>,
     records: Vec<Value>,
     calls: Arc<Mutex<usize>>,
     /// When set, the block hash at this height changes after the first lookup —
@@ -257,11 +288,8 @@ impl Respond for NodeResponder {
                     None => Value::Null,
                 }
             }
-            "get_header_by_number" => {
-                let number =
-                    u64::from_str_radix(params[0].as_str().unwrap().trim_start_matches("0x"), 16)
-                        .unwrap();
-                self.headers.get(&number).cloned().unwrap_or(Value::Null)
+            "get_header_by_number" | "get_header" => {
+                panic!("recorded-calendar verification must not request headers")
             }
             other => panic!("unexpected RPC method {other}"),
         };
@@ -276,54 +304,9 @@ async fn mock_node(fixture: &ChainFixture) -> MockServer {
 
 async fn mock_node_with_reorg(fixture: &ChainFixture, reorg_at_anchor: Option<u64>) -> MockServer {
     let server = MockServer::start().await;
-    // The independent chain-time oracle must see every canonical header, not
-    // just blocks where this entity had a transaction. A quiet block can move
-    // the running maximum and therefore change a later entity's day.
-    let anchor = fixture.headers.keys().copied().max().unwrap_or(0).max(100);
-    let mut headers = HashMap::new();
-    let mut last_timestamp = fixture
-        .headers
-        .iter()
-        .min_by_key(|(height, _)| *height)
-        .map(|(_, header)| header["timestamp"].clone())
-        .unwrap_or_else(|| json!(hex(day_ms(0) as u64)));
-    let template = fixture.headers.values().next().cloned().unwrap_or_else(|| {
-        json!({
-            "version": "0x0", "compact_target": "0x1a08a97e", "epoch": "0x0",
-            "transactions_root": hash_of(0), "proposals_hash": hash_of(0),
-            "extra_hash": hash_of(0), "dao": format!("0x{}", "00".repeat(32)),
-            "nonce": "0x0",
-        })
-    });
-    for number in 0..=anchor {
-        if let Some(header) = fixture.headers.get(&number) {
-            last_timestamp = header["timestamp"].clone();
-        }
-        let hash = if number == 0 {
-            GENESIS.to_string()
-        } else {
-            format!("0xb{number:063x}")
-        };
-        let parent_hash = if number <= 1 {
-            GENESIS.to_string()
-        } else {
-            format!("0xb{:063x}", number - 1)
-        };
-        let mut header = fixture
-            .headers
-            .get(&number)
-            .cloned()
-            .unwrap_or_else(|| template.clone());
-        header["number"] = json!(hex(number));
-        header["timestamp"] = last_timestamp.clone();
-        header["hash"] = json!(hash);
-        header["parent_hash"] = json!(parent_hash);
-        headers.insert(number, header);
-    }
     Mock::given(method("POST"))
         .respond_with(NodeResponder {
             txs: fixture.txs.clone(),
-            headers,
             records: fixture.records.clone(),
             calls: Arc::new(Mutex::new(0)),
             reorg_at_anchor,
@@ -382,16 +365,18 @@ fn export_body(
 }
 
 async fn mock_api(
+    fixture: &ChainFixture,
     type_hash: &str,
     code_hash: &str,
     rows: &[(u32, i128, i128)],
     anchor: u64,
     complete: bool,
 ) -> MockServer {
-    mock_api_with_current(type_hash, code_hash, rows, anchor, complete, None).await
+    mock_api_with_current(fixture, type_hash, code_hash, rows, anchor, complete, None).await
 }
 
 async fn mock_api_with_current(
+    fixture: &ChainFixture,
     type_hash: &str,
     code_hash: &str,
     rows: &[(u32, i128, i128)],
@@ -400,11 +385,11 @@ async fn mock_api_with_current(
     current: Option<(i128, i128)>,
 ) -> MockServer {
     let server = MockServer::start().await;
+    let mut body = export_body(type_hash, code_hash, rows, anchor, complete, current);
+    body["calendar"] = fixture.calendar(anchor);
     Mock::given(method("POST"))
         .and(path("/api/v1/verify/entity-statistics"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(export_body(
-            type_hash, code_hash, rows, anchor, complete, current,
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .mount(&server)
         .await;
     // Deliberately NOT mounting /api/v1/tokens/{hash}: the check must build its
@@ -455,6 +440,7 @@ struct Wiring {
     entities: Vec<EntitySelector>,
     /// Where the run writes `manifest.json`; `None` writes nothing.
     evidence_dir: Option<std::path::PathBuf>,
+    budget: ckbadger_indexer::verify::entity_history::EntityBudget,
 }
 
 fn wiring(
@@ -473,6 +459,7 @@ fn wiring(
             id: type_hash.to_string(),
         }],
         evidence_dir: None,
+        budget: Default::default(),
     }
 }
 
@@ -490,7 +477,7 @@ fn context(wiring: &Wiring) -> CheckContext {
         entities: wiring.entities.clone(),
         verify_source_path: Some(wiring.declaration_path.clone()),
         evidence_dir: wiring.evidence_dir.clone(),
-        entity_budget: Default::default(),
+        entity_budget: wiring.budget,
         source_profile: std::sync::Mutex::new(None),
     }
 }
@@ -549,7 +536,7 @@ async fn an_index_that_matches_the_chain_passes() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -562,12 +549,391 @@ async fn an_index_that_matches_the_chain_passes() {
     assert_eq!(result.items_checked, 1, "items are entities, not rows");
 }
 
+fn recorded_calendar(anchor: u64) -> Value {
+    json!({
+        "source": "indexed_chain_time",
+        "independentlyVerified": false,
+        "complete": true,
+        "buckets": [
+            {"date":date_for(0),"startBlock":0,"endBlock":19},
+            {"date":date_for(1),"startBlock":20,"endBlock":29},
+            {"date":date_for(2),"startBlock":30,"endBlock":anchor}
+        ]
+    })
+}
+
+async fn mock_export(body: Value) -> MockServer {
+    let api = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/verify/entity-statistics"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&api)
+        .await;
+    api
+}
+
+async fn result_or_error(
+    wiring: Wiring,
+) -> anyhow::Result<ckbadger_indexer::verify::checks::CheckResult> {
+    tokio::task::spawn_blocking(move || {
+        EntityCapacityHistoryMatchesChain.run(&context(&wiring), &ProgressReporter::new(None))
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_high_anchor_needs_no_header_prefix_or_header_rpc() {
+    const ANCHOR: u64 = 30_000_000;
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    let node = mock_node(&fixture).await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"method":"get_indexer_tip"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc":"2.0","id":1,"result":{"block_number":hex(ANCHOR),"block_hash":hash_of(1)}
+        })))
+        .with_priority(1)
+        .mount(&node)
+        .await;
+    let mut body = export_body(&id, &code, &fixture.daily_rows(), ANCHOR, true, None);
+    let calendar = recorded_calendar(ANCHOR);
+    body["calendar"] = calendar.clone();
+    let api = mock_export(body).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration = declaration(dir.path(), NODE_VERSION);
+    let mut wiring = wiring(&api, &node, &declaration, &id);
+    wiring.budget.max_rpc_requests = 12;
+    wiring.evidence_dir = Some(dir.path().join("evidence"));
+    let result = run_check(wiring).await;
+    assert_eq!(result.status, CheckStatus::Pass, "{:?}", result.detail);
+    let detail = result.detail.unwrap();
+    assert!(detail.contains("indexed_chain_time"), "{detail}");
+    assert!(detail.contains("not independently verified"), "{detail}");
+    let requests = node.received_requests().await.unwrap();
+    assert!(requests.iter().all(|request| {
+        !serde_json::from_slice::<Value>(&request.body).unwrap()["method"]
+            .as_str()
+            .unwrap()
+            .contains("header")
+    }));
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("evidence/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["calendar"], calendar);
+    assert_eq!(manifest["calendarSource"], "indexed_chain_time");
+    assert_eq!(manifest["calendarIndependentlyVerified"], false);
+    assert_eq!(manifest["amountSource"], "ckb_rpc");
+    assert_eq!(manifest["rpcRequests"], requests.len());
+    assert_eq!(manifest["historyRecords"], fixture.records.len());
+    assert_eq!(manifest["anchorBlockNumber"], ANCHOR);
+    let api_requests = api.received_requests().await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&api_requests[0].body).unwrap()["includeCalendar"],
+        true
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_missing_or_invalid_evidence_is_an_error_without_fallback() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    for damage in [
+        "missing",
+        "null",
+        "source",
+        "independent",
+        "missing label",
+        "gap",
+        "overlap",
+        "negative",
+        "reversed",
+        "first block",
+        "last block",
+        "date",
+        "duplicate date",
+        "empty",
+    ] {
+        let node = mock_node(&fixture).await;
+        let mut body = export_body(&id, &code, &fixture.daily_rows(), 100, true, None);
+        let mut calendar = recorded_calendar(100);
+        match damage {
+            "source" => calendar["source"] = json!("raw_headers"),
+            "independent" => calendar["independentlyVerified"] = json!(true),
+            "missing label" => {
+                calendar
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("independentlyVerified");
+            }
+            "gap" => calendar["buckets"][1]["startBlock"] = json!(21),
+            "overlap" => calendar["buckets"][1]["startBlock"] = json!(19),
+            "negative" => calendar["buckets"][0]["startBlock"] = json!(-1),
+            "reversed" => calendar["buckets"][1]["endBlock"] = json!(18),
+            "first block" => calendar["buckets"][0]["startBlock"] = json!(1),
+            "last block" => calendar["buckets"][2]["endBlock"] = json!(99),
+            "date" => calendar["buckets"][1]["date"] = json!(20260230),
+            "duplicate date" => calendar["buckets"][1]["date"] = json!(date_for(0)),
+            "empty" => calendar["buckets"] = json!([]),
+            "missing" | "null" => {}
+            _ => unreachable!(),
+        }
+        if damage != "missing" {
+            body["calendar"] = if damage == "null" {
+                Value::Null
+            } else {
+                calendar
+            };
+        }
+        let api = mock_export(body).await;
+        let dir = tempfile::tempdir().unwrap();
+        let declaration = declaration(dir.path(), NODE_VERSION);
+        let error = result_or_error(wiring(&api, &node, &declaration, &id))
+            .await
+            .expect_err(damage);
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("calendar") || message.contains("independentlyVerified"),
+            "{damage}: {message}"
+        );
+        assert!(
+            node.received_requests().await.unwrap().is_empty(),
+            "bad calendar must fail before chain work: {damage}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_shared_wrong_day_never_claims_independent_clock_verification() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    let node = mock_node(&fixture).await;
+    let shifted_rows: Vec<_> = fixture
+        .daily_rows()
+        .into_iter()
+        .map(|(d, c, k)| (d + 1, c, k))
+        .collect();
+    let mut body = export_body(&id, &code, &shifted_rows, 100, true, None);
+    let mut calendar = recorded_calendar(100);
+    for bucket in calendar["buckets"].as_array_mut().unwrap() {
+        bucket["date"] = json!(bucket["date"].as_u64().unwrap() + 1);
+    }
+    body["calendar"] = calendar;
+    let api = mock_export(body).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration, &id)).await;
+    assert_eq!(result.status, CheckStatus::Pass, "{:?}", result.detail);
+    assert_eq!(
+        EntityCapacityHistoryMatchesChain.name(),
+        "entity_capacity_history_matches_recorded_calendar"
+    );
+    assert!(result
+        .detail
+        .unwrap()
+        .contains("calendar not independently verified"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_incomplete_export_preserves_evidence_and_qualified_scope() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    for calendar_complete in [false, true] {
+        let node = mock_node(&fixture).await;
+        let mut body = export_body(&id, &code, &fixture.daily_rows(), 100, false, None);
+        let mut calendar = recorded_calendar(100);
+        if !calendar_complete {
+            calendar["complete"] = json!(false);
+            calendar["buckets"].as_array_mut().unwrap().pop();
+        }
+        body["calendar"] = calendar.clone();
+        let api = mock_export(body).await;
+        let dir = tempfile::tempdir().unwrap();
+        let declaration = declaration(dir.path(), NODE_VERSION);
+        let mut wiring = wiring(&api, &node, &declaration, &id);
+        wiring.evidence_dir = Some(dir.path().join("evidence"));
+        let result = run_check(wiring).await;
+        assert_eq!(result.status, CheckStatus::Inconclusive);
+        assert_eq!(result.items_checked, 0);
+        let manifest: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("evidence/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["sourceProfile"]["status"], "qualified");
+        assert_eq!(manifest["calendar"], calendar);
+        assert_eq!(manifest["calendarIndependentlyVerified"], false);
+        assert_eq!(manifest["entities"][0]["complete"], false);
+        assert_eq!(manifest["historyRecords"], 0);
+        assert_eq!(manifest["rpcRequests"], 4);
+        assert_eq!(node.received_requests().await.unwrap().len(), 4);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_withheld_export_without_calendar_does_not_query_chain() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    let node = mock_node(&fixture).await;
+    let api = mock_export(export_body(&id, &code, &[], 100, false, None)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration, &id)).await;
+    assert_eq!(result.status, CheckStatus::Inconclusive);
+    assert!(node.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_rpc_and_record_limits_keep_qualified_source_and_exact_spend() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    for (max_rpc, max_records, expected_status) in [
+        (11, 100, CheckStatus::Pass),
+        (10, 100, CheckStatus::Inconclusive),
+        (100, 1, CheckStatus::Inconclusive),
+    ] {
+        let node = mock_node(&fixture).await;
+        let api = mock_api(&fixture, &id, &code, &fixture.daily_rows(), 100, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let declaration = declaration(dir.path(), NODE_VERSION);
+        let mut wiring = wiring(&api, &node, &declaration, &id);
+        wiring.budget.max_rpc_requests = max_rpc;
+        wiring.budget.max_records = max_records;
+        wiring.evidence_dir = Some(dir.path().join("evidence"));
+        let result = run_check(wiring).await;
+        assert_eq!(result.status, expected_status, "{:?}", result.detail);
+        let manifest: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("evidence/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["sourceProfile"]["status"], "qualified");
+        let requests = node.received_requests().await.unwrap().len();
+        assert_eq!(manifest["rpcRequests"], requests);
+        assert!(requests <= max_rpc);
+        if expected_status == CheckStatus::Pass {
+            assert_eq!(
+                requests, max_rpc,
+                "exactly spending the RPC limit still completes"
+            );
+        } else {
+            assert_eq!(manifest["entities"][0]["complete"], false);
+            assert!(!result.detail.unwrap().contains("source not qualified"));
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_missing_chain_transaction_is_uncovered_never_zero() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let mut fixture = standard_fixture(&code);
+    let first_hash = fixture.records[0]["tx_hash"].as_str().unwrap().to_string();
+    fixture.txs.remove(&first_hash);
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&fixture, &id, &code, &fixture.daily_rows(), 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration, &id)).await;
+    assert_eq!(result.status, CheckStatus::Inconclusive);
+    assert_eq!(result.items_checked, 0);
+    assert!(result.detail.unwrap().contains("not fully covered"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_prevout_lookup_cannot_exceed_remaining_rpc_budget() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let mut fixture = standard_fixture(&code);
+    // All records remain present. Encounter the spend first so resolving its
+    // input requires both the spending transaction and an uncached prevout.
+    fixture.records.rotate_right(1);
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&fixture, &id, &code, &fixture.daily_rows(), 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration = declaration(dir.path(), NODE_VERSION);
+    let mut wiring = wiring(&api, &node, &declaration, &id);
+    wiring.budget.max_rpc_requests = 7; // qualification4 + pages2 + spending tx1
+    wiring.evidence_dir = Some(dir.path().join("evidence"));
+    let result = run_check(wiring).await;
+    assert_eq!(result.status, CheckStatus::Inconclusive);
+    assert!(result.detail.unwrap().contains("budget"));
+    assert_eq!(node.received_requests().await.unwrap().len(), 7);
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("evidence/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["rpcRequests"], 7);
+    assert_eq!(manifest["sourceProfile"]["status"], "qualified");
+    assert_eq!(manifest["entities"][0]["complete"], false);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_qualification_stays_within_its_request_budget() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    for limit in 0..4 {
+        let node = mock_node(&fixture).await;
+        let api = mock_api(&fixture, &id, &code, &fixture.daily_rows(), 100, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let declaration = declaration(dir.path(), NODE_VERSION);
+        let mut wiring = wiring(&api, &node, &declaration, &id);
+        wiring.budget.max_rpc_requests = limit;
+        let result = run_check(wiring).await;
+        assert_eq!(result.status, CheckStatus::Inconclusive);
+        assert_eq!(node.received_requests().await.unwrap().len(), limit);
+        assert!(result.detail.unwrap().contains("source not qualified"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recorded_calendar_uncovered_current_facet_is_incomplete_in_manifest() {
+    let code = hash_of(0xc0de);
+    let id = type_hash_of(&code);
+    let fixture = standard_fixture(&code);
+    let node = mock_node(&fixture).await;
+    let mut rows = fixture.daily_rows();
+    rows[0].1 += 1; // retain known daily/prefix differences even with a missing facet
+    let mut body = export_body(&id, &code, &rows, 100, true, None);
+    body["calendar"] = fixture.calendar(100);
+    body["entities"][0]["currentError"] = json!("current accumulation failed");
+    let api = mock_export(body).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration = declaration(dir.path(), NODE_VERSION);
+    let mut wiring = wiring(&api, &node, &declaration, &id);
+    wiring.evidence_dir = Some(dir.path().join("evidence"));
+    let result = run_check(wiring).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Fail,
+        "known amount differences remain failures"
+    );
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("evidence/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    let entity = &manifest["entities"][0];
+    assert_eq!(entity["complete"], false);
+    assert_eq!(entity["historyRecords"], fixture.records.len());
+    assert!(entity["differences"].as_u64().unwrap() > 0);
+    assert!(entity["uncoveredReason"]
+        .as_str()
+        .unwrap()
+        .contains("current facet"));
+}
+
 /// The original 10k-request default could not finish even the first mainnet
 /// incident selector. Exercise an exhaustive history beyond that allowance:
-/// every distinct block and transaction must be fetched, with real pagination.
+/// every distinct transaction must be fetched, with real pagination; calendar lookup adds no RPC.
 #[tokio::test(flavor = "multi_thread")]
 async fn default_budget_verifies_a_history_requiring_more_than_ten_thousand_requests() {
-    const RECORDS: u64 = 5_001;
+    const RECORDS: u64 = 10_001;
     let code_hash = hash_of(0xc0de);
     let type_hash = type_hash_of(&code_hash);
     let mut fixture = ChainFixture::new(&code_hash);
@@ -575,7 +941,15 @@ async fn default_budget_verifies_a_history_requiring_more_than_ten_thousand_requ
         fixture.create(block, (block / 2_000) as i64, shape(1_000, 16, 20));
     }
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &fixture.daily_rows(), RECORDS, true).await;
+    let api = mock_api(
+        &fixture,
+        &type_hash,
+        &code_hash,
+        &fixture.daily_rows(),
+        RECORDS,
+        true,
+    )
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let evidence = dir.path().join("evidence");
@@ -607,7 +981,7 @@ async fn a_hundred_shannons_missing_from_one_day_fails_on_the_daily_facet() {
     rows[0].1 -= 100;
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let expected_date = rows[0].0;
@@ -637,6 +1011,7 @@ async fn a_stored_current_value_that_disagrees_with_the_live_set_fails_on_the_cu
     let node = mock_node(&fixture).await;
     // Every day agrees; only the reported current total is off.
     let api = mock_api_with_current(
+        &fixture,
         &type_hash,
         &code_hash,
         &rows,
@@ -669,7 +1044,7 @@ async fn a_wrong_occupied_capacity_fails_on_the_knowledge_facet() {
     rows[1].2 += SHANNON;
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -690,7 +1065,7 @@ async fn offsetting_daily_errors_with_a_correct_total_still_fail() {
     rows[1].1 -= 100;
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -720,7 +1095,7 @@ async fn whole_days_missing_from_the_index_are_named() {
     let missing: Vec<u32> = all_rows[2..].iter().map(|(date, _, _)| *date).collect();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -745,7 +1120,7 @@ async fn a_source_that_does_not_qualify_is_inconclusive_not_a_failure() {
     rows[0].1 -= 100;
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), "0.118.0-different");
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -768,7 +1143,7 @@ async fn an_anchor_that_moves_during_the_walk_is_inconclusive_not_a_failure() {
     rows[0].1 -= 100;
 
     let node = mock_node_with_reorg(&fixture, Some(100)).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
 
@@ -797,7 +1172,7 @@ async fn an_incomplete_export_is_inconclusive() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, false).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, false).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -819,7 +1194,7 @@ async fn expected_values_do_not_depend_on_the_protocol_registry() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &unregistered, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &unregistered, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
@@ -843,7 +1218,7 @@ async fn default_run_reads_the_token_directory_envelope() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     Mock::given(method("GET"))
         .and(path("/api/v1/tokens"))
         .and(query_param("limit", "8"))
@@ -893,7 +1268,7 @@ async fn token_plus_spore_selectors_end_inconclusive_and_name_the_spore_one() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let evidence = dir.path().join("evidence");
@@ -950,7 +1325,7 @@ async fn rpc_budget_spend_equals_the_requests_the_node_received() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
     let evidence = dir.path().join("evidence");
@@ -982,7 +1357,7 @@ async fn a_bare_uppercase_entity_id_selects_the_same_entity() {
     let rows = fixture.daily_rows();
 
     let node = mock_node(&fixture).await;
-    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let api = mock_api(&fixture, &type_hash, &code_hash, &rows, 100, true).await;
     let dir = tempfile::tempdir().unwrap();
     let declaration_path = declaration(dir.path(), NODE_VERSION);
 
