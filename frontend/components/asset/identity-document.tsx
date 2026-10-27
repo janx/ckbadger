@@ -184,7 +184,7 @@ export function IdentityDocument({ protocol }: IdentityDocumentProps) {
                     {r.label || r.key} · {r.type}
                   </dt>
                   <dd className="break-all">
-                    {r.value}
+                    {r.value ?? r.valueHex}
                     <span className="text-text-dim block text-[11px]">TTL {r.ttl}s</span>
                   </dd>
                 </div>
@@ -217,7 +217,7 @@ export function IdentityDocument({ protocol }: IdentityDocumentProps) {
                 {d.linkedAccount.name ?? d.linkedAccount.id} →
               </AppLink>
               <p className="text-text-dim text-[11px]">
-                Linked account {d.linkedAccount.isLive ? 'live' : 'inactive'}
+                Current linked account {d.linkedAccount.isLive ? 'live' : 'inactive'}
                 {d.linkedAccount.registeredAt !== null
                   ? ` · registered ${secondsDate(d.linkedAccount.registeredAt)} UTC+8`
                   : ''}

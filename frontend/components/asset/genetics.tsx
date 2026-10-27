@@ -11,8 +11,9 @@ import { HUE_RAMP } from '@/lib/design-tokens';
 export interface ObjectGeneticsViewProps {
   evidence: ObjectGenetics;
   subject: string;
+  collection?: CollectionInsights['genetics'];
 }
-export function ObjectGeneticsView({ evidence, subject }: ObjectGeneticsViewProps) {
+export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGeneticsViewProps) {
   const { dnaHex, cachedVmTraits: cached, currentPattern: pattern } = evidence;
   if (dnaHex === null)
     return <p className="text-text-dim text-[11px]">This object has no DOB DNA.</p>;
@@ -98,7 +99,21 @@ export function ObjectGeneticsView({ evidence, subject }: ObjectGeneticsViewProp
           {cached.traits.map((t, i) => (
             <div key={`${t.name}:${i}`}>
               <dt className="text-text-dim text-[11px]">{t.name}</dt>
-              <dd className="text-text-bright break-words">{t.value}</dd>
+              <dd className="text-text-bright break-words">
+                {t.value}
+                {collection?.complete && (
+                  <span className="text-text-dim block text-[11px]">
+                    {(() => {
+                      const count = collection.traits
+                        .find((g) => g.name === t.name)
+                        ?.values.find((v) => v.value === t.value)?.count;
+                      return count === undefined
+                        ? 'Variant absent from the current collection result'
+                        : `${count} of ${collection.eligibleItems} live DOB items`;
+                    })()}
+                  </span>
+                )}
+              </dd>
             </div>
           ))}
         </dl>
@@ -203,6 +218,9 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
   return (
     <section aria-label="Current decoder blueprint" className="space-y-6">
       <h2 className="text-text-bright text-[15px]">Current decoder blueprint</h2>
+      <p className="text-text-dim text-[11px]">
+        {pattern.version === null ? 'DOB version not stated' : `DOB/${pattern.version}`}
+      </p>
       {pattern.steps.map((step) => (
         <article key={step.step} className="space-y-3">
           <h3>

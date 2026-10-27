@@ -1,255 +1,151 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-
-import DotbitItemDetailPage from '@/app/identities/dotbit/[identityId]/client-page';
-import { api } from '@/lib/api';
-import { render } from '../utils/test-utils';
-
-vi.mock('@/lib/api', () => ({
-  api: {
-    getDotbitItemDetail: vi.fn(),
-    getDotbitItemActivities: vi.fn(),
-    getAddress: vi.fn(),
-  },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
-}));
-
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div data-testid="header">Header</div>,
-}));
-
-const mockReplace = vi.fn();
-let mockSearchParams = new URLSearchParams();
-
+import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import Page from '@/app/identities/dotbit/[identityId]/client-page';
+import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
+import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import {
+  dotbitV4ProtocolProducer as evidence,
+  itemActivityFeedProducer,
+  itemTransactionsProducer,
+} from '@/__tests__/msw/fixtures/item-producer';
+vi.mock('@/components/layout/header', () => ({ Header: () => null }));
+let query = '';
+const replace = vi.fn();
 vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ identityId: '0xabc' }),
-  usePathname: () => '/identities/dotbit/0xabc',
-  useRouter: () => ({ replace: mockReplace }),
-  useSearchParams: () => mockSearchParams,
+  useSearchParams: () => new URLSearchParams(query),
+  usePathname: () => '/identities/dotbit/item',
+  useRouter: () => ({ replace }),
 }));
-
-describe('DotbitItemDetailPage', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReplace.mockReset();
-    mockSearchParams = new URLSearchParams();
-    vi.mocked(api.getAddress).mockResolvedValue({
-      lockScriptHash: '0xlock',
-      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-      balance: '0',
-      commonKnowledgeSize: '0',
-      liveCellsCount: 0,
-      transactionsCount: 0,
-    } as any);
-    vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+beforeEach(() => {
+  mockItemReads();
+  query = '';
+  replace.mockClear();
+});
+afterEach(() => vi.restoreAllMocks());
+it('renders exact canonical protocol, whole cell history and raw bytes for dotbit', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
+  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent('cell data');
+  expect(api.getDotbitItemDetail).toHaveBeenCalledWith(evidence.itemId);
+  expect(api.getItemProtocol).toHaveBeenCalledWith('dotbit', evidence.itemId);
+  const link = screen
+    .getAllByRole('link')
+    .find(
+      (a) =>
+        a.getAttribute('href') ===
+        `/mainnet/cell/${evidence.versions[0].cell.txHash}/${evidence.versions[0].cell.outputIndex}`
+    );
+  expect(link).toBeDefined();
+});
+it('keeps recycled identity history while showing no live capacity', async () => {
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+    ...identityItem('dotbit'),
+    isLive: false,
+    ownerLockHash: null,
+    txHash: null,
+    outputIndex: null,
   });
-
-  it('hydrates activity cursor from URL query', async () => {
-    mockSearchParams = new URLSearchParams('activity_cursor=500:0');
-    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: '0xtx',
-      outputIndex: 2,
-    } as any);
-
-    render(<DotbitItemDetailPage identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 50,
-        cursor: '500:0',
-      });
-    });
-  });
-
-  it('renders dotbit labels, back link, and recycled status message', async () => {
-    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
+  const cells: ItemCellVersions = {
+    data: evidence.versions.map((v) => ({
+      ...v.cell,
       isLive: false,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: null,
-      outputIndex: null,
-    } as any);
-
-    render(<DotbitItemDetailPage identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
-    });
-
-    expect(screen.getByRole('link', { name: /Back to \.bit Collection/ })).toHaveAttribute(
-      'href',
-      '/mainnet/identities/dotbit'
-    );
-    expect(screen.getByText('Identity & Ownership')).toBeInTheDocument();
-    expect(screen.getByText('Cell Status')).toBeInTheDocument();
-    expect(screen.getAllByText('alice.bit').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
-    expect(screen.getByText('Recycled .bit account has no live cell.')).toBeInTheDocument();
+      consumedByTx: '0x' + 'ab'.repeat(32),
+      consumedAtBlock: 101,
+    })),
+    total: evidence.versions.length,
+  };
+  vi.mocked(api.getItemCellVersions).mockResolvedValue(cells);
+  render(<Page identityId={evidence.itemId} />);
+  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
+  expect(await screen.findByText('No live cell')).toBeInTheDocument();
+  expect(screen.getAllByText('0').length).toBeGreaterThan(0);
+  expect(screen.getByLabelText('Raw item evidence')).toBeInTheDocument();
+});
+it('hydrates the explicit activity cursor and advances full-record pagination', async () => {
+  query = 'activity_cursor=100:0';
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
+    ...itemActivityFeedProducer,
+    total: 100,
+    hasMore: true,
+    nextCursor: '90:0',
   });
-
-  it('renders activities with correct timestamp parsing', async () => {
-    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: '0xtx',
-      outputIndex: 2,
-    } as any);
-    vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xacttx',
-          blockNumber: 456,
-          txIndex: 0,
-          timestamp: '1700000300000',
-          actions: ['burn', 'transfer'],
-        },
-      ],
+  render(<Page identityId={evidence.itemId} />);
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
       limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
-
-    render(<DotbitItemDetailPage identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 50 });
-    });
-
-    await waitFor(() => {
-      expect(screen.getAllByText('recycled, transfer').length).toBeGreaterThan(0);
-    });
-    expect(screen.getByText(/2023/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '#456' })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks/456'
-    );
-    expect(
-      screen
-        .getAllByRole('link')
-        .some((link) => link.getAttribute('href') === '/mainnet/tx/0xacttx')
-    ).toBe(true);
+      cursor: '100:0',
+    })
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
+      limit: 50,
+      cursor: '90:0',
+    })
+  );
+  expect(replace).toHaveBeenCalledWith('/identities/dotbit/item?activity_cursor=90%3A0', {
+    scroll: false,
   });
-
-  it('applies cursor pagination', async () => {
-    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: '0xtx',
-      outputIndex: 2,
-    } as any);
-    vi.mocked(api.getDotbitItemActivities).mockImplementation(async (_nftId, params) => {
-      if (params?.cursor === '500:0') {
-        return {
-          data: [
-            {
-              txHash: '0xpage2',
-              blockNumber: 400,
-              txIndex: 0,
-              timestamp: '1700000400',
-              actions: ['mint'],
-            },
-          ],
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        } as any;
-      }
-      return {
-        data: [
-          {
-            txHash: '0xpage1',
-            blockNumber: 500,
-            txIndex: 0,
-            timestamp: '1700000500',
-            actions: ['transfer'],
-          },
-        ],
-        limit: 50,
-        hasMore: true,
-        nextCursor: '500:0',
-      } as any;
-    });
-
-    render(<DotbitItemDetailPage identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 50 });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Next' })).not.toBeDisabled();
-    });
-    const nextButton = screen.getByRole('button', { name: 'Next' });
-    fireEvent.click(nextButton);
-
-    await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 50,
-        cursor: '500:0',
-      });
-    });
-    await waitFor(() => {
-      expect(
-        mockReplace.mock.calls.some((call) => String(call[0]).includes('activity_cursor=500%3A0'))
-      ).toBe(true);
-    });
+});
+it('uses the independent Transactions layer and preserves unavailable cycles', async () => {
+  vi.mocked(api.getItemTransactions).mockResolvedValue({
+    ...itemTransactionsProducer,
+    data: itemTransactionsProducer.data.map((t) => ({
+      ...t,
+      cycles: null,
+      cyclesStatus: 'pending',
+    })),
   });
-
-  it('renders live cell link when account is live', async () => {
-    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: '0xtx',
-      outputIndex: 2,
-    } as any);
-
-    render(<DotbitItemDetailPage identityId="0xabc" />);
-
-    await waitFor(() => {
-      const links = screen.getAllByRole('link');
-      expect(links.some((link) => link.getAttribute('href') === '/mainnet/cell/0xtx-2')).toBe(true);
-    });
+  render(<Page identityId={evidence.itemId} />);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  await screen.findByRole('table', { name: 'Asset transactions' });
+  expect(screen.getByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
+    'Not computed'
+  );
+  expect(screen.getByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
+  expect(api.getItemTransactions).toHaveBeenCalledWith('dotbit', evidence.itemId, {
+    limit: 50,
+    cursor: undefined,
   });
-
-  it('renders not found panel when item is missing', async () => {
-    vi.mocked(api.getDotbitItemDetail).mockRejectedValue(new Error('API error: 404'));
-
-    render(<DotbitItemDetailPage identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('.bit item not found')).toBeInTheDocument();
-    });
+});
+it('starts a new identity on its own first cursor page', async () => {
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
+    ...emptyPage(),
+    total: 100,
+    hasMore: true,
+    nextCursor: '90:0',
   });
+  const { rerender } = render(<Page identityId={evidence.itemId} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
+      limit: 50,
+      cursor: '90:0',
+    })
+  );
+  const next = '0x' + '66'.repeat(32);
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({ ...identityItem('dotbit'), nftId: next });
+  query = '';
+  rerender(<Page identityId={next} />);
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', next, {
+      limit: 50,
+      cursor: undefined,
+    })
+  );
+});
+it('reports missing identity and unavailable raw evidence without inventing a document', async () => {
+  vi.mocked(api.getDotbitItemDetail).mockRejectedValue(
+    new ApiRequestError(404, 'not_found', 'Identity not found')
+  );
+  const { unmount } = render(<Page identityId={evidence.itemId} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Identity not found');
+  unmount();
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue(identityItem('dotbit'));
+  vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));
+  render(<Page identityId={evidence.itemId} />);
+  expect(
+    (await screen.findAllByRole('alert')).some((a) =>
+      a.textContent?.includes('missing local cell bytes')
+    )
+  ).toBe(true);
 });

@@ -43,6 +43,24 @@ Machine-friendly endpoints:
   anchor for exact row shares. `/activity-feed` and `/transactions` expose both paginated layers.
   Issuer is nullable and requires script proof; stored name/symbol/decimals provenance is not
   recorded. Unknown decimals remain raw integer amounts.
+- Canonical item evidence: append `/cell-versions`, `/protocol`, `/activity-feed` or
+  `/transactions` to `/spore/objects/{id}`, `/assets/objects/items/{id}` (m-NFT), or
+  `/assets/identities/{dotbit|bit-cell|did|dotcell}/items/{id}`. Versions are oldest first;
+  protocol responses include exact raw bytes, byte spans and lossless decoded values.
+  Named identity rights do not imply ownership of the physical cell.
+- DOB evidence: `/spore/objects/{id}/genetics` separates the current decoder byte map from
+  cached VM traits. The original cached execution binary hash was not recorded.
+  `/spore/clusters/{id}/insights` reports complete decoding coverage and exact trait counts;
+  `/gallery?traits=<JSON map>&limit=24&cursor=...` filters the entire collection before paging.
+  Incomplete decoding does not produce partial whole-collection trait frequencies.
+- Cluster current cell: `/spore/clusters/{id}/protocol` uses the canonical live type index;
+  `current: null` means no current cluster cell. Item capacity excludes the cluster cell.
+  Collection capacity histories return complete UTC+8 dates, an anchor and calendar source;
+  history readouts never fill missing values from another response.
+- Collection activity and transaction feeds append `/activity-feed` or `/transactions` to
+  `/spore/clusters/{id}`, `/assets/objects/{id}` or `/assets/identities/{aliasOrId}`.
+  `/assets/identities/did/pds` groups current canonical DID document endpoints; an identity may
+  name multiple endpoints. Bitcoin-backed media remains a link, not an embedded remote preview.
 - Exact live-cell inventory: `/api/{network}/v1/cells/live-summary` (constant-size JSON; verify
   `tip.block`/`tip.hash` against the local CKB node)
 - Optional local peer evidence: `/api/{network}/v1/network/summary`,

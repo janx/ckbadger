@@ -34,7 +34,9 @@ it('keeps .bit protocol owner and manager separate from cell ownership and expos
   expect(rights).toHaveTextContent(`manager · algorithm ${d.manager.algorithm}`);
   expect(rights).toHaveTextContent(d.owner.argsHex);
   for (const record of d.records)
-    expect(screen.getByLabelText('Account records')).toHaveTextContent(record.value);
+    expect(screen.getByLabelText('Account records')).toHaveTextContent(
+      record.value ?? record.valueHex
+    );
   expect(screen.getByText(/witness version 4/)).toBeInTheDocument();
 });
 it.each([bitCellProtocolProducer, bitCellLegacyProtocolProducer])(

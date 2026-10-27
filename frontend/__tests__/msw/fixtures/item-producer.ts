@@ -9,6 +9,11 @@ import type {
   ItemActivity,
   ItemTransaction,
   ItemProtocol,
+  SporeDetail,
+  SporeCluster,
+  ObjectCollection,
+  ClusterProtocol,
+  AssetCapacityHistory,
 } from '@/lib/api';
 export const objectGeneticsProducer = {
   cachedVmTraits: {
@@ -41,7 +46,7 @@ export const objectGeneticsProducer = {
         ],
         decoderBinaryHash: '0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
         decoderReference: {
-          hash: '13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
+          hash: '0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
           type: 'code_hash',
         },
         description: {
@@ -65,12 +70,15 @@ export const objectGeneticsProducer = {
         step: 0,
       },
     ],
+    version: 0,
   },
   dnaHex: '0x01',
   number: '18446744073709551614',
 } satisfies ObjectGenetics;
 export const collectionInsightsProducer = {
+  calendarAnchor: null,
   calendarSource: 'indexedChainTimeUtc8',
+  completeThrough: null,
   currentPattern: {
     source: 'currentCanonicalDecoder',
     status: 'dob',
@@ -79,7 +87,7 @@ export const collectionInsightsProducer = {
         bytes: [],
         decoderBinaryHash: '0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
         decoderReference: {
-          hash: '13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
+          hash: '0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
           type: 'code_hash',
         },
         description: {
@@ -103,6 +111,7 @@ export const collectionInsightsProducer = {
         step: 0,
       },
     ],
+    version: 0,
   },
   genetics: {
     complete: true,
@@ -153,7 +162,9 @@ export const collectionInsightsProducer = {
   weeklyActivity: [],
 } satisfies CollectionInsights;
 export const collectionInsightsPendingProducer = {
+  calendarAnchor: null,
   calendarSource: 'indexedChainTimeUtc8',
+  completeThrough: null,
   currentPattern: {
     source: 'currentCanonicalDecoder',
     status: 'dob',
@@ -162,7 +173,7 @@ export const collectionInsightsPendingProducer = {
         bytes: [],
         decoderBinaryHash: '0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
         decoderReference: {
-          hash: '13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
+          hash: '0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c',
           type: 'code_hash',
         },
         description: {
@@ -186,6 +197,7 @@ export const collectionInsightsPendingProducer = {
         step: 0,
       },
     ],
+    version: 0,
   },
   genetics: {
     complete: false,
@@ -530,6 +542,526 @@ export const itemTransactionsProducer = {
   nextCursor: null,
   total: 2,
 } satisfies CursorPaginatedResponse<ItemTransaction>;
+export const sporeDetailProducer = {
+  clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+  contentSize: 38,
+  contentType: 'dob/0',
+  createdAtBlock: 100,
+  createdAtTx: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+  isLive: true,
+  mediaProfile: {
+    issues: [],
+    sources: [],
+    tier: 'unknown',
+  },
+  outputIndex: 0,
+  ownedCapacity: '50000000000',
+  ownedKnowledge: '22900000000',
+  ownerAddress:
+    'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+  ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+  sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
+  txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+} satisfies SporeDetail;
+export const sporeCellVersionsProducer = {
+  data: [
+    {
+      anatomy: {
+        capacityBytes: 8,
+        dataBytes: 103,
+        lockBytes: 53,
+        typeBytes: 65,
+      },
+      blockNumber: 100,
+      capacity: '50000000000',
+      consumedAtBlock: null,
+      consumedByTx: null,
+      dataHash: '0xc9d057d5666780ce964fba028388f3e4318803591c90327e7be9fc4d5568d002',
+      isLive: true,
+      lock: {
+        args: '0x0101010101010101010101010101010101010101',
+        codeHash: '0x4141414141414141414141414141414141414141414141414141414141414141',
+        hashType: 'type',
+      },
+      lockName: null,
+      occupiedCapacity: '22900000000',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      timestamp: '1700000000100',
+      txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+      txIndex: 1,
+      type: {
+        args: '0x0202020202020202020202020202020202020202020202020202020202020202',
+        codeHash: '0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5',
+        hashType: 'type',
+      },
+      typeName: null,
+    },
+  ],
+  total: 1,
+} satisfies ItemCellVersions;
+export const clusterDetailProducer = {
+  activitiesCount: 0,
+  clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+  composition: {
+    centralizedMixtureCount: 0,
+    decentralizedMixtureCount: 0,
+    onchainCount: 0,
+    onchainRatio: '0.0000',
+    pureCkbCount: 0,
+    tier: 'unknown',
+    unknownCount: 8,
+  },
+  createdAtBlock: 99,
+  description:
+    '{"dob":{"decoder":{"hash":"13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c","type":"code_hash"},"pattern":[["Face","String",0,1,"options",["Red","Blue"]]],"ver":0}}',
+  holdersCount: 2,
+  name: 'Genes',
+  ownedCapacity: '400000000000',
+  ownedKnowledge: '183200000000',
+  ownerAddress:
+    'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+  ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+  sporesCount: 8,
+  totalCount: 8,
+} satisfies SporeCluster;
+export const objectCollectionDetailProducer = {
+  activitiesCount: 0,
+  collectionId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+  composition: {
+    centralizedMixtureCount: 0,
+    decentralizedMixtureCount: 0,
+    onchainCount: 0,
+    onchainRatio: '0.0000',
+    pureCkbCount: 0,
+    tier: 'unknown',
+    unknownCount: 8,
+  },
+  holdersCount: 2,
+  liveCount: 8,
+  name: null,
+  ownedCapacity: '400000000000',
+  ownedKnowledge: '183200000000',
+  standard: 'spore',
+  totalCount: 8,
+} satisfies ObjectCollection;
+export const clusterProtocolProducer = {
+  clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+  current: {
+    cell: {
+      anatomy: {
+        capacityBytes: 8,
+        dataBytes: 210,
+        lockBytes: 53,
+        typeBytes: 65,
+      },
+      blockNumber: 99,
+      capacity: '100000000000',
+      consumedAtBlock: null,
+      consumedByTx: null,
+      dataHash: '0xfb1d94058486657cdaa924e39e328bfff5a4376083914548b412fc7bed29dc23',
+      isLive: true,
+      lock: {
+        args: '0x0101010101010101010101010101010101010101',
+        codeHash: '0x4141414141414141414141414141414141414141414141414141414141414141',
+        hashType: 'type',
+      },
+      lockName: null,
+      occupiedCapacity: '33600000000',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      timestamp: '1700000000099',
+      txHash: '0xa5c53484e7aa75ca3d36da3b03aa560e7341f616e53b5ef1e03f03c3541f3261',
+      txIndex: 0,
+      type: {
+        args: '0x7777777777777777777777777777777777777777777777777777777777777777',
+        codeHash: '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075',
+        hashType: 'type',
+      },
+      typeName: null,
+    },
+    dataHex:
+      '0xd20000001000000019000000d20000000500000047656e6573b50000007b22646f62223a7b226465636f646572223a7b2268617368223a2231336361633738616438343832323032663138663964663465613730373631316333356639393433373566613033616537393132313331326464613939323563222c2274797065223a22636f64655f68617368227d2c227061747465726e223a5b5b2246616365222c22537472696e67222c302c312c226f7074696f6e73222c5b22526564222c22426c7565225d5d5d2c22766572223a307d7d',
+    decoded: {
+      description:
+        '{"dob":{"decoder":{"hash":"13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c","type":"code_hash"},"pattern":[["Face","String",0,1,"options",["Red","Blue"]]],"ver":0}}',
+      name: 'Genes',
+    },
+    fields: [
+      {
+        end: 25,
+        name: 'name',
+        start: 16,
+        valueHex: '0x0500000047656e6573',
+      },
+      {
+        end: 210,
+        name: 'description',
+        start: 25,
+        valueHex:
+          '0xb50000007b22646f62223a7b226465636f646572223a7b2268617368223a2231336361633738616438343832323032663138663964663465613730373631316333356639393433373566613033616537393132313331326464613939323563222c2274797065223a22636f64655f68617368227d2c227061747465726e223a5b5b2246616365222c22537472696e67222c302c312c226f7074696f6e73222c5b22526564222c22426c7565225d5d5d2c22766572223a307d7d',
+      },
+      {
+        end: 210,
+        name: 'mutantId',
+        start: 210,
+        valueHex: '0x',
+      },
+    ],
+  },
+  kind: 'spore_cluster',
+  source: 'canonicalLiveTypeIndex',
+} satisfies ClusterProtocol;
+export const collectionGalleryProducer = {
+  data: [
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0x18b224b944d7ac51e1f9ebf48ab3f24938a04b29022bd56e2923cae7203e2f6c',
+      decodeStatus: 'decoded',
+      dnaHex: '0x00',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551615',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      sporeId: '0x0101010101010101010101010101010101010101010101010101010101010101',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Red',
+        },
+      ],
+      txHash: '0x18b224b944d7ac51e1f9ebf48ab3f24938a04b29022bd56e2923cae7203e2f6c',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+      decodeStatus: 'decoded',
+      dnaHex: '0x01',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551614',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Blue',
+        },
+      ],
+      txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0xc356cacc09685ce9c8e4e8c33717fdba09549a567bc01a5b8330d5196256173e',
+      decodeStatus: 'decoded',
+      dnaHex: '0x02',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551613',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      sporeId: '0x0303030303030303030303030303030303030303030303030303030303030303',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Red',
+        },
+      ],
+      txHash: '0xc356cacc09685ce9c8e4e8c33717fdba09549a567bc01a5b8330d5196256173e',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0x5bfd5e48d14c052786424184333cc8b8a98a3e31cc2f54b4c4fad5f7274f7513',
+      decodeStatus: 'decoded',
+      dnaHex: '0x03',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551612',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      sporeId: '0x0404040404040404040404040404040404040404040404040404040404040404',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Blue',
+        },
+      ],
+      txHash: '0x5bfd5e48d14c052786424184333cc8b8a98a3e31cc2f54b4c4fad5f7274f7513',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0x7a8a972290ecef95113de6b7e242161fcec3e8a8ea4200dc282b124c1b0faf0e',
+      decodeStatus: 'decoded',
+      dnaHex: '0x04',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551611',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      sporeId: '0x0505050505050505050505050505050505050505050505050505050505050505',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Red',
+        },
+      ],
+      txHash: '0x7a8a972290ecef95113de6b7e242161fcec3e8a8ea4200dc282b124c1b0faf0e',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0xb9b7d51b3a4b152fe791b986a181951bd9f8767a2f3c895f5fe3db9fe926209a',
+      decodeStatus: 'decoded',
+      dnaHex: '0x05',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551610',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      sporeId: '0x0606060606060606060606060606060606060606060606060606060606060606',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Blue',
+        },
+      ],
+      txHash: '0xb9b7d51b3a4b152fe791b986a181951bd9f8767a2f3c895f5fe3db9fe926209a',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0x01394b4bff7caff7c6c06d6323223846d4257b2d45bccd4f2c4f252defac4c73',
+      decodeStatus: 'decoded',
+      dnaHex: '0x06',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551609',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqsqdnfwk',
+      ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
+      sporeId: '0x0707070707070707070707070707070707070707070707070707070707070707',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Red',
+        },
+      ],
+      txHash: '0x01394b4bff7caff7c6c06d6323223846d4257b2d45bccd4f2c4f252defac4c73',
+    },
+    {
+      clusterId: '0x7777777777777777777777777777777777777777777777777777777777777777',
+      contentSize: 38,
+      contentType: 'dob/0',
+      createdAtBlock: 100,
+      createdAtTx: '0x85d942f1ba6b75a85a4e6ba02e3b7a717636d8213389e1de52f5287f84bded50',
+      decodeStatus: 'decoded',
+      dnaHex: '0x07',
+      isLive: true,
+      mediaProfile: {
+        issues: [],
+        sources: [],
+        tier: 'unknown',
+      },
+      number: '18446744073709551608',
+      outputIndex: 0,
+      ownerAddress:
+        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqsqdnfwk',
+      ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
+      sporeId: '0x0808080808080808080808080808080808080808080808080808080808080808',
+      traits: [
+        {
+          name: 'Face',
+          value: 'Blue',
+        },
+      ],
+      txHash: '0x85d942f1ba6b75a85a4e6ba02e3b7a717636d8213389e1de52f5287f84bded50',
+    },
+  ],
+  hasMore: false,
+  limit: 100,
+  nextCursor: null,
+  total: 8,
+} satisfies CursorPaginatedResponse<GalleryObject>;
+export const clusterCapacityHistoryProducer = {
+  anchor: {
+    blockHash: '0x0202020202020202020202020202020202020202020202020202020202020202',
+    blockNumber: 2,
+    chainTime: '1793059200000',
+  },
+  completeThrough: '2026-10-26',
+  data: [
+    {
+      date: '2026-10-25',
+      values: {
+        unused: '50',
+        used: '50',
+      },
+    },
+    {
+      date: '2026-10-26',
+      values: {
+        unused: '60',
+        used: '60',
+      },
+    },
+  ],
+  series: [
+    {
+      color: '#f59e0b',
+      key: 'used',
+      label: 'Used',
+    },
+    {
+      color: '#06b6d4',
+      key: 'unused',
+      label: 'Unused',
+    },
+  ],
+  source: 'indexedChainTimeUtc8',
+  title: 'Calendar Capacity History',
+} satisfies AssetCapacityHistory;
+export const sporeCapacityHistoryProducer = {
+  anchor: {
+    blockHash: '0x0202020202020202020202020202020202020202020202020202020202020202',
+    blockNumber: 2,
+    chainTime: '1793059200000',
+  },
+  completeThrough: '2026-10-26',
+  data: [
+    {
+      date: '2026-10-25',
+      values: {
+        unused: '50',
+        used: '50',
+      },
+    },
+    {
+      date: '2026-10-26',
+      values: {
+        unused: '60',
+        used: '60',
+      },
+    },
+  ],
+  series: [
+    {
+      color: '#f59e0b',
+      key: 'used',
+      label: 'Used',
+    },
+    {
+      color: '#06b6d4',
+      key: 'unused',
+      label: 'Unused',
+    },
+  ],
+  source: 'indexedChainTimeUtc8',
+  title: 'Spore Capacity History',
+} satisfies AssetCapacityHistory;
+export const objectCollectionCapacityHistoryProducer = {
+  anchor: {
+    blockHash: '0x0202020202020202020202020202020202020202020202020202020202020202',
+    blockNumber: 2,
+    chainTime: '1793059200000',
+  },
+  completeThrough: '2026-10-26',
+  data: [
+    {
+      date: '2026-10-25',
+      values: {
+        unused: '50',
+        used: '50',
+      },
+    },
+    {
+      date: '2026-10-26',
+      values: {
+        unused: '60',
+        used: '60',
+      },
+    },
+  ],
+  series: [
+    {
+      color: '#f59e0b',
+      key: 'used',
+      label: 'Used',
+    },
+    {
+      color: '#00c389',
+      key: 'unused',
+      label: 'Unused',
+    },
+  ],
+  source: 'indexedChainTimeUtc8',
+  title: '0x7777777777777777777777777777777777777777777777777777777777777777 Capacity History',
+} satisfies AssetCapacityHistory;
 export const bitCellLegacyProtocolProducer = {
   itemId: '0x2121212121212121212121212121212121212121212121212121212121212121',
   kind: 'bit_cell',
@@ -577,6 +1109,7 @@ export const bitCellLegacyProtocolProducer = {
         expiredAt: '1900000000',
         identityId: '0x2121212121212121212121212121212121212121212121212121212121212121',
         linkedAccount: null,
+        linkedAccountSource: 'currentCanonicalAccount',
       },
       fields: [
         {
@@ -648,6 +1181,7 @@ export const bitCellProtocolProducer = {
         expiredAt: '1900000000',
         identityId: '0x2222222222222222222222222222222222222222222222222222222222222222',
         linkedAccount: null,
+        linkedAccountSource: 'currentCanonicalAccount',
       },
       fields: [
         {
@@ -833,6 +1367,7 @@ export const dotbitV1ProtocolProducer = {
             ttl: 300,
             type: 'address',
             value: '0xabc',
+            valueHex: '0x3078616263',
           },
         ],
         registeredAt: '1600000000',
@@ -1039,6 +1574,7 @@ export const dotbitV2ProtocolProducer = {
             ttl: 300,
             type: 'address',
             value: '0xabc',
+            valueHex: '0x3078616263',
           },
         ],
         registeredAt: '1600000000',
@@ -1222,6 +1758,7 @@ export const dotbitV3ProtocolProducer = {
             ttl: 300,
             type: 'address',
             value: '0xabc',
+            valueHex: '0x3078616263',
           },
         ],
         registeredAt: '1600000000',
@@ -1319,6 +1856,7 @@ export const dotbitV4ProtocolProducer = {
             ttl: 300,
             type: 'address',
             value: '0xabc',
+            valueHex: '0x3078616263',
           },
         ],
         registeredAt: '1600000000',
@@ -1349,6 +1887,76 @@ export const dotbitV4ProtocolProducer = {
           name: 'expiredAt',
           start: 72,
           valueHex: '0x00b33f7100000000',
+        },
+      ],
+    },
+  ],
+} satisfies ItemProtocol;
+export const sporeProtocolProducer = {
+  itemId: '0x0202020202020202020202020202020202020202020202020202020202020202',
+  kind: 'spore',
+  versions: [
+    {
+      cell: {
+        anatomy: {
+          capacityBytes: 8,
+          dataBytes: 103,
+          lockBytes: 53,
+          typeBytes: 65,
+        },
+        blockNumber: 100,
+        capacity: '50000000000',
+        consumedAtBlock: null,
+        consumedByTx: null,
+        dataHash: '0xc9d057d5666780ce964fba028388f3e4318803591c90327e7be9fc4d5568d002',
+        isLive: true,
+        lock: {
+          args: '0x0101010101010101010101010101010101010101',
+          codeHash: '0x4141414141414141414141414141414141414141414141414141414141414141',
+          hashType: 'type',
+        },
+        lockName: null,
+        occupiedCapacity: '22900000000',
+        outputIndex: 0,
+        ownerAddress:
+          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+        timestamp: '1700000000100',
+        txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+        txIndex: 1,
+        type: {
+          args: '0x0202020202020202020202020202020202020202020202020202020202020202',
+          codeHash: '0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5',
+          hashType: 'type',
+        },
+        typeName: null,
+      },
+      dataHex:
+        '0x6700000010000000190000004300000005000000646f622f30260000007b22646e61223a223031222c226964223a31383434363734343037333730393535313631347d200000007777777777777777777777777777777777777777777777777777777777777777',
+      decoded: {
+        contentHex:
+          '0x7b22646e61223a223031222c226964223a31383434363734343037333730393535313631347d',
+        dnaHex: '0x01',
+      },
+      fields: [
+        {
+          end: 25,
+          name: 'contentType',
+          start: 16,
+          valueHex: '0x05000000646f622f30',
+        },
+        {
+          end: 67,
+          name: 'content',
+          start: 25,
+          valueHex:
+            '0x260000007b22646e61223a223031222c226964223a31383434363734343037333730393535313631347d',
+        },
+        {
+          end: 103,
+          name: 'clusterId',
+          start: 67,
+          valueHex: '0x200000007777777777777777777777777777777777777777777777777777777777777777',
         },
       ],
     },

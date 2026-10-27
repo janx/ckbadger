@@ -1,39 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-
+import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
 import {
   IdentityItemDetail,
   type IdentityItemDetailConfig,
 } from '@/components/identity/identity-item-detail';
-import { api } from '@/lib/api';
-import { render } from '../utils/test-utils';
-
-vi.mock('@/lib/api', () => ({
-  api: {
-    getAddress: vi.fn(),
-  },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
-}));
-
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div data-testid="header">Header</div>,
-}));
-
-const mockReplace = vi.fn();
-let mockSearchParams = new URLSearchParams();
-let mockPathname = '';
-
-vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ identityId: '0xabc' }),
-  usePathname: () => mockPathname,
-  useRouter: () => ({ replace: mockReplace }),
-  useSearchParams: () => mockSearchParams,
-}));
-
-const mockFetchDetail = vi.fn();
-const mockFetchActivities = vi.fn();
-
+import { api, ApiRequestError } from '@/lib/api';
+import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import {
+  dotbitV4ProtocolProducer,
+  didProtocolProducer,
+} from '@/__tests__/msw/fixtures/item-producer';
+vi.mock('@/components/layout/header', () => ({ Header: () => null }));
+const mockFetchDetail = vi.fn(),
+  mockFetchActivities = vi.fn();
 const dotbitConfig: IdentityItemDetailConfig = {
   standard: 'dotbit',
   fetchDetail: mockFetchDetail,
@@ -68,175 +46,71 @@ const didCkbConfig: IdentityItemDetailConfig = {
   },
 };
 
-describe('IdentityItemDetail', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReplace.mockReset();
-    mockSearchParams = new URLSearchParams();
-    mockPathname = '/identities/dotbit/0xabc';
-    vi.mocked(api.getAddress).mockResolvedValue({
-      lockScriptHash: '0xlock',
-      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-      balance: '0',
-      commonKnowledgeSize: '0',
-      liveCellsCount: 0,
-      transactionsCount: 0,
-    } as any);
-    mockFetchActivities.mockResolvedValue({
-      data: [],
+beforeEach(() => {
+  mockItemReads();
+  mockFetchDetail.mockReset();
+  mockFetchDetail.mockResolvedValue(identityItem('dotbit'));
+});
+it('uses the canonical item outpoint and protocol instead of resolving an owner balance', async () => {
+  render(<IdentityItemDetail config={dotbitConfig} identityId={dotbitV4ProtocolProducer.itemId} />);
+  await screen.findByRole('region', { name: 'Raw item evidence' });
+  expect(screen.getByRole('heading', { level: 1, name: 'alice.bit' })).toBeInTheDocument();
+  const cell = dotbitV4ProtocolProducer.versions[0].cell;
+  expect(
+    screen
+      .getAllByRole('link')
+      .some((a) => a.getAttribute('href') === `/mainnet/cell/${cell.txHash}/${cell.outputIndex}`)
+  ).toBe(true);
+  expect(api.getItemProtocol).toHaveBeenCalledWith('dotbit', dotbitV4ProtocolProducer.itemId);
+});
+it('supports did:ckb document identity without fabricating expiry fields', async () => {
+  mockFetchDetail.mockResolvedValue(identityItem('did'));
+  render(<IdentityItemDetail config={didCkbConfig} identityId={didProtocolProducer.itemId} />);
+  expect(await screen.findByRole('region', { name: 'DID document' })).toBeInTheDocument();
+  expect(screen.queryByText(/expires/i)).not.toBeInTheDocument();
+});
+it('retains configuration-specific not-found semantics', async () => {
+  mockFetchDetail.mockRejectedValue(new ApiRequestError(404, 'NOT_FOUND', 'missing'));
+  const view = render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
+  expect(await screen.findByRole('heading', { name: '.bit item not found' })).toBeInTheDocument();
+  view.unmount();
+  render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
+  expect(
+    await screen.findByRole('heading', { name: 'did:ckb item not found' })
+  ).toBeInTheDocument();
+});
+it('resets the independent activity cursor when navigating to another identity', async () => {
+  const first = identityItem('dotbit'),
+    second = { ...first, nftId: '0x' + 'ee'.repeat(20), name: 'bob.bit' };
+  mockFetchDetail.mockImplementation(async (id: string) => (id === first.nftId ? first : second));
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue({
+    ...emptyPage(),
+    hasMore: true,
+    nextCursor: 'older',
+  });
+  const view = render(<IdentityItemDetail config={dotbitConfig} identityId={first.nftId} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenLastCalledWith('dotbit', first.nftId, {
       limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
-  });
-
-  it('renders dotbit labels, back link, and live cell link', async () => {
-    mockFetchDetail.mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: '0xtx',
-      outputIndex: 2,
-    });
-
-    render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('DOTBIT')).toBeInTheDocument();
-    });
-
-    expect(screen.getByRole('link', { name: /Back to \.bit Collection/ })).toHaveAttribute(
-      'href',
-      '/mainnet/identities/dotbit'
-    );
-    expect(screen.getByText('.bit Name')).toBeInTheDocument();
-    expect(screen.getByText('Account ID')).toBeInTheDocument();
-    expect(screen.getByText('Expires At')).toBeInTheDocument();
-    expect(
-      screen
-        .getAllByRole('link')
-        .some((link) => link.getAttribute('href') === '/mainnet/cell/0xtx-2')
-    ).toBe(true);
-  });
-
-  it('renders did:ckb standard labels without expiry', async () => {
-    mockFetchDetail.mockResolvedValue({
-      nftId: '0xabc',
-      name: 'did:alice.ckb',
-      standard: 'did_ckb',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      txHash: null,
-      outputIndex: null,
-    });
-
-    render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('DID:CKB')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('did:ckb Name')).toBeInTheDocument();
-    expect(screen.getByText('DID ID')).toBeInTheDocument();
-    expect(screen.queryByText('Expires At')).not.toBeInTheDocument();
-  });
-
-  it('shows config-specific not found messages', async () => {
-    mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
-
-    const { rerender } = render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('.bit item not found')).toBeInTheDocument();
-    });
-
-    rerender(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('did:ckb item not found')).toBeInTheDocument();
-    });
-  });
-
-  it('starts a newly navigated-to identity on its first activity page', async () => {
-    // Moving from one account to another on the same route (search, history)
-    // changes only the route parameter, so the element stays mounted. The
-    // activity page of the account left behind must not follow the user.
-    const detailFor = (nftId: string, name: string) => ({
-      nftId,
-      name,
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: true,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: null,
-      outputIndex: null,
-    });
-    mockFetchDetail.mockImplementation(async (id: string) =>
-      id === '0xaaa' ? detailFor('0xaaa', 'alice.bit') : detailFor('0xbbb', 'bob.bit')
-    );
-    mockFetchActivities.mockResolvedValue({
-      data: [],
+      cursor: 'older',
+    })
+  );
+  view.rerender(<IdentityItemDetail config={dotbitConfig} identityId={second.nftId} />);
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenLastCalledWith('dotbit', second.nftId, {
       limit: 50,
-      hasMore: true,
-      nextCursor: 'alice-page-2',
-    });
-
-    mockPathname = '/identities/dotbit/0xaaa';
-    const { rerender } = render(<IdentityItemDetail config={dotbitConfig} identityId="0xaaa" />);
-    await waitFor(() => {
-      expect(mockFetchActivities).toHaveBeenCalledWith('0xaaa', { limit: 50 });
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
-    await waitFor(() => {
-      expect(mockFetchActivities).toHaveBeenCalledWith('0xaaa', {
-        limit: 50,
-        cursor: 'alice-page-2',
-      });
-    });
-    expect(screen.getByText('Page 2')).toBeInTheDocument();
-
-    mockPathname = '/identities/dotbit/0xbbb';
-    mockSearchParams = new URLSearchParams();
-    mockReplace.mockClear();
-    mockFetchActivities.mockClear();
-    rerender(<IdentityItemDetail config={dotbitConfig} identityId="0xbbb" />);
-
-    await waitFor(() => {
-      expect(mockFetchActivities).toHaveBeenCalledWith('0xbbb', { limit: 50 });
-    });
-    expect(await screen.findByText('Page 1')).toBeInTheDocument();
-    expect(mockFetchActivities).not.toHaveBeenCalledWith(
-      '0xbbb',
-      expect.objectContaining({ cursor: expect.anything() })
-    );
-    expect(mockReplace.mock.calls.some(([url]) => String(url).includes('activity_cursor'))).toBe(
-      false
-    );
+      cursor: undefined,
+    })
+  );
+});
+it('keeps recycled identities inspectable without claiming a live cell', async () => {
+  mockFetchDetail.mockResolvedValue({
+    ...identityItem('dotbit'),
+    isLive: false,
+    ownerLockHash: null,
   });
-
-  it('renders recycled status message', async () => {
-    mockFetchDetail.mockResolvedValue({
-      nftId: '0xabc',
-      name: 'alice.bit',
-      standard: 'dotbit',
-      ownerLockHash: '0xlock',
-      isLive: false,
-      createdAtBlock: 123,
-      expiredAt: 1800000000,
-      txHash: null,
-      outputIndex: null,
-    });
-
-    render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Recycled .bit account has no live cell.')).toBeInTheDocument();
-    });
-  });
+  render(<IdentityItemDetail config={dotbitConfig} identityId={dotbitV4ProtocolProducer.itemId} />);
+  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
+  expect(await screen.findByRole('region', { name: 'Raw item evidence' })).toBeInTheDocument();
 });

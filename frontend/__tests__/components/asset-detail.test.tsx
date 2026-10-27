@@ -64,6 +64,8 @@ describe('Canonical item cell versions', () => {
         }}
       />
     );
+    expect(screen.getByRole('heading', { name: 'Cell versions' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'CKB held in its cell' })).not.toBeInTheDocument();
     const versions = screen.getByLabelText('Object cell versions');
     expect(versions).toHaveTextContent('100.00000001');
     expect(versions).toHaveTextContent('39.00000001');

@@ -1,0 +1,56 @@
+import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { CapacityHistory } from '@/components/asset/capacity-history';
+import type { AssetCapacityHistory } from '@/lib/api';
+const history: AssetCapacityHistory = {
+  source: 'indexedChainTimeUtc8',
+  completeThrough: '2023-11-14',
+  anchor: { blockNumber: 999, blockHash: '0x' + '11'.repeat(32), chainTime: '1700000000000' },
+  title: 'Capacity',
+  series: [],
+  data: Array.from({ length: 14 }, (_, i) => ({
+    date: `2023-11-${String(i + 1).padStart(2, '0')}`,
+    values: { used: '6100000000', unused: String(BigInt(3900000000) + BigInt(i)) },
+  })),
+};
+it('preserves single shannons, complete-day cutoff and shared capacity/transfer range', () => {
+  render(
+    <CapacityHistory
+      subject="Collection"
+      history={history}
+      weekly={[
+        {
+          weekStart: '2023-11-06',
+          mintTransactions: 2,
+          transferTransactions: 7,
+          burnTransactions: 1,
+        },
+      ]}
+    />
+  );
+  const readout = screen.getByLabelText('History readout');
+  expect(readout).toHaveTextContent('100.00000013');
+  expect(readout).toHaveTextContent('39.00000013');
+  expect(screen.getByText(/Complete UTC\+8 days through 2023-11-14/)).toBeInTheDocument();
+  const range = screen.getByRole('group', { name: 'History time range' });
+  fireEvent.click(within(range).getByRole('button', { name: '1W' }));
+  expect(within(range).getByRole('button', { name: '1W' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByText('No data in this range.')).toBeInTheDocument();
+  expect(readout).toHaveTextContent('100.00000013');
+});
+it('rejects an incomplete calendar day and missing exact occupied state', () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect(() =>
+    render(
+      <CapacityHistory subject="Broken" history={{ ...history, completeThrough: '2023-11-13' }} />
+    )
+  ).toThrow('incomplete day');
+  expect(() =>
+    render(
+      <CapacityHistory
+        subject="Broken"
+        history={{ ...history, data: [{ date: '2023-11-01', values: { unused: '1' } }] }}
+      />
+    )
+  ).toThrow('occupied');
+  log.mockRestore();
+});

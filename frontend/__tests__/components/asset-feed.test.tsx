@@ -98,4 +98,38 @@ describe('Shared asset feeds', () => {
     );
     expect(loadTransactions).toHaveBeenCalledWith({ limit: 50, cursor: undefined });
   });
+  it('hydrates an activity cursor and returns to that exact starting page without affecting transactions', async () => {
+    const loadActivities = vi.fn().mockResolvedValue({
+      data: [activity],
+      total: 100,
+      limit: 50,
+      hasMore: true,
+      nextCursor: 'older',
+    });
+    const loadTransactions = vi
+      .fn()
+      .mockResolvedValue({ data: [], total: 0, limit: 50, hasMore: false, nextCursor: null });
+    const changed = vi.fn();
+    render(
+      <AssetFeed
+        queryKey="cursor"
+        scope="This identity"
+        initialActivityCursor="100:2"
+        onActivityCursorChange={changed}
+        loadActivities={loadActivities}
+        loadTransactions={loadTransactions}
+      />
+    );
+    await waitFor(() =>
+      expect(loadActivities).toHaveBeenLastCalledWith({ limit: 50, cursor: '100:2' })
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(changed).toHaveBeenLastCalledWith('older'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Previous' }));
+    await waitFor(() => expect(changed).toHaveBeenLastCalledWith('100:2'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    await waitFor(() =>
+      expect(loadTransactions).toHaveBeenCalledWith({ limit: 50, cursor: undefined })
+    );
+  });
 });

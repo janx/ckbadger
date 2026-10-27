@@ -1,568 +1,168 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { render } from '../utils/test-utils';
-import ClusterDetailPage from '@/app/clusters/[clusterId]/client-page';
+import { QueryClientProvider } from '@tanstack/react-query';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+  act,
+  createTestQueryClient,
+} from '@/__tests__/utils/test-utils';
+import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api } from '@/lib/api';
-
-vi.mock('@/lib/api', () => ({
-  api: {
-    getSporeCluster: vi.fn(),
-    getSporesByCluster: vi.fn(),
-    getSporeClusterCapacityChart: vi.fn(),
-    getSporeClusterHolders: vi.fn(),
-    getSporeClusterActivities: vi.fn(),
-    getAddress: vi.fn(),
-  },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
-}));
-
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div data-testid="header">Header</div>,
-}));
-
-const mockClusterId = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-let mockSearchParamsString = '';
-const mockReplace = vi.fn();
-
-vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ clusterId: mockClusterId }),
-  useRouter: () => ({ push: vi.fn(), replace: mockReplace }),
-  usePathname: () => `/clusters/${mockClusterId}`,
-  useSearchParams: () => new URLSearchParams(mockSearchParamsString),
-}));
-
-const mockCluster = {
-  clusterId: mockClusterId,
-  name: 'Test Collection',
-  description: 'A test collection of spores',
-  composition: {
-    tier: 'btc_ckb' as const,
-    onchainCount: 5,
-    pureCkbCount: 0,
-    decentralizedMixtureCount: 0,
-    centralizedMixtureCount: 0,
-    unknownCount: 0,
-    onchainRatio: '1.0',
-  },
-  ownerLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
-  ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
-  sporesCount: 5,
-  holdersCount: 3,
-  activitiesCount: 10,
-  createdAtBlock: 1000000,
-  ownedCapacity: '100000000000',
-  ownedKnowledge: '61000000000',
-};
-
-const mockSpores = {
-  data: [
-    {
-      sporeId: '0x2222222222222222222222222222222222222222222222222222222222222222',
-      txHash: '0x3333333333333333333333333333333333333333333333333333333333333333',
-      outputIndex: 0,
-      clusterId: mockClusterId,
-      contentType: 'image/png',
-      contentSize: 1024,
-      ownerLockHash: '0x4444444444444444444444444444444444444444444444444444444444444444',
-      ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
-      isLive: true,
-      createdAtBlock: 1000001,
-    },
-    {
-      sporeId: '0x5555555555555555555555555555555555555555555555555555555555555555',
-      txHash: '0x6666666666666666666666666666666666666666666666666666666666666666',
-      outputIndex: 0,
-      clusterId: mockClusterId,
-      contentType: 'text/plain',
-      contentSize: 256,
-      ownerLockHash: '0x7777777777777777777777777777777777777777777777777777777777777777',
-      ownerAddress: undefined,
-      isLive: true,
-      createdAtBlock: 1000002,
-    },
-  ],
-  total: 2,
-  limit: 18,
-  hasMore: false,
-  nextCursor: null,
-};
-
-const emptySpores = {
-  data: [],
-  total: 0,
-  limit: 18,
-  hasMore: false,
-  nextCursor: null,
-};
-
-describe('ClusterDetailPage', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockSearchParamsString = '';
-    vi.mocked(api.getSporeClusterCapacityChart).mockResolvedValue({
-      title: 'Test Collection Capacity History',
-      data: [],
-      series: [],
-    });
-    vi.mocked(api.getAddress).mockResolvedValue({
-      lockScriptHash: mockCluster.ownerLockHash,
-      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-      balance: '0',
-      commonKnowledgeSize: '0',
-      liveCellsCount: 0,
-      transactionsCount: 0,
-    } as any);
-    vi.mocked(api.getSporeClusterHolders).mockResolvedValue({
-      data: [],
-      total: 0,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
-    vi.mocked(api.getSporeClusterActivities).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
+import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import {
+  clusterDetailProducer,
+  collectionGalleryFilteredProducer,
+  collectionInsightsPendingProducer,
+  collectionInsightsProducer,
+} from '@/__tests__/msw/fixtures/item-producer';
+vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
+const id = clusterDetailProducer.clusterId;
+beforeEach(mockItemReads);
+it('renders collection identity, capacity history, genes, gallery, holders and both feed layers', async () => {
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('heading', { name: 'Genes' })).toHaveClass('text-[26px]');
+  expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
+    'Inventory/Objects'
+  );
+  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent('4,000');
+  await screen.findByRole('region', { name: 'Collection allele frequencies' });
+  expect(screen.getByRole('region', { name: 'Collection objects' })).toBeInTheDocument();
+  expect(screen.getByRole('group', { name: 'History time range' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'Activities' })).toHaveAttribute('aria-selected', 'true');
+  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
+  expect(api.getCollectionTransactions).toHaveBeenCalledWith('spore', id, {
+    limit: 50,
+    cursor: undefined,
   });
-
-  it('renders overview sections, back link, object gallery, and Activities tab by default', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('header')).toBeInTheDocument();
-      expect(screen.getByText('Test Collection')).toBeInTheDocument();
-      expect(screen.getByText('A test collection of spores')).toBeInTheDocument();
-      expect(screen.getByText('Spore Cluster')).toBeInTheDocument();
-      expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
-      expect(screen.getByText('Collection Overview')).toBeInTheDocument();
-      expect(screen.getByText('Composition')).toBeInTheDocument();
-      expect(screen.getByText('Supply')).toBeInTheDocument();
-      expect(screen.getByText('creator')).toBeInTheDocument();
-      // Objects gallery is always visible (standalone panel)
-      expect(screen.getByText(/^Objects \(/)).toBeInTheDocument();
-      // Activities and Holders are tabs
-      expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
-      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
-      // Search/filter controls are always visible in the gallery panel header
-      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-      const backLink = screen.getByText('\u2190 Back to Objects');
-      expect(backLink.closest('a')).toHaveAttribute('href', '/mainnet/inventory/objects');
-    });
+});
+it('keeps live, created and burned counts separate and never adds the cluster cell to item capacity', async () => {
+  render(<ClusterPage clusterId={id} />);
+  await screen.findByRole('heading', { name: 'Genes' });
+  const facts = screen.getByRole('complementary', { name: 'Facts' });
+  expect(within(facts).getByText('Live').nextElementSibling).toHaveTextContent('8');
+  expect(within(facts).getByText('Minted / created').nextElementSibling).toHaveTextContent('8');
+  expect(within(facts).getByText('Inactive / burned').nextElementSibling).toHaveTextContent('0');
+  expect(within(facts).getByText('CKB held').nextElementSibling).toHaveTextContent('4,000');
+});
+it('applies exact whole-collection trait filtering before pagination and resets the cursor', async () => {
+  vi.mocked(api.getCollectionGallery).mockResolvedValue({
+    ...collectionGalleryFilteredProducer,
+    hasMore: true,
+    nextCursor: 'older',
   });
-
-  it('hydrates the requested tab and falls back to Activities for invalid tab params', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    for (const testCase of [
-      {
-        searchParams: 'tab=holders',
-        assert: async () => {
-          await waitFor(() => {
-            expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
-          });
-        },
-      },
-      {
-        searchParams: 'tab=invalid',
-        assert: async () => {
-          await waitFor(() => {
-            expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
-          });
-        },
-      },
-    ]) {
-      mockSearchParamsString = testCase.searchParams;
-      const view = render(<ClusterDetailPage clusterId={mockClusterId} />);
-      await testCase.assert();
-      view.unmount();
-    }
+  render(<ClusterPage clusterId={id} />);
+  const gallery = await screen.findByRole('region', { name: 'Collection objects' });
+  fireEvent.click(await within(gallery).findByRole('button', { name: 'Next' }));
+  await waitFor(() =>
+    expect(api.getCollectionGallery).toHaveBeenLastCalledWith(
+      id,
+      expect.objectContaining({ cursor: 'older' })
+    )
+  );
+  const genes = screen.getByRole('region', { name: 'Collection allele frequencies' });
+  fireEvent.click(within(genes).getByRole('button', { name: /Blue/ }));
+  await waitFor(() =>
+    expect(api.getCollectionGallery).toHaveBeenLastCalledWith(id, {
+      limit: 24,
+      cursor: undefined,
+      traits: { Face: 'Blue' },
+    })
+  );
+  fireEvent.click(within(genes).getByRole('button', { name: /Blue/ }));
+  expect(within(genes).getByRole('button', { name: /Blue/ })).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  expect(
+    within(screen.getByRole('region', { name: 'Collection objects' })).getByRole('button', {
+      name: 'Previous',
+    })
+  ).toBeDisabled();
+});
+it('does not present partial frequencies or offer filtering while decoding is incomplete', async () => {
+  vi.mocked(api.getCollectionInsights).mockResolvedValue(collectionInsightsPendingProducer);
+  render(<ClusterPage clusterId={id} />);
+  const genes = await screen.findByRole('region', { name: 'Collection allele frequencies' });
+  expect(genes).toHaveTextContent('Trait frequencies and filtering await complete decoding.');
+  expect(within(genes).queryByRole('button')).not.toBeInTheDocument();
+  expect(api.getCollectionGallery).toHaveBeenCalledWith(id, {
+    limit: 24,
+    cursor: undefined,
+    traits: {},
   });
-
-  it('renders spore objects with content type and size in gallery cards', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      // Gallery panel renders spore cards with content type and size
-      expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('256 B').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
-    });
+});
+it('shows unknown metadata without synthesizing a name, owner, or minted block', async () => {
+  vi.mocked(api.getSporeCluster).mockResolvedValue({
+    ...clusterDetailProducer,
+    name: null,
+    createdAtBlock: null,
+    ownerLockHash: null,
+    ownerAddress: null,
   });
-
-  it('handles malformed spore payload without crashing', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue({
-      data: [
-        {
-          ...mockSpores.data[0],
-          sporeId: '0x0000000000000000000000000000000000000000000000000000000000000000',
-          contentType: undefined,
-          ownerLockHash: undefined,
-          ownerAddress: undefined,
-          contentSize: undefined,
-          createdAtBlock: undefined,
-        } as any,
-      ],
-      total: 1,
-      limit: 18,
-      hasMore: false,
-      nextCursor: null,
-    });
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      // The gallery panel should render without crashing
-      expect(screen.getByText(/^Objects \(/)).toBeInTheDocument();
-      // Content type falls back to 'unknown'
-      expect(screen.getAllByText('unknown').length).toBeGreaterThan(0);
-    });
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('heading', { name: 'Unnamed collection' })).toBeInTheDocument();
+  expect(await screen.findByText('No current cluster cell')).toBeInTheDocument();
+  const facts = screen.getByRole('complementary', { name: 'Facts' });
+  expect(within(facts).getByText('Created').nextElementSibling).toHaveTextContent('Not recorded');
+  expect(facts.querySelector('a[href$="/blocks/null"]')).toBeNull();
+});
+it('retains the stored description and exact current decoder version without inventing DOB/0', async () => {
+  vi.mocked(api.getCollectionInsights).mockResolvedValue({
+    ...collectionInsightsProducer,
+    currentPattern: { ...collectionInsightsProducer.currentPattern, status: 'dob', version: null },
   });
-
-  it('shows error state when cluster not found', async () => {
-    vi.mocked(api.getSporeCluster).mockRejectedValue(new Error('Not found'));
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Spore Cluster not found')).toBeInTheDocument();
-    });
+  render(<ClusterPage clusterId={id} />);
+  await screen.findByRole('heading', { name: 'Current decoder blueprint' });
+  expect(screen.getByText(/DOB version not stated/)).toBeInTheDocument();
+  expect(screen.getByText(clusterDetailProducer.description!)).toBeInTheDocument();
+});
+it('handles empty gallery and holder sets without using collection totals as page lengths', async () => {
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
+  vi.mocked(api.getSporeClusterHolders).mockResolvedValue(emptyPage());
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
+  expect(await screen.findByText('No current holders.')).toBeInTheDocument();
+  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent('Live8');
+});
+it('links each gallery item and preserves DNA, metadata and explicit no-owner state', async () => {
+  const item = collectionGalleryFilteredProducer.data[0];
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([{ ...item, ownerLockHash: null, ownerAddress: null }])
+  );
+  render(<ClusterPage clusterId={id} />);
+  const gallery = await screen.findByRole('region', { name: 'Collection objects' });
+  await within(gallery).findByText('No live owner');
+  expect(gallery.querySelector(`a[href='/mainnet/objects/${item.sporeId}']`)).not.toBeNull();
+  expect(
+    within(gallery).getByRole('img', { name: new RegExp(`${item.sporeId} DNA:`) })
+  ).toBeInTheDocument();
+});
+it('reports failed reads without substituting a fake collection', async () => {
+  vi.mocked(api.getObjectCollection).mockRejectedValue(new Error('Not found'));
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Could not load collection: Not found'
+  );
+  expect(screen.queryByRole('region', { name: 'Collection objects' })).not.toBeInTheDocument();
+});
+it('preserves prior gallery data while reporting a refetch error', async () => {
+  const client = createTestQueryClient();
+  render(
+    <QueryClientProvider client={client}>
+      <ClusterPage clusterId={id} />
+    </QueryClientProvider>
+  );
+  const gallery = await screen.findByRole('region', { name: 'Collection objects' });
+  await within(gallery).findAllByText('Blue');
+  vi.mocked(api.getCollectionGallery).mockRejectedValue(new Error('view failed'));
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ['collection-gallery'] });
   });
-
-  it('shows empty state when cluster has no spores', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      // Gallery panel shows empty state
-      expect(screen.getByText('No objects in this collection')).toBeInTheDocument();
-    });
-  });
-
-  it('filters spores by content type and shows an empty filtered state when nothing matches', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('2 shown / 5 total')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
-      target: { value: 'image' },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
-      target: { value: 'audio' },
-    });
-
-    await waitFor(() => {
-      // Gallery panel shows "No objects in this collection" when filter results in 0 items
-      expect(screen.getByText('No objects in this collection')).toBeInTheDocument();
-      expect(screen.getByText('0 shown / 5 total')).toBeInTheDocument();
-    });
-  });
-
-  it('filters spores by search keyword', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText('Search spores'), {
-      target: { value: 'text/plain' },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
-      expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
-    });
-  });
-
-  it('hydrates list controls from URL search params', async () => {
-    mockSearchParamsString = 'content=text&sort=sizeAsc&q=text%2Fplain';
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Filter spores by content type')).toHaveValue('text');
-      expect(screen.getByLabelText('Search spores')).toHaveValue('text/plain');
-      expect(screen.getByLabelText('Sort spores')).toHaveValue('sizeAsc');
-      expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
-    });
-  });
-
-  it('updates URL search params when list controls change', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
-      expect(screen.getByLabelText('Sort spores')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
-      target: { value: 'image' },
-    });
-    fireEvent.change(screen.getByLabelText('Sort spores'), {
-      target: { value: 'sizeDesc' },
-    });
-    fireEvent.change(screen.getByLabelText('Search spores'), {
-      target: { value: '0x2222' },
-    });
-
-    await waitFor(() => {
-      expect(
-        mockReplace.mock.calls.some(
-          ([href]) =>
-            String(href).includes('content=image') &&
-            String(href).includes('sort=sizeDesc') &&
-            String(href).includes('q=0x2222')
-        )
-      ).toBe(true);
-    });
-  });
-
-  it('updates tab query param when switching collection tabs', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Holders \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
-      expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=holders'))).toBe(
-        true
-      );
-    });
-    expect(api.getSporeClusterHolders).toHaveBeenCalledWith(
-      mockClusterId,
-      expect.objectContaining({ limit: 50 })
-    );
-  });
-
-  it('renders cluster description JSON with metadata blocks', async () => {
-    const jsonDescriptionCluster = {
-      ...mockCluster,
-      description: JSON.stringify({
-        description: 'On-chain generative spores',
-        version: 1,
-        category: 'collectible',
-        dob: {
-          ver: 1,
-          pattern: [{}, {}],
-          decoders: [{}],
-        },
-      }),
-    };
-    vi.mocked(api.getSporeCluster).mockResolvedValue(jsonDescriptionCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('On-chain generative spores')).toBeInTheDocument();
-      // Non-DOB metadata still shows in description area
-      const versionLabel = screen.getByText('Version');
-      expect(versionLabel).toBeInTheDocument();
-      expect(versionLabel.parentElement?.textContent).toContain('1');
-      expect(screen.getByText('Category')).toBeInTheDocument();
-      expect(screen.getByText('collectible')).toBeInTheDocument();
-      // DOB metadata moves to the DOB Blueprint section
-      expect(screen.getByText('DOB Blueprint')).toBeInTheDocument();
-      expect(screen.getByText('version')).toBeInTheDocument();
-      expect(screen.getByText('traits')).toBeInTheDocument();
-      expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('View Raw Cluster Metadata JSON'));
-
-    await waitFor(() => {
-      // Raw JSON is now syntax-highlighted (split across spans), so check container text
-      const pre = screen
-        .getByText('View Raw Cluster Metadata JSON')
-        .closest('details')
-        ?.querySelector('pre');
-      expect(pre).toBeInTheDocument();
-      expect(pre?.textContent).toContain('"category"');
-      expect(pre?.textContent).toContain('"collectible"');
-    });
-  });
-
-  it('links the DOB version a cluster description states', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue({
-      ...mockCluster,
-      description: JSON.stringify({ dob: { ver: 1, pattern: [{}], decoders: [{}] } }),
-    });
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    const link = await screen.findByRole('link', { name: 'DOB/1 ↗' });
-    expect(link).toHaveAttribute('href', 'https://github.com/sporeprotocol/spore-dob-1');
-  });
-
-  it('shows a DOB version the cluster description does not state as such, not as DOB/0', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue({
-      ...mockCluster,
-      description: JSON.stringify({ dob: { pattern: [{}], decoders: [{}] } }),
-    });
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    const version = await screen.findByTestId('dob-version');
-    expect(version).toHaveTextContent('not stated');
-    expect(version).toHaveAttribute(
-      'title',
-      'The cluster description sets no dob.ver, so its DOB specification is unknown'
-    );
-    expect(within(version.parentElement!).queryByRole('link')).toBeNull();
-    expect(document.querySelector('a[href*="spore-dob-0"]')).toBeNull();
-  });
-
-  it('resolves creator address from owner lock hash', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue({
-      ...mockCluster,
-      ownerAddress: undefined,
-    });
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(api.getAddress).toHaveBeenCalledWith(mockCluster.ownerLockHash);
-      const ownerLink = screen.getByRole('link', {
-        name: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-      });
-      expect(ownerLink).toBeInTheDocument();
-      expect(ownerLink).toHaveAttribute(
-        'href',
-        '/mainnet/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
-      );
-    });
-  });
-
-  it('omits a nonexistent minted-block link for a synthetic cluster', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue({
-      ...mockCluster,
-      createdAtBlock: null,
-      ownerLockHash: null,
-      ownerAddress: undefined,
-    });
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-    await screen.findByText(mockCluster.name!);
-    expect(document.querySelector('a[href$="/blocks/null"]')).toBeNull();
-    expect(api.getAddress).not.toHaveBeenCalledWith(null);
-    expect(api.getAddress).not.toHaveBeenCalledWith(mockCluster.ownerLockHash);
-  });
-
-  it('resolves spore owner address from owner lock hash', async () => {
-    const resolvedSporeOwnerAddress = 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgpz9p9j';
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-    vi.mocked(api.getAddress).mockImplementation(async (addr: string) => {
-      if (addr === mockSpores.data[1].ownerLockHash) {
-        return {
-          lockScriptHash: addr,
-          address: resolvedSporeOwnerAddress,
-          balance: '0',
-          commonKnowledgeSize: '0',
-          liveCellsCount: 0,
-          transactionsCount: 0,
-        } as any;
-      }
-      return {
-        lockScriptHash: addr,
-        address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-        balance: '0',
-        commonKnowledgeSize: '0',
-        liveCellsCount: 0,
-        transactionsCount: 0,
-      } as any;
-    });
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      // Gallery panel is always visible, spore cards show resolved addresses
-      expect(api.getAddress).toHaveBeenCalledWith(mockSpores.data[1].ownerLockHash);
-      const addressLinks = screen.getAllByRole('link');
-      expect(
-        addressLinks.find(
-          (link) => link.getAttribute('href') === `/mainnet/address/${resolvedSporeOwnerAddress}`
-        )
-      ).toBeTruthy();
-      expect(
-        addressLinks.find(
-          (link) =>
-            link.getAttribute('href') === `/mainnet/address/${mockSpores.data[1].ownerLockHash}`
-        )
-      ).toBeUndefined();
-    });
-  });
-
-  it('handles unnamed collection', async () => {
-    const unnamedCluster = { ...mockCluster, name: null };
-    vi.mocked(api.getSporeCluster).mockResolvedValue(unnamedCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Unnamed Collection')).toBeInTheDocument();
-    });
-  });
-
-  it('renders pagination status in gallery panel', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      // Gallery panel uses GALLERY_PAGE_SIZE (18), label is "Objects"
-      expect(screen.getByText('Showing 1-2 of 5 Objects, 18 per page')).toBeInTheDocument();
-      // Both gallery panel and activities tab render pagination, so multiple
-      // Previous/Next buttons exist; verify the gallery-specific pagination text
-      const paginationButtons = screen.getAllByRole('button', { name: 'Previous' });
-      expect(paginationButtons.length).toBeGreaterThanOrEqual(1);
-      expect(paginationButtons.some((btn) => (btn as HTMLButtonElement).disabled)).toBe(true);
-    });
-  });
+  expect(await within(gallery).findByRole('alert')).toHaveTextContent(
+    'Showing previously loaded data.'
+  );
+  expect(within(gallery).getAllByText('Blue').length).toBeGreaterThan(0);
 });

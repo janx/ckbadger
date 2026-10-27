@@ -77,6 +77,7 @@ describe('api', () => {
           return HttpResponse.json({ data: [] });
         })
       );
+      await api.getSporeClusterProtocol('0xcc');
       await api.getItemProtocol('bit-cell', '0xab');
       await api.getItemActivityFeed('mnft', '0xab', { limit: 10, cursor: '100:2' });
       await api.getItemTransactions('did', '0xcd', { limit: 20, cursor: '99:1' });
@@ -87,6 +88,7 @@ describe('api', () => {
       await api.getCollectionGallery('0xcd', { limit: 24, traits: { Face: 'Blue / Green' } });
       await api.getDidPdsDistribution();
       expect(seen).toEqual([
+        '/api/mainnet/v1/spore/clusters/0xcc/protocol',
         '/api/mainnet/v1/assets/identities/bit-cell/items/0xab/protocol',
         '/api/mainnet/v1/assets/objects/items/0xab/activity-feed?limit=10&cursor=100%3A2',
         '/api/mainnet/v1/assets/identities/did/items/0xcd/transactions?limit=20&cursor=99%3A1',

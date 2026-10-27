@@ -52,6 +52,24 @@ describe('Independent DOB evidence', () => {
     render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText('Cached VM result: Blue · Green')).toBeInTheDocument();
   });
+  it('uses complete same-name/value collection counts and never presents partial frequencies', () => {
+    const view = render(
+      <ObjectGeneticsView
+        evidence={objectGeneticsProducer}
+        subject="Spore"
+        collection={collectionInsightsProducer.genetics}
+      />
+    );
+    expect(screen.getByText('4 of 8 live DOB items')).toBeInTheDocument();
+    view.rerender(
+      <ObjectGeneticsView
+        evidence={objectGeneticsProducer}
+        subject="Spore"
+        collection={collectionInsightsPendingProducer.genetics}
+      />
+    );
+    expect(screen.queryByText(/of 8 live DOB items/)).not.toBeInTheDocument();
+  });
   it('rejects a byte map that disagrees with immutable DNA', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x02';

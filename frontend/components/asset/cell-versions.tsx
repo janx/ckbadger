@@ -43,7 +43,7 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
   }
   return (
     <DetailSection
-      title="CKB held in its cell"
+      title="Cell versions"
       actions={
         <span className="text-text-dim text-[11px]">
           Every canonical cell version · oldest first

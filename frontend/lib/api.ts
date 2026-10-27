@@ -1186,6 +1186,7 @@ export type CurrentPattern =
   | { status: 'notDob'; steps: [] }
   | {
       status: 'dob';
+      version: number | null;
       source: 'currentCanonicalDecoder';
       steps: {
         step: number;
@@ -1209,6 +1210,8 @@ export interface ObjectGenetics {
   currentPattern: CurrentPattern;
 }
 export interface CollectionInsights {
+  completeThrough: string | null;
+  calendarAnchor: { blockNumber: number; blockHash: string; chainTime: string } | null;
   calendarSource: 'indexedChainTimeUtc8';
   holderDistribution: { range: string; holders: number; items: number }[];
   weeklyActivity: {
@@ -1264,9 +1267,17 @@ export interface DotbitProtocol {
   status: number;
   owner: { algorithm: number; argsHex: string };
   manager: { algorithm: number; argsHex: string };
-  records: { type: string; key: string; label: string; value: string; ttl: number }[];
+  records: {
+    type: string;
+    key: string;
+    label: string;
+    value: string | null;
+    valueHex: string;
+    ttl: number;
+  }[];
 }
 export interface BitCellProtocol {
+  linkedAccountSource: 'currentCanonicalAccount';
   identityId: string;
   accountId: string;
   account: string;
@@ -1589,8 +1600,9 @@ interface SporeCluster {
   name: string | null;
   description: string | null;
   ownerLockHash: string | null;
-  ownerAddress?: string;
+  ownerAddress?: string | null;
   sporesCount: number;
+  totalCount: number;
   holdersCount: number;
   activitiesCount: number;
   createdAtBlock: number | null;
@@ -1624,7 +1636,7 @@ interface SporeNft {
   contentType: string;
   contentSize: number;
   ownerLockHash: string | null;
-  ownerAddress?: string;
+  ownerAddress?: string | null;
   isLive: boolean;
   createdAtBlock: number;
   mediaProfile?: {
@@ -2035,6 +2047,23 @@ interface StackedAreaChartResponse {
   data: StackedAreaDataPoint[];
   series: StackedAreaSeries[];
   title: string;
+}
+
+export interface AssetCapacityHistory extends StackedAreaChartResponse {
+  source: 'indexedChainTimeUtc8';
+  completeThrough: string;
+  anchor: { blockNumber: number; blockHash: string; chainTime: string };
+}
+export interface ClusterProtocol {
+  kind: 'spore_cluster';
+  clusterId: string;
+  source: 'canonicalLiveTypeIndex';
+  current: {
+    cell: ItemCellVersion;
+    dataHex: string;
+    fields: { name: string; start: number; end: number; valueHex: string }[];
+    decoded: { name: string; description: string };
+  } | null;
 }
 
 interface MostUtilizedScriptsChartResponse {
@@ -3559,6 +3588,9 @@ export const api = {
     return fetchApi(`/spore/clusters/${clusterId}`);
   },
 
+  getSporeClusterProtocol: (clusterId: string): Promise<ClusterProtocol> =>
+    fetchApi(`/spore/clusters/${clusterId}/protocol`),
+
   getSporeClusterHolders: (
     clusterId: string,
     params: CollectionHoldersParams = {}
@@ -3585,7 +3617,7 @@ export const api = {
   getSporeClusterCapacityChart: (
     clusterId: string,
     range: CapacityChartRangeParams = {}
-  ): Promise<StackedAreaChartResponse> => {
+  ): Promise<AssetCapacityHistory> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
@@ -3644,7 +3676,7 @@ export const api = {
   getObjectCollectionCapacityChart: (
     collectionId: string,
     range: CapacityChartRangeParams = {}
-  ): Promise<StackedAreaChartResponse> => {
+  ): Promise<AssetCapacityHistory> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
@@ -3734,7 +3766,7 @@ export const api = {
   getIdentityCollectionCapacityChart: (
     collectionId: string,
     range: CapacityChartRangeParams = {}
-  ): Promise<StackedAreaChartResponse> => {
+  ): Promise<AssetCapacityHistory> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);

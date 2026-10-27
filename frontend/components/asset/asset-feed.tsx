@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction, CursorPaginatedResponse } from '@/lib/api';
 import { ActivityRow } from '@/components/activity/activity-row';
@@ -143,6 +143,8 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
 export interface AssetFeedProps {
   queryKey: string;
   scope: string;
+  initialActivityCursor?: string;
+  onActivityCursorChange?: (cursor: string | undefined) => void;
   loadActivities: (params: {
     limit: number;
     cursor?: string;
@@ -161,13 +163,19 @@ export function AssetFeed({
   loadTransactions,
   token,
   context,
+  initialActivityCursor,
+  onActivityCursorChange,
 }: AssetFeedProps) {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
     txPages = useCursorPagination();
+  const activityCursor = actsPages.cursor ?? initialActivityCursor;
+  useEffect(() => {
+    onActivityCursorChange?.(activityCursor);
+  }, [activityCursor, onActivityCursorChange]);
   const acts = useQuery({
-    queryKey: ['asset-feed', queryKey, 'activities', actsPages.cursor],
-    queryFn: () => loadActivities({ limit: 50, cursor: actsPages.cursor }),
+    queryKey: ['asset-feed', queryKey, 'activities', activityCursor],
+    queryFn: () => loadActivities({ limit: 50, cursor: activityCursor }),
     enabled: tab === 'activities',
   });
   const txs = useQuery({
