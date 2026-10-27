@@ -290,8 +290,8 @@ from the chain and compares it against the index, with **zero tolerance** —
 ```toml
 # work/mainnet/verify-source.toml
 genesisHash = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5"
-nodeVersion = "0.209.0 (d166e28 2026-07-29)"
-indexerVersion = "0.209.0 (d166e28 2026-07-29)"
+nodeVersion = "0.210.0 (2592ddf 2026-09-17)"
+indexerVersion = "0.210.0 (2592ddf 2026-09-17)"
 buildStartBlock = 0
 continuousFromGenesis = true
 provenance = "Operator confirmed the running, self-operated CKB indexer was continuously built from genesis."
@@ -299,6 +299,15 @@ provenance = "Operator confirmed the running, self-operated CKB indexer was cont
 
 `nodeVersion` and `indexerVersion` must agree — the node and its in-process
 indexer are one binary — and both are checked against the live node.
+The versions above are an example, not a supported-version restriction. After
+upgrading the same node, read `local_node_info.version` from its configured RPC
+endpoint and update both fields to that exact string. Retain the original
+history provenance only while the index, genesis and unfiltered coverage it
+describes remain unchanged. A version mismatch is correctly `inconclusive`;
+do not remove qualification or claim new history coverage to make it pass.
+Qualifying the source does not increase the history budget: a full mainnet
+chain-time prefix still needs more than 20 million header requests before
+entity enumeration, as described above.
 
 > **Coverage limits.** Only the **token** family has an adapter in this
 > delivery. Script, Spore, cluster and object families, independent candidate

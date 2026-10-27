@@ -3416,6 +3416,61 @@ against its documented default selection before calling a budget sufficient.
 
 ---
 
+### VERIFY-005: Object checks required a token-only field and confused supply with transfers
+
+**Date**: 2026-10-27
+
+**Symptom**: Mainnet verification reported 60 passes, two errors and two inconclusive checks.
+Both `object_asset_collection_consistency` and `asset_top_holders_address_consistency` failed
+while decoding the object list: `missing field transfersCount`. They reached no data comparison.
+
+**Root cause**: The object API correctly stopped exposing `transfersCount` as a collection-size
+alias. It returns historical item count as the decimal string `totalSupply`, current item count
+as `liveCount`, and activity count as `activitiesCount`. Verify's shared list projection still
+required `transfersCount`, and its collection check compared that transfer field with detail
+`totalCount`. No producer-consumer contract regression exercised these checks, so the stale
+verifier projection escaped validation. The holder check also
+returned success when zero holder rows were sampled, even when it had already recorded a
+collection/list/holder-total mismatch.
+
+**Fix**: The object check requires the actual collection count fields and compares exact
+`totalSupply` with detail `totalCount`, `liveCount` with detail `liveCount`, and items total with
+detail `totalCount`. The holder projection contains only the fields that its check consumes.
+Missing or malformed required count fields remain errors, count mismatches remain failures, and
+zero holder rows no longer discard existing findings. The object filter is checked as object-only;
+identity collections retain their separate checks.
+
+**Validation**: Regressions distinguish total, live and activity counts, reject malformed/missing
+counts and inconsistent totals, and exercise the zero-holder mismatch. A separate API integration
+test serves the real router and runs the public verifier checks against a fully burned mNFT
+collection, so producer and consumer no longer rely solely on copies of the same mock schema.
+At fix `b00c1944`, integrated validation passed 209 verifier tests, 16 entity-history tests,
+62 asset API tests and the 2-test real-router target (289 total), plus formatting, workspace
+check, strict all-target Clippy and a debug CLI build. A live mainnet rerun
+`20261027T054127Z-a3a5eb12` then passed both affected checks: 9 sampled collections and 200 holder
+addresses. Logs and gate metadata are retained under `.worktrees/verify-contract-fix-results/`.
+
+**Separate source issue**: The two inconclusive chain checks used an operator declaration naming
+CKB 0.209 while the running node answered 0.210. The existing index directory, matching mainnet
+genesis and unfiltered configuration were checked; only the declaration's runtime versions were
+updated, preserving its original operator history provenance. DAO verification then passed for
+all 22,364 live cells at block 20,846,321. The capacity-history check remained correctly
+inconclusive because its independent chain-time prefix needs at least 20,846,322 header RPCs and
+the default run had 999,996 requests remaining. Source qualification and budget checks were not
+weakened; this is not evidence of an aggregate mismatch.
+That source-check rerun is `20261027T052646Z-0329c695`. Both runs were selected checks, not a new
+complete 64-check verification; the capacity-history check still requires an explicitly larger
+RPC/time budget to complete.
+
+**Re-sync required**: No. The fix changes verifier reads and assertions, with no domain,
+append-only or network write-path changes. The runtime declaration is local configuration;
+no service restart or database rebuild is needed for that update.
+
+**Files**: `crates/indexer/src/verify/api_checks.rs`,
+`crates/api/tests/api_verify_asset_contract.rs`, `docs/TESTING.md`
+
+---
+
 ## Category: Statistics & Charts
 
 ### STATS-012: The daily hash-rate chart served H/ms under an H/s label
