@@ -29,7 +29,6 @@ const SPORE_OWNER_PAGE_LIMIT: usize = 100;
 const SPORE_OWNER_MAX_PAGES: usize = 50;
 const OBJECT_ASSET_LIST_LIMIT: usize = 100;
 const OBJECT_COLLECTION_SAMPLE_MAX: usize = 20;
-const SECONDARY_ISSUANCE_MAX_DRIFT_CKB: i128 = 10_000;
 const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
 const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
@@ -107,9 +106,6 @@ struct DaoStatisticsResponse {
     total_deposited: String,
     estimated_apc: String,
     active_deposits: i64,
-    mining_reward: String,
-    deposit_compensation: String,
-    burnt: String,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -304,6 +300,15 @@ struct StackedChartDataPoint {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SecondaryIssuancePoint {
+    date: String,
+    values: std::collections::HashMap<String, String>,
+    protocol_total_shannons: Option<String>,
+    phase1_compensation_shannons: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MinerDistributionDataPoint {
     miner_lock_hash: String,
     address: Option<String>,
@@ -338,10 +343,6 @@ fn sampling_tip_from_stats(stats: &NetworkStats) -> anyhow::Result<u64> {
             stats.latest_block, stats.sync_status.synced_block, stats.sync_status.tip_block
         ))?;
     Ok(tip as u64)
-}
-
-fn exceeds_drift_limit(chart_value: i128, stats_value: i128, max_drift: i128) -> bool {
-    (chart_value - stats_value).abs() > max_drift
 }
 
 fn normalize_hex_key(raw: &str) -> String {
@@ -1129,9 +1130,9 @@ impl Check for DaoStatisticsSane {
 ///  - Value: `total-supply.burnt - secondary-issuance.burnt` isolates the
 ///    genesis burnt, which must equal 8.4B CKB (mainnet and testnet share it).
 ///
-/// The mutable current UTC+8 day is intentionally excluded: these two endpoints
-/// have independent caches, so their current-day snapshots need not represent
-/// the same block. Completed snapshots are immutable and exactly comparable.
+/// Both endpoints publish only complete UTC+8 days from the same indexed DAO
+/// daily snapshot history. Their day boundaries depend on the indexed monotone
+/// chain-time calendar; this check does not independently re-verify that clock.
 ///
 /// This is the Fast-tier counterpart to S17 (`BurntSupplyGenesisInvariant`),
 /// which checks every overlapping completed date.
@@ -1142,75 +1143,37 @@ impl Check for GenesisBaselineBurntInvariant {
         "genesis_baseline_burnt_invariant"
     }
     fn description(&self) -> &'static str {
-        "completed-day genesis baseline burnt equals network invariant (8.4B CKB)"
+        "Latest completed-day burnt gap equals exact genesis burnt (shannons)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        // A successful fetch of these endpoints proves the baseline is present:
-        // both derive `burnt` from `GenesisBaseline` and error if it is missing.
-        let total_supply: ChartWrapper<StackedChartDataPoint> =
-            api_get(ctx, "charts/total-supply")?;
+        let supply: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let secondary: ChartWrapper<StackedChartDataPoint> =
             api_get(ctx, "charts/secondary-issuance")?;
-
-        let current_date = current_ckb_date();
-        let mut secondary_burnt_by_date = std::collections::HashMap::<&str, i128>::new();
-        for point in secondary
-            .data
-            .iter()
-            .filter(|point| point.date != current_date)
-        {
-            if let Some(burnt) = point
-                .values
-                .get("burnt")
-                .and_then(|v| parse_non_negative_i128(v))
-            {
-                secondary_burnt_by_date.insert(point.date.as_str(), burnt);
+        let BurntGapEvidence { gaps, mut findings } =
+            exact_burnt_gaps(ctx, &supply.data, &secondary.data)?;
+        if let Some((date, gap)) = gaps.last() {
+            if *gap != GENESIS_BURNT_SHANNONS {
+                findings.push(Finding {
+                    entity: date.clone(),
+                    details: vec![format!("genesis burnt = {gap} shannons, expected {GENESIS_BURNT_SHANNONS} shannons (8.4B network invariant)")],
+                });
             }
         }
-
-        // Latest completed date present in both charts (data is date-ascending).
-        let latest = total_supply
-            .data
-            .iter()
-            .rev()
-            .filter(|point| point.date != current_date)
-            .find_map(|point| {
-                let total_burnt = point
-                    .values
-                    .get("burnt")
-                    .and_then(|v| parse_non_negative_i128(v))?;
-                let secondary_burnt = secondary_burnt_by_date.get(point.date.as_str())?;
-                Some((point.date.as_str(), total_burnt - secondary_burnt))
-            });
-
-        let Some((date, gap_ckb)) = latest else {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no completed overlapping dates between total-supply and secondary-issuance charts"
-                    .to_string(),
-            ));
-        };
-
-        let expected_gap_ckb = GENESIS_BURNT_SHANNONS / SHANNONS_PER_CKB;
-        if gap_ckb == expected_gap_ckb {
+        let checked = u64::from(!gaps.is_empty());
+        if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
-                1,
-                format!("genesis burnt = {} CKB at {}", gap_ckb, date),
+                checked,
+                if let Some((date, gap)) = gaps.last() {
+                    format!("genesis burnt = {gap} shannons at {date}; indexed calendar is the chart's day-boundary dependency")
+                } else {
+                    "no completed DAO snapshot day yet; supply, secondary and deposit charts are empty".to_string()
+                },
             ))
         } else {
-            Ok(CheckResult::fail(
-                1,
-                vec![Finding {
-                    entity: date.to_string(),
-                    details: vec![format!(
-                        "genesis burnt = {} CKB, expected {} CKB (8.4B network invariant)",
-                        gap_ckb, expected_gap_ckb
-                    )],
-                }],
-            ))
+            Ok(CheckResult::fail(checked, findings))
         }
     }
 }
@@ -1828,28 +1791,56 @@ impl Check for ChartTotalSupplyMonotonic {
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let chart: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let mut findings = vec![];
-        let mut prev_total: f64 = 0.0;
-        let mut prev_date = String::new();
+        let dates: Vec<_> = chart.data.iter().map(|point| point.date.as_str()).collect();
+        validate_completed_chart_dates(&dates, "total-supply", &current_ckb_date(), &mut findings);
+        if chart.data.is_empty() {
+            validate_empty_dao_chart_history(ctx, &mut findings)?;
+        }
+        let mut previous: Option<(String, i128)> = None;
 
         for point in &chart.data {
-            // total-supply is a stacked area; sum all series values for total
-            let total: f64 = point
-                .values
-                .values()
-                .filter_map(|v| v.parse::<f64>().ok())
-                .sum();
-
-            if total < prev_total && !prev_date.is_empty() {
-                findings.push(Finding {
-                    entity: point.date.clone(),
-                    details: vec![format!(
-                        "total supply decreased: {:.2} → {:.2} (prev={})",
-                        prev_total, total, prev_date,
-                    )],
-                });
+            let mut total = 0i128;
+            let mut valid = true;
+            for key in ["circulating", "nervosdao", "burnt"] {
+                match point
+                    .values
+                    .get(key)
+                    .and_then(|raw| parse_ckb_to_shannons(raw))
+                {
+                    Some(value) => match total.checked_add(value) {
+                        Some(sum) => total = sum,
+                        None => {
+                            valid = false;
+                            findings.push(Finding {
+                                entity: point.date.clone(),
+                                details: vec![format!("total-supply {key} sum overflow")],
+                            });
+                        }
+                    },
+                    None => {
+                        valid = false;
+                        findings.push(Finding {
+                            entity: point.date.clone(),
+                            details: vec![format!("missing or invalid total-supply {key} value")],
+                        });
+                    }
+                }
             }
-            prev_total = total;
-            prev_date = point.date.clone();
+            if !valid {
+                continue;
+            }
+            if let Some((previous_date, previous_total)) = &previous {
+                if total < *previous_total {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!(
+                            "total supply decreased: {} → {} shannons (prev={})",
+                            previous_total, total, previous_date,
+                        )],
+                    });
+                }
+            }
+            previous = Some((point.date.clone(), total));
         }
 
         let checked = chart.data.len() as u64;
@@ -2558,14 +2549,9 @@ fn parse_ckb_to_shannons(raw: &str) -> Option<i128> {
         None => 0,
     };
 
-    Some(whole_part * SHANNONS_PER_CKB + frac_part)
-}
-
-fn shannons_to_rounded_whole_ckb(shannons: i128) -> Option<i128> {
-    if shannons < 0 {
-        return None;
-    }
-    Some((shannons + 50_000_000) / SHANNONS_PER_CKB)
+    whole_part
+        .checked_mul(SHANNONS_PER_CKB)?
+        .checked_add(frac_part)
 }
 
 /// S14: GET /charts/hodl-wave → required series present and percentage sum sane.
@@ -2731,122 +2717,244 @@ impl Check for ChartKnowledgeCompositionExact {
     }
 }
 
-/// S16: Latest /charts/secondary-issuance must match /dao/statistics cumulative fields.
-pub struct SecondaryIssuanceMatchesDaoStatistics;
+fn validate_completed_chart_dates(
+    dates: &[&str],
+    chart: &str,
+    today: &str,
+    findings: &mut Vec<Finding>,
+) {
+    let mut previous: Option<&str> = None;
+    for &date in dates {
+        let canonical = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .is_ok_and(|parsed| parsed.format("%Y-%m-%d").to_string() == date);
+        if !canonical || date >= today {
+            findings.push(Finding {
+                entity: date.to_string(),
+                details: vec![format!("{chart} contains an invalid or incomplete day {date}; current wall UTC+8 day is {today}")],
+            });
+        }
+        if let Some(before) = previous.filter(|before| date <= *before) {
+            findings.push(Finding {
+                entity: date.to_string(),
+                details: vec![format!(
+                    "{chart} dates are not strictly increasing after {before}"
+                )],
+            });
+        }
+        previous = Some(date);
+    }
+}
 
-impl Check for SecondaryIssuanceMatchesDaoStatistics {
+fn validate_empty_dao_chart_history(
+    ctx: &CheckContext,
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<()> {
+    let deposit: ChartWrapper<ChartDataPoint> = api_get(ctx, "dao/charts/total-deposit")?;
+    if !deposit.data.is_empty() {
+        findings.push(Finding {
+            entity: "chart-date-coverage".to_string(),
+            details: vec![format!(
+                "DAO deposit chart has {} completed days but supply/secondary history is empty",
+                deposit.data.len()
+            )],
+        });
+    }
+    Ok(())
+}
+
+struct BurntGapEvidence {
+    gaps: Vec<(String, i128)>,
+    findings: Vec<Finding>,
+}
+
+fn exact_burnt_gaps(
+    ctx: &CheckContext,
+    supply: &[StackedChartDataPoint],
+    secondary: &[StackedChartDataPoint],
+) -> anyhow::Result<BurntGapEvidence> {
+    let today = current_ckb_date();
+    // The public endpoints now emit only complete days. A current-day point is
+    // rejected by the date validator rather than used as stable evidence.
+    let supply_dates: Vec<_> = supply.iter().map(|point| point.date.as_str()).collect();
+    let secondary_dates: Vec<_> = secondary.iter().map(|point| point.date.as_str()).collect();
+    let mut findings = vec![];
+    validate_completed_chart_dates(&supply_dates, "total-supply", &today, &mut findings);
+    validate_completed_chart_dates(
+        &secondary_dates,
+        "secondary-issuance",
+        &today,
+        &mut findings,
+    );
+    if supply_dates != secondary_dates {
+        findings.push(Finding {
+            entity: "chart-date-coverage".to_string(),
+            details: vec![format!(
+                "total-supply dates {:?} differ from secondary-issuance dates {:?}",
+                supply_dates, secondary_dates
+            )],
+        });
+    }
+    if supply.is_empty() && secondary.is_empty() {
+        validate_empty_dao_chart_history(ctx, &mut findings)?;
+    }
+    let mut gaps = vec![];
+    for (left, right) in supply.iter().zip(secondary) {
+        if left.date != right.date {
+            continue;
+        }
+        let total = left
+            .values
+            .get("burnt")
+            .and_then(|raw| parse_ckb_to_shannons(raw));
+        let secondary_burnt = right
+            .values
+            .get("burnt")
+            .and_then(|raw| parse_ckb_to_shannons(raw));
+        match (total, secondary_burnt) {
+            (Some(total), Some(secondary_burnt)) => {
+                gaps.push((left.date.clone(), total - secondary_burnt))
+            }
+            (None, _) => findings.push(Finding {
+                entity: left.date.clone(),
+                details: vec!["missing or invalid total-supply burnt CKB value".to_string()],
+            }),
+            (_, None) => findings.push(Finding {
+                entity: left.date.clone(),
+                details: vec!["missing or invalid secondary-issuance burnt CKB value".to_string()],
+            }),
+        }
+    }
+    Ok(BurntGapEvidence { gaps, findings })
+}
+
+/// S16: Each complete-day secondary issuance partition conserves the
+/// independently materialized protocol secondary total at that date. This
+/// checks partition identity, not independent historical category attribution.
+pub struct SecondaryIssuancePartitionConservation;
+
+impl Check for SecondaryIssuancePartitionConservation {
     fn name(&self) -> &'static str {
-        "secondary_issuance_matches_dao_statistics"
+        "secondary_issuance_partition_conservation"
     }
     fn description(&self) -> &'static str {
-        "Latest secondary issuance chart equals DAO statistics (same rounded CKB)"
+        "Each completed-day secondary issuance partition equals its exact protocol total (shannons)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let dao: DaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
-        let secondary: ChartWrapper<StackedChartDataPoint> =
+        let secondary: ChartWrapper<SecondaryIssuancePoint> =
             api_get(ctx, "charts/secondary-issuance")?;
-
-        let Some(latest) = secondary.data.last() else {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "secondary-issuance chart is empty".to_string(),
-            ));
-        };
-
+        let supply: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let mut findings = vec![];
-
-        let chart_compensation = latest
-            .values
-            .get("compensation")
-            .and_then(|v| parse_non_negative_i128(v));
-        let chart_mining = latest
-            .values
-            .get("mining")
-            .and_then(|v| parse_non_negative_i128(v));
-        let chart_burnt = latest
-            .values
-            .get("burnt")
-            .and_then(|v| parse_non_negative_i128(v));
-
-        let stats_compensation = parse_non_negative_i128(&dao.deposit_compensation)
-            .and_then(shannons_to_rounded_whole_ckb);
-        let stats_mining =
-            parse_non_negative_i128(&dao.mining_reward).and_then(shannons_to_rounded_whole_ckb);
-        let stats_burnt =
-            parse_non_negative_i128(&dao.burnt).and_then(shannons_to_rounded_whole_ckb);
-
-        match (chart_compensation, stats_compensation) {
-            (Some(chart), Some(stats))
-                if exceeds_drift_limit(chart, stats, SECONDARY_ISSUANCE_MAX_DRIFT_CKB) =>
-            {
-                findings.push(Finding {
-                    entity: latest.date.clone(),
-                    details: vec![format!(
-                        "compensation chart={} != dao_statistics={}",
-                        chart, stats
-                    )],
-                })
-            }
-            (None, _) | (_, None) => findings.push(Finding {
-                entity: latest.date.clone(),
-                details: vec!["missing or invalid compensation value".to_string()],
-            }),
-            _ => {}
+        let today = current_ckb_date();
+        let secondary_dates: Vec<_> = secondary
+            .data
+            .iter()
+            .map(|point| point.date.as_str())
+            .collect();
+        let supply_dates: Vec<_> = supply
+            .data
+            .iter()
+            .map(|point| point.date.as_str())
+            .collect();
+        validate_completed_chart_dates(
+            &secondary_dates,
+            "secondary-issuance",
+            &today,
+            &mut findings,
+        );
+        validate_completed_chart_dates(&supply_dates, "total-supply", &today, &mut findings);
+        if secondary_dates != supply_dates {
+            findings.push(Finding {
+                entity: "chart-date-coverage".to_string(),
+                details: vec![format!(
+                    "secondary-issuance dates {:?} differ from total-supply dates {:?}",
+                    secondary_dates, supply_dates
+                )],
+            });
         }
-
-        match (chart_mining, stats_mining) {
-            (Some(chart), Some(stats))
-                if exceeds_drift_limit(chart, stats, SECONDARY_ISSUANCE_MAX_DRIFT_CKB) =>
-            {
-                findings.push(Finding {
-                    entity: latest.date.clone(),
-                    details: vec![format!(
-                        "mining chart={} != dao_statistics={}",
-                        chart, stats
-                    )],
-                })
-            }
-            (None, _) | (_, None) => findings.push(Finding {
-                entity: latest.date.clone(),
-                details: vec!["missing or invalid mining value".to_string()],
-            }),
-            _ => {}
+        if secondary.data.is_empty() {
+            validate_empty_dao_chart_history(ctx, &mut findings)?;
         }
-
-        match (chart_burnt, stats_burnt) {
-            (Some(chart), Some(stats))
-                if exceeds_drift_limit(chart, stats, SECONDARY_ISSUANCE_MAX_DRIFT_CKB) =>
-            {
+        for point in &secondary.data {
+            let mut components = [0i128; 3];
+            if point.values.len() != 3 {
                 findings.push(Finding {
-                    entity: latest.date.clone(),
-                    details: vec![format!("burnt chart={} != dao_statistics={}", chart, stats)],
-                })
+                    entity: point.date.clone(),
+                    details: vec![format!("secondary-issuance requires exactly compensation, mining and burnt; got {:?}", point.values.keys().collect::<Vec<_>>())],
+                });
             }
-            (None, _) | (_, None) => findings.push(Finding {
-                entity: latest.date.clone(),
-                details: vec!["missing or invalid burnt value".to_string()],
-            }),
-            _ => {}
+            let mut valid = true;
+            for (index, key) in ["compensation", "mining", "burnt"].iter().enumerate() {
+                match point
+                    .values
+                    .get(*key)
+                    .and_then(|raw| parse_ckb_to_shannons(raw))
+                {
+                    Some(value) => components[index] = value,
+                    None => {
+                        valid = false;
+                        findings.push(Finding {
+                            entity: point.date.clone(),
+                            details: vec![format!(
+                                "missing or invalid secondary-issuance {key} CKB value"
+                            )],
+                        });
+                    }
+                }
+            }
+            let protocol = point
+                .protocol_total_shannons
+                .as_deref()
+                .and_then(parse_non_negative_i128);
+            let phase1 = point
+                .phase1_compensation_shannons
+                .as_deref()
+                .and_then(parse_non_negative_i128);
+            if protocol.is_none() {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec!["missing or invalid protocolTotalShannons".to_string()],
+                });
+            }
+            if phase1.is_none() {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec!["missing or invalid phase1CompensationShannons".to_string()],
+                });
+            }
+            if let Some(phase1) = phase1 {
+                if valid && phase1 > components[0] {
+                    findings.push(Finding { entity: point.date.clone(), details: vec![format!("phase1CompensationShannons {phase1} exceeds cumulative DAO compensation {}", components[0])] });
+                }
+            }
+            if valid {
+                let sum = components
+                    .into_iter()
+                    .try_fold(0i128, |sum, value| sum.checked_add(value));
+                match (sum, protocol) {
+                    (Some(sum), Some(protocol)) if sum != protocol => findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("completed-day secondary partition {sum} shannons != protocolTotalShannons {protocol} shannons")],
+                    }),
+                    (None, _) => findings.push(Finding { entity: point.date.clone(), details: vec!["secondary-issuance partition overflow".to_string()] }),
+                    _ => {}
+                }
+            }
         }
-
+        let checked = secondary.data.len() as u64;
         if findings.is_empty() {
-            Ok(CheckResult::pass_with_detail(
-                1,
-                format!("matched at {}", latest.date),
-            ))
+            Ok(CheckResult::pass_with_detail(checked, format!("{checked} exact completed-day partitions; indexed calendar is the chart's day-boundary dependency")))
         } else {
-            Ok(CheckResult::fail(1, findings))
+            Ok(CheckResult::fail(checked, findings))
         }
     }
 }
 
-/// S17: For overlapping completed dates, total-supply burnt minus secondary
-/// burnt must equal genesis burnt. The current UTC+8 day is mutable and the two
-/// chart endpoints are cached independently, so comparing it would race two
-/// different block snapshots.
+/// S17: Every completed date has an exact burnt gap equal to genesis burnt.
+/// The indexed monotone chain-time calendar defines the day boundaries; this
+/// chart-level check does not independently prove the calendar itself.
 pub struct BurntSupplyGenesisInvariant;
 
 impl Check for BurntSupplyGenesisInvariant {
@@ -2854,90 +2962,34 @@ impl Check for BurntSupplyGenesisInvariant {
         "burnt_supply_genesis_invariant"
     }
     fn description(&self) -> &'static str {
-        "completed-day total-supply.burnt - secondary-issuance.burnt equals genesis burnt (8.4B CKB)"
+        "Every completed-day total-supply.burnt minus secondary-issuance.burnt equals exact genesis burnt (shannons)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let total_supply: ChartWrapper<StackedChartDataPoint> =
-            api_get(ctx, "charts/total-supply")?;
+        let supply: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let secondary: ChartWrapper<StackedChartDataPoint> =
             api_get(ctx, "charts/secondary-issuance")?;
-
-        let current_date = current_ckb_date();
-        let mut findings = vec![];
-        let mut secondary_burnt_by_date = std::collections::HashMap::<String, i128>::new();
-        for point in secondary
-            .data
-            .iter()
-            .filter(|point| point.date != current_date)
-        {
-            if let Some(burnt) = point
-                .values
-                .get("burnt")
-                .and_then(|v| parse_non_negative_i128(v))
-            {
-                secondary_burnt_by_date.insert(point.date.clone(), burnt);
-            } else {
+        let BurntGapEvidence { gaps, mut findings } =
+            exact_burnt_gaps(ctx, &supply.data, &secondary.data)?;
+        for (date, gap) in &gaps {
+            if *gap != GENESIS_BURNT_SHANNONS {
                 findings.push(Finding {
-                    entity: point.date.clone(),
-                    details: vec!["missing or invalid secondary burnt value".to_string()],
+                    entity: date.clone(),
+                    details: vec![format!("burnt gap={gap} shannons, expected {GENESIS_BURNT_SHANNONS} shannons (8.4B network invariant)")],
                 });
             }
         }
-
-        let expected_gap_ckb = GENESIS_BURNT_SHANNONS / SHANNONS_PER_CKB;
-        let mut checked = 0u64;
-
-        for point in total_supply
-            .data
-            .iter()
-            .filter(|point| point.date != current_date)
-        {
-            let Some(secondary_burnt) = secondary_burnt_by_date.get(&point.date) else {
-                continue;
-            };
-
-            let total_burnt = match point
-                .values
-                .get("burnt")
-                .and_then(|v| parse_non_negative_i128(v))
-            {
-                Some(v) => v,
-                None => {
-                    findings.push(Finding {
-                        entity: point.date.clone(),
-                        details: vec!["missing or invalid total-supply burnt value".to_string()],
-                    });
-                    continue;
-                }
-            };
-
-            checked += 1;
-            let gap = total_burnt - *secondary_burnt;
-            if gap != expected_gap_ckb {
-                findings.push(Finding {
-                    entity: point.date.clone(),
-                    details: vec![format!(
-                        "burnt gap={} CKB, expected {} CKB",
-                        gap, expected_gap_ckb
-                    )],
-                });
-            }
-        }
-
-        if checked == 0 {
-            return Ok(CheckResult::pass_with_detail(
-                0,
-                "no completed overlapping dates with secondary issuance chart".to_string(),
-            ));
-        }
-
+        let checked = gaps.len() as u64;
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 checked,
-                format!("{} overlapping completed-date points", checked),
+                if checked == 0 {
+                    "no completed DAO snapshot day yet; supply, secondary and deposit charts are empty".to_string()
+                } else {
+                    format!("{checked} exact completed-day burnt gaps; indexed calendar is the chart's day-boundary dependency")
+                },
             ))
         } else {
             Ok(CheckResult::fail(checked, findings))
@@ -5043,7 +5095,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(ChartInflationRateSane),
         Box::new(ChartHodlWaveConsistency),
         Box::new(ChartKnowledgeCompositionExact),
-        Box::new(SecondaryIssuanceMatchesDaoStatistics),
+        Box::new(SecondaryIssuancePartitionConservation),
         Box::new(BurntSupplyGenesisInvariant),
         Box::new(RpcBlockSpotCheck),
         Box::new(TokenActivityTransferBidirectional),
@@ -5270,7 +5322,7 @@ mod tests {
         assert!(names.contains(&"chart_inflation_rate_sane"));
         assert!(names.contains(&"chart_hodl_wave_consistency"));
         assert!(names.contains(&"chart_knowledge_composition_exact"));
-        assert!(names.contains(&"secondary_issuance_matches_dao_statistics"));
+        assert!(names.contains(&"secondary_issuance_partition_conservation"));
         assert!(names.contains(&"burnt_supply_genesis_invariant"));
         assert!(names.contains(&"token_activity_transfer_bidirectional"));
         assert!(names.contains(&"spore_owner_roundtrip"));
@@ -5834,6 +5886,30 @@ mod tests {
         });
     }
 
+    fn mount_secondary_partition_data(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        supply_data: serde_json::Value,
+        secondary_data: serde_json::Value,
+    ) {
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"data": supply_data})),
+                )
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/secondary-issuance"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"data": secondary_data})),
+                )
+                .mount(server)
+                .await;
+        });
+    }
+
     #[test]
     fn test_genesis_baseline_burnt_invariant_passes_when_gap_is_8_4b() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -5872,7 +5948,7 @@ mod tests {
     }
 
     #[test]
-    fn burnt_genesis_checks_ignore_cache_skew_on_incomplete_current_day() {
+    fn burnt_genesis_checks_reject_an_incomplete_current_day_in_chart_history() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let server = runtime.block_on(MockServer::start());
         let today = ckbadger_common::now_datetime_utc8().date();
@@ -5907,18 +5983,312 @@ mod tests {
         let progress = ProgressReporter::new(None);
 
         let fast = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
-        assert!(fast.passed(), "fast findings: {:?}", fast.findings);
+        assert!(
+            !fast.passed(),
+            "current day cannot be presented as complete"
+        );
+        assert!(fast
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .any(|detail| detail.contains("incomplete day")));
 
         let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
+        assert!(!sampling.passed());
+        assert!(sampling
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .any(|detail| detail.contains("incomplete day")));
+    }
+
+    #[test]
+    fn secondary_partition_uses_exact_completed_day_not_newer_live_statistics() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/secondary-issuance"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{
+                        "date": "2024-01-01",
+                        "values": {"compensation": "1.00000001", "mining": "2.00000002", "burnt": "3.00000003"},
+                        "protocolTotalShannons": "600000005",
+                        "phase1CompensationShannons": "100000000"
+                    }]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"date": "2024-01-01", "values": {"circulating": "1", "nervosdao": "1", "burnt": "8400000000"}}]})))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/statistics"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "totalDeposited": "1000000000", "estimatedApc": "2.0", "activeDeposits": 1,
+                    "miningReward": "900000000000", "depositCompensation": "900000000000", "burnt": "900000000000"
+                })))
+                .mount(&server)
+                .await;
+        });
+        let result = SecondaryIssuancePartitionConservation
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
         assert!(
-            sampling.passed(),
-            "sampling findings: {:?}",
-            sampling.findings
+            !result.passed(),
+            "one-shannon historical mismatch must fail"
         );
-        assert_eq!(
-            sampling.items_checked, 1,
-            "only the completed day is stable"
+        assert!(result
+            .findings
+            .iter()
+            .any(|finding| finding.entity == "2024-01-01"));
+        assert!(
+            result
+                .findings
+                .iter()
+                .flat_map(|finding| &finding.details)
+                .any(|detail| detail.contains("600000005") && detail.contains("600000006")),
+            "must fail at the completed-day protocol total: {:?}",
+            result.findings
         );
+    }
+
+    #[test]
+    fn secondary_partition_accepts_exact_fractional_conservation_without_live_stats() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_secondary_partition_data(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"compensation": "1.00000001", "mining": "2.00000002", "burnt": "3.00000003"}, "protocolTotalShannons": "600000006", "phase1CompensationShannons": "100000000"}]),
+        );
+        let result = SecondaryIssuancePartitionConservation
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(
+            result.passed(),
+            "exact completed-day partition: {:?}",
+            result.findings
+        );
+        assert_eq!(result.items_checked, 1);
+    }
+
+    #[test]
+    fn secondary_partition_cannot_prove_a_redistribution_with_unchanged_total() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_secondary_partition_data(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"compensation": "0", "mining": "3", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "0"}]),
+        );
+        let result = SecondaryIssuancePartitionConservation
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(
+            result.passed(),
+            "conservation alone cannot attribute each category: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn secondary_partition_rejects_phase1_overflow_and_missing_protocol_total() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_secondary_partition_data(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "100000001"}]),
+        );
+        let result = SecondaryIssuancePartitionConservation
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed());
+        assert!(result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .any(|detail| detail.contains("phase1CompensationShannons")));
+    }
+
+    #[test]
+    fn secondary_partition_rejects_missing_required_wire_field() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_secondary_partition_data(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "phase1CompensationShannons": "0"}]),
+        );
+        let result = SecondaryIssuancePartitionConservation
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed());
+        assert!(result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .any(|detail| detail.contains("protocolTotalShannons")));
+    }
+
+    #[test]
+    fn secondary_partition_rejects_duplicate_dates() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let row = json!({"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "0"});
+        mount_secondary_partition_data(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"circulating": "10", "nervosdao": "2", "burnt": "8400000000"}}]),
+            json!([row.clone(), row]),
+        );
+        let result = SecondaryIssuancePartitionConservation
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed());
+        assert!(result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .any(|detail| detail.contains("not strictly increasing")));
+    }
+
+    #[test]
+    fn dao_chart_checks_reject_empty_history_when_deposit_history_exists() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_secondary_partition_data(&runtime, &server, json!([]), json!([]));
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/charts/total-deposit"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"data": [{"date": "2024-01-01", "value": "0"}]})),
+                )
+                .mount(&server)
+                .await;
+        });
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        for check in [
+            &SecondaryIssuancePartitionConservation as &dyn Check,
+            &GenesisBaselineBurntInvariant,
+            &BurntSupplyGenesisInvariant,
+        ] {
+            let result = check.run(&ctx, &progress).unwrap();
+            assert!(
+                !result.passed(),
+                "{} accepted missing completed history",
+                check.name()
+            );
+            assert!(result
+                .findings
+                .iter()
+                .flat_map(|finding| &finding.details)
+                .any(|detail| detail.contains("history is empty")));
+        }
+    }
+
+    #[test]
+    fn fractional_genesis_burnt_gap_fails_by_one_shannon() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_burnt_charts(&runtime, &server, "8400001000.00000001", "1000.00000002");
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        assert!(!GenesisBaselineBurntInvariant
+            .run(&ctx, &progress)
+            .unwrap()
+            .passed());
+        assert!(!BurntSupplyGenesisInvariant
+            .run(&ctx, &progress)
+            .unwrap()
+            .passed());
+    }
+
+    #[test]
+    fn burnt_gap_checks_reject_different_completed_date_coverage() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_burnt_chart_data(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"burnt": "8400000001"}}]),
+            json!([{"date": "2024-01-02", "values": {"burnt": "1"}}]),
+        );
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        for check in [
+            &GenesisBaselineBurntInvariant as &dyn Check,
+            &BurntSupplyGenesisInvariant,
+        ] {
+            let result = check.run(&ctx, &progress).unwrap();
+            assert!(
+                !result.passed(),
+                "{} silently skipped disjoint dates",
+                check.name()
+            );
+            assert!(result
+                .findings
+                .iter()
+                .flat_map(|finding| &finding.details)
+                .any(|detail| detail.contains("dates")));
+        }
+    }
+
+    #[test]
+    fn total_supply_monotonic_detects_one_shannon_decrease_above_f64_precision() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
+                    {"date": "2024-01-01", "values": {"circulating": "9007199254740992.00000001", "nervosdao": "0", "burnt": "0"}},
+                    {"date": "2024-01-02", "values": {"circulating": "9007199254740992", "nervosdao": "0", "burnt": "0"}}
+                ]})))
+                .mount(&server)
+                .await;
+        });
+        let result = ChartTotalSupplyMonotonic
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(
+            !result.passed(),
+            "one-shannon decrease must remain visible above f64 precision"
+        );
+    }
+
+    #[test]
+    fn total_supply_monotonic_rejects_malformed_component_instead_of_default_zero() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
+                    {"date": "2024-01-01", "values": {"circulating": "1", "nervosdao": "0", "burnt": "0"}},
+                    {"date": "2024-01-02", "values": {"circulating": "broken", "nervosdao": "0", "burnt": "0"}}
+                ]})))
+                .mount(&server)
+                .await;
+        });
+        let result = ChartTotalSupplyMonotonic
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed());
+        assert!(result
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.details)
+            .any(|detail| detail.contains("invalid total-supply circulating")));
     }
 
     #[test]
@@ -6585,11 +6955,12 @@ mod tests {
     }
 
     #[test]
-    fn test_shannons_to_rounded_whole_ckb_matches_chart_rounding() {
-        assert_eq!(shannons_to_rounded_whole_ckb(149_999_999), Some(1));
-        assert_eq!(shannons_to_rounded_whole_ckb(150_000_000), Some(2));
-        assert_eq!(shannons_to_rounded_whole_ckb(0), Some(0));
-        assert_eq!(shannons_to_rounded_whole_ckb(-1), None);
+    fn test_exact_ckb_parser_rejects_overflow_instead_of_rounding() {
+        assert_eq!(parse_ckb_to_shannons("1.49999999"), Some(149_999_999));
+        assert_eq!(
+            parse_ckb_to_shannons("170141183460469231731687303715884105727"),
+            None
+        );
     }
 
     #[test]
@@ -6657,12 +7028,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("0x01") && error.contains("name"), "{error}");
-    }
-
-    #[test]
-    fn test_exceeds_drift_limit() {
-        assert!(!exceeds_drift_limit(1_000, 1_005, 10));
-        assert!(exceeds_drift_limit(1_000, 1_020, 10));
     }
 
     #[test]

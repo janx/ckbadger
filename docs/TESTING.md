@@ -44,6 +44,16 @@ daily checks use absolute comparisons. Testnet's daily checks compare normalized
 its Explorer statistics retain historical constant baseline gaps; the NervosDAO point check uses
 the normalized latest completed day. No tolerance is widened. See POSTMORTEM DAO-029 and DAO-031.
 
+The secondary-issuance Sampling check verifies exact **completed-day partition conservation**:
+compensation + miner issuance + burnt treasury must equal that day's independent
+`protocolTotalShannons`, and frozen phase-1 compensation cannot exceed the compensation share.
+It does not compare a historical chart point with the newer live `/dao/statistics` singleton or
+independently establish each category's allocation. The Fast and Sampling burnt checks compare
+matching completed dates in exact shannons against the genesis burnt invariant; the total-supply
+monotonicity check also sums exact shannons. These chart checks depend on the API's indexed
+monotone chain-time calendar for complete-day boundaries and blockless-day carry; they do not
+independently verify that calendar.
+
 `--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling +
 Explorer). The public `ckbadger verify` command resolves each network's API, RPC, official
 explorer, cache directory, and deterministic sampling settings from its work directory; it does
