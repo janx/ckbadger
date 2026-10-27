@@ -175,6 +175,7 @@ pub(super) type LiveBitCellOutpoints = HashMap<Vec<u8>, CellOutpoint>;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/assets", get(list_assets))
+        .route("/assets/summary", get(super::asset_summary::get))
         .route(
             "/assets/objects/items/{object_id}",
             get(get_object_item_detail),
@@ -706,9 +707,10 @@ fn normalize_assets_composition_tier(
         | "btc_ckb"
         | "decentralized_mixture"
         | "centralized_mixture"
+        | "decode_pending"
         | "unknown" => Ok(Some(normalized)),
         _ => Err(ApiError::bad_request(
-            "Invalid composition_tier. Expected one of: pure_ckb, btc_ckb, decentralized_mixture, centralized_mixture, unknown",
+            "Invalid composition_tier. Expected one of: pure_ckb, btc_ckb, decentralized_mixture, centralized_mixture, unknown, decode_pending",
         )),
     }
 }

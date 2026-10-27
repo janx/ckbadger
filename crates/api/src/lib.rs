@@ -1,3 +1,4 @@
+mod asset_catalog;
 pub mod cache;
 pub mod consensus;
 pub mod cycles;

@@ -5,8 +5,7 @@ use crate::routes::statistics::{
     build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
 };
 use crate::utils::{
-    accumulate_owned_capacity, hash_type_to_string, resolve_collection_standard,
-    resolve_dob_collection_name, resolve_object_collection_composition_tier_override,
+    accumulate_owned_capacity, hash_type_to_string, resolve_dob_collection_name,
     resolve_object_collection_name,
 };
 use crate::AppState;
@@ -269,29 +268,6 @@ impl CachedAssetEntry {
 
 fn format_ratio_4(numerator: i64, denominator: i64) -> anyhow::Result<Option<String>> {
     crate::utils::exact_ratio::format_share_4(numerator, denominator).map_err(anyhow::Error::msg)
-}
-
-fn resolve_composition_tier(
-    btc_ckb: i64,
-    pure_ckb: i64,
-    decentralized_mixture: i64,
-    centralized_mixture: i64,
-    unknown: i64,
-) -> String {
-    if centralized_mixture > 0 {
-        return "centralized_mixture".to_string();
-    }
-    if decentralized_mixture > 0 {
-        return "decentralized_mixture".to_string();
-    }
-    let total_onchain = btc_ckb + pure_ckb;
-    if total_onchain > 0 && unknown == 0 {
-        if btc_ckb > 0 {
-            return "btc_ckb".to_string();
-        }
-        return "pure_ckb".to_string();
-    }
-    "unknown".to_string()
 }
 
 fn set_api_cache_refresh_startup(entry: &mut ckbadger_common::BackgroundTaskEntry) {
@@ -758,19 +734,21 @@ fn build_asset_caches_sync(
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // -- Token assets (list_tokens + scan_all_token_24h_transfers + per-token holder scans) --
-    let tokens = state.store.list_tokens()?;
+    let catalog = {
+        // Membership and pending counts join multiple canonical CFs. Pin only
+        // this projection; the much longer holder/history hydration below must
+        // continue to allow secondary catch-up between its independent reads.
+        let _view = ckbadger_store::read_view::acquire_read();
+        crate::asset_catalog::AssetCatalog::load(&state.store)?
+    };
+    let tokens = &catalog.tokens;
     let transfers_24h_map = state.store.scan_all_token_24h_transfers(now_ms)?;
     let mut token_assets: Vec<CachedAssetEntry> = Vec::with_capacity(tokens.len());
 
-    for (hash, info) in &tokens {
+    for (hash, info) in tokens {
         // Live-scan CF_TOKEN_HOLDERS for both authoritative aggregates. This is the
         // same single calculation path used by the token detail endpoint.
         let (holders_count, total_supply) = state.store.aggregate_token_holder_stats(hash)?;
-
-        // Skip noise tokens: no name/symbol and no holders
-        if info.name.is_none() && info.symbol.is_none() && holders_count == 0 {
-            continue;
-        }
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
         let token_daily = state.store.list_token_daily_deltas(hash)?;
@@ -828,11 +806,11 @@ fn build_asset_caches_sync(
     let mut object_assets: Vec<CachedAssetEntry> = Vec::new();
 
     // Spore/DOB collections from pre-aggregated cluster_agg CF
-    let cluster_aggs = state.store.list_cluster_aggregates()?;
+    let cluster_aggs = &catalog.clusters;
     let spore_transfers_24h_map = state.store.scan_all_spore_24h_transfers(now_ms)?;
     object_assets.reserve(cluster_aggs.len());
 
-    for (cluster_id_bytes, agg) in &cluster_aggs {
+    for (cluster_id_bytes, agg) in cluster_aggs {
         if agg.total_count == 0 {
             continue;
         }
@@ -865,23 +843,10 @@ fn build_asset_caches_sync(
                 e
             )
         })?;
-        let total_onchain = agg
-            .btc_ckb_count
-            .checked_add(agg.pure_ckb_count)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "cluster 0x{} onchain count overflow",
-                    hex::encode(cluster_id_bytes)
-                )
-            })?;
+        let classification = &catalog.collections[cluster_id_bytes];
+        let total_onchain = classification.onchain_count;
         let onchain_ratio = format_ratio_4(total_onchain, agg.live_count)?;
-        let composition_tier = resolve_composition_tier(
-            agg.btc_ckb_count,
-            agg.pure_ckb_count,
-            agg.decentralized_mixture_count,
-            agg.centralized_mixture_count,
-            agg.unknown_count,
-        );
+        let composition_tier = classification.tier.clone();
 
         object_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -922,11 +887,11 @@ fn build_asset_caches_sync(
     }
 
     // Object collections from pre-aggregated nft_collection_agg CF
-    let nft_aggs = state.store.list_mnft_collection_aggregates()?;
+    let nft_aggs = &catalog.mnfts;
     let nft_transfers_24h_map = state.store.scan_all_object_24h_transfers(now_ms)?;
     object_assets.reserve(nft_aggs.len());
 
-    for (collection_id_bytes, agg) in &nft_aggs {
+    for (collection_id_bytes, agg) in nft_aggs {
         if agg.total_count == 0 {
             continue;
         }
@@ -935,45 +900,12 @@ fn build_asset_caches_sync(
             .get(collection_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
-        let raw_standard = agg.standard.asset_standard().to_string();
-        let standard = resolve_collection_standard(collection_id_bytes, &raw_standard);
-        let asset_type = if standard == "dotbit" || standard == "did_ckb" {
-            "identity"
-        } else {
-            "object"
-        };
+        let classification = &catalog.collections[collection_id_bytes];
+        let standard = classification.standard.clone();
+        let asset_type = classification.asset_type;
         let display_name = resolve_object_collection_name(&standard, agg.name.as_deref());
-        let has_tier_counts = agg.pure_ckb_count > 0
-            || agg.btc_ckb_count > 0
-            || agg.decentralized_mixture_count > 0
-            || agg.centralized_mixture_count > 0;
-        let composition_tier = if has_tier_counts {
-            resolve_composition_tier(
-                agg.btc_ckb_count,
-                agg.pure_ckb_count,
-                agg.decentralized_mixture_count,
-                agg.centralized_mixture_count,
-                agg.unknown_count,
-            )
-        } else {
-            resolve_object_collection_composition_tier_override(&standard)
-                .unwrap_or("unknown")
-                .to_string()
-        };
-        let onchain_count = if has_tier_counts {
-            agg.pure_ckb_count
-                .checked_add(agg.btc_ckb_count)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "object collection 0x{} onchain count overflow",
-                        hex::encode(collection_id_bytes)
-                    )
-                })?
-        } else if matches!(composition_tier.as_str(), "btc_ckb" | "pure_ckb") {
-            agg.live_count
-        } else {
-            0
-        };
+        let composition_tier = classification.tier.clone();
+        let onchain_count = classification.onchain_count;
         let onchain_ratio = format_ratio_4(onchain_count, agg.live_count)?;
         let nft_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
         anyhow::ensure!(
@@ -1027,10 +959,10 @@ fn build_asset_caches_sync(
     }
 
     // Identity collections from pre-aggregated identity_agg CF
-    let identity_aggs = state.store.list_identity_collection_aggregates()?;
+    let identity_aggs = &catalog.identities;
     object_assets.reserve(identity_aggs.len());
 
-    for (collection_id_bytes, agg) in &identity_aggs {
+    for (collection_id_bytes, agg) in identity_aggs {
         if agg.total_count == 0 {
             continue;
         }
@@ -1039,17 +971,11 @@ fn build_asset_caches_sync(
             .get(collection_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
-        let standard_str = agg.standard.asset_standard().to_string();
-        let standard = resolve_collection_standard(collection_id_bytes, &standard_str);
+        let classification = &catalog.collections[collection_id_bytes];
+        let standard = classification.standard.clone();
         let display_name = resolve_object_collection_name(&standard, agg.name.as_deref());
-        let composition_tier = resolve_object_collection_composition_tier_override(&standard)
-            .unwrap_or("unknown")
-            .to_string();
-        let onchain_count = if matches!(composition_tier.as_str(), "btc_ckb" | "pure_ckb") {
-            agg.live_count
-        } else {
-            0
-        };
+        let composition_tier = classification.tier.clone();
+        let onchain_count = classification.onchain_count;
         let onchain_ratio = format_ratio_4(onchain_count, agg.live_count)?;
         let id_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
         anyhow::ensure!(

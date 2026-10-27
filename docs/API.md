@@ -127,6 +127,7 @@ Each item a transaction moves is one `ItemDeltaResponse`, tagged by `kind`:
 | Method | Path                                                             | Handler                                | Purpose                                                                               |
 | ------ | ---------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------- |
 | GET    | `/api/v1/assets`                                                 | `list_assets`                          | List all assets (tokens + objects + identities), cache-backed with search/sort/cursor |
+| GET    | `/api/v1/assets/summary`                                         | `asset_summary::get`                   | Exact catalog counts and composition in one pinned canonical view                     |
 | GET    | `/api/v1/assets/objects/items/{object_id}`                       | `get_object_item_detail`               | Get mNFT token item detail (class, issuer, lifecycle, composition)                    |
 | GET    | `/api/v1/assets/objects/items/{object_id}/activities`            | `list_mnft_item_activities`            | List per-item mNFT activities (cursor-paginated, optional `action`)                   |
 | GET    | `/api/v1/assets/objects/{collection_id}`                         | `get_object_collection`                | Get object/Spore collection detail (counts, composition, owned capacity)              |
@@ -134,6 +135,10 @@ Each item a transaction moves is one `ItemDeltaResponse`, tagged by `kind`:
 | GET    | `/api/v1/assets/objects/{collection_id}/holders`                 | `list_object_collection_holders`       | List ranked holders of an object collection (cursor)                                  |
 | GET    | `/api/v1/assets/objects/{collection_id}/activities`              | `list_object_collection_activities`    | List collection-level activities (cursor, optional `action`)                          |
 | GET    | `/api/v1/assets/objects/{collection_id}/charts/capacity-history` | `get_object_collection_capacity_chart` | Stacked-area capacity history chart (date range)                                      |
+
+`/assets/summary` returns `source: "canonical_asset_indexes"`, `anchor: {blockNumber,blockHash} | null`, `counts: {token,object,identity}`, `objectStandards: [{standard,collectionsCount,liveCount}]`, `objectComposition: [{tier,collectionsCount,liveCount}]`, `fullyOnchainObjectsCount`, and `pendingItemsCount`. Composition rows classify whole collections; their `liveCount` counts members of those collections, not individual-item tiers. `pendingItemsCount` independently counts every live pending Spore, including members of mixed collections and the existing Sole Spores sentinel collection. A fully pending collection has tier `decode_pending`; mixed collections retain their normal aggregate classification. The same owning catalog supplies warmup membership/classification and the summary; no page sampling is used.
+
+The summary's request pins its canonical view. `/assets` remains a warmup snapshot, so separate list and summary requests do not claim a shared anchor. Summary reads token metadata, checks only enough canonical holder rows to establish positive membership for unlabelled tokens, scans collection aggregates and live Spore pending evidence; it does not run all token capacity/history/holder-sum scans. `composition_tier` additionally accepts `decode_pending`; filtering precedes pagination and `total` covers the entire matching snapshot.
 
 **Params**
 
@@ -599,14 +604,18 @@ status.
 
 ### tokens (crates/api/src/routes/tokens.rs)
 
-| Method | Path                                                 | Handler                    | Purpose                                                              |
-| ------ | ---------------------------------------------------- | -------------------------- | -------------------------------------------------------------------- |
-| GET    | `/api/v1/tokens`                                     | `list_tokens`              | List tokens from warmup cache (search/standard/cursor)               |
-| GET    | `/api/v1/tokens/{type_hash}`                         | `get_token`                | Get token detail + holders/transfers/24h aggregates + owned capacity |
-| GET    | `/api/v1/tokens/{type_hash}/holders`                 | `get_token_holders`        | List ranked token holders (cursor)                                   |
-| GET    | `/api/v1/tokens/{type_hash}/transfers`               | `get_token_transfers`      | List token transfers (cursor)                                        |
-| GET    | `/api/v1/tokens/{type_hash}/activities`              | `get_token_activities`     | List token activities (cursor)                                       |
-| GET    | `/api/v1/tokens/{type_hash}/charts/capacity-history` | `get_token_capacity_chart` | Stacked-area capacity history chart (date range)                     |
+| Method | Path                                                 | Handler                        | Purpose                                                                          |
+| ------ | ---------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
+| GET    | `/api/v1/tokens`                                     | `list_tokens`                  | List tokens from warmup cache (search/standard/cursor)                           |
+| GET    | `/api/v1/tokens/{type_hash}`                         | `get_token`                    | Get token detail + holders/transfers/24h aggregates + owned capacity             |
+| GET    | `/api/v1/tokens/{type_hash}/holders`                 | `get_token_holders`            | List ranked token holders (cursor)                                               |
+| GET    | `/api/v1/tokens/{type_hash}/transfers`               | `get_token_transfers`          | List token transfers (cursor)                                                    |
+| GET    | `/api/v1/tokens/{type_hash}/activities`              | `get_token_activities`         | List token activities (cursor)                                                   |
+| GET    | `/api/v1/tokens/{type_hash}/charts/capacity-history` | `get_token_capacity_chart`     | Stacked-area capacity history chart (date range)                                 |
+| GET    | `/api/v1/tokens/{type_hash}/history`                 | `token_history::history`       | Complete-day supply/capacity, complete-week transfer counts, every supply change |
+| GET    | `/api/v1/tokens/{type_hash}/distribution`            | `token_history::distribution`  | Whole positive-holder distribution and top-one/next-nine/rest amounts            |
+| GET    | `/api/v1/tokens/{type_hash}/activity-feed`           | `token_history::activity_feed` | Full cross-user activities, one row per canonical transaction                    |
+| GET    | `/api/v1/tokens/{type_hash}/transactions`            | `token_history::transactions`  | The same deduplicated scope as canonical transaction rows                        |
 
 **Params**
 
@@ -620,10 +629,21 @@ status.
 **Responses**
 
 - `CursorPaginatedResponse<TokenResponse>` / `TokenResponse` — token info + standard, supply, holders/transfers
-- `CursorPaginatedResponse<TokenHolderResponse>`
+- `TokenHoldersResponse` — flat cursor page plus `totalSupply` and nullable `anchor`
 - `CursorPaginatedResponse<TokenTransferResponse>` — tx_hash, from/to, amount, is_mint/is_burn
 - `CursorPaginatedResponse<TokenActivityResponse>` — tx + actions + `transfers: Vec<TokenTransferDetail>`
 - `StackedAreaChartResponse` — used/unused capacity series
+
+**D4 exact read contracts**
+
+- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockKind} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
+- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`; percentages use this page's denominator, never another request's cached total.
+- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity}]`, `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
+- Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
+- New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every participant remains present. Token amount moved can be read as the sum of positive deltas for that token in the complete activity; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
+- Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.
+
+Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0025-simple-udt/0025-simple-udt.md) and [RFC 0052](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0052-extensible-udt/0052-extensible-udt.md), rather than arbitrary compatible-script argument guesses.
 
 ---
 

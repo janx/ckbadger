@@ -79,7 +79,7 @@ pub struct ParticipantRef {
     pub roles: Vec<&'static str>,
 }
 
-fn participant_lock_kind(
+pub(crate) fn participant_lock_kind(
     store: &CkbadgerStore,
     lock_hash: &[u8; 32],
     pool_record: Option<&PoolTxRecord>,

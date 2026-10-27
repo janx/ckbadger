@@ -229,7 +229,7 @@ fn required_tx_timestamp(
         })
 }
 
-fn transaction_response(
+pub(crate) fn transaction_response(
     state: &AppState,
     block: i64,
     index: i32,
@@ -818,7 +818,7 @@ pub struct DotCellNameWitnessResponse {
 /// The same string-encoded transaction, in the indexer's RPC type: the direct
 /// reader and the node lookup mirror the indexer's `rpc::TransactionView`
 /// field for field, and the `.cell` parser takes the indexer's.
-fn indexer_tx_view(tx: &RpcTransactionView) -> ckbadger_indexer::rpc::TransactionView {
+pub(crate) fn indexer_tx_view(tx: &RpcTransactionView) -> ckbadger_indexer::rpc::TransactionView {
     use ckbadger_indexer::rpc::{CellDep, CellInput, CellOutput, OutPoint, Script};
 
     let out_point = |p: &ckb_store_reader::RpcOutPoint| OutPoint {

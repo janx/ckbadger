@@ -30,6 +30,22 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/tokens/{type_hash}/transfers", get(get_token_transfers))
         .route("/tokens/{type_hash}/activities", get(get_token_activities))
         .route(
+            "/tokens/{type_hash}/activity-feed",
+            get(super::token_history::activity_feed),
+        )
+        .route(
+            "/tokens/{type_hash}/transactions",
+            get(super::token_history::transactions),
+        )
+        .route(
+            "/tokens/{type_hash}/history",
+            get(super::token_history::history),
+        )
+        .route(
+            "/tokens/{type_hash}/distribution",
+            get(super::token_history::distribution),
+        )
+        .route(
             "/tokens/{type_hash}/charts/capacity-history",
             get(get_token_capacity_chart),
         )
@@ -93,9 +109,27 @@ pub struct TokenResponse {
     pub transfers_count: i64,
     pub transfers_24h: i64,
     pub cells_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_symbol_tokens: Option<Vec<SameSymbolToken>>,
+    pub issuer: Option<TokenIssuer>,
     pub total_capacity: Option<String>,
     #[serde(rename = "totalCommonKnowledgeSize")]
     pub total_used_capacity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SameSymbolToken {
+    pub type_script_hash: String,
+    pub holders_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenIssuer {
+    pub lock_hash: String,
+    pub address: Option<String>,
+    pub lock_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +138,23 @@ pub struct TokenHolderResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub balance: String,
+    pub lock_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenHoldersResponse {
+    #[serde(flatten)]
+    pub page: CursorPaginatedResponse<TokenHolderResponse>,
+    pub total_supply: String,
+    pub anchor: Option<TokenAnchor>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenAnchor {
+    pub block_number: i64,
+    pub block_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,15 +227,15 @@ fn token_info_to_response(
         transfers_count: derived.transfers_count,
         transfers_24h: derived.transfers_24h,
         cells_count: None,
+        same_symbol_tokens: None,
+        issuer: None,
         total_capacity: derived.owned_capacity.map(|c| c.to_string()),
         total_used_capacity: derived.owned_knowledge.map(|c| c.to_string()),
     })
 }
 
-const XUDT_EXTENSION_FLAGS_MASK: u32 = 0x1FFF_FFFF;
-
 fn is_xudt_standard(standard: &str) -> bool {
-    standard.eq_ignore_ascii_case("xudt") || standard.eq_ignore_ascii_case("xudt_compatible")
+    standard.eq_ignore_ascii_case("xudt")
 }
 
 fn is_plain_xudt_without_extension(type_args: Option<&[u8]>) -> bool {
@@ -196,8 +247,13 @@ fn is_plain_xudt_without_extension(type_args: Option<&[u8]>) -> bool {
         32 => true,
         // Explicit flags in args: <owner lock script hash(32)> <flags(4)>
         36 => {
-            let flags = u32::from_le_bytes(type_args[32..36].try_into().unwrap_or_default());
-            (flags & XUDT_EXTENSION_FLAGS_MASK) == 0
+            let flags = u32::from_le_bytes(
+                type_args[32..36]
+                    .try_into()
+                    .expect("validated 36-byte xUDT args"),
+            );
+            // RFC 0052: high bits can replace/disable owner-lock mode too.
+            flags == 0
         }
         _ => false,
     }
@@ -254,7 +310,15 @@ async fn list_tokens(
     let limit = params.limit.clamp(1, 100) as usize;
 
     if let Some(cached_tokens) = state.load_token_cache() {
-        return serve_tokens_from_cache(cached_tokens, &params, limit);
+        let mut response = serve_tokens_from_cache(cached_tokens, &params, limit)?;
+        for row in &mut response.0.data {
+            let hash = parse_hash32(&row.type_script_hash, "type_hash")?;
+            row.cells_count = Some(
+                super::token_history::live_cells_count(&state, &hash)
+                    .map_err(|error| ApiError::internal(error.to_string()))?,
+            );
+        }
+        return Ok(response);
     }
 
     Err(state.asset_cache_unavailable("token cache unavailable; warmup in progress"))
@@ -374,6 +438,8 @@ fn serve_tokens_from_cache(
                 transfers_count: entry.transfers_count,
                 transfers_24h: entry.transfers_24h,
                 cells_count: None,
+                same_symbol_tokens: None,
+                issuer: None,
                 total_capacity: None,
                 total_used_capacity: None,
             })
@@ -439,7 +505,7 @@ async fn get_token(
                 (Some(lc), Some(luc))
             };
 
-            ok(token_info_to_response(
+            let mut response = token_info_to_response(
                 &hash,
                 &info,
                 TokenDerivedStats {
@@ -450,7 +516,55 @@ async fn get_token(
                     owned_capacity,
                     owned_knowledge,
                 },
-            )?)
+            )?;
+            response.cells_count = Some(
+                super::token_history::live_cells_count(&state, &hash)
+                    .map_err(|error| ApiError::internal(error.to_string()))?,
+            );
+            let mut others = Vec::new();
+            if let Some(symbol) = info.symbol.as_deref() {
+                for (other_hash, other) in state
+                    .store
+                    .list_tokens()
+                    .map_err(|error| ApiError::internal(error.to_string()))?
+                {
+                    if other_hash != hash && other.symbol.as_deref() == Some(symbol) {
+                        let (holders_count, _) = state
+                            .store
+                            .aggregate_token_holder_stats(&other_hash)
+                            .map_err(|error| ApiError::internal(error.to_string()))?;
+                        others.push(SameSymbolToken {
+                            type_script_hash: format!("0x{}", hex::encode(other_hash)),
+                            holders_count,
+                        });
+                    }
+                }
+            }
+            response.same_symbol_tokens = Some(others);
+            // These exact standard layouts name the owner authorized to mint.
+            // Compatible/custom scripts and extended xUDT rules prove no such
+            // authority merely by having 32 bytes at the front of their args.
+            if (info.standard.eq_ignore_ascii_case("sudt") && info.type_args.len() >= 32)
+                || (info.standard.eq_ignore_ascii_case("xudt")
+                    && is_plain_xudt_without_extension(Some(&info.type_args)))
+            {
+                let lock: [u8; 32] = info.type_args[..32]
+                    .try_into()
+                    .expect("validated owner hash width");
+                response.issuer = Some(TokenIssuer {
+                    lock_hash: format!("0x{}", hex::encode(lock)),
+                    address: crate::utils::address::resolve_lock_address(
+                        &state.store,
+                        &lock,
+                        &state.ckb_network,
+                    )
+                    .map_err(|error| ApiError::internal(error.to_string()))?
+                    .map(|resolved| resolved.address),
+                    lock_kind: super::activities::participant_lock_kind(&state.store, &lock, None)
+                        .map_err(|error| ApiError::internal(error.to_string()))?,
+                });
+            }
+            ok(response)
         }
         None => Err(ApiError::not_found("Token not found")),
     }
@@ -460,7 +574,7 @@ async fn get_token_holders(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
-) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
+) -> ApiResult<TokenHoldersResponse> {
     let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
@@ -474,12 +588,12 @@ async fn get_token_holders(
     let store = state.store.clone();
     let hash_c = hash.clone();
     let network = state.ckb_network.clone();
-    let (_token, holders_count, mut page, addresses) =
+    let (_token, holders_count, total_supply, mut page, addresses) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let token = store
                 .get_token(&hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
-            let (holders_count, _) = store.aggregate_token_holder_stats(&hash_c)?;
+            let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
             let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
             // Resolve only the rendered rows: the `limit + 1`-th row exists solely to
             // detect `has_more` and is truncated away below.
@@ -488,7 +602,7 @@ async fn get_token_holders(
                 &network,
                 page.iter().take(limit).map(|(lock, _)| lock.as_slice()),
             )?;
-            Ok((token, holders_count, page, addresses))
+            Ok((token, holders_count, total_supply, page, addresses))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -527,19 +641,34 @@ async fn get_token_holders(
 
     let holders: Vec<TokenHolderResponse> = page
         .into_iter()
-        .map(|(lock_script_hash, balance)| TokenHolderResponse {
-            address: addresses.get(&lock_script_hash).cloned(),
-            lock_script_hash: format!("0x{}", hex::encode(lock_script_hash)),
-            balance: balance.to_string(),
+        .map(|(lock_script_hash, balance)| {
+            let lock: [u8; 32] = lock_script_hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| ApiError::internal("invalid token holder lock length"))?;
+            Ok(TokenHolderResponse {
+                lock_kind: super::activities::participant_lock_kind(&state.store, &lock, None)
+                    .map_err(|e| ApiError::internal(e.to_string()))?,
+                address: addresses.get(&lock_script_hash).cloned(),
+                lock_script_hash: format!("0x{}", hex::encode(lock_script_hash)),
+                balance: balance.to_string(),
+            })
         })
-        .collect();
+        .collect::<Result<_, crate::response::ApiRouteError>>()?;
 
-    ok(CursorPaginatedResponse::new(
-        holders,
-        holders_count,
-        limit as i64,
-        next_cursor,
-    ))
+    let anchor = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map(|(block_number, header)| TokenAnchor {
+            block_number,
+            block_hash: format!("0x{}", hex::encode(header.hash)),
+        });
+    ok(TokenHoldersResponse {
+        total_supply: total_supply.to_string(),
+        anchor,
+        page: CursorPaginatedResponse::new(holders, holders_count, limit as i64, next_cursor),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -951,6 +1080,22 @@ mod tests {
     use crate::warmup::CachedAssetEntry;
 
     #[test]
+    fn compatible_token_does_not_inherit_xudt_issuance_semantics() {
+        assert_eq!(
+            max_supply_status("xudt_compatible", None, Some(&[0x11; 32])),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn xudt_owner_mode_flags_do_not_prove_plain_lock_issuance() {
+        let mut args = vec![0x11; 32];
+        args.extend_from_slice(&0x2000_0000u32.to_le_bytes());
+        assert!(!is_plain_xudt_without_extension(Some(&args)));
+        assert_eq!(max_supply_status("xudt", None, Some(&args)), "unknown");
+    }
+
+    #[test]
     fn test_is_plain_xudt_without_extension_for_compatible_and_zero_flags() {
         let compatible = vec![0x11; 32];
         assert!(is_plain_xudt_without_extension(Some(&compatible)));
@@ -985,7 +1130,7 @@ mod tests {
         assert_eq!(max_supply_status("sudt", None, None), "unlimited");
         assert_eq!(
             max_supply_status("xudt_compatible", None, Some(&plain_xudt)),
-            "unlimited"
+            "unknown"
         );
         assert_eq!(max_supply_status("xudt", None, Some(&ext_xudt)), "unknown");
     }
