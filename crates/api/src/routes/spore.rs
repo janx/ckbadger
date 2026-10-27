@@ -169,7 +169,7 @@ fn normalize_cluster_activity_action_filter(
 
 /// Parse a cluster_id URL parameter. Accepts "sole-spores" alias
 /// or a 32-byte hex string.
-fn parse_cluster_id_param(
+pub(super) fn parse_cluster_id_param(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, axum::Json<ApiError>)> {
     if raw.eq_ignore_ascii_case("sole-spores") {
@@ -314,7 +314,7 @@ pub struct SporeDobDecodeResponse {
 }
 
 /// Convert an ObjectEntry from the store into a SporeResponse.
-fn spore_to_response(
+pub(super) fn spore_to_response(
     spore_id: &[u8],
     entry: &ckbadger_store::ObjectEntry,
 ) -> Result<SporeResponse, ApiRouteError> {
@@ -842,12 +842,21 @@ async fn get_cluster_holders(
 
     let response_rows: Vec<ClusterHolderResponse> = page
         .into_iter()
-        .map(|(lock_hash, count)| ClusterHolderResponse {
-            lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
-            address: None,
-            item_count: *count,
+        .map(|(lock_hash, count)| {
+            let address = crate::utils::address::resolve_lock_address(
+                &state.store,
+                lock_hash,
+                &state.ckb_network,
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map(|resolved| resolved.address);
+            Ok(ClusterHolderResponse {
+                lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
+                address,
+                item_count: *count,
+            })
         })
-        .collect();
+        .collect::<Result<_, crate::response::ApiRouteError>>()?;
 
     ok(CursorPaginatedResponse::new(
         response_rows,
@@ -1030,49 +1039,65 @@ async fn get_spores_by_cluster(
 }
 
 /// Get cluster — point lookup + count from secondary index (no full scan).
+/// One existence/source contract for detail, insights and full feeds. A
+/// cluster may be empty, inferred from Spore membership, or virtual (sole).
+pub(crate) fn read_cluster(
+    state: &AppState,
+    id: &[u8],
+) -> Result<
+    (
+        Option<ckbadger_store::ObjectEntry>,
+        Option<ckbadger_store::ClusterAggregate>,
+    ),
+    ApiRouteError,
+> {
+    let entry = state
+        .store
+        .get_spore(id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if entry
+        .as_ref()
+        .is_some_and(|entry| entry.standard != ckbadger_store::ObjectStandard::SporeCluster)
+    {
+        return Err(ApiError::not_found("Cluster not found"));
+    }
+    let aggregate = state
+        .store
+        .get_cluster_aggregate(id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if aggregate.is_none() {
+        let count = state
+            .store
+            .count_spores_in_cluster(id)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        if count > 0 {
+            return Err(ApiError::internal(format!(
+                "missing aggregate for cluster 0x{} with {count} indexed spores",
+                hex::encode(id)
+            )));
+        }
+    }
+    if entry.is_none()
+        && !aggregate.as_ref().is_some_and(|agg| agg.total_count > 0)
+        && !is_sole_spores_sentinel(id)
+    {
+        return Err(ApiError::not_found("Cluster not found"));
+    }
+    Ok((entry, aggregate))
+}
+
 async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
     let id = parse_cluster_id_param(&cluster_id)?;
 
-    // Look up the cluster entry directly
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let cluster_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let cluster_aggregate = tokio::task::spawn_blocking(move || store.get_cluster_aggregate(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if cluster_aggregate.is_none() {
-        let ever_minted = state.store.count_spores_in_cluster(&id).map_err(|e| {
-            ApiError::internal(format!(
-                "failed to check cluster membership 0x{}: {e}",
-                hex::encode(&id)
-            ))
-        })?;
-        if ever_minted > 0 {
-            return Err(ApiError::internal(format!(
-                "missing aggregate for cluster 0x{} with {ever_minted} indexed spores",
-                hex::encode(&id)
-            )));
-        }
-    }
-
-    // Existence is judged on ever-minted history: a fully-melted cluster
-    // still exists, it just has zero live spores.
-    let cluster_exists = cluster_entry.is_some()
-        || cluster_aggregate
-            .as_ref()
-            .is_some_and(|agg| agg.total_count > 0);
-    if !cluster_exists && !is_sole_spores_sentinel(&id) {
-        return Err(ApiError::not_found("Cluster not found"));
-    }
+    let read_state = state.clone();
+    let read_id = id.clone();
+    let (cluster_entry, cluster_aggregate) =
+        tokio::task::spawn_blocking(move || read_cluster(&read_state, &read_id))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))??;
 
     // Read counts from pre-computed aggregate (zero RocksDB scans). The
     // displayed count is the LIVE count: every neighbouring field (items list,
@@ -1343,19 +1368,7 @@ async fn decode_spore(
         Some(ckbadger_store::DecodeOutcome::Decoded(decoded_entry)) => {
             // Merge traits across all steps: later steps override same-name traits,
             // earlier steps' unique traits are preserved. Insertion order maintained.
-            let mut traits: Vec<DobTraitResponse> = Vec::new();
-            for step in &decoded_entry.steps {
-                for t in &step.traits {
-                    if let Some(existing) = traits.iter_mut().find(|r| r.name == t.name) {
-                        existing.value = t.value.clone();
-                    } else {
-                        traits.push(DobTraitResponse {
-                            name: t.name.clone(),
-                            value: t.value.clone(),
-                        });
-                    }
-                }
-            }
+            let traits = super::asset_genetics::merged_traits(&decoded_entry);
 
             // One media entry per step
             let mut media: Vec<DecodedMediaResponse> = decoded_entry

@@ -3,6 +3,10 @@ mod address_holdings;
 pub(crate) mod address_pool;
 pub(crate) mod address_presence;
 mod asset_feed;
+mod asset_genetics;
+mod asset_history;
+mod asset_protocol;
+mod asset_read_feed;
 mod asset_summary;
 pub mod assets;
 mod blocks;
@@ -41,6 +45,9 @@ pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(activities::routes())
         .merge(assets::routes())
+        .merge(asset_history::routes())
+        .merge(asset_read_feed::routes())
+        .merge(asset_genetics::routes())
         .merge(identities::routes())
         .merge(blocks::routes())
         .merge(transactions::routes())

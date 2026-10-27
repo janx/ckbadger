@@ -461,9 +461,9 @@ struct DecodeContext {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderStep {
-    decoder_ref: DecoderRef,
-    pattern_json: String,
+pub struct DecoderStep {
+    pub decoder_ref: DecoderRef,
+    pub pattern_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -801,13 +801,13 @@ fn verify_blake2b_hash(data: &[u8], expected_hash: &[u8]) -> Result<()> {
 /// (the authority per the official server's `unbox_dob`), never by the
 /// spore's content_type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DobVersion {
+pub enum DobVersion {
     V0,
     V1,
 }
 
 impl DobVersion {
-    fn number(self) -> u64 {
+    pub fn number(self) -> u64 {
         match self {
             DobVersion::V0 => 0,
             DobVersion::V1 => 1,
@@ -821,7 +821,7 @@ impl DobVersion {
 /// null) `ver` means version 0; `0`/`1` select their version; anything else —
 /// an undefined version number or a non-integer value — is a loud error,
 /// never a silent default.
-fn parse_dob_version_from_cluster(dob: &Value) -> Result<DobVersion> {
+pub fn parse_dob_version_from_cluster(dob: &Value) -> Result<DobVersion> {
     match dob.get("ver") {
         None | Some(Value::Null) => Ok(DobVersion::V0),
         Some(ver) => match ver.as_u64() {
@@ -839,7 +839,7 @@ fn parse_dob_version_from_cluster(dob: &Value) -> Result<DobVersion> {
 /// parameters after ';' ignored). Used only as a consistency cross-check
 /// against the cluster's authoritative `dob.ver`; unparseable types yield
 /// `None` — there is no silent default.
-fn parse_dob_version_from_content_type(content_type: &str) -> Option<u64> {
+pub fn parse_dob_version_from_content_type(content_type: &str) -> Option<u64> {
     let normalized = content_type.trim().to_ascii_lowercase();
     let rest = normalized.strip_prefix("dob/")?;
     rest.split(';').next()?.trim().parse().ok()
@@ -865,7 +865,7 @@ fn parse_decoder_ref(dob: &Value) -> Result<DecoderRef> {
     bail!("no decoder reference found in DOB metadata")
 }
 
-fn parse_decoder_steps(dob: &Value) -> Result<Vec<DecoderStep>> {
+pub fn parse_decoder_steps(dob: &Value) -> Result<Vec<DecoderStep>> {
     if let Some(decoders) = dob.get("decoders").and_then(|v| v.as_array()) {
         let mut steps = Vec::with_capacity(decoders.len());
         for (index, entry) in decoders.iter().enumerate() {

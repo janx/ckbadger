@@ -412,7 +412,7 @@ fn clean_hex(raw: &str) -> Option<String> {
 ///
 /// Empty content has no DNA (`None`); non-UTF-8 text-form content is
 /// rejected exactly like the official server's `serde_json::from_slice`.
-pub(crate) fn parse_dna_hex_from_content(content: &[u8]) -> Option<String> {
+pub fn parse_dna_hex_from_content(content: &[u8]) -> Option<String> {
     match content.first() {
         None => None,
         Some(0) => Some(hex::encode(&content[1..])),

@@ -30,6 +30,8 @@ futures = "0.3"
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+ciborium = "0.2.2"
+data-encoding = "2.11.0"
 toml = "0.8"
 bincode = { workspace = true }
 ckb-jsonrpc-types = { workspace = true }

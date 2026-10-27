@@ -78,6 +78,24 @@ pub struct GeneBytes {
     pub raw_hex: String,
 }
 
+/// Describe the exact normalized argv pattern emitted by the DOB metadata
+/// parser. The binary's reviewed dialect decides how to interpret the text.
+pub fn describe_serialized_pattern(
+    decoder_code_hash: &[u8; 32],
+    serialized: &str,
+) -> Result<PatternDescription> {
+    let hash = hex::encode(decoder_code_hash);
+    if hash == LEGACY {
+        describe_pattern(decoder_code_hash, &Value::String(serialized.to_owned()))
+    } else if hash == JSON_DOB0 || NERVAPE.contains(&hash.as_str()) {
+        let value = serde_json::from_str(serialized)
+            .with_context(|| format!("decoder {hash} normalized JSON pattern is malformed"))?;
+        describe_pattern(decoder_code_hash, &value)
+    } else {
+        describe_pattern(decoder_code_hash, &Value::Null)
+    }
+}
+
 /// Describe only a known binary's pattern dialect, never guess from JSON shape.
 pub fn describe_pattern(
     decoder_code_hash: &[u8; 32],
@@ -474,6 +492,55 @@ mod tests {
         ])])))
     }
 
+    #[test]
+    fn normalized_patterns_follow_exact_binary_dialect_without_fallback() {
+        let legacy_pattern = legacy(&[schema(2, Vec::new())]);
+        assert_eq!(
+            describe_serialized_pattern(&hash(LEGACY), legacy_pattern.as_str().unwrap()).unwrap(),
+            describe_pattern(&hash(LEGACY), &legacy_pattern).unwrap()
+        );
+        let json_pattern = json!([["Face", "String", 0, 1, "options", ["Red", "Blue"]]]);
+        assert_eq!(
+            describe_serialized_pattern(&hash(JSON_DOB0), &json_pattern.to_string()).unwrap(),
+            describe_pattern(&hash(JSON_DOB0), &json_pattern).unwrap()
+        );
+        assert!(matches!(
+            describe_serialized_pattern(&[0xff; 32], "not JSON or molecule").unwrap(),
+            PatternDescription::Unsupported { .. }
+        ));
+        assert!(format!(
+            "{:#}",
+            describe_serialized_pattern(&hash(JSON_DOB0), "not JSON").unwrap_err()
+        )
+        .contains("normalized JSON pattern"));
+        assert!(
+            describe_serialized_pattern(&hash(LEGACY), &legacy_pattern.to_string()).is_err(),
+            "legacy must not acquire an outer JSON string quote layer"
+        );
+    }
+    #[test]
+    fn normalized_patterns_accept_real_legacy_and_3x_fixtures() {
+        for (binary, source) in [
+            (
+                LEGACY,
+                include_str!("../tests/fixtures/nervape-legacy-pattern.json"),
+            ),
+            (
+                NERVAPE[2],
+                include_str!("../tests/fixtures/nervape3x-pattern.json"),
+            ),
+        ] {
+            let pattern: Value = serde_json::from_str(source).unwrap();
+            let serialized = pattern
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| pattern.to_string());
+            assert_eq!(
+                describe_serialized_pattern(&hash(binary), &serialized).unwrap(),
+                describe_pattern(&hash(binary), &pattern).unwrap()
+            );
+        }
+    }
     #[test]
     fn unknown_binary_is_unsupported_even_with_a_familiar_pattern() {
         let description =

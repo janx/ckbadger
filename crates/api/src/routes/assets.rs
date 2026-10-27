@@ -61,7 +61,7 @@ pub(super) struct ResolvedCollection {
 /// `CF_CLUSTER_AGG`.  The returned [`MnftCollectionAggregate`] is a normalised
 /// view, and the accompanying [`ObjectCollectionSource`] tells callers which
 /// row source belongs to it.
-fn get_collection_aggregate(
+pub(super) fn get_collection_aggregate(
     store: &CkbadgerStore,
     collection_id: &[u8],
 ) -> anyhow::Result<Option<ResolvedCollection>> {
@@ -401,6 +401,7 @@ pub struct MnftClassSummaryResponse {
     pub total: u32,
     pub issued: u32,
     pub configure: u8,
+    pub permissions: super::asset_protocol::MnftPermissions,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -436,6 +437,9 @@ pub struct MnftItemDetailResponse {
     pub token_index: u32,
     pub characteristic_hex: String,
     pub configure: u8,
+    pub permissions: super::asset_protocol::MnftPermissions,
+    pub claimed: bool,
+    pub locked: bool,
     pub state: u8,
     pub tx_hash: Option<String>,
     pub output_index: Option<i16>,
@@ -1046,7 +1050,7 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
     format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
 }
 
-fn decode_object_collection_id(
+pub(super) fn decode_object_collection_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
     if let Some(standard) = identity_alias(raw) {
@@ -1723,6 +1727,9 @@ async fn get_object_item_detail(
         token_index,
         characteristic_hex: format!("0x{}", hex::encode(characteristic)),
         configure: token_configure,
+        permissions: super::asset_protocol::mnft_permissions(token_configure),
+        claimed: token_state & 1 != 0,
+        locked: token_state & 2 != 0,
         state: token_state,
         tx_hash: live_outpoint.as_ref().map(|(tx_hash, _)| tx_hash.clone()),
         output_index: live_outpoint
@@ -1737,6 +1744,7 @@ async fn get_object_item_detail(
             total: class_total,
             issued: class_issued,
             configure: class_configure,
+            permissions: super::asset_protocol::mnft_permissions(class_configure),
         },
         issuer: MnftIssuerSummaryResponse {
             issuer_id: format!("0x{}", hex::encode(&issuer_id)),
@@ -1772,7 +1780,7 @@ fn asset_action_name(action: ckbadger_store::AssetAction) -> &'static str {
     }
 }
 
-fn collect_nft_item_lifecycle_actions(
+pub(super) fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
     standard: NftLifecycleStandard,
@@ -2215,6 +2223,7 @@ async fn get_object_collection(
                     total,
                     issued,
                     configure,
+                    permissions: super::asset_protocol::mnft_permissions(configure),
                 });
 
                 let created_at = Some(class_entry.created_at_block);

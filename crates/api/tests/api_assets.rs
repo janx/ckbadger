@@ -1355,6 +1355,46 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     assert_eq!(json["data"][0]["values"]["unused"], "50");
 }
 
+fn seed_did_live_cell(batch: &mut StoreBatch<'_>, id: &[u8], hash: &[u8], block: i64) {
+    batch.put_tx_hash_map(hash, block, 0);
+    batch.put_tx_index(
+        block,
+        0,
+        &TxIndexEntry {
+            tx_hash: hash.try_into().unwrap(),
+            is_cellbase: false,
+            timestamp: 1_700_000_000 + block,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_spore_outpoint(hash, 0, id);
+    batch.put_cell(
+        hash,
+        0,
+        &LiveCellInfo {
+            capacity: 320_00000000,
+            occupied_capacity: (94 + id.len() as i64) * 100_000000,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x61; 20],
+            type_script_hash: Some(vec![0x71; 32]),
+            type_code_hash: Some(vec![0x81; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(id.to_vec()),
+            data_size: 0,
+            udt_amount: None,
+            data_hash: Some(vec![0; 32]),
+        },
+        block,
+    );
+}
+
 #[tokio::test]
 async fn test_assets_did_ckb_item_detail_supports_20_byte_item_ids() {
     let store = test_store();
@@ -1377,6 +1417,7 @@ async fn test_assets_did_ckb_item_detail_supports_20_byte_item_ids() {
             extra: IdentityExtra::DidCkb,
         },
     );
+    seed_did_live_cell(&mut batch, &did_id, &[0x91; 32], 21_080_336);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1571,7 +1612,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         &mint_tx,
         0,
         &LiveCellInfo {
-            capacity: 100_00000000,
+            capacity: 128_00000000,
             lock_script_hash: vec![0x41; 32],
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
@@ -1581,7 +1622,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             type_hash_type: Some(1),
             type_args: Some(did_id.to_vec()),
             data_size: 0,
-            occupied_capacity: 61_00000000,
+            occupied_capacity: (94 + did_id.len() as i64) * 100_000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -1621,6 +1662,14 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             semantic_tags: 0,
         },
     );
+    seed_did_live_cell(&mut batch, &did_id, &transfer_tx, 200);
+    batch
+        .put_raw_cf_by_name(
+            "stats_spore",
+            &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&did_id, &transfer_tx, 0),
+            &[AssetAction::Transfer.compact()],
+        )
+        .unwrap();
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1640,8 +1689,8 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     assert_eq!(json["name"], "did:alice.ckb");
     assert_eq!(json["standard"], "did_ckb");
     assert_eq!(json["isLive"], true);
-    assert_eq!(json["txHash"], serde_json::Value::Null);
-    assert_eq!(json["outputIndex"], serde_json::Value::Null);
+    assert_eq!(json["txHash"], format!("0x{}", hex::encode([0x92; 32])));
+    assert_eq!(json["outputIndex"], 0);
 
     let request = Request::builder()
         .uri(format!(

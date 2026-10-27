@@ -36,7 +36,7 @@ use ckbadger_indexer::parser::dotcell::DOTCELL_GRACE_SECONDS;
 /// Accepts every standard's aliases from the store's identity table and the
 /// hex-encoded sentinel IDs. Rejects any collection ID that does not resolve to
 /// an identity sentinel.
-fn decode_identity_collection_id(
+pub(super) fn decode_identity_collection_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
     if let Some(standard) = identity_alias(raw) {
@@ -528,6 +528,21 @@ async fn get_did_ckb_item_detail(
         return Err(ApiError::bad_request("Item is not a did:ckb identity"));
     }
 
+    let history_state = state.clone();
+    let history_id = identity_id_bytes.clone();
+    let versions = tokio::task::spawn_blocking(move || {
+        super::asset_history::checked_versions(
+            &history_state,
+            &history_id,
+            NftLifecycleStandard::DidCkb,
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
+    let current = versions
+        .into_iter()
+        .find(|version| version.response.is_live)
+        .map(|version| (version.tx_hash, version.response.output_index));
     ok(CollectionItemResponse {
         nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
         name: entry.name,
@@ -541,8 +556,10 @@ async fn get_did_ckb_item_detail(
         expired_at: None,
         registered_at: None,
         status: None,
-        tx_hash: None,
-        output_index: None,
+        tx_hash: current
+            .as_ref()
+            .map(|(hash, _)| format!("0x{}", hex::encode(hash))),
+        output_index: current.map(|(_, index)| index),
     })
 }
 
@@ -853,7 +870,7 @@ pub(super) fn parse_dotcell_label(raw: &str) -> Result<String, &'static str> {
 }
 
 /// Accept a 20-byte hex id (`0x…`), a bare label, or `label.cell`.
-fn decode_dotcell_item_ref(raw: &str) -> Result<[u8; 20], ApiRouteError> {
+pub(super) fn decode_dotcell_item_ref(raw: &str) -> Result<[u8; 20], ApiRouteError> {
     if raw.starts_with("0x") {
         return parse_fixed_hex::<20>(raw, ".cell name id", "name id");
     }
@@ -899,15 +916,15 @@ struct ResolvedLock {
     entry: LockScriptEntry,
 }
 
-struct DotCellPartyResolver<'a> {
-    store: &'a CkbadgerStore,
-    network: &'a str,
+pub(super) struct DotCellPartyResolver<'a> {
+    pub(super) store: &'a CkbadgerStore,
+    pub(super) network: &'a str,
 }
 
 impl DotCellPartyResolver<'_> {
     /// Resolve one 20-byte owner/manager prefix. An ambiguous prefix (two
     /// known locks share it) is an internal error naming both, never a guess.
-    fn resolve(&self, prefix: &[u8; 20]) -> Result<PartyRef, ApiRouteError> {
+    pub(super) fn resolve(&self, prefix: &[u8; 20]) -> Result<PartyRef, ApiRouteError> {
         Ok(self.resolve_with_lock(prefix)?.0)
     }
 
