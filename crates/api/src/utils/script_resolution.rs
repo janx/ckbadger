@@ -28,6 +28,7 @@ pub struct TypeReferenceLiveMatch {
     pub tx_hash: Vec<u8>,
     pub output_index: i16,
     pub version_hash: Vec<u8>,
+    pub native_type_id: bool,
 }
 
 pub type VersionCodeCell = (Vec<u8>, i16, PositionedCellInfo, bool);
@@ -435,6 +436,10 @@ pub fn resolve_live_type_reference_matches(
             tx_hash,
             output_index,
             version_hash,
+            native_type_id: cell.type_hash_type == Some(1)
+                && cell.type_code_hash.as_deref().is_some_and(|hash| {
+                    hash.len() == 32 && hash[..25] == [0; 25] && &hash[25..] == b"TYPE_ID"
+                }),
         });
     }
     Ok(matches)
@@ -501,6 +506,52 @@ pub fn reference_form_member_version(
     reference_hash: &[u8],
     is_allowed_version: &dyn Fn(&[u8]) -> bool,
 ) -> anyhow::Result<Option<Vec<u8>>> {
+    reference_form_member_version_with_lineage(
+        store,
+        cells_store,
+        hash_type,
+        reference_hash,
+        is_allowed_version,
+        None,
+    )
+}
+
+/// Callers that already loaded all version records provide the observed Type
+/// ID set, avoiding another full version scan for each retired reference.
+pub fn reference_form_member_version_with_lineage(
+    store: &CkbadgerStore,
+    cells_store: &CkbadgerStore,
+    hash_type: u8,
+    reference_hash: &[u8],
+    is_allowed_version: &dyn Fn(&[u8]) -> bool,
+    observed_type_id: Option<bool>,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    if hash_type == 1 {
+        let matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+        if matches.iter().any(|candidate| candidate.native_type_id)
+            || (matches.is_empty()
+                && match observed_type_id {
+                    Some(observed) => observed,
+                    None => has_observed_type_id_lineage(store, reference_hash)?,
+                })
+        {
+            return persisted_reference_version_candidate(
+                store,
+                cells_store,
+                hash_type,
+                reference_hash,
+            );
+        }
+        let unique: HashSet<Vec<u8>> = matches
+            .into_iter()
+            .map(|candidate| candidate.version_hash)
+            .collect();
+        return Ok(if unique.len() == 1 {
+            unique.into_iter().next()
+        } else {
+            None
+        });
+    }
     if let Some(version_hash) =
         persisted_reference_version_candidate(store, cells_store, hash_type, reference_hash)?
     {
@@ -561,11 +612,18 @@ pub fn resolve_script_form_by_hash(
         )));
     }
 
-    if hash_type != 1 || has_observed_type_id_lineage(store, reference_hash)? {
+    if hash_type != 1 {
         return Ok(CurrentScriptVersionResolution::NotFound);
     }
 
     let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+    if type_matches
+        .iter()
+        .any(|candidate| candidate.native_type_id)
+        || (type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?)
+    {
+        return Ok(CurrentScriptVersionResolution::NotFound);
+    }
     let unique_versions: Vec<Vec<u8>> = {
         let mut seen = HashSet::new();
         type_matches
@@ -603,10 +661,22 @@ pub fn resolve_script_by_hash(
     reference_hash: &[u8],
 ) -> anyhow::Result<CurrentScriptVersionResolution> {
     let direct_version = store.get_script_version(reference_hash)?;
+    let live_type_matches =
+        resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+    let native_type_id = live_type_matches
+        .iter()
+        .any(|candidate| candidate.native_type_id);
+    let retired_type_id =
+        live_type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?;
     let persisted_versions = {
         let mut seen = HashSet::new();
         let mut versions = Vec::new();
         for hash_type in [0u8, 1u8, 2u8, 4u8] {
+            // A generic type binding records historical use, not a unique
+            // current executable. Its live cells decide current resolution.
+            if hash_type == 1 && !native_type_id && !retired_type_id {
+                continue;
+            }
             if let Some(version_hash) = persisted_reference_version_candidate(
                 store,
                 cells_store,
@@ -640,10 +710,10 @@ pub fn resolve_script_by_hash(
         )));
     }
 
-    let type_matches = if has_observed_type_id_lineage(store, reference_hash)? {
+    let type_matches = if native_type_id || retired_type_id {
         Vec::new()
     } else {
-        resolve_live_type_reference_matches(store, cells_store, reference_hash)?
+        live_type_matches
     };
     if let Some(version_info) = direct_version {
         let mut unique_versions: Vec<Vec<u8>> = {
@@ -730,6 +800,33 @@ pub fn list_version_code_cells(
 mod tests {
     use super::*;
     use ckbadger_store::{batch::StoreBatch, types::LiveCellInfo, CkbadgerStore};
+
+    fn seed_live_generic_code_cell(store: &CkbadgerStore, reference: &[u8], binary: &[u8]) {
+        let tx = vec![0xb1; 32];
+        let mut batch = StoreBatch::new(store);
+        batch.put_cell(
+            &tx,
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference.to_vec()),
+                type_code_hash: Some(vec![0x13; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(binary.to_vec()),
+            },
+            10,
+        );
+        batch.put_cell_by_type(reference, 10, &tx, 0);
+        batch.commit().unwrap();
+    }
 
     #[test]
     fn type_id_retirement_keeps_history_without_promoting_non_executable_payload() {
@@ -958,7 +1055,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_script_by_hash_uses_persisted_mapping_before_live_type_ambiguity() {
+    fn test_resolve_script_by_hash_reports_generic_live_type_ambiguity_despite_mapping() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x63; 32];
@@ -1017,7 +1114,7 @@ mod tests {
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(conflicting_version_hash),
+                data_hash: Some(conflicting_version_hash.clone()),
             },
             11,
         );
@@ -1026,18 +1123,34 @@ mod tests {
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
         match resolution {
-            CurrentScriptVersionResolution::Resolved(resolved) => {
-                assert_eq!(resolved.version_hash, mapped_version_hash);
+            CurrentScriptVersionResolution::Ambiguous(ambiguous) => {
                 assert_eq!(
-                    resolved
-                        .version_info
-                        .as_ref()
-                        .and_then(|info| info.name.as_deref()),
-                    Some("Mapped Version")
+                    ambiguous.version_hashes,
+                    vec![mapped_version_hash, conflicting_version_hash]
                 );
             }
-            other => panic!("expected persisted mapping to win, got {other:?}"),
+            other => panic!("expected live generic ambiguity, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_generic_persisted_mapping_without_live_code_is_not_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = vec![0x66; 32];
+        let historical = vec![0x77; 32];
+        store
+            .put_script_reference_to_version_direct(1, &reference, &historical)
+            .unwrap();
+
+        assert_eq!(
+            resolve_script_form_by_hash(&store, &store, 1, &reference).unwrap(),
+            CurrentScriptVersionResolution::NotFound
+        );
+        assert_eq!(
+            resolve_script_by_hash(&store, &store, &reference).unwrap(),
+            CurrentScriptVersionResolution::NotFound
+        );
     }
 
     #[test]
@@ -1110,6 +1223,8 @@ mod tests {
                 },
             )
             .unwrap();
+
+        seed_live_generic_code_cell(&store, &reference_hash, &version_hash);
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
         match resolution {
@@ -1192,6 +1307,8 @@ mod tests {
         store
             .put_script_reference_to_version_direct(0, &reference_hash, &reference_hash)
             .unwrap();
+
+        seed_live_generic_code_cell(&store, &reference_hash, &version_hash);
 
         match resolve_script_form_by_hash(&store, &store, 1, &reference_hash).unwrap() {
             CurrentScriptVersionResolution::Resolved(resolved) => {

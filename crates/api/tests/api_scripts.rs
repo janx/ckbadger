@@ -184,7 +184,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
                 version_hash: version.clone(),
                 family_id: Some("mixed-holders".to_string()),
                 registered_references: vec![(reference.clone(), 1)],
-                type_id_deployments: vec![(reference.clone(), 10)],
+                type_id_deployments: Vec::new(),
                 canonical_reference_hash: Some(reference.clone()),
                 canonical_hash_type: Some(1),
                 lock_cells_count: 2,
@@ -242,6 +242,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
         batch.commit().unwrap();
         let app = create_router(test_config(store)).await;
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/v1/scripts/Mixed%20Holders")
@@ -250,13 +251,43 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let detail: serde_json::Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let custody = &detail["references"][0]["custody"];
         if different_binary {
             assert_eq!(custody["class"], "ambiguous");
+            assert!(detail["references"][0]["currentVersionHash"].is_null());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/v1/scripts/code-cells?code_hash=0x{}&hash_type=type",
+                            hex::encode(&reference)
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let code_cells: serde_json::Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert!(code_cells["resolvedVersionHash"].is_null());
+            assert_eq!(
+                code_cells["ambiguity"]["versionHashes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
         } else {
             assert_eq!(custody["class"], "mixed");
             assert_eq!(

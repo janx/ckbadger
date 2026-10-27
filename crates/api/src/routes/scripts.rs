@@ -22,7 +22,8 @@ use crate::response::{
     ScriptVersionDetailResponse,
 };
 use crate::utils::script_resolution::{
-    has_observed_type_id_lineage, resolve_dep_cells_for_transaction,
+    has_observed_type_id_lineage, reference_form_member_version_with_lineage,
+    resolve_dep_cells_for_transaction,
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
@@ -611,9 +612,6 @@ fn reference_custody(
                     hex::encode(reference_hash)
                 ))
             })?;
-            let Some(current) = current else {
-                return Ok(custody_without_witness("retired", None));
-            };
             let cells = state
                 .store
                 .list_cells_by_type(reference_hash, usize::MAX, None, &state.append_only_store)
@@ -623,6 +621,30 @@ fn reference_custody(
                         hex::encode(reference_hash)
                     ))
                 })?;
+            let native_type_id_hash =
+                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).map_err(|e| {
+                    ApiError::internal(format!("invalid native Type ID code hash: {e}"))
+                })?;
+            let Some(current) = current else {
+                if cells.iter().any(|(_, _, cell)| {
+                    cell.type_hash_type == Some(1)
+                        && cell.type_code_hash.as_deref() == Some(native_type_id_hash.as_slice())
+                }) {
+                    return Ok(custody_without_witness("retired", None));
+                }
+                let unique: HashSet<Vec<u8>> = cells
+                    .iter()
+                    .filter_map(|(_, _, cell)| cell.data_hash.clone())
+                    .collect();
+                return Ok(custody_without_witness(
+                    if unique.len() > 1 {
+                        "ambiguous"
+                    } else {
+                        "retired"
+                    },
+                    None,
+                ));
+            };
             if cells.is_empty() {
                 if has_observed_type_id_lineage(&state.store, reference_hash)
                     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -631,10 +653,6 @@ fn reference_custody(
                 }
                 return Ok(custody_without_witness("retired", None));
             }
-            let native_type_id_hash =
-                hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).map_err(|e| {
-                    ApiError::internal(format!("invalid native Type ID code hash: {e}"))
-                })?;
             let mut version = None;
             let mut owners: BTreeMap<(Vec<u8>, i16, Vec<u8>), (String, Vec<String>, bool)> =
                 BTreeMap::new();
@@ -1217,6 +1235,14 @@ fn family_classes_for_list(
     let allowed_versions: HashSet<Vec<u8>> =
         versions.iter().map(|(hash, _)| hash.clone()).collect();
     let registered = registered_reference_set(&versions);
+    let observed_type_ids: HashSet<Vec<u8>> = versions
+        .iter()
+        .flat_map(|(_, info)| {
+            info.type_id_deployments
+                .iter()
+                .map(|(reference, _)| reference.clone())
+        })
+        .collect();
     let references = state.store.list_script_reference_infos().map_err(|e| {
         ApiError::internal(format!("list script references for class summary: {e}"))
     })?;
@@ -1226,6 +1252,7 @@ fn family_classes_for_list(
             state,
             &membership,
             &allowed_versions,
+            &observed_type_ids,
             reference_hash,
             hash_type,
             info,
@@ -1442,16 +1469,18 @@ fn resolve_member_form(
     state: &AppState,
     membership: &ScriptFamilyMembershipIndex,
     allowed_versions: &HashSet<Vec<u8>>,
+    observed_type_ids: &HashSet<Vec<u8>>,
     reference_hash: Vec<u8>,
     hash_type: u8,
     info: ckbadger_store::types::ScriptReferenceInfo,
 ) -> Result<(Option<String>, FamilyMemberForm), ApiRouteError> {
-    let current_version_hash = reference_form_member_version(
+    let current_version_hash = reference_form_member_version_with_lineage(
         &state.store,
         &state.append_only_store,
         hash_type,
         &reference_hash,
         &|hash| allowed_versions.contains(hash),
+        Some(observed_type_ids.contains(&reference_hash)),
     )
     .map_err(|e| {
         ApiError::internal(format!(
@@ -1460,8 +1489,24 @@ fn resolve_member_form(
             hash_type
         ))
     })?;
+    // A generic reference may have no current binary (retired or ambiguous),
+    // while the indexed binding still identifies the family of its historical
+    // usage. Never present that historical binding as the current executable.
+    let family_candidate = if hash_type == 1 && current_version_hash.is_none() {
+        state
+            .store
+            .get_script_reference_version_hash(hash_type, &reference_hash)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "read registered reference binding 0x{}: {e}",
+                    hex::encode(&reference_hash)
+                ))
+            })?
+    } else {
+        current_version_hash.clone()
+    };
     let family_id = membership
-        .resolve_family(&reference_hash, hash_type, current_version_hash.as_deref())
+        .resolve_family(&reference_hash, hash_type, family_candidate.as_deref())
         .map_err(|e| {
             ApiError::internal(format!(
                 "resolve family for script reference 0x{} type {}: {e}",
@@ -1510,6 +1555,14 @@ fn family_member_reference_forms(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let membership = ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let observed_type_ids: HashSet<Vec<u8>> = versions
+        .iter()
+        .flat_map(|(_, info)| {
+            info.type_id_deployments
+                .iter()
+                .map(|(reference, _)| reference.clone())
+        })
+        .collect();
     let mut members = Vec::new();
     for ((reference_hash, hash_type), info) in state
         .store
@@ -1520,6 +1573,7 @@ fn family_member_reference_forms(
             state,
             &membership,
             allowed_versions,
+            &observed_type_ids,
             reference_hash,
             hash_type,
             info,
