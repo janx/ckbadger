@@ -31,6 +31,11 @@ describe('EpochTimeLengthPage', () => {
     });
     vi.mocked(api.getHardforks).mockResolvedValue({
       network: 'mainnet',
+      consensusFeatures: [
+        { rfc: '0029', activationEpoch: 0 },
+        { rfc: '0032', activationEpoch: 5414 },
+        { rfc: '0049', activationEpoch: 12293 },
+      ],
       tipEpoch: 13000,
       tipBlock: 19000000,
       events: [
