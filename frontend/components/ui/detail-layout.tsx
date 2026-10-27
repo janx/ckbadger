@@ -51,7 +51,11 @@ export function DetailLayout({
           </div>
           {actions}
         </div>
-        {identity && <div className="text-text-dim mt-2 break-all text-xs">{identity}</div>}
+        {identity && (
+          <div className="text-text-dim mt-2 min-w-0 text-xs [overflow-wrap:anywhere]">
+            {identity}
+          </div>
+        )}
         {facts && (
           <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
             {facts.map(({ label, value }) => (
