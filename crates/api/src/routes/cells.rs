@@ -2054,6 +2054,7 @@ pub struct AddressTransactionResponse {
     pub is_cellbase: bool,
     pub tx_size: Option<i32>,
     pub cycles: Option<i64>,
+    pub cycles_status: String,
     pub script_labels: Vec<String>,
 }
 
@@ -3884,7 +3885,9 @@ async fn get_address_transactions(
                 let tx_size = Some(crate::routes::transactions::tx_serialized_size_in_block(
                     tx_entry.tx_size,
                 ));
-                let cycles = tx_entry.cycles;
+                let (cycles, cycles_status) = crate::routes::transactions::display_cycles(
+                    tx_entry.cycles, is_cellbase || block_number == 0, &tx_hash,
+                )?;
 
                 // Script labels from semantic_tags bitmap (single calculation path).
                 // semantic_tags == 0 means "plain CKB transfer" → empty labels is correct.
@@ -3905,6 +3908,7 @@ async fn get_address_transactions(
                     is_cellbase,
                     tx_size,
                     cycles,
+                    cycles_status,
                     script_labels,
                 })
             },
@@ -3983,6 +3987,7 @@ fn build_pool_transaction_rows(
             is_cellbase: record.is_cellbase,
             tx_size: Some(i32::try_from(record.entry.size)?),
             cycles: Some(i64::try_from(record.entry.cycles)?),
+            cycles_status: "complete".into(),
             script_labels: script_labels_from_semantic_tags(record.semantic_tags),
         });
     }

@@ -171,7 +171,7 @@ pub(crate) fn tx_cycles_status(cycles: Option<i64>) -> TxCyclesStatus {
     }
 }
 
-fn display_cycles(
+pub(crate) fn display_cycles(
     cycles: Option<i64>,
     execution_exempt: bool,
     tx_hash: &[u8],
