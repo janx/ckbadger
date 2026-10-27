@@ -1940,6 +1940,291 @@ mod tests {
     }
 
     #[test]
+    fn persisted_mainnet_mnft_lineage_survives_bundled_reimport() {
+        assert_persisted_mainnet_lineage_survives_bundled_reimport(
+            "m-nft-issuer",
+            "b59879b6ea6fff985223117fa499ce84f8cfb028c4ffdfdf5d3ec19e905a11ed",
+        );
+    }
+
+    #[test]
+    fn persisted_mainnet_joyid_lineage_survives_bundled_reimport() {
+        assert_persisted_mainnet_lineage_survives_bundled_reimport(
+            "joyid",
+            "d23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac",
+        );
+    }
+
+    fn script_startup_rows(
+        store: &CkbadgerStore,
+    ) -> std::collections::BTreeMap<(String, Vec<u8>), Vec<u8>> {
+        [
+            ckbadger_store::CF_SCRIPT_VERSIONS,
+            ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+            ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
+            ckbadger_store::CF_SCRIPT_FAMILIES,
+            ckbadger_store::CF_SCRIPT_REFERENCE_INFO,
+            ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
+        ]
+        .into_iter()
+        .flat_map(|cf| {
+            store
+                .iterator_cf(store.cf(cf), rocksdb::IteratorMode::Start)
+                .map(move |row| {
+                    let (key, value) = row.unwrap();
+                    ((cf.to_owned(), key.to_vec()), value.to_vec())
+                })
+        })
+        .collect()
+    }
+
+    fn assert_persisted_mainnet_lineage_survives_bundled_reimport(
+        family: &str,
+        foreign_reference_hex: &str,
+    ) {
+        // These compact cases were verified read-only with get_block_by_number
+        // on 2026-10-27: native Type ID script hashes and ELF data hashes were
+        // recomputed from the node's actual bytes. Keep block/tx/outpoint/type
+        // provenance in the fixture; do not fabricate ELF bytes for these hashes.
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/native_typeid_lineage_mainnet_startup_cases.json"
+        )))
+        .unwrap();
+        let case = cases.iter().find(|case| case["family"] == family).unwrap();
+        let decode = |field: &str| {
+            hex::decode(case[field].as_str().unwrap().trim_start_matches("0x")).unwrap()
+        };
+        let reference = decode("reference_hash");
+        let binary = decode("binary_hash");
+        let block = case["block_number"].as_i64().unwrap();
+        let script: crate::rpc::Script =
+            serde_json::from_value(case["type_script"].clone()).unwrap();
+        assert_eq!(
+            crate::parser::ScriptParser::compute_script_hash(&script),
+            reference
+        );
+        let foreign_reference = hex::decode(foreign_reference_hex).unwrap();
+
+        let tuples: Vec<(String, String, i64)> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/native_typeid_lineage_mainnet_0_12m.json"
+        )))
+        .unwrap();
+        assert_eq!(tuples.len(), 471);
+        let mut observations: Vec<_> = tuples
+            .into_iter()
+            .map(|(reference, binary, block_number)| TypeIdCodeChange {
+                reference_hash: hex::decode(reference).unwrap(),
+                version_hash: Some(hex::decode(binary).unwrap()),
+                block_number,
+            })
+            .collect();
+        let joyid = cases.iter().find(|case| case["family"] == "joyid").unwrap();
+        observations.push(TypeIdCodeChange {
+            reference_hash: hex::decode(
+                joyid["reference_hash"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches("0x"),
+            )
+            .unwrap(),
+            version_hash: Some(
+                hex::decode(
+                    joyid["binary_hash"]
+                        .as_str()
+                        .unwrap()
+                        .trim_start_matches("0x"),
+                )
+                .unwrap(),
+            ),
+            block_number: joyid["block_number"].as_i64().unwrap(),
+        });
+        assert!(observations.iter().any(|observation| {
+            observation.reference_hash == reference
+                && observation.version_hash.as_ref() == Some(&binary)
+                && observation.block_number == block
+        }));
+        let current_binary = observations
+            .iter()
+            .rev()
+            .find(|observation| observation.reference_hash == reference)
+            .unwrap()
+            .version_hash
+            .clone()
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append");
+        let payload_key = keys::encode_outpoint(&[0x76; 32], 0);
+        let (expected_rows, expected_version, expected_payload) = {
+            let store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
+            let append = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
+            let imported =
+                crate::label_import::run_label_import_bundled(&store, "mainnet").unwrap();
+            assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+            assert!(store.get_script_version(&binary).unwrap().is_none());
+            let writer = BatchWriter::new(store.clone(), append.clone());
+
+            // Synthetic nonzero usage exercises every rollup field, independently
+            // of the exact chain deployment observations. Only domain is mutable.
+            let changes = HashMap::from([
+                ((reference.clone(), 1, false), (9, 7, 900, 700, 549, 427)),
+                ((reference.clone(), 1, true), (5, 3, 500, 300, 305, 183)),
+            ]);
+            let mut batch = StoreBatch::new(&store);
+            let infos = writer
+                .update_script_reference_usage_batch(&changes, &mut batch)
+                .unwrap();
+            let rollup = build_script_reference_rollup_state_with_lineage(
+                &store,
+                vec![((reference.clone(), 1), Some(current_binary.clone()))],
+                infos,
+                &observations,
+            )
+            .unwrap();
+            // Persist the shared rollup exactly as bulk final materialization:
+            // version/family/index rows, and only the observed current binding.
+            // There is no undo on the bulk path and no chain replay on reopen.
+            for ((reference, kind), binary) in rollup.reference_mappings {
+                batch.put_script_reference_to_version(kind, &reference, binary.as_ref().unwrap());
+            }
+            for (hash, version) in rollup.versions {
+                batch.put_script_version(&hash, &version);
+                if let Some(family) = &version.family_id {
+                    batch.put_script_version_by_family(family, &hash);
+                }
+                if let Some(name) = &version.name {
+                    batch.put_script_version_by_label(name, &hash);
+                }
+            }
+            for (family, info) in rollup.families {
+                batch.put_script_family(&family, &info);
+            }
+            batch.commit().unwrap();
+            writer.refresh_script_reference_rollups().unwrap();
+            let version = store.get_script_version(&binary).unwrap().unwrap();
+            assert_eq!(version.family_id.as_deref(), Some(family));
+            assert_eq!(version.canonical_reference_hash, Some(reference.clone()));
+            assert_eq!(version.canonical_hash_type, Some(1));
+            assert_eq!(
+                version.type_id_deployments,
+                vec![(reference.clone(), block)]
+            );
+            assert!(version.registered_references.is_empty());
+            let info = store.get_script_family(family).unwrap().unwrap();
+            assert_eq!((info.cells_count, info.live_cells_count), (14, 10));
+            assert_eq!(
+                (info.owned_capacity_sum, info.owned_knowledge_sum),
+                (1000, 610)
+            );
+
+            // An unrelated immutable payload guards the store boundary. The
+            // metadata import and rollup must never update/delete append-only CF_CELLS.
+            let mut payload = StoreBatch::new(&append);
+            payload.put_cell_payload(
+                &payload_key,
+                &ckbadger_store::LiveCellInfo {
+                    capacity: 10000,
+                    lock_script_hash: vec![0x11; 32],
+                    lock_code_hash: vec![0x22; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_script_hash: None,
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 41,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+            );
+            payload.commit().unwrap();
+            (
+                script_startup_rows(&store),
+                version,
+                append
+                    .get_cf(append.cf_cells(), &payload_key)
+                    .unwrap()
+                    .unwrap(),
+            )
+        }; // All writer/store handles drop here: no in-memory lineage survives.
+
+        for startup in 1..=2 {
+            let store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
+            let append = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
+            assert_eq!(
+                script_startup_rows(&store),
+                expected_rows,
+                "before startup {startup}"
+            );
+            let imported =
+                crate::label_import::run_label_import_bundled(&store, "mainnet").unwrap();
+            assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+            // Capture importer evidence before startup refresh can mask damage.
+            let imported_version = store.get_script_version(&binary).unwrap().unwrap();
+            let family_key = keys::encode_script_version_by_family_key(family, &binary);
+            let label_key = keys::encode_script_version_by_label_key(
+                expected_version.name.as_deref().unwrap(),
+                &binary,
+            );
+            let family_index = store
+                .get_cf(store.cf_script_versions_by_family(), &family_key)
+                .unwrap();
+            let label_index = store
+                .get_cf(store.cf_script_versions_by_label(), &label_key)
+                .unwrap();
+            let writer = BatchWriter::new(store.clone(), append.clone());
+            // This is the actual unconditional startup entry point in writer/sync.rs.
+            let refreshed = writer.refresh_script_reference_rollups();
+            assert_eq!(
+                imported_version, expected_version,
+                "{family} lost persisted lineage metadata during startup {startup}; refresh={refreshed:?}"
+            );
+            assert_eq!(
+                family_index,
+                Some(vec![]),
+                "{family} family index after import"
+            );
+            assert_eq!(
+                label_index,
+                Some(vec![]),
+                "{family} label index after import"
+            );
+            refreshed.unwrap();
+            assert_eq!(
+                script_startup_rows(&store),
+                expected_rows,
+                "after startup {startup}"
+            );
+            let versions = store.list_script_versions().unwrap();
+            assert!(
+                versions.iter().all(|(_, version)| !version
+                    .registered_references
+                    .iter()
+                    .any(|(anchor, _)| anchor == &foreign_reference)),
+                "{family} imported a testnet anchor on mainnet"
+            );
+            let membership = ckbadger_store::ScriptFamilyMembershipIndex::new(
+                versions.iter().map(|(_, version)| version),
+            )
+            .unwrap();
+            assert_eq!(
+                membership
+                    .resolve_family(&reference, 1, Some(&current_binary))
+                    .unwrap(),
+                Some(family)
+            );
+            assert_eq!(
+                append.get_cf(append.cf_cells(), &payload_key).unwrap(),
+                Some(expected_payload.clone())
+            );
+        }
+    }
+
+    #[test]
     fn real_mainnet_type_id_deployments_preserve_imported_family_boundaries() {
         // Exact native Type ID ELF outputs at heights 0..=12,000,000, collected
         // read-only from the node. Each tuple is (type hash, binary hash, block).
