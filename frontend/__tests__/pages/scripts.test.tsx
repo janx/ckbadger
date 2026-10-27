@@ -92,6 +92,32 @@ describe('ScriptsPage', () => {
     expect(screen.getByPlaceholderText('Search by script family name...')).toBeInTheDocument();
   });
 
+  it('uses server role totals and refetches the filtered family set', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...mockScriptsResponse,
+      classSummary: [
+        {
+          class: 'fixed',
+          lockCellsCount: 2,
+          lockOwnedCapacitySum: '3000000000',
+          referenceCount: 1,
+        },
+      ],
+      roleCounts: { all: 2, locks: 1, types: 1 },
+    });
+    render(<ScriptsPage />);
+    expect(await screen.findByRole('button', { name: 'Types 1' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: 'Live lock capacity distribution by code class' })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Types 1' }));
+    await waitFor(() =>
+      expect(api.getScripts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ role: 'type', cursor: undefined })
+      )
+    );
+  });
+
   it('renders sortable script list columns and entries', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 

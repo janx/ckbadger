@@ -1,383 +1,341 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { ListTable } from '@/components/ui/list-table';
+import {
+  ScriptCodeClassSummary,
+  scriptClassLabel,
+} from '@/components/scripts/script-code-evidence';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, KnownScript } from '@/lib/api';
+import { api, type KnownScript } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import {
-  getScriptRefBadgeLabel,
-  getScriptRefVerboseLabel,
-  normalizeScriptRefHashType,
-} from '@/lib/script-ref';
+import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
 import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
+type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
-type ScriptSortKey =
-  | 'name'
-  | 'usedAs'
-  | 'description'
-  | 'used'
-  | 'capacity'
-  | 'liveCells'
-  | 'cells';
 const UNKNOWN_SCRIPT_NAME = 'unknown';
-const UNLABELED_SCRIPT_LABEL = 'Unlabeled';
+
+function hasName(script: KnownScript): boolean {
+  return Boolean(script.name?.trim() && script.name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
+}
+
+function scriptHref(script: KnownScript): string {
+  const kind = script.scriptKind === 'lock+type' ? 'both' : script.scriptKind;
+  return getScriptDetailHref({
+    name: script.name,
+    codeHash: script.codeHash,
+    hashType: normalizeScriptRefHashType(script.hashType),
+    scriptKind: kind === 'lock' || kind === 'type' || kind === 'both' ? kind : undefined,
+  });
+}
+
+function codeDescription(script: KnownScript): string {
+  const classes = script.codeClasses ?? [];
+  if (!classes.length) return 'Code evidence unavailable';
+  if (classes.length > 1) return `${classes.length} code classes`;
+  return scriptClassLabel(classes[0].class);
+}
+
+function occupiedPercent(script: KnownScript): string {
+  const total = BigInt(script.ownedCapacitySum!);
+  if (total === BigInt(0)) return '0.00%';
+  const occupied = BigInt(script.ownedKnowledgeSum!);
+  if (occupied < BigInt(0) || occupied > total) {
+    throw new Error(`Script ${script.codeHash} has invalid occupied capacity`);
+  }
+  const hundredths = (occupied * BigInt(10000)) / total;
+  return `${hundredths / BigInt(100)}.${String(hundredths % BigInt(100)).padStart(2, '0')}%`;
+}
+
+function capacityText(value: string) {
+  const compact = formatCkbCompact(value);
+  return <span title={`${compact.full} CKB`}>{compact.value} CKB</span>;
+}
+
+function countText(value: number | undefined): string {
+  return value === undefined ? 'unavailable' : value.toLocaleString();
+}
+
+function ScriptName({ script }: { script: KnownScript }) {
+  const name = hasName(script) ? script.name!.trim() : 'Unlabeled';
+  const ref = `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
+  return (
+    <div className="min-w-0">
+      <AppLink
+        href={scriptHref(script)}
+        title={!hasName(script) ? `${script.hashType} ref:${script.codeHash}` : undefined}
+        className="text-text-bright hover:text-emphasis font-medium hover:underline"
+      >
+        {name}
+      </AppLink>
+      {script.deprecated && <span className="text-negative ml-2 text-[11px]">Deprecated</span>}
+      <div className="text-text-dim mt-1 truncate text-[11px]" title={script.description ?? ref}>
+        {hasName(script) ? script.description : ref}
+      </div>
+    </div>
+  );
+}
 
 export default function ScriptsPage() {
   const pagination = useCursorPagination();
-  const decoderType = undefined;
   const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState<string | undefined>(undefined);
-  const [sortKey, setSortKey] = useState<ScriptSortKey>('capacity');
+  const [search, setSearch] = useState<string | undefined>();
+  const [role, setRole] = useState<'lock' | 'type' | undefined>();
+  const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['scripts', pagination.cursor, decoderType, search, sortKey, sortDirection],
+    queryKey: ['scripts', pagination.cursor, search, role, sortKey, sortDirection],
     queryFn: () =>
       api.getScripts({
         limit: DEFAULT_PAGE_SIZE,
         cursor: pagination.cursor,
-        decoderType,
+        decoderType: undefined,
         search,
+        role,
         sortKey,
         sortDirection,
       }),
     placeholderData: keepPreviousData,
   });
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSearch(searchInput.trim() || undefined);
+  function toggleSort(next: SortKey) {
+    setSortDirection(
+      next === sortKey
+        ? sortDirection === 'asc'
+          ? 'desc'
+          : 'asc'
+        : next === 'name' || next === 'description' || next === 'usedAs'
+          ? 'asc'
+          : 'desc'
+    );
+    setSortKey(next);
     pagination.reset();
-  };
+  }
 
-  const clearSearch = () => {
-    setSearchInput('');
-    setSearch(undefined);
-    pagination.reset();
-  };
+  const columns = [
+    {
+      key: 'script',
+      label: 'Script',
+      minWidth: 205,
+      width: '24%',
+      render: (s: KnownScript) => <ScriptName script={s} />,
+    },
+    {
+      key: 'role',
+      label: 'Role',
+      minWidth: 85,
+      width: '9%',
+      render: (s: KnownScript) => (
+        <span className="text-text-dim">{s.scriptKind ?? 'unregistered'}</span>
+      ),
+    },
+    {
+      key: 'code',
+      label: 'Code',
+      minWidth: 210,
+      width: '23%',
+      render: (s: KnownScript) => <span className="text-text-dim">{codeDescription(s)}</span>,
+    },
+    {
+      key: 'cells',
+      label: 'Live cells',
+      minWidth: 105,
+      width: '11%',
+      numeric: true,
+      render: (s: KnownScript) => (
+        <span title={`${countText(s.cellsCount)} ever`}>{countText(s.liveCellsCount)}</span>
+      ),
+    },
+    {
+      key: 'capacity',
+      label: 'CKB in its cells · occupied',
+      minWidth: 225,
+      width: '24%',
+      render: (s: KnownScript) => (
+        <div className="min-w-0">
+          <div>{capacityText(s.ownedCapacitySum!)}</div>
+          <div className="bg-base-elevated mt-1 h-1 w-full overflow-hidden rounded">
+            <div className="bg-positive h-full" style={{ width: occupiedPercent(s) }} />
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'occupied',
+      label: 'Occupied',
+      minWidth: 95,
+      width: '9%',
+      numeric: true,
+      render: (s: KnownScript) => <span className="text-text-dim">{occupiedPercent(s)}</span>,
+    },
+  ];
 
-  const toggleSort = (nextKey: ScriptSortKey) => {
-    if (nextKey === sortKey) {
-      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(nextKey);
-      setSortDirection(
-        nextKey === 'name' || nextKey === 'description' || nextKey === 'usedAs' ? 'asc' : 'desc'
-      );
-    }
-    pagination.reset();
-  };
-
-  const renderSortHeader = (
-    key: ScriptSortKey,
-    label: string,
-    className: string,
-    align: 'left' | 'right' = 'left'
-  ) => (
-    <button
-      type="button"
-      className={`${className} flex items-center gap-1 ${align === 'right' ? 'justify-end text-right' : ''}`}
-      onClick={() => toggleSort(key)}
-      aria-label={`Sort by ${label}`}
-    >
-      <span>{label}</span>
-      <span className={sortKey === key ? 'text-emphasis' : 'text-text-dim'}>
-        {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
-      </span>
-    </button>
-  );
-
-  const scripts = data?.data ?? [];
-  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-  const hasKnownScriptName = (name: string | null | undefined): boolean =>
-    Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
-  const getScriptRefDisplay = (script: KnownScript): string =>
-    `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
-  const getScriptRefFull = (script: KnownScript): string => {
-    const hashType = getScriptRefVerboseLabel(script.hashType);
-    return `${hashType}:${script.codeHash}`;
-  };
-  const normalizeScriptKind = (value: string | null): 'lock' | 'type' | 'both' | undefined => {
-    if (value === 'lock' || value === 'type' || value === 'both') return value;
-    if (value === 'lock+type') return 'both';
-    return undefined;
-  };
-  const getScriptHref = (script: KnownScript): string =>
-    getScriptDetailHref({
-      name: script.name,
-      codeHash: script.codeHash,
-      hashType: normalizeScriptRefHashType(script.hashType),
-      scriptKind: normalizeScriptKind(script.scriptKind),
-    });
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <PageHeader
+        <DetailLayout
+          kind="index"
           title="Scripts"
-          subtitle="Browse known scripts deployed on the CKB network"
+          identity="Known script families and their registered code references"
           actions={
-            <form onSubmit={handleSearch} className="flex gap-2">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="Search by script family name..."
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-bright w-64 rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
-                />
-                {search && (
-                  <button
-                    type="button"
-                    onClick={clearSearch}
-                    className="text-text-dim hover:text-text absolute right-2 top-1/2 -translate-y-1/2"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                setSearch(searchInput.trim() || undefined);
+                pagination.reset();
+              }}
+              className="flex min-w-0 gap-2"
+            >
+              <input
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                placeholder="Search by script family name..."
+                aria-label="Search scripts"
+                className="border-base-border bg-base-surface text-text-bright min-w-0 rounded border px-3 py-1.5 text-xs sm:w-64"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchInput('');
+                    setSearch(undefined);
+                    pagination.reset();
+                  }}
+                  aria-label="Clear search"
+                  className="text-text-dim"
+                >
+                  ×
+                </button>
+              )}
               <button
                 type="submit"
-                className="border-emphasis-dim bg-emphasis-dim/20 text-emphasis hover:bg-emphasis-dim/40 rounded border px-4 py-1.5 font-mono text-sm transition-colors"
+                className="border-base-border text-text-bright rounded border px-3 py-1.5 text-xs"
               >
                 Search
               </button>
             </form>
           }
-        />
-
-        <TerminalPanel>
-          <TerminalPanelHeader indicator="active">Script List</TerminalPanelHeader>
-          <TerminalPanelContent padding="none">
-            {isLoading ? (
-              <div className="space-y-2 py-4">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <TerminalRow key={i} hoverable={false}>
-                    {/* Table skeleton (md+) */}
-                    <div className="hidden animate-pulse items-center md:flex">
-                      <div className="w-44 shrink-0">
-                        <div className="bg-base-elevated h-4 w-32 rounded" />
-                      </div>
-                      <div className="w-16 shrink-0">
-                        <div className="bg-base-elevated h-4 w-12 rounded" />
-                      </div>
-                      <div className="min-w-0 flex-1 px-4">
-                        <div className="bg-base-elevated h-4 w-48 rounded" />
-                      </div>
-                      <div className="hidden xl:contents">
-                        <div className="w-24 shrink-0">
-                          <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
-                        </div>
-                        <div className="w-24 shrink-0">
-                          <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
-                        </div>
-                      </div>
-                      <div className="w-28 shrink-0">
-                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
-                      </div>
-                      <div className="w-28 shrink-0">
-                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
-                      </div>
-                    </div>
-                    {/* Card skeleton (<md) */}
-                    <div className="animate-pulse space-y-1.5 md:hidden">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="bg-base-elevated h-4 w-28 rounded" />
-                        <div className="bg-base-elevated h-4 w-10 rounded" />
-                      </div>
-                      <div className="bg-base-elevated h-3 w-3/4 rounded" />
-                      <div className="flex items-center gap-4">
-                        <div className="bg-base-elevated h-3 w-24 rounded" />
-                        <div className="bg-base-elevated h-3 w-24 rounded" />
-                      </div>
-                    </div>
-                  </TerminalRow>
-                ))}
-              </div>
-            ) : isError ? (
-              <div className="py-8 text-center">
-                <p className="text-negative font-mono text-sm">Failed to load scripts</p>
-                <p className="text-negative mt-2 font-mono text-xs">{errorMessage}</p>
-              </div>
-            ) : data?.data?.length ? (
-              <>
-                <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
-                  {renderSortHeader('name', 'Script', 'w-44 shrink-0')}
-                  {renderSortHeader('usedAs', 'Used as', 'w-16 shrink-0')}
-                  {renderSortHeader('description', 'Description', 'min-w-0 flex-1 px-4')}
-                  <div className="hidden xl:contents">
-                    {renderSortHeader('liveCells', 'Live Cells', 'w-24 shrink-0', 'right')}
-                    {renderSortHeader('cells', 'Total Cells', 'w-24 shrink-0', 'right')}
-                  </div>
-                  {renderSortHeader('used', 'Used (CKB)', 'w-28 shrink-0', 'right')}
-                  {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28 shrink-0', 'right')}
-                </div>
-                {scripts.map((script: KnownScript) => (
-                  <TerminalRow key={script.codeHash}>
-                    {/* Table layout (md+) */}
-                    <div className="hidden items-center md:flex">
-                      <div className="w-44 shrink-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {hasKnownScriptName(script.name) ? (
-                            <AppLink
-                              href={getScriptHref(script)}
-                              className="text-emphasis font-medium hover:underline"
-                            >
-                              {script.name!.trim()}
-                            </AppLink>
-                          ) : (
-                            <AppLink
-                              href={getScriptHref(script)}
-                              className="hover:text-emphasis text-text font-medium hover:underline"
-                              title={getScriptRefFull(script)}
-                            >
-                              {UNLABELED_SCRIPT_LABEL}
-                            </AppLink>
-                          )}
-                          {script.deprecated && <Badge variant="red">Deprecated</Badge>}
-                        </div>
-                      </div>
-                      <div className="w-16 shrink-0">
-                        {script.scriptKind ? (
-                          <Badge variant={script.scriptKind === 'lock' ? 'blue' : 'purple'}>
-                            {script.scriptKind}
-                          </Badge>
-                        ) : (
-                          <span className="text-text-dim">-</span>
-                        )}
-                      </div>
-                      <div className="text-text-dim min-w-0 flex-1 truncate px-4 text-sm">
-                        {hasKnownScriptName(script.name) ? (
-                          script.description
-                        ) : (
-                          <span
-                            title={getScriptRefFull(script)}
-                            className="text-text-dim font-mono text-xs"
-                          >
-                            {getScriptRefDisplay(script)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="hidden xl:contents">
-                        <div className="text-text w-24 shrink-0 text-right font-mono tabular-nums">
-                          {script.liveCellsCount != null
-                            ? new Intl.NumberFormat().format(script.liveCellsCount)
-                            : '-'}
-                        </div>
-                        <div className="text-text-dim w-24 shrink-0 text-right font-mono tabular-nums">
-                          {script.cellsCount != null
-                            ? new Intl.NumberFormat().format(script.cellsCount)
-                            : '-'}
-                        </div>
-                      </div>
-                      <div className="text-text w-28 shrink-0 text-right font-mono">
-                        {(() => {
-                          const occupied = script.ownedKnowledgeSum;
-                          if (!occupied) {
-                            return <span className="text-text-dim">-</span>;
-                          }
-                          const compact = formatCkbCompact(occupied);
-                          return <span title={`${compact.full} CKB`}>{compact.value}</span>;
-                        })()}
-                      </div>
-                      <div className="text-text w-28 shrink-0 text-right font-mono">
-                        {(() => {
-                          const capacity = script.ownedCapacitySum;
-                          if (!capacity) {
-                            return <span className="text-text-dim">-</span>;
-                          }
-                          const compact = formatCkbCompact(capacity);
-                          return <span title={`${compact.full} CKB`}>{compact.value}</span>;
-                        })()}
-                      </div>
-                    </div>
-                    {/* Card layout (<md) */}
-                    <div className="space-y-1.5 md:hidden">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <AppLink
-                            href={getScriptHref(script)}
-                            className="text-emphasis font-medium hover:underline"
-                          >
-                            {hasKnownScriptName(script.name)
-                              ? script.name!.trim()
-                              : UNLABELED_SCRIPT_LABEL}
-                          </AppLink>
-                          {script.deprecated && <Badge variant="red">Deprecated</Badge>}
-                        </div>
-                        {script.scriptKind && (
-                          <Badge variant={script.scriptKind === 'lock' ? 'blue' : 'purple'}>
-                            {script.scriptKind}
-                          </Badge>
-                        )}
-                      </div>
-                      {hasKnownScriptName(script.name) && script.description && (
-                        <div className="text-text-dim line-clamp-2 text-xs">
-                          {script.description}
-                        </div>
-                      )}
-                      {!hasKnownScriptName(script.name) && (
-                        <div
-                          className="text-text-dim font-mono text-xs"
-                          title={getScriptRefFull(script)}
-                        >
-                          {getScriptRefDisplay(script)}
-                        </div>
-                      )}
-                      <div className="text-text flex items-center gap-4 font-mono text-xs">
-                        <span>
-                          Common Knowledge:{' '}
-                          {(() => {
-                            const o = script.ownedKnowledgeSum;
-                            return o ? formatCkbCompact(o).value : '-';
-                          })()}
-                        </span>
-                        <span>
-                          Capacity:{' '}
-                          {(() => {
-                            const c = script.ownedCapacitySum;
-                            return c ? formatCkbCompact(c).value : '-';
-                          })()}
-                        </span>
-                      </div>
-                    </div>
-                  </TerminalRow>
-                ))}
-              </>
-            ) : (
-              <div className="text-text-dim py-8 text-center">No scripts found</div>
-            )}
-          </TerminalPanelContent>
-
-          {data && data.data?.length > 0 && (
-            <TerminalPanelFooter>
-              <CursorPagination
-                total={data.total ?? undefined}
-                totalLabel="scripts"
-                pageSize={DEFAULT_PAGE_SIZE}
-                page={pagination.page}
-                hasMore={data.hasMore}
-                hasPrevious={pagination.hasPrevious}
-                onNext={() => pagination.goToNext(data.nextCursor)}
-                onPrevious={pagination.goToPrevious}
-              />
-            </TerminalPanelFooter>
+        >
+          {data?.classSummary && (
+            <ScriptCodeClassSummary
+              classes={data.classSummary}
+              title="Who can change the code · lock scripts"
+            />
           )}
-        </TerminalPanel>
+          <DetailSection
+            title="Script families"
+            actions={
+              <span className="text-text-dim text-xs">
+                {data?.total?.toLocaleString() ?? '—'} families
+              </span>
+            }
+          >
+            <div
+              role="group"
+              aria-label="Filter scripts by role"
+              className="mb-4 flex flex-wrap gap-2 text-xs"
+            >
+              {(
+                [
+                  [undefined, 'All', data?.roleCounts?.all],
+                  ['lock', 'Locks', data?.roleCounts?.locks],
+                  ['type', 'Types', data?.roleCounts?.types],
+                ] as const
+              ).map(([value, label, count]) => (
+                <button
+                  key={label}
+                  type="button"
+                  aria-pressed={role === value}
+                  onClick={() => {
+                    setRole(value);
+                    pagination.reset();
+                  }}
+                  className={`border-base-border rounded border px-3 py-1 ${role === value ? 'text-text-bright bg-base-elevated' : 'text-text-dim'}`}
+                >
+                  {label} {count === undefined ? '' : count.toLocaleString()}
+                </button>
+              ))}
+            </div>
+            <div className="text-text-dim mb-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px]">
+              {(
+                [
+                  ['name', 'Script'],
+                  ['usedAs', 'Used as'],
+                  ['description', 'Description'],
+                  ['liveCells', 'Live Cells'],
+                  ['cells', 'Total Cells'],
+                  ['used', 'Used (CKB)'],
+                  ['capacity', 'Capacity (CKB)'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={`Sort by ${label}`}
+                  onClick={() => toggleSort(key)}
+                  className={sortKey === key ? 'text-text-bright' : 'hover:text-text-bright'}
+                >
+                  <span>{label}</span>{' '}
+                  {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                </button>
+              ))}
+            </div>
+            {isLoading ? (
+              <div className="text-text-dim py-8 text-xs">Loading scripts...</div>
+            ) : isError ? (
+              <div role="alert" className="text-negative py-8 text-xs">
+                <strong>Failed to load scripts</strong>:{' '}
+                {error instanceof Error ? error.message : 'Unknown error'}
+              </div>
+            ) : (
+              <ListTable
+                label="Scripts"
+                columns={columns}
+                rows={data?.data ?? []}
+                rowKey={(s) => s.codeHash}
+                empty="No scripts found"
+                mobileRow={(s) => (
+                  <div className="min-w-0 space-y-2 text-xs">
+                    <ScriptName script={s} />
+                    <div className="text-text-dim">
+                      {s.scriptKind ?? 'unregistered'} · {codeDescription(s)}
+                    </div>
+                    <div className="flex flex-wrap justify-between gap-2">
+                      <span>{countText(s.liveCellsCount)} live cells</span>
+                      <span>{capacityText(s.ownedCapacitySum!)}</span>
+                    </div>
+                    <div className="text-text-dim">
+                      Common Knowledge: {formatCkbCompact(s.ownedKnowledgeSum!).value} · Occupied{' '}
+                      {occupiedPercent(s)}
+                    </div>
+                  </div>
+                )}
+              />
+            )}
+            {data && data.data.length > 0 && (
+              <div className="border-base-border mt-4 border-t pt-4">
+                <CursorPagination
+                  total={data.total ?? undefined}
+                  totalLabel="scripts"
+                  pageSize={DEFAULT_PAGE_SIZE}
+                  page={pagination.page}
+                  hasMore={data.hasMore}
+                  hasPrevious={pagination.hasPrevious}
+                  onNext={() => pagination.goToNext(data.nextCursor)}
+                  onPrevious={pagination.goToPrevious}
+                />
+              </div>
+            )}
+          </DetailSection>
+        </DetailLayout>
       </main>
     </div>
   );

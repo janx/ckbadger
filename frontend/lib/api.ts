@@ -2202,6 +2202,7 @@ interface KnownScript {
   codeCellsLiveCount?: number;
   codeCellsTotal?: number;
   observedReferences?: ScriptObservedReferenceApi[];
+  codeClasses?: ScriptCodeClassTotalApi[];
 }
 
 interface DeploymentUsage {
@@ -2238,6 +2239,47 @@ interface ScriptFamilyListItemApi {
   ownedCapacitySum: string;
   ownedKnowledgeSum: string;
   versionsCount: number;
+  codeClasses?: ScriptCodeClassTotalApi[];
+}
+
+export interface ScriptCodeClassTotalApi {
+  class:
+    | 'fixed'
+    | 'unspendable'
+    | 'one_key'
+    | 'multisig'
+    | 'unsupported'
+    | 'retired'
+    | 'mixed'
+    | 'ambiguous';
+  lockCellsCount: number;
+  lockOwnedCapacitySum: string;
+  referenceCount: number;
+}
+
+export interface ScriptsListApi extends CursorPaginatedResponse<KnownScript> {
+  classSummary?: ScriptCodeClassTotalApi[];
+  roleCounts?: { all: number; locks: number; types: number };
+}
+
+export interface ScriptCustodyApi {
+  class: ScriptCodeClassTotalApi['class'];
+  lockCodeHash: string | null;
+  lockHashType: string | null;
+  lockArgs: string | null;
+  threshold: number | null;
+  keyCount: number | null;
+  requireFirstN: number | null;
+  keyHashes: string[];
+  verifiedByTx: string | null;
+  witnessState: 'never_signed' | 'verified' | 'unavailable' | 'not_applicable';
+  owners: {
+    lockCodeHash: string;
+    lockHashType: string;
+    lockArgs: string;
+    class: ScriptCodeClassTotalApi['class'];
+    codeCells: string[];
+  }[];
 }
 
 interface ScriptObservedReferenceApi {
@@ -2247,6 +2289,8 @@ interface ScriptObservedReferenceApi {
   cellsCount: number;
   ownedCapacitySum: string;
   ownedKnowledgeSum: string;
+  currentVersionHash?: string | null;
+  custody?: ScriptCustodyApi;
 }
 
 interface ScriptVersionDetailApi {
@@ -2259,6 +2303,8 @@ interface ScriptVersionDetailApi {
   canonicalReferenceHash: string | null;
   canonicalHashType: string | null;
   deployedAt: number | null;
+  firstDeployedBlock?: number | null;
+  firstDeployedTxIndex?: number | null;
   liveCellsCount: number;
   cellsCount: number;
   ownedCapacitySum: string;
@@ -2276,6 +2322,27 @@ interface ScriptVersionDeploymentApi {
   codeCellTxHash: string;
   codeCellOutputIndex: number;
   deployedAt: number;
+  createdAtBlock?: number;
+  status?: 'live' | 'consumed';
+  consumedAtBlock?: number | null;
+  consumedByTx?: string | null;
+  custody?: ScriptCustodyApi;
+}
+
+export interface ScriptHistoryMarkerApi {
+  referenceHash: string;
+  hashType: string;
+  versionHash: string | null;
+  event: 'deployed' | 'consumed';
+  blockNumber: number;
+  txIndex: number | null;
+  timestamp: number;
+  chainTimeMs: number;
+  indexedDay: string;
+  codeCellTxHash: string;
+  codeCellOutputIndex: number;
+  eventTxHash: string;
+  custody: ScriptCustodyApi;
 }
 
 interface ScriptFamilyDetailApi {
@@ -2290,6 +2357,9 @@ interface ScriptFamilyDetailApi {
   ownedKnowledgeSum: string;
   versionsCount: number;
   versions: ScriptVersionDetailApi[];
+  references?: ScriptObservedReferenceApi[];
+  codeClasses?: ScriptCodeClassTotalApi[];
+  history?: ScriptHistoryMarkerApi[];
 }
 
 interface ScriptQueryParams {
@@ -2298,6 +2368,7 @@ interface ScriptQueryParams {
   network?: string;
   decoderType?: string;
   search?: string;
+  role?: 'lock' | 'type';
   sortKey?:
     | 'name'
     | 'usedAs'
@@ -2364,6 +2435,7 @@ function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): Kno
     ownedKnowledgeSum: script.ownedKnowledgeSum,
     liveCellsCount: script.liveCellsCount,
     cellsCount: script.cellsCount,
+    codeClasses: script.codeClasses,
   };
 }
 
@@ -4125,13 +4197,14 @@ export const api = {
     return fetchApi('/pipeline');
   },
 
-  getScripts: (params: ScriptQueryParams = {}): Promise<CursorPaginatedResponse<KnownScript>> => {
+  getScripts: (params: ScriptQueryParams = {}): Promise<ScriptsListApi> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.network) query.set('network', params.network);
     if (params.decoderType) query.set('decoder_type', params.decoderType);
     if (params.search) query.set('search', params.search);
+    if (params.role) query.set('role', params.role);
     if (params.sortKey) {
       const snakeKey =
         params.sortKey === 'usedRatio'
@@ -4142,12 +4215,12 @@ export const api = {
       query.set('sort_key', snakeKey);
     }
     if (params.sortDirection) query.set('sort_direction', params.sortDirection);
-    return fetchApi<CursorPaginatedResponse<ScriptFamilyListItemApi>>(`/scripts?${query}`).then(
-      (response) => ({
-        ...response,
-        data: response.data.map(scriptFamilyListItemToKnownScript),
-      })
-    );
+    return fetchApi<
+      CursorPaginatedResponse<ScriptFamilyListItemApi> & { classSummary: ScriptCodeClassTotalApi[] }
+    >(`/scripts?${query}`).then((response) => ({
+      ...response,
+      data: response.data.map(scriptFamilyListItemToKnownScript),
+    }));
   },
 
   getScript: (name: string): Promise<KnownScript[]> => {

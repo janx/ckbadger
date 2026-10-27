@@ -1,0 +1,240 @@
+{
+  "cellsCount": 2,
+  "codeClasses": [
+    {
+      "class": "fixed",
+      "lockCellsCount": 1,
+      "lockOwnedCapacitySum": "500",
+      "referenceCount": 1
+    },
+    {
+      "class": "one_key",
+      "lockCellsCount": 1,
+      "lockOwnedCapacitySum": "400",
+      "referenceCount": 1
+    }
+  ],
+  "description": null,
+  "familyId": "class-evidence",
+  "history": [
+    {
+      "blockNumber": 10,
+      "chainTimeMs": 1704153601000,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+      "custody": {
+        "class": "one_key",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x8181818181818181818181818181818181818181",
+        "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "lockHashType": "type",
+        "owners": [],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "event": "deployed",
+      "eventTxHash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+      "hashType": "data1",
+      "indexedDay": "2024-01-02",
+      "referenceHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+      "timestamp": 1704153599000,
+      "txIndex": 1,
+      "versionHash": "0x3131313131313131313131313131313131313131313131313131313131313131"
+    },
+    {
+      "blockNumber": 10,
+      "chainTimeMs": 1704153601000,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+      "custody": {
+        "class": "one_key",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x8181818181818181818181818181818181818181",
+        "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "lockHashType": "type",
+        "owners": [],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "event": "deployed",
+      "eventTxHash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+      "hashType": "type",
+      "indexedDay": "2024-01-02",
+      "referenceHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
+      "timestamp": 1704153599000,
+      "txIndex": 1,
+      "versionHash": "0x3131313131313131313131313131313131313131313131313131313131313131"
+    }
+  ],
+  "liveCellsCount": 2,
+  "name": "Class Evidence",
+  "ownedCapacitySum": "900",
+  "ownedKnowledgeSum": "100",
+  "references": [
+    {
+      "cellsCount": 1,
+      "currentVersionHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+      "custody": {
+        "class": "fixed",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": null,
+        "lockCodeHash": null,
+        "lockHashType": null,
+        "owners": [],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "not_applicable"
+      },
+      "hashType": "data1",
+      "liveCellsCount": 1,
+      "ownedCapacitySum": "500",
+      "ownedKnowledgeSum": "50",
+      "referenceHash": "0x3131313131313131313131313131313131313131313131313131313131313131"
+    },
+    {
+      "cellsCount": 1,
+      "currentVersionHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+      "custody": {
+        "class": "one_key",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x8181818181818181818181818181818181818181",
+        "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "lockHashType": "type",
+        "owners": [
+          {
+            "class": "one_key",
+            "codeCells": ["0x5353535353535353535353535353535353535353535353535353535353535353:0"],
+            "lockArgs": "0x8181818181818181818181818181818181818181",
+            "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "lockHashType": "type"
+          }
+        ],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "hashType": "type",
+      "liveCellsCount": 1,
+      "ownedCapacitySum": "400",
+      "ownedKnowledgeSum": "50",
+      "referenceHash": "0x4242424242424242424242424242424242424242424242424242424242424242"
+    }
+  ],
+  "scriptKind": "lock",
+  "versions": [
+    {
+      "canonicalHashType": "type",
+      "canonicalReferenceHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
+      "cellsCount": 2,
+      "codeCellsLiveCount": 1,
+      "codeCellsTotal": 1,
+      "deployedAt": 1704153599000,
+      "deployments": [
+        {
+          "codeCellOutputIndex": 0,
+          "codeCellTxHash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+          "consumedAtBlock": null,
+          "consumedByTx": null,
+          "createdAtBlock": 10,
+          "custody": {
+            "class": "one_key",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x8181818181818181818181818181818181818181",
+            "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "lockHashType": "type",
+            "owners": [],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "unavailable"
+          },
+          "dataReferenceHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+          "deployedAt": 1704153599000,
+          "hashType": "type",
+          "status": "live",
+          "typeReferenceHash": "0x4242424242424242424242424242424242424242424242424242424242424242"
+        }
+      ],
+      "deprecated": false,
+      "description": null,
+      "firstDeployedBlock": 10,
+      "firstDeployedTxIndex": 1,
+      "liveCellsCount": 2,
+      "name": "Class Evidence",
+      "ownedCapacitySum": "900",
+      "ownedKnowledgeSum": "100",
+      "references": [
+        {
+          "cellsCount": 1,
+          "currentVersionHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+          "custody": {
+            "class": "fixed",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": null,
+            "lockCodeHash": null,
+            "lockHashType": null,
+            "owners": [],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "not_applicable"
+          },
+          "hashType": "data1",
+          "liveCellsCount": 1,
+          "ownedCapacitySum": "500",
+          "ownedKnowledgeSum": "50",
+          "referenceHash": "0x3131313131313131313131313131313131313131313131313131313131313131"
+        },
+        {
+          "cellsCount": 1,
+          "currentVersionHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+          "custody": {
+            "class": "one_key",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x8181818181818181818181818181818181818181",
+            "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "lockHashType": "type",
+            "owners": [
+              {
+                "class": "one_key",
+                "codeCells": [
+                  "0x5353535353535353535353535353535353535353535353535353535353535353:0"
+                ],
+                "lockArgs": "0x8181818181818181818181818181818181818181",
+                "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                "lockHashType": "type"
+              }
+            ],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "unavailable"
+          },
+          "hashType": "type",
+          "liveCellsCount": 1,
+          "ownedCapacitySum": "400",
+          "ownedKnowledgeSum": "50",
+          "referenceHash": "0x4242424242424242424242424242424242424242424242424242424242424242"
+        }
+      ],
+      "scriptKind": "lock",
+      "versionHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
+      "website": null
+    }
+  ],
+  "versionsCount": 1,
+  "website": null
+}

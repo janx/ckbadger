@@ -1,0 +1,391 @@
+{
+  "cellsCount": 3,
+  "codeClasses": [
+    {
+      "class": "multisig",
+      "lockCellsCount": 3,
+      "lockOwnedCapacitySum": "300",
+      "referenceCount": 3
+    }
+  ],
+  "description": null,
+  "familyId": "multisig-evidence",
+  "history": [
+    {
+      "blockNumber": 10,
+      "chainTimeMs": 1704153601000,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x2020202020202020202020202020202020202020202020202020202020202020",
+      "custody": {
+        "class": "multisig",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x4545454545454545454545454545454545454545",
+        "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        "lockHashType": "type",
+        "owners": [],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "never_signed"
+      },
+      "event": "deployed",
+      "eventTxHash": "0x2020202020202020202020202020202020202020202020202020202020202020",
+      "hashType": "type",
+      "indexedDay": "2024-01-02",
+      "referenceHash": "0x0101010101010101010101010101010101010101010101010101010101010101",
+      "timestamp": 1704153599000,
+      "txIndex": 0,
+      "versionHash": "0x9191919191919191919191919191919191919191919191919191919191919191"
+    },
+    {
+      "blockNumber": 10,
+      "chainTimeMs": 1704153601000,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x2121212121212121212121212121212121212121212121212121212121212121",
+      "custody": {
+        "class": "multisig",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x4545454545454545454545454545454545454545",
+        "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        "lockHashType": "type",
+        "owners": [],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "event": "deployed",
+      "eventTxHash": "0x2121212121212121212121212121212121212121212121212121212121212121",
+      "hashType": "type",
+      "indexedDay": "2024-01-02",
+      "referenceHash": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "timestamp": 1704153599000,
+      "txIndex": 1,
+      "versionHash": "0x9191919191919191919191919191919191919191919191919191919191919191"
+    },
+    {
+      "blockNumber": 10,
+      "chainTimeMs": 1704153601000,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "custody": {
+        "class": "multisig",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x4545454545454545454545454545454545454545",
+        "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        "lockHashType": "type",
+        "owners": [],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "event": "deployed",
+      "eventTxHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "hashType": "type",
+      "indexedDay": "2024-01-02",
+      "referenceHash": "0x0303030303030303030303030303030303030303030303030303030303030303",
+      "timestamp": 1704153599000,
+      "txIndex": 2,
+      "versionHash": "0x9191919191919191919191919191919191919191919191919191919191919191"
+    }
+  ],
+  "liveCellsCount": 3,
+  "name": "Multisig Evidence",
+  "ownedCapacitySum": "300",
+  "ownedKnowledgeSum": "0",
+  "references": [
+    {
+      "cellsCount": 1,
+      "currentVersionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+      "custody": {
+        "class": "multisig",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x4545454545454545454545454545454545454545",
+        "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        "lockHashType": "type",
+        "owners": [
+          {
+            "class": "multisig",
+            "codeCells": ["0x2020202020202020202020202020202020202020202020202020202020202020:0"],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type"
+          }
+        ],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "never_signed"
+      },
+      "hashType": "type",
+      "liveCellsCount": 1,
+      "ownedCapacitySum": "100",
+      "ownedKnowledgeSum": "0",
+      "referenceHash": "0x0101010101010101010101010101010101010101010101010101010101010101"
+    },
+    {
+      "cellsCount": 1,
+      "currentVersionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+      "custody": {
+        "class": "multisig",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x4545454545454545454545454545454545454545",
+        "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        "lockHashType": "type",
+        "owners": [
+          {
+            "class": "multisig",
+            "codeCells": ["0x2121212121212121212121212121212121212121212121212121212121212121:0"],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type"
+          }
+        ],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "hashType": "type",
+      "liveCellsCount": 1,
+      "ownedCapacitySum": "100",
+      "ownedKnowledgeSum": "0",
+      "referenceHash": "0x0202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "cellsCount": 1,
+      "currentVersionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+      "custody": {
+        "class": "multisig",
+        "keyCount": null,
+        "keyHashes": [],
+        "lockArgs": "0x4545454545454545454545454545454545454545",
+        "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        "lockHashType": "type",
+        "owners": [
+          {
+            "class": "multisig",
+            "codeCells": ["0x2222222222222222222222222222222222222222222222222222222222222222:0"],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type"
+          }
+        ],
+        "requireFirstN": null,
+        "threshold": null,
+        "verifiedByTx": null,
+        "witnessState": "unavailable"
+      },
+      "hashType": "type",
+      "liveCellsCount": 1,
+      "ownedCapacitySum": "100",
+      "ownedKnowledgeSum": "0",
+      "referenceHash": "0x0303030303030303030303030303030303030303030303030303030303030303"
+    }
+  ],
+  "scriptKind": "lock",
+  "versions": [
+    {
+      "canonicalHashType": "type",
+      "canonicalReferenceHash": "0x0101010101010101010101010101010101010101010101010101010101010101",
+      "cellsCount": 3,
+      "codeCellsLiveCount": 3,
+      "codeCellsTotal": 3,
+      "deployedAt": 1704153599000,
+      "deployments": [
+        {
+          "codeCellOutputIndex": 0,
+          "codeCellTxHash": "0x2020202020202020202020202020202020202020202020202020202020202020",
+          "consumedAtBlock": null,
+          "consumedByTx": null,
+          "createdAtBlock": 10,
+          "custody": {
+            "class": "multisig",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type",
+            "owners": [],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "never_signed"
+          },
+          "dataReferenceHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+          "deployedAt": 1704153599000,
+          "hashType": "type",
+          "status": "live",
+          "typeReferenceHash": "0x0101010101010101010101010101010101010101010101010101010101010101"
+        },
+        {
+          "codeCellOutputIndex": 0,
+          "codeCellTxHash": "0x2121212121212121212121212121212121212121212121212121212121212121",
+          "consumedAtBlock": null,
+          "consumedByTx": null,
+          "createdAtBlock": 10,
+          "custody": {
+            "class": "multisig",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type",
+            "owners": [],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "unavailable"
+          },
+          "dataReferenceHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+          "deployedAt": 1704153599000,
+          "hashType": "type",
+          "status": "live",
+          "typeReferenceHash": "0x0202020202020202020202020202020202020202020202020202020202020202"
+        },
+        {
+          "codeCellOutputIndex": 0,
+          "codeCellTxHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+          "consumedAtBlock": null,
+          "consumedByTx": null,
+          "createdAtBlock": 10,
+          "custody": {
+            "class": "multisig",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type",
+            "owners": [],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "unavailable"
+          },
+          "dataReferenceHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+          "deployedAt": 1704153599000,
+          "hashType": "type",
+          "status": "live",
+          "typeReferenceHash": "0x0303030303030303030303030303030303030303030303030303030303030303"
+        }
+      ],
+      "deprecated": false,
+      "description": null,
+      "firstDeployedBlock": 10,
+      "firstDeployedTxIndex": 0,
+      "liveCellsCount": 3,
+      "name": "Multisig Evidence",
+      "ownedCapacitySum": "300",
+      "ownedKnowledgeSum": "0",
+      "references": [
+        {
+          "cellsCount": 1,
+          "currentVersionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+          "custody": {
+            "class": "multisig",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type",
+            "owners": [
+              {
+                "class": "multisig",
+                "codeCells": [
+                  "0x2020202020202020202020202020202020202020202020202020202020202020:0"
+                ],
+                "lockArgs": "0x4545454545454545454545454545454545454545",
+                "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+                "lockHashType": "type"
+              }
+            ],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "never_signed"
+          },
+          "hashType": "type",
+          "liveCellsCount": 1,
+          "ownedCapacitySum": "100",
+          "ownedKnowledgeSum": "0",
+          "referenceHash": "0x0101010101010101010101010101010101010101010101010101010101010101"
+        },
+        {
+          "cellsCount": 1,
+          "currentVersionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+          "custody": {
+            "class": "multisig",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type",
+            "owners": [
+              {
+                "class": "multisig",
+                "codeCells": [
+                  "0x2121212121212121212121212121212121212121212121212121212121212121:0"
+                ],
+                "lockArgs": "0x4545454545454545454545454545454545454545",
+                "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+                "lockHashType": "type"
+              }
+            ],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "unavailable"
+          },
+          "hashType": "type",
+          "liveCellsCount": 1,
+          "ownedCapacitySum": "100",
+          "ownedKnowledgeSum": "0",
+          "referenceHash": "0x0202020202020202020202020202020202020202020202020202020202020202"
+        },
+        {
+          "cellsCount": 1,
+          "currentVersionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+          "custody": {
+            "class": "multisig",
+            "keyCount": null,
+            "keyHashes": [],
+            "lockArgs": "0x4545454545454545454545454545454545454545",
+            "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            "lockHashType": "type",
+            "owners": [
+              {
+                "class": "multisig",
+                "codeCells": [
+                  "0x2222222222222222222222222222222222222222222222222222222222222222:0"
+                ],
+                "lockArgs": "0x4545454545454545454545454545454545454545",
+                "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+                "lockHashType": "type"
+              }
+            ],
+            "requireFirstN": null,
+            "threshold": null,
+            "verifiedByTx": null,
+            "witnessState": "unavailable"
+          },
+          "hashType": "type",
+          "liveCellsCount": 1,
+          "ownedCapacitySum": "100",
+          "ownedKnowledgeSum": "0",
+          "referenceHash": "0x0303030303030303030303030303030303030303030303030303030303030303"
+        }
+      ],
+      "scriptKind": "lock",
+      "versionHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
+      "website": null
+    }
+  ],
+  "versionsCount": 1,
+  "website": null
+}

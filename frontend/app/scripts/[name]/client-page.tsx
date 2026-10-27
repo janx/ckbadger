@@ -4,21 +4,17 @@ import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
-import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
-import { CapacityUtilization } from '@/components/ui/capacity-utilization';
-import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
-import { HelpPopover } from '@/components/ui/help-popover';
-import { HMulHelpPopover, computeHMulValue, formatHMulValue } from '@/components/ui/hmul-info';
+import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
+import { ListTable } from '@/components/ui/list-table';
+import {
+  ScriptCodeClassSummary,
+  ScriptCustodyEvidence,
+  ScriptCapacityEvidenceChart,
+} from '@/components/scripts/script-code-evidence';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
@@ -30,7 +26,79 @@ import {
   type ScriptRefHashType,
 } from '@/lib/script-ref';
 import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
-import type { KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
+import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
+
+function CellOccupiedValue({ cell }: { cell: Cell }) {
+  if (cell.cellType === 'genesis_special_burn') {
+    return cell.virtualCommonKnowledgeSize === undefined ? (
+      <span
+        role="alert"
+        data-testid="burn-cell-virtual-size-error"
+        title={`Genesis burn cell ${cell.txHash}:${cell.outputIndex} has no virtualCommonKnowledgeSize`}
+        className="text-negative"
+      >
+        unavailable
+      </span>
+    ) : (
+      <span
+        title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
+      >
+        <Capacity value={cell.virtualCommonKnowledgeSize} />
+      </span>
+    );
+  }
+  return <Capacity value={cell.commonKnowledgeSize} />;
+}
+
+function CellOwner({ cell }: { cell: Cell }) {
+  return cell.address ? (
+    <Link href={`/address/${cell.address}`} className="text-emphasis break-all hover:underline">
+      {cell.address}
+    </Link>
+  ) : (
+    <span role="alert" className="text-negative">
+      Owner address unavailable
+    </span>
+  );
+}
+
+function CellTypeReference({ cell }: { cell: Cell }) {
+  if (!cell.typeScriptHash) return <span className="text-text-dim">No type script</span>;
+  if (!cell.typeCodeHash || !cell.typeHashType)
+    return (
+      <span role="alert" className="text-negative">
+        Type reference unavailable
+      </span>
+    );
+  return (
+    <Link
+      href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
+      className="text-emphasis break-all hover:underline"
+    >
+      {cell.typeProtocolName ?? cell.typeCodeHash}
+    </Link>
+  );
+}
+
+function CellAnatomyBar({ cell }: { cell: Cell }) {
+  const bytes = cell.commonKnowledgeSizeBreakdown;
+  if (!bytes)
+    return (
+      <span role="alert" className="text-negative">
+        Cell anatomy unavailable
+      </span>
+    );
+  return (
+    <CellBar
+      subject={`${cell.txHash}:${cell.outputIndex}`}
+      anatomy={{
+        lock: String(bytes.lockScriptBytes),
+        type: String(bytes.typeScriptBytes),
+        data: String(bytes.dataBytes),
+      }}
+    />
+  );
+}
 
 interface SelectedVersion {
   codeHash: string;
@@ -113,58 +181,7 @@ function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells
   );
 }
 
-/**
- * The selected version's owned capacity: the bar, "no live cells" only when its usage says
- * exactly 0, or the reason its usage cannot be shown.
- */
-function SelectedVersionUsage({
-  usage,
-  codeHash,
-}: {
-  usage: VersionUsage | null;
-  codeHash: string | undefined;
-}) {
-  if (usage === null) return null;
-  if (usage.state !== 'ready') {
-    return (
-      <div
-        data-testid="selected-version-usage"
-        data-state={usage.state}
-        role="alert"
-        className="text-rouge py-2 text-center font-mono text-xs"
-      >
-        {usage.message}
-      </div>
-    );
-  }
-  if (usage.ownedCapacitySum === '0' && usage.ownedKnowledgeSum === '0') {
-    return (
-      <div
-        data-testid="selected-version-usage"
-        data-state="none-live"
-        className="text-text-dim py-2 text-center text-xs"
-      >
-        No live cells currently use this version.
-      </div>
-    );
-  }
-  return (
-    <div data-testid="selected-version-usage" data-state="ready">
-      <CapacityUtilization
-        subject={`version ${codeHash}`}
-        totalCapacity={usage.ownedCapacitySum}
-        commonKnowledgeSize={usage.ownedKnowledgeSum}
-        totalLabel="Owned Capacity"
-      />
-    </div>
-  );
-}
-
 const UNKNOWN_SCRIPT_NAME = 'unknown';
-const ALL_ZERO_HASH = `0x${'0'.repeat(64)}`;
-const MOBILE_BREAKPOINT = 768;
-const COMPACT_SCRIPT_VERSIONS_WIDTH = 1080;
-const COMPACT_VERSION_DEPLOYMENTS_WIDTH = 1240;
 
 function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number {
   const aTs = a.deployedAt ?? null;
@@ -233,19 +250,6 @@ function encodeVersionCellsCursorState(state: Record<string, string | undefined>
   return JSON.stringify(state);
 }
 
-function formatDeploymentTimestamp(timestamp: number | null | undefined): string {
-  if (timestamp == null) {
-    return '-';
-  }
-
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return '-';
-  }
-
-  return date.toLocaleString();
-}
-
 function compareDeploymentCreatedAt(
   left: { deployedAt?: number | null; createdAtBlock?: number | null },
   right: { deployedAt?: number | null; createdAtBlock?: number | null }
@@ -284,29 +288,6 @@ function hasKnownScriptName(name: string | null | undefined): boolean {
 
   const normalized = name.trim();
   return normalized.length > 0 && normalized.toLowerCase() !== UNKNOWN_SCRIPT_NAME;
-}
-
-function isAllZeroHash(hash: string | null | undefined): boolean {
-  return hash != null && hash.toLowerCase() === ALL_ZERO_HASH;
-}
-
-function useViewportWidth(defaultWidth = 1280): number {
-  const [width, setWidth] = useState(() =>
-    typeof window === 'undefined' ? defaultWidth : window.innerWidth
-  );
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const handleResize = () => setWidth(window.innerWidth);
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  return width;
 }
 
 function deploymentReferenceHashes(
@@ -366,7 +347,6 @@ export default function ScriptDetailPage({
       ? `0x${codeHashParam.trim().slice(2).toLowerCase()}`
       : null;
   const isCodeHashMode = normalizedCodeHash != null;
-  const viewportWidth = useViewportWidth();
   const selectedRefParam = searchParams.get('ref') ?? (isCodeHashMode ? normalizedCodeHash : null);
   const selectedRef =
     selectedRefParam && isHexScriptHash(selectedRefParam.trim())
@@ -400,6 +380,15 @@ export default function ScriptDetailPage({
       if (!name) throw new Error('script name is required');
       return api.getScriptUsage(name);
     },
+    enabled: Boolean(name) && !isCodeHashMode,
+  });
+  const {
+    data: familyCapacityChart,
+    isLoading: isFamilyCapacityChartLoading,
+    error: familyCapacityChartError,
+  } = useQuery({
+    queryKey: ['script-capacity-chart', 'family', name, capacityRange],
+    queryFn: () => api.getScriptCapacityChart(name!, capacityRangeParams ?? undefined),
     enabled: Boolean(name) && !isCodeHashMode,
   });
   const { data: codeHashLookup, isLoading: isCodeHashLookupLoading } = useQuery({
@@ -773,24 +762,6 @@ export default function ScriptDetailPage({
       staleTime: Infinity,
     })),
   });
-  const governanceCodeHashes = useMemo(() => {
-    const hashes = new Set<string>();
-
-    for (const query of deploymentCellQueries) {
-      const codeHash = normalizeHash(query.data?.lock?.codeHash);
-      if (codeHash && !isAllZeroHash(codeHash)) {
-        hashes.add(codeHash);
-      }
-    }
-
-    return Array.from(hashes);
-  }, [deploymentCellQueries]);
-  const { data: governanceLookup } = useQuery({
-    queryKey: ['script-governance-lookup', governanceCodeHashes],
-    queryFn: () => api.lookupScripts(governanceCodeHashes),
-    enabled: governanceCodeHashes.length > 0,
-    staleTime: Infinity,
-  });
   const selectedScriptKindForChart =
     selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
       ? selectedVersion.scriptKind
@@ -871,11 +842,6 @@ export default function ScriptDetailPage({
     selectedVersionUsageState?.state === 'ready'
       ? selectedVersionUsageState.liveCellsCount
       : undefined;
-  const selectedVersionHMul = computeHMulValue(
-    selectedVersionUsage?.ownedCapacitySum,
-    selectedVersionUsage?.ownedKnowledgeSum
-  );
-  const selectedVersionHMulLabel = formatHMulValue(selectedVersionHMul) ?? '-';
   const selectedVersionCellsData = useMemo(() => {
     const merged = new Map<
       string,
@@ -988,45 +954,20 @@ export default function ScriptDetailPage({
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <TerminalPanel>
-            <TerminalPanelHeader>
-              <div>
-                <div className="text-emphasis text-sm font-semibold">
-                  Ambiguous Script Reference
-                </div>
-                <div className="text-text-dim text-xs">
-                  Current live type resolution points to more than one bytecode version.
-                </div>
-              </div>
-            </TerminalPanelHeader>
-            <TerminalPanelContent className="space-y-4">
-              <div className="space-y-2">
-                <div className="text-text-dim text-xs uppercase tracking-[0.2em]">Reference</div>
-                <HexDisplay
-                  value={normalizedCodeHash ?? ''}
-                  size="sm"
-                  startChars={10}
-                  endChars={8}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="text-text-dim text-xs uppercase tracking-[0.2em]">
-                  Conflicting Versions
-                </div>
-                <div className="space-y-2">
-                  {codeHashAmbiguity.versionHashes.map((versionHash) => (
-                    <HexDisplay
-                      key={versionHash}
-                      value={versionHash}
-                      size="sm"
-                      startChars={10}
-                      endChars={8}
-                    />
-                  ))}
-                </div>
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
+          <DetailLayout title="Ambiguous script reference" identity={normalizedCodeHash}>
+            <DetailSection title="Conflicting live bytecode">
+              <p className="text-text-dim mb-4 text-xs">
+                Current live type resolution points to more than one bytecode version.
+              </p>
+              <ul className="space-y-2 text-xs">
+                {codeHashAmbiguity.versionHashes.map((hash) => (
+                  <li key={hash} className="break-all">
+                    {hash}
+                  </li>
+                ))}
+              </ul>
+            </DetailSection>
+          </DetailLayout>
         </main>
       </div>
     );
@@ -1039,11 +980,9 @@ export default function ScriptDetailPage({
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <TerminalPanel>
-            <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-dim text-xl">Script not found</h2>
-            </TerminalPanelContent>
-          </TerminalPanel>
+          <DetailLayout title="Script not found">
+            <p className="text-text-dim py-8 text-xs">No script matched this name or reference.</p>
+          </DetailLayout>
         </main>
       </div>
     );
@@ -1058,13 +997,8 @@ export default function ScriptDetailPage({
   const pageDeprecated = isCodeHashMode
     ? Boolean(scriptInfo && 'deprecated' in scriptInfo && scriptInfo.deprecated)
     : versionGroups.some((group) => group.deprecated);
-  const pageDecoderType =
-    isCodeHashMode && scriptInfo && 'decoderType' in scriptInfo ? scriptInfo.decoderType : null;
   const pageHash =
     isCodeHashMode && scriptInfo && 'codeHash' in scriptInfo ? scriptInfo.codeHash : undefined;
-  const pageRfc = isCodeHashMode && scriptInfo && 'rfc' in scriptInfo ? scriptInfo.rfc : null;
-  const pageSourceUrl =
-    isCodeHashMode && scriptInfo && 'sourceUrl' in scriptInfo ? scriptInfo.sourceUrl : null;
   const pageWebsite = scriptInfo?.website ?? null;
   const deploymentCellsByOutpoint = new Map(
     deploymentCellQueries
@@ -1137,23 +1071,6 @@ export default function ScriptDetailPage({
       references: deploymentReferenceHashes(deployment, deploymentLookup?.[deployment.codeHash]),
     };
   });
-  const isSelectedVersionCodeCellsLoading = selectedVersionDeployments.some((deployment) => {
-    const outpointKey = deploymentOutpointKey(
-      deployment.codeCellTxHash,
-      deployment.codeCellOutputIndex
-    );
-    if (!outpointKey) {
-      return false;
-    }
-
-    const queryIndex = sortedDeployments.findIndex(
-      (candidate) =>
-        candidate.codeCellTxHash === deployment.codeCellTxHash &&
-        candidate.codeCellOutputIndex === deployment.codeCellOutputIndex
-    );
-
-    return queryIndex >= 0 ? Boolean(deploymentCellQueries[queryIndex]?.isLoading) : false;
-  });
   const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => query.isLoading);
 
   const handleVersionClick = (versionRow: (typeof versionRows)[number]) => {
@@ -1166,994 +1083,456 @@ export default function ScriptDetailPage({
       cellsPagination.reset();
     }
   };
-  const handleDeploymentClick = (outpointKey: string | null) => {
-    if (!outpointKey) return;
-    setSelectedDeploymentOutpoint((prev) => (prev === outpointKey ? null : outpointKey));
-    cellsPagination.reset();
-  };
   const isSelected = (versionRow: (typeof versionRows)[number]) =>
     selectedVersion?.codeHash === versionRow.codeHash;
-  const isDeploymentSelected = (outpointKey: string | null) =>
-    outpointKey != null && selectedDeploymentOutpoint === outpointKey;
-  const hasMultipleDeployments = selectedVersionDeploymentRows.length > 1;
-  const showMobileVersions = viewportWidth < MOBILE_BREAKPOINT;
-  const showCompactVersions = !showMobileVersions && viewportWidth < COMPACT_SCRIPT_VERSIONS_WIDTH;
-  const showMobileVersionDeployments = viewportWidth < MOBILE_BREAKPOINT;
-  const showCompactVersionDeployments =
-    !showMobileVersionDeployments && viewportWidth < COMPACT_VERSION_DEPLOYMENTS_WIDTH;
-
-  const renderVersionIdentity = (versionRow: (typeof versionRows)[number], selected: boolean) => (
-    <div className="flex flex-wrap items-center gap-2">
-      <HexDisplay
-        value={versionRow.codeHash}
-        size="sm"
-        startChars={8}
-        endChars={6}
-        copyable={false}
-      />
-      <button
-        type="button"
-        className="text-text-dim border-base-border hover:bg-base-elevated/60 rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wide"
-        title={`Click to copy: ${versionRow.codeHash}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-            void navigator.clipboard.writeText(versionRow.codeHash).catch(() => {
-              // Ignore clipboard failures for the explicit copy affordance.
-            });
-          }
-        }}
-      >
-        Copy
-      </button>
-      {selected && <Badge variant="green">Selected</Badge>}
-      {versionRow.deprecated && <Badge variant="red">Deprecated</Badge>}
-    </div>
-  );
-
-  const renderVersionFirstDeployedAt = (versionRow: (typeof versionRows)[number]) =>
-    versionRow.firstDeploymentCell && versionRow.firstDeployment ? (
-      <Link
-        href={`/blocks/${versionRow.firstDeploymentCell.createdAtBlock}`}
-        className="block hover:underline"
-      >
-        <div className="text-emphasis font-mono text-xs">
-          #{formatNumber(versionRow.firstDeploymentCell.createdAtBlock)}
-        </div>
-        <div className="text-text-dim font-mono text-xs">
-          {formatDeploymentTimestamp(versionRow.firstDeployment.deployedAt)}
-        </div>
-      </Link>
-    ) : (
-      <span className="text-text-dim">-</span>
-    );
-
-  const renderVersionUsageBadge = (versionRow: (typeof versionRows)[number]) =>
-    versionRow.scriptKind ? (
-      <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
-        {versionRow.scriptKind.toUpperCase()}
-      </Badge>
-    ) : (
-      <span className="text-text-dim">-</span>
-    );
-
   const renderDeploymentStatus = (
     codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell']
   ) =>
     codeCell ? (
-      <Badge variant={codeCell.status === 'live' ? 'green' : 'gray'}>
-        {codeCell.status === 'live' ? 'Live' : 'Consumed'}
-      </Badge>
+      <span className="text-text-dim">{codeCell.status === 'live' ? 'Live' : 'Consumed'}</span>
     ) : (
-      <span className="text-text-dim font-mono text-xs">-</span>
+      <span className="text-text-dim">Status unavailable</span>
     );
 
-  const renderDeploymentBadges = (
-    deployment: (typeof selectedVersionDeploymentRows)[number]['deployment'],
-    codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell'],
-    selected: boolean = false
-  ) => (
-    <div className="flex flex-wrap items-center gap-2">
-      {renderDeploymentStatus(codeCell)}
-      {selected && hasMultipleDeployments && <Badge variant="green">Selected</Badge>}
-      {deployment.deprecated && <Badge variant="red">Deprecated</Badge>}
-    </div>
+  const namedVersion = namedScriptDetail?.versions.find(
+    (version) => version.versionHash === selectedVersion?.codeHash
   );
-
-  const renderGovernance = (
-    codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell']
-  ) => {
-    if (!codeCell?.lock) {
-      return <span className="text-text-dim font-mono text-xs">-</span>;
-    }
-
-    if (isAllZeroHash(codeCell.lock.codeHash)) {
-      return (
-        <div className="space-y-1">
-          <div className="text-text font-mono text-sm">Immutable (all-zero lock)</div>
-          <div className="text-text-dim font-mono text-xs">No governance lock script</div>
-        </div>
-      );
-    }
-
-    if (hasKnownScriptName(governanceLookup?.[codeCell.lock.codeHash]?.name)) {
-      return (
-        <div className="space-y-1">
-          <div className="text-text font-mono text-sm">
-            {governanceLookup?.[codeCell.lock.codeHash]?.name}
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant="gray">{codeCell.lock.hashType}</Badge>
-            <div>
-              <HexDisplay value={codeCell.lock.args} size="sm" startChars={8} endChars={6} />
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-text font-mono text-sm">Script Ref</span>
-          <Badge variant="gray">{codeCell.lock.hashType}</Badge>
-        </div>
-        <div>
-          <HexDisplay value={codeCell.lock.codeHash} size="sm" startChars={8} endChars={6} />
-        </div>
-        <div className="pl-1">
-          <HexDisplay value={codeCell.lock.args} size="sm" startChars={8} endChars={6} />
-        </div>
-      </div>
-    );
-  };
-
-  const renderDeploymentReferences = (
-    references: (typeof selectedVersionDeploymentRows)[number]['references']
-  ) => (
-    <div className="min-w-0 space-y-2">
-      <div className="flex items-start gap-2">
-        <span className="text-text-dim font-mono text-xs">type:</span>
-        {references.typeRef ? (
-          <HexDisplay value={references.typeRef} size="sm" startChars={8} endChars={6} />
-        ) : (
-          <span className="text-text-dim font-mono text-xs">Unavailable</span>
-        )}
-      </div>
-      <div className="flex items-start gap-2">
-        <span className="text-text-dim font-mono text-xs">{references.dataRefType}:</span>
-        {references.dataRef ? (
-          <HexDisplay value={references.dataRef} size="sm" startChars={8} endChars={6} />
-        ) : (
-          <span className="text-text-dim font-mono text-xs">Unavailable</span>
-        )}
-      </div>
-    </div>
+  const custodyByOutpoint = new Map(
+    namedVersion?.deployments.map((deployment) => [
+      `${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`,
+      deployment.custody,
+    ]) ?? []
   );
-
-  const renderDeploymentTimestamp = (
-    deployment: (typeof selectedVersionDeploymentRows)[number]['deployment'],
-    codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell']
-  ) => (
-    <div className="space-y-1 text-right">
-      <div>
-        {codeCell ? (
-          <Link
-            href={`/blocks/${codeCell.createdAtBlock}`}
-            className="text-emphasis font-mono text-xs hover:underline"
-          >
-            #{formatNumber(codeCell.createdAtBlock)}
-          </Link>
-        ) : (
-          <span className="text-text-dim font-mono text-xs">-</span>
-        )}
-      </div>
-      <div className="text-text-dim font-mono text-xs">
-        {formatDeploymentTimestamp(deployment.deployedAt)}
-      </div>
-    </div>
-  );
-
-  const scriptVersionsHelp = (
-    <>
-      <div className="text-text font-mono text-xs">What this section shows</div>
-      <div>One row = one script version, identified by `code_hash`.</div>
-      <div>
-        This table answers which versions exist for the script and how much current live usage each
-        version has.
-      </div>
-      <div className="space-y-1">
-        <div>
-          <span className="text-text font-mono">Code Hash</span>: version identity.
-        </div>
-        <div>
-          <span className="text-text font-mono">First Deployed At</span>: earliest known deployment
-          block and timestamp for this version.
-        </div>
-        <div>
-          <span className="text-text font-mono">Used As</span>: whether cells use this version as a
-          `lock`, `type`, or both. In compact tables this appears as a badge inside the code-hash
-          cell.
-        </div>
-        <div>
-          <span className="text-text font-mono">Deployments</span>: how many code cells have
-          deployed this same bytecode version.
-        </div>
-        <div>
-          <span className="text-text font-mono">Cells Using It</span>: live cells currently using
-          this version.
-        </div>
-        <div>
-          <span className="text-text font-mono">Capacity Using It</span>: current live capacity held
-          by cells using this version.
-        </div>
-      </div>
-    </>
-  );
-
-  const versionDeploymentsHelp = (
-    <>
-      <div className="text-text font-mono text-xs">What this section shows</div>
-      <div>One row = one deployment code cell for the currently selected version.</div>
-      <div>
-        This table answers where the selected version was deployed and which concrete code cell a
-        given reference points to.
-      </div>
-      <div className="space-y-1">
-        <div>
-          <span className="text-text font-mono">Outpoint</span>: the concrete code cell identity. In
-          compact tables, the status badge is shown in the same cell.
-        </div>
-        <div>
-          <span className="text-text font-mono">Status</span>: whether that deployment code cell is
-          still live or already consumed.
-        </div>
-        <div>
-          <span className="text-text font-mono">Governance</span>: the code cell lock script that
-          governs upgrades or proves immutability.
-        </div>
-        <div>
-          <span className="text-text font-mono">References</span>: the actual refs bound to this
-          deployment code cell.
-        </div>
-        <div>
-          <span className="text-text font-mono">Deployed At</span>: block number and timestamp for
-          this deployment.
-        </div>
-        <div>
-          <span className="text-text font-mono">Common Knowledge Size</span>: common knowledge size
-          of the code cell itself.
-        </div>
-      </div>
-    </>
-  );
-
-  const referencesHelp = (
-    <>
-      <div className="text-text font-mono text-xs">type ref</div>
-      <div>Resolves by type script hash. Upgradable flow, executes on latest CKB-VM.</div>
-      <div className="text-text pt-1 font-mono text-xs">data/data1/data2</div>
-      <div>Resolves by bytecode hash. Immutable binary, VM version fixed to v0/v1/v2.</div>
-      <div className="pt-1">
-        `type` favors upgradability; `data` family favors deterministic, reproducible execution.
-      </div>
-      <div className="pt-1">
-        <a
-          href="https://docs.nervos.org/docs/tech-explanation/data-type-diff"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-emphasis hover:underline"
-        >
-          Reference doc: data vs type hash semantics
-        </a>
-      </div>
-    </>
-  );
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <PageHeader
+        <DetailLayout
           title={pageTitle}
-          subtitle={pageSubtitle}
-          hash={!isKnownScript ? pageHash : undefined}
-          badge={
-            <div className="flex items-center gap-2">
-              {!isKnownScript && <Badge variant="gray">UNLABELED</Badge>}
-              {pageDeprecated && <Badge variant="red">Deprecated</Badge>}
-              {inferredScriptKind && (
-                <Badge variant="neutral">{inferredScriptKind.toUpperCase()}</Badge>
-              )}
-              {pageDecoderType && <Badge variant="gray">{pageDecoderType.toUpperCase()}</Badge>}
-            </div>
+          identity={isCodeHashMode ? pageHash : pageSubtitle}
+          status={
+            <span className="text-text-dim text-xs">
+              {inferredScriptKind ?? namedScriptDetail?.scriptKind ?? 'role unregistered'}
+              {pageDeprecated ? ' · Deprecated' : ''}
+            </span>
           }
           actions={
-            <div className="flex gap-3">
-              {pageRfc && (
-                <a
-                  href={pageRfc}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-emphasis border-base-border hover:border-base-border hover:bg-base-surface rounded border px-3 py-1 font-mono text-sm transition-colors"
-                >
-                  RFC
-                </a>
-              )}
-              {pageWebsite && (
-                <a
-                  href={pageWebsite}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-emphasis border-base-border hover:border-base-border hover:bg-base-surface rounded border px-3 py-1 font-mono text-sm transition-colors"
-                >
-                  Website
-                </a>
-              )}
-              {pageSourceUrl && (
-                <a
-                  href={pageSourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-emphasis border-base-border hover:border-base-border hover:bg-base-surface rounded border px-3 py-1 font-mono text-sm transition-colors"
-                >
-                  Source
-                </a>
-              )}
-            </div>
+            pageWebsite && (
+              <a href={pageWebsite} className="text-emphasis text-xs hover:underline">
+                Website ↗
+              </a>
+            )
           }
-        />
-        <TerminalPanel className="border-base-border/80 mb-6" data-testid="script-versions-panel">
-          <TerminalPanelHeader indicator="active">
-            <div className="flex items-center gap-2">
-              <span>Script Versions</span>
-              <HelpPopover label="Explain Script Versions" title="Script Versions">
-                {scriptVersionsHelp}
-              </HelpPopover>
-            </div>
-          </TerminalPanelHeader>
-          <TerminalPanelContent padding="none">
-            {showMobileVersions ? (
-              <div data-testid="script-versions-compact">
-                {versionRows.map((versionRow) => {
-                  const selected = isSelected(versionRow);
-
-                  return (
-                    <TerminalRow
-                      key={versionRow.codeHash}
-                      data-testid={`version-row-${versionRow.codeHash}`}
-                      onClick={() => handleVersionClick(versionRow)}
-                      className={`cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
-                    >
-                      <div className="space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 space-y-2">
-                            {renderVersionIdentity(versionRow, selected)}
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                Used as
-                              </span>
-                              {renderVersionUsageBadge(versionRow)}
-                            </div>
-                          </div>
-                          <div className="min-w-[9rem] text-right">
-                            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                              First deployed
-                            </div>
-                            <div className="pt-1">{renderVersionFirstDeployedAt(versionRow)}</div>
-                          </div>
-                        </div>
-                        <div className="border-base-border/50 grid grid-cols-3 gap-3 border-t pt-3">
-                          <div>
-                            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                              Deployments
-                            </div>
-                            <div className="text-text pt-1 font-mono tabular-nums">
-                              {formatNumber(versionRow.deploymentsCount)}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                              Cells using it
-                            </div>
-                            <div className="text-text pt-1 font-mono tabular-nums">
-                              <VersionUsageCell usage={versionRow.usage} field="cells" />
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                              Capacity using it
-                            </div>
-                            <div className="text-text pt-1 font-mono tabular-nums">
-                              <VersionUsageCell usage={versionRow.usage} field="capacity" />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </TerminalRow>
-                  );
-                })}
-                {usage && (
-                  <div className="border-base-border bg-base-bg/95 border-t px-4 py-3 backdrop-blur">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="text-text-dim font-medium">Total</div>
-                      <div className="grid grid-cols-2 gap-4 text-right">
-                        <div>
-                          <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                            Cells using it
-                          </div>
-                          <div className="text-emphasis font-mono tabular-nums">
-                            <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
-                              {formatNumber(usage.liveCellsCount)}
-                            </span>
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                            Capacity using it
-                          </div>
-                          <div className="text-emphasis font-mono tabular-nums">
-                            <span title={`${formatCkbCompact(usage.ownedCapacitySum).full} CKB`}>
-                              {formatCkbCompact(usage.ownedCapacitySum).value} CKB
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : showCompactVersions ? (
-              <div className="overflow-x-auto">
-                <div className="border-base-border bg-base-surface/50 text-text-dim grid min-w-[760px] grid-cols-[minmax(0,1fr)_9rem_6rem_8rem_9rem] gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                  <div>Code Hash</div>
-                  <div className="text-right">First Deployed At</div>
-                  <div className="text-right">Deployments</div>
-                  <div className="text-right">Cells Using It</div>
-                  <div className="text-right">Capacity Using It</div>
-                </div>
-                {versionRows.map((versionRow) => {
-                  const selected = isSelected(versionRow);
-
-                  return (
-                    <TerminalRow
-                      key={versionRow.codeHash}
-                      data-testid={`version-row-${versionRow.codeHash}`}
-                      onClick={() => handleVersionClick(versionRow)}
-                      className={`min-w-[760px] cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
-                    >
-                      <div className="grid w-full min-w-[760px] grid-cols-[minmax(0,1fr)_9rem_6rem_8rem_9rem] items-start gap-4">
-                        <div className="min-w-0 space-y-2 py-0.5">
-                          {renderVersionIdentity(versionRow, selected)}
-                          <div>{renderVersionUsageBadge(versionRow)}</div>
-                        </div>
-                        <div className="py-0.5 text-right">
-                          {renderVersionFirstDeployedAt(versionRow)}
-                        </div>
-                        <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                          {formatNumber(versionRow.deploymentsCount)}
-                        </div>
-                        <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                          <VersionUsageCell usage={versionRow.usage} field="cells" />
-                        </div>
-                        <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                          <VersionUsageCell usage={versionRow.usage} field="capacity" />
-                        </div>
-                      </div>
-                    </TerminalRow>
-                  );
-                })}
-                {usage && (
-                  <div className="border-base-border bg-base-bg/95 sticky bottom-0 z-10 grid min-w-[760px] grid-cols-[minmax(0,1fr)_9rem_6rem_8rem_9rem] gap-4 border-t px-4 py-3 font-medium backdrop-blur">
-                    <div className="text-text-dim">Total</div>
-                    <div />
-                    <div />
-                    <div className="text-emphasis text-right font-mono tabular-nums">
-                      <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
-                        {formatNumber(usage.liveCellsCount)}
-                      </span>
-                    </div>
-                    <div className="text-emphasis text-right font-mono tabular-nums">
-                      <span title={`${formatCkbCompact(usage.ownedCapacitySum).full} CKB`}>
-                        {formatCkbCompact(usage.ownedCapacitySum).value} CKB
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <div className="border-base-border bg-base-surface/50 text-text-dim flex min-w-[980px] border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                  <div className="flex-1">Code Hash</div>
-                  <div className="w-44 shrink-0 text-right">First Deployed At</div>
-                  <div className="w-24 shrink-0 text-center">Used As</div>
-                  <div className="w-28 shrink-0 text-right">Deployments</div>
-                  <div className="w-40 shrink-0 text-right">Cells Using It</div>
-                  <div className="w-44 shrink-0 text-right">Capacity Using It</div>
-                </div>
-                {versionRows.map((versionRow) => {
-                  const selected = isSelected(versionRow);
-
-                  return (
-                    <React.Fragment key={versionRow.codeHash}>
-                      <TerminalRow
-                        data-testid={`version-row-${versionRow.codeHash}`}
-                        onClick={() => handleVersionClick(versionRow)}
-                        className={`min-w-[980px] cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
-                      >
-                        <div className="grid w-full min-w-[980px] grid-cols-[minmax(0,1fr)_11rem_6rem_7rem_9rem_11rem] items-center gap-4">
-                          <div className="min-w-0 py-0.5">
-                            {renderVersionIdentity(versionRow, selected)}
-                          </div>
-                          <div className="py-0.5 text-right">
-                            {renderVersionFirstDeployedAt(versionRow)}
-                          </div>
-                          <div className="text-text-dim py-0.5 text-center">
-                            {renderVersionUsageBadge(versionRow)}
-                          </div>
-                          <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                            {formatNumber(versionRow.deploymentsCount)}
-                          </div>
-                          <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                            <VersionUsageCell usage={versionRow.usage} field="cells" />
-                          </div>
-                          <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                            <VersionUsageCell usage={versionRow.usage} field="capacity" />
-                          </div>
-                        </div>
-                      </TerminalRow>
-                    </React.Fragment>
-                  );
-                })}
-                {usage && (
-                  <div className="border-base-border bg-base-bg/95 sticky bottom-0 z-10 flex min-w-[980px] border-t px-4 py-3 font-medium backdrop-blur">
-                    <div className="text-text-dim flex-1">Total</div>
-                    <div className="w-44 shrink-0" />
-                    <div className="w-24 shrink-0" />
-                    <div className="w-28 shrink-0" />
-                    <div className="text-emphasis w-40 shrink-0 text-right font-mono tabular-nums">
-                      <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
-                        {formatNumber(usage.liveCellsCount)}
-                      </span>
-                    </div>
-                    <div className="text-emphasis w-44 shrink-0 text-right font-mono tabular-nums">
-                      <span title={`${formatCkbCompact(usage.ownedCapacitySum).full} CKB`}>
-                        {formatCkbCompact(usage.ownedCapacitySum).value} CKB
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </TerminalPanelContent>
-        </TerminalPanel>
-        {selectedVersion && (
-          <>
-            <TerminalPanel className="mb-6" data-testid="version-deployments-panel">
-              <TerminalPanelHeader indicator="none">
-                <div className="flex items-center gap-2">
-                  <span>Version Deployments</span>
-                  <HelpPopover label="Explain Version Deployments" title="Version Deployments">
-                    {versionDeploymentsHelp}
-                  </HelpPopover>
-                </div>
-              </TerminalPanelHeader>
-              <TerminalPanelContent padding="none">
-                {showMobileVersionDeployments ? (
-                  <div data-testid="version-deployments-compact">
-                    {selectedVersionDeploymentRows.length > 0 ? (
-                      selectedVersionDeploymentRows.map(
-                        ({ deployment, outpointKey, codeCell, references }) => (
-                          <TerminalRow
-                            key={outpointKey ?? deployment.codeHash}
-                            data-testid={outpointKey ? `deployment-row-${outpointKey}` : undefined}
-                            onClick={() => handleDeploymentClick(outpointKey)}
-                            className={
-                              hasMultipleDeployments
-                                ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`
-                                : ''
-                            }
-                          >
-                            <div className="space-y-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                    Outpoint
-                                  </div>
-                                  <div className="pt-1">
-                                    {deployment.codeCellTxHash != null &&
-                                    deployment.codeCellOutputIndex != null ? (
-                                      <Link
-                                        href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                                        className="text-emphasis hover:underline"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        <HexDisplay
-                                          value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                          size="sm"
-                                          startChars={8}
-                                          endChars={8}
-                                          copyable={false}
-                                        />
-                                      </Link>
-                                    ) : (
-                                      <span className="text-text-dim font-mono text-xs">
-                                        Unavailable
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="pt-4">
-                                  {renderDeploymentBadges(
-                                    deployment,
-                                    codeCell,
-                                    isDeploymentSelected(outpointKey)
-                                  )}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                  Governance
-                                </div>
-                                <div className="pt-1">{renderGovernance(codeCell)}</div>
-                              </div>
-                              <div>
-                                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                  References
-                                </div>
-                                <div className="pt-1">{renderDeploymentReferences(references)}</div>
-                              </div>
-                              <div className="border-base-border/50 grid grid-cols-2 gap-3 border-t pt-3">
-                                <div>
-                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                    Deployed at
-                                  </div>
-                                  <div className="pt-1 text-left">
-                                    {renderDeploymentTimestamp(deployment, codeCell)}
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                    Common knowledge size
-                                  </div>
-                                  <div className="pt-1">
-                                    {codeCell?.commonKnowledgeSize != null ? (
-                                      <Capacity
-                                        value={String(codeCell.commonKnowledgeSize)}
-                                        className="text-sm"
-                                      />
-                                    ) : (
-                                      <span className="text-text-dim font-mono text-xs">-</span>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </TerminalRow>
-                        )
-                      )
-                    ) : (
-                      <div className="text-text-dim px-4 py-8 text-center">
-                        No deployments found for this version
-                      </div>
-                    )}
-                    {isSelectedVersionCodeCellsLoading &&
-                      selectedVersionDeploymentRows.length > 0 && (
-                        <div className="text-text-dim border-base-border border-t px-4 py-3 text-xs">
-                          Loading deployment status, block, and capacity...
-                        </div>
-                      )}
-                  </div>
-                ) : showCompactVersionDeployments ? (
-                  <div className="overflow-x-auto" data-testid="version-deployments-scroll">
-                    <div className="border-base-border bg-base-surface/50 text-text-dim grid min-w-[860px] grid-cols-[10rem_minmax(10rem,1fr)_minmax(11rem,1fr)_8rem_9rem] gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                      <div>Outpoint</div>
-                      <div>Governance</div>
-                      <div className="flex items-center gap-1">
-                        <span>References</span>
-                        <HelpPopover
-                          label="Explain References"
-                          title="Reference Semantics"
-                          contentClassName="w-[24rem]"
-                        >
-                          {referencesHelp}
-                        </HelpPopover>
-                      </div>
-                      <div className="text-right">Deployed At</div>
-                      <div className="text-right">Common Knowledge Size</div>
-                    </div>
-                    {selectedVersionDeploymentRows.length > 0 ? (
-                      selectedVersionDeploymentRows.map(
-                        ({ deployment, outpointKey, codeCell, references }) => (
-                          <TerminalRow
-                            key={outpointKey ?? deployment.codeHash}
-                            data-testid={outpointKey ? `deployment-row-${outpointKey}` : undefined}
-                            onClick={() => handleDeploymentClick(outpointKey)}
-                            className={`min-w-[860px] ${hasMultipleDeployments ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}` : ''}`}
-                          >
-                            <div className="grid w-full min-w-[860px] grid-cols-[10rem_minmax(10rem,1fr)_minmax(11rem,1fr)_8rem_9rem] items-start gap-4">
-                              <div
-                                className="min-w-0 space-y-2"
-                                title={outpointKey ? `Click to copy: ${outpointKey}` : undefined}
-                              >
-                                {deployment.codeCellTxHash != null &&
-                                deployment.codeCellOutputIndex != null ? (
-                                  <Link
-                                    href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                                    className="text-emphasis hover:underline"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <HexDisplay
-                                      value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                      size="sm"
-                                      startChars={8}
-                                      endChars={8}
-                                      copyable={false}
-                                    />
-                                  </Link>
-                                ) : (
-                                  <span className="text-text-dim font-mono text-xs">
-                                    Unavailable
-                                  </span>
-                                )}
-                                <div>
-                                  {renderDeploymentBadges(
-                                    deployment,
-                                    codeCell,
-                                    isDeploymentSelected(outpointKey)
-                                  )}
-                                </div>
-                              </div>
-                              <div className="min-w-0 space-y-2">{renderGovernance(codeCell)}</div>
-                              {renderDeploymentReferences(references)}
-                              {renderDeploymentTimestamp(deployment, codeCell)}
-                              <div className="text-right">
-                                {codeCell?.commonKnowledgeSize != null ? (
-                                  <Capacity
-                                    value={String(codeCell.commonKnowledgeSize)}
-                                    className="text-sm"
-                                  />
-                                ) : (
-                                  <span className="text-text-dim font-mono text-xs">-</span>
-                                )}
-                              </div>
-                            </div>
-                          </TerminalRow>
-                        )
-                      )
-                    ) : (
-                      <div className="text-text-dim px-4 py-8 text-center">
-                        No deployments found for this version
-                      </div>
-                    )}
-                    {isSelectedVersionCodeCellsLoading &&
-                      selectedVersionDeploymentRows.length > 0 && (
-                        <div className="text-text-dim border-base-border border-t px-4 py-3 text-xs">
-                          Loading deployment status, block, and capacity...
-                        </div>
-                      )}
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto" data-testid="version-deployments-scroll">
-                    <div className="border-base-border bg-base-surface/50 text-text-dim grid min-w-[1120px] grid-cols-[11rem_6rem_minmax(14rem,1fr)_minmax(16rem,1fr)_11rem_11rem] gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                      <div>Outpoint</div>
-                      <div>Status</div>
-                      <div>Governance</div>
-                      <div className="flex items-center gap-1">
-                        <span>References</span>
-                        <HelpPopover
-                          label="Explain References"
-                          title="Reference Semantics"
-                          contentClassName="w-[24rem]"
-                        >
-                          {referencesHelp}
-                        </HelpPopover>
-                      </div>
-                      <div className="text-right">Deployed At</div>
-                      <div className="text-right">Common Knowledge Size</div>
-                    </div>
-                    {selectedVersionDeploymentRows.length > 0 ? (
-                      selectedVersionDeploymentRows.map(
-                        ({ deployment, outpointKey, codeCell, references }) => (
-                          <TerminalRow
-                            key={outpointKey ?? deployment.codeHash}
-                            data-testid={outpointKey ? `deployment-row-${outpointKey}` : undefined}
-                            onClick={() => handleDeploymentClick(outpointKey)}
-                            className={`min-w-[1120px] ${hasMultipleDeployments ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}` : ''}`}
-                          >
-                            <div className="grid w-full min-w-[1120px] grid-cols-[11rem_6rem_minmax(14rem,1fr)_minmax(16rem,1fr)_11rem_11rem] items-start gap-4">
-                              <div
-                                className="min-w-0"
-                                title={outpointKey ? `Click to copy: ${outpointKey}` : undefined}
-                              >
-                                {deployment.codeCellTxHash != null &&
-                                deployment.codeCellOutputIndex != null ? (
-                                  <Link
-                                    href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                                    className="text-emphasis hover:underline"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <HexDisplay
-                                      value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                      size="sm"
-                                      startChars={8}
-                                      endChars={8}
-                                      copyable={false}
-                                    />
-                                  </Link>
-                                ) : (
-                                  <span className="text-text-dim font-mono text-xs">
-                                    Unavailable
-                                  </span>
-                                )}
-                              </div>
-                              <div className="pt-0.5">
-                                {renderDeploymentBadges(
-                                  deployment,
-                                  codeCell,
-                                  isDeploymentSelected(outpointKey)
-                                )}
-                              </div>
-                              <div className="min-w-0 space-y-2">{renderGovernance(codeCell)}</div>
-                              {renderDeploymentReferences(references)}
-                              {renderDeploymentTimestamp(deployment, codeCell)}
-                              <div className="text-right">
-                                {codeCell?.commonKnowledgeSize != null ? (
-                                  <Capacity
-                                    value={String(codeCell.commonKnowledgeSize)}
-                                    className="text-sm"
-                                  />
-                                ) : (
-                                  <span className="text-text-dim font-mono text-xs">-</span>
-                                )}
-                              </div>
-                            </div>
-                          </TerminalRow>
-                        )
-                      )
-                    ) : (
-                      <div className="text-text-dim px-4 py-8 text-center">
-                        No deployments found for this version
-                      </div>
-                    )}
-                    {isSelectedVersionCodeCellsLoading &&
-                      selectedVersionDeploymentRows.length > 0 && (
-                        <div className="text-text-dim border-base-border border-t px-4 py-3 text-xs">
-                          Loading deployment status, block, and capacity...
-                        </div>
-                      )}
-                  </div>
-                )}
-              </TerminalPanelContent>
-            </TerminalPanel>
-            <TerminalPanel data-testid="version-usage-panel">
-              <TerminalPanelHeader
-                indicator="none"
+          facts={[
+            {
+              label: 'Live cells',
+              value: !isCodeHashMode
+                ? formatNumber(namedScriptDetail!.liveCellsCount)
+                : usage
+                  ? formatNumber(usage.liveCellsCount)
+                  : 'unavailable',
+            },
+            {
+              label: 'CKB in its cells',
+              value: !isCodeHashMode
+                ? formatCkbCompact(namedScriptDetail!.ownedCapacitySum).value
+                : usage
+                  ? formatCkbCompact(usage.ownedCapacitySum).value
+                  : 'unavailable',
+            },
+            {
+              label: 'Code versions',
+              value: !isCodeHashMode
+                ? formatNumber(namedScriptDetail!.versionsCount)
+                : formatNumber(versionRows.length),
+            },
+          ]}
+          tier2={
+            <>
+              <DetailSection
+                title="Code versions"
                 actions={
-                  <div className="flex items-center gap-2">
-                    <span className="text-gold font-mono text-xs tabular-nums">
-                      HMul: {selectedVersionHMulLabel}
-                    </span>
-                    <HMulHelpPopover align="end" />
-                  </div>
+                  <span className="text-text-dim text-xs">
+                    Select a version to inspect its deployment and cells
+                  </span>
                 }
               >
-                Usage
-              </TerminalPanelHeader>
-              <TerminalPanelContent padding="none">
-                <div className="border-base-border border-b px-4 py-4">
-                  <SelectedVersionUsage
-                    usage={selectedVersionUsageState}
-                    codeHash={selectedVersion.codeHash}
-                  />
-                </div>
-                <div className="border-base-border border-b px-4 py-4">
-                  <div className="text-text-dim mb-3 text-xs">
-                    Historical common knowledge and free live capacity for the selected version.
-                  </div>
-                  <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
-                  {isSelectedCapacityChartLoading ? (
-                    <div className="text-text-dim py-6 text-center">Loading version history...</div>
-                  ) : selectedCapacityChart && selectedCapacityChart.data.length > 0 ? (
-                    <StackedAreaChart
-                      data={selectedCapacityChart.data}
-                      series={selectedCapacityChart.series}
-                      height={220}
-                      valueUnit="shannon"
-                    />
-                  ) : (
-                    <div className="text-text-dim py-6 text-center">No version history yet</div>
+                <ListTable
+                  label="Code versions"
+                  columns={[
+                    {
+                      key: 'version',
+                      label: 'Version · bytecode hash',
+                      minWidth: 225,
+                      width: '30%',
+                      render: (row) => (
+                        <button
+                          type="button"
+                          onClick={() => handleVersionClick(row)}
+                          className="text-emphasis break-all text-left font-mono hover:underline"
+                        >
+                          {row.codeHash}
+                        </button>
+                      ),
+                    },
+                    {
+                      key: 'deployed',
+                      label: 'First observed',
+                      minWidth: 130,
+                      width: '17%',
+                      render: (row) =>
+                        row.firstDeploymentCell ? (
+                          <Link
+                            href={`/blocks/${row.firstDeploymentCell.createdAtBlock}`}
+                            className="text-emphasis"
+                          >
+                            #{formatNumber(row.firstDeploymentCell.createdAtBlock)}
+                          </Link>
+                        ) : (
+                          'No deployment observed'
+                        ),
+                    },
+                    {
+                      key: 'deployments',
+                      label: 'Code cells',
+                      minWidth: 110,
+                      width: '12%',
+                      numeric: true,
+                      render: (row) => row.deploymentsCount.toLocaleString(),
+                    },
+                    {
+                      key: 'cells',
+                      label: 'Live cells using it',
+                      minWidth: 120,
+                      width: '17%',
+                      numeric: true,
+                      render: (row) => <VersionUsageCell usage={row.usage} field="cells" />,
+                    },
+                    {
+                      key: 'capacity',
+                      label: 'CKB in its cells',
+                      minWidth: 150,
+                      width: '24%',
+                      numeric: true,
+                      render: (row) => <VersionUsageCell usage={row.usage} field="capacity" />,
+                    },
+                  ]}
+                  rows={versionRows}
+                  rowKey={(row) => row.codeHash}
+                  rowClassName={(row) => (isSelected(row) ? 'bg-base-elevated/30' : '')}
+                  mobileRow={(row) => (
+                    <button
+                      type="button"
+                      onClick={() => handleVersionClick(row)}
+                      className="w-full space-y-2 text-left text-xs"
+                    >
+                      <span className="text-emphasis break-all">{row.codeHash}</span>
+                      <span className="text-text-dim block">
+                        {row.deploymentsCount} code cells ·{' '}
+                        <VersionUsageCell usage={row.usage} field="cells" /> live cells
+                      </span>
+                    </button>
                   )}
-                </div>
-                <div className="px-4 py-4">
-                  <div className="text-text-dim mb-3 text-xs">
-                    Live cells currently using the selected version.
-                  </div>
-                </div>
-                {isVersionCellsLoading ? (
-                  <div className="text-text-dim py-8 text-center">Loading cells...</div>
-                ) : selectedVersionCellsData.data.length > 0 ? (
-                  <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim flex border-y px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                      <div className="flex-1">Cell</div>
-                      <div className="w-52 shrink-0 text-right">Capacity</div>
-                      <div className="w-24 shrink-0 text-right">Data Size</div>
-                      <div className="w-28 shrink-0 text-right">Created At</div>
-                    </div>
-                    {selectedVersionCellsData.data.map((cell) => (
-                      <TerminalRow key={`${cell.txHash}-${cell.outputIndex}`}>
-                        <div className="flex items-center">
-                          <div className="flex-1">
+                />
+              </DetailSection>
+              {selectedVersion && (
+                <DetailSection title="Code cell deployments">
+                  <ListTable
+                    label="Code cell deployments"
+                    rows={selectedVersionDeploymentRows}
+                    rowKey={(row) => row.outpointKey ?? row.deployment.codeHash}
+                    columns={[
+                      {
+                        key: 'outpoint',
+                        label: 'Outpoint',
+                        minWidth: 235,
+                        width: '28%',
+                        render: (row) =>
+                          row.outpointKey ? (
+                            <Link
+                              href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
+                              className="text-emphasis break-all"
+                            >
+                              {row.outpointKey}
+                            </Link>
+                          ) : (
+                            'No observed outpoint'
+                          ),
+                      },
+                      {
+                        key: 'status',
+                        label: 'Status',
+                        minWidth: 90,
+                        width: '12%',
+                        render: (row) => renderDeploymentStatus(row.codeCell),
+                      },
+                      {
+                        key: 'holder',
+                        label: 'Code cell holder',
+                        minWidth: 220,
+                        width: '36%',
+                        render: (row) => {
+                          const custody = row.outpointKey
+                            ? custodyByOutpoint.get(row.outpointKey)
+                            : undefined;
+                          return custody ? (
+                            <ScriptCustodyEvidence custody={custody} />
+                          ) : (
+                            <span className="text-text-dim">Custody evidence unavailable</span>
+                          );
+                        },
+                      },
+                      {
+                        key: 'block',
+                        label: 'Created at',
+                        minWidth: 120,
+                        width: '24%',
+                        render: (row) =>
+                          row.codeCell ? (
+                            <Link
+                              href={`/blocks/${row.codeCell.createdAtBlock}`}
+                              className="text-emphasis"
+                            >
+                              #{formatNumber(row.codeCell.createdAtBlock)}
+                            </Link>
+                          ) : (
+                            'unavailable'
+                          ),
+                      },
+                    ]}
+                    mobileRow={(row) => (
+                      <div className="space-y-2 text-xs">
+                        <Link
+                          href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
+                          className="text-emphasis break-all"
+                        >
+                          {row.outpointKey}
+                        </Link>
+                        <div>{renderDeploymentStatus(row.codeCell)}</div>
+                        {row.outpointKey && custodyByOutpoint.get(row.outpointKey) && (
+                          <ScriptCustodyEvidence
+                            custody={custodyByOutpoint.get(row.outpointKey)!}
+                          />
+                        )}
+                      </div>
+                    )}
+                    empty="No deployments observed for this code version"
+                  />
+                </DetailSection>
+              )}
+              {selectedVersion && (
+                <DetailSection
+                  title="Its cells"
+                  actions={
+                    <span className="text-text-dim text-xs">
+                      Live cells using the selected code version
+                    </span>
+                  }
+                >
+                  {isVersionCellsLoading ? (
+                    <p className="text-text-dim py-6 text-xs">Loading cells...</p>
+                  ) : (
+                    <ListTable
+                      label="Its cells"
+                      rows={selectedVersionCellsData.data}
+                      rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
+                      columns={[
+                        {
+                          key: 'cell',
+                          label: 'Cell',
+                          minWidth: 220,
+                          width: '26%',
+                          render: (cell) => (
                             <Link
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                              className="text-emphasis hover:underline"
+                              className="text-emphasis break-all"
                             >
-                              <HexDisplay value={`${cell.txHash}:${cell.outputIndex}`} />
+                              {cell.txHash}:{cell.outputIndex}
                             </Link>
+                          ),
+                        },
+                        {
+                          key: 'owner',
+                          label: 'Owner',
+                          minWidth: 200,
+                          width: '18%',
+                          render: (cell) => <CellOwner cell={cell} />,
+                        },
+                        {
+                          key: 'type',
+                          label: 'Type reference',
+                          minWidth: 165,
+                          width: '15%',
+                          render: (cell) => <CellTypeReference cell={cell} />,
+                        },
+                        {
+                          key: 'capacity',
+                          label: 'Capacity',
+                          minWidth: 120,
+                          width: '11%',
+                          numeric: true,
+                          render: (cell) => <Capacity value={cell.capacity} />,
+                        },
+                        {
+                          key: 'knowledge',
+                          label: 'Occupied',
+                          minWidth: 120,
+                          width: '11%',
+                          numeric: true,
+                          render: (cell) => <CellOccupiedValue cell={cell} />,
+                        },
+                        {
+                          key: 'created',
+                          label: 'Created',
+                          minWidth: 95,
+                          width: '9%',
+                          numeric: true,
+                          render: (cell) => (
+                            <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
+                              #{cell.createdAtBlock.toLocaleString()}
+                            </Link>
+                          ),
+                        },
+                        {
+                          key: 'anatomy',
+                          label: 'Cell anatomy',
+                          minWidth: 180,
+                          width: '10%',
+                          render: (cell) => <CellAnatomyBar cell={cell} />,
+                        },
+                      ]}
+                      mobileRow={(cell) => (
+                        <div className="min-w-0 space-y-2 text-xs">
+                          <Link
+                            href={`/cell/${cell.txHash}-${cell.outputIndex}`}
+                            className="text-emphasis break-all"
+                          >
+                            {cell.txHash}:{cell.outputIndex}
+                          </Link>
+                          <div>
+                            Owner: <CellOwner cell={cell} />
                           </div>
-                          <div className="text-text-bright w-52 shrink-0 text-right">
-                            <Capacity value={cell.capacity} />
+                          <div>
+                            Type: <CellTypeReference cell={cell} />
                           </div>
-                          <div className="text-text-dim w-24 shrink-0 text-right font-mono">
-                            {cell.cellType === 'genesis_special_burn' ? (
-                              // The API sets virtualCommonKnowledgeSize exactly on this cell type.
-                              cell.virtualCommonKnowledgeSize === undefined ? (
-                                <span
-                                  role="alert"
-                                  data-testid="burn-cell-virtual-size-error"
-                                  title={`Genesis burn cell ${cell.txHash}:${cell.outputIndex} has no virtualCommonKnowledgeSize`}
-                                  className="text-rouge"
-                                >
-                                  unavailable
-                                </span>
-                              ) : (
-                                <span
-                                  className="border-base-border cursor-help border-b border-dashed"
-                                  title={`Virtual common knowledge size: ${formatCapacity(
-                                    cell.virtualCommonKnowledgeSize
-                                  )}`}
-                                >
-                                  <Capacity value={cell.virtualCommonKnowledgeSize} />
-                                </span>
-                              )
-                            ) : (
-                              <>{cell.dataSize.toLocaleString()} bytes</>
-                            )}
+                          <div>
+                            <Capacity value={cell.capacity} /> · occupied{' '}
+                            <CellOccupiedValue cell={cell} />
                           </div>
-                          <div className="w-28 shrink-0 text-right">
-                            <Link
-                              href={`/blocks/${cell.createdAtBlock}`}
-                              className="text-emphasis hover:underline"
-                            >
+                          <div>
+                            Created{' '}
+                            <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
                               #{cell.createdAtBlock.toLocaleString()}
                             </Link>
                           </div>
+                          <CellAnatomyBar cell={cell} />
                         </div>
-                      </TerminalRow>
-                    ))}
-                    <div className="border-base-border border-t p-4">
-                      <CursorPagination
-                        total={selectedVersionCellsData.total}
-                        totalLabel="cells"
-                        pageSize={DEFAULT_PAGE_SIZE}
-                        page={cellsPagination.page}
-                        currentCount={selectedVersionCellsData.currentCount}
-                        hasMore={selectedVersionCellsData.hasMore}
-                        hasPrevious={cellsPagination.hasPrevious}
-                        onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
-                        onPrevious={cellsPagination.goToPrevious}
-                      />
+                      )}
+                      empty="No live cells currently use this version"
+                    />
+                  )}
+                  {selectedVersionCellsData.data.length > 0 && (
+                    <CursorPagination
+                      total={selectedVersionCellsData.total}
+                      totalLabel="cells"
+                      pageSize={DEFAULT_PAGE_SIZE}
+                      page={cellsPagination.page}
+                      currentCount={selectedVersionCellsData.currentCount}
+                      hasMore={selectedVersionCellsData.hasMore}
+                      hasPrevious={cellsPagination.hasPrevious}
+                      onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
+                      onPrevious={cellsPagination.goToPrevious}
+                    />
+                  )}
+                </DetailSection>
+              )}
+            </>
+          }
+        >
+          <DetailSection title="Capacity history">
+            <p className="text-text-dim mb-3 text-xs">
+              Live capacity and common knowledge across{' '}
+              {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
+            </p>
+            <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
+            {(isCodeHashMode ? isSelectedCapacityChartLoading : isFamilyCapacityChartLoading) ? (
+              <p className="text-text-dim py-6 text-xs">Loading capacity history...</p>
+            ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
+              <ScriptCapacityEvidenceChart
+                chart={(isCodeHashMode ? selectedCapacityChart : familyCapacityChart)!}
+                markers={namedScriptDetail?.history ?? []}
+              />
+            ) : (
+              <p className="text-text-dim py-6 text-xs">No capacity history yet</p>
+            )}
+            {!isCodeHashMode && familyCapacityChartError && (
+              <p role="alert" className="text-negative text-xs">
+                Capacity history unavailable: {String(familyCapacityChartError)}
+              </p>
+            )}
+          </DetailSection>
+          {!isCodeHashMode && namedScriptDetail?.codeClasses && (
+            <ScriptCodeClassSummary classes={namedScriptDetail.codeClasses} />
+          )}
+          {!isCodeHashMode && namedScriptDetail?.references && (
+            <DetailSection title="Registered references">
+              <ListTable
+                label="Registered references"
+                rows={namedScriptDetail.references}
+                rowKey={(row) => `${row.hashType}:${row.referenceHash}`}
+                columns={[
+                  {
+                    key: 'reference',
+                    label: 'Reference',
+                    minWidth: 250,
+                    width: '35%',
+                    render: (row) => (
+                      <span className="text-text-bright break-all">
+                        {row.hashType} · {row.referenceHash}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'code',
+                    label: 'Current code version',
+                    minWidth: 210,
+                    width: '30%',
+                    render: (row) => (
+                      <span className="text-text-dim break-all">
+                        {row.currentVersionHash ?? 'Retired · no current code cell'}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'custody',
+                    label: 'Code cell holder',
+                    minWidth: 235,
+                    width: '35%',
+                    render: (row) =>
+                      row.custody ? (
+                        <ScriptCustodyEvidence custody={row.custody} />
+                      ) : (
+                        <span className="text-text-dim">Evidence unavailable</span>
+                      ),
+                  },
+                ]}
+                mobileRow={(row) => (
+                  <div className="space-y-2 text-xs">
+                    <div className="break-all">
+                      {row.hashType} · {row.referenceHash}
                     </div>
-                  </>
-                ) : (
-                  <div className="text-text-dim py-8 text-center">
-                    No cells found for this script
+                    <div>Current code: {row.currentVersionHash ?? 'retired'}</div>
+                    {row.custody ? (
+                      <ScriptCustodyEvidence custody={row.custody} />
+                    ) : (
+                      'Evidence unavailable'
+                    )}
                   </div>
                 )}
-              </TerminalPanelContent>
-            </TerminalPanel>
-          </>
-        )}
+              />
+            </DetailSection>
+          )}
+        </DetailLayout>
       </main>
     </div>
   );

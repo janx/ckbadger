@@ -1,0 +1,54 @@
+{
+  "classSummary": [
+    {
+      "class": "fixed",
+      "lockCellsCount": 1,
+      "lockOwnedCapacitySum": "500",
+      "referenceCount": 1
+    },
+    {
+      "class": "one_key",
+      "lockCellsCount": 1,
+      "lockOwnedCapacitySum": "400",
+      "referenceCount": 1
+    }
+  ],
+  "data": [
+    {
+      "cellsCount": 2,
+      "codeClasses": [
+        {
+          "class": "fixed",
+          "lockCellsCount": 1,
+          "lockOwnedCapacitySum": "500",
+          "referenceCount": 1
+        },
+        {
+          "class": "one_key",
+          "lockCellsCount": 1,
+          "lockOwnedCapacitySum": "400",
+          "referenceCount": 1
+        }
+      ],
+      "deprecated": false,
+      "description": null,
+      "familyId": "class-evidence",
+      "liveCellsCount": 2,
+      "name": "Class Evidence",
+      "ownedCapacitySum": "900",
+      "ownedKnowledgeSum": "100",
+      "scriptKind": "lock",
+      "versionsCount": 1,
+      "website": null
+    }
+  ],
+  "hasMore": false,
+  "limit": 50,
+  "nextCursor": null,
+  "roleCounts": {
+    "all": 1,
+    "locks": 1,
+    "types": 0
+  },
+  "total": 1
+}

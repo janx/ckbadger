@@ -424,78 +424,42 @@ describe('ScriptDetailPage', () => {
     });
   });
 
-  it('keeps compact tables on tablet widths instead of switching to cards', async () => {
+  it('uses the flat board with capacity first and code versions after the developer gap', async () => {
     setViewportWidth(900);
-
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-
-    await waitFor(() => {
-      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
-      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTestId('script-versions-compact')).toBeNull();
-    expect(screen.queryByTestId('version-deployments-compact')).toBeNull();
-
-    expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
-    expect(screen.getByText('Code Hash')).toBeInTheDocument();
-    expect(screen.getByText('First Deployed At')).toBeInTheDocument();
-    expect(screen.getByText('Deployments')).toBeInTheDocument();
-    expect(screen.getByText('Cells Using It')).toBeInTheDocument();
-    expect(screen.getByText('Capacity Using It')).toBeInTheDocument();
-    expect(screen.queryByText('Used As')).toBeNull();
-
-    const sharedVersionRow = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
-    expect(within(sharedVersionRow).getByText('LOCK')).toBeInTheDocument();
-
-    expect(screen.getByText('Outpoint')).toBeInTheDocument();
-    expect(screen.getByText('Governance')).toBeInTheDocument();
-    expect(screen.getByText('References')).toBeInTheDocument();
-    expect(screen.getByText('Deployed At')).toBeInTheDocument();
-    expect(screen.getByText('Common Knowledge Size')).toBeInTheDocument();
-    expect(screen.queryByText('Status')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Explain References' })).toBeInTheDocument();
-
-    const firstDeploymentRow = screen.getByTestId(`deployment-row-${firstDeploymentTxHash}:0`);
-    expect(within(firstDeploymentRow).getByText('Live')).toBeInTheDocument();
-    expect(within(firstDeploymentRow).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
-  });
-
-  it('switches to cards on mobile widths', async () => {
-    setViewportWidth(640);
-
-    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-
-    await waitFor(() => {
-      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
-      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
-    });
-
-    const compactVersions = screen.getByTestId('script-versions-compact');
+    expect(await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
+    expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+    const tier1 = document.querySelector('[data-tier="1"]')!;
+    const tier2 = document.querySelector('[data-tier="2"]')!;
     expect(
-      within(compactVersions).getByTitle(`Click to copy: ${sharedVersionCodeHash}`)
+      within(tier1 as HTMLElement).getByRole('heading', { name: 'Capacity history' })
     ).toBeInTheDocument();
-    expect(within(compactVersions).getAllByText('First deployed').length).toBeGreaterThan(0);
-    expect(within(compactVersions).getAllByText('Cells using it').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
-    expect(screen.queryByText('Code Hash')).toBeNull();
-    expect(screen.queryByText('Capacity Using It')).toBeNull();
-
-    const compactDeployments = screen.getByTestId('version-deployments-compact');
-    expect(within(compactDeployments).getAllByText('Governance').length).toBeGreaterThan(0);
-    expect(within(compactDeployments).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
-    expect(within(compactDeployments).getAllByText('Common knowledge size').length).toBeGreaterThan(
-      0
-    );
-    expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Explain References' })).toBeNull();
-    expect(screen.queryByText('Status')).toBeNull();
-    expect(screen.queryByText('Deployed At')).toBeNull();
-    expect(screen.queryByText('Common Knowledge Size')).toBeNull();
+    expect(
+      within(tier2 as HTMLElement).getByRole('heading', { name: 'Code versions' })
+    ).toBeInTheDocument();
+    expect(
+      within(tier2 as HTMLElement).getByRole('heading', { name: 'Code cell deployments' })
+    ).toBeInTheDocument();
+    expect(
+      within(tier2 as HTMLElement).getByRole('heading', { name: 'Its cells' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Code versions' })).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Code cell deployments' })).toBeInTheDocument();
+    expect(screen.queryByTestId('script-versions-panel')).toBeNull();
   });
 
-  it('shows deprecated badges for known deprecated scripts in the header and tables', async () => {
+  it('provides compact cell and version records at mobile widths', async () => {
+    setViewportWidth(390);
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    expect(await screen.findByRole('list', { name: 'Code versions, compact' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('list', { name: 'Code cell deployments, compact' })
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('list', { name: 'Its cells, compact' })).toBeInTheDocument();
+    expect(document.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+  });
+
+  it('marks deprecated family and versions without calling them unlabeled', async () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
       ...mockScriptFamilyDetail,
       name: 'PW Lock',
@@ -503,26 +467,17 @@ describe('ScriptDetailPage', () => {
       versions: mockScriptFamilyDetail.versions.map((version) => ({
         ...version,
         name: 'PW Lock',
-        description: 'Ethereum wallet compatible lock',
         deprecated: true,
       })),
     } as any);
-    vi.mocked(api.getScriptUsage).mockResolvedValue({
-      ...mockUsage,
-      name: 'PW Lock',
-    });
-
+    vi.mocked(api.getScriptUsage).mockResolvedValue({ ...mockUsage, name: 'PW Lock' });
     render(<ScriptDetailPage name="PW Lock" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('PW Lock')).toBeInTheDocument();
-    });
-
+    expect(await screen.findByRole('heading', { name: 'PW Lock' })).toBeInTheDocument();
+    expect(screen.getByText(/Deprecated/)).toBeInTheDocument();
     expect(screen.queryByText('Unlabeled Script')).toBeNull();
-    expect(screen.getAllByText('Deprecated').length).toBeGreaterThan(1);
   });
 
-  it('renders zero-deployment versions without synthesizing fake deployment rows', async () => {
+  it('keeps a version without a code-cell deployment visible', async () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
       ...mockScriptFamilyDetail,
       versions: [
@@ -535,81 +490,68 @@ describe('ScriptDetailPage', () => {
       ],
       versionsCount: 1,
     } as any);
-    vi.mocked(api.getScriptUsage).mockResolvedValue({
-      ...mockUsage,
-      byDeployment: [
-        {
-          ...mockUsage.byDeployment[0],
-          codeHash: sharedVersionCodeHash,
-          liveCellsCount: 3,
-          cellsCount: 4,
-        },
-      ],
-    });
-
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-
-    await waitFor(() => {
-      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
-      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText('Script not found')).toBeNull();
-    const versionRow = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
-    expect(within(versionRow).getByText(/^0$/)).toBeInTheDocument();
-    expect(screen.getByText('No deployments found for this version')).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'Code versions' })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('table', { name: 'Code versions' })).getByRole('button', {
+        name: sharedVersionCodeHash,
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText('No deployments observed for this code version')).toBeInTheDocument();
   });
 
-  it('shows version usage as an error, not as no cells, when the usage request fails', async () => {
-    setViewportWidth(900);
+  it('shows failed version usage as unavailable, never zero', async () => {
     vi.mocked(api.getScriptUsage).mockRejectedValue(new Error('usage endpoint 503'));
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const row = await screen.findByTestId(`version-row-${sharedVersionCodeHash}`);
-    const cells = within(row).getAllByTestId('version-usage');
-    expect(cells).toHaveLength(2);
-    for (const cell of cells) {
-      expect(cell).toHaveAttribute('data-state', 'failed');
-      expect(cell).toHaveAttribute('role', 'alert');
-      expect(cell).toHaveAttribute(
-        'title',
-        'The usage of SECP256K1_BLAKE160 failed to load: usage endpoint 503'
-      );
-      expect(cell).not.toHaveTextContent('-');
-    }
+    const table = await screen.findByRole('table', { name: 'Code versions' });
+    const alerts = within(table).getAllByRole('alert');
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[0]).toHaveAttribute('data-state', 'failed');
+    expect(alerts[0]).toHaveAttribute(
+      'title',
+      'The usage of SECP256K1_BLAKE160 failed to load: usage endpoint 503'
+    );
+    expect(alerts[0]).not.toHaveTextContent(/^0$/);
   });
 
-  it('shows a version the usage response leaves out as an error, not as zero cells', async () => {
-    setViewportWidth(900);
+  it('does not infer zero when one version is absent from usage', async () => {
     vi.mocked(api.getScriptUsage).mockResolvedValue({
       ...mockUsage,
       byDeployment: mockUsage.byDeployment.filter((d) => d.codeHash !== legacyVersionCodeHash),
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const legacy = await screen.findByTestId(`version-row-${legacyVersionCodeHash}`);
+    const table = await screen.findByRole('table', { name: 'Code versions' });
     await waitFor(() =>
-      expect(within(legacy).getAllByTestId('version-usage')[0]).toHaveAttribute(
-        'data-state',
-        'missing'
-      )
+      expect(
+        within(table)
+          .getAllByTestId('version-usage')
+          .some((node) => node.getAttribute('data-state') === 'missing')
+      ).toBe(true)
     );
-    expect(within(legacy).getAllByRole('alert')[0]).toHaveAttribute(
-      'title',
-      `The usage of SECP256K1_BLAKE160 has no entry for version ${legacyVersionCodeHash}`
-    );
-    // The version the usage covers still reads.
-    const shared = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
-    expect(within(shared).getAllByTestId('version-usage')[0]).toHaveTextContent('7');
+    expect(
+      within(table)
+        .getAllByTestId('version-usage')
+        .some((node) => node.textContent === '7')
+    ).toBe(true);
   });
 
-  it('shows the selected version usage and its live cell total from the usage response', async () => {
+  it('uses selected version usage as the cells total and exposes owner/type anatomy', async () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const panel = await screen.findByTestId('selected-version-usage');
-    expect(panel).toHaveAttribute('data-state', 'ready');
-    expect(within(panel).getByText('Owned Capacity')).toBeInTheDocument();
+    const cells = await screen.findByRole('table', { name: 'Its cells' });
+    expect(within(cells).getByText('Owner')).toBeInTheDocument();
+    expect(within(cells).getByText('Type reference')).toBeInTheDocument();
+    expect(within(cells).getByText('Occupied')).toBeInTheDocument();
     await waitFor(() => expect(document.body.textContent).toMatch(/of 7\s*cells/));
   });
 
-  it('says the selected version has no live cells only when its usage says 0', async () => {
+  it('shows a true zero-usage version as having no live cells', async () => {
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
     vi.mocked(api.getScriptUsage).mockResolvedValue({
       ...mockUsage,
       byDeployment: mockUsage.byDeployment.map((d) =>
@@ -619,46 +561,43 @@ describe('ScriptDetailPage', () => {
       ),
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    // The page opens on a version with live cells; pick the empty one.
-    fireEvent.click(await screen.findByTestId(`version-row-${sharedVersionCodeHash}`));
-    const panel = await screen.findByTestId('selected-version-usage');
-    expect(panel).toHaveAttribute('data-state', 'none-live');
-    expect(panel).toHaveTextContent('No live cells currently use this version.');
+    const table = await screen.findByRole('table', { name: 'Code versions' });
+    fireEvent.click(within(table).getByRole('button', { name: sharedVersionCodeHash }));
+    expect(await screen.findByText('No live cells currently use this version')).toBeInTheDocument();
   });
 
-  it('shows a failed usage request as an error in the selected version, with no cell total', async () => {
+  it('retains failed selected usage as an error in version rows', async () => {
     vi.mocked(api.getScriptUsage).mockRejectedValue(new Error('usage endpoint 503'));
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const panel = await screen.findByTestId('selected-version-usage');
-    expect(panel).toHaveAttribute('data-state', 'failed');
-    expect(panel).toHaveAttribute('role', 'alert');
-    expect(panel).toHaveTextContent(
-      'The usage of SECP256K1_BLAKE160 failed to load: usage endpoint 503'
+    const table = await screen.findByRole('table', { name: 'Code versions' });
+    expect(within(table).getAllByTestId('version-usage')[0]).toHaveAttribute(
+      'data-state',
+      'failed'
     );
-    expect(panel).not.toHaveTextContent('No live cells');
-    await screen.findByText('Live cells currently using the selected version.');
     expect(document.body.textContent).not.toMatch(/of 0\s*cells/);
   });
 
-  it('shows a selected version the usage response leaves out as an error', async () => {
+  it('retains missing selected usage as missing in version rows', async () => {
     vi.mocked(api.getScriptUsage).mockResolvedValue({
       ...mockUsage,
       byDeployment: mockUsage.byDeployment.filter((d) => d.codeHash !== sharedVersionCodeHash),
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    fireEvent.click(await screen.findByTestId(`version-row-${sharedVersionCodeHash}`));
-    const panel = await screen.findByTestId('selected-version-usage');
-    expect(panel).toHaveAttribute('data-state', 'missing');
-    expect(panel).toHaveTextContent(
-      `The usage of SECP256K1_BLAKE160 has no entry for version ${sharedVersionCodeHash}`
+    const table = await screen.findByRole('table', { name: 'Code versions' });
+    await waitFor(() =>
+      expect(
+        within(table)
+          .getAllByTestId('version-usage')
+          .some((node) => node.getAttribute('data-state') === 'missing')
+      ).toBe(true)
     );
   });
 
-  it('shows a genesis burn cell without its virtual size as an error, not as 0 CKB', async () => {
+  it('shows missing virtual occupied size of a genesis burn cell as an error', async () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
       data: [
         {
-          txHash: '0x7777777777777777777777777777777777777777777777777777777777777777',
+          txHash: `0x${'77'.repeat(32)}`,
           outputIndex: 0,
           capacity: '840000000000000000',
           commonKnowledgeSize: '0',
@@ -674,20 +613,17 @@ describe('ScriptDetailPage', () => {
       nextCursor: null,
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const alert = await screen.findByTestId('burn-cell-virtual-size-error');
-    expect(alert).toHaveAttribute('role', 'alert');
-    expect(alert).toHaveAttribute(
-      'title',
-      'Genesis burn cell 0x7777777777777777777777777777777777777777777777777777777777777777:0 has no virtualCommonKnowledgeSize'
+    expect((await screen.findAllByTestId('burn-cell-virtual-size-error')).length).toBeGreaterThan(
+      0
     );
     expect(screen.queryByTitle(/Virtual common knowledge size: 0/)).toBeNull();
   });
 
-  it('derives the genesis special burn tooltip from the API value', async () => {
+  it('reads the genesis burn virtual size from the API value', async () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
       data: [
         {
-          txHash: '0x7777777777777777777777777777777777777777777777777777777777777777',
+          txHash: `0x${'77'.repeat(32)}`,
           outputIndex: 0,
           capacity: '840000000000000000',
           commonKnowledgeSize: '0',
@@ -703,16 +639,14 @@ describe('ScriptDetailPage', () => {
       hasMore: false,
       nextCursor: null,
     });
-
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-
-    // The tooltip copy comes from the API value, so it stays truthful on every
-    // network instead of quoting mainnet's genesis figure.
     expect(
-      await screen.findByTitle(
-        `Virtual common knowledge size: ${formatCapacity('504000000000000000')}`
-      )
-    ).toBeInTheDocument();
+      (
+        await screen.findAllByTitle(
+          `Virtual common knowledge size: ${formatCapacity('504000000000000000')}`
+        )
+      ).length
+    ).toBeGreaterThan(0);
     expect(screen.queryByTitle(/5\.04B/)).toBeNull();
   });
 });

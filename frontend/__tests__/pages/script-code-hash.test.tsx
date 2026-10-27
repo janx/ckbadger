@@ -147,22 +147,17 @@ describe('ScriptByCodeHashPage', () => {
     render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Script Versions')).toBeInTheDocument();
-      expect(screen.getByText('Version Deployments')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
-      expect(
-        screen.getByRole('button', { name: 'Explain Version Deployments' })
-      ).toBeInTheDocument();
+      expect(screen.getByRole('table', { name: 'Code versions' })).toBeInTheDocument();
     });
+    expect(screen.getByRole('heading', { name: 'Its cells' })).toBeInTheDocument();
     expect(screen.queryByText('Same Deployment References')).toBeNull();
-    expect(screen.getByText('Usage')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Historical common knowledge and free live capacity for the selected version.'
-      )
-    ).toBeInTheDocument();
-    expect(screen.getAllByTitle(`Click to copy: ${mockCodeHash}`).length).toBeGreaterThan(0);
-    expect(screen.getByTitle(`Click to copy: ${mockDeploymentTxHash}:0`)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Capacity history' })).toBeInTheDocument();
+    expect(screen.getByText(/Live capacity and common knowledge across/)).toBeInTheDocument();
+    expect(screen.getAllByText(mockCodeHash).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: `${mockDeploymentTxHash}:0` })[0]).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${mockDeploymentTxHash}-0`
+    );
   });
 
   it('redirects known script hash to the unified named script detail page', async () => {
