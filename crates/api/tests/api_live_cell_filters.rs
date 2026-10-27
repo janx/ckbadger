@@ -41,7 +41,8 @@ fn seed_one_live_cell(store: &std::sync::Arc<CkbadgerStore>) {
         type_hash_type: Some(1),
         type_args: Some(vec![]),
         data_size: 0,
-        occupied_capacity: 61_00000000,
+        // 8-byte capacity + two 33-byte scripts, with empty args and data.
+        occupied_capacity: 74_00000000,
         udt_amount: None,
         data_hash: None,
     };
