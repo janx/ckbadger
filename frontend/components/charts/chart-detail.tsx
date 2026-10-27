@@ -352,7 +352,7 @@ export function ChartDetail({ slug }: { slug: string }) {
             aria-label={`${definition.title} loading`}
           />
         )}
-        {data.error && (
+        {data.error && !model && !modelError && (
           <DetailLayout title={definition.title}>
             <div role="alert" className="text-negative break-words">
               Failed to load {definition.title}: {data.error.message}
@@ -372,6 +372,19 @@ export function ChartDetail({ slug }: { slug: string }) {
               Invalid {definition.title} chart data: {modelError}
             </p>
           </DetailLayout>
+        )}
+        {data.error && model && (
+          <p role="alert" className="text-negative mb-5 break-words text-xs">
+            Could not refresh {definition.title}: {data.error.message}. Showing previously loaded
+            data.
+            <button
+              type="button"
+              onClick={() => void data.refetch()}
+              className="text-jade ml-2 underline"
+            >
+              Retry
+            </button>
+          </p>
         )}
         {model && (
           <DetailBody definition={definition} model={model} events={hardforks.data?.events ?? []} />

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { act, createTestQueryClient, render } from '../utils/test-utils';
 import { ChartDetail } from '@/components/charts/chart-detail';
 import { api } from '@/lib/api';
 
@@ -68,5 +69,27 @@ describe('shared chart detail', () => {
       expect(screen.getByText('No indexed observations for this chart.')).toBeInTheDocument()
     );
     expect(api.getHashRateChart).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps one title and previously loaded chart after a failed background refresh', async () => {
+    const client = createTestQueryClient();
+    vi.mocked(api.getHashRateChart).mockResolvedValue(response);
+    render(
+      <QueryClientProvider client={client}>
+        <ChartDetail slug="hash-rate" />
+      </QueryClientProvider>
+    );
+    expect(
+      await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
+    ).toBeInTheDocument();
+    vi.mocked(api.getHashRateChart).mockRejectedValue(new Error('secondary read failed'));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['chart-hash-rate'], exact: true });
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not refresh Hash rate: secondary read failed. Showing previously loaded data.'
+    );
+    expect(screen.getAllByRole('heading', { level: 1, name: 'Hash rate' })).toHaveLength(1);
+    expect(screen.getByRole('img', { name: 'Hash rate: 2 points, linear' })).toBeInTheDocument();
   });
 });

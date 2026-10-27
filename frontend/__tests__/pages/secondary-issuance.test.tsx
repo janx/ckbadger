@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import SecondaryIssuancePage from '@/app/charts/secondary-issuance/page';
 import { api } from '@/lib/api';
+import { exactDecimalRatio } from '@/lib/exact-integer';
 
 const chartMock = vi.fn(({ title }: { title: string }) => <div role="img" aria-label={title} />);
 vi.mock('@/lib/api', () => ({
@@ -18,22 +19,22 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }
 vi.mock('@/components/charts/chart-small-multiple', () => ({ ChartSmallMultiple: () => null }));
 
 describe('SecondaryIssuancePage', () => {
-  it('shows exact stacked components and the separate protocol total with overlap evidence', async () => {
+  it('shows disjoint exact secondary components, protocol total, and frozen phase-1 evidence', async () => {
     chartMock.mockClear();
     vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue({
       title: 'Secondary Issuance',
       data: [
         {
           date: '2026-02-23',
-          values: { mining: '60.00000001', dao: '30', burnt: '10' },
+          values: { mining: '60.00000001', compensation: '29', burnt: '10' },
           protocolTotalShannons: '9900000001',
           phase1CompensationShannons: '100000000',
         },
       ],
       series: [
-        { key: 'mining', label: 'Mining Reward', color: '#00c389' },
-        { key: 'dao', label: 'Deposit Compensation', color: '#ffb000' },
-        { key: 'burnt', label: 'Treasury', color: '#68ccf0' },
+        { key: 'compensation', label: 'Deposit Compensation', color: '#00c389' },
+        { key: 'mining', label: 'Mining Reward', color: '#8b5cf6' },
+        { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
     });
     render(<SecondaryIssuancePage />);
@@ -42,14 +43,25 @@ describe('SecondaryIssuancePage', () => {
     expect(chartMock.mock.calls[0][0]).toMatchObject({
       kind: 'stacked',
       unit: 'CKB',
-      data: [{ label: '2026-02-23', values: { mining: '60.00000001', dao: '30', burnt: '10' } }],
-      series: [
-        { label: 'Mining Reward' },
-        { label: 'Deposit Compensation' },
-        { label: 'Treasury' },
+      data: [
+        { label: '2026-02-23', values: { mining: '60.00000001', compensation: '29', burnt: '10' } },
       ],
+      series: [{ label: 'Deposit Compensation' }, { label: 'Mining Reward' }, { label: 'Burnt' }],
     });
+    const values = (
+      chartMock.mock.calls[0][0] as unknown as { data: { values: Record<string, string> }[] }
+    ).data[0].values;
+    const shannons = (key: string) => {
+      const [numerator, denominator] = exactDecimalRatio(values[key], `secondary ${key}`);
+      const scaled = numerator * BigInt(100_000_000);
+      expect(scaled % denominator).toBe(BigInt(0));
+      return scaled / denominator;
+    };
+    expect(shannons('mining') + shannons('compensation') + shannons('burnt')).toBe(
+      BigInt('9900000001')
+    );
     expect(screen.getByText(/99.00000001 CKB/)).toBeInTheDocument();
+    expect(screen.getByText('Frozen phase-1 overlap')).toBeInTheDocument();
     expect(screen.getByText('1 CKB')).toBeInTheDocument();
   });
 });
