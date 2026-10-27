@@ -1,0 +1,101 @@
+{
+  "adoptedBranch": [
+    {
+      "hash": "0x9c59b7957970638438382f3c8ae71fa4931e5e7108f73216d748fbf55ecebf53",
+      "minerLockHash": null,
+      "number": 11,
+      "timestamp": "2023-11-14T22:13:20+00:00",
+      "transactionsCount": 1
+    },
+    {
+      "hash": "0x772d52182c3ac62d7d01c29e4864f70029ed0202d8caf7b2ffe180673c422c88",
+      "minerLockHash": null,
+      "number": 12,
+      "timestamp": "2023-11-14T22:13:21+00:00",
+      "transactionsCount": 1
+    }
+  ],
+  "canonicalBranch": [
+    {
+      "hash": "0x9c59b7957970638438382f3c8ae71fa4931e5e7108f73216d748fbf55ecebf53",
+      "minerLockHash": null,
+      "number": 11,
+      "timestamp": "2023-11-14T22:13:20+00:00",
+      "transactionsCount": 1
+    },
+    {
+      "hash": "0x772d52182c3ac62d7d01c29e4864f70029ed0202d8caf7b2ffe180673c422c88",
+      "minerLockHash": null,
+      "number": 12,
+      "timestamp": "2023-11-14T22:13:21+00:00",
+      "transactionsCount": 1
+    }
+  ],
+  "canonicalTipNumber": 12,
+  "event": {
+    "depth": 1,
+    "detectedAt": "2025-07-31T22:13:20+00:00",
+    "eventType": "reorg",
+    "forkPointHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "forkPointNumber": 10,
+    "id": 1754000000000,
+    "newTipHash": "0x772d52182c3ac62d7d01c29e4864f70029ed0202d8caf7b2ffe180673c422c88",
+    "newTipNumber": 12,
+    "oldTipHash": "0x36bac5b43aa2f1e91c21b692d0c17ce2a701962e6314d32d5fa4e0fba529440e",
+    "oldTipNumber": 11,
+    "orphanedBlocksCount": 1,
+    "orphanedTxsCount": 2,
+    "preview": null,
+    "previewStatus": "not_loaded",
+    "resolutionAction": null,
+    "resolutionNotes": null,
+    "resolvedAt": null,
+    "resolvedBy": null,
+    "reversesEvents": [],
+    "revertedByEvent": null
+  },
+  "orphanedBlocks": [
+    {
+      "competingBlock": {
+        "hash": "0x9c59b7957970638438382f3c8ae71fa4931e5e7108f73216d748fbf55ecebf53",
+        "minerLockHash": null,
+        "number": 11,
+        "timestamp": "2023-11-14T22:13:20+00:00",
+        "transactionsCount": 1
+      },
+      "fate": "not_included_as_uncle",
+      "hash": "0x36bac5b43aa2f1e91c21b692d0c17ce2a701962e6314d32d5fa4e0fba529440e",
+      "minerLockHash": null,
+      "number": 11,
+      "parentHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "timestamp": "2023-11-14T22:13:20.010+00:00",
+      "timestampGapMs": 10,
+      "transactionsCount": 2,
+      "uncleIn": null
+    }
+  ],
+  "orphanedTransactions": [
+    {
+      "blockHash": "0x36bac5b43aa2f1e91c21b692d0c17ce2a701962e6314d32d5fa4e0fba529440e",
+      "blockNumber": 11,
+      "committedAt": null,
+      "fate": "cellbase",
+      "hash": "0x560fd913e23d34e7182fcdf5176a4345135d3a8dbf2494bf30c1cf450ce9f626",
+      "inputsCount": 0,
+      "outputsCount": 1,
+      "totalCapacity": "1",
+      "txIndex": 0
+    },
+    {
+      "blockHash": "0x36bac5b43aa2f1e91c21b692d0c17ce2a701962e6314d32d5fa4e0fba529440e",
+      "blockNumber": 11,
+      "committedAt": null,
+      "fate": "not_committed_as_of_tip",
+      "hash": "0xa7d37931b828e4b8b5271589bcdbe6bf608df1edaa63287934e17cad0163793f",
+      "inputsCount": 0,
+      "outputsCount": 1,
+      "totalCapacity": "77",
+      "txIndex": 1
+    }
+  ]
+}

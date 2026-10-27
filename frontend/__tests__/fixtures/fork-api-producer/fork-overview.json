@@ -1,0 +1,27 @@
+{
+  "days": [
+    {
+      "canonicalBlocks": 1,
+      "date": "2026-10-20",
+      "nodeSwitches": 0,
+      "uncles": 2
+    },
+    {
+      "canonicalBlocks": 1,
+      "date": "2026-10-21",
+      "nodeSwitches": 1,
+      "uncles": 3
+    },
+    {
+      "canonicalBlocks": 0,
+      "date": "2026-10-22",
+      "nodeSwitches": 0,
+      "uncles": 0
+    }
+  ],
+  "nodeSwitchesAllTime": 1,
+  "nodeSwitchesInWindow": 1,
+  "scope": "complete UTC+8 days; uncles use indexed chain time, node switches use this indexer's detection wall time",
+  "throughDate": "2026-10-22",
+  "unclesInWindow": 5
+}

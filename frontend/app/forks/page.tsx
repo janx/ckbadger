@@ -1,221 +1,215 @@
 'use client';
+
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { api } from '@/lib/api';
 import { Header } from '@/components/layout/header';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
-import { HexDisplay } from '@/components/ui/hex-display';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { ListTable } from '@/components/ui/list-table';
+import { Chart } from '@/components/ui/chart';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { api, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatTimeAgo } from '@/lib/utils';
+
+const eventLink = (event: ReorgEvent) => `/forks/${event.id}`;
+const hash = (value: string) => <span className="break-all font-mono">{value}</span>;
+
 export default function ForksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = DEFAULT_PAGE_SIZE;
-  const { data, isLoading } = useQuery({
+  const overview = useQuery({
+    queryKey: ['forks-overview', 30],
+    queryFn: () => api.getForkOverview(30),
+  });
+  const events = useQuery({
     queryKey: ['forks', cursor, limit],
     queryFn: () => api.getForks({ cursor, limit }),
-    staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
-  const getBadgeVariant = (type: string): 'red' | 'blue' | 'green' | 'gray' => {
-    switch (type.toLowerCase()) {
-      case 'deep_fork':
-      case 'deep':
-        return 'red';
-      case 'reorg':
-        return 'blue';
-      case 'resolved':
-        return 'green';
-      default:
-        return 'gray';
-    }
-  };
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
-        <PageHeader
-          title="Fork Events"
-          subtitle="Monitor blockchain reorganizations and fork events"
-        />
-        <TerminalPanel>
-          <TerminalPanelHeader indicator="warning">Fork Event Log</TerminalPanelHeader>
-          <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
-              <div className="w-24">Event</div>
-              <div className="w-16 text-center">Depth</div>
-              <div className="w-28">Fork Point</div>
-              <div className="flex-1">Old Tip</div>
-              <div className="flex-1">New Tip</div>
-              <div className="w-24 text-center">Orphaned</div>
-              <div className="w-28 text-right">Time</div>
-            </div>
-            {isLoading
-              ? Array.from({ length: 10 }).map((_, i) => (
-                  <TerminalRow key={i} hoverable={false}>
-                    {/* Table skeleton (lg+) */}
-                    <div className="hidden animate-pulse items-center lg:flex">
-                      <div className="w-24">
-                        <div className="bg-base-elevated h-5 w-16 rounded" />
-                      </div>
-                      <div className="w-16 text-center">
-                        <div className="bg-base-elevated mx-auto h-4 w-8 rounded" />
-                      </div>
-                      <div className="w-28">
-                        <div className="bg-base-elevated h-4 w-20 rounded" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="bg-base-elevated h-8 w-32 rounded" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="bg-base-elevated h-8 w-32 rounded" />
-                      </div>
-                      <div className="w-24 text-center">
-                        <div className="bg-base-elevated mx-auto h-8 w-16 rounded" />
-                      </div>
-                      <div className="w-28 text-right">
-                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
-                      </div>
-                    </div>
-                    {/* Card skeleton (<lg) */}
-                    <div className="animate-pulse space-y-1.5 lg:hidden">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="bg-base-elevated h-5 w-16 rounded" />
-                        <div className="bg-base-elevated h-4 w-20 rounded" />
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="bg-base-elevated h-4 w-16 rounded" />
-                        <div className="bg-base-elevated h-4 w-24 rounded" />
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="bg-base-elevated h-4 w-20 rounded" />
-                        <div className="bg-base-elevated h-4 w-20 rounded" />
-                      </div>
-                      <div className="bg-base-elevated h-4 w-32 rounded" />
-                    </div>
-                  </TerminalRow>
-                ))
-              : data?.data?.map((event) => (
-                  <TerminalRow key={event.id}>
-                    {/* Table row (lg+) */}
-                    <div className="hidden items-center lg:flex">
-                      <div className="w-24">
-                        <Link href={`/forks/${event.id}`}>
-                          <Badge variant={getBadgeVariant(event.eventType)}>
-                            {event.eventType.toUpperCase()}
-                          </Badge>
+      <main className="container mx-auto min-w-0 px-4 py-8">
+        <DetailLayout
+          title="Forks & uncles"
+          kind="index"
+          identity="Uncles belong to canonical chain history. Branch switches are events observed by this node."
+          facts={
+            overview.data
+              ? [
+                  {
+                    label: 'Uncles · 30 completed days',
+                    value: overview.data.unclesInWindow.toLocaleString(),
+                  },
+                  {
+                    label: 'Node switches · 30 days',
+                    value: overview.data.nodeSwitchesInWindow.toLocaleString(),
+                  },
+                  {
+                    label: 'Node switches · all time',
+                    value: overview.data.nodeSwitchesAllTime.toLocaleString(),
+                  },
+                  { label: 'Through', value: overview.data.throughDate ?? 'No completed day' },
+                ]
+              : undefined
+          }
+        >
+          <DetailSection title="Uncles and branch switches by day">
+            {overview.isLoading && <p role="status">Loading fork history…</p>}
+            {overview.error && (
+              <p role="alert">Fork history unavailable: {(overview.error as Error).message}</p>
+            )}
+            {overview.data && (
+              <>
+                <p className="text-text-dim mb-4 text-xs">{overview.data.scope}</p>
+                {overview.data.days.length ? (
+                  <Chart
+                    title="Chain uncles and this node's switches"
+                    subtitle="Exact daily counts; hover or use arrow keys for a day"
+                    data={overview.data.days.map((day) => ({
+                      label: day.date,
+                      values: { uncles: String(day.uncles), switches: String(day.nodeSwitches) },
+                    }))}
+                    series={[
+                      { key: 'uncles', label: 'Uncles', color: '#54a8c7' },
+                      { key: 'switches', label: 'Node switches', color: '#ad789f' },
+                    ]}
+                    unit="events"
+                    kind="bars"
+                  />
+                ) : (
+                  <p>No completed fork days are indexed.</p>
+                )}
+              </>
+            )}
+          </DetailSection>
+          <DetailSection title="Observed branch switches">
+            <p className="text-text-dim mb-4 text-xs">
+              This node's persisted switches. An old branch can later re-enter the canonical chain.
+            </p>
+            {events.isLoading && <p role="status">Loading branch switches…</p>}
+            {events.error && (
+              <p role="alert">Branch switches unavailable: {(events.error as Error).message}</p>
+            )}
+            {events.data && (
+              <>
+                <ListTable
+                  label="Observed branch switches"
+                  rows={events.data.data}
+                  rowKey={(event) => String(event.id)}
+                  empty="No branch switches observed by this node. Chain uncles above can still exist."
+                  columns={[
+                    {
+                      key: 'event',
+                      label: 'Event',
+                      minWidth: 175,
+                      render: (event) => (
+                        <Link href={eventLink(event)} className="text-emphasis hover:underline">
+                          {new Date(event.detectedAt).toLocaleString()}
                         </Link>
-                      </div>
-                      <div className="text-warning w-16 text-center font-mono">{event.depth}</div>
-                      <div className="w-28">
-                        <Link
-                          href={`/blocks/${event.forkPointNumber}`}
-                          className="text-emphasis font-mono hover:underline"
-                        >
+                      ),
+                    },
+                    {
+                      key: 'fork',
+                      label: 'Fork point',
+                      minWidth: 115,
+                      render: (event) => (
+                        <Link href={`/blocks/${event.forkPointNumber}`}>
                           #{event.forkPointNumber.toLocaleString()}
                         </Link>
+                      ),
+                    },
+                    {
+                      key: 'branch',
+                      label: 'Old → adopted tip',
+                      minWidth: 155,
+                      render: (event) => (
+                        <span>
+                          #{event.oldTipNumber.toLocaleString()} → #
+                          {event.newTipNumber.toLocaleString()}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'depth',
+                      label: 'Depth',
+                      minWidth: 70,
+                      numeric: true,
+                      render: (event) => event.depth.toLocaleString(),
+                    },
+                    {
+                      key: 'fate',
+                      label: 'Old block fate',
+                      minWidth: 155,
+                      render: (event) =>
+                        event.preview?.fate.replaceAll('_', ' ') ??
+                        event.previewStatus.replaceAll('_', ' '),
+                    },
+                    {
+                      key: 'uncle',
+                      label: 'Uncle in',
+                      minWidth: 100,
+                      render: (event) =>
+                        event.preview?.uncleInBlock != null ? (
+                          <Link href={`/blocks/${event.preview.uncleInBlock}`}>
+                            #{event.preview.uncleInBlock}
+                          </Link>
+                        ) : (
+                          '—'
+                        ),
+                    },
+                  ]}
+                  mobileRow={(event) => (
+                    <div className="min-w-0 space-y-2 text-xs">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <Link href={eventLink(event)} className="text-emphasis">
+                          {new Date(event.detectedAt).toLocaleString()}
+                        </Link>
+                        <span>
+                          {event.depth} block{event.depth === 1 ? '' : 's'}
+                        </span>
                       </div>
-                      <div className="flex-1">
-                        <div className="text-text font-mono">
-                          #{event.oldTipNumber.toLocaleString()}
-                        </div>
-                        <HexDisplay
-                          value={event.oldTipHash}
-                          size="sm"
-                          startChars={8}
-                          endChars={6}
-                        />
+                      <div>
+                        Fork #{event.forkPointNumber.toLocaleString()} · old #
+                        {event.oldTipNumber.toLocaleString()} → adopted #
+                        {event.newTipNumber.toLocaleString()}
                       </div>
-                      <div className="flex-1">
-                        <div className="text-text font-mono">
-                          #{event.newTipNumber.toLocaleString()}
-                        </div>
-                        <HexDisplay
-                          value={event.newTipHash}
-                          size="sm"
-                          startChars={8}
-                          endChars={6}
-                        />
+                      <div>
+                        Old block:{' '}
+                        {event.preview?.fate.replaceAll('_', ' ') ??
+                          event.previewStatus.replaceAll('_', ' ')}
                       </div>
-                      <div className="w-24 text-center">
-                        <div className="text-negative font-mono text-sm">
-                          {event.orphanedBlocksCount} blocks
+                      {event.preview && (
+                        <div>
+                          Uncle inclusion:{' '}
+                          {event.preview.uncleInBlock == null
+                            ? 'none observed'
+                            : `#${event.preview.uncleInBlock}`}{' '}
+                          · later committed transactions: {event.preview.committedLaterTransactions}
                         </div>
-                        <div className="text-text-dim font-mono text-xs">
-                          {event.orphanedTxsCount} txs
-                        </div>
-                      </div>
-                      <div className="text-text-dim w-28 text-right">
-                        {formatTimeAgo(event.detectedAt)}
+                      )}
+                      <div className="text-text-dim break-all">
+                        Old tip {hash(event.oldTipHash)}
                       </div>
                     </div>
-                    {/* Card row (<lg) */}
-                    <div className="space-y-1.5 lg:hidden">
-                      <div className="flex items-center justify-between gap-2">
-                        <Link href={`/forks/${event.id}`}>
-                          <Badge variant={getBadgeVariant(event.eventType)}>
-                            {event.eventType.toUpperCase()}
-                          </Badge>
-                        </Link>
-                        <span className="text-text-dim text-xs">
-                          {formatTimeAgo(event.detectedAt)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs">
-                        <span className="text-text">
-                          Depth: <span className="text-warning font-mono">{event.depth}</span>
-                        </span>
-                        <Link
-                          href={`/blocks/${event.forkPointNumber}`}
-                          className="text-emphasis font-mono hover:underline"
-                        >
-                          Fork #{event.forkPointNumber.toLocaleString()}
-                        </Link>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs">
-                        <span className="text-text-dim">
-                          Old:{' '}
-                          <span className="text-text font-mono">
-                            #{event.oldTipNumber.toLocaleString()}
-                          </span>
-                        </span>
-                        <span className="text-text-dim">
-                          New:{' '}
-                          <span className="text-text font-mono">
-                            #{event.newTipNumber.toLocaleString()}
-                          </span>
-                        </span>
-                      </div>
-                      <div className="text-negative text-xs">
-                        {event.orphanedBlocksCount} blocks, {event.orphanedTxsCount} txs orphaned
-                      </div>
-                    </div>
-                  </TerminalRow>
-                ))}
-          </TerminalPanelContent>
-          {data && (
-            <TerminalPanelFooter>
-              <CursorPagination
-                total={data.total}
-                totalLabel="events"
-                pageSize={limit}
-                page={page}
-                hasMore={data.hasMore}
-                hasPrevious={hasPrevious}
-                onNext={() => goToNext(data.nextCursor)}
-                onPrevious={goToPrevious}
-              />
-            </TerminalPanelFooter>
-          )}
-        </TerminalPanel>
+                  )}
+                />
+                <div className="mt-5">
+                  <CursorPagination
+                    total={events.data.total}
+                    totalLabel="events"
+                    pageSize={limit}
+                    page={page}
+                    hasMore={events.data.hasMore}
+                    hasPrevious={hasPrevious}
+                    onNext={() => goToNext(events.data!.nextCursor)}
+                    onPrevious={goToPrevious}
+                  />
+                </div>
+              </>
+            )}
+          </DetailSection>
+        </DetailLayout>
       </main>
     </div>
   );

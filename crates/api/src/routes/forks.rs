@@ -7,11 +7,16 @@ use axum::{
 };
 use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
+use crate::utils::stats_bucket::ChainTime;
 use crate::AppState;
-use ckbadger_store::types::{DeepForkInfo, ReorgEventKind, ReorgEventRecord, SyncStatus};
+use ckbadger_store::types::{
+    CachedBlockHeader, DeepForkInfo, ReorgEventKind, ReorgEventRecord, SyncStatus,
+};
+use ckbadger_store::CkbadgerStore;
 
 /// How long after detection a persisted reorg still counts as "recent".
 ///
@@ -45,6 +50,21 @@ pub struct ReorgEventResponse {
     pub resolved_by: Option<String>,
     pub resolution_action: Option<String>,
     pub resolution_notes: Option<String>,
+    pub preview_status: String,
+    pub preview: Option<ForkEventPreviewResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkEventPreviewResponse {
+    pub old_block_hash: String,
+    pub old_miner_lock_hash: Option<String>,
+    pub competing_miner_lock_hash: Option<String>,
+    pub fate: String,
+    pub uncle_in_block: Option<i64>,
+    pub timestamp_gap_ms: Option<i64>,
+    pub noncellbase_transactions: i64,
+    pub committed_later_transactions: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +76,38 @@ pub struct OrphanedBlockResponse {
     pub timestamp: String,
     pub transactions_count: i32,
     pub miner_lock_hash: Option<String>,
+    /// Fate of this historical old-branch block in the current indexed chain.
+    pub fate: String,
+    pub uncle_in: Option<UncleInclusionResponse>,
+    pub competing_block: Option<CanonicalBranchBlockResponse>,
+    /// Historical branch timestamp minus the current canonical block at its height.
+    pub timestamp_gap_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleInclusionResponse {
+    pub block_number: i64,
+    pub block_hash: String,
+    pub distance: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalBranchBlockResponse {
+    pub number: i64,
+    pub hash: String,
+    pub timestamp: String,
+    pub transactions_count: i32,
+    pub miner_lock_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalTxLocationResponse {
+    pub block_number: i64,
+    pub block_hash: String,
+    pub tx_index: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,6 +120,8 @@ pub struct OrphanedTransactionResponse {
     pub inputs_count: Option<i16>,
     pub outputs_count: Option<i16>,
     pub total_capacity: Option<String>,
+    pub fate: String,
+    pub committed_at: Option<CanonicalTxLocationResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +131,12 @@ pub struct ReorgDetailResponse {
     /// Historical branch evidence retained by the node, even after local rollback.
     pub orphaned_blocks: Vec<OrphanedBlockResponse>,
     pub orphaned_transactions: Vec<OrphanedTransactionResponse>,
+    /// The branch adopted by this switch, traced from its persisted new tip.
+    pub adopted_branch: Vec<CanonicalBranchBlockResponse>,
+    /// Today's indexed canonical blocks at the affected heights. A later switch
+    /// may have reversed the original adoption.
+    pub canonical_branch: Vec<CanonicalBranchBlockResponse>,
+    pub canonical_tip_number: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,9 +170,37 @@ pub struct ListForksParams {
     pub cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ForkOverviewParams {
+    pub days: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkDayResponse {
+    /// Canonical indexed UTC+8 calendar day, never the raw header timestamp.
+    pub date: String,
+    pub canonical_blocks: i32,
+    pub uncles: i32,
+    /// Switches observed by this indexer's node on the same UTC+8 day.
+    pub node_switches: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOverviewResponse {
+    pub scope: &'static str,
+    pub through_date: Option<String>,
+    pub days: Vec<ForkDayResponse>,
+    pub uncles_in_window: i64,
+    pub node_switches_in_window: i64,
+    pub node_switches_all_time: i64,
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/forks", get(list_forks))
+        .route("/forks/overview", get(get_forks_overview))
         .route("/forks/recent", get(get_recent_reorg))
         .route("/forks/{id}", get(get_fork_detail))
 }
@@ -188,6 +276,8 @@ fn reorg_event_response(record: &ReorgEventRecord) -> Result<ReorgEventResponse,
         resolved_by: None,
         resolution_action: None,
         resolution_notes: None,
+        preview_status: "not_loaded".to_string(),
+        preview: None,
     })
 }
 
@@ -201,6 +291,120 @@ fn parse_forks_cursor(cursor: Option<&str>) -> Result<Option<Vec<u8>>, ApiRouteE
     ckbadger_store::keys::decode_reorg_event_key(&bytes)
         .map_err(|_| ApiError::bad_request("Invalid forks cursor"))?;
     Ok(Some(bytes))
+}
+
+/// The chain's uncle record and this node's observed switches share only a
+/// calendar axis. They are distinct populations: most uncles were never a tip
+/// of this node, while a switch can later be reversed.
+async fn get_forks_overview(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ForkOverviewParams>,
+) -> ApiResult<ForkOverviewResponse> {
+    let days = params.days.unwrap_or(30);
+    if !(1..=90).contains(&days) {
+        return Err(ApiError::bad_request("days must be between 1 and 90"));
+    }
+    let store = state.store.clone();
+    let response = tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
+        let chain = ChainTime::load(&store)?;
+        let rows = store.list_daily_block_stats().map_err(|e| ApiError::internal(e.to_string()))?;
+        let events = store.list_reorg_events(usize::MAX, None).map_err(|e| ApiError::internal(e.to_string()))?;
+        let node_switches_all_time = i64::try_from(events.iter().filter(|record| record.event.kind == ReorgEventKind::Automatic).count())
+            .map_err(|_| ApiError::internal("node switch count exceeds i64"))?;
+        let Some(chain) = chain else {
+            if !rows.is_empty() || !events.is_empty() {
+                return Err(ApiError::internal("fork evidence exists without an indexed canonical chain"));
+            }
+            return Ok(ForkOverviewResponse {
+                scope: "complete UTC+8 days; uncles use indexed chain time, node switches use this indexer's detection wall time",
+                through_date: None,
+                days: Vec::new(),
+                uncles_in_window: 0,
+                node_switches_in_window: 0,
+                node_switches_all_time: 0,
+            });
+        };
+        let genesis = store.get_block_header(0).map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| ApiError::internal("indexed tip exists without genesis header"))?;
+        let genesis_day = ckbadger_common::stats_bucket::stats_day(genesis.chain_time_ms)
+            .map_err(|e| ApiError::internal(format!("invalid genesis chain day: {e}")))?;
+        let last_day = chain.last_complete_day()?;
+        if last_day < genesis_day {
+            return Ok(ForkOverviewResponse {
+                scope: "complete UTC+8 days; uncles use indexed chain time, node switches use this indexer's detection wall time",
+                through_date: None,
+                days: Vec::new(),
+                uncles_in_window: 0,
+                node_switches_in_window: 0,
+                node_switches_all_time,
+            });
+        }
+        let requested_start = last_day - chrono::Duration::days(i64::from(days) - 1);
+        let start_day = requested_start.max(genesis_day);
+        let mut by_day = HashMap::new();
+        for (key, stats) in rows {
+            let date = chrono::NaiveDate::parse_from_str(&key, "%Y%m%d").map_err(|e| ApiError::internal(format!("invalid daily block stats key {key}: {e}")))?;
+            if date < start_day || date > last_day { continue; }
+            if stats.block_count <= 0 || stats.total_uncles < 0 {
+                return Err(ApiError::internal(format!("invalid canonical daily block stats on {date}: blocks={} uncles={}", stats.block_count, stats.total_uncles)));
+            }
+            if by_day.insert(date, stats).is_some() {
+                return Err(ApiError::internal(format!("duplicate daily block stats on {date}")));
+            }
+        }
+        let mut switches_by_day: HashMap<chrono::NaiveDate, i32> = HashMap::new();
+        let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+            .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
+        for record in events.iter().filter(|record| record.event.kind == ReorgEventKind::Automatic) {
+            let detected = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(record.detected_at_ms)
+                .ok_or_else(|| ApiError::internal(format!("invalid fork event time {}", record.key)))?;
+            let date = detected.with_timezone(&utc8).date_naive();
+            if date < start_day || date > last_day { continue; }
+            let count = switches_by_day.entry(date).or_insert(0);
+            *count = count.checked_add(1).ok_or_else(|| ApiError::internal(format!("node switch count overflow on {date}")))?;
+        }
+        let mut day = start_day;
+        let mut data = Vec::new();
+        let mut uncles_in_window = 0i64;
+        let mut node_switches_in_window = 0i64;
+        while day <= last_day {
+            let (canonical_blocks, uncles) = match by_day.remove(&day) {
+                Some(stats) => (stats.block_count, stats.total_uncles),
+                None => {
+                    // A missing daily row is valid only if the indexed chain
+                    // proves the day contained no canonical block.
+                    let preceding = day.pred_opt().ok_or_else(|| ApiError::internal("fork day underflow"))?;
+                    let start_ms = ckbadger_common::stats_bucket::utc8_day_end_ms(preceding)
+                        .map_err(|e| ApiError::internal(format!("invalid fork day {day}: {e}")))?;
+                    if let Some(number) = store.find_first_block_at_or_after_chain_time_ms(start_ms)
+                        .map_err(|e| ApiError::internal(format!("fork day {day} coverage: {e}")))? {
+                        let header = store.get_block_header(number).map_err(|e| ApiError::internal(e.to_string()))?
+                            .ok_or_else(|| ApiError::internal(format!("missing canonical header {number} for fork day {day}")))?;
+                        let first_day = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)
+                            .map_err(|e| ApiError::internal(format!("invalid chain day at block {number}: {e}")))?;
+                        if first_day == day {
+                            return Err(ApiError::internal(format!("missing daily block stats on block-bearing fork day {day}; first block={number}")));
+                        }
+                    }
+                    (0, 0)
+                }
+            };
+            let node_switches = switches_by_day.remove(&day).unwrap_or(0);
+            uncles_in_window = uncles_in_window.checked_add(i64::from(uncles)).ok_or_else(|| ApiError::internal("uncle count overflow"))?;
+            node_switches_in_window = node_switches_in_window.checked_add(i64::from(node_switches)).ok_or_else(|| ApiError::internal("node switch count overflow"))?;
+            data.push(ForkDayResponse { date: day.format("%Y-%m-%d").to_string(), canonical_blocks, uncles, node_switches });
+            day = day.succ_opt().ok_or_else(|| ApiError::internal("fork day overflow"))?;
+        }
+        Ok(ForkOverviewResponse {
+            scope: "complete UTC+8 days; uncles use indexed chain time, node switches use this indexer's detection wall time",
+            through_date: Some(last_day.format("%Y-%m-%d").to_string()),
+            days: data,
+            uncles_in_window,
+            node_switches_in_window,
+            node_switches_all_time,
+        })
+    }).await.map_err(|e| ApiError::internal(e.to_string()))??;
+    ok(response)
 }
 
 /// List the persisted reorg-event history, newest first.
@@ -238,10 +442,91 @@ async fn list_forks(
         None
     };
 
-    let events = records
+    let mut events = records
         .iter()
         .map(reorg_event_response)
         .collect::<Result<Vec<_>, _>>()?;
+
+    if let Some(reader) = state.ckb_store.clone() {
+        let store = state.store.clone();
+        let records_for_evidence = records.clone();
+        let previews = tokio::task::spawn_blocking(
+            move || -> anyhow::Result<Vec<(String, Option<ForkEventPreviewResponse>)>> {
+                records_for_evidence
+                    .iter()
+                    .map(|record| {
+                        if record.event.orphaned_blocks == 0 {
+                            return Ok(("no_old_branch".to_string(), None));
+                        }
+                        let (mut blocks, mut transactions) =
+                            read_orphaned_branch(&reader, &record.event)?;
+                        enrich_branch_fate(
+                            &store,
+                            &reader,
+                            &record.event,
+                            &mut blocks,
+                            &mut transactions,
+                        )?;
+                        let first = blocks.first().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "fork {} recorded old blocks but node branch is empty",
+                                record.key
+                            )
+                        })?;
+                        let noncellbase_transactions = i64::try_from(
+                            transactions
+                                .iter()
+                                .filter(|tx| tx.block_hash == first.hash && tx.tx_index > 0)
+                                .count(),
+                        )?;
+                        let committed_later_transactions = i64::try_from(
+                            transactions
+                                .iter()
+                                .filter(|tx| {
+                                    tx.block_hash == first.hash && tx.fate == "committed_later"
+                                })
+                                .count(),
+                        )?;
+                        Ok((
+                            "available".to_string(),
+                            Some(ForkEventPreviewResponse {
+                                old_block_hash: first.hash.clone(),
+                                old_miner_lock_hash: first.miner_lock_hash.clone(),
+                                competing_miner_lock_hash: first
+                                    .competing_block
+                                    .as_ref()
+                                    .and_then(|block| block.miner_lock_hash.clone()),
+                                fate: first.fate.clone(),
+                                uncle_in_block: first
+                                    .uncle_in
+                                    .as_ref()
+                                    .map(|uncle| uncle.block_number),
+                                timestamp_gap_ms: first.timestamp_gap_ms,
+                                noncellbase_transactions,
+                                committed_later_transactions,
+                            }),
+                        ))
+                    })
+                    .collect()
+            },
+        )
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(format!("fork list evidence: {e:#}")))?;
+        for (event, (status, preview)) in events.iter_mut().zip(previews) {
+            event.preview_status = status;
+            event.preview = preview;
+        }
+    } else {
+        for event in &mut events {
+            event.preview_status = if event.orphaned_blocks_count == 0 {
+                "no_old_branch"
+            } else {
+                "node_reader_unavailable"
+            }
+            .to_string();
+        }
+    }
 
     ok(CursorPaginatedResponse::new(
         events,
@@ -266,8 +551,25 @@ async fn get_fork_detail(
         return Err(ApiError::not_found("Reorg event not found"));
     };
 
-    let (orphaned_blocks, orphaned_transactions) = if record.event.orphaned_blocks == 0 {
-        (Vec::new(), Vec::new())
+    let (
+        orphaned_blocks,
+        orphaned_transactions,
+        adopted_branch,
+        canonical_branch,
+        canonical_tip_number,
+    ) = if record.event.orphaned_blocks == 0 {
+        let store = state.store.clone();
+        let tip = tokio::task::spawn_blocking(move || store.get_sync_tip_block())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            tip.map(|(number, _)| number),
+        )
     } else {
         let reader = state.ckb_store.clone().ok_or_else(|| {
             ApiError::internal(format!(
@@ -276,44 +578,126 @@ async fn get_fork_detail(
             ))
         })?;
         let event = record.event.clone();
-        tokio::task::spawn_blocking(move || read_orphaned_branch(&reader, &event))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(format!("fork {id}: {e:#}")))?
+        let store = state.store.clone();
+        tokio::task::spawn_blocking(move || {
+            let (mut blocks, mut transactions) = read_orphaned_branch(&reader, &event)?;
+            let adopted_branch = read_adopted_branch(&reader, &event)?;
+            let (canonical_branch, canonical_tip_number) =
+                enrich_branch_fate(&store, &reader, &event, &mut blocks, &mut transactions)?;
+            Ok::<_, anyhow::Error>((
+                blocks,
+                transactions,
+                adopted_branch,
+                canonical_branch,
+                canonical_tip_number,
+            ))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(format!("fork {id}: {e:#}")))?
     };
     ok(ReorgDetailResponse {
         event: reorg_event_response(&record)?,
         orphaned_blocks,
         orphaned_transactions,
+        adopted_branch,
+        canonical_branch,
+        canonical_tip_number,
     })
+}
+
+fn read_adopted_branch(
+    reader: &ckb_store_reader::CkbChainReader,
+    event: &ckbadger_store::ReorgEvent,
+) -> anyhow::Result<Vec<CanonicalBranchBlockResponse>> {
+    let mut branch = Vec::new();
+    for (hash, block) in walk_recorded_branch(
+        reader,
+        "adopted",
+        event.new_tip,
+        &event.new_tip_hash,
+        event.fork_point,
+        &event.fork_point_hash,
+    )? {
+        let expected_number = i64::try_from(block.number())?;
+        let timestamp = chrono::DateTime::from_timestamp_millis(i64::try_from(block.timestamp())?)
+            .ok_or_else(|| anyhow::anyhow!("invalid adopted timestamp at block {expected_number}"))?
+            .to_rfc3339();
+        let miner_lock_hash = reader
+            .get_cellbase_witness(&hash)
+            .map(|(lock, _)| hex0x(lock.calc_script_hash().as_slice()));
+        branch.push(CanonicalBranchBlockResponse {
+            number: expected_number,
+            hash: hex0x(&hash),
+            timestamp,
+            transactions_count: i32::try_from(block.transactions().len())?,
+            miner_lock_hash,
+        });
+    }
+    branch.reverse();
+    Ok(branch)
+}
+
+/// The single strict node-store traversal for both persisted event branches.
+/// It proves each parent edge and the recorded fork-point hash, independent of
+/// what the domain store currently considers canonical.
+fn walk_recorded_branch(
+    reader: &ckb_store_reader::CkbChainReader,
+    label: &str,
+    tip_number: i64,
+    tip_hash: &[u8],
+    fork_point: i64,
+    fork_point_hash: &[u8],
+) -> anyhow::Result<Vec<([u8; 32], ckb_types::core::BlockView)>> {
+    anyhow::ensure!(
+        tip_number > fork_point,
+        "{label} branch tip {tip_number} does not exceed fork point {fork_point}"
+    );
+    let mut hash: [u8; 32] = tip_hash
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid {label} tip hash at block {tip_number}"))?;
+    let mut branch = Vec::new();
+    for expected_number in ((fork_point + 1)..=tip_number).rev() {
+        let block = reader.get_block(&hash).ok_or_else(|| {
+            anyhow::anyhow!(
+                "CKB RocksDB is missing {label} block {expected_number} 0x{}",
+                hex::encode(hash)
+            )
+        })?;
+        anyhow::ensure!(
+            block.number() == u64::try_from(expected_number)?,
+            "{label} block height mismatch at 0x{}: expected={expected_number} actual={}",
+            hex::encode(hash),
+            block.number()
+        );
+        let parent: [u8; 32] = block.parent_hash().as_slice().try_into().map_err(|_| {
+            anyhow::anyhow!("invalid {label} parent hash at block {expected_number}")
+        })?;
+        branch.push((hash, block));
+        hash = parent;
+    }
+    anyhow::ensure!(
+        hash.as_slice() == fork_point_hash,
+        "{label} branch does not reach recorded fork point {fork_point}"
+    );
+    Ok(branch)
 }
 
 fn read_orphaned_branch(
     reader: &ckb_store_reader::CkbChainReader,
     event: &ckbadger_store::ReorgEvent,
 ) -> anyhow::Result<(Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>)> {
-    let mut hash: [u8; 32] = event
-        .old_tip_hash
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("invalid old tip hash"))?;
     let mut blocks = Vec::new();
     let mut transactions = Vec::new();
-    for expected_number in ((event.fork_point + 1)..=event.old_tip).rev() {
-        let block = reader.get_block(&hash).ok_or_else(|| {
-            anyhow::anyhow!(
-                "CKB RocksDB is missing historical block {} 0x{}",
-                expected_number,
-                hex::encode(hash)
-            )
-        })?;
-        anyhow::ensure!(
-            block.number() == expected_number as u64,
-            "historical block height mismatch at 0x{}: expected={} actual={}",
-            hex::encode(hash),
-            expected_number,
-            block.number()
-        );
+    for (hash, block) in walk_recorded_branch(
+        reader,
+        "old",
+        event.old_tip,
+        &event.old_tip_hash,
+        event.fork_point,
+        &event.fork_point_hash,
+    )? {
+        let expected_number = i64::try_from(block.number())?;
         let timestamp = chrono::DateTime::from_timestamp_millis(i64::try_from(block.timestamp())?)
             .ok_or_else(|| {
                 anyhow::anyhow!("invalid historical block timestamp at {}", expected_number)
@@ -329,6 +713,10 @@ fn read_orphaned_branch(
             timestamp,
             transactions_count: i32::try_from(block.transactions().len())?,
             miner_lock_hash,
+            fate: "canonical_evidence_unavailable".to_string(),
+            uncle_in: None,
+            competing_block: None,
+            timestamp_gap_ms: None,
         });
         for (index, tx) in block.transactions().iter().enumerate() {
             let total_capacity = tx.outputs().into_iter().try_fold(0u128, |total, output| {
@@ -345,22 +733,210 @@ fn read_orphaned_branch(
                 inputs_count: Some(i16::try_from(tx.inputs().len())?),
                 outputs_count: Some(i16::try_from(tx.outputs().len())?),
                 total_capacity: Some(total_capacity.to_string()),
+                fate: "canonical_evidence_unavailable".to_string(),
+                committed_at: None,
             });
         }
-        hash.copy_from_slice(block.parent_hash().as_slice());
     }
-    anyhow::ensure!(
-        hash.as_slice() == event.fork_point_hash.as_slice(),
-        "historical branch does not reach recorded fork point {}",
-        event.fork_point
-    );
     anyhow::ensure!(
         blocks.len() as i64 == event.orphaned_blocks,
         "historical branch block count mismatch: recorded={} actual={}",
         event.orphaned_blocks,
         blocks.len()
     );
+    blocks.reverse();
+    transactions.sort_by_key(|tx| (tx.block_number, tx.tx_index));
     Ok((blocks, transactions))
+}
+
+fn canonical_block_response(
+    number: i64,
+    header: &CachedBlockHeader,
+) -> anyhow::Result<CanonicalBranchBlockResponse> {
+    let timestamp = chrono::DateTime::from_timestamp_millis(header.timestamp)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid canonical timestamp at block {number}: {}",
+                header.timestamp
+            )
+        })?
+        .to_rfc3339();
+    anyhow::ensure!(
+        header.transactions_count >= 0,
+        "negative tx count at canonical block {number}"
+    );
+    Ok(CanonicalBranchBlockResponse {
+        number,
+        hash: hex0x(&header.hash),
+        timestamp,
+        transactions_count: header.transactions_count,
+        miner_lock_hash: header.miner_lock_hash.as_ref().map(|hash| hex0x(hash)),
+    })
+}
+
+/// Read one current canonical view for the whole historical branch. Re-entry
+/// after a later switch is identified by the exact hash at the same height;
+/// the persisted event still records what this node dropped at that moment.
+fn enrich_branch_fate(
+    store: &CkbadgerStore,
+    reader: &ckb_store_reader::CkbChainReader,
+    event: &ckbadger_store::ReorgEvent,
+    blocks: &mut [OrphanedBlockResponse],
+    transactions: &mut [OrphanedTransactionResponse],
+) -> anyhow::Result<(Vec<CanonicalBranchBlockResponse>, Option<i64>)> {
+    let Some((tip, _)) = store.get_sync_tip_block()? else {
+        // A retained node block can be inspected before this API's index has
+        // a canonical view. The unavailable state is explicit on every row.
+        return Ok((Vec::new(), None));
+    };
+    let mut canonical_branch = Vec::new();
+    let branch_end = event.old_tip.max(event.new_tip).min(tip);
+    for number in (event.fork_point + 1)..=branch_end {
+        let header = store.get_block_header(number)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing canonical block {number} within fork {} branch view at tip {tip}",
+                event.fork_point
+            )
+        })?;
+        canonical_branch.push(canonical_block_response(number, &header)?);
+    }
+    for block in blocks.iter_mut() {
+        if block.number > tip {
+            block.fate = "awaiting_canonical_tip".to_string();
+            continue;
+        }
+        let current = store.get_block_header(block.number)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing canonical block {} while resolving old branch block {}",
+                block.number,
+                block.hash
+            )
+        })?;
+        if hex0x(&current.hash) == block.hash {
+            block.fate = "canonical_now".to_string();
+            continue;
+        }
+        block.timestamp_gap_ms = Some(
+            chrono::DateTime::parse_from_rfc3339(&block.timestamp)?
+                .timestamp_millis()
+                .checked_sub(current.timestamp)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("timestamp gap overflow for old block {}", block.hash)
+                })?,
+        );
+        block.competing_block = Some(canonical_block_response(block.number, &current)?);
+        let hash_bytes = hex::decode(
+            block
+                .hash
+                .strip_prefix("0x")
+                .ok_or_else(|| anyhow::anyhow!("old block lacks 0x prefix: {}", block.hash))?,
+        )?;
+        let hash: [u8; 32] = hash_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("old block has invalid hash length: {}", block.hash))?;
+        let historical = reader.get_block(&hash).ok_or_else(|| {
+            anyhow::anyhow!(
+                "CKB RocksDB lost historical old branch block {}",
+                block.hash
+            )
+        })?;
+        let old_epoch = historical.epoch().number();
+        let mut epoch_finished = false;
+        for number in (block.number + 1)..=tip {
+            let header = store.get_block_header(number)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing canonical block {number} while scanning uncle fate for {}",
+                    block.hash
+                )
+            })?;
+            if header.epoch_number > i64::try_from(old_epoch)? {
+                epoch_finished = true;
+                break;
+            }
+            anyhow::ensure!(
+                header.epoch_number >= 0 && header.uncles_count >= 0,
+                "invalid canonical epoch or uncle count at block {number}"
+            );
+            if header.uncles_count == 0 {
+                continue;
+            }
+            let canonical_hash: [u8; 32] = header
+                .hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("invalid canonical hash at block {number}"))?;
+            let canonical = reader.get_block(&canonical_hash).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "CKB RocksDB missing canonical uncle-bearing block {number} 0x{}",
+                    hex::encode(canonical_hash)
+                )
+            })?;
+            anyhow::ensure!(
+                canonical.data().uncles().len() == header.uncles_count as usize,
+                "uncle count mismatch at canonical block {number}: indexed={} node={}",
+                header.uncles_count,
+                canonical.data().uncles().len()
+            );
+            if canonical
+                .uncles()
+                .into_iter()
+                .any(|uncle| uncle.hash().as_slice() == hash)
+            {
+                block.uncle_in = Some(UncleInclusionResponse {
+                    block_number: number,
+                    block_hash: hex0x(&header.hash),
+                    distance: number.checked_sub(block.number).ok_or_else(|| {
+                        anyhow::anyhow!("uncle distance underflow for {}", block.hash)
+                    })?,
+                });
+                break;
+            }
+        }
+        block.fate = if block.uncle_in.is_some() {
+            "included_as_uncle"
+        } else if epoch_finished {
+            "not_included_as_uncle"
+        } else {
+            "uncle_fate_pending"
+        }
+        .to_string();
+    }
+    for tx in transactions.iter_mut() {
+        if tx.tx_index == 0 {
+            tx.fate = "cellbase".to_string();
+            continue;
+        }
+        let tx_hash = hex::decode(
+            tx.hash
+                .strip_prefix("0x")
+                .ok_or_else(|| anyhow::anyhow!("old tx lacks 0x prefix: {}", tx.hash))?,
+        )?;
+        match store.get_tx_by_hash(&tx_hash)? {
+            Some((number, index, _)) => {
+                let header = store.get_block_header(number)?.ok_or_else(|| {
+                    anyhow::anyhow!("canonical tx {} points to missing block {number}", tx.hash)
+                })?;
+                tx.committed_at = Some(CanonicalTxLocationResponse {
+                    block_number: number,
+                    block_hash: hex0x(&header.hash),
+                    tx_index: index,
+                });
+                tx.fate = if number == tx.block_number
+                    && header.hash == hex::decode(&tx.block_hash[2..])?
+                {
+                    "canonical_now"
+                } else if number >= tx.block_number {
+                    "committed_later"
+                } else {
+                    "committed_on_canonical_branch"
+                }
+                .to_string();
+            }
+            None => tx.fate = "not_committed_as_of_tip".to_string(),
+        }
+    }
+    Ok((canonical_branch, Some(tip)))
 }
 
 async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<RecentReorgResponse> {

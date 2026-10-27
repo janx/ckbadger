@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "depth": 1,
+      "detectedAt": "2025-07-31T22:13:20+00:00",
+      "eventType": "reorg",
+      "forkPointHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "forkPointNumber": 10,
+      "id": 1754000000000,
+      "newTipHash": "0xb057fd605c2f1dab44c5cd8ea7fb6df8a7868c3f3289d9003cfdfb33e29a2ef4",
+      "newTipNumber": 12,
+      "oldTipHash": "0x17404795231f70f04f67479bed95cace406fac2307e14bb6cf69784e39a3e72a",
+      "oldTipNumber": 11,
+      "orphanedBlocksCount": 1,
+      "orphanedTxsCount": 2,
+      "preview": {
+        "committedLaterTransactions": 1,
+        "competingMinerLockHash": null,
+        "fate": "included_as_uncle",
+        "noncellbaseTransactions": 1,
+        "oldBlockHash": "0x17404795231f70f04f67479bed95cace406fac2307e14bb6cf69784e39a3e72a",
+        "oldMinerLockHash": null,
+        "timestampGapMs": 50,
+        "uncleInBlock": 12
+      },
+      "previewStatus": "available",
+      "resolutionAction": null,
+      "resolutionNotes": null,
+      "resolvedAt": null,
+      "resolvedBy": null,
+      "reversesEvents": [],
+      "revertedByEvent": null
+    }
+  ],
+  "hasMore": false,
+  "limit": 10,
+  "nextCursor": null,
+  "total": 1
+}

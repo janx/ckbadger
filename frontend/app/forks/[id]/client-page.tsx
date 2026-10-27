@@ -1,249 +1,345 @@
 'use client';
+
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { notFound, useParams } from '@/src/navigation';
-import { api } from '@/lib/api';
-import { Header } from '@/components/layout/header';
-import { formatTimeAgo } from '@/lib/utils';
 import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
-import { HexDisplay } from '@/components/ui/hex-display';
-import { DataField, DataGrid } from '@/components/ui/data-field';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+  api,
+  type CanonicalBranchBlock,
+  type OrphanedBlock,
+  type OrphanedTransaction,
+} from '@/lib/api';
+import { Header } from '@/components/layout/header';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { ListTable } from '@/components/ui/list-table';
+
+const fullHash = (hash: string) => <span className="break-all font-mono text-xs">{hash}</span>;
+const blockAt = (number: number) => (
+  <Link href={`/blocks/${number}`} className="text-emphasis hover:underline">
+    #{number.toLocaleString()}
+  </Link>
+);
+const historicalHeight = (number: number) => <span>#{number.toLocaleString()}</span>;
+const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false) => (
+  <ListTable
+    label={label}
+    rows={rows}
+    rowKey={(block) => block.hash}
+    empty="No blocks on this branch."
+    columns={[
+      {
+        key: 'height',
+        label: 'Height',
+        minWidth: 90,
+        render: (block) => (current ? blockAt(block.number) : historicalHeight(block.number)),
+      },
+      { key: 'hash', label: 'Block hash', minWidth: 330, render: (block) => fullHash(block.hash) },
+      {
+        key: 'miner',
+        label: 'Miner lock hash',
+        minWidth: 330,
+        render: (block) =>
+          block.minerLockHash ? fullHash(block.minerLockHash) : 'Miner witness unavailable',
+      },
+      { key: 'time', label: 'Header time', minWidth: 180, render: (block) => block.timestamp },
+    ]}
+    mobileRow={(block) => (
+      <div className="min-w-0 space-y-1 text-xs">
+        {current ? blockAt(block.number) : historicalHeight(block.number)}
+        <div>{fullHash(block.hash)}</div>
+        <div>
+          Miner: {block.minerLockHash ? fullHash(block.minerLockHash) : 'witness unavailable'}
+        </div>
+        <div>{block.timestamp}</div>
+      </div>
+    )}
+  />
+);
+
 export default function ForkDetailPage() {
   const params = useParams();
-  const id = params.id as string;
-  const forkId = parseInt(id, 10);
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['fork', forkId],
-    queryFn: () => api.getForkDetail(forkId),
+  const id = Number(params.id);
+  const query = useQuery({
+    queryKey: ['fork', id],
+    queryFn: () => api.getForkDetail(id),
+    enabled: Number.isSafeInteger(id) && id >= 0,
   });
-  if (isNaN(forkId)) {
-    notFound();
-  }
-  const getBadgeVariant = (type: string): 'red' | 'blue' | 'green' | 'gray' => {
-    switch (type.toLowerCase()) {
-      case 'deep_fork':
-      case 'deep':
-        return 'red';
-      case 'reorg':
-        return 'blue';
-      case 'resolved':
-        return 'green';
-      default:
-        return 'gray';
-    }
-  };
-  if (error) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-8 text-center">
-          <h1 className="text-negative text-2xl font-bold">Error loading fork event</h1>
-          <p className="text-text-dim mt-2">{(error as Error).message}</p>
-        </main>
-      </div>
-    );
-  }
-  if (isLoading) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-8">
-          <div className="bg-base-elevated mb-6 h-10 w-64 animate-pulse rounded" />
-          <div className="grid gap-6 md:grid-cols-2">
-            <div className="border-base-border bg-base-surface/50 h-64 animate-pulse rounded border" />
-            <div className="border-base-border bg-base-surface/50 h-64 animate-pulse rounded border" />
-          </div>
-        </main>
-      </div>
-    );
-  }
-  if (!data) {
-    notFound();
-  }
-  const { event, orphanedBlocks, orphanedTransactions } = data;
+  if (!Number.isSafeInteger(id) || id < 0) notFound();
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
-        <PageHeader
-          title={`Fork Event #${event.id}`}
-          badge={
-            <Badge variant={getBadgeVariant(event.eventType)}>
-              {event.eventType.toUpperCase()}
-            </Badge>
-          }
-        />
-        <div className="mb-8 grid gap-6 md:grid-cols-2">
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="warning">Event Details</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <DataGrid>
-                <DataField label="Detected">
-                  <span>
-                    {new Date(event.detectedAt).toLocaleString()}{' '}
-                    <span className="text-text-dim">({formatTimeAgo(event.detectedAt)})</span>
-                  </span>
-                </DataField>
-                <DataField label="Depth">
-                  <span className="text-warning font-mono">{event.depth} blocks</span>
-                </DataField>
-                <DataField label="Fork Point">
-                  <div className="space-y-1">
-                    <Link
-                      href={`/blocks/${event.forkPointNumber}`}
-                      className="text-emphasis font-mono hover:underline"
-                    >
-                      #{event.forkPointNumber.toLocaleString()}
-                    </Link>
-                    <HexDisplay value={event.forkPointHash} size="sm" />
-                  </div>
-                </DataField>
-                {event.resolvedAt && (
-                  <DataField label="Resolved">
-                    <div>
-                      {new Date(event.resolvedAt).toLocaleString()}
-                      <div className="text-positive mt-1 text-xs">
-                        Action: {event.resolutionAction}
-                      </div>
-                    </div>
-                  </DataField>
-                )}
-              </DataGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="warning">Chain Split</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <div className="space-y-4">
-                <div className="border-negative/30 bg-negative/10 rounded border p-4">
-                  <div className="text-negative mb-2 text-xs font-medium uppercase tracking-wider">
-                    Old Tip (Orphaned)
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-text font-mono">
-                      Height: {event.oldTipNumber.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <HexDisplay value={event.oldTipHash} size="sm" />
-                  </div>
-                </div>
-                <div className="flex justify-center">
-                  <div className="text-warning text-2xl">↓</div>
-                </div>
-                <div className="border-positive/30 bg-positive/10 rounded border p-4">
-                  <div className="text-positive mb-2 text-xs font-medium uppercase tracking-wider">
-                    New Tip (Canonical)
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-text font-mono">
-                      Height: {event.newTipNumber.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <HexDisplay value={event.newTipHash} size="sm" />
-                  </div>
-                </div>
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </div>
-        <Tabs defaultValue="blocks">
-          <TabsList>
-            <TabsTrigger value="blocks">Orphaned Blocks ({orphanedBlocks.length})</TabsTrigger>
-            <TabsTrigger value="transactions">
-              Orphaned Transactions ({orphanedTransactions.length})
-            </TabsTrigger>
-          </TabsList>
-          <TerminalPanel className="mt-4">
-            <TabsContent value="blocks" className="m-0">
-              <TerminalPanelContent padding="none">
-                <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                  <div className="w-32">Number</div>
-                  <div className="flex-1">Hash</div>
-                  <div className="w-24 text-center">Tx Count</div>
-                  <div className="w-28 text-right">Time</div>
-                </div>
-                {orphanedBlocks.length === 0 ? (
-                  <div className="text-text-dim px-4 py-8 text-center">
-                    No orphaned blocks data available
-                  </div>
-                ) : (
-                  orphanedBlocks.map((block) => (
-                    <TerminalRow key={block.hash}>
-                      <div className="flex items-center">
-                        <div className="w-32">
-                          <Link
-                            href={`/blocks/${block.number}`}
-                            className="text-emphasis font-mono hover:underline"
-                          >
-                            #{block.number.toLocaleString()}
-                          </Link>
-                        </div>
-                        <div className="flex-1">
-                          <HexDisplay value={block.hash} size="sm" />
-                        </div>
-                        <div className="text-text w-24 text-center font-mono">
-                          {block.transactionsCount}
-                        </div>
-                        <div className="text-text-dim w-28 text-right">
-                          {formatTimeAgo(block.timestamp)}
-                        </div>
-                      </div>
-                    </TerminalRow>
-                  ))
-                )}
-              </TerminalPanelContent>
-            </TabsContent>
-            <TabsContent value="transactions" className="m-0">
-              <TerminalPanelContent padding="none">
-                <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                  <div className="flex-1">Transaction</div>
-                  <div className="w-36">Fee</div>
-                  <div className="w-24 text-right">I/O</div>
-                </div>
-                {orphanedTransactions.length === 0 ? (
-                  <div className="text-text-dim px-4 py-8 text-center">
-                    No orphaned transactions data available
-                  </div>
-                ) : (
-                  orphanedTransactions.map((tx) => (
-                    <TerminalRow key={tx.hash}>
-                      <div className="flex items-center">
-                        <div className="flex-1">
-                          <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                            <HexDisplay value={tx.hash} size="sm" />
-                          </Link>
-                          <Link
-                            href={`/blocks/${tx.blockNumber}`}
-                            className="text-text-dim hover:text-text block font-mono text-xs"
-                          >
-                            #{tx.blockNumber.toLocaleString()}
-                          </Link>
-                        </div>
-                        <div className="text-text w-36 font-mono">
-                          {tx.totalCapacity ? parseInt(tx.totalCapacity).toLocaleString() : '-'}{' '}
-                          <span className="text-text-dim">shannons</span>
-                        </div>
-                        <div className="text-text-dim w-24 text-right font-mono">
-                          {tx.inputsCount ?? '-'} / {tx.outputsCount ?? '-'}
-                        </div>
-                      </div>
-                    </TerminalRow>
-                  ))
-                )}
-              </TerminalPanelContent>
-            </TabsContent>
-          </TerminalPanel>
-        </Tabs>
+      <main className="container mx-auto min-w-0 px-4 py-8">
+        {query.isLoading && <p role="status">Loading fork evidence…</p>}
+        {query.error && (
+          <p role="alert">Fork evidence unavailable: {(query.error as Error).message}</p>
+        )}
+        {query.data && <ForkEvidence data={query.data} />}
       </main>
     </div>
+  );
+}
+
+function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDetail>> }) {
+  const { event, orphanedBlocks, orphanedTransactions, adoptedBranch, canonicalBranch } = data;
+  return (
+    <DetailLayout
+      title={`Fork event #${event.id}`}
+      identity={
+        <>
+          Detected {event.detectedAt} · {event.eventType.replaceAll('_', ' ')}
+        </>
+      }
+      facts={[
+        { label: 'Fork point', value: blockAt(event.forkPointNumber) },
+        {
+          label: 'Old → adopted tip',
+          value: (
+            <>
+              #{event.oldTipNumber.toLocaleString()} → #{event.newTipNumber.toLocaleString()}
+            </>
+          ),
+        },
+        { label: 'Switch depth', value: `${event.depth.toLocaleString()} blocks` },
+        { label: 'Old branch transactions', value: event.orphanedTxsCount.toLocaleString() },
+        {
+          label: 'Later reversal',
+          value: event.revertedByEvent ? (
+            <Link href={`/forks/${event.revertedByEvent}`}>Event #{event.revertedByEvent}</Link>
+          ) : (
+            'None recorded'
+          ),
+        },
+        {
+          label: 'Events reversed here',
+          value: event.reversesEvents?.length
+            ? event.reversesEvents.map((reversed, index) => (
+                <span key={reversed}>
+                  {index ? ', ' : ''}
+                  <Link href={`/forks/${reversed}`}>#{reversed}</Link>
+                </span>
+              ))
+            : 'None recorded',
+        },
+        ...(event.resolvedAt
+          ? [
+              {
+                label: 'Resolution',
+                value: `${event.resolutionAction ?? 'Recorded'} · ${event.resolvedAt}`,
+              },
+            ]
+          : []),
+        {
+          label: 'Current indexed tip',
+          value: data.canonicalTipNumber == null ? 'Unavailable' : blockAt(data.canonicalTipNumber),
+        },
+      ]}
+    >
+      <DetailSection title="Two branches at this switch">
+        <p className="text-text-dim mb-5 text-xs">
+          {event.eventType === 'deep_fork'
+            ? 'This deep-fork detection paused indexing before rollback. No branch was orphaned by this event; the recorded tips show the disagreement.'
+            : 'These branch paths are traced from the persisted old and adopted tip hashes back to the recorded fork point. Their current fate appears below.'}
+        </p>
+        <div className="grid min-w-0 gap-8 xl:grid-cols-2">
+          <div className="min-w-0">
+            <h3 className="text-negative mb-3 text-sm">Old branch · dropped at detection</h3>
+            <p className="mb-3 text-xs">Tip {fullHash(event.oldTipHash)}</p>
+            {blockRows(
+              'Historical old branch',
+              orphanedBlocks.map((block) => ({
+                number: block.number,
+                hash: block.hash,
+                timestamp: block.timestamp,
+                transactionsCount: block.transactionsCount,
+                minerLockHash: block.minerLockHash,
+              }))
+            )}
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-positive mb-3 text-sm">Branch adopted at detection</h3>
+            <p className="mb-3 text-xs">Tip {fullHash(event.newTipHash)}</p>
+            {blockRows('Historically adopted branch', adoptedBranch)}
+          </div>
+        </div>
+      </DetailSection>
+      <DetailSection title="Old branch fate now">
+        <ListTable
+          label="Old block fate"
+          rows={orphanedBlocks}
+          rowKey={(block: OrphanedBlock) => block.hash}
+          empty="No old branch blocks recorded for this event."
+          columns={[
+            {
+              key: 'block',
+              label: 'Old block',
+              minWidth: 340,
+              render: (block: OrphanedBlock) => (
+                <>
+                  {historicalHeight(block.number)} {fullHash(block.hash)}
+                </>
+              ),
+            },
+            {
+              key: 'fate',
+              label: 'Fate now',
+              minWidth: 155,
+              render: (block: OrphanedBlock) => block.fate.replaceAll('_', ' '),
+            },
+            {
+              key: 'uncle',
+              label: 'Uncle inclusion',
+              minWidth: 155,
+              render: (block: OrphanedBlock) =>
+                block.uncleIn ? (
+                  <>
+                    {blockAt(block.uncleIn.blockNumber)} · distance {block.uncleIn.distance}
+                  </>
+                ) : (
+                  '—'
+                ),
+            },
+            {
+              key: 'competing',
+              label: 'Current block at height',
+              minWidth: 190,
+              render: (block: OrphanedBlock) =>
+                block.competingBlock
+                  ? fullHash(block.competingBlock.hash)
+                  : block.fate === 'canonical_now'
+                    ? 'This old block re-entered'
+                    : 'Unavailable',
+            },
+            {
+              key: 'gap',
+              label: 'Header time gap',
+              minWidth: 125,
+              render: (block: OrphanedBlock) =>
+                block.timestampGapMs == null
+                  ? '—'
+                  : `${block.timestampGapMs > 0 ? '+' : ''}${block.timestampGapMs.toLocaleString()} ms`,
+            },
+          ]}
+          mobileRow={(block: OrphanedBlock) => (
+            <div className="min-w-0 space-y-2 text-xs">
+              <div>
+                {historicalHeight(block.number)} {fullHash(block.hash)}
+              </div>
+              <div>Fate now: {block.fate.replaceAll('_', ' ')}</div>
+              <div>
+                Uncle:{' '}
+                {block.uncleIn ? (
+                  <>
+                    {blockAt(block.uncleIn.blockNumber)} · distance {block.uncleIn.distance}
+                  </>
+                ) : (
+                  'none observed'
+                )}
+              </div>
+              {block.competingBlock && (
+                <div>Current competing block: {fullHash(block.competingBlock.hash)}</div>
+              )}
+              {block.timestampGapMs != null && (
+                <div>
+                  Header time gap: {block.timestampGapMs > 0 ? '+' : ''}
+                  {block.timestampGapMs.toLocaleString()} ms
+                </div>
+              )}
+            </div>
+          )}
+        />
+        <p className="text-text-dim mt-3 text-xs">
+          A historical drop can later be reversed. “Canonical now” means the exact old block hash is
+          currently indexed at its height.
+        </p>
+      </DetailSection>
+      <DetailSection title="Transactions from the old branch">
+        <ListTable
+          label="Old branch transaction fate"
+          rows={orphanedTransactions}
+          rowKey={(tx: OrphanedTransaction) => `${tx.blockHash}-${tx.txIndex}`}
+          empty="No old branch transactions retained."
+          columns={[
+            {
+              key: 'tx',
+              label: 'Transaction',
+              minWidth: 340,
+              render: (tx: OrphanedTransaction) =>
+                tx.committedAt ? (
+                  <Link href={`/tx/${tx.hash}`} className="text-emphasis break-all hover:underline">
+                    {tx.hash}
+                  </Link>
+                ) : (
+                  fullHash(tx.hash)
+                ),
+            },
+            {
+              key: 'origin',
+              label: 'Old block',
+              minWidth: 100,
+              render: (tx: OrphanedTransaction) => historicalHeight(tx.blockNumber),
+            },
+            {
+              key: 'fate',
+              label: 'Fate now',
+              minWidth: 180,
+              render: (tx: OrphanedTransaction) => tx.fate.replaceAll('_', ' '),
+            },
+            {
+              key: 'commit',
+              label: 'Canonical commit',
+              minWidth: 135,
+              render: (tx: OrphanedTransaction) =>
+                tx.committedAt ? (
+                  <>
+                    {blockAt(tx.committedAt.blockNumber)} · tx {tx.committedAt.txIndex}
+                  </>
+                ) : (
+                  '—'
+                ),
+            },
+            {
+              key: 'capacity',
+              label: 'Output capacity',
+              minWidth: 170,
+              render: (tx: OrphanedTransaction) =>
+                tx.totalCapacity == null
+                  ? 'Unavailable'
+                  : `${BigInt(tx.totalCapacity).toLocaleString()} shannons`,
+            },
+          ]}
+          mobileRow={(tx: OrphanedTransaction) => (
+            <div className="min-w-0 space-y-2 text-xs">
+              {tx.committedAt ? (
+                <Link href={`/tx/${tx.hash}`} className="text-emphasis break-all">
+                  {tx.hash}
+                </Link>
+              ) : (
+                fullHash(tx.hash)
+              )}
+              <div>
+                Old block {historicalHeight(tx.blockNumber)} · {tx.fate.replaceAll('_', ' ')}
+              </div>
+              <div>
+                Canonical commit:{' '}
+                {tx.committedAt ? blockAt(tx.committedAt.blockNumber) : 'none observed'}
+              </div>
+              <div>
+                Output capacity:{' '}
+                {tx.totalCapacity == null
+                  ? 'Unavailable'
+                  : `${BigInt(tx.totalCapacity).toLocaleString()} shannons`}
+              </div>
+            </div>
+          )}
+        />
+      </DetailSection>
+      <DetailSection title="Current canonical view at the affected heights">
+        <p className="text-text-dim mb-3 text-xs">
+          Current indexed chain state; this can differ from the branch this event originally
+          adopted.
+        </p>
+        {blockRows('Current canonical branch', canonicalBranch, true)}
+      </DetailSection>
+    </DetailLayout>
   );
 }

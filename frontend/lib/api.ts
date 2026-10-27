@@ -297,12 +297,41 @@ interface ReorgEvent {
   resolvedBy: string | null;
   resolutionAction: string | null;
   resolutionNotes: string | null;
+  previewStatus: 'available' | 'no_old_branch' | 'node_reader_unavailable';
+  preview: {
+    oldBlockHash: string;
+    oldMinerLockHash: string | null;
+    competingMinerLockHash: string | null;
+    fate: string;
+    uncleInBlock: number | null;
+    timestampGapMs: number | null;
+    noncellbaseTransactions: number;
+    committedLaterTransactions: number;
+  } | null;
 }
 
 interface OrphanedBlock {
   number: number;
   hash: string;
   parentHash: string;
+  timestamp: string;
+  transactionsCount: number;
+  minerLockHash: string | null;
+  fate:
+    | 'canonical_now'
+    | 'included_as_uncle'
+    | 'not_included_as_uncle'
+    | 'uncle_fate_pending'
+    | 'awaiting_canonical_tip'
+    | 'canonical_evidence_unavailable';
+  uncleIn: { blockNumber: number; blockHash: string; distance: number } | null;
+  competingBlock: CanonicalBranchBlock | null;
+  timestampGapMs: number | null;
+}
+
+interface CanonicalBranchBlock {
+  number: number;
+  hash: string;
   timestamp: string;
   transactionsCount: number;
   minerLockHash: string | null;
@@ -316,12 +345,32 @@ interface OrphanedTransaction {
   inputsCount: number | null;
   outputsCount: number | null;
   totalCapacity: string | null;
+  fate:
+    | 'cellbase'
+    | 'canonical_now'
+    | 'committed_later'
+    | 'committed_on_canonical_branch'
+    | 'not_committed_as_of_tip'
+    | 'canonical_evidence_unavailable';
+  committedAt: { blockNumber: number; blockHash: string; txIndex: number } | null;
 }
 
 interface ReorgDetail {
   event: ReorgEvent;
   orphanedBlocks: OrphanedBlock[];
   orphanedTransactions: OrphanedTransaction[];
+  adoptedBranch: CanonicalBranchBlock[];
+  canonicalBranch: CanonicalBranchBlock[];
+  canonicalTipNumber: number | null;
+}
+
+interface ForkOverview {
+  scope: string;
+  throughDate: string | null;
+  days: { date: string; canonicalBlocks: number; uncles: number; nodeSwitches: number }[];
+  unclesInWindow: number;
+  nodeSwitchesInWindow: number;
+  nodeSwitchesAllTime: number;
 }
 
 interface RecentReorgResponse {
@@ -3186,7 +3235,9 @@ export type {
   ReorgEvent,
   OrphanedBlock,
   OrphanedTransaction,
+  CanonicalBranchBlock,
   ReorgDetail,
+  ForkOverview,
   RecentReorgResponse,
   HardforkResource,
   HardforkEvent,
@@ -3506,6 +3557,10 @@ export const api = {
 
   getForkDetail: (id: number): Promise<ReorgDetail> => {
     return fetchApi(`/forks/${id}`);
+  },
+
+  getForkOverview: (days = 30): Promise<ForkOverview> => {
+    return fetchApi(`/forks/overview?days=${days}`);
   },
 
   getRecentReorg: (): Promise<RecentReorgResponse> => {

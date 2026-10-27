@@ -3651,7 +3651,20 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
         .transaction(tx)
         .build();
     let block_hash = block.hash();
-    let chain = seed_ckb_chain(&[block]);
+    let adopted11 = BlockBuilder::default()
+        .number(11u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .parent_hash(packed::Byte32::new(parent))
+        .timestamp(1700000000100u64.pack())
+        .build();
+    let adopted12 = BlockBuilder::default()
+        .number(12u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 1, 1000).pack())
+        .parent_hash(adopted11.hash())
+        .timestamp(1700000000200u64.pack())
+        .build();
+    let adopted_hash = adopted12.hash();
+    let chain = seed_ckb_chain(&[block, adopted11, adopted12]);
     let id = 1754000000000;
     let event = ReorgEvent {
         detected_at: id / 1000,
@@ -3661,7 +3674,7 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
         old_tip: 11,
         old_tip_hash: block_hash.as_slice().to_vec(),
         new_tip: 12,
-        new_tip_hash: vec![0x44; 32],
+        new_tip_hash: adopted_hash.as_slice().to_vec(),
         depth: 1,
         orphaned_blocks: 1,
         orphaned_txs: 1,
