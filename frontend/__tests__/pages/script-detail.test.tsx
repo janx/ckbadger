@@ -13,8 +13,11 @@ vi.mock('@/lib/api', () => ({
     getScriptCapacityChartByCodeHash: vi.fn(),
     getCell: vi.fn(),
     getCellsByScriptRef: vi.fn(),
+    getCodeCells: vi.fn(),
     lookupScripts: vi.fn(),
   },
+  isNotFoundApiError: (error: unknown) =>
+    typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
@@ -476,6 +479,52 @@ describe('ScriptDetailPage', () => {
     const current = within(compact).getByText(`Current code: ${sharedVersionCodeHash}`);
     expect(current).toHaveClass('break-all');
     expect(current).toHaveTextContent(sharedVersionCodeHash);
+  });
+
+  it.each([
+    { status: 500, expectedTitle: 'Script data unavailable' },
+    { status: 404, expectedTitle: 'Script not found' },
+  ])(
+    'distinguishes named script HTTP $status from not found',
+    async ({ status, expectedTitle }) => {
+      vi.mocked(api.getScriptFamilyDetail).mockRejectedValue({
+        status,
+        message: `family endpoint ${status}`,
+      });
+      render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+      expect(await screen.findByRole('heading', { name: expectedTitle })).toBeInTheDocument();
+      if (status !== 404) {
+        expect(screen.getByRole('alert')).toHaveTextContent('family endpoint 500');
+        expect(screen.queryByText('No script matched this name or reference.')).toBeNull();
+      }
+    }
+  );
+
+  it.each(['lookup', 'code cells'])(
+    'shows a raw reference %s request failure instead of not found',
+    async (failedRequest) => {
+      vi.mocked(api.getCodeCells).mockResolvedValue({ deployments: [] } as any);
+      if (failedRequest === 'lookup') {
+        vi.mocked(api.lookupScripts).mockRejectedValue(new Error('lookup transport failed'));
+      } else {
+        vi.mocked(api.getCodeCells).mockRejectedValue(new Error('code cells invariant failed'));
+      }
+      render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
+      expect(
+        await screen.findByRole('heading', { name: 'Script data unavailable' })
+      ).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        failedRequest === 'lookup' ? 'lookup transport failed' : 'code cells invariant failed'
+      );
+      expect(screen.queryByText('No script matched this name or reference.')).toBeNull();
+    }
+  );
+
+  it('shows a raw reference 404 as not found', async () => {
+    vi.mocked(api.getCodeCells).mockRejectedValue({ status: 404, message: 'reference missing' });
+    render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
+    expect(await screen.findByRole('heading', { name: 'Script not found' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Script data unavailable' })).toBeNull();
   });
 
   it('marks deprecated family and versions without calling them unlabeled', async () => {

@@ -16,7 +16,7 @@ import {
   ScriptCapacityEvidenceChart,
 } from '@/components/scripts/script-code-evidence';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api } from '@/lib/api';
+import { api, isNotFoundApiError } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
@@ -391,7 +391,11 @@ export default function ScriptDetailPage({
     queryFn: () => api.getScriptCapacityChart(name!, capacityRangeParams ?? undefined),
     enabled: Boolean(name) && !isCodeHashMode,
   });
-  const { data: codeHashLookup, isLoading: isCodeHashLookupLoading } = useQuery({
+  const {
+    data: codeHashLookup,
+    isLoading: isCodeHashLookupLoading,
+    error: codeHashLookupError,
+  } = useQuery({
     queryKey: ['script-lookup-detail', normalizedCodeHash],
     queryFn: async () => {
       const result = await api.lookupScripts([normalizedCodeHash!]);
@@ -425,7 +429,11 @@ export default function ScriptDetailPage({
     isCodeHashMode,
     selectedRefHashType,
   ]);
-  const { data: codeHashCodeCells, isLoading: isCodeHashCodeCellsLoading } = useQuery({
+  const {
+    data: codeHashCodeCells,
+    isLoading: isCodeHashCodeCellsLoading,
+    error: codeHashCodeCellsError,
+  } = useQuery({
     queryKey: ['script-code-cells-unified', normalizedCodeHash, codeHashDeploymentQueryHashType],
     queryFn: () => api.getCodeCells(normalizedCodeHash!, codeHashDeploymentQueryHashType!),
     enabled: Boolean(isCodeHashMode && normalizedCodeHash && codeHashDeploymentQueryHashType),
@@ -945,6 +953,29 @@ export default function ScriptDetailPage({
       </div>
     );
   }
+  const rawRequestFailures = [
+    codeHashLookupError ? { source: 'reference lookup', error: codeHashLookupError } : null,
+    codeHashCodeCellsError ? { source: 'code-cell query', error: codeHashCodeCellsError } : null,
+  ].filter((failure): failure is { source: string; error: Error } => failure !== null);
+  const failedRequest = isCodeHashMode
+    ? (rawRequestFailures.find((failure) => !isNotFoundApiError(failure.error)) ?? null)
+    : namedScriptDetailError && !isNotFoundApiError(namedScriptDetailError)
+      ? { source: 'script family detail', error: namedScriptDetailError }
+      : null;
+  if (failedRequest) {
+    return (
+      <div className="bg-base-bg min-h-screen">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <DetailLayout title="Script data unavailable" identity={normalizedCodeHash ?? name}>
+            <p role="alert" className="text-negative break-words py-8 text-xs">
+              Failed to load {failedRequest.source}: {failedRequest.error.message}
+            </p>
+          </DetailLayout>
+        </main>
+      </div>
+    );
+  }
   const codeHashAmbiguity =
     isCodeHashMode && codeHashLookup?.resolutionState === 'ambiguous'
       ? codeHashLookup.ambiguity
@@ -973,8 +1004,11 @@ export default function ScriptDetailPage({
     );
   }
   if (
-    (!isCodeHashMode && (namedScriptDetailError || !namedScriptDetail)) ||
-    (isCodeHashMode && (!deployments || deployments.length === 0))
+    (!isCodeHashMode && !namedScriptDetail) ||
+    (isCodeHashMode &&
+      (rawRequestFailures.some((failure) => isNotFoundApiError(failure.error)) ||
+        !deployments ||
+        deployments.length === 0))
   ) {
     return (
       <div className="bg-base-bg min-h-screen">
