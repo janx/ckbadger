@@ -3,6 +3,8 @@ import { render, screen } from '../utils/test-utils';
 import { FiberChannelBoard, observedDuration } from '@/components/fiber/fiber-channel-board';
 import forceClosed from '../fixtures/fiber-force-closed.json';
 import type { FiberChannelDetail, FiberChannelEvidence } from '@/lib/api';
+import producerDetail from '../fixtures/fiber-open-detail.json';
+import producerEvidence from '../fixtures/fiber-evidence-open.json';
 
 vi.mock('@/components/cell/cell-transactions', () => ({
   TransactionEvidence: ({ hash, label }: { hash: string; label: string }) => (
@@ -60,6 +62,22 @@ const evidence: FiberChannelEvidence = {
 };
 
 describe('FiberChannelBoard', () => {
+  it('renders paired node-backed channel and evidence producer responses', () => {
+    expect(producerDetail.channelId).toBe(producerEvidence.channelId);
+    expect(producerDetail.fundingTxHash).toBe(producerEvidence.funding.txHash);
+    render(
+      <FiberChannelBoard
+        channel={producerDetail as FiberChannelDetail}
+        evidence={producerEvidence as FiberChannelEvidence}
+      />
+    );
+    expect(screen.getByTestId('stage-Opening')).toHaveTextContent(producerDetail.fundingTxHash);
+    expect(screen.getByText('1,000.00000000 CKB')).toBeInTheDocument();
+    expect(screen.getByText('699.00000000 CKB')).toBeInTheDocument();
+    expect(screen.getByText('30100000000 shannons')).toBeInTheDocument();
+    expect(screen.getByText(/output-only lock did not necessarily sign/)).toBeInTheDocument();
+  });
+
   it('keeps current commitment distinct from initial force close and shows precise protocol fields', () => {
     render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={evidence} />);
     expect(screen.getByText('Force-close waiting')).toBeInTheDocument();
