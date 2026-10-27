@@ -691,6 +691,17 @@ async fn history(
     let granularity = parse_granularity(&query.granularity).ok_or_else(|| {
         ApiError::bad_request(format!("unknown granularity '{}'", query.granularity))
     })?;
+    let last_complete_day = if granularity == Granularity::Day {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| {
+                ApiError::internal(format!("system clock before UNIX epoch: {error}"))
+            })?
+            .as_secs();
+        bucket_of(now, Granularity::Day).checked_sub(1)
+    } else {
+        None
+    };
     let points = match state.network_store.load_full() {
         None => Vec::new(),
         Some(store) => {
@@ -706,17 +717,7 @@ async fn history(
                 .scan_history(metric, granularity, from, to)
                 .map_err(|error| ApiError::internal(error.to_string()))?;
             if granularity == Granularity::Day {
-                let reference = match query.to {
-                    Some(timestamp) => timestamp,
-                    None => std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_err(|error| {
-                            ApiError::internal(format!("system clock before UNIX epoch: {error}"))
-                        })?
-                        .as_secs(),
-                };
-                let current_day = bucket_of(reference, Granularity::Day);
-                rows.retain(|(bucket, _)| *bucket < current_day);
+                rows.retain(|(bucket, _)| last_complete_day.is_some_and(|day| *bucket <= day));
             }
             rows.into_iter()
                 .map(|(bucket, point)| {
@@ -743,18 +744,14 @@ async fn history(
         }
     };
     let daily_coverage = if granularity == Granularity::Day {
-        let reference = match query.to {
-            Some(timestamp) => timestamp,
-            None => std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|error| {
-                    ApiError::internal(format!("system clock before UNIX epoch: {error}"))
-                })?
-                .as_secs(),
-        };
-        let current_day = bucket_of(reference, Granularity::Day);
-        match current_day.checked_sub(1) {
-            Some(last_complete_day) => daily_coverage(&points, query.from, last_complete_day)?,
+        match last_complete_day {
+            Some(last_complete_day) => {
+                let coverage_end = query
+                    .to
+                    .map(|to| bucket_of(to, Granularity::Day).min(last_complete_day))
+                    .unwrap_or(last_complete_day);
+                daily_coverage(&points, query.from, coverage_end)?
+            }
             None => Vec::new(),
         }
     } else {

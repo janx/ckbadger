@@ -106,7 +106,7 @@ async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() 
     let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
     let (code, history) = get_json(
         &app,
-        "/network/history?metric=verifiedPeers&granularity=day&to=1123200",
+        "/network/history?metric=verifiedPeers&granularity=day&to=1036800",
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -126,11 +126,56 @@ async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() 
     )
     .await;
     let bounded_days = bounded["dailyCoverage"].as_array().unwrap();
-    assert_eq!(bounded_days.len(), 7);
+    assert_eq!(bounded_days.len(), 8);
     assert_eq!(bounded["coverageFrom"], 777600);
-    assert_eq!(bounded["coverageTo"], 1296000);
+    assert_eq!(bounded["coverageTo"], 1382400);
     assert_eq!(bounded_days[0]["hasRetainedObservation"], false);
-    assert_eq!(bounded_days[6]["hasRetainedObservation"], false);
+    assert_eq!(bounded_days[7]["hasRetainedObservation"], false);
+}
+
+#[tokio::test]
+async fn daily_history_future_to_never_includes_the_incomplete_or_future_day() {
+    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
+    use ckbadger_store::{CkbadgerStore, HistoryPoint};
+
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let current = bucket_of(now, Granularity::Day);
+    for (bucket, scalar) in [(current - 1, 5), (current, 99), (current + 1, 100)] {
+        network
+            .put_history_point(
+                Metric::VerifiedPeers,
+                Granularity::Day,
+                bucket,
+                &HistoryPoint {
+                    scalar,
+                    buckets: vec![],
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let from = (current - 2) * 86_400;
+    let to = (current + 2) * 86_400;
+    let (status, body) = get_json(
+        &app,
+        &format!("/network/history?metric=verifiedPeers&granularity=day&from={from}&to={to}"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["points"].as_array().unwrap().len(), 1);
+    assert_eq!(body["points"][0]["scalar"], 5);
+    assert_eq!(body["coverageFrom"], from);
+    assert_eq!(body["coverageTo"], (current - 1) * 86_400);
+    assert_eq!(body["dailyCoverage"].as_array().unwrap().len(), 2);
+    assert_eq!(body["dailyCoverage"][0]["hasRetainedObservation"], false);
+    assert_eq!(body["dailyCoverage"][1]["hasRetainedObservation"], true);
 }
 
 #[tokio::test]
