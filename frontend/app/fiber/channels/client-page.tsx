@@ -4,63 +4,35 @@ import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
-import { PageHeader } from '@/components/ui/page-header';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { StatBlock, StatGrid } from '@/components/ui/stat-block';
-import { HexDisplay } from '@/components/ui/hex-display';
+import { FiberNetworkGraph } from '@/components/fiber/fiber-network-graph';
+import { observedDuration } from '@/components/fiber/fiber-channel-board';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type FiberChannel, type FiberChannelState } from '@/lib/api';
+import { api, type FiberChannelState } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
-import { Badge } from '@/components/ui/page-header';
+import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 
 type StateFilter = 'all' | FiberChannelState;
-
-const STATE_FILTERS: { value: StateFilter; label: string }[] = [
+const filters: { value: StateFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'open', label: 'Open' },
-  { value: 'cooperativelyClosed', label: 'Closed' },
-  { value: 'forceClosed', label: 'Force Closed' },
+  { value: 'cooperativelyClosed', label: 'Cooperative' },
+  { value: 'forceClosed', label: 'Force-close waiting' },
   { value: 'settled', label: 'Settled' },
 ];
-
-function getStateBadge(state: FiberChannelState) {
-  switch (state) {
-    case 'open':
-      return <Badge variant="green">Open</Badge>;
-    case 'cooperativelyClosed':
-      return <Badge variant="gray">Closed</Badge>;
-    case 'forceClosed':
-      return <Badge variant="red">Force Closed</Badge>;
-    case 'settled':
-      return <Badge variant="neutral">Settled</Badge>;
-    default:
-      return <Badge variant="gray">{state}</Badge>;
-  }
-}
-
-function truncateAddress(addr: string): string {
-  if (addr.length <= 20) return addr;
-  return `${addr.slice(0, 10)}...${addr.slice(-8)}`;
-}
+const stateLabel: Record<FiberChannelState, string> = {
+  open: 'Open',
+  cooperativelyClosed: 'Cooperative close',
+  forceClosed: 'Force-close waiting',
+  settled: 'Settled',
+};
+const short = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-8)}`;
 
 export default function FiberChannelsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('all');
   const pagination = useCursorPagination();
-
-  const { data: stats } = useQuery({
-    queryKey: ['fiber-stats'],
-    queryFn: () => api.getFiberStats(),
-  });
-
-  const { data: channels, isLoading } = useQuery({
+  const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
+  const channels = useQuery({
     queryKey: ['fiber-channels', stateFilter, pagination.cursor],
     queryFn: () =>
       api.getFiberChannels({
@@ -70,164 +42,198 @@ export default function FiberChannelsPage() {
       }),
     placeholderData: keepPreviousData,
   });
-
+  const stats = network.data?.summary;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-4">
-        <PageHeader
-          title="Fiber Channels"
-          subtitle="Follow the living circuitry of Fiber on Nervos, where nodes whisper value through channels like signals across a sleepless mind."
-        />
-
-        {stats && (
-          <TerminalPanel className="mb-8">
-            <TerminalPanelContent>
-              <StatGrid columns={4}>
-                <StatBlock label="Total Channels" value={stats.totalChannels} color="default" />
-                <StatBlock label="Open Channels" value={stats.openChannels} color="jade" />
-                <StatBlock label="Closed Channels" value={stats.closedChannels} color="default" />
-                <StatBlock
-                  label="Locked Capacity"
-                  value={formatCkbCompact(stats.totalCapacityLocked).value}
-                  suffix=" CKB"
-                  color="gold"
-                  subtext={formatCkbAmount(stats.totalCapacityLocked).full}
-                />
-              </StatGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
+      <main className="container mx-auto max-w-[1440px] px-4 pb-16 pt-6">
+        <div className="text-jade font-mono text-[11px] uppercase tracking-[0.16em]">
+          Payment channels · on-chain view
+        </div>
+        <h1 className="text-text-bright mt-1 text-[26px] font-semibold">Fiber channels</h1>
+        <p className="text-text-dim mt-2 max-w-3xl text-[15px] leading-relaxed">
+          Fiber parties lock CKB or tokens in a shared cell and can pay off chain. This page shows
+          only openings and closes observed on CKB; it cannot reveal off-chain payments, balances,
+          or routing.
+        </p>
+        {network.isError && (
+          <p role="alert" className="text-rouge mt-5 text-[13px]">
+            Fiber network evidence could not be loaded: {String(network.error)}
+          </p>
         )}
-
-        <TerminalPanel>
-          <TerminalPanelHeader>Channels</TerminalPanelHeader>
-          <TerminalPanelContent padding="none">
-            <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
-              {STATE_FILTERS.map((f) => (
+        {network.isLoading && (
+          <p className="text-text-dim py-8 text-[13px]">Loading indexed Fiber network…</p>
+        )}
+        {stats && (
+          <div className="border-base-border mt-7 grid min-h-[72px] gap-4 border-y py-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div>
+              <div className="text-text-dim text-[11px]">Channels ever</div>
+              <div className="text-text-bright mt-1 font-mono text-[18px]">
+                {stats.totalChannels.toLocaleString()}
+              </div>
+              <div className="text-text-dim text-[11px]">
+                {stats.firstOpenTimestamp
+                  ? `since ${new Date(Number(stats.firstOpenTimestamp)).toLocaleDateString()}`
+                  : 'none yet'}
+              </div>
+            </div>
+            <div>
+              <div className="text-text-dim text-[11px]">Open now</div>
+              <div className="text-jade mt-1 font-mono text-[18px]">
+                {stats.openChannels.toLocaleString()}
+              </div>
+              <div className="text-text-dim text-[11px]">
+                {formatCkbAmount(stats.totalCapacityLocked).full} CKB locked
+              </div>
+            </div>
+            <div>
+              <div className="text-text-dim text-[11px]">Observed parties</div>
+              <div className="text-text-bright mt-1 font-mono text-[18px]">
+                {stats.observedParties.toLocaleString()}
+              </div>
+              <div className="text-text-dim text-[11px]">
+                in {stats.observedPairs.toLocaleString()} on-chain pairs
+              </div>
+            </div>
+            <div>
+              <div className="text-text-dim text-[11px]">Force-close waiting</div>
+              <div className="text-text-bright mt-1 font-mono text-[18px]">
+                {stats.forceClosedWaitingChannels.toLocaleString()}
+              </div>
+              <div className="text-text-dim text-[11px]">
+                {stats.forceClosedSettledChannels} settled · {stats.cooperativelyClosedChannels}{' '}
+                cooperative
+              </div>
+            </div>
+            <div>
+              <div className="text-text-dim text-[11px]">Observed closed lifetime</div>
+              <div className="text-text-bright mt-1 font-mono text-[18px]">
+                {observedDuration(stats.typicalClosedLifetimeMs)}
+              </div>
+              <div className="text-text-dim text-[11px]">
+                lower median · {stats.closedWithinHour} under 1 h
+              </div>
+            </div>
+          </div>
+        )}
+        {network.data && <FiberNetworkGraph network={network.data} />}
+        <section className="border-base-border border-t pt-5" aria-label="Fiber channels">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-text-bright text-[18px] font-medium">Channels on CKB</h2>
+              <p className="text-text-dim mt-1 text-[12px]">
+                Each row is an indexed funding cell and its on-chain lifecycle.
+              </p>
+            </div>
+            <div
+              className="flex flex-wrap gap-1"
+              role="group"
+              aria-label="Filter channels by state"
+            >
+              {filters.map((filter) => (
                 <button
-                  key={f.value}
+                  key={filter.value}
+                  type="button"
+                  aria-pressed={stateFilter === filter.value}
                   onClick={() => {
-                    setStateFilter(f.value);
+                    setStateFilter(filter.value);
                     pagination.reset();
                   }}
-                  className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
-                    stateFilter === f.value
-                      ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text-dim hover:text-text'
-                  }`}
+                  className={`border px-2.5 py-1 font-mono text-[11px] ${stateFilter === filter.value ? 'border-jade text-jade' : 'border-base-border text-text-dim hover:text-text'}`}
                 >
-                  {f.label}
+                  {filter.label}
                 </button>
               ))}
             </div>
-
-            {isLoading ? (
-              <div className="text-text-dim py-12 text-center">Loading channels...</div>
-            ) : channels?.data && channels.data.length > 0 ? (
-              <>
-                <div
-                  className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
-                  style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
-                >
-                  <div>Channel ID</div>
-                  <div>Status</div>
-                  <div>Participants</div>
-                  <div className="text-right">Capacity</div>
-                  <div className="text-right">Opened</div>
-                </div>
-                {channels.data.map((channel: FiberChannel) => (
-                  <TerminalRow key={channel.channelId}>
-                    <div
-                      className="hidden w-full items-center gap-x-4 md:grid"
-                      style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
-                    >
-                      <div>
-                        <Link href={`/fiber/channels/${channel.channelId}`}>
-                          <HexDisplay
-                            value={channel.channelId}
-                            truncate
-                            startChars={8}
-                            endChars={6}
-                          />
-                        </Link>
-                      </div>
-                      <div>{getStateBadge(channel.state)}</div>
-                      <div className="flex flex-wrap gap-1">
-                        {channel.participants.map((addr) => (
-                          <Link
-                            key={addr}
-                            href={`/address/${addr}`}
-                            className="text-text-dim hover:text-text font-mono text-xs transition-colors"
-                          >
-                            {truncateAddress(addr)}
-                          </Link>
-                        ))}
-                      </div>
-                      <div className="text-text-bright text-right font-mono text-sm">
-                        {formatCkbAmount(channel.capacity).full} CKB
-                      </div>
-                      <div className="text-text-dim text-right text-sm">
-                        {formatTimeAgo(channel.openTimestamp)}
-                      </div>
-                    </div>
-
-                    {/* Mobile layout */}
-                    <div className="space-y-1.5 md:hidden">
-                      <div className="flex items-center justify-between gap-2">
-                        <Link href={`/fiber/channels/${channel.channelId}`}>
-                          <HexDisplay
-                            value={channel.channelId}
-                            truncate
-                            startChars={8}
-                            endChars={6}
-                          />
-                        </Link>
-                        {getStateBadge(channel.state)}
-                      </div>
-                      <div className="flex items-center justify-between gap-2 text-sm">
-                        <span className="text-text-bright font-mono">
-                          {formatCkbAmount(channel.capacity).full} CKB
-                        </span>
-                        <span className="text-text-dim text-xs">
-                          {formatTimeAgo(channel.openTimestamp)}
-                        </span>
-                      </div>
-                      <div className="text-text-dim flex flex-wrap gap-1 font-mono text-xs">
-                        {channel.participants.map((addr) => (
-                          <Link
-                            key={addr}
-                            href={`/address/${addr}`}
-                            className="hover:text-text transition-colors"
-                          >
-                            {truncateAddress(addr)}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  </TerminalRow>
-                ))}
-              </>
-            ) : (
-              <div className="text-text-dim py-12 text-center">
-                {stateFilter === 'all' ? 'No channels found' : `No ${stateFilter} channels found`}
-              </div>
-            )}
-          </TerminalPanelContent>
-          {(channels?.hasMore || pagination.hasPrevious) && (
-            <TerminalPanelFooter className="flex justify-center">
-              <CursorPagination
-                total={channels?.total}
-                totalLabel="channels"
-                pageSize={DEFAULT_PAGE_SIZE}
-                hasMore={channels?.hasMore ?? false}
-                hasPrevious={pagination.hasPrevious}
-                page={pagination.page}
-                onNext={() => pagination.goToNext(channels?.nextCursor)}
-                onPrevious={pagination.goToPrevious}
-              />
-            </TerminalPanelFooter>
+          </div>
+          {channels.isError && (
+            <p role="alert" className="text-rouge py-7 text-[13px]">
+              Channel list could not be loaded: {String(channels.error)}
+            </p>
           )}
-        </TerminalPanel>
+          {channels.isLoading && (
+            <p className="text-text-dim py-7 text-[13px]">Loading channels…</p>
+          )}
+          {channels.data && (
+            <>
+              <div className="border-base-border text-text-dim mt-4 hidden grid-cols-[minmax(0,1.5fr)_minmax(0,1.7fr)_150px_145px_110px] gap-4 border-y py-2 font-mono text-[11px] uppercase tracking-wider md:grid">
+                <span>Channel</span>
+                <span>Observed locks</span>
+                <span>State</span>
+                <span className="text-right">Funding capacity</span>
+                <span className="text-right">Opened</span>
+              </div>
+              {channels.data.data.length === 0 && (
+                <p className="text-text-dim py-10 text-[13px]">
+                  No {stateFilter === 'all' ? '' : `${stateFilter} `}channels observed.
+                </p>
+              )}
+              {channels.data.data.map((channel) => (
+                <div
+                  key={channel.channelId}
+                  className="border-base-border grid gap-2 border-b py-3 text-[12px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1.7fr)_150px_145px_110px] md:items-center md:gap-4"
+                >
+                  <Link
+                    href={`/fiber/channels/${channel.channelId}`}
+                    className="text-jade min-w-0 break-all font-mono hover:underline"
+                    title={channel.channelId}
+                  >
+                    {short(channel.channelId)}
+                  </Link>
+                  <div className="text-text-dim flex min-w-0 flex-wrap gap-x-2 gap-y-1 font-mono text-[11px]">
+                    {channel.observedParties.map((party) =>
+                      party.address ? (
+                        <Link
+                          key={party.lockScriptHash}
+                          href={`/address/${party.address}`}
+                          className="hover:text-jade"
+                          title={party.address}
+                        >
+                          {short(party.address)}
+                        </Link>
+                      ) : (
+                        <span key={party.lockScriptHash} title={party.lockScriptHash}>
+                          Unknown address · {short(party.lockScriptHash)}
+                        </span>
+                      )
+                    )}
+                  </div>
+                  <span
+                    className={
+                      channel.state === 'open'
+                        ? 'text-jade'
+                        : channel.state === 'forceClosed'
+                          ? 'text-[#f2c55c]'
+                          : 'text-text-dim'
+                    }
+                  >
+                    {stateLabel[channel.state]}
+                  </span>
+                  <span className="text-text-bright font-mono md:text-right">
+                    {formatCkbAmount(channel.capacity).full} CKB
+                  </span>
+                  <span className="text-text-dim md:text-right">
+                    {formatTimeAgo(channel.openTimestamp)}
+                  </span>
+                </div>
+              ))}
+              {(channels.data.hasMore || pagination.hasPrevious) && (
+                <div className="mt-4 flex justify-center">
+                  <CursorPagination
+                    total={channels.data.total}
+                    totalLabel="channels"
+                    pageSize={DEFAULT_PAGE_SIZE}
+                    hasMore={channels.data.hasMore}
+                    hasPrevious={pagination.hasPrevious}
+                    page={pagination.page}
+                    onNext={() => pagination.goToNext(channels.data?.nextCursor)}
+                    onPrevious={pagination.goToPrevious}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </section>
       </main>
     </div>
   );

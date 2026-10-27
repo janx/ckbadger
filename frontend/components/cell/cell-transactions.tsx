@@ -8,14 +8,14 @@ import { api, type Cell, type TransactionDetail } from '@/lib/api';
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
 
-function TransactionEvidence({
+export function TransactionEvidence({
   hash,
   label,
   focus,
 }: {
   hash: string;
   label: string;
-  focus: string;
+  focus?: string;
 }) {
   const transaction = useQuery({
     queryKey: ['cell-transaction-detail', hash],
@@ -45,7 +45,7 @@ function TransactionEvidence({
   )
     throw new Error(`${label} transaction ${hash} lacks committed structure`);
   const tiles = cellTiles(tx, undefined);
-  if (![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
+  if (focus && ![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
     throw new Error(`${label} transaction ${hash} does not contain focused cell ${focus}`);
   const groups: TxStructureGroup[] = tx.scriptGroups.map((group) => {
     const witness =
@@ -109,7 +109,7 @@ function TransactionEvidence({
         fee={tx.fee}
         poolCapacity={tx.isCellbase ? undefined : (tx.inputsCapacity ?? undefined)}
         groups={groups}
-        focusedCellIds={[focus]}
+        focusedCellIds={focus ? [focus] : []}
       />
     </div>
   );

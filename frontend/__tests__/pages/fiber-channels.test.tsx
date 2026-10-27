@@ -1,50 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '../utils/test-utils';
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '../utils/test-utils';
 import FiberChannelsPage from '@/app/fiber/channels/client-page';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
+import network from '../fixtures/fiber-network.json';
+import channel from '../fixtures/fiber-open.json';
 
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
 describe('FiberChannelsPage', () => {
-  beforeEach(() => {
+  it('uses API-produced on-chain network and channel contracts', async () => {
+    const requested: string[] = [];
     server.use(
-      http.get('/api/:network/v1/fiber/stats', () =>
-        HttpResponse.json({
-          totalChannels: 42,
-          openChannels: 10,
-          totalCapacityLocked: '500000000000',
-        })
-      ),
-      http.get('/api/:network/v1/fiber/channels', () =>
-        HttpResponse.json({
-          data: [],
-          total: 0,
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        })
-      )
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', ({ request }) => {
+        requested.push(new URL(request.url).searchParams.get('state') ?? 'all');
+        return HttpResponse.json({ data: [channel], limit: 50, hasMore: false, nextCursor: null });
+      })
     );
-  });
-
-  it('renders stats from the fiber stats API response shape', async () => {
     render(<FiberChannelsPage />);
-
-    expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Fiber Channels')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Follow the living circuitry of Fiber on Nervos, where nodes whisper value through channels like signals across a sleepless mind.'
-      )
-    ).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByText('Closed Channels')).toBeInTheDocument();
-      expect(screen.getByText('32')).toBeInTheDocument();
-      expect(screen.getByText('5,000.00000000')).toBeInTheDocument();
-    });
+    expect(screen.getByRole('heading', { name: 'Fiber channels' })).toBeInTheDocument();
+    expect(screen.getByText(/cannot reveal off-chain payments/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('On-chain party pairs')).toBeInTheDocument());
+    expect(screen.getAllByText(/3,000\.00000000/).length).toBeGreaterThan(0);
+    expect(screen.getByText('Unknown address · 0xaaaaaaaa…aaaaaaaa')).toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Open' });
+    fireEvent.click(open);
+    await waitFor(() => expect(requested).toContain('open'));
+    expect(open).toHaveAttribute('aria-pressed', 'true');
   });
 });

@@ -1,0 +1,44 @@
+{
+  "capacity": "300000000000",
+  "channelId": "0x0101010101010101010101010101010101010101010101010101010101010101",
+  "closeBlock": null,
+  "closeTimestamp": null,
+  "closeTxHash": null,
+  "commitmentTxHash": null,
+  "delayEpoch": null,
+  "delayEpochDecoded": null,
+  "fundingOutputIndex": 0,
+  "fundingTxHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "lifetimeAnchorBlock": 30,
+  "observedLifetimeMs": "200000",
+  "observedParties": [
+    {
+      "address": null,
+      "lockScriptHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "address": null,
+      "lockScriptHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "openBlock": 10,
+  "openTimestamp": "1700000000000",
+  "participants": [
+    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "settlementBlock": null,
+  "settlementTimestamp": null,
+  "settlementTxHash": null,
+  "state": "open",
+  "timeline": [
+    {
+      "blockNumber": 10,
+      "event": "open",
+      "timestamp": "1700000000000",
+      "txHash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "udtAmount": null,
+  "udtTypeHash": null
+}

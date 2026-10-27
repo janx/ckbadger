@@ -1,0 +1,48 @@
+{
+  "pairs": [
+    {
+      "channels": 2,
+      "cooperativelyClosedChannels": 1,
+      "firstLockScriptHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "firstOpenBlock": 10,
+      "forceClosedSettledChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "lastOpenBlock": 10,
+      "openCapacity": "300000000000",
+      "openChannels": 1,
+      "secondLockScriptHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "typicalClosedLifetimeMs": "100000"
+    }
+  ],
+  "parties": [
+    {
+      "address": null,
+      "channels": 3,
+      "lockScriptHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "openCapacity": "300000000000",
+      "openChannels": 1
+    },
+    {
+      "address": null,
+      "channels": 2,
+      "lockScriptHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "openCapacity": "300000000000",
+      "openChannels": 1
+    }
+  ],
+  "summary": {
+    "closedWithinHour": 2,
+    "cooperativelyClosedChannels": 1,
+    "firstOpenTimestamp": "1700000000000",
+    "forceClosedSettledChannels": 0,
+    "forceClosedWaitingChannels": 1,
+    "observedPairs": 1,
+    "observedParties": 2,
+    "openChannels": 1,
+    "tipBlockNumber": 30,
+    "tipChainTimeMs": "1700000200000",
+    "totalCapacityLocked": "300000000000",
+    "totalChannels": 3,
+    "typicalClosedLifetimeMs": "100000"
+  }
+}

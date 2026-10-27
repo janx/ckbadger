@@ -2907,6 +2907,9 @@ interface FiberChannel {
   settlementTxHash: string | null;
   /** Non-fiber owners of the funding tx; the fiber locks are never participants. */
   participants: string[];
+  observedParties: { lockScriptHash: string; address: string | null }[];
+  observedLifetimeMs: string | null;
+  lifetimeAnchorBlock: number | null;
 }
 
 interface FiberTimelineEvent {
@@ -2924,6 +2927,16 @@ interface FiberStatsApiResponse {
   totalChannels: number;
   openChannels: number;
   totalCapacityLocked: string;
+  cooperativelyClosedChannels: number;
+  forceClosedWaitingChannels: number;
+  forceClosedSettledChannels: number;
+  observedParties: number;
+  observedPairs: number;
+  firstOpenTimestamp: string | null;
+  typicalClosedLifetimeMs: string | null;
+  closedWithinHour: number;
+  tipBlockNumber: number;
+  tipChainTimeMs: string;
 }
 
 interface FiberStats {
@@ -2931,6 +2944,100 @@ interface FiberStats {
   openChannels: number;
   closedChannels: number;
   totalCapacityLocked: string;
+  cooperativelyClosedChannels: number;
+  forceClosedWaitingChannels: number;
+  forceClosedSettledChannels: number;
+  observedParties: number;
+  observedPairs: number;
+  firstOpenTimestamp: string | null;
+  typicalClosedLifetimeMs: string | null;
+  closedWithinHour: number;
+  tipBlockNumber: number;
+  tipChainTimeMs: string;
+}
+
+interface FiberParty {
+  lockScriptHash: string;
+  address: string | null;
+  channels: number;
+  openChannels: number;
+  openCapacity: string;
+}
+
+interface FiberPair {
+  firstLockScriptHash: string;
+  secondLockScriptHash: string;
+  channels: number;
+  openChannels: number;
+  cooperativelyClosedChannels: number;
+  forceClosedWaitingChannels: number;
+  forceClosedSettledChannels: number;
+  openCapacity: string;
+  firstOpenBlock: number;
+  lastOpenBlock: number;
+  typicalClosedLifetimeMs: string | null;
+}
+
+interface FiberNetwork {
+  summary: FiberStatsApiResponse;
+  parties: FiberParty[];
+  pairs: FiberPair[];
+}
+
+interface FiberCellEvidence {
+  txHash: string;
+  outputIndex: number;
+  blockNumber: number;
+  capacity: string;
+  lockCodeHash: string;
+  lockHashType: string;
+  lockArgs: string;
+  isLive: boolean;
+  consumedByTx: string | null;
+}
+
+interface FiberCommitmentEvidence extends FiberCellEvidence {
+  pubkeyHash: string;
+  delayEpoch: string;
+  version: string;
+  settlementHash: string | null;
+  settlementFlag: number | null;
+  lockFormat: 'legacy36' | 'full57';
+  epochLock:
+    | 'firstSettlementDelay'
+    | 'subsequentSettlementNoReappliedDelay'
+    | 'legacyFormatRuleUnverified';
+  readyEpoch: string | null;
+  epochLockMetAtTip: boolean | null;
+  tipEpoch: string;
+}
+
+interface FiberChannelEvidence {
+  channelId: string;
+  funding: FiberCellEvidence;
+  currentCommitment: FiberCommitmentEvidence | null;
+  openingPartyFlows: {
+    lockScriptHash: string;
+    openingInputCapacity: string;
+    openingOutputCapacity: string;
+    observedNetInput: string;
+  }[];
+  stages: {
+    stage: string;
+    txHash: string;
+    blockNumber: number;
+    timestamp: string;
+    inputs: number;
+    outputs: number;
+    witnessCount: number;
+  }[];
+  settlementOutputs: {
+    txHash: string;
+    outputIndex: number;
+    ownerLockHash: string;
+    observedParty: boolean;
+    capacity: string;
+  }[];
 }
 
 interface FiberChannelQueryParams {
@@ -3105,6 +3212,10 @@ export type {
   FiberChannelDetail,
   FiberTimelineEvent,
   FiberStats,
+  FiberNetwork,
+  FiberPair,
+  FiberParty,
+  FiberChannelEvidence,
   FiberChannelState,
   FiberChannelQueryParams,
 };
@@ -4480,6 +4591,11 @@ export const api = {
     return fetchApi(`/fiber/channels/${channelId}`);
   },
 
+  getFiberChannelEvidence: (channelId: string): Promise<FiberChannelEvidence> =>
+    fetchApi(`/fiber/channels/${channelId}/evidence`),
+
+  getFiberNetwork: (): Promise<FiberNetwork> => fetchApi('/fiber/network'),
+
   getAddressFiberChannels: (
     addr: string,
     params: CursorQueryParams = {}
@@ -4503,6 +4619,16 @@ export const api = {
         openChannels: stats.openChannels,
         closedChannels: stats.totalChannels - stats.openChannels,
         totalCapacityLocked: stats.totalCapacityLocked,
+        cooperativelyClosedChannels: stats.cooperativelyClosedChannels,
+        forceClosedWaitingChannels: stats.forceClosedWaitingChannels,
+        forceClosedSettledChannels: stats.forceClosedSettledChannels,
+        observedParties: stats.observedParties,
+        observedPairs: stats.observedPairs,
+        firstOpenTimestamp: stats.firstOpenTimestamp,
+        typicalClosedLifetimeMs: stats.typicalClosedLifetimeMs,
+        closedWithinHour: stats.closedWithinHour,
+        tipBlockNumber: stats.tipBlockNumber,
+        tipChainTimeMs: stats.tipChainTimeMs,
       };
     });
   },

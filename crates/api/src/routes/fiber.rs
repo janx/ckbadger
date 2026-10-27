@@ -5,10 +5,10 @@ use axum::{
 };
 use ckbadger_store::types::FiberChannelState;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{address_to_lock_script_hash, is_ckb_address, parse_hash32};
+use crate::utils::{address_to_lock_script_hash, is_ckb_address, parse_hash32, script_to_address};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -16,11 +16,19 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/fiber/channels", get(list_channels))
         .route("/fiber/channels/{channel_id}", get(get_channel))
         .route(
+            "/fiber/channels/{channel_id}/evidence",
+            get(get_channel_evidence),
+        )
+        .route(
             "/addresses/{addr}/fiber/channels",
             get(get_address_channels),
         )
         .route("/fiber/stats", get(get_stats))
+        .route("/fiber/network", get(get_network))
 }
+
+mod evidence;
+use evidence::get_channel_evidence;
 
 // ── Response types ──────────────────────────────────────────────────────
 
@@ -34,6 +42,11 @@ pub struct FiberChannelResponse {
     pub udt_amount: Option<String>,
     /// Participant identifiers — CKB addresses when resolvable, hex lock_hash otherwise.
     pub participants: Vec<String>,
+    pub observed_parties: Vec<FiberParticipantResponse>,
+    /// Duration from opening to close, or opening to the indexed tip for an
+    /// open channel, using the monotone canonical chain-time clock.
+    pub observed_lifetime_ms: Option<String>,
+    pub lifetime_anchor_block: Option<i64>,
     pub funding_tx_hash: String,
     pub funding_output_index: u32,
     pub open_block: i64,
@@ -54,6 +67,13 @@ pub struct FiberChannelResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FiberParticipantResponse {
+    pub lock_script_hash: String,
+    pub address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FiberEpochDelay {
     pub relative: bool,
     pub epochs: u64,
@@ -69,7 +89,8 @@ fn decode_epoch_delay(raw: u64) -> Result<FiberEpochDelay, String> {
     }
     let index = (raw >> 24) & 0xffff;
     let length = (raw >> 40) & 0xffff;
-    if length == 0 || index >= length {
+    // RFC 0017 normalizes the encoded zero fraction 0/0 to 0/1.
+    if (length == 0 && index != 0) || (length != 0 && index >= length) {
         return Err(format!(
             "Fiber commitment delay has invalid epoch fraction: {raw:#x} ({index}/{length})"
         ));
@@ -78,7 +99,7 @@ fn decode_epoch_delay(raw: u64) -> Result<FiberEpochDelay, String> {
         relative: raw >> 63 != 0,
         epochs: raw & 0xff_ffff,
         index,
-        length,
+        length: if length == 0 { 1 } else { length },
     })
 }
 
@@ -106,6 +127,51 @@ pub struct FiberStatsResponse {
     pub total_channels: u64,
     pub open_channels: u64,
     pub total_capacity_locked: String,
+    pub cooperatively_closed_channels: u64,
+    pub force_closed_waiting_channels: u64,
+    pub force_closed_settled_channels: u64,
+    pub observed_parties: u64,
+    pub observed_pairs: u64,
+    pub first_open_timestamp: Option<String>,
+    pub typical_closed_lifetime_ms: Option<String>,
+    pub closed_within_hour: u64,
+    pub tip_block_number: i64,
+    pub tip_chain_time_ms: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiberPartyResponse {
+    pub lock_script_hash: String,
+    /// Unknown is a valid observation when the indexed lock script is absent.
+    pub address: Option<String>,
+    pub channels: u64,
+    pub open_channels: u64,
+    pub open_capacity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiberPairResponse {
+    pub first_lock_script_hash: String,
+    pub second_lock_script_hash: String,
+    pub channels: u64,
+    pub open_channels: u64,
+    pub cooperatively_closed_channels: u64,
+    pub force_closed_waiting_channels: u64,
+    pub force_closed_settled_channels: u64,
+    pub open_capacity: String,
+    pub first_open_block: i64,
+    pub last_open_block: i64,
+    pub typical_closed_lifetime_ms: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiberNetworkResponse {
+    pub summary: FiberStatsResponse,
+    pub parties: Vec<FiberPartyResponse>,
+    pub pairs: Vec<FiberPairResponse>,
 }
 
 // ── Query / path params ─────────────────────────────────────────────────
@@ -174,6 +240,9 @@ fn build_channel_response(
             .iter()
             .map(|p| format_participant(p))
             .collect(),
+        observed_parties: Vec::new(),
+        observed_lifetime_ms: None,
+        lifetime_anchor_block: None,
         funding_tx_hash: format_hex(&ch.funding_tx_hash),
         funding_output_index: ch.funding_output_index,
         open_block: ch.open_block,
@@ -246,6 +315,307 @@ fn build_timeline(
     Ok(timeline)
 }
 
+fn observed_party(
+    store: &ckbadger_store::CkbadgerStore,
+    network: &str,
+    lock_hash: &[u8],
+) -> anyhow::Result<FiberParticipantResponse> {
+    anyhow::ensure!(
+        lock_hash.len() == 32,
+        "Fiber party lock hash has {} bytes",
+        lock_hash.len()
+    );
+    let address = match store.get_lock_script(lock_hash)? {
+        Some(lock) => {
+            let hash_type = u8::try_from(lock.hash_type)?;
+            anyhow::ensure!(
+                crate::utils::address::compute_script_hash(&lock.code_hash, hash_type, &lock.args)
+                    == lock_hash,
+                "Fiber party lock payload does not hash to indexed lock 0x{}",
+                hex::encode(lock_hash)
+            );
+            Some(
+                script_to_address(&lock.code_hash, lock.hash_type, &lock.args, network)
+                    .map_err(anyhow::Error::msg)?,
+            )
+        }
+        None => None,
+    };
+    Ok(FiberParticipantResponse {
+        lock_script_hash: format_hex(lock_hash),
+        address,
+    })
+}
+
+fn canonical_header(
+    store: &ckbadger_store::CkbadgerStore,
+    number: i64,
+) -> anyhow::Result<ckbadger_store::types::CachedBlockHeader> {
+    store.get_block_header(number)?.ok_or_else(|| {
+        anyhow::anyhow!("Fiber channel requires missing canonical block header #{number}")
+    })
+}
+
+fn channel_lifetime(
+    store: &ckbadger_store::CkbadgerStore,
+    id: &[u8],
+    ch: &ckbadger_store::types::FiberChannel,
+    tip_number: i64,
+    tip_chain_time_ms: i64,
+) -> anyhow::Result<(i64, i64)> {
+    anyhow::ensure!(
+        ch.open_block >= 0 && ch.open_block <= tip_number,
+        "Fiber channel 0x{} has invalid open block {} at tip {tip_number}",
+        hex::encode(id),
+        ch.open_block
+    );
+    let open = canonical_header(store, ch.open_block)?;
+    anyhow::ensure!(
+        open.timestamp == ch.open_timestamp,
+        "Fiber channel 0x{} open timestamp {} differs from block {} header {}",
+        hex::encode(id),
+        ch.open_timestamp,
+        ch.open_block,
+        open.timestamp
+    );
+    let (anchor_number, anchor_chain_time_ms) = match ch.state {
+        FiberChannelState::Open => (tip_number, tip_chain_time_ms),
+        _ => {
+            let number = ch.close_block.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Fiber channel 0x{} {:?} missing close block",
+                    hex::encode(id),
+                    ch.state
+                )
+            })?;
+            anyhow::ensure!(
+                number >= ch.open_block && number <= tip_number,
+                "Fiber channel 0x{} close block {number} outside open {}..tip {tip_number}",
+                hex::encode(id),
+                ch.open_block
+            );
+            let close = canonical_header(store, number)?;
+            anyhow::ensure!(
+                Some(close.timestamp) == ch.close_timestamp,
+                "Fiber channel 0x{} close timestamp differs from block {number} header",
+                hex::encode(id)
+            );
+            (number, close.chain_time_ms)
+        }
+    };
+    let duration = anchor_chain_time_ms
+        .checked_sub(open.chain_time_ms)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Fiber channel 0x{} chain time regressed from block {} to {anchor_number}",
+                hex::encode(id),
+                ch.open_block
+            )
+        })?;
+    Ok((duration, anchor_number))
+}
+
+fn enrich_channel(
+    store: &ckbadger_store::CkbadgerStore,
+    network: &str,
+    id: &[u8],
+    ch: &ckbadger_store::types::FiberChannel,
+    tip_number: i64,
+    tip_chain_time_ms: i64,
+) -> anyhow::Result<FiberChannelResponse> {
+    let mut response = build_channel_response(id, ch).map_err(anyhow::Error::msg)?;
+    response.observed_parties = ch
+        .participants
+        .iter()
+        .map(|hash| observed_party(store, network, hash))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let (duration, anchor) = channel_lifetime(store, id, ch, tip_number, tip_chain_time_ms)?;
+    response.observed_lifetime_ms = Some(duration.to_string());
+    response.lifetime_anchor_block = Some(anchor);
+    Ok(response)
+}
+
+#[derive(Default)]
+struct PairCounts {
+    channels: u64,
+    open: u64,
+    cooperative: u64,
+    waiting: u64,
+    settled: u64,
+    open_capacity: u128,
+    first_open_block: Option<i64>,
+    last_open_block: Option<i64>,
+    closed_lifetimes: Vec<i64>,
+}
+
+fn median_lifetime(mut durations: Vec<i64>) -> Option<String> {
+    if durations.is_empty() {
+        return None;
+    }
+    durations.sort_unstable();
+    Some(durations[(durations.len() - 1) / 2].to_string())
+}
+
+fn aggregate_network(
+    store: &ckbadger_store::CkbadgerStore,
+    network: &str,
+) -> anyhow::Result<FiberNetworkResponse> {
+    let (tip_number, tip) = store
+        .get_sync_tip_block()?
+        .ok_or_else(|| anyhow::anyhow!("Fiber network unavailable before first committed block"))?;
+    let mut summary = FiberStatsResponse {
+        total_channels: 0,
+        open_channels: 0,
+        total_capacity_locked: "0".into(),
+        cooperatively_closed_channels: 0,
+        force_closed_waiting_channels: 0,
+        force_closed_settled_channels: 0,
+        observed_parties: 0,
+        observed_pairs: 0,
+        first_open_timestamp: None,
+        typical_closed_lifetime_ms: None,
+        closed_within_hour: 0,
+        tip_block_number: tip_number,
+        tip_chain_time_ms: tip.chain_time_ms.to_string(),
+    };
+    let mut parties = BTreeMap::<Vec<u8>, (u64, u64, u128)>::new();
+    let mut pairs = BTreeMap::<(Vec<u8>, Vec<u8>), PairCounts>::new();
+    let mut all_closed_lifetimes = Vec::new();
+    let mut first_open: Option<(i64, i64)> = None;
+    let mut locked = 0u128;
+    let mut cursor: Option<Vec<u8>> = None;
+    loop {
+        let rows = store.list_fiber_channels(500, cursor.as_deref(), None)?;
+        if rows.is_empty() {
+            break;
+        }
+        for (id, ch) in &rows {
+            let (lifetime, _) = channel_lifetime(store, id, ch, tip_number, tip.chain_time_ms)?;
+            summary.total_channels = summary
+                .total_channels
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("Fiber channel count overflow"))?;
+            if first_open.is_none_or(|(block, _)| ch.open_block < block) {
+                first_open = Some((ch.open_block, ch.open_timestamp));
+            }
+            if ch.state == FiberChannelState::Open {
+                summary.open_channels += 1;
+                locked = locked
+                    .checked_add(u128::from(ch.capacity))
+                    .ok_or_else(|| anyhow::anyhow!("Fiber locked capacity overflow"))?;
+            } else {
+                all_closed_lifetimes.push(lifetime);
+                if lifetime < 3_600_000 {
+                    summary.closed_within_hour += 1;
+                }
+                match ch.state {
+                    FiberChannelState::CooperativelyClosed => {
+                        summary.cooperatively_closed_channels += 1
+                    }
+                    FiberChannelState::ForceClosed => summary.force_closed_waiting_channels += 1,
+                    FiberChannelState::Settled => summary.force_closed_settled_channels += 1,
+                    FiberChannelState::Open => unreachable!(),
+                }
+            }
+            for hash in &ch.participants {
+                anyhow::ensure!(
+                    hash.len() == 32,
+                    "Fiber channel 0x{} party hash has {} bytes",
+                    hex::encode(id),
+                    hash.len()
+                );
+                let row = parties.entry(hash.clone()).or_default();
+                row.0 += 1;
+                if ch.state == FiberChannelState::Open {
+                    row.1 += 1;
+                    row.2 = row
+                        .2
+                        .checked_add(u128::from(ch.capacity))
+                        .ok_or_else(|| anyhow::anyhow!("Fiber party open capacity overflow"))?;
+                }
+            }
+            if ch.participants.len() == 2 && ch.participants[0] != ch.participants[1] {
+                let mut key = [ch.participants[0].clone(), ch.participants[1].clone()];
+                key.sort();
+                let row = pairs.entry((key[0].clone(), key[1].clone())).or_default();
+                row.channels += 1;
+                row.first_open_block = Some(
+                    row.first_open_block
+                        .map_or(ch.open_block, |v| v.min(ch.open_block)),
+                );
+                row.last_open_block = Some(
+                    row.last_open_block
+                        .map_or(ch.open_block, |v| v.max(ch.open_block)),
+                );
+                match ch.state {
+                    FiberChannelState::Open => {
+                        row.open += 1;
+                        row.open_capacity = row
+                            .open_capacity
+                            .checked_add(u128::from(ch.capacity))
+                            .ok_or_else(|| anyhow::anyhow!("Fiber pair open capacity overflow"))?;
+                    }
+                    FiberChannelState::CooperativelyClosed => row.cooperative += 1,
+                    FiberChannelState::ForceClosed => row.waiting += 1,
+                    FiberChannelState::Settled => row.settled += 1,
+                }
+                if ch.state != FiberChannelState::Open {
+                    row.closed_lifetimes.push(lifetime);
+                }
+            }
+            cursor = Some(id.clone());
+        }
+        if rows.len() < 500 {
+            break;
+        }
+    }
+    summary.total_capacity_locked = locked.to_string();
+    summary.first_open_timestamp = first_open.map(|(_, timestamp)| timestamp.to_string());
+    summary.typical_closed_lifetime_ms = median_lifetime(all_closed_lifetimes);
+    summary.observed_parties = parties.len() as u64;
+    summary.observed_pairs = pairs.len() as u64;
+    let parties = parties
+        .into_iter()
+        .map(|(hash, (channels, open_channels, open_capacity))| {
+            let party = observed_party(store, network, &hash)?;
+            Ok(FiberPartyResponse {
+                lock_script_hash: party.lock_script_hash,
+                address: party.address,
+                channels,
+                open_channels,
+                open_capacity: open_capacity.to_string(),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let pairs = pairs
+        .into_iter()
+        .map(|((first, second), counts)| {
+            Ok(FiberPairResponse {
+                first_lock_script_hash: format_hex(&first),
+                second_lock_script_hash: format_hex(&second),
+                channels: counts.channels,
+                open_channels: counts.open,
+                cooperatively_closed_channels: counts.cooperative,
+                force_closed_waiting_channels: counts.waiting,
+                force_closed_settled_channels: counts.settled,
+                open_capacity: counts.open_capacity.to_string(),
+                first_open_block: counts
+                    .first_open_block
+                    .ok_or_else(|| anyhow::anyhow!("Fiber pair has no first open block"))?,
+                last_open_block: counts
+                    .last_open_block
+                    .ok_or_else(|| anyhow::anyhow!("Fiber pair has no last open block"))?,
+                typical_closed_lifetime_ms: median_lifetime(counts.closed_lifetimes),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(FiberNetworkResponse {
+        summary,
+        parties,
+        pairs,
+    })
+}
+
 // ── Handlers ────────────────────────────────────────────────────────────
 
 /// GET /fiber/channels
@@ -283,11 +653,25 @@ async fn list_channels(
         None
     };
 
+    let (tip_number, tip) = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::initializing("Fiber channels require an indexed tip"))?;
     let data: Vec<FiberChannelResponse> = page
         .iter()
-        .map(|(id, ch)| build_channel_response(id, ch))
-        .collect::<Result<_, _>>()
-        .map_err(ApiError::internal)?;
+        .map(|(id, ch)| {
+            enrich_channel(
+                &state.store,
+                &state.ckb_network,
+                id,
+                ch,
+                tip_number,
+                tip.chain_time_ms,
+            )
+        })
+        .collect::<anyhow::Result<_>>()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(CursorPaginatedResponse::without_total(
         data,
@@ -311,7 +695,20 @@ async fn get_channel(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Fiber channel not found"))?;
 
-    let resp = build_channel_response(&id_bytes, &channel).map_err(ApiError::internal)?;
+    let (tip_number, tip) = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::initializing("Fiber channel requires an indexed tip"))?;
+    let resp = enrich_channel(
+        &state.store,
+        &state.ckb_network,
+        &id_bytes,
+        &channel,
+        tip_number,
+        tip.chain_time_ms,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let timeline = build_timeline(&channel)
         .map_err(|error| ApiError::internal(format!("fiber channel {}: {error}", channel_id)))?;
 
@@ -343,61 +740,50 @@ async fn get_address_channels(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let (tip_number, tip) = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::initializing("Fiber channels require an indexed tip"))?;
     let data: Vec<FiberChannelResponse> = rows
         .iter()
-        .map(|(id, ch)| build_channel_response(id, ch))
-        .collect::<Result<_, _>>()
-        .map_err(ApiError::internal)?;
+        .map(|(id, ch)| {
+            enrich_channel(
+                &state.store,
+                &state.ckb_network,
+                id,
+                ch,
+                tip_number,
+                tip.chain_time_ms,
+            )
+        })
+        .collect::<anyhow::Result<_>>()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(data)
 }
 
 /// GET /fiber/stats
 async fn get_stats(State(state): State<Arc<AppState>>) -> ApiResult<FiberStatsResponse> {
-    // Iterate all channels to compute stats. For a small-to-moderate number of
-    // Fiber channels this is fine. If the number grows significantly, a
-    // pre-aggregated counter should be added to the store.
     let store = state.store.clone();
-    let stats = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let mut total_channels: u64 = 0;
-        let mut open_channels: u64 = 0;
-        let mut total_capacity_locked: u128 = 0;
-
-        let batch_size = 500;
-        let mut cursor: Option<Vec<u8>> = None;
-
-        loop {
-            let rows = store.list_fiber_channels(batch_size, cursor.as_deref(), None)?;
-
-            if rows.is_empty() {
-                break;
-            }
-
-            for (id, ch) in &rows {
-                total_channels += 1;
-                if ch.state == FiberChannelState::Open {
-                    open_channels += 1;
-                    total_capacity_locked += ch.capacity as u128;
-                }
-                cursor = Some(id.clone());
-            }
-
-            if rows.len() < batch_size {
-                break;
-            }
-        }
-
-        Ok(FiberStatsResponse {
-            total_channels,
-            open_channels,
-            total_capacity_locked: total_capacity_locked.to_string(),
-        })
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let network = state.ckb_network.clone();
+    let stats = tokio::task::spawn_blocking(move || aggregate_network(&store, &network))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .summary;
 
     ok(stats)
+}
+
+async fn get_network(State(state): State<Arc<AppState>>) -> ApiResult<FiberNetworkResponse> {
+    let store = state.store.clone();
+    let network = state.ckb_network.clone();
+    let data = tokio::task::spawn_blocking(move || aggregate_network(&store, &network))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    ok(data)
 }
 
 #[cfg(test)]
@@ -444,6 +830,14 @@ mod tests {
         );
         assert_eq!(state_to_str(FiberChannelState::ForceClosed), "forceClosed");
         assert_eq!(state_to_str(FiberChannelState::Settled), "settled");
+    }
+
+    #[test]
+    fn zero_epoch_fraction_is_valid_and_nonzero_over_zero_is_not() {
+        // RFC 0017 permits 0/0 as an encoding of 0/1.
+        let zero = decode_epoch_delay(0xa000_0000_0000_0001).unwrap();
+        assert_eq!((zero.epochs, zero.index, zero.length), (1, 0, 1));
+        assert!(decode_epoch_delay(0xa000_0000_0100_0001).is_err());
     }
 
     #[test]
@@ -595,6 +989,9 @@ mod tests {
             udt_type_hash: None,
             udt_amount: None,
             participants: vec!["0xaa".to_string()],
+            observed_parties: vec![],
+            observed_lifetime_ms: None,
+            lifetime_anchor_block: None,
             funding_tx_hash: "0x1111".to_string(),
             funding_output_index: 0,
             open_block: 100,
@@ -623,6 +1020,16 @@ mod tests {
             total_channels: 42,
             open_channels: 10,
             total_capacity_locked: "500000000000".to_string(),
+            cooperatively_closed_channels: 20,
+            force_closed_waiting_channels: 7,
+            force_closed_settled_channels: 5,
+            observed_parties: 2,
+            observed_pairs: 1,
+            first_open_timestamp: Some("1000".into()),
+            typical_closed_lifetime_ms: Some("500".into()),
+            closed_within_hour: 32,
+            tip_block_number: 30,
+            tip_chain_time_ms: "3000".into(),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["totalChannels"], 42);
@@ -639,6 +1046,9 @@ mod tests {
             udt_type_hash: None,
             udt_amount: None,
             participants: vec![],
+            observed_parties: vec![],
+            observed_lifetime_ms: None,
+            lifetime_anchor_block: None,
             funding_tx_hash: "0xbb".to_string(),
             funding_output_index: 0,
             open_block: 1,

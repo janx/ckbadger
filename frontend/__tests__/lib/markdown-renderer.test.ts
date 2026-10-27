@@ -54,6 +54,9 @@ describe('renderMarkdownPage', () => {
       settlementTimestamp: null,
       settlementTxHash: null,
       participants: ['ckb1owner'],
+      observedParties: [{ lockScriptHash: '0xowner', address: 'ckb1owner' }],
+      observedLifetimeMs: '0',
+      lifetimeAnchorBlock: 42,
       timeline: [
         { event: 'open', blockNumber: 42, txHash: '0xfunding', timestamp: '2026-09-08T00:00:00Z' },
       ],

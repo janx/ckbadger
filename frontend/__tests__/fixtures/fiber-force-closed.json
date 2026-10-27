@@ -1,0 +1,43 @@
+{
+  "capacity": "100000000000",
+  "channelId": "0x6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+  "closeBlock": 20,
+  "closeTimestamp": "1700000100000",
+  "closeTxHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+  "commitmentTxHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+  "delayEpoch": "11529216145580097537",
+  "delayEpochDecoded": {
+    "epochs": 1,
+    "index": 0,
+    "length": 1,
+    "relative": true
+  },
+  "fundingOutputIndex": 0,
+  "fundingTxHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "lifetimeAnchorBlock": 20,
+  "observedLifetimeMs": "100000",
+  "observedParties": [],
+  "openBlock": 10,
+  "openTimestamp": "1700000000000",
+  "participants": [],
+  "settlementBlock": null,
+  "settlementTimestamp": null,
+  "settlementTxHash": null,
+  "state": "forceClosed",
+  "timeline": [
+    {
+      "blockNumber": 10,
+      "event": "open",
+      "timestamp": "1700000000000",
+      "txHash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "blockNumber": 20,
+      "event": "forceClose",
+      "timestamp": "1700000100000",
+      "txHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "udtAmount": null,
+  "udtTypeHash": null
+}
