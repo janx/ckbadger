@@ -8,14 +8,23 @@ export function HexMap({
   fields,
   subject,
   onFieldHover,
+  offsetBase = 0,
 }: {
   hex: string;
   fields: readonly HexField[];
   subject: string;
   onFieldHover?: (field: string | null) => void;
+  /** Absolute position of the first byte when showing a page of a payload. */
+  offsetBase?: number;
 }) {
   const bytes = hexBytes(hex, subject);
   validateByteRanges(fields, bytes.length, subject);
+  if (
+    !Number.isSafeInteger(offsetBase) ||
+    offsetBase < 0 ||
+    !Number.isSafeInteger(offsetBase + bytes.length)
+  )
+    throw new Error(`${subject}: invalid byte-map base offset ${offsetBase}`);
   const [active, setActive] = useState<string | null>(null);
   const select = (id: string | null) => {
     setActive(id);
@@ -32,9 +41,9 @@ export function HexMap({
             <button
               type="button"
               key={i}
-              data-byte-offset={i}
+              data-byte-offset={offsetBase + i}
               data-highlighted={highlighted}
-              title={`Byte ${i}: 0x${byte}${owners.length ? ` · ${owners.map((f) => f.label).join(', ')}` : ''}`}
+              title={`Byte ${offsetBase + i}: 0x${byte}${owners.length ? ` · ${owners.map((f) => f.label).join(', ')}` : ''}`}
               onMouseEnter={() => select(owners[0]?.id ?? null)}
               onMouseLeave={() => select(null)}
               onFocus={() => select(owners[0]?.id ?? null)}
@@ -66,7 +75,7 @@ export function HexMap({
           >
             {f.label}{' '}
             <span className="text-text-dim">
-              bytes {f.offset}–{f.offset + f.length - 1}
+              bytes {offsetBase + f.offset}–{offsetBase + f.offset + f.length - 1}
             </span>
           </button>
         ))}
