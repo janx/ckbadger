@@ -269,3 +269,22 @@ restarted. Re-sync required: **no** for this verification closure.
 - Reproducer and process/command logs: `.worktrees/site-redesign-round2-results/verify-round1-full.py`,
   `round1-full-verify.json`, `round1-full-verify.log`, and `round1-full-api.log`.
 - Next implementation round: [D3 Address v3](SITE_REDESIGN_ROUND2.md).
+
+## 2026-10-27 D3 completion
+
+The three round-2 lanes completed the Address v3 read contracts, page and
+independent acceptance on `integration/site-redesign-round2`. At fixed code
+revision `1e05934c`, integrated Rust gates passed **4,589 tests across 69 suites**
+with zero failures; three existing opt-in native-VM tests were not run by the
+default command. Frontend gates passed **1,476 tests in 177 files**, type checks,
+lint and both production builds. Final browser acceptance passed 22 states at
+1440/390 px, and a separate read-only mainnet API probe checked the real address's
+40 live cells and every class's cursor pages, exact capacity and occupied totals.
+Its seven fast checks also passed. Temporary APIs and previews were stopped.
+
+Re-sync required: **no**. No logical store write path changed in D3. The
+[round-2 report](SITE_REDESIGN_ROUND2.md) separates complete round-1 verification,
+D3 unit/integration tests, deterministic browser fixtures and actual mainnet
+evidence. D4–D8 remain the next authorized read-time/frontend rounds; their
+[gap audit](reports/2026-10-27-site-redesign-round2-acceptance-and-remaining-gaps.md)
+defines concrete contracts, page work and acceptance gates.
