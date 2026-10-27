@@ -28,6 +28,12 @@ Machine-friendly endpoints:
   - Raw response `meta` includes `buildVersion`
   - Raw response headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`
 - Capability descriptor: `/capabilities` (JSON)
+- Address physical holdings: `/api/{network}/v1/addresses/{addr}/holdings` returns an exact
+  current-owner capacity partition, six live-cell classes and four holding-kind counts.
+  `/api/{network}/v1/addresses/{addr}/cells?class=dao|token|object|identity|script|plain&limit=50&cursor=...`
+  filters before cursor pagination. Identity `heldSinceBlock` traces uninterrupted ownership;
+  `createdAtBlock` describes the current cell. Protocol-named `.cell` rights remain separate at
+  `/api/{network}/v1/addresses/{addr}/dotcell-names` and add no physical capacity.
 - Exact live-cell inventory: `/api/{network}/v1/cells/live-summary` (constant-size JSON; verify
   `tip.block`/`tip.hash` against the local CKB node)
 - Optional local peer evidence: `/api/{network}/v1/network/summary`,

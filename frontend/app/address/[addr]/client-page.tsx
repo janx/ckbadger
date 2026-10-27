@@ -1,1390 +1,532 @@
 'use client';
-import { useState, useMemo } from 'react';
+
+import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import Link from '@/components/ui/link';
-import Image from '@/components/ui/image';
 import { Header } from '@/components/layout/header';
-import { PageHeader, Badge } from '@/components/ui/page-header';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { Hash } from '@/components/ui/hash';
+import Link from '@/components/ui/link';
+import { ClassMark } from '@/components/ui/class-mark';
 import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { StatBlock, StatGrid } from '@/components/ui/stat-block';
-import { HexDisplay } from '@/components/ui/hex-display';
-import { Capacity } from '@/components/ui/capacity';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+  AddressBalance,
+  AddressHoldingsSection,
+  AddressLoadState,
+  AddressStaleNotice,
+  AddressPagination,
+  ADDRESS_CLASSES,
+} from '@/components/address/address-holdings';
+import {
+  AddressActivity,
+  AddressTransactions,
+  AddressLiveCells,
+} from '@/components/address/address-history';
+import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
+import { ExactCkb } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import {
-  api,
-  type AddressToken,
-  type DaoDeposit,
-  type Activity,
-  type FiberChannel,
-} from '@/lib/api';
-import { ActivityEventGroup } from '@/components/activity-event-row';
-import { formatScaledInteger } from '@/lib/exact-integer';
-import {
-  formatPoolDuration,
-  PoolInterpretationNotice,
-  PoolStatusBadge,
-  PoolTruncatedNotice,
-  PoolUnavailableNotice,
-} from '@/components/ui/pool-status';
-import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
+import { api, type AddressCellClass } from '@/lib/api';
 import { useParams } from '@/src/navigation';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
-import { formatExpiry } from '@/lib/asset-utils';
-import { getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { formatTokenBalanceWithRawMarker, RAW_AMOUNT_TITLE } from '@/lib/format-asset';
+import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
+import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
+import { cn } from '@/lib/utils';
+
+const activityFilters = [
+  ['all', 'All'],
+  ['ckb', 'CKB'],
+  ['token', 'Token'],
+  ['object', 'Object'],
+  ['identity', 'Identity'],
+  ['dao', 'DAO'],
+  ['type_call', 'Script calls (type)'],
+  ['lock_call', 'Script calls (lock)'],
+  ['protocol:rgbpp', 'RGB++'],
+] as const;
+type ActivityFilter = (typeof activityFilters)[number][0];
 export default function AddressDetailPage() {
   const params = useParams();
   const addr = params.addr as string;
   return <AddressDetailPageContent key={addr} addr={addr} />;
 }
+function AddressIdentity({ value }: { value: string }) {
+  const [copyState, setCopyState] = useState('Copy address');
+  return (
+    <span className="flex min-w-0 items-start gap-2 text-[13px]">
+      <Hash
+        hash={value}
+        truncate={false}
+        copyable={false}
+        className="min-w-0 text-[13px] [overflow-wrap:anywhere]"
+      />
+      <button
+        aria-label={copyState}
+        title={copyState}
+        className="hover:text-jade shrink-0 p-1"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopyState('Address copied');
+          } catch {
+            setCopyState('Unable to copy address');
+          }
+        }}
+      >
+        {copyState === 'Address copied' ? (
+          '✓'
+        ) : (
+          <svg
+            aria-hidden="true"
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+          >
+            <rect x="5" y="5" width="8" height="8" rx="1" />
+            <path d="M3 11H2V2h9v1" />
+          </svg>
+        )}
+      </button>
+    </span>
+  );
+}
 function AddressDetailPageContent({ addr }: { addr: string }) {
-  const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
-  const [selectedDao, setSelectedDao] = useState(false);
-  const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');
-  const [activityFilter, setActivityFilter] = useState<
-    | 'all'
-    | 'ckb'
-    | 'token'
-    | 'object'
-    | 'identity'
-    | 'dao'
-    | 'type_call'
-    | 'lock_call'
-    | 'protocol:rgbpp'
-  >('all');
-  const [cellFilter, setCellFilter] = useState<'all' | 'ckb' | 'token' | 'dao'>('all');
-  const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
-  const activitiesPagination = useCursorPagination();
-  const cellsPagination = useCursorPagination();
-  const txPagination = useCursorPagination();
-  const daoPagination = useCursorPagination();
-  const fiberPagination = useCursorPagination();
-  const namesPagination = useCursorPagination();
-  const {
-    data: address,
-    isLoading,
-    error,
-  } = useQuery({
+  const [tab, setTab] = useState<'activities' | 'transactions' | 'cells'>('activities');
+  const [filter, setFilter] = useState<ActivityFilter>('all');
+  const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
+  const activityPage = useCursorPagination(),
+    txPage = useCursorPagination(),
+    cellPage = useCursorPagination(),
+    namesPage = useCursorPagination(),
+    fiberPage = useCursorPagination();
+  const address = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
-    // The unconfirmed header is read from this summary and shows on every tab
-    // and page, so the summary is what keeps it current.
     refetchInterval: POOL_POLL_INTERVAL_MS,
   });
-  const { data: tokens } = useQuery({
-    queryKey: ['address-tokens', address?.lockScriptHash],
-    queryFn: () =>
-      api.getAddressTokens(address!.lockScriptHash, {
-        limit: 100,
-      }),
-    enabled: !!address,
+  const lockHash = address.data?.lockScriptHash;
+  const holdings = useQuery({
+    queryKey: ['address-holdings', lockHash],
+    queryFn: () => api.getAddressHoldings(lockHash!),
+    enabled: !!lockHash,
+    staleTime: 60000,
+    refetchInterval: 60000,
   });
-  const { data: daoSummary } = useQuery({
-    queryKey: ['address-dao-summary', address?.lockScriptHash],
-    queryFn: () => api.getAddressDaoSummary(address!.lockScriptHash),
-    enabled: !!address,
-  });
-  const { data: daoDeposits } = useQuery({
-    queryKey: ['address-dao-deposits', address?.lockScriptHash, daoPagination.cursor],
+  const activities = useQuery({
+    queryKey: ['address-activities', lockHash, activityPage.cursor, filter],
     queryFn: () =>
-      api.getDaoDepositsByAddress(address!.lockScriptHash, {
-        limit: 100,
-        cursor: daoPagination.cursor,
-      }),
-    enabled: !!address && !!daoSummary?.hasDaoActivity,
-    placeholderData: keepPreviousData,
-  });
-  const {
-    data: activities,
-    isLoading: activitiesLoading,
-    isError: activitiesError,
-  } = useQuery({
-    queryKey: [
-      'address-activities',
-      address?.lockScriptHash,
-      activitiesPagination.cursor,
-      activityFilter,
-    ],
-    queryFn: () =>
-      api.getAddressActivities(address!.lockScriptHash, {
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: activitiesPagination.cursor,
-        filter: activityFilter,
-      }),
-    enabled: !!address,
-    placeholderData: keepPreviousData,
-    // Unconfirmed rows live only on page one, and only the tab in view is
-    // worth re-asking for.
-    refetchInterval: poolRefetchInterval({
-      isPageOne: !activitiesPagination.cursor,
-      isActiveTab: activeTab === 'activities',
-    }),
-    refetchOnWindowFocus: true,
-  });
-  const tokenMap = useMemo(() => {
-    const map = new Map<string, AddressToken>();
-    if (tokens?.data) {
-      tokens.data.forEach((token) => {
-        map.set(token.typeScriptHash, token);
-      });
-    }
-    return map;
-  }, [tokens?.data]);
-  const cellsTypeFilter = selectedDao ? null : selectedToken?.typeScriptHash;
-  const cellsCodeHashFilter = selectedDao ? DAO_CODE_HASH : undefined;
-  const { data: cells, isLoading: cellsLoading } = useQuery({
-    queryKey: [
-      'address-cells',
-      address?.lockScriptHash,
-      cellsTypeFilter,
-      cellsCodeHashFilter,
-      cellsPagination.cursor,
-    ],
-    queryFn: () =>
-      api.getLiveCells({
-        lockScriptHash: address!.lockScriptHash,
-        typeScriptHash: cellsTypeFilter ?? undefined,
-        typeCodeHash: cellsCodeHashFilter,
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: cellsPagination.cursor,
-      }),
-    enabled: !!address,
-    placeholderData: keepPreviousData,
-  });
-  const filteredCells = useMemo(() => {
-    if (!cells?.data || cellFilter === 'all') return cells?.data;
-    return cells.data.filter((cell) => {
-      switch (cellFilter) {
-        case 'ckb':
-          return !cell.typeScriptHash && !cell.udtAmount;
-        case 'token':
-          return !!cell.udtAmount;
-        case 'dao':
-          return cell.typeCodeHash?.toLowerCase() === DAO_CODE_HASH.toLowerCase();
-        default:
-          return true;
-      }
-    });
-  }, [cells?.data, cellFilter]);
-  const { data: transactions, isLoading: txLoading } = useQuery({
-    queryKey: ['address-transactions', address?.lockScriptHash, txPagination.cursor],
-    queryFn: () =>
-      api.getAddressTransactions(address!.lockScriptHash, {
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: txPagination.cursor,
-      }),
-    enabled: !!address,
+      api.getAddressActivities(lockHash!, { limit: 50, cursor: activityPage.cursor, filter }),
+    enabled: !!lockHash && tab === 'activities',
     placeholderData: keepPreviousData,
     refetchInterval: poolRefetchInterval({
-      isPageOne: !txPagination.cursor,
-      isActiveTab: activeTab === 'transactions',
+      isPageOne: !activityPage.cursor,
+      isActiveTab: tab === 'activities',
     }),
-    refetchOnWindowFocus: true,
   });
-  // `.cell` names an address owns. The lookup is a prefix seek on this
-  // address's own lock hash, so it needs the resolved hash, not the route text.
-  const { data: dotcellNames } = useQuery({
-    queryKey: ['address-dotcell-names', address?.lockScriptHash, namesPagination.cursor],
+  const transactions = useQuery({
+    queryKey: ['address-transactions', lockHash, txPage.cursor],
+    queryFn: () => api.getAddressTransactions(lockHash!, { limit: 50, cursor: txPage.cursor }),
+    enabled: !!lockHash && tab === 'transactions',
+    placeholderData: keepPreviousData,
+    refetchInterval: poolRefetchInterval({
+      isPageOne: !txPage.cursor,
+      isActiveTab: tab === 'transactions',
+    }),
+  });
+  const cells = useQuery({
+    queryKey: ['address-cells', lockHash, cellPage.cursor, cellClass],
     queryFn: () =>
-      api.getAddressDotCellNames(address!.lockScriptHash, {
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: namesPagination.cursor,
-      }),
-    enabled: !!address,
+      api.getAddressCells(lockHash!, { limit: 50, cursor: cellPage.cursor, class: cellClass }),
+    enabled: !!lockHash && tab === 'cells',
     placeholderData: keepPreviousData,
   });
-  const { data: fiberChannels } = useQuery({
-    queryKey: ['address-fiber-channels', address?.lockScriptHash, fiberPagination.cursor],
-    queryFn: () =>
-      api.getAddressFiberChannels(address!.lockScriptHash, {
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: fiberPagination.cursor,
-      }),
-    enabled: !!address,
+  const names = useQuery({
+    queryKey: ['address-dotcell-names', lockHash, namesPage.cursor],
+    queryFn: () => api.getAddressDotCellNames(lockHash!, { limit: 50, cursor: namesPage.cursor }),
+    enabled: !!lockHash,
     placeholderData: keepPreviousData,
   });
-  // The pool segment belongs to whichever list the user is looking at. It
-  // decides only that list's notices; the header reads `address.pendingSummary`.
+  const fiber = useQuery({
+    queryKey: ['address-fiber-channels', lockHash, fiberPage.cursor],
+    queryFn: () => api.getAddressFiberChannels(lockHash!, { limit: 50, cursor: fiberPage.cursor }),
+    enabled: !!lockHash,
+    placeholderData: keepPreviousData,
+  });
   const pool =
-    activeTab === 'transactions' && !txPagination.cursor
-      ? transactions?.pool
-      : activeTab === 'activities' && !activitiesPagination.cursor
-        ? activities?.pool
+    tab === 'activities' && !activityPage.cursor
+      ? activities.data?.pool
+      : tab === 'transactions' && !txPage.cursor
+        ? transactions.data?.pool
         : undefined;
-
-  const handleTokenSelect = (token: AddressToken | null) => {
-    setSelectedToken(token);
-    setSelectedDao(false);
-    cellsPagination.reset();
-    if (token) {
-      setActiveTab('cells');
-    }
-  };
-  if (isLoading) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-4">
-          <div className="animate-pulse">
-            <div className="bg-base-surface mb-8 h-12 w-64 rounded" />
-            <div className="mb-8 grid gap-4 md:grid-cols-3">
-              <div className="bg-base-surface h-32 rounded" />
-              <div className="bg-base-surface h-32 rounded" />
-              <div className="bg-base-surface h-32 rounded" />
-            </div>
-            <div className="bg-base-surface h-96 rounded" />
-          </div>
-        </main>
-      </div>
-    );
-  }
-  if (error || !address) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-4">
-          <TerminalPanel>
-            <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-dim text-xl">Address not found</h2>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </main>
-      </div>
-    );
-  }
-  const shortHash = (value: string) => {
-    if (value.length <= 20) return value;
-    return `${value.slice(0, 10)}...${value.slice(-8)}`;
-  };
-  const tokenDisplayName = (token: {
-    symbol?: string | null;
-    name?: string | null;
-    typeScriptHash?: string;
-  }) => {
-    const symbol = token.symbol?.trim();
-    if (symbol) return symbol;
-    const name = token.name?.trim();
-    if (name) return name;
-    return token.typeScriptHash ? shortHash(token.typeScriptHash) : 'Token';
-  };
-  const parseDaoCellData = (dataHex: string | undefined): number | null => {
-    if (!dataHex || dataHex === '0x' || dataHex.length < 18) return null;
-    const hex = dataHex.startsWith('0x') ? dataHex.slice(2) : dataHex;
-    if (hex.length < 16) return null;
-    const bytes = [];
-    for (let i = 0; i < 16; i += 2) {
-      bytes.push(parseInt(hex.slice(i, i + 2), 16));
-    }
-    let blockNumber = 0;
-    for (let i = 7; i >= 0; i--) {
-      blockNumber = blockNumber * 256 + bytes[i];
-    }
-    return blockNumber;
-  };
-  const isDaoCell = (cell: { typeCodeHash?: string }): boolean => {
-    if (!cell.typeCodeHash) return false;
-    return cell.typeCodeHash.toLowerCase() === DAO_CODE_HASH.toLowerCase();
-  };
-  const getDaoStatusBadge = (status: string) => {
-    switch (status) {
-      case 'deposited':
-        return <Badge variant="green">Active</Badge>;
-      case 'withdrawing':
-        return <Badge variant="gold">Withdraw Request</Badge>;
-      case 'withdrawn':
-        return <Badge variant="gray">Completed</Badge>;
-      default:
-        return <Badge variant="gray">{status}</Badge>;
-    }
-  };
-  const formatDaoDuration = (depositTimestamp: string, endTimestamp?: string | null): string => {
-    const start = new Date(depositTimestamp).getTime();
-    const end = endTimestamp ? new Date(endTimestamp).getTime() : Date.now();
-    const days = Math.floor((end - start) / (1000 * 60 * 60 * 24));
-    if (days < 1) return '<1 day';
-    if (days === 1) return '1 day';
-    return `${days} days`;
-  };
+  const a = address.data;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-4">
-        <PageHeader
-          title="Address"
-          hash={address.address || address.lockScriptHash}
-          badge={
-            <div className="flex items-center gap-2">
-              <Badge variant="green">Active</Badge>
-              {address.lockScriptInfo && (
-                <Link
-                  href={`/scripts/${encodeURIComponent(address.lockScriptInfo.name)}`}
-                  className="border-base-border bg-base-elevated/70 text-text hover:bg-base-elevated inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium transition-colors"
-                >
-                  {address.lockScriptInfo.name}
-                </Link>
-              )}
-              {address.lockScriptInfo?.deprecated && <Badge variant="red">Deprecated</Badge>}
-            </div>
-          }
-        />
-        <TerminalPanel className="mb-8">
-          <TerminalPanelContent>
-            <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
-              <StatBlock
-                label="Balance"
-                value={formatCkbAmount(address.balance).full}
-                suffix=" CKB"
-                color="jade"
-                className="col-span-2"
-              />
-              <StatBlock label="Live Cells" value={address.liveCellsCount} color="gold" />
-              <StatBlock label="Transactions" value={address.transactionsCount} color="default" />
-            </div>
-            {address.pendingSummary !== null && address.pendingSummary.txCount > 0 && (
-              <div className="border-base-border mt-4 flex items-baseline gap-3 border-t pt-4">
-                {/* Deliberately apart from Balance and never added to it: a
-                    transaction in the node's pool is a proposed transition that
-                    proof-of-work has not confirmed. */}
-                <StatBlock
-                  label="Unconfirmed"
-                  value={`${address.pendingSummary.txCount} tx`}
-                  color="gold"
-                  size="sm"
-                />
-                {BigInt(address.pendingSummary.capacityDelta) !== BigInt(0) && (
-                  <span className="text-warning font-mono text-sm">
-                    {formatCkbAmount(address.pendingSummary.capacityDelta).isNegative ? '' : '+'}
-                    {formatCkbAmount(address.pendingSummary.capacityDelta).full} CKB pending
+      <main className="container mx-auto px-4 py-8">
+        {!a ? (
+          <AddressLoadState label="address" error={address.error} loading={address.isLoading} />
+        ) : (
+          <DetailLayout
+            title="Address"
+            identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
+            status={
+              <span className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                {a.lockScript && (
+                  <span>
+                    lock{' '}
+                    <Link
+                      href={getScriptDetailHref({
+                        name: a.lockScriptInfo?.name,
+                        codeHash: a.lockScript.codeHash,
+                        hashType: a.lockScript.hashType,
+                        scriptKind: 'lock',
+                      })}
+                      className="text-text-bright"
+                    >
+                      {a.lockScriptInfo?.name ?? (
+                        <Hash hash={a.lockScript.codeHash} className="text-xs" copyable={false} />
+                      )}
+                    </Link>
                   </span>
                 )}
-              </div>
-            )}
-            {(() => {
-              const balanceBig = BigInt(address.balance);
-              const usedBig = BigInt(address.commonKnowledgeSize);
-              if (balanceBig <= BigInt(0) || usedBig <= BigInt(0)) return null;
-              const freeBig = balanceBig - usedBig;
-              const ratio = Number((usedBig * BigInt(10000)) / balanceBig) / 100;
-              return (
-                <div className="mt-6">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                      Common Knowledge Share
-                    </span>
-                    <span className="text-text font-mono text-xs">
-                      {ratio.toFixed(1)}% of balance
-                    </span>
-                  </div>
-                  <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
-                    <div
-                      className="bg-warning transition-all duration-300"
-                      style={{ width: `${Math.max(ratio, 0.5)}%` }}
-                    />
-                    <div className="bg-emphasis/30 flex-1" />
-                  </div>
-                  <div className="mt-1.5 flex items-center justify-between">
-                    <span
-                      className="text-warning font-mono text-xs"
-                      title={formatCkbAmount(address.commonKnowledgeSize).full + ' CKB'}
-                    >
-                      Common Knowledge: {formatCkbCompact(address.commonKnowledgeSize).value} CKB
-                    </span>
-                    <span
-                      className="text-emphasis font-mono text-xs"
-                      title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
-                    >
-                      Free Capacity: {formatCkbCompact(freeBig.toString()).value} CKB
-                    </span>
-                  </div>
-                </div>
-              );
-            })()}
-          </TerminalPanelContent>
-        </TerminalPanel>
-        {daoSummary?.hasDaoActivity && (
-          <TerminalPanel className="mb-8" variant="elevated">
-            <TerminalPanelHeader>
-              <div className="flex items-center gap-2">
-                <div className="bg-base-elevated text-text flex h-5 w-5 items-center justify-center rounded-full text-xs">
-                  D
-                </div>
-                <Link href="/dao" className="hover:text-emphasis transition-colors">
-                  Nervos DAO
-                </Link>
-                {daoSummary.estimatedApc && (
-                  <span className="text-positive text-xs font-normal">
-                    {daoSummary.estimatedApc}% APC
-                  </span>
-                )}
-              </div>
-            </TerminalPanelHeader>
-            <TerminalPanelContent>
-              <StatGrid columns={4}>
-                <StatBlock
-                  label="Total Locked"
-                  value={formatCkbCompact(daoSummary.totalLockedCapacity).value}
-                  suffix=" CKB"
-                  color="default"
-                  subtext={formatCkbAmount(daoSummary.totalLockedCapacity).full}
-                />
-                <StatBlock
-                  label="Active Deposits"
-                  value={daoSummary.activeDepositsCount}
-                  color="jade"
-                />
-                <StatBlock
-                  label="Pending Withdrawals"
-                  value={daoSummary.pendingWithdrawalsCount}
-                  color={daoSummary.pendingWithdrawalsCount > 0 ? 'gold' : 'default'}
-                />
-                <StatBlock
-                  label="Compensation Earned"
-                  value={`+${formatCkbCompact(daoSummary.totalCompensationEarned).value}`}
-                  suffix=" CKB"
-                  color="jade"
-                  subtext={formatCkbAmount(daoSummary.totalCompensationEarned).full}
-                />
-              </StatGrid>
-            </TerminalPanelContent>
-            {daoDeposits?.data && daoDeposits.data.length > 0 && (
-              <>
-                <TerminalPanelContent padding="none">
-                  <div className="min-w-full overflow-x-auto">
-                    <div
-                      className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
-                      style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
-                    >
-                      <div>Deposit</div>
-                      <div>Status</div>
-                      <div className="text-right">Capacity</div>
-                      <div className="text-right">Compensation</div>
-                      <div>Duration</div>
-                      <div className="text-right">Time</div>
-                    </div>
-                    {daoDeposits.data.map((deposit: DaoDeposit) => (
-                      <TerminalRow key={`dao-${deposit.txHash}-${deposit.outputIndex}`}>
-                        <div
-                          className="hidden w-full items-start gap-x-4 md:grid"
-                          style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
-                        >
-                          <div>
-                            <Link href={`/tx/${deposit.txHash}`}>
-                              <HexDisplay
-                                value={deposit.txHash}
-                                truncate
-                                startChars={6}
-                                endChars={6}
-                              />
-                            </Link>
-                            <Link
-                              href={`/blocks/${deposit.depositBlockNumber}`}
-                              className="text-text-dim hover:text-text block font-mono text-xs"
-                            >
-                              #{deposit.depositBlockNumber.toLocaleString()}
-                            </Link>
-                          </div>
-                          <div className="self-center">{getDaoStatusBadge(deposit.status)}</div>
-                          <div className="self-center text-right">
-                            <Capacity value={deposit.capacity} className="text-text-bright" />
-                          </div>
-                          <div className="self-center text-right">
-                            {deposit.compensation ? (
-                              <span className="text-positive font-mono text-sm">
-                                +{formatCkbAmount(deposit.compensation).full} CKB
-                              </span>
-                            ) : deposit.status === 'deposited' ? (
-                              <span className="text-text-dim text-sm">Accruing...</span>
-                            ) : (
-                              <span className="text-text-dim">-</span>
-                            )}
-                          </div>
-                          <div className="text-text self-center font-mono text-sm">
-                            {formatDaoDuration(
-                              deposit.depositTimestamp,
-                              deposit.withdrawTimestamp || deposit.withdrawRequestTimestamp
-                            )}
-                          </div>
-                          <div className="text-text-dim self-center text-right text-sm">
-                            {formatTimeAgo(deposit.depositTimestamp)}
-                          </div>
-                        </div>
-                        <div className="space-y-1.5 md:hidden">
-                          <div className="flex items-center justify-between gap-2">
-                            <Link href={`/tx/${deposit.txHash}`}>
-                              <HexDisplay
-                                value={deposit.txHash}
-                                truncate
-                                startChars={6}
-                                endChars={6}
-                              />
-                            </Link>
-                            {getDaoStatusBadge(deposit.status)}
-                          </div>
-                          <div className="flex items-center justify-between gap-2 text-sm">
-                            <Capacity value={deposit.capacity} className="text-text-bright" />
-                            {deposit.compensation ? (
-                              <span className="text-positive font-mono">
-                                +{formatCkbAmount(deposit.compensation).full} CKB
-                              </span>
-                            ) : deposit.status === 'deposited' ? (
-                              <span className="text-text-dim">Accruing...</span>
-                            ) : null}
-                          </div>
-                          <div className="text-text-dim flex items-center gap-3 text-xs">
-                            <span>
-                              {formatDaoDuration(
-                                deposit.depositTimestamp,
-                                deposit.withdrawTimestamp || deposit.withdrawRequestTimestamp
-                              )}
-                            </span>
-                            <span>{formatTimeAgo(deposit.depositTimestamp)}</span>
-                            <Link
-                              href={`/blocks/${deposit.depositBlockNumber}`}
-                              className="text-text-dim font-mono hover:underline"
-                            >
-                              #{deposit.depositBlockNumber.toLocaleString()}
-                            </Link>
-                          </div>
-                        </div>
-                      </TerminalRow>
-                    ))}
-                  </div>
-                </TerminalPanelContent>
-                {(daoDeposits.hasMore || daoPagination.hasPrevious) && (
-                  <TerminalPanelFooter className="flex justify-center">
-                    <CursorPagination
-                      total={daoDeposits.total}
-                      totalLabel="deposits"
-                      pageSize={100}
-                      hasMore={daoDeposits.hasMore}
-                      hasPrevious={daoPagination.hasPrevious}
-                      page={daoPagination.page}
-                      onNext={() => daoPagination.goToNext(daoDeposits.nextCursor)}
-                      onPrevious={daoPagination.goToPrevious}
-                    />
-                  </TerminalPanelFooter>
-                )}
-              </>
-            )}
-          </TerminalPanel>
-        )}
-        {tokens?.data && tokens.data.length > 0 && (
-          <TerminalPanel className="mb-8" variant="elevated">
-            <TerminalPanelHeader>Holdings ({tokens?.data?.length || 0})</TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              <div className="min-w-full">
-                <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
-                  <div className="min-w-0 flex-1">Asset</div>
-                  <div className="w-28 shrink-0">Standard</div>
-                  <div className="w-44 shrink-0 text-right">Balance</div>
-                </div>
-                {[...(tokens?.data ?? [])]
-                  .sort((a, b) => {
-                    const nameA = (a.name || a.symbol || '').toLowerCase();
-                    const nameB = (b.name || b.symbol || '').toLowerCase();
-                    return nameA.localeCompare(nameB);
-                  })
-                  .map((token) => {
-                    const isSelected = selectedToken?.typeScriptHash === token.typeScriptHash;
-                    return (
-                      <TerminalRow
-                        key={token.typeScriptHash}
-                        className={`cursor-pointer ${isSelected ? 'bg-base-elevated/80' : ''}`}
-                      >
-                        <div
-                          className="hidden w-full items-center sm:flex"
-                          onClick={() => handleTokenSelect(isSelected ? null : token)}
-                        >
-                          <div className="flex min-w-0 flex-1 items-center gap-3">
-                            {token.iconUrl && (
-                              <Image
-                                src={token.iconUrl}
-                                alt={token.symbol || token.name || 'Token'}
-                                className="h-6 w-6 rounded-full"
-                                width={24}
-                                height={24}
-                                unoptimized
-                                onError={(event) => {
-                                  event.currentTarget.style.display = 'none';
-                                }}
-                              />
-                            )}
-                            <div>
-                              <Link
-                                href={`/tokens/${token.typeScriptHash}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-emphasis font-medium hover:underline"
-                              >
-                                {tokenDisplayName(token)}
-                              </Link>
-                              {token.symbol && token.name && (
-                                <span className="text-text-dim ml-2 text-xs">{token.symbol}</span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="w-28 shrink-0">
-                            <Badge variant="gray">{token.standard}</Badge>
-                          </div>
-                          <div className="w-44 shrink-0 text-right">
-                            <span
-                              className="text-text-bright font-mono"
-                              title={token.decimals == null ? RAW_AMOUNT_TITLE : undefined}
-                            >
-                              {formatTokenBalanceWithRawMarker(token.balance, token.decimals)}
-                            </span>
-                          </div>
-                        </div>
-                        <div
-                          className="w-full space-y-1 sm:hidden"
-                          onClick={() => handleTokenSelect(isSelected ? null : token)}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {token.iconUrl && (
-                                <Image
-                                  src={token.iconUrl}
-                                  alt={token.symbol || token.name || 'Token'}
-                                  className="h-6 w-6 rounded-full"
-                                  width={24}
-                                  height={24}
-                                  unoptimized
-                                  onError={(event) => {
-                                    event.currentTarget.style.display = 'none';
-                                  }}
-                                />
-                              )}
-                              <Link
-                                href={`/tokens/${token.typeScriptHash}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-emphasis truncate font-medium hover:underline"
-                              >
-                                {tokenDisplayName(token)}
-                              </Link>
-                              <Badge variant="gray">{token.standard}</Badge>
-                            </div>
-                          </div>
-                          <div className="text-text-bright text-right font-mono text-sm">
-                            {formatTokenBalanceWithRawMarker(token.balance, token.decimals)}
-                          </div>
-                        </div>
-                      </TerminalRow>
-                    );
-                  })}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        )}
-        {dotcellNames?.data && dotcellNames.data.length > 0 && (
-          <TerminalPanel className="mb-8" variant="elevated" data-testid="address-dotcell-names">
-            <TerminalPanelHeader>
-              {/* The endpoint declares no total, so a count is shown only when
-                  the whole list is on this one page. */}
-              {!dotcellNames.hasMore && !namesPagination.hasPrevious
-                ? `Names (${dotcellNames.data.length})`
-                : 'Names'}
-            </TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              <div className="min-w-full">
-                <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
-                  <div className="min-w-0 flex-1">Name</div>
-                  <div className="w-52 shrink-0 text-right">Expires</div>
-                </div>
-                {dotcellNames.data.map((name) => (
-                  <TerminalRow key={name.identityId}>
-                    <div className="flex w-full flex-col gap-1 sm:flex-row sm:items-center">
-                      <div className="min-w-0 flex-1">
-                        <Link
-                          href={getIdentityItemDetailHref('dotcell', name.identityId)}
-                          className="text-emphasis font-mono font-medium hover:underline"
-                        >
-                          {name.name}
-                        </Link>
-                      </div>
-                      <div className="text-text-dim w-52 shrink-0 font-mono text-xs sm:text-right">
-                        {formatExpiry(name.expiredAt)}
-                      </div>
-                    </div>
-                  </TerminalRow>
-                ))}
-              </div>
-            </TerminalPanelContent>
-            {(dotcellNames.hasMore || namesPagination.hasPrevious) && (
-              <TerminalPanelFooter className="flex justify-center">
-                <CursorPagination
-                  totalLabel="names"
-                  pageSize={DEFAULT_PAGE_SIZE}
-                  hasMore={dotcellNames.hasMore}
-                  hasPrevious={namesPagination.hasPrevious}
-                  page={namesPagination.page}
-                  onNext={() => namesPagination.goToNext(dotcellNames.nextCursor)}
-                  onPrevious={namesPagination.goToPrevious}
-                />
-              </TerminalPanelFooter>
-            )}
-          </TerminalPanel>
-        )}
-        {fiberChannels?.data && fiberChannels.data.length > 0 && (
-          <TerminalPanel>
-            <TerminalPanelHeader>
-              Fiber Channels
-              <span className="text-text-dim ml-2 text-sm">
-                ({fiberChannels.total ?? fiberChannels.data.length})
+                {a.lockScriptInfo?.deprecated && <span className="text-negative">Deprecated</span>}
+                <span>
+                  {holdings.data
+                    ? `${holdings.data.liveCellsCount.toLocaleString('en-US')} live cells · `
+                    : ''}
+                  {a.transactionsCount.toLocaleString('en-US')} transactions
+                </span>
               </span>
-            </TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              <div
-                className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
-                style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
-              >
-                <div>Channel ID</div>
-                <div>Status</div>
-                <div>Participants</div>
-                <div className="text-right">Capacity</div>
-                <div className="text-right">Opened</div>
-              </div>
-              {fiberChannels.data.map((channel: FiberChannel) => {
-                const stateBadge = (() => {
-                  switch (channel.state) {
-                    case 'open':
-                      return <Badge variant="green">Open</Badge>;
-                    case 'cooperativelyClosed':
-                      return <Badge variant="gray">Closed</Badge>;
-                    case 'forceClosed':
-                      return <Badge variant="red">Force Closed</Badge>;
-                    case 'settled':
-                      return <Badge variant="neutral">Settled</Badge>;
-                    default:
-                      return <Badge variant="gray">{channel.state}</Badge>;
-                  }
-                })();
-                return (
-                  <TerminalRow key={channel.channelId}>
-                    <div
-                      className="hidden w-full items-center gap-x-4 md:grid"
-                      style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
-                    >
-                      <div>
-                        <Link href={`/fiber/channels/${channel.channelId}`}>
-                          <HexDisplay
-                            value={channel.channelId}
-                            truncate
-                            startChars={8}
-                            endChars={6}
+            }
+            tier2={
+              <DetailSection title="Lock script">
+                <dl className="grid grid-cols-[90px_minmax(0,1fr)] gap-x-4 gap-y-3 text-xs">
+                  {a.lockScript ? (
+                    <>
+                      <dt className="text-text-dim">code hash</dt>
+                      <dd className="break-all">
+                        <Link
+                          href={getScriptDetailHref({
+                            name: a.lockScriptInfo?.name,
+                            codeHash: a.lockScript.codeHash,
+                            hashType: a.lockScript.hashType,
+                            scriptKind: 'lock',
+                          })}
+                        >
+                          <Hash
+                            hash={a.lockScript.codeHash}
+                            truncate={false}
+                            copyable={false}
+                            className="text-xs"
                           />
                         </Link>
-                      </div>
-                      <div>{stateBadge}</div>
-                      <div className="flex flex-wrap gap-1">
-                        {channel.participants.map((pAddr) => (
-                          <Link
-                            key={pAddr}
-                            href={`/address/${pAddr}`}
-                            className="text-text-dim hover:text-text font-mono text-xs transition-colors"
-                          >
-                            {pAddr.length > 20
-                              ? `${pAddr.slice(0, 10)}...${pAddr.slice(-8)}`
-                              : pAddr}
-                          </Link>
-                        ))}
-                      </div>
-                      <div className="text-text-bright text-right font-mono text-sm">
-                        {formatCkbAmount(channel.capacity).full} CKB
-                      </div>
-                      <div className="text-text-dim text-right text-sm">
-                        {formatTimeAgo(channel.openTimestamp)}
-                      </div>
-                    </div>
-                    <div className="space-y-1.5 md:hidden">
-                      <div className="flex items-center justify-between gap-2">
-                        <Link href={`/fiber/channels/${channel.channelId}`}>
-                          <HexDisplay
-                            value={channel.channelId}
-                            truncate
-                            startChars={8}
-                            endChars={6}
-                          />
-                        </Link>
-                        {stateBadge}
-                      </div>
-                      <div className="flex items-center justify-between gap-2 text-sm">
-                        <span className="text-text-bright font-mono">
-                          {formatCkbAmount(channel.capacity).full} CKB
-                        </span>
-                        <span className="text-text-dim text-xs">
-                          {formatTimeAgo(channel.openTimestamp)}
-                        </span>
-                      </div>
-                    </div>
-                  </TerminalRow>
-                );
-              })}
-            </TerminalPanelContent>
-            {(fiberChannels.hasMore || fiberPagination.hasPrevious) && (
-              <TerminalPanelFooter className="flex justify-center">
-                <CursorPagination
-                  total={fiberChannels.total}
-                  totalLabel="channels"
-                  pageSize={DEFAULT_PAGE_SIZE}
-                  hasMore={fiberChannels.hasMore}
-                  hasPrevious={fiberPagination.hasPrevious}
-                  page={fiberPagination.page}
-                  onNext={() => fiberPagination.goToNext(fiberChannels.nextCursor)}
-                  onPrevious={fiberPagination.goToPrevious}
-                />
-              </TerminalPanelFooter>
-            )}
-          </TerminalPanel>
-        )}
-        <TerminalPanel>
-          <TerminalPanelHeader
-            actions={
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setActiveTab('activities')}
-                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
-                    activeTab === 'activities'
-                      ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text hover:text-text-bright'
-                  }`}
-                >
-                  Activities
-                  <span className="ml-1 opacity-75">({address.transactionsCount})</span>
-                </button>
-                <button
-                  onClick={() => setActiveTab('cells')}
-                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
-                    activeTab === 'cells'
-                      ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text hover:text-text-bright'
-                  }`}
-                >
-                  Live Cells
-                  {selectedToken || selectedDao ? (
-                    <span className="ml-1 opacity-75">({cells?.total ?? '...'})</span>
+                      </dd>
+                      <dt className="text-text-dim">hash type</dt>
+                      <dd>{a.lockScript.hashType}</dd>
+                      <dt className="text-text-dim">args</dt>
+                      <dd className="break-all">
+                        <Hash hash={a.lockScript.args} truncate={false} className="text-xs" />
+                      </dd>
+                    </>
                   ) : (
-                    <span className="ml-1 opacity-75">({address.liveCellsCount})</span>
+                    <>
+                      <dt>Script</dt>
+                      <dd>Unavailable</dd>
+                    </>
                   )}
-                </button>
-                <button
-                  onClick={() => setActiveTab('transactions')}
-                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
-                    activeTab === 'transactions'
-                      ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text hover:text-text-bright'
-                  }`}
-                >
-                  Transactions
-                  <span className="ml-1 opacity-75">({address.transactionsCount})</span>
-                </button>
-              </div>
+                  <dt className="text-text-dim">lock hash</dt>
+                  <dd className="break-all">
+                    <Hash hash={a.lockScriptHash} truncate={false} className="text-xs" />
+                  </dd>
+                </dl>
+              </DetailSection>
             }
           >
-            {activeTab === 'activities' ? (
-              'Activities'
-            ) : activeTab === 'cells' ? (
-              <div className="flex items-center gap-2">
-                <span>Cells</span>
-                {selectedToken && (
-                  <Badge variant="gold" className="ml-2">
-                    Filter: {tokenDisplayName(selectedToken)}
-                  </Badge>
-                )}
-                {selectedDao && (
-                  <Badge variant="neutral" className="ml-2">
-                    Filter: Nervos DAO
-                  </Badge>
-                )}
-              </div>
+            {a && <AddressStaleNotice error={address.error} label="address metadata" />}
+            {holdings.data && <AddressStaleNotice error={holdings.error} label="holdings" />}
+            {holdings.data ? (
+              <AddressBalance holdings={holdings.data} />
             ) : (
-              'Transactions'
+              <AddressLoadState
+                label="holdings and balance partition"
+                error={holdings.error}
+                loading={holdings.isLoading}
+              />
             )}
-          </TerminalPanelHeader>
-          {selectedToken && activeTab === 'cells' && (
-            <div className="border-base-border bg-base-surface/50 flex items-center justify-between border-b px-4 py-2">
-              <span className="text-text text-sm">
-                Showing cells for{' '}
-                <span className="text-warning">{tokenDisplayName(selectedToken)}</span>
-              </span>
-              <button
-                onClick={() => handleTokenSelect(null)}
-                className="text-negative text-xs hover:underline"
+            {a.pendingSummary !== null && a.pendingSummary.txCount > 0 && (
+              <aside
+                aria-label="Unconfirmed"
+                className="text-text-dim flex flex-wrap items-baseline gap-3 text-xs"
               >
-                Clear Filter
-              </button>
-            </div>
-          )}
-          {selectedDao && activeTab === 'cells' && (
-            <div className="border-base-border bg-base-surface/50 flex items-center justify-between border-b px-4 py-2">
-              <span className="text-text text-sm">
-                Showing cells for <span className="text-text">Nervos DAO</span>
-              </span>
-              <button
-                onClick={() => setSelectedDao(false)}
-                className="text-negative text-xs hover:underline"
-              >
-                Clear Filter
-              </button>
-            </div>
-          )}
-          <TerminalPanelContent padding="none">
-            {activeTab === 'activities' && (
-              <>
-                <div className="border-base-border flex items-center gap-2 border-b px-4 py-2">
-                  <label
-                    htmlFor="activity-filter"
-                    className="text-text-dim font-mono text-xs uppercase tracking-wider"
-                  >
-                    Filter
-                  </label>
-                  <select
-                    id="activity-filter"
-                    value={activityFilter}
-                    onChange={(e) => {
-                      setActivityFilter(e.target.value as typeof activityFilter);
-                      activitiesPagination.reset();
-                    }}
-                    className="border-base-border bg-base-elevated text-text focus:ring-jade/50 rounded border px-2 py-1 font-mono text-xs focus:outline-none focus:ring-1"
-                  >
-                    <option value="all">All</option>
-                    <option value="ckb">CKB</option>
-                    <option value="token">Token</option>
-                    <option value="object">Object</option>
-                    <option value="identity">Identity</option>
-                    <option value="dao">DAO</option>
-                    <option value="type_call">Script Call (type)</option>
-                    <option value="lock_call">Script Call (lock)</option>
-                    <option value="protocol:rgbpp">RGB++</option>
-                  </select>
-                </div>
-                {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
-                {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
-                {activitiesLoading ? (
-                  <div className="text-text-dim py-12 text-center">Loading activities...</div>
-                ) : activitiesError ? (
-                  <div className="text-negative py-12 text-center">Failed to load activities</div>
-                ) : activities?.data && activities?.data.length > 0 ? (
-                  <>
-                    <div
-                      className="md:grid md:items-baseline md:gap-x-4"
-                      style={{ gridTemplateColumns: '13rem 1fr auto 5rem' }}
-                    >
-                      {activities?.data.map((activity: Activity, idx: number) => (
-                        <ActivityEventGroup
-                          // Keyed by txHash alone: when an unconfirmed row
-                          // commits it keeps its hash and gains a block, so the
-                          // same row updates in place instead of remounting.
-                          key={activity.txHash}
-                          activity={activity}
-                          formatTimeAgo={(ts) => formatTimeAgo(Number(ts))}
-                          isFirst={idx === 0}
-                        />
-                      ))}
-                    </div>
-                    {(activities?.hasMore || activitiesPagination.hasPrevious) && (
-                      <TerminalPanelFooter className="flex justify-center">
-                        <CursorPagination
-                          // Activities exclude cellbase, so the address's
-                          // transaction count is not a total this list can page
-                          // to. Render whatever total the API declares — none,
-                          // today — and show the enumerated range instead.
-                          total={activities?.total ?? undefined}
-                          totalLabel="activities"
-                          pageSize={DEFAULT_PAGE_SIZE}
-                          // The enumerated range is over COMMITTED rows; the
-                          // unconfirmed segment is not part of the paged set.
-                          // Counted from the rows themselves, so it cannot go
-                          // negative and needs no clamp to hide it if it did.
-                          currentCount={
-                            activities?.data?.filter((a) => a.poolStatus === undefined).length ?? 0
-                          }
-                          hasMore={activities?.hasMore ?? false}
-                          hasPrevious={activitiesPagination.hasPrevious}
-                          page={activitiesPagination.page}
-                          onNext={() => activitiesPagination.goToNext(activities?.nextCursor)}
-                          onPrevious={activitiesPagination.goToPrevious}
-                        />
-                      </TerminalPanelFooter>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-text-dim py-12 text-center">
-                    {activityFilter === 'all'
-                      ? 'No activities'
-                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'type_call' ? 'Script Call (type)' : activityFilter === 'lock_call' ? 'Script Call (lock)' : activityFilter === 'protocol:rgbpp' ? 'RGB++' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
-                  </div>
+                <span>Unconfirmed</span>
+                <span>{a.pendingSummary.txCount} tx</span>
+                {BigInt(a.pendingSummary.capacityDelta) !== BigInt(0) && (
+                  <span>
+                    <ExactCkb shannons={BigInt(a.pendingSummary.capacityDelta)} wrap /> pending
+                  </span>
                 )}
-              </>
+              </aside>
             )}
-            {activeTab === 'cells' && (
-              <>
-                <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
-                  {(['all', 'ckb', 'token', 'dao'] as const).map((f) => (
-                    <button
-                      key={f}
-                      onClick={() => setCellFilter(f)}
-                      className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
-                        cellFilter === f
-                          ? 'bg-emphasis/15 text-emphasis'
-                          : 'text-text-dim hover:text-text'
-                      }`}
+            {holdings.data && <AddressHoldingsSection holdings={holdings.data} />}
+            {names.error ? (
+              <AddressLoadState label=".cell named rights" error={names.error} loading={false} />
+            ) : (
+              names.data &&
+              names.data.data.length > 0 && (
+                <DetailSection title=".cell named rights">
+                  <div data-testid="address-dotcell-names">
+                    <p className="text-text-dim mb-3 text-xs">
+                      Names this protocol assigns to the address. These rights do not add the name
+                      cell’s capacity to this address’s physical holdings.
+                    </p>
+                    {names.data.data.map((n) => (
+                      <div
+                        key={n.identityId}
+                        className="border-base-elevated flex flex-wrap justify-between gap-2 border-b py-2 text-xs"
+                      >
+                        <Link
+                          href={getIdentityItemDetailHref('dotcell', n.identityId)}
+                          className="text-text-bright"
+                        >
+                          {n.name}
+                        </Link>
+                        <span className="text-text-dim">
+                          {n.expiredAt === null
+                            ? 'Expiry unavailable'
+                            : `expires ${new Date(n.expiredAt * 1000).toISOString().slice(0, 10)}`}
+                        </span>
+                      </div>
+                    ))}
+                    <AddressPagination
+                      pagination={namesPage}
+                      hasMore={names.data.hasMore}
+                      nextCursor={names.data.nextCursor}
+                      currentCount={names.data.data.length}
+                      total={names.data.total}
+                      label="names"
+                    />
+                  </div>
+                </DetailSection>
+              )
+            )}
+            {fiber.error ? (
+              <AddressLoadState label="Fiber channels" error={fiber.error} loading={false} />
+            ) : (
+              fiber.data &&
+              fiber.data.data.length > 0 && (
+                <DetailSection title="Fiber channels">
+                  {fiber.data.data.map((c) => (
+                    <div
+                      key={c.channelId}
+                      className="border-base-elevated flex flex-wrap justify-between gap-3 border-b py-3 text-xs"
                     >
-                      {{ all: 'All', ckb: 'CKB', token: 'Token', dao: 'DAO' }[f]}
+                      <Link href={`/fiber/channels/${c.channelId}`}>
+                        <Hash hash={c.channelId} className="text-xs" copyable={false} />
+                      </Link>
+                      <span>{c.state}</span>
+                      <span className="flex flex-wrap gap-2">
+                        {c.participants.map((p) => (
+                          <Link href={`/address/${p}`} key={p}>
+                            <Hash hash={p} copyable={false} className="text-xs" />
+                          </Link>
+                        ))}
+                      </span>
+                      <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" wrap />
+                    </div>
+                  ))}
+                  <AddressPagination
+                    pagination={fiberPage}
+                    hasMore={fiber.data.hasMore}
+                    nextCursor={fiber.data.nextCursor}
+                    currentCount={fiber.data.data.length}
+                    total={fiber.data.total}
+                    label="channels"
+                  />
+                </DetailSection>
+              )
+            )}
+            <section aria-label="History" className="min-w-0">
+              {tab === 'activities' && activities.data && (
+                <AddressStaleNotice error={activities.error} label="activities" />
+              )}
+              {tab === 'transactions' && transactions.data && (
+                <AddressStaleNotice error={transactions.error} label="transactions" />
+              )}
+              {tab === 'cells' && cells.data && (
+                <AddressStaleNotice error={cells.error} label="live cells" />
+              )}
+              <div
+                role="group"
+                aria-label="History views"
+                className="border-base-border-subtle flex flex-wrap gap-x-6 gap-y-1 border-b"
+              >
+                {(
+                  [
+                    ['activities', 'Activities'],
+                    ['transactions', 'Transactions'],
+                    ['cells', 'Live cells'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={tab === id}
+                    onClick={() => setTab(id)}
+                    className={cn(
+                      'flex h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
+                      tab === id
+                        ? 'border-jade text-text-bright'
+                        : 'text-text-dim border-transparent'
+                    )}
+                  >
+                    {label}
+                    {id === 'transactions' && (
+                      <span className="text-text-dim text-xs font-normal">
+                        {a.transactionsCount.toLocaleString('en-US')}
+                      </span>
+                    )}
+                    {id === 'cells' && holdings.data && (
+                      <span className="text-text-dim text-xs font-normal">
+                        {holdings.data.liveCellsCount.toLocaleString('en-US')}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              {tab === 'activities' && (
+                <div
+                  role="group"
+                  aria-label="Filter activity"
+                  className="my-4 flex flex-wrap gap-2"
+                >
+                  {activityFilters.map(([value, label]) => (
+                    <button
+                      key={value}
+                      aria-pressed={filter === value}
+                      onClick={() => {
+                        setFilter(value);
+                        activityPage.reset();
+                      }}
+                      className={cn(
+                        'rounded border px-2.5 py-1.5 text-xs',
+                        filter === value
+                          ? 'border-base-border bg-base-elevated text-text-bright'
+                          : 'border-base-border-subtle text-text-dim'
+                      )}
+                    >
+                      {label}
                     </button>
                   ))}
                 </div>
-                <div className="p-4">
-                  {cellsLoading ? (
-                    <div className="text-text-dim py-12 text-center">Loading cells...</div>
-                  ) : filteredCells && filteredCells.length > 0 ? (
-                    <>
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {filteredCells.map((cell) => {
-                          const cellToken = cell.typeScriptHash
-                            ? tokenMap.get(cell.typeScriptHash)
-                            : undefined;
-                          const cellIsDao = isDaoCell(cell);
-                          const daoDepositBlock = cellIsDao ? parseDaoCellData(cell.data) : null;
-                          const daoDepositInfo = cellIsDao
-                            ? daoDeposits?.data?.find(
-                                (d) =>
-                                  d.txHash === cell.txHash && d.outputIndex === cell.outputIndex
-                              )
-                            : null;
-                          return (
-                            <TerminalPanel
-                              key={`${cell.txHash}-${cell.outputIndex}`}
-                              variant="inset"
-                              className="h-full"
-                            >
-                              <TerminalPanelContent padding="sm">
-                                <div className="mb-3 flex items-center justify-between">
-                                  <Link
-                                    href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                                    className="text-emphasis hover:underline"
-                                  >
-                                    <HexDisplay
-                                      value={`${cell.txHash}:${cell.outputIndex}`}
-                                      truncate
-                                      startChars={6}
-                                      endChars={6}
-                                      size="sm"
-                                    />
-                                  </Link>
-                                  <span className="text-text-dim font-mono text-xs">
-                                    #{cell.createdAtBlock.toLocaleString()}
-                                  </span>
-                                </div>
-                                <div className="border-base-border bg-base-surface/50 mb-2 rounded border p-2">
-                                  <Capacity
-                                    value={cell.capacity}
-                                    className="text-text-bright text-lg"
-                                  />
-                                </div>
-                                {cellIsDao && (
-                                  <div className="border-base-border bg-base-surface/50 rounded border px-2 py-1.5">
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span className="text-text font-mono">Nervos DAO</span>
-                                      {daoDepositInfo && (
-                                        <Badge
-                                          variant={
-                                            daoDepositInfo.status === 'deposited'
-                                              ? 'green'
-                                              : daoDepositInfo.status === 'withdrawing'
-                                                ? 'gold'
-                                                : 'gray'
-                                          }
-                                        >
-                                          {daoDepositInfo.status === 'deposited'
-                                            ? 'Active'
-                                            : daoDepositInfo.status === 'withdrawing'
-                                              ? 'Withdraw Request'
-                                              : 'Completed'}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    {daoDepositBlock !== null && daoDepositBlock > 0 && (
-                                      <div className="text-text-dim mt-1 text-xs">
-                                        Deposit Block: #{daoDepositBlock.toLocaleString()}
-                                      </div>
-                                    )}
-                                    {daoDepositInfo?.compensation && (
-                                      <div className="text-positive mt-1 text-xs">
-                                        +{formatCkbAmount(daoDepositInfo.compensation).full} CKB
-                                        compensation
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                                {cellToken && cell.udtAmount && (
-                                  <div className="bg-gold/10 border-gold-dim/30 rounded border px-2 py-1.5">
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span className="text-warning-dim font-mono">
-                                        {formatTokenBalanceWithRawMarker(
-                                          cell.udtAmount,
-                                          cellToken.decimals
-                                        )}
-                                      </span>
-                                      <span className="text-warning text-xs">
-                                        {tokenDisplayName(cellToken)}
-                                      </span>
-                                    </div>
-                                  </div>
-                                )}
-                                {!cellToken && !cellIsDao && cell.udtAmount && (
-                                  <div className="border-base-border bg-base-elevated/50 rounded border px-2 py-1.5">
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span
-                                        className="text-text font-mono"
-                                        title={RAW_AMOUNT_TITLE}
-                                      >
-                                        {formatTokenBalanceWithRawMarker(cell.udtAmount, null)}
-                                      </span>
-                                      {cell.typeScriptHash ? (
-                                        <Link
-                                          href={`/tokens/${cell.typeScriptHash}`}
-                                          className="text-text-dim hover:text-text text-xs hover:underline"
-                                        >
-                                          {shortHash(cell.typeScriptHash)}
-                                        </Link>
-                                      ) : (
-                                        <span className="text-text-dim text-xs">Token</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
-                                {!cellToken &&
-                                  !cellIsDao &&
-                                  !cell.udtAmount &&
-                                  cell.dataSize > 0 && (
-                                    <div className="border-base-border bg-base-elevated/30 rounded border px-2 py-1">
-                                      <span className="text-text-dim font-mono text-xs">
-                                        {cell.dataSize} bytes data
-                                      </span>
-                                    </div>
-                                  )}
-                              </TerminalPanelContent>
-                            </TerminalPanel>
-                          );
-                        })}
-                      </div>
-                      {(cells?.hasMore || cellsPagination.hasPrevious) && (
-                        <TerminalPanelFooter className="mt-4 flex justify-center border-t-0">
-                          <CursorPagination
-                            total={
-                              !selectedToken && !selectedDao ? address.liveCellsCount : undefined
-                            }
-                            totalLabel="cells"
-                            pageSize={DEFAULT_PAGE_SIZE}
-                            hasMore={cells?.hasMore ?? false}
-                            hasPrevious={cellsPagination.hasPrevious}
-                            page={cellsPagination.page}
-                            onNext={() => cellsPagination.goToNext(cells?.nextCursor)}
-                            onPrevious={cellsPagination.goToPrevious}
-                          />
-                        </TerminalPanelFooter>
-                      )}
-                    </>
-                  ) : (
-                    <div className="text-text-dim py-12 text-center">
-                      {cellFilter !== 'all'
-                        ? `No ${cellFilter === 'ckb' ? 'CKB' : cellFilter.toUpperCase()} cells on this page`
-                        : selectedToken
-                          ? `No cells found for ${selectedToken.symbol || selectedToken.name}`
-                          : 'No live cells'}
-                    </div>
+              )}
+              {tab === 'cells' && (
+                <div
+                  role="group"
+                  aria-label="Filter live cells"
+                  className="my-4 flex flex-wrap gap-2"
+                >
+                  {[{ key: undefined, label: 'All', mark: undefined }, ...ADDRESS_CLASSES].map(
+                    (c) => (
+                      <button
+                        key={c.key ?? 'all'}
+                        aria-pressed={cellClass === c.key}
+                        onClick={() => {
+                          setCellClass(c.key);
+                          cellPage.reset();
+                        }}
+                        className={cn(
+                          'flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs',
+                          cellClass === c.key
+                            ? 'border-base-border bg-base-elevated text-text-bright'
+                            : 'border-base-border-subtle text-text-dim'
+                        )}
+                      >
+                        {c.mark && <ClassMark kind={c.mark} size={12} />}
+                        {c.label}
+                        {holdings.data && c.key && (
+                          <span>{holdings.data.classes[c.key].cellCount}</span>
+                        )}
+                      </button>
+                    )
                   )}
                 </div>
-              </>
-            )}
-            {activeTab === 'transactions' && (
-              <>
-                {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
-                {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
-                {txLoading ? (
-                  <div className="text-text-dim py-12 text-center">Loading transactions...</div>
-                ) : transactions?.data && transactions.data.length > 0 ? (
+              )}
+              {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
+              {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
+              {tab === 'activities' &&
+                (activities.data ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
-                      <div className="flex-1">Transaction</div>
-                      <div className="w-20 text-center">In/Out</div>
-                      <div className="w-32 text-right">Fee</div>
-                      <div className="hidden w-28 text-right xl:block">Size/Cycles</div>
-                      <div className="w-44 text-right">CKB Change</div>
-                      <div className="w-20 text-right">Time</div>
-                    </div>
-                    {transactions.data.map((tx) => {
-                      const isPositive = !tx.capacityChange.startsWith('-');
-                      const feeRate =
-                        tx.txSize && tx.txSize > 0 && BigInt(tx.fee) > BigInt(0)
-                          ? formatScaledInteger(BigInt(tx.fee), BigInt(tx.txSize), 1)
-                          : null;
-                      // A transaction still in the node's pool has no block and
-                      // no block time. It reports where it stands and how long
-                      // it has waited instead. Keying by txHash is what lets the
-                      // row update in place when it commits.
-                      const inPool = tx.blockNumber === null;
-                      const position =
-                        inPool && tx.poolStatus ? (
-                          <PoolStatusBadge status={tx.poolStatus} />
-                        ) : (
-                          <Link
-                            href={`/blocks/${tx.blockNumber}`}
-                            className="text-text-dim hover:text-text block font-mono text-xs"
-                          >
-                            #{tx.blockNumber?.toLocaleString()}
-                          </Link>
-                        );
-                      const when =
-                        inPool && tx.timeAddedToPool ? (
-                          <span className="text-warning font-mono text-xs">
-                            in pool for {formatPoolDuration(tx.timeAddedToPool)}
-                          </span>
-                        ) : (
-                          <span>
-                            {tx.timestamp === null ? '\u2014' : formatTimeAgo(tx.timestamp)}
-                          </span>
-                        );
-                      return (
-                        <TerminalRow key={tx.txHash}>
-                          <div className="hidden w-full items-center gap-4 lg:flex">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <Link href={`/tx/${tx.txHash}`}>
-                                  <HexDisplay
-                                    value={tx.txHash}
-                                    truncate
-                                    startChars={6}
-                                    endChars={6}
-                                  />
-                                </Link>
-                                {tx.isCellbase && <Badge variant="neutral">Cellbase</Badge>}
-                                {tx.scriptLabels.map((label) => (
-                                  <Badge key={label} variant="neutral">
-                                    {label}
-                                  </Badge>
-                                ))}
-                              </div>
-                              {position}
-                              <PoolInterpretationNotice interpretation={tx.interpretation} />
-                            </div>
-                            <div className="text-text w-20 text-center font-mono">
-                              <span className="text-emphasis/70">{tx.inputsCount}</span>
-                              <span className="text-text-dim mx-1">→</span>
-                              <span className="text-emphasis/70">{tx.outputsCount}</span>
-                            </div>
-                            <div className="w-32 whitespace-nowrap text-right">
-                              {tx.isCellbase ? (
-                                <span className="text-text-dim">{'\u2014'}</span>
-                              ) : (
-                                <div>
-                                  <Capacity value={tx.fee} className="text-text" />
-                                  {feeRate != null && (
-                                    <div className="text-text-dim font-mono text-xs">
-                                      {feeRate} shannons/B
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <div className="text-text-dim hidden w-28 whitespace-nowrap text-right font-mono text-xs xl:block">
-                              {tx.txSize != null ? (
-                                <span>
-                                  {tx.txSize >= 1000
-                                    ? `${(tx.txSize / 1000).toFixed(1)} kB`
-                                    : `${tx.txSize} B`}
-                                </span>
-                              ) : (
-                                <span className="text-text-dim">{'\u2014'}</span>
-                              )}
-                              {tx.cycles != null && (
-                                <>
-                                  <span className="text-text-dim mx-1">/</span>
-                                  <span>
-                                    {tx.cycles >= 1000000
-                                      ? `${(tx.cycles / 1000000).toFixed(1)}M`
-                                      : `${(tx.cycles / 1000).toFixed(0)}k`}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                            <div className="w-44 whitespace-nowrap text-right">
-                              <Capacity
-                                value={tx.capacityChange}
-                                className={isPositive ? 'text-positive' : 'text-negative'}
-                                showSign
-                              />
-                            </div>
-                            <div className="text-text-dim w-20 text-right text-sm">{when}</div>
-                          </div>
-                          <div
-                            className="space-y-1.5 lg:hidden"
-                            data-testid="address-tx-row-mobile"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <Link href={`/tx/${tx.txHash}`}>
-                                <HexDisplay
-                                  value={tx.txHash}
-                                  truncate
-                                  startChars={8}
-                                  endChars={6}
-                                />
-                              </Link>
-                              <span className="text-text-dim shrink-0 text-xs">{when}</span>
-                            </div>
-                            {/* The same position and interpretation facts the
-                                desktop row carries. */}
-                            {position}
-                            <PoolInterpretationNotice interpretation={tx.interpretation} />
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-text-dim flex items-center gap-3 font-mono text-xs">
-                                <span>
-                                  <span className="text-emphasis-dim">{tx.inputsCount}</span>
-                                  <span className="mx-1">→</span>
-                                  <span className="text-emphasis-dim">{tx.outputsCount}</span>
-                                </span>
-                                <span>Fee: {formatCkbAmount(tx.fee).full}</span>
-                              </div>
-                              <span
-                                className={`font-mono text-sm ${tx.capacityChange.startsWith('-') ? 'text-negative' : 'text-positive'}`}
-                              >
-                                {!tx.capacityChange.startsWith('-') && '+'}
-                                {formatCkbAmount(tx.capacityChange).full} CKB
-                              </span>
-                            </div>
-                          </div>
-                        </TerminalRow>
-                      );
-                    })}
-                    {(transactions.hasMore || txPagination.hasPrevious) && (
-                      <TerminalPanelFooter className="flex justify-center">
-                        <CursorPagination
-                          total={address.transactionsCount}
-                          totalLabel="transactions"
-                          pageSize={DEFAULT_PAGE_SIZE}
-                          hasMore={transactions.hasMore}
-                          hasPrevious={txPagination.hasPrevious}
-                          page={txPagination.page}
-                          onNext={() => txPagination.goToNext(transactions.nextCursor)}
-                          onPrevious={txPagination.goToPrevious}
-                        />
-                      </TerminalPanelFooter>
+                    {activities.data.data.length ? (
+                      activities.data.data.map((row) => (
+                        <AddressActivity key={row.txHash} activity={row} address={a} />
+                      ))
+                    ) : (
+                      <p className="text-text-dim py-6 text-xs">
+                        {filter === 'all'
+                          ? 'No activities.'
+                          : `No ${activityFilters.find((f) => f[0] === filter)![1]} activities on this page.`}
+                      </p>
                     )}
+                    <AddressPagination
+                      pagination={activityPage}
+                      hasMore={activities.data.hasMore}
+                      nextCursor={activities.data.nextCursor}
+                      currentCount={
+                        activities.data.data.filter((row) => row.poolStatus === undefined).length
+                      }
+                      label="activities"
+                    />
                   </>
                 ) : (
-                  <div className="text-text-dim py-12 text-center">No transactions</div>
-                )}
-              </>
-            )}
-          </TerminalPanelContent>
-        </TerminalPanel>
+                  <AddressLoadState
+                    label="activities"
+                    error={activities.error}
+                    loading={activities.isLoading}
+                  />
+                ))}
+              {tab === 'transactions' &&
+                (transactions.data ? (
+                  <>
+                    <AddressTransactions rows={transactions.data.data} />
+                    <AddressPagination
+                      pagination={txPage}
+                      hasMore={transactions.data.hasMore}
+                      nextCursor={transactions.data.nextCursor}
+                      currentCount={
+                        transactions.data.data.filter((row) => row.poolStatus === undefined).length
+                      }
+                      total={transactions.data.total}
+                      label="transactions"
+                    />
+                  </>
+                ) : (
+                  <AddressLoadState
+                    label="transactions"
+                    error={transactions.error}
+                    loading={transactions.isLoading}
+                  />
+                ))}
+              {tab === 'cells' &&
+                (cells.data ? (
+                  <>
+                    <AddressLiveCells rows={cells.data.data} />
+                    <AddressPagination
+                      pagination={cellPage}
+                      hasMore={cells.data.hasMore}
+                      nextCursor={cells.data.nextCursor}
+                      currentCount={cells.data.data.length}
+                      total={cells.data.total}
+                      label="live cells"
+                    />
+                  </>
+                ) : (
+                  <AddressLoadState
+                    label="live cells"
+                    error={cells.error}
+                    loading={cells.isLoading}
+                  />
+                ))}
+            </section>
+          </DetailLayout>
+        )}
       </main>
     </div>
   );

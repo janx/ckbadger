@@ -35,6 +35,8 @@ export function formatStandard(standard: string): string {
   if (standard === 'spore') return 'Spore';
   if (standard === 'm-nft') return 'M-NFT';
   if (standard === 'dotbit') return '.bit';
+  if (standard === 'bit_cell') return '.bit Cell';
+  if (standard === 'dotcell') return '.cell';
   if (standard === 'did_ckb') return 'did:ckb';
   return standard.charAt(0).toUpperCase() + standard.slice(1);
 }

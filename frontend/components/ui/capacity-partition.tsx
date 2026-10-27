@@ -12,6 +12,7 @@ export interface CapacityPartitionProps {
   free: string;
   daoFree?: string;
   className?: string;
+  showTotal?: boolean;
 }
 export function CapacityPartition({
   subject,
@@ -20,6 +21,7 @@ export function CapacityPartition({
   free,
   daoFree,
   className,
+  showTotal = true,
 }: CapacityPartitionProps) {
   const [active, setActive] = useState<string | null>(null);
   const sum = exactUnsignedInteger(total, `${subject}: total`);
@@ -48,10 +50,12 @@ export function CapacityPartition({
     throw new Error(`${subject}: capacity partition does not equal total ${total}`);
   return (
     <div className={className} aria-label={`${subject} capacity partition`}>
-      <div className="mb-3 flex flex-wrap justify-between gap-2 text-xs">
-        <span className="text-text-dim">CKB held</span>
-        <ExactCkb shannons={sum} signed={false} tone="plain" />
-      </div>
+      {showTotal && (
+        <div className="mb-3 flex flex-wrap justify-between gap-2 text-xs">
+          <span className="text-text-dim">CKB held</span>
+          <ExactCkb shannons={sum} signed={false} tone="plain" />
+        </div>
+      )}
       {sum > BigInt(0) && (
         <div className="flex h-2 w-full" aria-hidden="true">
           {parts.map((p) => (

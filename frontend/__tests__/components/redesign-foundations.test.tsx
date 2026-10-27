@@ -289,6 +289,44 @@ describe('transaction and activity foundations', () => {
       )
     ).toThrow('0xbroken: script group g references unknown cell missing');
   });
+  it('keeps participant pool evidence nullable and never creates a block link', () => {
+    const activity = latestActivities[0];
+    const { container } = render(
+      <ActivityRow
+        activity={{
+          ...activity,
+          blockNumber: null,
+          timestamp: null,
+          poolStatus: 'proposed',
+          timeAddedToPool: new Date().toISOString(),
+          interpretation: {
+            status: 'partial',
+            reasons: [{ code: 'unresolved_input', detail: '0xabc:1' }],
+          },
+        }}
+        mode="participant"
+        participant={activity.participants[0]}
+      />
+    );
+    expect(screen.getByText('Proposed')).toBeInTheDocument();
+    expect(screen.getByText(/in pool for/)).toBeInTheDocument();
+    expect(screen.getByText(/partial: input not yet resolvable/)).toBeInTheDocument();
+    expect(container.querySelector('a[href*="/blocks/"]')).toBeNull();
+  });
+  it('can omit the partition total when the detail hero already displays it', () => {
+    render(
+      <CapacityPartition
+        subject="Address"
+        total="10000000000"
+        occupied="6100000000"
+        free="3900000000"
+        showTotal={false}
+      />
+    );
+    expect(screen.queryByText('CKB held')).not.toBeInTheDocument();
+    expect(screen.getByText('occupied')).toBeInTheDocument();
+    expect(screen.getByText('free')).toBeInTheDocument();
+  });
   it('shares cross-user and participant activity grammar, including registered lock kind', () => {
     const activity = latestActivities[0];
     const participant = { ...activity.participants[0], lockKind: 'JoyID' };
