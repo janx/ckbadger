@@ -345,3 +345,54 @@ previous full 64-check chain run. The [round-4 report](SITE_REDESIGN_ROUND4.md) 
 [detailed acceptance](reports/2026-10-27-site-redesign-round4-acceptance.md) retain
 failure corrections, immutable binary provenance and read-performance costs.
 Next: **D6 DAO and charts**, followed by D7 and D8.
+
+## 2026-10-28 D6 completion
+
+Sol implementation lanes completed Nervos DAO, the 28-preview Charts overview
+and all 29 existing chart detail routes, including circulation ratio. DAO uses
+exact phase capacities, current depositor counts, epoch fractions, AR anchors
+and full-denominator concentration. Supply and secondary charts preserve
+sub-CKB precision and the declared indexed chain calendar. Root integrated and
+accepted the work; the final layout corrections are included with D7.
+
+Independent mainnet acceptance enumerated **22,357 live DAO cells** and passed
+**99 DAO assertions**, plus exact supply/secondary identities over **2,538
+completed dates**. Four selected CLI checks passed; this was intentionally not
+another complete 64-check verification. The combined workspace at `1781213e`
+passed **4,762 tests in 74 suites**, zero failures. Corrected overview/miner
+pages and 40 controlled D6 states also passed.
+
+Re-sync required: **no**. No production store write path or schema changed.
+The [round-5 scope](SITE_REDESIGN_ROUND5.md) and
+[D6 acceptance report](reports/2026-10-28-site-redesign-round5-acceptance.md)
+record exact executable provenance, earlier failures and their fixes, source
+boundaries, tests and read-performance observations. D7 follows in the same
+integration sequence, with D8 reserved for not-found/crash pages.
+
+## 2026-10-28 D7 completion
+
+Three `gpt-6-sol` agents completed Fiber network/channel pages, Forks list/detail,
+Network and Hardforks on `integration/site-redesign-round6`. Final implementation
+revision: `53ab417b`. Exact observed-party flows, commitment-stage evidence,
+historical versus current branch fate, retained crawler scope, consensus features
+and 249 named code-version deployment markers are exposed without new writes.
+
+The complete workspace at `1781213e` passed **4,762 tests in 74 suites**, zero
+failures, with three existing opt-in native-VM tests unrun. The final API and
+presentation changes passed a complete **1,381-test API run in 35 suites** and
+**1,679 frontend tests in 210 files**. Type checks, lint, formatting, strict
+workspace Clippy, production frontend/CLI builds and all 25 producer/consumer
+fixture comparisons passed.
+
+The frozen final binary passed **1,879 selected mainnet assertions**, plus a
+bounded **20-header / 60-comparison** fork proof, **22 real page/width
+combinations** and **70 controlled states** at 1440/390 px. The acceptance retains
+declared calendar and crawler-observation limits and does not claim another full
+64-check verification. Temporary APIs/previews were stopped; the user's services
+and primary stores were unchanged.
+
+Re-sync required: **no**. No domain, append-only or network production write path
+or schema changed. The [round-6 scope](SITE_REDESIGN_ROUND6.md) and
+[D7 acceptance report](reports/2026-10-28-site-redesign-round6-acceptance.md) record
+the fixes, immutable binary SHA, failure evidence and additional read costs.
+The requested plan is complete through D7. Next: **D8 not-found/crash pages**.

@@ -77,8 +77,18 @@ previous full 64-check verification.
 
 ## Result
 
-Implementation and acceptance are in progress.
+D6 is complete. DAO and all 29 chart detail routes are implemented, together
+with the 28-preview overview and exact read contracts. Independent acceptance
+checked 22,357 live DAO cells, 99 DAO assertions and 2,538 completed chart dates.
+All four selected CLI checks passed; this is separate from the earlier full
+64-check chain verification.
 
-- Re-sync required: **no planned requirement** for D6 read-time changes.
-- What to do next: complete both lanes, integrate and verify D6; D7 (Fiber,
-  forks, network and hardforks) and D8 (not-found/crash pages) follow.
+The final mobile miner layout and overview readouts were corrected with D7.
+The combined Rust workspace run at `1781213e` passed 4,762 tests with zero
+failures; frontend and browser evidence, fixture agreement and the declared
+calendar dependency are recorded in the
+[D6 acceptance report](reports/2026-10-28-site-redesign-round5-acceptance.md).
+
+- Re-sync required: **no** for D6 read-time changes.
+- What to do next: [D7](SITE_REDESIGN_ROUND6.md) is also complete; D8 not-found/crash
+  pages are next.
