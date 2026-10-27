@@ -211,7 +211,17 @@ struct AssetListApiRecord {
     asset_type: String,
     standard: String,
     holders_count: i64,
-    transfers_count: i64,
+}
+
+/// Object supply counts items ever created; liveCount counts surviving items.
+/// transfersCount is token-only and is not part of the object wire contract.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObjectAssetListApiRecord {
+    #[serde(flatten)]
+    asset: AssetListApiRecord,
+    total_supply: String,
+    live_count: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -226,7 +236,6 @@ struct AddressBalanceApiRecord {
 struct NftCollectionDetailApiRecord {
     collection_id: String,
     total_count: i64,
-    #[allow(dead_code)]
     live_count: i64,
     holders_count: i64,
 }
@@ -3438,7 +3447,7 @@ impl Check for ObjectAssetCollectionConsistency {
         Some(ctx.sample_count.min(OBJECT_COLLECTION_SAMPLE_MAX) as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let assets: CursorPageWithTotal<AssetListApiRecord> = api_get(
+        let assets: CursorPageWithTotal<ObjectAssetListApiRecord> = api_get(
             ctx,
             &format!("assets?type=object&limit={}", OBJECT_ASSET_LIST_LIMIT),
         )?;
@@ -3460,33 +3469,50 @@ impl Check for ObjectAssetCollectionConsistency {
         let mut checked = 0u64;
 
         for idx in sample_indices {
-            let asset = &assets.data[idx];
+            let object = &assets.data[idx];
+            let asset = &object.asset;
 
-            // The ?type=object filter is a catch-all returning object + identity types.
-            let detail_prefix = match asset.asset_type.as_str() {
-                "object" => "assets/objects",
-                "identity" => "assets/identities",
-                other => {
-                    findings.push(Finding {
-                        entity: format!("asset={}", asset.id),
-                        details: vec![format!(
-                            "unexpected asset type '{}' in object asset list",
-                            other
-                        )],
-                    });
-                    checked += 1;
-                    progress.inc(1);
-                    continue;
-                }
-            };
+            if asset.asset_type != "object" {
+                findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "unexpected asset type '{}' in object asset list",
+                        asset.asset_type
+                    )],
+                });
+                checked += 1;
+                progress.inc(1);
+                continue;
+            }
 
             if asset.standard.eq_ignore_ascii_case("spore") {
                 progress.inc(1);
                 continue;
             }
 
+            let total_count = object.total_supply.parse::<i64>().map_err(|error| {
+                anyhow::anyhow!(
+                    "asset={} invalid list totalSupply '{}': {}",
+                    asset.id,
+                    object.total_supply,
+                    error
+                )
+            })?;
+            anyhow::ensure!(
+                total_count >= 0,
+                "asset={} invalid negative list totalSupply={}",
+                asset.id,
+                total_count
+            );
+            anyhow::ensure!(
+                object.live_count >= 0,
+                "asset={} invalid negative list liveCount={}",
+                asset.id,
+                object.live_count
+            );
+
             let collection_detail: NftCollectionDetailApiRecord =
-                api_get(ctx, &format!("{}/{}", detail_prefix, asset.id))?;
+                api_get(ctx, &format!("assets/objects/{}", asset.id))?;
             let detail_id = normalize_hex_key(&collection_detail.collection_id);
             let asset_id = normalize_hex_key(&asset.id);
 
@@ -3499,12 +3525,21 @@ impl Check for ObjectAssetCollectionConsistency {
                     )],
                 });
             }
-            if collection_detail.total_count != asset.transfers_count {
+            if collection_detail.total_count != total_count {
                 findings.push(Finding {
                     entity: format!("asset={}", asset.id),
                     details: vec![format!(
-                        "detail totalCount={} != list transfersCount={}",
-                        collection_detail.total_count, asset.transfers_count
+                        "detail totalCount={} != list totalSupply={}",
+                        collection_detail.total_count, total_count
+                    )],
+                });
+            }
+            if collection_detail.live_count != object.live_count {
+                findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "detail liveCount={} != list liveCount={}",
+                        collection_detail.live_count, object.live_count
                     )],
                 });
             }
@@ -3518,10 +3553,8 @@ impl Check for ObjectAssetCollectionConsistency {
                 });
             }
 
-            let items: CursorPageWithTotal<serde_json::Value> = api_get(
-                ctx,
-                &format!("{}/{}/items?limit=1", detail_prefix, asset.id),
-            )?;
+            let items: CursorPageWithTotal<serde_json::Value> =
+                api_get(ctx, &format!("assets/objects/{}/items?limit=1", asset.id))?;
             match items.total {
                 Some(total) if total == collection_detail.total_count => {}
                 Some(total) => findings.push(Finding {
@@ -3670,6 +3703,18 @@ impl Check for AssetTopHoldersAddressConsistency {
         }
 
         for asset in object_assets.data.iter().take(TOP_ASSET_LIMIT) {
+            if asset.asset_type != "object" {
+                findings.push(Finding {
+                    entity: format!("object={} standard={}", asset.id, asset.standard),
+                    details: vec![format!(
+                        "unexpected asset type '{}' in object list",
+                        asset.asset_type
+                    )],
+                });
+                checked += 1;
+                progress.inc(1);
+                continue;
+            }
             let mut asset_details = vec![];
 
             let (detail_id, detail_holders_count, holders): (
@@ -3688,29 +3733,13 @@ impl Check for AssetTopHoldersAddressConsistency {
                 )?;
                 (detail.cluster_id, detail.holders_count, holders_page)
             } else {
-                // ?type=object returns object + identity types
-                let detail_prefix = match asset.asset_type.as_str() {
-                    "object" => "assets/objects",
-                    "identity" => "assets/identities",
-                    other => {
-                        asset_details
-                            .push(format!("unexpected asset type '{}' in object list", other));
-                        findings.push(Finding {
-                            entity: format!("object={} standard={}", asset.id, asset.standard),
-                            details: asset_details,
-                        });
-                        checked += 1;
-                        progress.inc(1);
-                        continue;
-                    }
-                };
                 let detail: NftCollectionDetailApiRecord =
-                    api_get(ctx, &format!("{}/{}", detail_prefix, asset.id))?;
+                    api_get(ctx, &format!("assets/objects/{}", asset.id))?;
                 let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
                     ctx,
                     &format!(
-                        "{}/{}/holders?limit={}",
-                        detail_prefix, asset.id, TOP_HOLDER_LIMIT
+                        "assets/objects/{}/holders?limit={}",
+                        asset.id, TOP_HOLDER_LIMIT
                     ),
                 )?;
                 (detail.collection_id, detail.holders_count, holders_page)
@@ -3779,7 +3808,7 @@ impl Check for AssetTopHoldersAddressConsistency {
             }
         }
 
-        if checked == 0 {
+        if checked == 0 && findings.is_empty() {
             return Ok(CheckResult::pass_with_detail(
                 0,
                 "no holders returned by top token/object assets".to_string(),
@@ -5552,6 +5581,220 @@ mod tests {
             evidence_dir: None,
             entity_budget: Default::default(),
             source_profile: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn asset_contract_object() -> serde_json::Value {
+        json!({
+            "id": "0x1234", "assetType": "object", "standard": "m-nft",
+            "holdersCount": 0, "totalSupply": "7", "liveCount": 0,
+            "activitiesCount": 19
+        })
+    }
+
+    fn mount_asset_contract(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        object: serde_json::Value,
+        items_total: i64,
+        holders_total: i64,
+    ) {
+        runtime.block_on(async {
+            for (asset_type, data) in [("token", json!([])), ("object", json!([object]))] {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/assets"))
+                    .and(query_param("type", asset_type))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "data": data, "total": data.as_array().unwrap().len(), "nextCursor": null
+                    })))
+                    .mount(server)
+                    .await;
+            }
+            for (endpoint, response) in [
+                (
+                    "/api/v1/assets/objects/0x1234",
+                    json!({
+                        "collectionId": "0x1234", "totalCount": 7,
+                        "liveCount": 0, "holdersCount": 0, "activitiesCount": 19
+                    }),
+                ),
+                (
+                    "/api/v1/assets/objects/0x1234/items",
+                    json!({
+                        "data": [], "total": items_total, "nextCursor": null
+                    }),
+                ),
+                (
+                    "/api/v1/assets/objects/0x1234/holders",
+                    json!({
+                        "data": [], "total": holders_total, "nextCursor": null
+                    }),
+                ),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(endpoint))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .mount(server)
+                    .await;
+            }
+        });
+    }
+
+    #[test]
+    fn asset_contract_object_counts_use_total_supply_and_live_count() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        mount_asset_contract(&runtime, &server, asset_contract_object(), 7, 0);
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        let result = ObjectAssetCollectionConsistency
+            .run(&ctx, &progress)
+            .unwrap();
+        assert!(result.passed(), "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+        let result = AssetTopHoldersAddressConsistency
+            .run(&ctx, &progress)
+            .unwrap();
+        assert!(result.passed(), "{:?}", result.findings);
+        assert_eq!(result.items_checked, 0);
+    }
+
+    #[test]
+    fn asset_contract_object_count_mismatches_are_failures() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let mut object = asset_contract_object();
+        object["totalSupply"] = json!("9");
+        object["liveCount"] = json!(2);
+        mount_asset_contract(&runtime, &server, object, 6, 0);
+        let result = ObjectAssetCollectionConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed());
+        assert_eq!(result.items_checked, 1);
+        for expected in [
+            "detail totalCount=7 != list totalSupply=9",
+            "detail liveCount=0 != list liveCount=2",
+            "items total=6 != detail totalCount=7",
+        ] {
+            assert!(
+                result
+                    .findings
+                    .iter()
+                    .flat_map(|finding| &finding.details)
+                    .any(|detail| detail == expected),
+                "missing {expected}: {:?}",
+                result.findings
+            );
+        }
+    }
+
+    #[test]
+    fn asset_contract_required_object_counts_reject_missing_and_malformed_values() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for (field, value, expected_error) in [
+            ("totalSupply", None, "totalSupply"),
+            ("totalSupply", Some(json!(null)), "invalid type"),
+            ("totalSupply", Some(json!(7)), "invalid type"),
+            ("totalSupply", Some(json!("-1")), "totalSupply"),
+            ("totalSupply", Some(json!("7.5")), "totalSupply"),
+            (
+                "totalSupply",
+                Some(json!("9223372036854775808")),
+                "totalSupply",
+            ),
+            ("liveCount", None, "liveCount"),
+            ("liveCount", Some(json!(null)), "invalid type"),
+            ("liveCount", Some(json!("0")), "invalid type"),
+            ("liveCount", Some(json!(-1)), "liveCount"),
+        ] {
+            let server = runtime.block_on(MockServer::start());
+            let mut object = asset_contract_object();
+            if let Some(value) = value {
+                object[field] = value;
+            } else {
+                object.as_object_mut().unwrap().remove(field);
+            }
+            mount_asset_contract(&runtime, &server, object, 7, 0);
+            let completed = execute_check(
+                &ObjectAssetCollectionConsistency,
+                &mock_ctx(&server),
+                &ProgressReporter::new(None),
+            );
+            assert_eq!(
+                completed.status,
+                CheckStatus::Error,
+                "{field}: {completed:?}"
+            );
+            assert!(
+                completed
+                    .status_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains(expected_error),
+                "{completed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn asset_contract_empty_holder_page_does_not_discard_mismatches() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let mut object = asset_contract_object();
+        object["holdersCount"] = json!(1);
+        // Isolate the pre-existing early-Pass bug from the separate old DTO bug:
+        // this extra legacy field lets the old consumer reach the result branch.
+        object["transfersCount"] = json!(7);
+        mount_asset_contract(&runtime, &server, object, 7, 2);
+        let result = AssetTopHoldersAddressConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(
+            !result.passed(),
+            "empty holders must not erase count mismatches"
+        );
+        assert_eq!(result.items_checked, 0);
+        for expected in [
+            "detail holdersCount=0 != list holdersCount=1",
+            "holders total=2 != detail holdersCount=0",
+        ] {
+            assert!(
+                result
+                    .findings
+                    .iter()
+                    .flat_map(|finding| &finding.details)
+                    .any(|detail| detail == expected),
+                "missing {expected}: {:?}",
+                result.findings
+            );
+        }
+    }
+
+    #[test]
+    fn asset_contract_object_filter_rejects_identity_rows() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let mut object = asset_contract_object();
+        object["assetType"] = json!("identity");
+        mount_asset_contract(&runtime, &server, object, 7, 0);
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        for check in [
+            &ObjectAssetCollectionConsistency as &dyn Check,
+            &AssetTopHoldersAddressConsistency,
+        ] {
+            let result = check.run(&ctx, &progress).unwrap();
+            assert!(!result.passed(), "{}", check.name());
+            assert!(
+                result
+                    .findings
+                    .iter()
+                    .flat_map(|finding| &finding.details)
+                    .any(|detail| detail.contains("unexpected asset type 'identity'")),
+                "{:?}",
+                result.findings
+            );
         }
     }
 
