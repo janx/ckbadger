@@ -199,6 +199,8 @@ pub struct DaoStatisticsResponse {
     /// sync tip by at most one batch commit, so this makes the as-of block
     /// explicit instead of implying "current".
     pub tip_block_number: i64,
+    /// Exact chain-derived block-0 burn policy total, in shannons.
+    pub genesis_baseline_burnt: String,
     pub total_deposited: String,
     pub total_deposited_ckb: String,
     pub total_depositors: i32,
@@ -563,6 +565,7 @@ fn compute_dao_24h_deltas(latest: &ckbadger_store::DaoLatestStatistics) -> DaoDe
 fn dao_latest_to_response(
     latest: &ckbadger_store::DaoLatestStatistics,
     deltas: DaoDeltas,
+    genesis_baseline_burnt: i128,
 ) -> DaoStatisticsResponse {
     let tip_block_number = latest.tip_block_number;
     let total_deposited = latest.total_deposited.to_string();
@@ -574,6 +577,7 @@ fn dao_latest_to_response(
 
     DaoStatisticsResponse {
         tip_block_number,
+        genesis_baseline_burnt: genesis_baseline_burnt.to_string(),
         total_deposited: total_deposited.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited),
         total_depositors: latest.total_depositors,
@@ -804,7 +808,12 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     };
 
     let deltas = compute_dao_24h_deltas(&latest);
-    ok(dao_latest_to_response(&latest, deltas))
+    let genesis_baseline_burnt = state.genesis_baseline()?.burnt;
+    ok(dao_latest_to_response(
+        &latest,
+        deltas,
+        genesis_baseline_burnt,
+    ))
 }
 
 async fn get_top_depositors(

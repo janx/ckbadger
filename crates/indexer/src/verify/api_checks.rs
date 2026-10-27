@@ -11,12 +11,6 @@ use std::collections::HashMap;
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
 const SHANNONS_PER_CKB: i128 = 100_000_000;
-/// Genesis burnt supply in shannons — a network invariant shared by mainnet and
-/// testnet (8.4B CKB, the unspendable Satoshi gift). The authoritative source is
-/// the persisted `GenesisBaseline::burnt` (derived from block 0); these
-/// API-backed verify checks have no store handle, so they assert against this
-/// documented network-invariant literal instead of the constant it derives to.
-const GENESIS_BURNT_SHANNONS: i128 = 840_000_000_000_000_000;
 const TOKEN_ACTIVITY_ADDRESS_LIMIT: usize = 20;
 const TOKEN_ACTIVITY_PAGE_LIMIT: usize = 100;
 const TOKEN_ACTIVITY_MAX_PAGES_PER_ADDRESS: usize = 3;
@@ -106,6 +100,22 @@ struct DaoStatisticsResponse {
     total_deposited: String,
     estimated_apc: String,
     active_deposits: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoGenesisBaselineResponse {
+    genesis_baseline_burnt: String,
+}
+
+fn genesis_baseline_burnt(ctx: &CheckContext) -> anyhow::Result<i128> {
+    let stats: DaoGenesisBaselineResponse = api_get(ctx, "dao/statistics")?;
+    parse_non_negative_i128(&stats.genesis_baseline_burnt).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid /dao/statistics genesisBaselineBurnt '{}'",
+            stats.genesis_baseline_burnt
+        )
+    })
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -1118,8 +1128,8 @@ impl Check for DaoStatisticsSane {
     }
 }
 
-/// F7: The persisted genesis economic baseline is present and its burnt supply
-/// equals the network invariant (8.4B CKB) on the latest completed day.
+/// F7: The latest completed-day burnt gap equals the active network's
+/// persisted genesis economic baseline.
 ///
 /// The verify harness is purely API-backed and has no store handle, so this
 /// check observes the baseline through the API rather than reading
@@ -1128,7 +1138,8 @@ impl Check for DaoStatisticsSane {
 ///    are derived from `GenesisBaseline` on the API side and fail-fast if it
 ///    was never derived, so a successful fetch proves the baseline is present.
 ///  - Value: `total-supply.burnt - secondary-issuance.burnt` isolates the
-///    genesis burnt, which must equal 8.4B CKB (mainnet and testnet share it).
+///    genesis burnt and is compared with `/dao/statistics.genesisBaselineBurnt`,
+///    read from the same canonical persisted baseline.
 ///
 /// Both endpoints publish only complete UTC+8 days from the same indexed DAO
 /// daily snapshot history. Their day boundaries depend on the indexed monotone
@@ -1155,10 +1166,11 @@ impl Check for GenesisBaselineBurntInvariant {
         let BurntGapEvidence { gaps, mut findings } =
             exact_burnt_gaps(ctx, &supply.data, &secondary.data)?;
         if let Some((date, gap)) = gaps.last() {
-            if *gap != GENESIS_BURNT_SHANNONS {
+            let expected = genesis_baseline_burnt(ctx)?;
+            if *gap != expected {
                 findings.push(Finding {
                     entity: date.clone(),
-                    details: vec![format!("genesis burnt = {gap} shannons, expected {GENESIS_BURNT_SHANNONS} shannons (8.4B network invariant)")],
+                    details: vec![format!("genesis burnt gap = {gap} shannons, persisted genesis baseline = {expected} shannons")],
                 });
             }
         }
@@ -1792,7 +1804,7 @@ impl Check for ChartTotalSupplyMonotonic {
         let chart: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let mut findings = vec![];
         let dates: Vec<_> = chart.data.iter().map(|point| point.date.as_str()).collect();
-        validate_completed_chart_dates(&dates, "total-supply", &current_ckb_date(), &mut findings);
+        validate_chart_dates(&dates, "total-supply", &mut findings);
         if chart.data.is_empty() {
             validate_empty_dao_chart_history(ctx, &mut findings)?;
         }
@@ -2515,12 +2527,6 @@ fn parse_non_negative_i128(raw: &str) -> Option<i128> {
     (value >= 0).then_some(value)
 }
 
-fn current_ckb_date() -> String {
-    ckbadger_common::now_datetime_utc8()
-        .format("%Y-%m-%d")
-        .to_string()
-}
-
 fn parse_ckb_to_shannons(raw: &str) -> Option<i128> {
     let s = raw.trim();
     if s.is_empty() || s.starts_with('-') {
@@ -2717,20 +2723,19 @@ impl Check for ChartKnowledgeCompositionExact {
     }
 }
 
-fn validate_completed_chart_dates(
-    dates: &[&str],
-    chart: &str,
-    today: &str,
-    findings: &mut Vec<Finding>,
-) {
+/// The API's indexed chain-time calendar selects completed days. An HTTP-only
+/// verifier cannot re-derive that boundary from its wall clock: local sync can
+/// lag, and fixture chains can run ahead. This checks the chart's date syntax
+/// and ordering, leaving completion to the API's explicit calendar dependency.
+fn validate_chart_dates(dates: &[&str], chart: &str, findings: &mut Vec<Finding>) {
     let mut previous: Option<&str> = None;
     for &date in dates {
         let canonical = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .is_ok_and(|parsed| parsed.format("%Y-%m-%d").to_string() == date);
-        if !canonical || date >= today {
+        if !canonical {
             findings.push(Finding {
                 entity: date.to_string(),
-                details: vec![format!("{chart} contains an invalid or incomplete day {date}; current wall UTC+8 day is {today}")],
+                details: vec![format!("{chart} contains an invalid date {date}")],
             });
         }
         if let Some(before) = previous.filter(|before| date <= *before) {
@@ -2772,19 +2777,14 @@ fn exact_burnt_gaps(
     supply: &[StackedChartDataPoint],
     secondary: &[StackedChartDataPoint],
 ) -> anyhow::Result<BurntGapEvidence> {
-    let today = current_ckb_date();
-    // The public endpoints now emit only complete days. A current-day point is
-    // rejected by the date validator rather than used as stable evidence.
+    // The public endpoints emit indexed-calendar-complete days; this verifier
+    // checks date syntax/order and exact same-date amounts without a wall-clock
+    // claim about completion.
     let supply_dates: Vec<_> = supply.iter().map(|point| point.date.as_str()).collect();
     let secondary_dates: Vec<_> = secondary.iter().map(|point| point.date.as_str()).collect();
     let mut findings = vec![];
-    validate_completed_chart_dates(&supply_dates, "total-supply", &today, &mut findings);
-    validate_completed_chart_dates(
-        &secondary_dates,
-        "secondary-issuance",
-        &today,
-        &mut findings,
-    );
+    validate_chart_dates(&supply_dates, "total-supply", &mut findings);
+    validate_chart_dates(&secondary_dates, "secondary-issuance", &mut findings);
     if supply_dates != secondary_dates {
         findings.push(Finding {
             entity: "chart-date-coverage".to_string(),
@@ -2847,7 +2847,6 @@ impl Check for SecondaryIssuancePartitionConservation {
             api_get(ctx, "charts/secondary-issuance")?;
         let supply: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let mut findings = vec![];
-        let today = current_ckb_date();
         let secondary_dates: Vec<_> = secondary
             .data
             .iter()
@@ -2858,13 +2857,8 @@ impl Check for SecondaryIssuancePartitionConservation {
             .iter()
             .map(|point| point.date.as_str())
             .collect();
-        validate_completed_chart_dates(
-            &secondary_dates,
-            "secondary-issuance",
-            &today,
-            &mut findings,
-        );
-        validate_completed_chart_dates(&supply_dates, "total-supply", &today, &mut findings);
+        validate_chart_dates(&secondary_dates, "secondary-issuance", &mut findings);
+        validate_chart_dates(&supply_dates, "total-supply", &mut findings);
         if secondary_dates != supply_dates {
             findings.push(Finding {
                 entity: "chart-date-coverage".to_string(),
@@ -2952,7 +2946,8 @@ impl Check for SecondaryIssuancePartitionConservation {
     }
 }
 
-/// S17: Every completed date has an exact burnt gap equal to genesis burnt.
+/// S17: Every completed date has an exact burnt gap equal to the persisted
+/// active-network genesis burnt.
 /// The indexed monotone chain-time calendar defines the day boundaries; this
 /// chart-level check does not independently prove the calendar itself.
 pub struct BurntSupplyGenesisInvariant;
@@ -2973,12 +2968,15 @@ impl Check for BurntSupplyGenesisInvariant {
             api_get(ctx, "charts/secondary-issuance")?;
         let BurntGapEvidence { gaps, mut findings } =
             exact_burnt_gaps(ctx, &supply.data, &secondary.data)?;
-        for (date, gap) in &gaps {
-            if *gap != GENESIS_BURNT_SHANNONS {
-                findings.push(Finding {
-                    entity: date.clone(),
-                    details: vec![format!("burnt gap={gap} shannons, expected {GENESIS_BURNT_SHANNONS} shannons (8.4B network invariant)")],
-                });
+        if !gaps.is_empty() {
+            let expected = genesis_baseline_burnt(ctx)?;
+            for (date, gap) in &gaps {
+                if *gap != expected {
+                    findings.push(Finding {
+                        entity: date.clone(),
+                        details: vec![format!("burnt gap={gap} shannons, persisted genesis baseline={expected} shannons")],
+                    });
+                }
             }
         }
         let checked = gaps.len() as u64;
@@ -5870,9 +5868,32 @@ mod tests {
         total_supply_data: serde_json::Value,
         secondary_data: serde_json::Value,
     ) {
+        mount_burnt_chart_data_with_baseline(
+            runtime,
+            server,
+            total_supply_data,
+            secondary_data,
+            "840000000000000000",
+        );
+    }
+
+    fn mount_burnt_chart_data_with_baseline(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        total_supply_data: serde_json::Value,
+        secondary_data: serde_json::Value,
+        baseline_burnt: &str,
+    ) {
         let total = json!({ "data": total_supply_data });
         let secondary = json!({ "data": secondary_data });
         runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/statistics"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "genesisBaselineBurnt": baseline_burnt
+                })))
+                .mount(server)
+                .await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(total))
@@ -5939,7 +5960,7 @@ mod tests {
         let result = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
         assert!(!result.passed());
         assert_eq!(result.findings.len(), 1);
-        assert!(result.findings[0].details[0].contains("8.4B network invariant"));
+        assert!(result.findings[0].details[0].contains("persisted genesis baseline"));
 
         let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
         assert!(!sampling.passed(), "completed-day mismatch must still fail");
@@ -5948,7 +5969,30 @@ mod tests {
     }
 
     #[test]
-    fn burnt_genesis_checks_reject_an_incomplete_current_day_in_chart_history() {
+    fn burnt_gap_uses_active_network_baseline_instead_of_mainnet_literal() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_burnt_chart_data_with_baseline(
+            &runtime,
+            &server,
+            json!([{"date": "2024-01-01", "values": {"burnt": "1.23456789"}}]),
+            json!([{"date": "2024-01-01", "values": {"burnt": "1"}}]),
+            "23456789",
+        );
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        assert!(GenesisBaselineBurntInvariant
+            .run(&ctx, &progress)
+            .unwrap()
+            .passed());
+        assert!(BurntSupplyGenesisInvariant
+            .run(&ctx, &progress)
+            .unwrap()
+            .passed());
+    }
+
+    #[test]
+    fn burnt_genesis_checks_reject_mismatch_on_wall_current_day() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let server = runtime.block_on(MockServer::start());
         let today = ckbadger_common::now_datetime_utc8().date();
@@ -5985,13 +6029,13 @@ mod tests {
         let fast = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
         assert!(
             !fast.passed(),
-            "current day cannot be presented as complete"
+            "the wall-current chain day has a wrong exact burnt gap"
         );
         assert!(fast
             .findings
             .iter()
             .flat_map(|finding| &finding.details)
-            .any(|detail| detail.contains("incomplete day")));
+            .any(|detail| detail.contains("persisted genesis baseline")));
 
         let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
         assert!(!sampling.passed());
@@ -5999,7 +6043,28 @@ mod tests {
             .findings
             .iter()
             .flat_map(|finding| &finding.details)
-            .any(|detail| detail.contains("incomplete day")));
+            .any(|detail| detail.contains("persisted genesis baseline")));
+    }
+
+    #[test]
+    fn chart_dates_do_not_depend_on_verifier_wall_clock() {
+        let today = ckbadger_common::now_datetime_utc8()
+            .date()
+            .format("%Y-%m-%d")
+            .to_string();
+        let tomorrow = (ckbadger_common::now_datetime_utc8().date() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let mut findings = Vec::new();
+        validate_chart_dates(
+            &[today.as_str(), tomorrow.as_str()],
+            "total-supply",
+            &mut findings,
+        );
+        assert!(
+            findings.is_empty(),
+            "wall clock rejected chain dates: {findings:?}"
+        );
     }
 
     #[test]
@@ -6166,6 +6231,13 @@ mod tests {
         let server = runtime.block_on(MockServer::start());
         mount_secondary_partition_data(&runtime, &server, json!([]), json!([]));
         runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/statistics"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "genesisBaselineBurnt": "840000000000000000"
+                })))
+                .mount(&server)
+                .await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/dao/charts/total-deposit"))
                 .respond_with(

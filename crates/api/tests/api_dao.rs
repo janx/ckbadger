@@ -409,6 +409,13 @@ async fn dao_evidence_rejects_owner_script_payload_under_wrong_hash() {
 #[tokio::test]
 async fn test_dao_stats_serves_the_indexer_singleton() {
     let store = test_store();
+    store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 123_456_789_000_000_001,
+            virtual_occupied: 0,
+        })
+        .unwrap();
 
     let mut dao = vec![0u8; 32];
     dao[8..16].copy_from_slice(&1u64.to_le_bytes());
@@ -498,6 +505,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     assert_eq!(json["rolling24hCutoffChainTimeMs"], "1699913600000");
     assert_eq!(json["estimatedApc"], "2.74");
     assert_eq!(json["tipBlockNumber"], 10);
+    assert_eq!(json["genesisBaselineBurnt"], "123456789000000001");
     assert_eq!(json["depositChange24h"], "-3");
     assert_eq!(json["depositorsChange24h"], 2);
     assert_eq!(json["claimedCompensationChange24h"], "5");
@@ -685,6 +693,7 @@ async fn test_dao_stats_fails_fast_when_singleton_missing_at_synced_tip() {
 #[tokio::test]
 async fn test_dao_stats_follows_singleton_without_stale_cache() {
     let store = test_store();
+    seed_genesis_baseline(&store);
     seed_tip_header(&store, 10);
 
     let mut latest = ckbadger_store::DaoLatestStatistics {

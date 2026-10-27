@@ -1649,6 +1649,8 @@ interface AddressDaoSummary {
 
 interface DaoStatistics {
   tipBlockNumber: number;
+  /** Exact block-0 burn-policy capacity from the persisted genesis baseline, shannons. */
+  genesisBaselineBurnt: string;
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;

@@ -149,6 +149,7 @@ export const txStats: TxStatsResponse = {
 
 export const daoStatistics: DaoStatistics = {
   tipBlockNumber: 20835366,
+  genesisBaselineBurnt: '840000000000000000',
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',
   totalDepositors: 16673,
