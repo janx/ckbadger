@@ -39,6 +39,35 @@ describe('api', () => {
       vi.restoreAllMocks();
     });
 
+    it('uses whole-asset read projections and preserves feed cursors', async () => {
+      const seen: string[] = [];
+      server.use(
+        http.get('/api/:network/v1/*', ({ request }) => {
+          const u = new URL(request.url);
+          seen.push(u.pathname + u.search);
+          return HttpResponse.json({ data: [] });
+        })
+      );
+      await api.getInventorySummary();
+      await api.getTokenHistory('0xab');
+      await api.getTokenDistribution('0xab');
+      await api.getTokenActivityFeed('0xab', { limit: 25, cursor: '9:3' });
+      await api.getTokenTransactions('0xab', { limit: 25, cursor: '8:2' });
+      await api.getItemCellVersions('spore', '0xcd');
+      await api.getItemCellVersions('mnft', '0xef');
+      await api.getItemCellVersions('did', '0x12');
+      expect(seen).toEqual([
+        '/api/mainnet/v1/assets/summary',
+        '/api/mainnet/v1/tokens/0xab/history',
+        '/api/mainnet/v1/tokens/0xab/distribution',
+        '/api/mainnet/v1/tokens/0xab/activity-feed?limit=25&cursor=9%3A3',
+        '/api/mainnet/v1/tokens/0xab/transactions?limit=25&cursor=8%3A2',
+        '/api/mainnet/v1/spore/objects/0xcd/cell-versions',
+        '/api/mainnet/v1/assets/objects/items/0xef/cell-versions',
+        '/api/mainnet/v1/assets/identities/did/items/0x12/cell-versions',
+      ]);
+    });
+
     it('uses exact owner holdings and server-side class pagination endpoints', async () => {
       server.use(
         http.get('/api/:network/v1/addresses/ckb1owner/holdings', () =>

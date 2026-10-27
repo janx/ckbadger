@@ -1,36 +1,31 @@
+import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
-import { api } from '@/lib/api';
-
-vi.mock('@/lib/api', () => ({
+import { api, type Token, type TokenHistory, type GlobalActivity } from '@/lib/api';
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
     getToken: vi.fn(),
-    getTokenCapacityChart: vi.fn(),
+    getTokenHistory: vi.fn(),
     getTokenHolders: vi.fn(),
-    getTokenActivities: vi.fn(),
+    getTokenDistribution: vi.fn(),
+    getTokenActivityFeed: vi.fn(),
+    getTokenTransactions: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
-
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
-
-vi.mock('@/src/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
-  useParams: () => ({
-    typeHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-  }),
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-const mockToken = {
-  typeScriptHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-  typeCodeHash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-  typeHashType: 'type',
+const hash = '0x' + '12'.repeat(32),
+  other = '0x' + '34'.repeat(32);
+const mockToken: Token = {
+  typeScriptHash: hash,
+  typeCodeHash: other,
+  typeHashType: 'data1',
   typeArgs: '0x00',
   standard: 'xudt',
   name: 'Test Token',
@@ -47,229 +42,232 @@ const mockToken = {
   operatorWebsite: null,
   totalSupply: '1000000000000',
   maximumSupply: null,
-  maximumSupplyStatus: 'unknown' as const,
+  maximumSupplyStatus: 'unknown',
   holdersCount: 42,
   transfersCount: 1000,
   transfers24h: 10,
   cellsCount: 150,
-  totalCapacity: '50000000000000',
+  totalCapacity: '50000000000001',
   totalCommonKnowledgeSize: '15300000000000',
+  issuer: null,
+  sameSymbolTokens: [],
 };
-
-const mockHolders = {
-  data: [],
-  total: 0,
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
+const history: TokenHistory = {
+  source: 'indexed_chain_time',
+  anchor: { blockNumber: 500, blockHash: other },
+  completeThrough: '2024-01-15',
+  daily: [
+    {
+      date: '2024-01-15',
+      supply: '1000000000000',
+      capacity: '50000000000001',
+      occupiedCapacity: '15300000000000',
+    },
+  ],
+  weekly: [{ weekStart: '2024-01-01', transfersCount: 5 }],
+  supplyEvents: [],
+  mintCount: 2,
+  burnCount: 1,
+  transfersCount: 1000,
 };
-
-const mockActivities = {
-  data: [],
-  limit: 50,
-  hasMore: false,
-  nextCursor: null,
+const empty = { data: [], limit: 50, hasMore: false, nextCursor: null };
+const activity: GlobalActivity = {
+  txHash: other,
+  blockNumber: 12345,
+  txIndex: 0,
+  timestamp: '1700000000000',
+  isCellbase: false,
+  participants: [
+    {
+      lockHash: hash,
+      lockHashPrefix: null,
+      address: null,
+      roles: [],
+      tags: 1,
+      ckbDelta: '100000001',
+      usedDelta: '0',
+      itemDeltas: [{ kind: 'token', typeScriptHash: hash, delta: '100000000000' }],
+    },
+  ],
+  typeCalls: [],
+  lockCalls: [],
+  protocolActions: [],
 };
-
 describe('TokenDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.getTokenCapacityChart).mockResolvedValue({
-      title: 'TEST Capacity History',
-      series: [
-        { key: 'used', label: 'Used', color: '#f59e0b' },
-        { key: 'unused', label: 'Unused', color: '#00c389' },
-      ],
-      data: [
-        {
-          date: '2024-01-15',
-          values: { used: '15300000000000', unused: '34700000000000' },
-        },
-      ],
-    });
-    vi.mocked(api.getTokenHolders).mockResolvedValue(mockHolders);
-    vi.mocked(api.getTokenActivities).mockResolvedValue(mockActivities);
-  });
-
-  it('renders token overview and capacity statistics', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('TEST')).toBeInTheDocument();
+    vi.mocked(api.getTokenHistory).mockResolvedValue(history);
+    vi.mocked(api.getTokenHolders).mockResolvedValue({
+      ...empty,
+      total: 0,
+      totalSupply: '0',
+      anchor: null,
     });
-
-    expect(screen.getByText('XUDT')).toBeInTheDocument();
-    expect(screen.getByText('A test token')).toBeInTheDocument();
-    expect(screen.getByText('Total Circulation')).toBeInTheDocument();
-    expect(screen.getByText('Maximum Supply')).toBeInTheDocument();
-    expect(screen.getByText('Unknown')).toBeInTheDocument();
-    expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
-    expect(screen.getByText('Owned Capacity')).toBeInTheDocument();
-    expect(screen.getByText(/^Common Knowledge:/)).toBeInTheDocument();
-    expect(screen.getByText(/^Free Capacity:/)).toBeInTheDocument();
-    expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
-    expect(screen.getByText('150')).toBeInTheDocument();
+    vi.mocked(api.getTokenDistribution).mockResolvedValue({
+      holdersCount: 0,
+      totalSupply: '0',
+      largestHolderBalance: '0',
+      nextNineBalance: '0',
+      remainingBalance: '0',
+      unit: 'token',
+      decimals: 8,
+      buckets: [],
+    });
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue(empty);
+    vi.mocked(api.getTokenTransactions).mockResolvedValue(empty);
   });
-
-  it('renders unlimited max supply when status is unlimited', async () => {
+  it('consumes unmodified router responses across history, distribution, holders and full transactions', async () => {
+    const p = tokenProducer;
+    vi.mocked(api.getToken).mockResolvedValue(p.token);
+    vi.mocked(api.getTokenHistory).mockResolvedValue(p.history);
+    vi.mocked(api.getTokenDistribution).mockResolvedValue(p.distribution);
+    vi.mocked(api.getTokenHolders).mockResolvedValue(p.holders);
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue(p.activityFeed);
+    vi.mocked(api.getTokenTransactions).mockResolvedValue(p.transactions);
+    render(<TokenDetailPage typeHash={p.token.typeScriptHash} />);
+    expect(await screen.findByRole('heading', { name: 'TOK' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Facts')).toHaveTextContent('0.00001000');
+    expect(await screen.findByRole('table', { name: 'Top 10 holders' })).toHaveTextContent(
+      '100.00%'
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    expect(await screen.findByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
+      'Not computed'
+    );
+    expect(screen.getByRole('table', { name: 'Asset transactions' })).toHaveTextContent('10');
+  });
+  it('renders token overview, exact capacity partition and tier-one history', async () => {
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
+    expect(screen.getByText(/xUDT · 8 decimals/)).toBeInTheDocument();
+    expect(screen.getByText('A test token')).toBeInTheDocument();
+    const facts = screen.getByLabelText('Facts');
+    expect(facts).toHaveTextContent('Maximum supply: Unknown');
+    expect(facts).toHaveTextContent('500,000.00000001');
+    expect(facts).toHaveTextContent('Live cells150');
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument();
+    expect(screen.getByText(/Metadata provenance not recorded/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: other })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${other}?hashType=data1&kind=type`
+    );
+  });
+  it('renders unlimited max supply only when the API explicitly establishes it', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       standard: 'sudt',
       maximumSupplyStatus: 'unlimited',
     });
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Unlimited')).toBeInTheDocument();
-    });
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByText('Maximum supply: Unlimited')).toBeInTheDocument();
   });
-
-  it('defaults to activities tab and renders transfer details', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-    vi.mocked(api.getTokenActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234',
-          blockNumber: 12345,
-          txIndex: 0,
-          transferSequence: 0,
-          timestamp: '1700000000000',
-          actions: ['mint', 'transfer'],
-          transfers: [
-            {
-              fromLockHash: null,
-              fromAddress: null,
-              toLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
-              toAddress: null,
-              amount: '100000000000',
-              isMint: true,
-              isBurn: false,
-            },
-            {
-              fromLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
-              fromAddress: null,
-              toLockHash: '0x2222222222222222222222222222222222222222222222222222222222222222',
-              toAddress: null,
-              amount: '50000000000',
-              isMint: false,
-              isBurn: false,
-            },
-          ],
-        },
-      ],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+  it('labels last full activity neutrally and states newest-first exactly once', async () => {
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByText(/^Last transaction involving this token/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('tablist', { name: 'What happened' }).textContent?.match(/newest first/g)
+    ).toHaveLength(1);
+  });
+  it('defaults to full participant activities and retains the separate transaction layer', async () => {
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('tab', { name: 'Activities' })).toHaveAttribute(
+      'aria-selected',
+      'true'
     );
-
-    await waitFor(() => {
-      expect(screen.getByText('Mint')).toBeInTheDocument();
-    });
-
-    expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
-    expect(screen.getByText('mint')).toBeInTheDocument();
-    expect(screen.getByText('transfer')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('link').some((l) => l.getAttribute('href') === `/mainnet/tx/${other}`)
+      ).toBe(true)
+    );
     expect(screen.getByRole('link', { name: '#12,345' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/12345'
     );
-    expect(
-      screen
-        .getAllByRole('link')
-        .some(
-          (link) =>
-            link.getAttribute('href') ===
-            '/mainnet/tx/0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
-        )
-    ).toBe(true);
-  });
-
-  it('renders unknown decimals as raw amounts with a decimals-unknown marker', async () => {
-    // B5: a token with no label and no on-chain info cell has decimals: null.
-    // The page must show 'Unknown' for the Decimals stat and raw base-unit
-    // amounts annotated as such — never silently pretend decimals are 0.
-    vi.mocked(api.getToken).mockResolvedValue({
-      ...mockToken,
-      decimals: null,
-      // 'unlimited' keeps the literal text 'Unknown' unique to the Decimals stat
-      maximumSupplyStatus: 'unlimited' as const,
-    });
-    vi.mocked(api.getTokenActivities).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234',
-          blockNumber: 12345,
-          txIndex: 0,
-          transferSequence: 0,
-          timestamp: '1700000000000',
-          actions: ['mint'],
-          transfers: [
-            {
-              fromLockHash: null,
-              fromAddress: null,
-              toLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
-              toAddress: null,
-              amount: '100000000000',
-              isMint: true,
-              isBurn: false,
-            },
-          ],
-        },
-      ],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    await waitFor(() =>
+      expect(api.getTokenTransactions).toHaveBeenCalledWith(hash, { limit: 50, cursor: undefined })
     );
-
-    await waitFor(() => {
-      expect(screen.getByText('TEST')).toBeInTheDocument();
-    });
-
-    // Decimals stat surfaces the unknown explicitly.
-    expect(screen.getByText('Unknown')).toBeInTheDocument();
-    // Total Circulation falls back to the raw base-unit amount, annotated.
-    expect(screen.getByText('1,000,000,000,000 (raw)')).toBeInTheDocument();
-    // Transfer amounts carry the decimals-unknown marker.
-    await waitFor(() => {
-      expect(screen.getByText('Mint')).toBeInTheDocument();
-    });
-    expect(screen.getAllByTitle(/decimals unknown/i).length).toBeGreaterThan(0);
   });
-
+  it('renders unknown decimals as raw amounts, never as zero decimals', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, decimals: null });
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByText(/xUDT · Decimals unknown/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Facts')).toHaveTextContent('1,000,000,000,000 (raw)');
+  });
   it('scales amounts exactly for decimals beyond double precision', async () => {
-    // decimals is the raw, unvalidated first byte of the xUDT Unique Cell, so
-    // >= 23 is reachable. A BigInt(10 ** 24) divisor rendered 10^24 base units
-    // as "1.000000000000000016777216".
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       decimals: 24,
-      totalSupply: '1000000000000000000000000',
+      totalSupply: '123456789012345678901234567890',
     });
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Facts')).toHaveTextContent('123,456.789012345678901234567890');
+  });
+  it('shows same-symbol collisions, proven issuer and exact supply changes without guessing provenance', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
+      issuer: { lockHash: other, address: null, lockKind: 'JoyID' },
+    });
+    vi.mocked(api.getTokenHistory).mockResolvedValue({
+      ...history,
+      supplyEvents: [
+        {
+          txHash: other,
+          blockNumber: 99,
+          txIndex: 2,
+          transferSequence: 3,
+          timestamp: '1700000000000',
+          kind: 'mint',
+          amount: '1',
+          supplyAfter: '1000000000000',
+          lockHash: other,
+          address: null,
+          lockKind: 'JoyID',
+        },
+      ],
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByText(/Other tokens also call themselves/)).toHaveTextContent(
+      '2 holders'
     );
-
-    await waitFor(() => {
-      expect(screen.getByText('TEST')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('1.000000000000000000000000')).toBeInTheDocument();
-    expect(screen.queryByText('1.000000000000000016777216')).toBeNull();
+    expect(screen.getByLabelText('Facts')).toHaveTextContent('JoyID · owner lock proven');
+    const details = await screen.findByText('Every change to the supply (1)');
+    fireEvent.click(details);
+    const table = screen.getByRole('table', { name: 'Mints and burns' });
+    expect(table).toHaveTextContent('+0.00000001');
+    expect(within(table).getByRole('link', { name: 'tx 2 · sequence 3' })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/${other}`
+    );
+  });
+  it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
+    vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));
+    vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
+      ...empty,
+      data: [{ lockScriptHash: hash, address: null, balance: '1', lockKind: null }],
+      total: 2,
+      totalSupply: '2',
+      anchor: null,
+      hasMore: !p?.cursor,
+      nextCursor: p?.cursor ? null : 'page2',
+    }));
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('History read failed');
+    fireEvent.click(screen.getByRole('button', { name: /All .*holders/ }));
+    await screen.findByRole('table', { name: 'All holders' });
+    fireEvent.click(
+      within(screen.getByRole('table', { name: 'All holders' }).closest('section')!).getByRole(
+        'button',
+        { name: 'Next' }
+      )
+    );
+    await waitFor(() =>
+      expect(api.getTokenHolders).toHaveBeenCalledWith(hash, { limit: 50, cursor: 'page2' })
+    );
   });
 });

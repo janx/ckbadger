@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   truncateHash,
+  formatUtc8Date,
   formatCkbAmount,
   formatCkbCompact,
   formatCkbValue,
@@ -142,5 +143,13 @@ describe('bytesToHex', () => {
     const bytes = hexToBytes(original);
     const result = bytesToHex(bytes);
     expect(result).toBe(original);
+  });
+});
+
+describe('formatUtc8Date', () => {
+  it('keeps raw event dates in fixed UTC+8 independently of browser timezone', () => {
+    expect(formatUtc8Date('2024-01-01T16:30:00Z')).toBe('2024-01-02');
+    expect(formatUtc8Date(String(Date.parse('2024-01-01T15:59:59Z')))).toBe('2024-01-01');
+    expect(() => formatUtc8Date('broken')).toThrow('Invalid block timestamp');
   });
 });

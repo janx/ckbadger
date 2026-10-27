@@ -408,6 +408,30 @@ describe('one chart grammar', () => {
     expect(container.querySelector(`path[fill="${CLASS_COLORS.tokens}"]`)).not.toBeNull();
     expect(container.querySelector(`path[fill="${CLASS_COLORS.objects}"]`)).not.toBeNull();
   });
+  it('supports a shared time axis and controlled hover without changing exact readouts', () => {
+    const onActive = vi.fn();
+    const { container } = render(
+      <Chart
+        title="Shared"
+        subtitle="Daily"
+        data={[
+          { label: 'First', x: 100, values: { v: '10000000000000001' } },
+          { label: 'Last', x: 300, values: { v: '2' } },
+        ]}
+        series={[{ key: 'v', label: 'Value' }]}
+        unit="CKB"
+        xDomain={[100, 300]}
+        activeIndex={0}
+        onActiveIndexChange={onActive}
+        hideCaption
+      />
+    );
+    expect(container.querySelector('[aria-live]')).toHaveTextContent(
+      'First: Value 10000000000000001 CKB'
+    );
+    fireEvent.keyDown(screen.getByRole('img', { name: 'Shared, CKB' }), { key: 'ArrowRight' });
+    expect(onActive).toHaveBeenCalledWith(1);
+  });
   it('fails loudly for missing series instead of drawing a default zero', () => {
     expect(() =>
       render(

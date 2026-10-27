@@ -1,700 +1,296 @@
 'use client';
 import { useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
-import { HexDisplay } from '@/components/ui/hex-display';
+import { DetailLayout } from '@/components/ui/detail-layout';
+import { ClassMark } from '@/components/ui/class-mark';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
-import { compositionTierCardStyle } from '@/components/object/storage-tier';
-import { formatTokenBalanceWithRawMarker, RAW_AMOUNT_TITLE } from '@/lib/format-asset';
-import { api, Asset } from '@/lib/api';
-import {
-  getClusterDetailHref,
-  getIdentityCollectionHref,
-  getMnftClassDetailHref,
-  getObjectDetailHref,
-  getTokenDetailHref,
-} from '@/lib/detail-routes';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatCkbCompact } from '@/lib/utils';
+import { InventorySummaryNotice } from '@/components/asset/inventory-summary';
+import { InventoryRows, AssetCount } from '@/components/asset/inventory-table';
+import { AddressLoadState, AddressStaleNotice } from '@/components/address/address-holdings';
+import { formatStandard } from '@/components/activity-event-row';
 import { formatCompositionTier } from '@/lib/asset-utils';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { api, type Asset } from '@/lib/api';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 
-export type AssetType = 'token' | 'object' | 'identity';
-type SortDirection = 'asc' | 'desc';
-type CompositionTierFilter =
-  | 'all'
-  | 'pure_ckb'
-  | 'btc_ckb'
-  | 'decentralized_mixture'
-  | 'centralized_mixture'
-  | 'unknown';
-type AssetSortKey =
-  | 'name'
-  | 'type'
-  | 'supply'
-  | 'transfers24h'
-  | 'holders'
-  | 'transfers'
-  | 'used'
-  | 'capacity'
-  | 'onchainRatio'
-  | 'hMultiplier';
-const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
-const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
-// The wire values `IdentityStandard::as_str()` produces. These travel to the
-// API as the `standard` filter, so they are the protocol's spelling, not a
-// display one — `formatStandardLabel` handles how they read.
-const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'bit_cell', 'did_ckb', 'dotcell'];
-const COMPOSITION_TIER_OPTIONS: CompositionTierFilter[] = [
-  'all',
+export type AssetType = Asset['assetType'];
+type AssetSortKey = NonNullable<Parameters<typeof api.getAssets>[0]>['sortKey'];
+const standards = {
+  token: ['xudt', 'sudt'],
+  object: ['spore', 'm-nft'],
+  identity: ['dotbit', 'bit_cell', 'did_ckb', 'dotcell'],
+};
+const tiers = [
   'pure_ckb',
   'btc_ckb',
   'decentralized_mixture',
   'centralized_mixture',
   'unknown',
-];
-function normalizeStandardFilter(value: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized.length > 0 ? normalized : undefined;
-}
-function normalizeCompositionTier(value: string | null): CompositionTierFilter {
-  if (!value) {
-    return 'all';
-  }
-  const normalized = value.trim().toLowerCase();
-  switch (normalized) {
-    case 'all':
-      return 'all';
-    case 'pure_ckb':
-      return 'pure_ckb';
-    case 'btc_ckb':
-      return 'btc_ckb';
-    case 'decentralized_mixture':
-      return 'decentralized_mixture';
-    case 'centralized_mixture':
-      return 'centralized_mixture';
-    case 'unknown':
-      return 'unknown';
-    default:
-      return 'all';
-  }
-}
-function formatCompositionTierLabel(value: CompositionTierFilter): string {
-  switch (value) {
-    case 'pure_ckb':
-      return 'Pure CKB';
-    case 'btc_ckb':
-      return 'BTC+CKB';
-    case 'decentralized_mixture':
-      return 'Decentralized Mixture';
-    case 'centralized_mixture':
-      return 'Centralized Mixture';
-    case 'unknown':
-      return 'Unknown';
-    default:
-      return 'All Composition';
-  }
-}
-
-function compositionTierTextClass(tier: string | null | undefined): string {
-  return tier ? compositionTierCardStyle(tier).text : 'text-text-dim';
-}
-function formatStandardLabel(standard: string): string {
-  switch (standard) {
-    case 'xudt':
-      return 'xUDT';
-    case 'sudt':
-      return 'sUDT';
-    case 'm-nft':
-      return 'm-NFT';
-    case 'did_ckb':
-    case 'did:ckb':
-      return 'did:ckb';
-    case 'bit_cell':
-      return '.bit Cell';
-    case 'dotbit':
-      return 'DOTBIT';
-    case 'dotcell':
-      return '.cell';
-    default:
-      return standard.toUpperCase();
-  }
-}
-function getStandardOptions(assetType: AssetType, selectedStandard?: string) {
-  const options =
-    assetType === 'token'
-      ? TOKEN_STANDARD_OPTIONS
-      : assetType === 'object'
-        ? OBJECT_STANDARD_OPTIONS
-        : IDENTITY_STANDARD_OPTIONS;
-  if (selectedStandard && !options.includes(selectedStandard)) {
-    return [...options, selectedStandard];
-  }
-  return options;
-}
-
-const EMPTY_STATE_LABELS: Record<AssetType, string> = {
-  token: 'No tokens found',
-  object: 'No objects found',
-  identity: 'No identities found',
-};
-
-function InventoryTable({
-  assetType,
-  search,
-  standard,
-  compositionTier,
-}: {
+  'decode_pending',
+] as const;
+interface InventoryPageClientProps {
   assetType: AssetType;
-  search: string | undefined;
-  standard: string | undefined;
-  compositionTier: CompositionTierFilter;
-}) {
+  title?: string;
+  subtitle?: string;
+  panelTitle?: string;
+}
+export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
+  const router = useRouter(),
+    pathname = usePathname(),
+    params = useSearchParams();
   const pagination = useCursorPagination();
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState<string>();
+  const [standard, setStandard] = useState<string | undefined>(
+    params.get('standard')?.trim().toLowerCase() || undefined
+  );
+  const [compositionTier, setCompositionTier] = useState<string | undefined>(
+    params.get('compositionTier') || undefined
+  );
   const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  const { data, isLoading } = useQuery({
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const summary = useQuery({
+    queryKey: ['inventory-summary'],
+    queryFn: api.getInventorySummary,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+  const assets = useQuery({
     queryKey: [
       'assets',
       assetType,
       pagination.cursor,
       search,
       standard,
+      compositionTier,
       sortKey,
       sortDirection,
-      compositionTier,
     ],
     queryFn: () =>
       api.getAssets({
-        limit: DEFAULT_PAGE_SIZE,
         type: assetType,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: pagination.cursor,
         search,
         standard,
+        compositionTier:
+          assetType === 'object' ? (compositionTier as (typeof tiers)[number]) : undefined,
         sortKey,
         sortDirection,
-        compositionTier:
-          assetType === 'object' && compositionTier !== 'all' ? compositionTier : undefined,
       }),
-    placeholderData: keepPreviousData,
   });
-  const assets = data?.data ?? [];
-  const nameColumnClass = 'min-w-0 flex-[2_0_10rem] pr-4';
-  const compositionColumnClass = 'w-36 shrink-0';
-  const typeColumnClass = 'w-20 shrink-0';
-  const smallNumberColumnClass = 'w-20 shrink-0 whitespace-nowrap text-right';
-  const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
-  const capacityColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
-  const formatNumber = (num: number | string) => {
-    if (typeof num === 'string') return BigInt(num).toLocaleString();
-    if (!Number.isSafeInteger(num)) throw new Error(`invalid inventory count ${num}`);
-    return new Intl.NumberFormat().format(num);
-  };
-  const shortHash = (value: string) => {
-    if (value.length <= 20) return value;
-    return `${value.slice(0, 10)}...${value.slice(-8)}`;
-  };
-  const getAssetLink = (asset: Asset) => {
-    if (asset.assetType === 'token') return getTokenDetailHref(asset.id);
-    if (asset.standard === 'spore') {
-      return getClusterDetailHref(asset.clusterId || asset.id);
-    }
-    if (asset.assetType === 'identity') return getIdentityCollectionHref(asset.standard, asset.id);
-    if (asset.standard === 'm-nft') return getMnftClassDetailHref(asset.id);
-    return getObjectDetailHref(asset.id);
-  };
-  const getAssetName = (asset: Asset) => {
-    if (asset.assetType === 'token') {
-      return asset.symbol || asset.name || shortHash(asset.id);
-    }
-    return asset.name || 'Unnamed Collection';
-  };
-  const getTypeBadgeLabel = (asset: Asset) => formatStandardLabel(asset.standard);
-  const toggleSort = (nextKey: AssetSortKey) => {
-    if (nextKey === sortKey) {
-      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(nextKey);
-      setSortDirection(nextKey === 'name' || nextKey === 'type' ? 'asc' : 'desc');
-    }
+  const filter = (key: 'standard' | 'compositionTier', value: string) => {
+    const next = value || undefined;
+    if (key === 'standard') setStandard(next);
+    else setCompositionTier(next);
     pagination.reset();
+    const query = new URLSearchParams(params.toString());
+    if (next) query.set(key, next);
+    else query.delete(key);
+    router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
   };
-  const renderSortHeader = (
-    key: AssetSortKey,
-    label: string,
-    className: string,
-    align: 'left' | 'right' = 'left'
-  ) => (
-    <button
-      type="button"
-      className={`${className} flex items-center gap-1 whitespace-nowrap ${align === 'right' ? 'justify-end text-right' : ''}`}
-      onClick={() => toggleSort(key)}
-      aria-label={`Sort by ${label}`}
-    >
-      <span>{label}</span>
-      <span className={sortKey === key ? 'text-emphasis' : 'text-text-dim'}>
-        {sortKey === key ? (sortDirection === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
-      </span>
-    </button>
-  );
-  if (isLoading) {
-    return (
-      <div className="space-y-2 py-4">
-        {/* Table skeleton (lg+) */}
-        {Array.from({ length: 5 }).map((_, i) => (
-          <TerminalRow key={i} hoverable={false}>
-            <div className="hidden animate-pulse items-center lg:flex">
-              <div className={nameColumnClass}>
-                <div className="bg-base-elevated h-4 w-48 rounded" />
-              </div>
-              {assetType === 'object' && (
-                <div className={compositionColumnClass}>
-                  <div className="bg-base-elevated h-4 w-24 rounded" />
-                </div>
-              )}
-              <div className={typeColumnClass}>
-                <div className="bg-base-elevated h-4 w-12 rounded" />
-              </div>
-              {assetType !== 'token' && (
-                <div className={smallNumberColumnClass}>
-                  <div className="bg-base-elevated ml-auto h-4 w-10 rounded" />
-                </div>
-              )}
-              <div className={smallNumberColumnClass}>
-                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
-              </div>
-              <div className={mediumNumberColumnClass}>
-                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-              </div>
-              {assetType === 'token' && (
-                <div className={`${capacityColumnClass} hidden xl:block`}>
-                  <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-                </div>
-              )}
-              <div className={`${capacityColumnClass} hidden xl:block`}>
-                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
-              </div>
-              <div className={`${capacityColumnClass} hidden xl:block`}>
-                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-              </div>
-              <div className={capacityColumnClass}>
-                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-              </div>
-            </div>
-            {/* Card skeleton (<lg) */}
-            <div className="animate-pulse space-y-2 lg:hidden">
-              <div className="flex items-center gap-2">
-                <div className="bg-base-elevated h-4 w-40 rounded" />
-                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
-              </div>
-              <div className="flex gap-4">
-                <div className="bg-base-elevated h-3 w-16 rounded" />
-                <div className="bg-base-elevated h-3 w-20 rounded" />
-                <div className="bg-base-elevated h-3 w-16 rounded" />
-              </div>
-            </div>
-          </TerminalRow>
-        ))}
-      </div>
-    );
-  }
-  if (!data?.data?.length) {
-    return <div className="text-text-dim py-8 text-center">{EMPTY_STATE_LABELS[assetType]}</div>;
-  }
-  return (
-    <>
-      <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-3 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
-        {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
-        {assetType === 'object' && (
-          <div className={`${compositionColumnClass} font-mono text-xs uppercase tracking-wider`}>
-            Composition
-          </div>
-        )}
-        {renderSortHeader('type', 'Standard', typeColumnClass)}
-        {assetType !== 'token' &&
-          renderSortHeader('supply', 'Items', smallNumberColumnClass, 'right')}
-        {renderSortHeader('transfers24h', '24h Txns', smallNumberColumnClass, 'right')}
-        {renderSortHeader('holders', 'Holders', mediumNumberColumnClass, 'right')}
-        <div className="hidden xl:contents">
-          {assetType === 'token' &&
-            renderSortHeader('supply', 'Circulation', capacityColumnClass, 'right')}
-          <div className={`${capacityColumnClass} flex items-center justify-end gap-1`}>
-            {renderSortHeader('hMultiplier', 'HMul', 'w-auto shrink-0', 'right')}
-            <HMulHelpPopover align="end" />
-          </div>
-          {renderSortHeader('used', 'Used', capacityColumnClass, 'right')}
-        </div>
-        {renderSortHeader('capacity', 'Capacity', capacityColumnClass, 'right')}
-      </div>
-      {assets.map((asset: Asset) => (
-        <TerminalRow key={asset.id}>
-          {/* Table row (lg+) */}
-          <div className="hidden items-center lg:flex">
-            <div className={nameColumnClass}>
-              <AppLink href={getAssetLink(asset)} className="block">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="text-emphasis max-w-full truncate font-medium hover:underline"
-                      title={getAssetName(asset)}
-                    >
-                      {getAssetName(asset)}
-                    </span>
-                    {asset.published && (
-                      <span className="text-emphasis" title="Verified">
-                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path
-                            fillRule="evenodd"
-                            d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      </span>
-                    )}
-                    {asset.famous && (
-                      <span className="text-warning" title="Famous">
-                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                        </svg>
-                      </span>
-                    )}
-                  </div>
-                  <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
-                </div>
-              </AppLink>
-            </div>
-            {assetType === 'object' && (
-              <div className={compositionColumnClass}>
-                {asset.compositionTier ? (
-                  <span
-                    className={`font-mono text-sm font-semibold leading-tight ${compositionTierTextClass(asset.compositionTier)}`}
-                  >
-                    {formatCompositionTier(asset.compositionTier)}
-                  </span>
-                ) : (
-                  <span className="text-text-dim font-mono text-xs">-</span>
-                )}
-              </div>
-            )}
-            <div className={typeColumnClass}>
-              <div className="flex flex-wrap gap-1">
-                <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
-              </div>
-            </div>
-            {assetType !== 'token' && (
-              <div className={`${smallNumberColumnClass} text-text-bright font-mono tabular-nums`}>
-                {asset.totalSupply === null ? '—' : formatNumber(asset.totalSupply)}
-              </div>
-            )}
-            <div className={`${smallNumberColumnClass} text-warning font-mono tabular-nums`}>
-              {formatNumber(asset.transfers24h)}
-            </div>
-            <div className={`${mediumNumberColumnClass} text-text-dim font-mono tabular-nums`}>
-              {formatNumber(asset.holdersCount)}
-            </div>
-            {assetType === 'token' && (
-              <div
-                className={`${capacityColumnClass} text-text-bright hidden font-mono tabular-nums xl:block`}
-              >
-                {(() => {
-                  // `decimals: null` means unknown (no label, no on-chain info
-                  // cell): the shared helper renders the raw base-unit integer
-                  // with an explicit "(raw)" marker so it can never be mistaken
-                  // for a real 0-decimals amount.
-                  const formatted = asset.totalSupply
-                    ? formatTokenBalanceWithRawMarker(asset.totalSupply, asset.decimals)
-                    : null;
-                  return formatted ? (
-                    <span
-                      className="block truncate"
-                      title={
-                        asset.decimals == null
-                          ? `Total Circulation: ${formatted} — ${RAW_AMOUNT_TITLE}`
-                          : `Total Circulation: ${formatted}`
-                      }
-                    >
-                      {formatted}
-                    </span>
-                  ) : (
-                    <span className="text-text-dim">-</span>
-                  );
-                })()}
-              </div>
-            )}
-            <div
-              className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
-            >
-              {asset.hMultiplier != null ? (
-                <span title={`HMul: \u00d7${asset.hMultiplier}`}>
-                  {'\u00d7'}
-                  {asset.hMultiplier}
-                </span>
-              ) : (
-                <span className="text-text-dim">-</span>
-              )}
-            </div>
-            <div
-              className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
-            >
-              {(() => {
-                const occupied = asset.ownedKnowledge;
-                if (!occupied) {
-                  return <span className="text-text-dim">-</span>;
-                }
-                const compact = formatCkbCompact(occupied);
-                return <span title={`${compact.full} CKB`}>{compact.value}</span>;
-              })()}
-            </div>
-            <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
-              {(() => {
-                const capacity = asset.ownedCapacity;
-                if (!capacity) {
-                  return <span className="text-text-dim">-</span>;
-                }
-                const compact = formatCkbCompact(capacity);
-                return <span title={`${compact.full} CKB`}>{compact.value}</span>;
-              })()}
-            </div>
-          </div>
-          {/* Card layout (<lg) */}
-          <div className="space-y-1.5 lg:hidden">
-            <div className="flex items-center gap-2">
-              <AppLink href={getAssetLink(asset)} className="min-w-0 flex-1">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="text-emphasis max-w-full truncate font-medium hover:underline"
-                      title={getAssetName(asset)}
-                    >
-                      {getAssetName(asset)}
-                    </span>
-                    {asset.published && (
-                      <span className="text-emphasis" title="Verified">
-                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path
-                            fillRule="evenodd"
-                            d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      </span>
-                    )}
-                    {asset.famous && (
-                      <span className="text-warning" title="Famous">
-                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                        </svg>
-                      </span>
-                    )}
-                  </div>
-                  <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
-                </div>
-              </AppLink>
-              <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
-            </div>
-            <div className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
-              {assetType === 'object' && asset.compositionTier && (
-                <span>
-                  Composition:{' '}
-                  <span
-                    className={`font-mono text-sm font-semibold leading-tight ${compositionTierTextClass(asset.compositionTier)}`}
-                  >
-                    {formatCompositionTier(asset.compositionTier)}
-                  </span>
-                </span>
-              )}
-              <span>
-                24h: <span className="text-warning">{formatNumber(asset.transfers24h)}</span>
-              </span>
-              <span>Holders: {formatNumber(asset.holdersCount)}</span>
-              {assetType !== 'token' && (
-                <span>
-                  Items: {asset.totalSupply === null ? '—' : formatNumber(asset.totalSupply)}
-                </span>
-              )}
-              <span>
-                Cap:{' '}
-                {(() => {
-                  const c = asset.ownedCapacity;
-                  return c ? formatCkbCompact(c).value : '-';
-                })()}
-              </span>
-            </div>
-          </div>
-        </TerminalRow>
-      ))}
-      <TerminalPanelFooter>
-        <CursorPagination
-          total={data.total ?? undefined}
-          totalLabel="items"
-          pageSize={DEFAULT_PAGE_SIZE}
-          page={pagination.page}
-          hasMore={data.hasMore}
-          hasPrevious={pagination.hasPrevious}
-          onNext={() => pagination.goToNext(data.nextCursor)}
-          onPrevious={pagination.goToPrevious}
-        />
-      </TerminalPanelFooter>
-    </>
-  );
-}
-
-interface InventoryPageClientProps {
-  assetType: AssetType;
-  title: string;
-  subtitle: string;
-  panelTitle: string;
-}
-
-export function InventoryPageClient({
-  assetType,
-  title,
-  subtitle,
-  panelTitle,
-}: InventoryPageClientProps) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState<string | undefined>(undefined);
-  const [standard, setStandard] = useState<string | undefined>(() =>
-    normalizeStandardFilter(searchParams.get('standard'))
-  );
-  const [compositionTier, setCompositionTier] = useState<CompositionTierFilter>(() =>
-    normalizeCompositionTier(searchParams.get('compositionTier'))
-  );
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSearch(searchInput.trim() || undefined);
-  };
-  const clearSearch = () => {
-    setSearchInput('');
-    setSearch(undefined);
-  };
-  const handleStandardChange = (value: string) => {
-    const nextStandard = normalizeStandardFilter(value);
-    setStandard(nextStandard);
-    const params = new URLSearchParams(searchParams.toString());
-    if (nextStandard) {
-      params.set('standard', nextStandard);
-    } else {
-      params.delete('standard');
-    }
-    const query = params.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-  };
-  const handleCompositionTierChange = (value: string) => {
-    const nextCompositionTier = normalizeCompositionTier(value);
-    setCompositionTier(nextCompositionTier);
-    const params = new URLSearchParams(searchParams.toString());
-    if (nextCompositionTier === 'all') {
-      params.delete('compositionTier');
-    } else {
-      params.set('compositionTier', nextCompositionTier);
-    }
-    const query = params.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-  };
-  const standardOptions = getStandardOptions(assetType, standard);
+  const sortOptions: [AssetSortKey, string][] = [
+    ['capacity', 'CKB held'],
+    ['name', 'Name'],
+    ['type', 'Standard'],
+    ['holders', 'Holders'],
+    ['used', 'Occupied'],
+    ['supply', 'Supply / minted'],
+    ['transfers24h', '24 h activity'],
+    ['hMultiplier', 'H-mult.'],
+  ];
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
-        <PageHeader
-          title={title}
-          subtitle={subtitle}
+      <main className="container mx-auto min-w-0 px-4 py-8">
+        <DetailLayout
+          kind="index"
+          title="Inventory"
+          identity="Everything people hold on CKB besides plain CKB"
           actions={
             <form
-              onSubmit={handleSearch}
-              className="flex w-full flex-wrap justify-end gap-2 sm:w-auto"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setSearch(searchInput.trim() || undefined);
+                pagination.reset();
+              }}
+              className="flex max-w-full flex-wrap gap-2"
             >
-              <div className="relative w-full sm:w-auto">
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="Search by name..."
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-bright w-full rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1 sm:w-64"
-                />
-                {search && (
-                  <button
-                    type="button"
-                    onClick={clearSearch}
-                    className="text-text-dim hover:text-text absolute right-2 top-1/2 -translate-y-1/2"
-                  >
-                    {'\u00d7'}
-                  </button>
-                )}
-              </div>
-              <button
-                type="submit"
-                className="text-emphasis border-base-border bg-base-surface/40 hover:bg-base-surface/70 rounded border px-4 py-1.5 font-mono text-sm transition-colors"
-              >
-                Search
-              </button>
+              <label className="sr-only" htmlFor="inventory-search">
+                Search the inventory
+              </label>
+              <input
+                id="inventory-search"
+                className="border-base-border bg-base-surface min-w-0 rounded border px-3 py-2 text-xs"
+                placeholder="Search by name..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+              />
+              <button className="border-base-border rounded border px-3 text-xs">Search</button>
             </form>
           }
-        />
-        <TerminalPanel>
-          <TerminalPanelHeader
-            indicator="active"
-            actions={
-              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                <select
-                  value={standard ?? ''}
-                  onChange={(event) => handleStandardChange(event.target.value)}
-                  aria-label="Filter by standard"
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
+        >
+          <nav
+            aria-label="Inventory classes"
+            className="border-base-border flex flex-wrap gap-6 border-b"
+          >
+            {(['token', 'object', 'identity'] as const).map((type) => {
+              const plural =
+                type === 'identity' ? 'identities' : (`${type}s` as 'tokens' | 'objects');
+              return (
+                <AppLink
+                  key={type}
+                  href={`/inventory/${plural}`}
+                  aria-current={type === assetType ? 'page' : undefined}
+                  className={`flex items-center gap-2 border-b-2 pb-3 text-[15px] ${type === assetType ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                 >
-                  <option value="">All standards</option>
-                  {standardOptions.map((item) => (
-                    <option key={item} value={item}>
-                      {formatStandardLabel(item)}
+                  <ClassMark kind={plural} size={18} />
+                  {plural[0].toUpperCase() + plural.slice(1)}
+                  {summary.data && (
+                    <span className="text-text-dim text-[11px]">
+                      <AssetCount value={summary.data.counts[type]} />
+                    </span>
+                  )}
+                </AppLink>
+              );
+            })}
+          </nav>
+          <AddressStaleNotice error={summary.error} label="inventory totals" />
+          {summary.data ? (
+            <InventorySummaryNotice summary={summary.data} assetType={assetType} />
+          ) : (
+            <AddressLoadState
+              error={summary.error}
+              loading={summary.isLoading}
+              label="inventory totals"
+            />
+          )}
+          <div
+            className="hidden flex-wrap gap-2 sm:flex"
+            role="group"
+            aria-label="Standard filters"
+          >
+            {['', ...standards[assetType]].map((s) => (
+              <button
+                key={s}
+                type="button"
+                aria-pressed={(standard ?? '') === s}
+                className={`rounded border px-3 py-1.5 text-xs ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
+                onClick={() => filter('standard', s)}
+              >
+                {s ? formatStandard(s) : 'All standards'}
+              </button>
+            ))}
+          </div>
+          {assetType === 'object' && (
+            <div
+              className="hidden flex-wrap gap-2 sm:flex"
+              role="group"
+              aria-label="Composition filters"
+            >
+              {['', ...tiers].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  aria-pressed={(compositionTier ?? '') === t}
+                  className={`rounded border px-3 py-1.5 text-xs ${compositionTier === t || (!compositionTier && !t) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
+                  onClick={() => filter('compositionTier', t)}
+                >
+                  {t ? formatCompositionTier(t) : 'All compositions'}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="text-text-dim sm:hidden">
+              Standard{' '}
+              <select
+                aria-label="Filter by standard"
+                value={standard ?? ''}
+                onChange={(e) => filter('standard', e.target.value)}
+                className="border-base-border bg-base-surface ml-2 rounded border p-2"
+              >
+                <option value="">All standards</option>
+                {[...new Set([...standards[assetType], ...(standard ? [standard] : [])])].map(
+                  (s) => (
+                    <option key={s} value={s}>
+                      {formatStandard(s)}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+            {assetType === 'object' && (
+              <label className="text-text-dim sm:hidden">
+                Composition{' '}
+                <select
+                  aria-label="Filter by composition tier"
+                  value={compositionTier ?? ''}
+                  onChange={(e) => filter('compositionTier', e.target.value)}
+                  className="border-base-border bg-base-surface ml-2 max-w-full rounded border p-2"
+                >
+                  <option value="">All compositions</option>
+                  {tiers.map((t) => (
+                    <option key={t} value={t}>
+                      {formatCompositionTier(t)}
                     </option>
                   ))}
                 </select>
-                {assetType === 'object' && (
-                  <select
-                    value={compositionTier}
-                    onChange={(event) => handleCompositionTierChange(event.target.value)}
-                    aria-label="Filter by composition tier"
-                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
-                  >
-                    {COMPOSITION_TIER_OPTIONS.map((item) => (
-                      <option key={item} value={item}>
-                        {formatCompositionTierLabel(item)}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            }
-          >
-            {panelTitle}
-          </TerminalPanelHeader>
-          <TerminalPanelContent padding="none">
-            <InventoryTable
-              assetType={assetType}
-              search={search}
-              standard={standard}
-              compositionTier={compositionTier}
-            />
-          </TerminalPanelContent>
-        </TerminalPanel>
+              </label>
+            )}
+            <label className="text-text-dim sm:ml-auto">
+              Sort by{' '}
+              <select
+                aria-label="Sort inventory"
+                value={sortKey}
+                onChange={(e) => {
+                  setSortKey(e.target.value as AssetSortKey);
+                  pagination.reset();
+                }}
+                className="border-base-border bg-base-surface ml-2 rounded border p-2"
+              >
+                {sortOptions.map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              aria-label="Reverse sort direction"
+              className="border-base-border rounded border p-2"
+              onClick={() => {
+                setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
+                pagination.reset();
+              }}
+            >
+              {sortDirection === 'desc' ? 'Descending' : 'Ascending'}
+            </button>
+            <HMulHelpPopover />
+          </div>
+          {assets.data ? (
+            <>
+              <AddressStaleNotice error={assets.error} label="inventory" />
+              <InventoryRows rows={assets.data.data} assetType={assetType} />
+              <CursorPagination
+                total={assets.data.total ?? undefined}
+                totalLabel="items"
+                pageSize={DEFAULT_PAGE_SIZE}
+                page={pagination.page}
+                hasMore={assets.data.hasMore}
+                hasPrevious={pagination.hasPrevious}
+                onNext={() => pagination.goToNext(assets.data.nextCursor)}
+                onPrevious={pagination.goToPrevious}
+              />
+            </>
+          ) : (
+            <AddressLoadState error={assets.error} loading={assets.isLoading} label="inventory" />
+          )}
+        </DetailLayout>
       </main>
     </div>
   );
@@ -704,8 +300,9 @@ export function InventoryPageFallback() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <div className="bg-base-elevated mb-6 h-10 w-48 animate-pulse rounded" />
-        <div className="border-base-border bg-base-surface/50 h-80 animate-pulse rounded border" />
+        <p role="status" className="text-text-dim text-xs">
+          Loading inventory…
+        </p>
       </main>
     </div>
   );

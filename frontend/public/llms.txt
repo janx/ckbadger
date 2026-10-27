@@ -34,6 +34,15 @@ Machine-friendly endpoints:
   filters before cursor pagination. Identity `heldSinceBlock` traces uninterrupted ownership;
   `createdAtBlock` describes the current cell. Protocol-named `.cell` rights remain separate at
   `/api/{network}/v1/addresses/{addr}/dotcell-names` and add no physical capacity.
+- Inventory summary: `/api/{network}/v1/assets/summary` reads canonical counts at its returned
+  anchor; `/assets` is a separately refreshed cached listing. Collection composition groups and
+  exact live DOB-pending item counts are distinct.
+- Token history: `/api/{network}/v1/tokens/{typeHash}/history` supplies complete UTC+8 daily
+  capacity/supply, complete weekly transfers and exact mint/burn events. `/distribution` supplies
+  same-view concentration and balance buckets; `/holders` includes its own `totalSupply` and
+  anchor for exact row shares. `/activity-feed` and `/transactions` expose both paginated layers.
+  Issuer is nullable and requires script proof; stored name/symbol/decimals provenance is not
+  recorded. Unknown decimals remain raw integer amounts.
 - Exact live-cell inventory: `/api/{network}/v1/cells/live-summary` (constant-size JSON; verify
   `tip.block`/`tip.hash` against the local CKB node)
 - Optional local peer evidence: `/api/{network}/v1/network/summary`,

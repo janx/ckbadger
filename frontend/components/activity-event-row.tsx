@@ -32,6 +32,8 @@ import type {
 // ---------------------------------------------------------------------------
 
 export function formatStandard(standard: string): string {
+  if (standard === 'xudt') return 'xUDT';
+  if (standard === 'sudt') return 'sUDT';
   if (standard === 'spore') return 'Spore';
   if (standard === 'm-nft') return 'M-NFT';
   if (standard === 'dotbit') return '.bit';

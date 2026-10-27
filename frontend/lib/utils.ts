@@ -12,6 +12,19 @@ export function truncateHash(hash: string, start = 10, end = 8): string {
   return `${hash.slice(0, start)}...${hash.slice(-end)}`;
 }
 
+/** Raw block timestamp displayed in the indexer's fixed UTC+8 calendar timezone. */
+export function formatUtc8Date(timestamp: string | number): string {
+  const value =
+    typeof timestamp === 'string' && /^\d+$/.test(timestamp)
+      ? Number(timestamp)
+      : typeof timestamp === 'number'
+        ? timestamp
+        : Date.parse(timestamp);
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new Error(`Invalid block timestamp ${timestamp}`);
+  return new Date(value + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 export function formatTimeAgo(timestamp: string | number | Date): string {
   const date =
     typeof timestamp === 'string' && /^\d+$/.test(timestamp)

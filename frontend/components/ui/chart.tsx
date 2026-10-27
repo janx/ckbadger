@@ -9,11 +9,15 @@ import { CLASS_COLORS, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
 export interface ChartPoint {
   label: string;
   values: Readonly<Record<string, string>>;
+  /** Optional exact time coordinate for plots sharing one time axis. */
+  x?: number;
 }
 export interface ChartSeries {
   key: string;
   label: string;
   assetClass?: AssetClass;
+  /** Explicit semantic color for non-class quantities such as occupied/free capacity. */
+  color?: string;
 }
 export interface ChartMarker {
   index: number;
@@ -33,6 +37,13 @@ export interface ChartProps {
   /** Receives the original exact decimal, never geometry converted through Number. */
   formatValue?: (value: string) => ReactNode;
   formatAxis?: (value: number, step: number) => string;
+  activeIndex?: number | null;
+  onActiveIndexChange?: (index: number | null) => void;
+  xDomain?: readonly [number, number];
+  plotLeft?: number;
+  hideCaption?: boolean;
+  hideXAxis?: boolean;
+  cursorX?: number | null;
 }
 export function Chart({
   title,
@@ -45,9 +56,31 @@ export function Chart({
   markers = [],
   formatValue = (v) => v,
   formatAxis = formatTick,
+  activeIndex: controlledActive,
+  onActiveIndexChange,
+  xDomain,
+  plotLeft,
+  hideCaption = false,
+  hideXAxis = false,
+  cursorX,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  const [active, setActive] = useState<number | null>(null);
+  const [localActive, setLocalActive] = useState<number | null>(null);
+  const active = controlledActive === undefined ? localActive : controlledActive;
+  const setActive = (index: number | null) => {
+    setLocalActive(index);
+    onActiveIndexChange?.(index);
+  };
+  if (
+    xDomain &&
+    (!Number.isFinite(xDomain[0]) ||
+      !Number.isFinite(xDomain[1]) ||
+      xDomain[0] >= xDomain[1] ||
+      data.some(
+        (p) => p.x === undefined || !Number.isFinite(p.x) || p.x < xDomain[0] || p.x > xDomain[1]
+      ))
+  )
+    throw new Error(`${title}: invalid shared time axis`);
   if (!series.length) throw new Error(`${title}: chart needs at least one series`);
   if (new Set(series.map((s) => s.key)).size !== series.length)
     throw new Error(`${title}: duplicate chart series`);
@@ -72,7 +105,8 @@ export function Chart({
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
   const color = (i: number) =>
-    series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : HUE_RAMP[i % HUE_RAMP.length];
+    series[i].color ??
+    (series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : HUE_RAMP[i % HUE_RAMP.length]);
   const activeIndex = active !== null && active < data.length ? active : null;
   const selected = data[activeIndex === null ? data.length - 1 : activeIndex];
   const plotValues =
@@ -85,19 +119,29 @@ export function Chart({
       )
     : null;
   const labels = ticks?.values.map((v) => `${formatAxis(v, ticks.step)} ${unit}`) ?? [];
-  const left = Math.max(48, ...labels.map((s) => s.length * 6 + 8));
+  const left = plotLeft ?? Math.max(48, ...labels.map((s) => s.length * 6 + 8));
   const right = width === null ? null : width - 10,
     top = 16,
     bottom = height - 26;
   const lo = ticks?.values[0],
     hi = ticks?.values[ticks.values.length - 1];
   const x = (i: number) =>
-    left + (data.length === 1 ? 0.5 : i / (data.length - 1)) * ((right as number) - left);
+    left +
+    (xDomain
+      ? (data[i].x! - xDomain[0]) / (xDomain[1] - xDomain[0])
+      : data.length === 1
+        ? 0.5
+        : i / (data.length - 1)) *
+      ((right as number) - left);
   const y = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
   return (
     <figure className="m-0 min-w-0">
-      <figcaption className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
+      <figcaption
+        className={
+          hideCaption ? 'sr-only' : 'mb-3 flex flex-wrap items-baseline justify-between gap-3'
+        }
+      >
         <span>
           <span className="text-text-bright block text-[15px] font-medium">{title}</span>
           <span className="text-text-dim text-[11px]">
@@ -160,17 +204,21 @@ export function Chart({
               onKeyDown={(e) => {
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                   e.preventDefault();
-                  setActive((i) => {
-                    const next =
-                      (i === null ? data.length - 1 : i) + (e.key === 'ArrowLeft' ? -1 : 1);
-                    return next < 0 ? 0 : next >= data.length ? data.length - 1 : next;
-                  });
+                  const next =
+                    (active === null ? data.length - 1 : active) + (e.key === 'ArrowLeft' ? -1 : 1);
+                  setActive(next < 0 ? 0 : next >= data.length ? data.length - 1 : next);
                 }
                 if (e.key === 'Escape') setActive(null);
               }}
               onPointerMove={(e) => {
                 const px = e.clientX - e.currentTarget.getBoundingClientRect().left;
-                const index = Math.round(((px - left) / (right - left)) * (data.length - 1));
+                const index = xDomain
+                  ? data.reduce(
+                      (closest, _, i) =>
+                        Math.abs(x(i) - px) < Math.abs(x(closest) - px) ? i : closest,
+                      0
+                    )
+                  : Math.round(((px - left) / (right - left)) * (data.length - 1));
                 setActive(index < 0 ? 0 : index >= data.length ? data.length - 1 : index);
               }}
               onPointerLeave={() => setActive(null)}
@@ -245,18 +293,39 @@ export function Chart({
               ))}
               {activeIndex !== null && (
                 <line
-                  x1={x(activeIndex!)}
-                  x2={x(activeIndex!)}
+                  x1={
+                    cursorX !== undefined && cursorX !== null && xDomain
+                      ? left + ((cursorX - xDomain[0]) / (xDomain[1] - xDomain[0])) * (right - left)
+                      : x(activeIndex!)
+                  }
+                  x2={
+                    cursorX !== undefined && cursorX !== null && xDomain
+                      ? left + ((cursorX - xDomain[0]) / (xDomain[1] - xDomain[0])) * (right - left)
+                      : x(activeIndex!)
+                  }
                   y1={top}
                   y2={bottom}
                   stroke="#a0a8be"
                 />
               )}
-              <text x={left} y={height - 5} fill="#7c849c" fontSize="10">
+              <text
+                visibility={hideXAxis ? 'hidden' : undefined}
+                x={left}
+                y={height - 5}
+                fill="#7c849c"
+                fontSize="10"
+              >
                 {data[0].label}
               </text>
               {data.length > 1 && (
-                <text x={right} y={height - 5} textAnchor="end" fill="#7c849c" fontSize="10">
+                <text
+                  visibility={hideXAxis ? 'hidden' : undefined}
+                  x={right}
+                  y={height - 5}
+                  textAnchor="end"
+                  fill="#7c849c"
+                  fontSize="10"
+                >
                   {data[data.length - 1].label}
                 </text>
               )}

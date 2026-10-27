@@ -1081,6 +1081,79 @@ interface SearchResponse {
   ambiguous?: boolean;
 }
 
+export interface InventorySummary {
+  source: 'canonical_asset_indexes';
+  anchor: { blockNumber: number; blockHash: string } | null;
+  counts: { token: number; object: number; identity: number };
+  objectStandards: { standard: string; collectionsCount: number; liveCount: number }[];
+  objectComposition: { tier: string; collectionsCount: number; liveCount: number }[];
+  fullyOnchainObjectsCount: number;
+  pendingItemsCount: number;
+}
+export interface TokenHistory {
+  source: 'indexed_chain_time';
+  completeThrough: string;
+  anchor: { blockNumber: number; blockHash: string };
+  daily: { date: string; supply: string; capacity: string; occupiedCapacity: string }[];
+  weekly: { weekStart: string; transfersCount: number }[];
+  supplyEvents: {
+    txHash: string;
+    blockNumber: number;
+    txIndex: number;
+    transferSequence: number;
+    timestamp: string;
+    kind: 'mint' | 'burn';
+    amount: string;
+    supplyAfter: string;
+    lockHash: string;
+    address: string | null;
+    lockKind: string | null;
+  }[];
+  mintCount: number;
+  burnCount: number;
+  transfersCount: number;
+}
+export interface TokenDistribution {
+  holdersCount: number;
+  totalSupply: string;
+  largestHolderBalance: string;
+  nextNineBalance: string;
+  remainingBalance: string;
+  unit: 'token' | 'raw';
+  decimals: number | null;
+  buckets: {
+    lowerBound: string;
+    upperBound: string | null;
+    holdersCount: number;
+    balance: string;
+  }[];
+}
+export interface ItemCellVersion {
+  txHash: string;
+  outputIndex: number;
+  blockNumber: number;
+  txIndex: number;
+  timestamp: string;
+  isLive: boolean;
+  consumedByTx: string | null;
+  consumedAtBlock: number | null;
+  ownerLockHash: string;
+  ownerAddress: string;
+  capacity: string;
+  occupiedCapacity: string;
+  lock: Script;
+  type: Script | null;
+  anatomy: { capacityBytes: number; lockBytes: number; typeBytes: number; dataBytes: number };
+  dataHash: string | null;
+  lockName: string | null;
+  typeName: string | null;
+}
+export type ItemKind = 'spore' | 'mnft' | 'dotbit' | 'bit-cell' | 'did' | 'dotcell';
+export interface ItemCellVersions {
+  data: ItemCellVersion[];
+  total: number;
+}
+
 interface Token {
   typeScriptHash: string;
   typeCodeHash: string;
@@ -1107,14 +1180,22 @@ interface Token {
   transfersCount: number;
   transfers24h: number;
   cellsCount: number | null;
+  sameSymbolTokens?: { typeScriptHash: string; holdersCount: number }[];
+  issuer: { lockHash: string; address: string | null; lockKind: string | null } | null;
   totalCapacity: string | null;
   totalCommonKnowledgeSize: string | null;
 }
 
 interface TokenHolder {
   lockScriptHash: string;
-  address?: string;
+  address: string | null;
   balance: string;
+  lockKind: string | null;
+}
+
+export interface TokenHoldersResponse extends CursorPaginatedResponse<TokenHolder> {
+  totalSupply: string;
+  anchor: { blockNumber: number; blockHash: string } | null;
 }
 
 interface TokenTransfer {
@@ -1150,8 +1231,8 @@ interface Asset {
   holdersCount: number;
   /** Token transfer count; omitted for object/identity collections. */
   transfersCount?: number;
-  liveCount?: number | null;
-  activitiesCount?: number | null;
+  liveCount: number | null;
+  activitiesCount: number | null;
   transfers24h: number;
   decimals: number | null;
   totalSupply: string | null;
@@ -1161,15 +1242,16 @@ interface Asset {
   clusterName: string | null;
   ownedCapacity: string | null;
   ownedKnowledge: string | null;
-  compositionTier?:
+  compositionTier:
     | 'btc_ckb'
     | 'pure_ckb'
     | 'decentralized_mixture'
     | 'centralized_mixture'
     | 'unknown'
-    | 'decode_pending';
-  fullyOnchainRatio?: string | null;
-  fullyOnchainCount?: number | null;
+    | 'decode_pending'
+    | null;
+  onchainRatio: string | null;
+  onchainCount: number | null;
   hMultiplier: string | null;
 }
 
@@ -1196,7 +1278,8 @@ interface AssetQueryParams {
     | 'btc_ckb'
     | 'decentralized_mixture'
     | 'centralized_mixture'
-    | 'unknown';
+    | 'unknown'
+    | 'decode_pending';
 }
 
 interface TokenHolderParams {
@@ -3075,6 +3158,39 @@ export const api = {
     return fetchApi(`/search?${query}`);
   },
 
+  getInventorySummary: (): Promise<InventorySummary> => fetchApi('/assets/summary'),
+  getItemCellVersions: (kind: ItemKind, id: string): Promise<ItemCellVersions> => {
+    const base =
+      kind === 'spore'
+        ? `/spore/objects/${id}`
+        : kind === 'mnft'
+          ? `/assets/objects/items/${id}`
+          : `/assets/identities/${kind}/items/${id}`;
+    return fetchApi(`${base}/cell-versions`);
+  },
+  getTokenHistory: (typeHash: string): Promise<TokenHistory> =>
+    fetchApi(`/tokens/${typeHash}/history`),
+  getTokenDistribution: (typeHash: string): Promise<TokenDistribution> =>
+    fetchApi(`/tokens/${typeHash}/distribution`),
+  getTokenActivityFeed: (
+    typeHash: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<GlobalActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return fetchApi(`/tokens/${typeHash}/activity-feed?${query}`);
+  },
+  getTokenTransactions: (
+    typeHash: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<Transaction>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return fetchApi(`/tokens/${typeHash}/transactions?${query}`);
+  },
+
   getAssets: (params: AssetQueryParams = {}): Promise<CursorPaginatedResponse<Asset>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
@@ -3125,7 +3241,7 @@ export const api = {
   getTokenHolders: (
     typeHash: string,
     params: TokenHolderParams = {}
-  ): Promise<CursorPaginatedResponse<TokenHolder>> => {
+  ): Promise<TokenHoldersResponse> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);

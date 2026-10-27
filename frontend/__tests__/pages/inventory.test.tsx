@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
+import { QueryClientProvider } from '@tanstack/react-query';
 import TokensPage from '@/app/inventory/tokens/page';
 import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
@@ -20,6 +21,7 @@ vi.mock('@/src/navigation', () => ({
 vi.mock('@/lib/api', () => ({
   api: {
     getAssets: vi.fn(),
+    getInventorySummary: vi.fn(),
     getToken: vi.fn(),
     getObjectCollection: vi.fn(),
     getSporeCluster: vi.fn(),
@@ -37,6 +39,11 @@ const mockTokenAssets = {
     {
       id: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
       assetType: 'token' as const,
+      liveCount: null,
+      activitiesCount: null,
+      compositionTier: null,
+      onchainRatio: null,
+      onchainCount: null,
       standard: 'xudt',
       name: 'Test Token',
       symbol: 'TEST',
@@ -69,6 +76,8 @@ const mockClusterAssets = {
     {
       id: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
       assetType: 'object' as const,
+      liveCount: null,
+      activitiesCount: null,
       standard: 'spore',
       name: 'Test Collection',
       symbol: null,
@@ -88,8 +97,8 @@ const mockClusterAssets = {
       ownedCapacity: '9000000000',
       ownedKnowledge: '5000000000',
       compositionTier: 'btc_ckb' as const,
-      fullyOnchainRatio: '1.0000',
-      fullyOnchainCount: 50,
+      onchainRatio: '1.0000',
+      onchainCount: 50,
       hMultiplier: '1.80',
     },
   ],
@@ -104,6 +113,11 @@ const mockDotbitIdentityAssets = {
     {
       id: '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
       assetType: 'identity' as const,
+      liveCount: null,
+      activitiesCount: null,
+      compositionTier: null,
+      onchainRatio: null,
+      onchainCount: null,
       standard: 'dotbit',
       name: '.bit',
       symbol: null,
@@ -136,6 +150,11 @@ const mockDidCkbIdentityAssets = {
     {
       id: '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
       assetType: 'identity' as const,
+      liveCount: null,
+      activitiesCount: null,
+      compositionTier: null,
+      onchainRatio: null,
+      onchainCount: null,
       standard: 'did_ckb',
       name: 'did:ckb',
       symbol: null,
@@ -168,6 +187,8 @@ const mockMixedObjectAssets = {
     {
       id: '0x1111111111111111111111111111111111111111111111111111111111111111',
       assetType: 'object' as const,
+      liveCount: null,
+      activitiesCount: null,
       standard: 'spore',
       name: 'Spore With Icon',
       symbol: null,
@@ -187,13 +208,15 @@ const mockMixedObjectAssets = {
       ownedCapacity: '3000000000',
       ownedKnowledge: '1000000000',
       compositionTier: 'btc_ckb' as const,
-      fullyOnchainRatio: '1.0000',
-      fullyOnchainCount: 10,
+      onchainRatio: '1.0000',
+      onchainCount: 10,
       hMultiplier: '3.00',
     },
     {
       id: '0x2222222222222222222222222222222222222222222222222222222222222222',
       assetType: 'object' as const,
+      liveCount: null,
+      activitiesCount: null,
       standard: 'm-nft',
       name: 'MNFT Without Icon',
       symbol: null,
@@ -213,8 +236,8 @@ const mockMixedObjectAssets = {
       ownedCapacity: '2000000000',
       ownedKnowledge: '900000000',
       compositionTier: 'centralized_mixture' as const,
-      fullyOnchainRatio: '0.0000',
-      fullyOnchainCount: 0,
+      onchainRatio: '0.0000',
+      onchainCount: 0,
       hMultiplier: '2.22',
     },
   ],
@@ -237,6 +260,11 @@ const sortableTokenAssets = {
     {
       id: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       assetType: 'token' as const,
+      liveCount: null,
+      activitiesCount: null,
+      compositionTier: null,
+      onchainRatio: null,
+      onchainCount: null,
       standard: 'xudt',
       name: 'Alpha Token',
       symbol: 'ALPHA',
@@ -260,6 +288,11 @@ const sortableTokenAssets = {
     {
       id: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       assetType: 'token' as const,
+      liveCount: null,
+      activitiesCount: null,
+      compositionTier: null,
+      onchainRatio: null,
+      onchainCount: null,
       standard: 'xudt',
       name: 'Beta Token',
       symbol: 'BETA',
@@ -290,6 +323,15 @@ const sortableTokenAssets = {
 describe('Tokens Inventory Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getInventorySummary).mockResolvedValue({
+      source: 'canonical_asset_indexes',
+      anchor: null,
+      counts: { token: 500, object: 200, identity: 4 },
+      objectStandards: [],
+      objectComposition: [],
+      fullyOnchainObjectsCount: 1000,
+      pendingItemsCount: 3,
+    });
     mockReplace.mockClear();
     window.history.replaceState(null, '', '/inventory/tokens');
   });
@@ -337,7 +379,7 @@ describe('Tokens Inventory Page', () => {
     render(<TokensPage />);
 
     await waitFor(() => {
-      expect(screen.getAllByTitle('Total Circulation: 1').length).toBeGreaterThan(0);
+      expect(screen.getAllByTitle('1').length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/1\.000000000000000016777216/)).toBeNull();
   });
@@ -399,12 +441,12 @@ describe('Tokens Inventory Page', () => {
     render(<TokensPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Standard' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Used' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: 'Sort inventory' })).toHaveValue('capacity');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Used' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort inventory' }), {
+      target: { value: 'used' },
+    });
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -427,10 +469,10 @@ describe('Tokens Inventory Page', () => {
       expect(api.getAssets).toHaveBeenCalledWith(
         expect.objectContaining({ sortKey: 'capacity', sortDirection: 'desc' })
       );
-      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Reverse sort direction' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse sort direction' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -482,11 +524,13 @@ describe('Tokens Inventory Page', () => {
     vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
     render(<TokensPage />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by HMul' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'H-mult.' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Explain HMul' })).toBeInTheDocument();
-      expect(screen.getByText('\u00d72.00')).toBeInTheDocument();
+      expect(screen.getAllByText('\u00d72.00').length).toBeGreaterThan(0);
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by HMul' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort inventory' }), {
+      target: { value: 'hMultiplier' },
+    });
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
         expect.objectContaining({ sortKey: 'hMultiplier', sortDirection: 'desc' })
@@ -498,6 +542,15 @@ describe('Tokens Inventory Page', () => {
 describe('Objects Inventory Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getInventorySummary).mockResolvedValue({
+      source: 'canonical_asset_indexes',
+      anchor: null,
+      counts: { token: 500, object: 200, identity: 4 },
+      objectStandards: [],
+      objectComposition: [],
+      fullyOnchainObjectsCount: 1000,
+      pendingItemsCount: 3,
+    });
     mockReplace.mockClear();
     window.history.replaceState(null, '', '/inventory/objects');
   });
@@ -510,8 +563,8 @@ describe('Objects Inventory Page', () => {
     await waitFor(() => {
       expect(screen.getByText('Objects')).toBeInTheDocument();
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Composition')).toBeInTheDocument();
-      expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
+      expect(screen.getByRole('columnheader', { name: 'Composition' })).toBeInTheDocument();
+      expect(screen.getAllByText('Spore').length).toBeGreaterThan(0);
       const tierLabels = screen.getAllByText('BTC+CKB');
       expect(tierLabels.length).toBeGreaterThanOrEqual(1);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
@@ -532,13 +585,14 @@ describe('Objects Inventory Page', () => {
         {
           ...mockClusterAssets.data[0],
           compositionTier: 'decode_pending',
-          fullyOnchainRatio: null,
-          fullyOnchainCount: null,
+          onchainRatio: null,
+          onchainCount: null,
         },
       ],
     });
     render(<ObjectsPage />);
-    const labels = await screen.findAllByText('Decode pending');
+    await screen.findByRole('table', { name: 'Object collections' });
+    const labels = screen.getAllByText('Decode pending').filter((el) => el.tagName === 'SPAN');
     expect(labels).toHaveLength(2);
     for (const label of labels) {
       expect(label).toHaveClass('text-text-dim');
@@ -594,6 +648,15 @@ describe('Objects Inventory Page', () => {
 describe('Identities Inventory Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getInventorySummary).mockResolvedValue({
+      source: 'canonical_asset_indexes',
+      anchor: null,
+      counts: { token: 500, object: 200, identity: 4 },
+      objectStandards: [],
+      objectComposition: [],
+      fullyOnchainObjectsCount: 1000,
+      pendingItemsCount: 3,
+    });
     mockReplace.mockClear();
     window.history.replaceState(null, '', '/inventory/identities');
   });
@@ -615,7 +678,7 @@ describe('Identities Inventory Page', () => {
     const values = Array.from(select.options).map((option) => option.value);
     expect(values).toEqual(['', 'dotbit', 'bit_cell', 'did_ckb', 'dotcell']);
 
-    expect(screen.getByRole('option', { name: 'DOTBIT' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '.bit' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '.bit Cell' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'did:ckb' })).toBeInTheDocument();
     // The protocol's own name for itself, not its wire value shouted.
@@ -650,7 +713,7 @@ describe('Identities Inventory Page', () => {
         assets: mockDotbitIdentityAssets,
         linkName: /\.bit/i,
         href: '/mainnet/identities/dotbit',
-        standard: 'DOTBIT',
+        standard: '.bit',
       },
       {
         assets: mockDidCkbIdentityAssets,
@@ -675,5 +738,100 @@ describe('Identities Inventory Page', () => {
 
       view.unmount();
     }
+  });
+});
+
+describe('Inventory approved board regressions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getInventorySummary).mockResolvedValue({
+      source: 'canonical_asset_indexes',
+      anchor: null,
+      counts: { token: 500, object: 200, identity: 4 },
+      objectStandards: [],
+      objectComposition: [],
+      fullyOnchainObjectsCount: 1000,
+      pendingItemsCount: 3,
+    });
+    window.history.replaceState(null, '', '/inventory/objects');
+  });
+  it('distinguishes live objects, minted objects, and actual activities', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockClusterAssets,
+      data: [{ ...mockClusterAssets.data[0], liveCount: 41, activitiesCount: 123 }],
+    });
+    render(<ObjectsPage />);
+    const table = await screen.findByRole('table', { name: 'Object collections' });
+    expect(within(table).getByText('41')).toBeInTheDocument();
+    expect(within(table).getByText('of 50 minted')).toBeInTheDocument();
+    expect(within(table).getByText('123')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Inventory', level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(
+      'Tokens'
+    );
+  });
+  it('shows transport errors as errors, not an empty inventory', async () => {
+    vi.mocked(api.getAssets).mockRejectedValue(new Error('pinned read failed'));
+    render(<ObjectsPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('pinned read failed');
+    expect(screen.queryByText('No objects found')).not.toBeInTheDocument();
+  });
+});
+
+describe('Inventory snapshot and pagination lifecycle', () => {
+  it('shows canonical global counts separately from a cached page', async () => {
+    vi.mocked(api.getInventorySummary).mockResolvedValue({
+      source: 'canonical_asset_indexes',
+      anchor: { blockNumber: 99, blockHash: '0xaa' },
+      counts: { token: 500, object: 200, identity: 4 },
+      objectStandards: [],
+      objectComposition: [],
+      fullyOnchainObjectsCount: 1000,
+      pendingItemsCount: 3,
+    });
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<TokensPage />);
+    expect(await screen.findByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(
+      'Tokens'
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent('500')
+    );
+    expect(screen.getByLabelText('Inventory totals')).toHaveTextContent(
+      'cached snapshot and can lag'
+    );
+  });
+  it('resets the cursor when a standard chip changes', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      hasMore: true,
+      nextCursor: 'older',
+    });
+    render(<TokensPage />);
+    await screen.findAllByText('TEST');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older' }))
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'sUDT' }));
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ standard: 'sudt', cursor: undefined })
+      )
+    );
+  });
+  it('retains the loaded rows and makes refetch failures visible', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    const client = createTestQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <TokensPage />
+      </QueryClientProvider>
+    );
+    await screen.findAllByText('TEST');
+    vi.mocked(api.getAssets).mockRejectedValue(new Error('Cache read failed'));
+    await client.invalidateQueries({ queryKey: ['assets'] });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing previously loaded');
+    expect(screen.getAllByText('TEST').length).toBeGreaterThan(0);
   });
 });

@@ -1,491 +1,303 @@
 'use client';
-import { useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
-import {
-  TerminalPanel,
-  TerminalPanelHeader,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
-import { Badge } from '@/components/ui/page-header';
-import { StatBlock, StatGrid } from '@/components/ui/stat-block';
-import { DataField } from '@/components/ui/data-field';
-import { HexDisplay } from '@/components/ui/hex-display';
-import { Address } from '@/components/ui/address';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
-import { api, TokenHolder, TokenActivity, TokenTransferDetail } from '@/lib/api';
-import { RAW_AMOUNT_TITLE, splitTokenAmount } from '@/lib/format-asset';
-import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatTimeAgo, formatNumber } from '@/lib/utils';
-function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
-  if (action === 'mint') return 'green';
-  if (action === 'burn') return 'red';
-  return 'neutral';
-}
-export interface TokenDetailPageProps {
-  typeHash: string;
-}
-export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
-  const [activeTab, setActiveTab] = useState('activities');
-  const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
-  const holdersPagination = useCursorPagination();
-  const activitiesPagination = useCursorPagination();
-  const capacityRangeParams = getCapacityRangeParams(capacityRange);
-  const {
-    data: token,
-    isLoading,
-    error,
-  } = useQuery({
-    queryKey: ['token', typeHash],
-    queryFn: () => api.getToken(typeHash),
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/lib/api';
+import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetHistory } from '@/components/asset/asset-history';
+import { AssetFeed } from '@/components/asset/asset-feed';
+import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
+import { TokenHolders } from '@/components/asset/token-holders';
+import { DetailSection } from '@/components/ui/detail-layout';
+import { CapacityPartition } from '@/components/ui/capacity-partition';
+import { Hash } from '@/components/ui/hash';
+import { AppLink } from '@/components/ui/app-link';
+import { formatTimeAgo } from '@/lib/utils';
+import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
+import { getScriptDetailHref } from '@/lib/detail-routes';
+import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
+  const token = useQuery({ queryKey: ['token', typeHash], queryFn: () => api.getToken(typeHash) });
+  const history = useQuery({
+    queryKey: ['token-history', typeHash],
+    queryFn: () => api.getTokenHistory(typeHash),
   });
-  const { data: holders } = useQuery({
-    queryKey: ['token-holders', typeHash, holdersPagination.cursor],
-    queryFn: () =>
-      api.getTokenHolders(typeHash, {
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: holdersPagination.cursor,
-      }),
-    enabled: !!token && activeTab === 'holders',
-    placeholderData: keepPreviousData,
+  const latest = useQuery({
+    queryKey: ['token-latest-activity', typeHash],
+    queryFn: () => api.getTokenActivityFeed(typeHash, { limit: 1 }),
   });
-  const { data: activities } = useQuery({
-    queryKey: ['token-activities', typeHash, activitiesPagination.cursor],
-    queryFn: () =>
-      api.getTokenActivities(typeHash, {
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: activitiesPagination.cursor,
-      }),
-    enabled: !!token && activeTab === 'activities',
-    placeholderData: keepPreviousData,
+  const concentration = useQuery({
+    queryKey: ['token-distribution', typeHash],
+    queryFn: () => api.getTokenDistribution(typeHash),
   });
-  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
-    queryKey: ['token-capacity-chart', typeHash, capacityRange],
-    queryFn: () =>
-      capacityRangeParams
-        ? api.getTokenCapacityChart(typeHash, capacityRangeParams)
-        : api.getTokenCapacityChart(typeHash),
-    enabled: !!token,
-  });
-  // Full declared precision: unlike the compact renderers, the token detail page
-  // keeps the fraction's trailing zeros, so it consumes the shared split rather
-  // than the trimmed string. `decimals === null` means unknown (no label, no
-  // on-chain info cell): the raw base-unit integer is shown — never assume 0.
-  const TokenAmount = ({ amount, decimals }: { amount: string; decimals: number | null }) => {
-    const { integer, fraction } = splitTokenAmount(amount, decimals);
+  const t = token.data;
+  if (!t)
     return (
-      <span className="font-mono tabular-nums">
-        <span>{integer}</span>
-        {fraction && <span className="text-emphasis-dim text-[0.85em]">.{fraction}</span>}
-        {decimals == null && (
-          <span className="text-text-dim ml-1 text-[0.7em] uppercase" title={RAW_AMOUNT_TITLE}>
-            raw
-          </span>
-        )}
-      </span>
+      <AssetDetailShell
+        title="Token"
+        kind="tokens"
+        breadcrumb={[{ label: 'Inventory', href: '/inventory/tokens' }]}
+      >
+        <AssetReadState error={token.error} loading={token.isLoading} label="token" />
+      </AssetDetailShell>
     );
-  };
-  if (isLoading) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-8">
-          <div className="animate-pulse space-y-8">
-            <div className="bg-base-surface h-20 w-full rounded" />
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="bg-base-surface h-48 rounded" />
-              <div className="bg-base-surface h-48 rounded" />
-            </div>
-            <div className="bg-base-surface h-96 rounded" />
-          </div>
-        </main>
-      </div>
+  const held =
+    t.totalCapacity === null ? null : exactUnsignedInteger(t.totalCapacity, 'token held capacity');
+  const occupied =
+    t.totalCommonKnowledgeSize === null
+      ? null
+      : exactUnsignedInteger(t.totalCommonKnowledgeSize, 'token occupied capacity');
+  if (held !== null && occupied !== null && occupied > held)
+    throw new Error(`${typeHash}: token occupied capacity exceeds held capacity`);
+  const tokenLabel = t.symbol ?? t.name ?? 'Token';
+  const maximum =
+    t.maximumSupplyStatus === 'limited' ? (
+      t.maximumSupply === null ? (
+        <span>Unavailable</span>
+      ) : (
+        <AssetAmount amount={t.maximumSupply} decimals={t.decimals} />
+      )
+    ) : t.maximumSupplyStatus === 'unlimited' ? (
+      'Unlimited'
+    ) : (
+      'Unknown'
     );
-  }
-  if (error || !token) {
-    return (
-      <div className="bg-base-bg min-h-screen">
-        <Header />
-        <main className="container mx-auto px-4 py-8">
-          <TerminalPanel>
-            <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-dim text-xl">Token not found</h2>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </main>
-      </div>
-    );
-  }
-  // Stat-block amounts: raw base-unit + "(raw)" suffix when decimals unknown.
-  const formatAmountStat = (amount: string) => {
-    const { integer, fraction } = splitTokenAmount(amount, token.decimals);
-    const base = fraction ? `${integer}.${fraction}` : integer;
-    return token.decimals == null ? `${base} (raw)` : base;
-  };
   return (
-    <div className="bg-base-bg min-h-screen">
-      <Header />
-      <main className="container mx-auto px-4 py-8">
-        <div className="mb-6">
-          <Link
-            href="/inventory/tokens"
-            className="hover:text-emphasis text-text-dim text-sm transition-colors"
-          >
-            ← Back to Tokens
-          </Link>
-        </div>
-        <TerminalPanel className="mb-6" glow>
-          <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
-          <TerminalPanelContent>
-            {/* Name + badges */}
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-text-bright font-mono text-2xl font-bold">
-                {token.symbol || token.name || 'Unknown Token'}
-              </h1>
-              <Badge variant="neutral">{token.standard.toUpperCase()}</Badge>
-              {token.published && (
-                <span className="text-emphasis" title="Verified">
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path
-                      fillRule="evenodd"
-                      d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </span>
+    <AssetDetailShell
+      kind="tokens"
+      title={tokenLabel}
+      breadcrumb={[
+        { label: 'Inventory', href: '/inventory/tokens' },
+        { label: 'Tokens', href: '/inventory/tokens' },
+      ]}
+      identity={
+        <>
+          {formatStandard(t.standard)} ·{' '}
+          {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
+          {t.name && t.name !== t.symbol && <> · {t.name}</>}
+        </>
+      }
+      intro={
+        <div className="space-y-3 text-xs">
+          <AssetReadState error={token.error} label="token" retained />
+          {t.description && (
+            <p className="text-text-dim">
+              {t.description}
+              {t.operatorWebsite && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <a
+                    href={t.operatorWebsite}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-jade break-all"
+                  >
+                    {t.operatorWebsite} ↗
+                  </a>
+                </>
               )}
-              {token.famous && (
-                <span className="text-warning" title="Famous">
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                  </svg>
-                </span>
+            </p>
+          )}
+          <p>
+            <AssetAmount amount={t.totalSupply} decimals={t.decimals} /> {t.symbol} exist, held by{' '}
+            <AssetCount value={t.holdersCount} /> addresses.{' '}
+            {concentration.data && BigInt(concentration.data.totalSupply) > BigInt(0) && (
+              <>
+                The largest holder owns{' '}
+                {formatScaledInteger(
+                  BigInt(concentration.data.largestHolderBalance) * BigInt(100),
+                  BigInt(concentration.data.totalSupply),
+                  2
+                )}
+                % of the supply.{' '}
+              </>
+            )}
+            {held !== null && (
+              <>
+                Its cells hold <ExactCkb shannons={held} tone="plain" signed={false} wrap />
+                {occupied !== null && held > BigInt(0) && (
+                  <>, {formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied</>
+                )}
+                .
+              </>
+            )}
+          </p>
+          {latest.data ? (
+            <>
+              <AssetReadState error={latest.error} label="last token movement" retained />
+              {latest.data.data[0] ? (
+                <p>
+                  Last transaction involving this token{' '}
+                  <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
+                    {formatTimeAgo(latest.data.data[0].timestamp)}
+                  </AppLink>
+                  : {activityHeadline(latest.data.data[0])}.
+                </p>
+              ) : (
+                <p className="text-text-dim">No recorded token movements.</p>
               )}
-            </div>
-
-            {/* Type script hash */}
-            <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
-              <span className="text-text-dim text-xs uppercase tracking-wider">type hash</span>
-              <HexDisplay value={token.typeScriptHash} truncate={false} size="sm" />
-            </div>
-
-            {/* Tags */}
-            {token.tags && token.tags.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {token.tags.map((tag) => (
-                  <Badge key={tag} variant="gray">
-                    {tag}
-                  </Badge>
+            </>
+          ) : (
+            <AssetReadState
+              error={latest.error}
+              loading={latest.isLoading}
+              label="last token movement"
+            />
+          )}
+          {t.sameSymbolTokens === undefined ? (
+            <p className="text-text-dim">Same-symbol comparison unavailable.</p>
+          ) : (
+            t.sameSymbolTokens.length > 0 && (
+              <p className="border-token/40 border-l-2 pl-3">
+                Other tokens also call themselves {t.symbol}:{' '}
+                {t.sameSymbolTokens.map((other, i) => (
+                  <span key={other.typeScriptHash}>
+                    {i > 0 && '; '}
+                    <AppLink href={`/tokens/${other.typeScriptHash}`}>
+                      <Hash hash={other.typeScriptHash} copyable={false} className="text-xs" />
+                    </AppLink>
+                    , <AssetCount value={other.holdersCount} /> holders
+                  </span>
                 ))}
-              </div>
-            )}
-
-            {/* Stats */}
-            <div className="border-base-border mt-4 border-t pt-4">
-              <StatGrid columns={3}>
-                <StatBlock label="Holders" value={token.holdersCount} color="jade" />
-                <StatBlock label="Transfers" value={token.transfersCount} color="gold" />
-                <StatBlock label="Decimals" value={token.decimals ?? 'Unknown'} color="default" />
-                <StatBlock
-                  label="Total Circulation"
-                  value={formatAmountStat(token.totalSupply)}
-                  color="jade"
+                . Tell them apart by type hash.
+              </p>
+            )
+          )}
+        </div>
+      }
+      facts={[
+        {
+          label: 'Supply',
+          value: (
+            <>
+              <AssetAmount amount={t.totalSupply} decimals={t.decimals} /> {t.symbol}
+              <div className="text-text-dim mt-1 text-[11px]">Maximum supply: {maximum}</div>
+            </>
+          ),
+        },
+        { label: 'Holders', value: <AssetCount value={t.holdersCount} /> },
+        {
+          label: 'Transfers',
+          value: (
+            <>
+              <AssetCount value={t.transfersCount} />
+              <span className="text-text-dim text-[11px]">
+                {' '}
+                · <AssetCount value={t.transfers24h} /> in 24 h
+              </span>
+            </>
+          ),
+        },
+        {
+          label: 'Issuer',
+          value: t.issuer ? (
+            <>
+              <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
+                <Hash
+                  hash={t.issuer.address ?? t.issuer.lockHash}
+                  startChars={12}
+                  endChars={6}
+                  copyable={false}
+                  className="text-xs"
                 />
-                <StatBlock
-                  label="Maximum Supply"
-                  value={(() => {
-                    if (token.maximumSupplyStatus === 'unlimited') return 'Unlimited';
-                    if (token.maximumSupplyStatus !== 'limited' || !token.maximumSupply) {
-                      return 'Unknown';
-                    }
-                    return formatAmountStat(token.maximumSupply);
-                  })()}
-                  color="default"
-                />
-                {token.cellsCount != null && (
-                  <StatBlock label="Cells" value={token.cellsCount} color="default" />
-                )}
-              </StatGrid>
-            </div>
-
-            {/* Description */}
-            {token.description && (
-              <div className="border-base-border mt-4 border-t pt-4">
-                <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                  Description
-                </div>
-                <div className="text-text mt-1 text-sm">{token.description}</div>
-              </div>
-            )}
-
-            {/* Token info fields */}
-            {(token.operatorWebsite || token.manager || token.email || token.udtType) && (
-              <div className="border-base-border mt-4 space-y-1 border-t pt-4">
-                {token.operatorWebsite && (
-                  <DataField label="Website">
-                    <a
-                      href={token.operatorWebsite}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-emphasis hover:underline"
-                    >
-                      {token.operatorWebsite}
-                    </a>
-                  </DataField>
-                )}
-                {token.manager && (
-                  <DataField label="Manager">
-                    <Link
-                      href={`/address/${token.manager}`}
-                      className="text-emphasis font-mono text-sm hover:underline"
-                    >
-                      {token.manager.length > 40
-                        ? `${token.manager.slice(0, 20)}...${token.manager.slice(-20)}`
-                        : token.manager}
-                    </Link>
-                  </DataField>
-                )}
-                {token.email && (
-                  <DataField label="Contact">
-                    <a href={`mailto:${token.email}`} className="text-emphasis hover:underline">
-                      {token.email}
-                    </a>
-                  </DataField>
-                )}
-                {token.udtType && (
-                  <DataField label="UDT Type">
-                    <span className="text-text-bright">{token.udtType}</span>
-                  </DataField>
-                )}
-              </div>
-            )}
-          </TerminalPanelContent>
-        </TerminalPanel>
-        <CapacityStatisticsSection
-          className="mb-6"
-          capacityRange={capacityRange}
-          onCapacityRangeChange={setCapacityRange}
-          capacityChart={capacityChart}
-          isCapacityChartLoading={isCapacityChartLoading}
-          subject={`token ${token.typeScriptHash}`}
-          totalCapacity={token.totalCapacity}
-          commonKnowledgeSize={token.totalCommonKnowledgeSize}
-          totalCapacityLabel="Owned Capacity"
+              </AppLink>
+              <p className="text-text-dim mt-1 text-[11px]">
+                {t.issuer.lockKind ?? 'Lock kind unavailable'} · owner lock proven by token script
+              </p>
+            </>
+          ) : (
+            <span className="text-text-dim text-xs">Not established by this token’s script</span>
+          ),
+        },
+        {
+          label: 'CKB held in its cells',
+          value:
+            held !== null && occupied !== null ? (
+              <CapacityPartition
+                subject="Token cells"
+                total={held.toString()}
+                occupied={occupied.toString()}
+                free={(held - occupied).toString()}
+              />
+            ) : (
+              <span className="text-text-dim">Capacity unavailable</span>
+            ),
+        },
+        { label: 'Live cells', value: <AssetCount value={t.cellsCount} /> },
+        {
+          label: 'Type hash',
+          value: <Hash hash={t.typeScriptHash} truncate={false} className="break-all text-xs" />,
+        },
+      ]}
+      feed={
+        <AssetFeed
+          queryKey={`token:${typeHash}`}
+          scope={`Every transaction that moved ${tokenLabel}`}
+          loadActivities={(p) => api.getTokenActivityFeed(typeHash, p)}
+          loadTransactions={(p) => api.getTokenTransactions(typeHash, p)}
+          token={{ typeHash, symbol: t.symbol, decimals: t.decimals }}
         />
-        <TerminalPanel>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TerminalPanelHeader
-              actions={
-                <TabsList>
-                  <TabsTrigger value="activities">
-                    Activities ({formatNumber(token.transfersCount)})
-                  </TabsTrigger>
-                  <TabsTrigger value="holders">
-                    Holders ({formatNumber(token.holdersCount)})
-                  </TabsTrigger>
-                </TabsList>
-              }
-            >
-              {activeTab === 'activities' ? 'Activities' : 'Holders'}
-            </TerminalPanelHeader>
-            <TabsContent value="activities">
-              <TerminalPanelContent padding="none">
-                {activities?.data?.length ? (
-                  <div className="space-y-3 p-4">
-                    {activities.data.map((activity: TokenActivity) => (
-                      <div
-                        key={`${activity.txHash}-${activity.txIndex}`}
-                        className="border-base-border bg-base-surface/40 space-y-2 rounded border p-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="text-text-dim font-mono text-xs">
-                            Block{' '}
-                            <Link
-                              href={`/blocks/${activity.blockNumber}`}
-                              className="text-emphasis hover:underline"
-                            >
-                              #{formatNumber(activity.blockNumber)}
-                            </Link>
-                            <span className="text-text-dim mx-1">&bull;</span>
-                            Tx Index {activity.txIndex}
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {activity.actions.map((action) => (
-                              <Badge
-                                key={`${activity.txHash}-${action}`}
-                                variant={actionBadgeVariant(action)}
-                              >
-                                {action}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <Link
-                            href={`/tx/${activity.txHash}`}
-                            className="text-text block font-mono text-xs hover:underline"
-                          >
-                            <HexDisplay
-                              value={activity.txHash}
-                              size="sm"
-                              startChars={14}
-                              endChars={10}
-                            />
-                          </Link>
-                          <span className="text-text-dim font-mono text-xs">
-                            {formatTimeAgo(activity.timestamp)}
-                          </span>
-                        </div>
-                        {activity.transfers.length > 0 && (
-                          <div className="border-base-border/50 space-y-1 border-t pt-2">
-                            {activity.transfers.map(
-                              (transfer: TokenTransferDetail, idx: number) => (
-                                <div
-                                  key={idx}
-                                  className="flex flex-wrap items-center gap-1.5 font-mono text-xs"
-                                >
-                                  {transfer.isMint ? (
-                                    <span className="text-positive">Mint</span>
-                                  ) : transfer.fromAddress ? (
-                                    <Address
-                                      address={transfer.fromAddress}
-                                      className="text-text-dim"
-                                    />
-                                  ) : transfer.fromLockHash ? (
-                                    <Link href={`/address/${transfer.fromLockHash}`}>
-                                      <HexDisplay
-                                        value={transfer.fromLockHash}
-                                        startChars={6}
-                                        endChars={4}
-                                        className="hover:underline"
-                                      />
-                                    </Link>
-                                  ) : (
-                                    <span className="text-text-dim">-</span>
-                                  )}
-                                  <svg
-                                    className="text-text-dim h-3 w-3 flex-shrink-0"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                    stroke="currentColor"
-                                    strokeWidth={2}
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      d="M13 7l5 5m0 0l-5 5m5-5H6"
-                                    />
-                                  </svg>
-                                  {transfer.isBurn ? (
-                                    <span className="text-negative">Burn</span>
-                                  ) : transfer.toAddress ? (
-                                    <Address
-                                      address={transfer.toAddress}
-                                      className="text-text-dim"
-                                    />
-                                  ) : (
-                                    <Link href={`/address/${transfer.toLockHash}`}>
-                                      <HexDisplay
-                                        value={transfer.toLockHash}
-                                        startChars={6}
-                                        endChars={4}
-                                        className="hover:underline"
-                                      />
-                                    </Link>
-                                  )}
-                                  <span className="text-text-bright ml-auto">
-                                    <TokenAmount
-                                      amount={transfer.amount}
-                                      decimals={token.decimals}
-                                    />
-                                  </span>
-                                </div>
-                              )
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-text-dim py-8 text-center">No activities</div>
-                )}
-              </TerminalPanelContent>
-              {activities?.data?.length ? (
-                <TerminalPanelFooter>
-                  <CursorPagination
-                    total={activities.total ?? undefined}
-                    totalLabel="activities"
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    page={activitiesPagination.page}
-                    currentCount={activities.data?.length ?? 0}
-                    hasMore={activities.hasMore}
-                    hasPrevious={activitiesPagination.hasPrevious}
-                    onNext={() => activitiesPagination.goToNext(activities.nextCursor)}
-                    onPrevious={activitiesPagination.goToPrevious}
-                  />
-                </TerminalPanelFooter>
-              ) : null}
-            </TabsContent>
-            <TabsContent value="holders">
-              <TerminalPanelContent padding="none">
-                {holders?.data?.length ? (
-                  <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                      <div className="flex-1">Address</div>
-                      <div className="w-48 text-right">Balance</div>
-                    </div>
-                    {holders.data.map((holder: TokenHolder) => (
-                      <TerminalRow key={holder.lockScriptHash}>
-                        <div className="flex items-center">
-                          <div className="flex-1">
-                            {holder.address ? (
-                              <Address address={holder.address} />
-                            ) : (
-                              <Link href={`/address/${holder.lockScriptHash}`}>
-                                <HexDisplay
-                                  value={holder.lockScriptHash}
-                                  className="hover:underline"
-                                />
-                              </Link>
-                            )}
-                          </div>
-                          <div className="text-text-bright w-48 text-right">
-                            <TokenAmount amount={holder.balance} decimals={token.decimals} />
-                          </div>
-                        </div>
-                      </TerminalRow>
-                    ))}
-                  </>
-                ) : (
-                  <div className="text-text-dim py-8 text-center">No holders</div>
-                )}
-              </TerminalPanelContent>
-              {holders?.data?.length ? (
-                <TerminalPanelFooter>
-                  <CursorPagination
-                    total={holders.total ?? undefined}
-                    totalLabel="holders"
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    page={holdersPagination.page}
-                    hasMore={holders.hasMore}
-                    hasPrevious={holdersPagination.hasPrevious}
-                    onNext={() => holdersPagination.goToNext(holders.nextCursor)}
-                    onPrevious={holdersPagination.goToPrevious}
-                  />
-                </TerminalPanelFooter>
-              ) : null}
-            </TabsContent>
-          </Tabs>
-        </TerminalPanel>
-      </main>
-    </div>
+      }
+      tier2={
+        <DetailSection title="Type script">
+          <dl className="space-y-4 text-xs">
+            <div>
+              <dt className="text-text-dim">Code hash · {t.typeHashType}</dt>
+              <dd className="mt-1">
+                <AppLink
+                  href={getScriptDetailHref({
+                    codeHash: t.typeCodeHash,
+                    hashType: t.typeHashType,
+                    scriptKind: 'type',
+                  })}
+                >
+                  <Hash hash={t.typeCodeHash} truncate={false} className="break-all text-xs" />
+                </AppLink>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-text-dim">Args</dt>
+              <dd className="mt-1">
+                <Hash hash={t.typeArgs} truncate={false} className="break-all text-xs" />
+              </dd>
+            </div>
+            <div>
+              <dt className="text-text-dim">Name · symbol · decimals</dt>
+              <dd className="mt-1">
+                {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
+                {t.decimals ?? 'Decimals unknown'}
+              </dd>
+              <dd className="text-text-dim mt-1 text-[11px]">
+                Metadata provenance not recorded. These displayed values do not establish whether
+                the source was an imported label or on-chain information.
+              </dd>
+            </div>
+          </dl>
+        </DetailSection>
+      }
+    >
+      {history.data ? (
+        <>
+          <AssetReadState error={history.error} label="token history" retained />
+          <AssetHistory
+            daily={history.data.daily}
+            weekly={history.data.weekly}
+            completeThrough={history.data.completeThrough}
+            supplyEvents={history.data.supplyEvents}
+            token={{ symbol: t.symbol, decimals: t.decimals }}
+          />
+          <p className="text-text-dim -mt-5 text-xs">
+            <AssetCount value={history.data.mintCount} /> mints ·{' '}
+            <AssetCount value={history.data.burnCount} /> burns ·{' '}
+            <AssetCount value={history.data.transfersCount} /> transfers.
+            {held !== null && occupied !== null && occupied > BigInt(0) && (
+              <> H-multiplier ×{formatScaledInteger(held, occupied, 2)}: CKB held ÷ occupied.</>
+            )}
+          </p>
+        </>
+      ) : (
+        <AssetReadState error={history.error} loading={history.isLoading} label="token history" />
+      )}
+      <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />
+    </AssetDetailShell>
   );
 }
