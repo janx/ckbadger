@@ -41,7 +41,9 @@ Important:
 - Identity: outpoint
 - One concrete cell that stores a script version on chain
 - A single version can have many code cell instances
-- Any live code cell instance of the same version can be used as a valid dep when assembling a tx
+- For a data-hash reference, any live code cell instance of the same version can supply the code.
+- For a type-hash reference, the live dep cell must also carry the exact referenced type script
+  hash. Equal binary bytes under a different type script do not satisfy that reference.
 
 ### Runtime Script Reference
 

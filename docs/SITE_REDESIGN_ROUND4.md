@@ -74,6 +74,24 @@ stopped after acceptance. Record fixture and live evidence separately.
 
 ## Result
 
-Implementation is in progress. Re-sync required: **no** for the planned scope.
-After D5 acceptance, D6 (DAO and charts) is next; D7 (Fiber, forks, network and
-hardforks) and D8 (not-found/crash pages) remain subsequent rounds.
+D5 implementation and integrated acceptance are complete. Two `gpt-6-sol`
+agents delivered the Scripts and Cells feature slices. Production source is
+fixed at `bcd7be71`; final test-fixture revision is `3e94a4c1`.
+
+- Complete Rust gates pass: **4,713 tests in 73 suites**, zero failures, formatting,
+  workspace check and strict all-target Clippy. Three existing opt-in native-VM
+  tests remain unrun by the default command.
+- Final frontend source passes **1,599 tests in 196 files**, type checking, lint
+  and production build. Five regenerated API fixtures exactly match their
+  committed frontend consumers.
+- Read-only mainnet acceptance passes **161 independent assertions** and
+  **16 real page/width combinations**, plus **18 controlled loading/error states**
+  at 1440/390 px. All temporary APIs/previews were stopped.
+- Re-sync required: **no** for D5. No schema or production store write path
+  changed. Existing services and primary stores were not replaced or rebuilt.
+- What to do next: **D6 DAO and charts**; D7 (Fiber, forks, network and hardforks)
+  and D8 (not-found/crash pages) remain subsequent rounds.
+
+The [detailed acceptance report](reports/2026-10-27-site-redesign-round4-acceptance.md)
+records independent byte/witness/ELF evidence, corrected regressions, exact
+binary provenance, read-performance observations and verification limits.

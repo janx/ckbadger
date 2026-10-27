@@ -320,3 +320,28 @@ The [round-3 report](SITE_REDESIGN_ROUND3.md) and
 [detailed acceptance](reports/2026-10-27-site-redesign-round3-acceptance.md) record
 final binary provenance, cache/snapshot limits, performance observations and
 regression evidence. Next: D5 Scripts/Cells, followed by D6–D8.
+
+## 2026-10-27 D5 completion
+
+Two `gpt-6-sol` implementation lanes completed Scripts inventory, family/reference
+detail, Cell and Code Cell on `integration/site-redesign-round4`. Production code
+revision is `bcd7be71`; the final test-only fixture correction is `3e94a4c1`.
+Current executable resolution uses live exact-reference evidence; historical
+family membership and actual transaction execution retain their own chain
+sources. Pages expose complete class totals, custody/upgrade history, exact cell
+serialization, ELF ranges and Type ID lineage.
+
+Final Rust gates passed **4,713 tests in 73 suites**, zero failures, formatting,
+workspace check and strict all-target Clippy. Three existing opt-in native-VM
+tests remain unrun by the default command. Frontend gates passed **1,599 tests in
+196 files**, type checking, lint and production build. Five regenerated producer
+fixtures match the committed consumers. The frozen final binary passed **161
+independent mainnet assertions**, **16 real page/width combinations** and **18
+controlled loading/error states** at 1440/390 px. All task APIs/previews stopped.
+
+Re-sync required: **no** for D5. No production domain, append-only or network
+store write path changed. This selected-entity acceptance is separate from the
+previous full 64-check chain run. The [round-4 report](SITE_REDESIGN_ROUND4.md) and
+[detailed acceptance](reports/2026-10-27-site-redesign-round4-acceptance.md) retain
+failure corrections, immutable binary provenance and read-performance costs.
+Next: **D6 DAO and charts**, followed by D7 and D8.
