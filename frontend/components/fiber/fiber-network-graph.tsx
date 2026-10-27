@@ -97,7 +97,7 @@ export function FiberNetworkGraph({ network }: Props) {
                     y1={first.y}
                     x2={second.x}
                     y2={second.y}
-                    stroke={active ? '#f2c55c' : pair.openChannels > 0 ? '#2edba3' : '#606b80'}
+                    stroke={active ? '#a0a8be' : pair.openChannels > 0 ? '#2edba3' : '#606b80'}
                     strokeWidth={Math.min(4, 1 + pair.channels / 3)}
                     opacity={active ? 1 : 0.65}
                   />

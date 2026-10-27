@@ -202,7 +202,7 @@ export default function FiberChannelsPage() {
                       channel.state === 'open'
                         ? 'text-jade'
                         : channel.state === 'forceClosed'
-                          ? 'text-[#f2c55c]'
+                          ? 'text-text-bright'
                           : 'text-text-dim'
                     }
                   >

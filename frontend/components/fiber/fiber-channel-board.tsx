@@ -170,7 +170,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
           {channel.closeTxHash ? (
             <div>
               <div className="mb-2 flex flex-wrap items-baseline gap-3">
-                <span className="font-mono text-[12px] text-[#f2c55c]">02 CLOSE</span>
+                <span className="text-text-bright font-mono text-[12px]">02 CLOSE</span>
                 <Link
                   href={`/tx/${channel.closeTxHash}`}
                   className="text-text-bright hover:text-jade break-all font-mono text-[12px]"
@@ -191,7 +191,9 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
           {updatedCommitment && tracked && (
             <div>
               <div className="mb-2 flex flex-wrap items-baseline gap-3">
-                <span className="font-mono text-[12px] text-[#f2c55c]">03 UPDATED COMMITMENT</span>
+                <span className="text-text-bright font-mono text-[12px]">
+                  03 UPDATED COMMITMENT
+                </span>
                 <Link
                   href={`/tx/${updatedCommitment.txHash}`}
                   className="text-text-bright hover:text-jade break-all font-mono text-[12px]"
@@ -219,7 +221,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
           {channel.settlementTxHash ? (
             <div>
               <div className="mb-2 flex flex-wrap items-baseline gap-3">
-                <span className="font-mono text-[12px] text-[#f2c55c]">
+                <span className="text-text-bright font-mono text-[12px]">
                   {updatedCommitment ? '04' : '03'} SETTLEMENT
                 </span>
                 <Link
