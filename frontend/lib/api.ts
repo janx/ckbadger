@@ -1154,6 +1154,183 @@ export interface ItemCellVersions {
   total: number;
 }
 
+export interface GeneDefinition {
+  index: number;
+  traitIndex: number;
+  valueIndex: number;
+  name: string;
+  typeTag: string;
+  byteOffset: string;
+  byteLength: string;
+  rule: string;
+  ruleArguments: unknown;
+}
+export type PatternDescription =
+  | {
+      status: 'supported';
+      format: 'moleculeDob0' | 'jsonDob0' | 'nervapeJsonDob0';
+      rangePolicy: 'strict' | 'clipToDna';
+      genes: GeneDefinition[];
+    }
+  | { status: 'unsupported'; reason: string };
+export interface GeneBytes {
+  geneIndex: number;
+  declaredByteOffset: string;
+  declaredByteLength: string;
+  byteOffset: number;
+  byteLength: number;
+  truncated: boolean;
+  rawHex: string;
+}
+export type CurrentPattern =
+  | { status: 'notDob'; steps: [] }
+  | {
+      status: 'dob';
+      source: 'currentCanonicalDecoder';
+      steps: {
+        step: number;
+        decoderReference: { type: string; hash: string };
+        decoderBinaryHash: string | null;
+        description: PatternDescription;
+        bytes: GeneBytes[];
+      }[];
+    };
+export interface ObjectGenetics {
+  dnaHex: string | null;
+  number: string | null;
+  cachedVmTraits: {
+    status: 'decoded' | 'failed' | 'pending' | 'notDob';
+    decodedAt: string | null;
+    traits: DobTrait[];
+    source: 'cachedVm';
+    originalDecoderHashRecorded: false;
+    reason?: string;
+  };
+  currentPattern: CurrentPattern;
+}
+export interface CollectionInsights {
+  calendarSource: 'indexedChainTimeUtc8';
+  holderDistribution: { range: string; holders: number; items: number }[];
+  weeklyActivity: {
+    weekStart: string;
+    mintTransactions: number;
+    transferTransactions: number;
+    burnTransactions: number;
+  }[];
+  genetics: {
+    liveItems: number;
+    eligibleItems: number;
+    nonDobItems: number;
+    decodedItems: number;
+    pendingItems: number;
+    failedItems: number;
+    complete: boolean;
+    traits: { name: string; values: { value: string; count: number }[] }[];
+  };
+  currentPattern: CurrentPattern;
+}
+export interface GalleryObject extends SporeNft {
+  dnaHex: string | null;
+  number: string | null;
+  traits: DobTrait[];
+  decodeStatus: string;
+}
+export interface ItemFeedContext {
+  itemId: string;
+  action: string;
+  createdCell: ItemCellVersion | null;
+  consumedCell: ItemCellVersion | null;
+}
+export type ItemActivity = GlobalActivity & { itemContext: ItemFeedContext };
+export type ItemTransaction = Transaction & { itemContext: ItemFeedContext };
+export interface DidProtocol {
+  did: string;
+  itemId: string;
+  documentVersion: number;
+  documentEncoding: 'cborLosslessJson';
+  documentCborHex: string;
+  document: unknown;
+  localId: string | null;
+  pdsEndpoints: string[];
+}
+export interface DotbitProtocol {
+  accountId: string;
+  account: string;
+  nextAccountId: string | null;
+  nextAccountName: string | null;
+  expiredAt: string | null;
+  witnessVersion: number;
+  registeredAt: string;
+  status: number;
+  owner: { algorithm: number; argsHex: string };
+  manager: { algorithm: number; argsHex: string };
+  records: { type: string; key: string; label: string; value: string; ttl: number }[];
+}
+export interface BitCellProtocol {
+  identityId: string;
+  accountId: string;
+  account: string;
+  expiredAt: string;
+  linkedAccount: {
+    id: string;
+    name: string | null;
+    isLive: boolean;
+    registeredAt: string | null;
+    expiredAt: string | null;
+  } | null;
+}
+export interface DotCellProtocol {
+  name: string;
+  label: string;
+  layoutVersion: number;
+  expiredAt: string;
+  recordsHash: string;
+  nextId: string;
+  owner: DotCellPartyRef;
+  manager: DotCellPartyRef;
+  records: DotCellRecord[];
+}
+export interface MnftProtocol {
+  characteristicHex: string;
+  configure: number;
+  state: number;
+  claimed: boolean;
+  locked: boolean;
+  permissions: {
+    allowClaim: boolean;
+    allowLock: boolean;
+    allowExtension: boolean;
+    allowCharacteristicUpdate: boolean;
+    allowTransferBeforeClaim: boolean;
+    allowTransferAfterClaim: boolean;
+    allowDestroyBeforeClaim: boolean;
+    allowDestroyAfterClaim: boolean;
+  };
+}
+export interface ProtocolVersion<T> {
+  cell: ItemCellVersion;
+  dataHex: string;
+  fields: { name: string; start: number; end: number; valueHex: string }[];
+  decoded: T;
+}
+export type ItemProtocol =
+  | {
+      kind: 'spore';
+      itemId: string;
+      versions: ProtocolVersion<{ contentHex: string; dnaHex: string | null }>[];
+    }
+  | { kind: 'm-nft'; itemId: string; versions: ProtocolVersion<MnftProtocol>[] }
+  | { kind: 'dotbit'; itemId: string; versions: ProtocolVersion<DotbitProtocol>[] }
+  | { kind: 'bit_cell'; itemId: string; versions: ProtocolVersion<BitCellProtocol>[] }
+  | { kind: 'did_ckb'; itemId: string; versions: ProtocolVersion<DidProtocol>[] }
+  | { kind: 'dotcell'; itemId: string; versions: ProtocolVersion<DotCellProtocol>[] };
+export interface DidPdsDistribution {
+  source: 'currentCanonicalDocuments';
+  totalLiveIdentities: number;
+  withoutPds: number;
+  groups: { endpoint: string; count: number }[];
+}
+
 interface Token {
   typeScriptHash: string;
   typeCodeHash: string;
@@ -1429,12 +1606,12 @@ interface SporeCluster {
       | 'centralized_mixture'
       | 'unknown'
       | 'decode_pending';
-    fullyOnchainCount: number;
+    onchainCount: number;
     pureCkbCount: number;
     decentralizedMixtureCount: number;
     centralizedMixtureCount: number;
     unknownCount: number;
-    fullyOnchainRatio: string | null;
+    onchainRatio: string | null;
   };
 }
 
@@ -1495,7 +1672,7 @@ export interface DecodedMediaItem {
   url: string;
 }
 
-interface SporeDobDecoded {
+export interface SporeDobDecoded {
   status: string;
   sporeId: string;
   contentType: string;
@@ -1523,12 +1700,12 @@ interface ObjectCollection {
       | 'centralized_mixture'
       | 'unknown'
       | 'decode_pending';
-    fullyOnchainCount: number;
+    onchainCount: number;
     pureCkbCount: number;
     decentralizedMixtureCount: number;
     centralizedMixtureCount: number;
     unknownCount: number;
-    fullyOnchainRatio: string;
+    onchainRatio: string | null;
   };
   classDetail?: {
     classId: string;
@@ -1539,6 +1716,7 @@ interface ObjectCollection {
     total: number;
     issued: number;
     configure: number;
+    permissions: MnftProtocol['permissions'];
   };
   issuerDetail?: {
     issuerId: string;
@@ -1684,6 +1862,7 @@ interface CollectionActivity {
 }
 
 interface MnftClassSummary {
+  permissions: MnftProtocol['permissions'];
   classId: string;
   issuerId: string;
   name: string | null;
@@ -1711,6 +1890,9 @@ interface MnftLifecycleEvent {
 }
 
 interface MnftItemDetail {
+  permissions: MnftProtocol['permissions'];
+  claimed: boolean;
+  locked: boolean;
   createdAtTx?: string;
   ownerAddress?: string | null;
   nftId: string;
@@ -2887,6 +3069,27 @@ export interface NetworkPeerDetail {
   directSessions: NetworkDirectSessionEvidence[];
 }
 
+function itemReadPath(kind: ItemKind, id: string): string {
+  const value = encodeURIComponent(id);
+  return kind === 'spore'
+    ? `/spore/objects/${value}`
+    : kind === 'mnft'
+      ? `/assets/objects/items/${value}`
+      : `/assets/identities/${kind}/items/${value}`;
+}
+function collectionReadPath(kind: 'spore' | 'object' | 'identity', id: string): string {
+  const value = encodeURIComponent(id);
+  return kind === 'spore'
+    ? `/spore/clusters/${value}`
+    : `/assets/${kind === 'object' ? 'objects' : 'identities'}/${value}`;
+}
+function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  if (params.cursor !== undefined) query.set('cursor', params.cursor);
+  return query;
+}
+
 export const api = {
   getForks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<ReorgEvent>> => {
     const query = new URLSearchParams();
@@ -3159,15 +3362,48 @@ export const api = {
   },
 
   getInventorySummary: (): Promise<InventorySummary> => fetchApi('/assets/summary'),
-  getItemCellVersions: (kind: ItemKind, id: string): Promise<ItemCellVersions> => {
-    const base =
-      kind === 'spore'
-        ? `/spore/objects/${id}`
-        : kind === 'mnft'
-          ? `/assets/objects/items/${id}`
-          : `/assets/identities/${kind}/items/${id}`;
-    return fetchApi(`${base}/cell-versions`);
+  getItemCellVersions: (kind: ItemKind, id: string): Promise<ItemCellVersions> =>
+    fetchApi(`${itemReadPath(kind, id)}/cell-versions`),
+  getItemProtocol: (kind: ItemKind, id: string): Promise<ItemProtocol> =>
+    fetchApi(`${itemReadPath(kind, id)}/protocol`),
+  getItemActivityFeed: (
+    kind: ItemKind,
+    id: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<ItemActivity>> =>
+    fetchApi(`${itemReadPath(kind, id)}/activity-feed?${cursorReadQuery(params)}`),
+  getItemTransactions: (
+    kind: ItemKind,
+    id: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<ItemTransaction>> =>
+    fetchApi(`${itemReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
+  getCollectionActivityFeed: (
+    kind: 'spore' | 'object' | 'identity',
+    id: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<GlobalActivity>> =>
+    fetchApi(`${collectionReadPath(kind, id)}/activity-feed?${cursorReadQuery(params)}`),
+  getCollectionTransactions: (
+    kind: 'spore' | 'object' | 'identity',
+    id: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<Transaction>> =>
+    fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
+  getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
+    fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),
+  getCollectionInsights: (id: string): Promise<CollectionInsights> =>
+    fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`),
+  getCollectionGallery: (
+    id: string,
+    params: CursorQueryParams & { traits?: Record<string, string> } = {}
+  ): Promise<CursorPaginatedResponse<GalleryObject>> => {
+    const query = cursorReadQuery(params);
+    if (params.traits && Object.keys(params.traits).length)
+      query.set('traits', JSON.stringify(params.traits));
+    return fetchApi(`/spore/clusters/${encodeURIComponent(id)}/gallery?${query}`);
   },
+  getDidPdsDistribution: (): Promise<DidPdsDistribution> => fetchApi('/assets/identities/did/pds'),
   getTokenHistory: (typeHash: string): Promise<TokenHistory> =>
     fetchApi(`/tokens/${typeHash}/history`),
   getTokenDistribution: (typeHash: string): Promise<TokenDistribution> =>

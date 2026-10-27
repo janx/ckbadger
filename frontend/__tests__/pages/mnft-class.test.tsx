@@ -43,12 +43,12 @@ const mockCollection = {
   ownedKnowledge: '300000000000',
   composition: {
     tier: 'unknown' as const,
-    fullyOnchainCount: 0,
+    onchainCount: 0,
     pureCkbCount: 0,
     decentralizedMixtureCount: 0,
     centralizedMixtureCount: 0,
     unknownCount: 80,
-    fullyOnchainRatio: '0',
+    onchainRatio: '0',
   },
   classDetail: {
     classId: mockClassId,
@@ -59,6 +59,16 @@ const mockCollection = {
     total: 100,
     issued: 100,
     configure: 3,
+    permissions: {
+      allowClaim: false,
+      allowLock: false,
+      allowExtension: true,
+      allowCharacteristicUpdate: true,
+      allowTransferBeforeClaim: true,
+      allowTransferAfterClaim: true,
+      allowDestroyBeforeClaim: true,
+      allowDestroyAfterClaim: true,
+    },
   },
   issuerDetail: {
     issuerId: '0x1111111111111111111111111111111111111111',

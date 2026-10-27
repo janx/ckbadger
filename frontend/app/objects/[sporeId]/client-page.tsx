@@ -612,10 +612,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             buttonClassName={style.tooltipButton}
                           />
                         </div>
-                        {collection.composition.fullyOnchainRatio && (
+                        {collection.composition.onchainRatio && (
                           <div className="text-text-dim mt-1 font-mono text-xs">
-                            On-chain:{' '}
-                            {formatDecimal(collection.composition.fullyOnchainRatio, 1, 100)}%
+                            On-chain: {formatDecimal(collection.composition.onchainRatio, 1, 100)}%
                           </div>
                         )}
                       </div>

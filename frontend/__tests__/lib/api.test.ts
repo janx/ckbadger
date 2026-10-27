@@ -68,6 +68,37 @@ describe('api', () => {
       ]);
     });
 
+    it('uses canonical item/collection feeds and encodes whole-gallery trait filters', async () => {
+      const seen: string[] = [];
+      server.use(
+        http.get('/api/:network/v1/*', ({ request }) => {
+          const url = new URL(request.url);
+          seen.push(url.pathname + url.search);
+          return HttpResponse.json({ data: [] });
+        })
+      );
+      await api.getItemProtocol('bit-cell', '0xab');
+      await api.getItemActivityFeed('mnft', '0xab', { limit: 10, cursor: '100:2' });
+      await api.getItemTransactions('did', '0xcd', { limit: 20, cursor: '99:1' });
+      await api.getCollectionActivityFeed('identity', 'did:ckb');
+      await api.getCollectionTransactions('object', '0xef');
+      await api.getObjectGenetics('0xab');
+      await api.getCollectionInsights('0xcd');
+      await api.getCollectionGallery('0xcd', { limit: 24, traits: { Face: 'Blue / Green' } });
+      await api.getDidPdsDistribution();
+      expect(seen).toEqual([
+        '/api/mainnet/v1/assets/identities/bit-cell/items/0xab/protocol',
+        '/api/mainnet/v1/assets/objects/items/0xab/activity-feed?limit=10&cursor=100%3A2',
+        '/api/mainnet/v1/assets/identities/did/items/0xcd/transactions?limit=20&cursor=99%3A1',
+        '/api/mainnet/v1/assets/identities/did%3Ackb/activity-feed',
+        '/api/mainnet/v1/assets/objects/0xef/transactions',
+        '/api/mainnet/v1/spore/objects/0xab/genetics',
+        '/api/mainnet/v1/spore/clusters/0xcd/insights',
+        '/api/mainnet/v1/spore/clusters/0xcd/gallery?limit=24&traits=%7B%22Face%22%3A%22Blue+%2F+Green%22%7D',
+        '/api/mainnet/v1/assets/identities/did/pds',
+      ]);
+    });
+
     it('uses exact owner holdings and server-side class pagination endpoints', async () => {
       server.use(
         http.get('/api/:network/v1/addresses/ckb1owner/holdings', () =>
