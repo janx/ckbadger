@@ -204,3 +204,48 @@ to accommodate an incomplete fixture.
 - What to do next: the user performs one final mainnet/testnet purge and genesis re-sync,
   then runs `ckbadger verify --depth sampling` and reviews the pages at the historical fixture
   heights. No running service or user store was restarted, purged or rebuilt by this task.
+
+## 2026-10-27 startup import correction
+
+The first full mainnet run on `e23fee85` completed bulk finalization at block 20,844,328, then
+entered an indexer restart loop during the required bulk-to-live handoff. Startup label import
+cleared the JoyID and M-NFT Issuer families learned from mainnet Type ID history because bundled
+metadata listed those bytecodes only under testnet. Both deployments were independently verified
+against local node block data. See [PROTO-013](POSTMORTEM.md#proto-013-startup-label-cleanup-erased-families-learned-from-mainnet-type-id-history)
+for the incident and ownership error.
+
+Three agent lanes delivered the importer fix, independent persisted-startup regressions and a
+read-only review. Root integrated the regression as `18e924cc` and the fix as `7f489cf8`.
+The importer now preserves locally observed binary attribution, revokes imported registrations
+separately, and validates persisted and planned membership before label writes. Explicit metadata
+can still label the exact previously unknown binary it declares. The strict membership check is
+unchanged; invalid historical attribution is not reconstructed during import. All changed
+production writes target the indexer-owned **domain** store; append-only and network writes do
+not change.
+
+- Both real lifecycle regressions failed before the fix and passed afterward. They apply the 471
+  recorded historical deployment observations plus the verified JoyID observation, persist and
+  close the stores, then perform two reopen/import/refresh cycles. Version and index assertions
+  precede refresh; six relevant script domain CFs and an immutable cell payload are compared
+  afterward. These are persisted startup-operation tests, not a launched supervisor test.
+- Label-import unit tests passed **51/51** (43 existing and 8 new); the independent lifecycle
+  rerun passed **2/2**, and the full writer-addresses suite passed **21/21**. The independent final
+  review found no remaining blocker, including for revoked anchors, copied Type IDs, active
+  registrations in other metadata entries, stable family IDs and already-damaged stores.
+- Root's integrated gate at `7f489cf8` passed formatting, workspace check, strict all-target
+  workspace Clippy, **4,542 tests across 66 suites with zero failures**, and a debug CLI build.
+  The default command left three existing opt-in native-VM tests unrun; this importer-only fix
+  does not change those paths. The indexer suite passed **1,813/1,813**. HEAD stayed unchanged
+  throughout the gate. Metadata and exact commands are recorded by
+  `root-startup-lineage-fix-gates.py` and `root-startup-lineage-fix-integrated-gates.json` in the
+  evidence directory below. Debug CLI SHA-256:
+  `fd49f0cb09d34b0cc0cdaf2d8a8e9af84ecc03bdc393054d9b76ef651cc9e87b`.
+- Evidence is retained under `.worktrees/site-redesign-startup-fix-results/`: the incident log
+  snapshot, independently hashed deployment evidence, RED/GREEN lifecycle logs, and integrated
+  gate metadata. The compact verified deployment fixture is committed with the tests.
+
+Re-sync required: **yes for the mainnet store already damaged by the old importer**. Healthy
+stores need no schema migration or re-sync for this fix alone. Stop the old supervisor before
+replacing its binary, build the corrected revision, then rebuild the affected chain stores from
+genesis and run the normal verification. The separate network store does not require rebuilding.
+This task leaves the user's services, `work/` data and running release binary unchanged.

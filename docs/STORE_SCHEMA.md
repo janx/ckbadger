@@ -253,6 +253,16 @@ Bulk excludes non-executable state cells; live changes record undo for version m
 family/label indexes and reference mapping. Retirement clears the executable mapping while
 preserving deployment history and the registered family's reference usage.
 
+Startup label import owns imported registrations, not chain deployment history. A binary listed
+only in another network's metadata can still have been deployed on this network. Excluded-network
+cleanup preserves an existing binary family, label, indexes and chain-derived display reference
+when this store has Type ID deployment observations for that binary; it removes revoked imported
+anchors without inventing replacement registrations or family attribution. This also applies
+after the final imported anchor is revoked. Unobserved foreign-only labels are still removed.
+Retaining a known binary's family does not grant an unregistered Type ID permanent membership.
+Active registrations and persisted observations are validated before import writes; contradictory
+family attribution fails with reference, binary and block context instead of being repaired.
+
 ### `sync_meta` Fixed Keys
 
 `sync_meta` belongs to the **domain store** and is written only by the indexer. Its fixed-key

@@ -3888,4 +3888,54 @@ gaps. Existing inflation regressions cover the shared proof.
 **Re-sync required**: No. The sparse persisted data is correct. All changes
 are on the API read path; no domain, append-only, or network writes change.
 
-_Last updated: 2026-10-25_
+---
+
+### PROTO-013: Startup label cleanup erased families learned from mainnet Type ID history
+
+**Date**: 2026-10-27
+
+**Symptom**: Mainnet completed all 625 bulk batches and finalization at 03:31:28 UTC,
+at block 20,844,328, then exited cleanly for the required bulk-to-live handoff. Every subsequent
+indexer process exited with status 1 during startup script-reference refresh. The supervisor
+retried with exponential backoff up to 60 seconds. The fatal invariant named JoyID at block
+17,117,990 or M-NFT Issuer at block 5,360,614: a registered Type ID's observed binary had
+`version_family=None`. API, frontend and crawler processes remained running.
+
+**Root cause**: Bundled metadata listed those two bytecodes under testnet, but the bytecodes
+also occurred in mainnet's registered Type ID histories. Bulk correctly attributed them to their
+families from mainnet chain observations. On the next process start, label import treated the
+other-network metadata entry as evidence that the binary did not belong on mainnet. It cleared
+the persisted family, label and indexes while retaining the deployment history. The strict
+membership check then correctly rejected the contradictory state. Local node RPC independently
+confirmed both deployment outputs, their ELF bytecode hashes and their native Type ID hashes.
+The initial clean restart was expected; the later error exits were not a bulk failure or crawler
+failure.
+
+**Fix**: The indexer's importer retains an already-known binary family and its label/indexes
+when the local store has Type ID deployment observations. It revokes imported anchors separately
+and preserves chain-derived display references. Unobserved foreign-only labels are still removed.
+This does not register arbitrary copied Type IDs or infer historical family attribution.
+Explicit metadata can still label the exact previously unknown binary it declares. Preflight
+first validates persisted membership, then checks active registrations against observations before
+any import writes, so new metadata cannot hide existing damage and a contradiction cannot be
+reduced to an import warning and ignored. The existing membership invariant remains unchanged.
+
+**Why the tests missed it**: First-import and chain-rollup tests passed independently. They did
+not close and reopen a populated store and repeat the startup import before refreshing rollups.
+The new regressions reproduce both real failures before the fix, apply the 471 recorded deployment
+observations plus the verified JoyID observation, and perform two complete reopen/import/refresh
+cycles. They compare version and index rows before refresh, compare six relevant script domain CFs
+afterward, and retain an immutable append-only payload. Unit regressions cover both network
+directions, revoked anchors, stale foreign labels and fail-fast preflight errors.
+
+**Store boundary / re-sync required**: Yes for stores already damaged by the old importer.
+Only indexer-owned domain metadata writes change; append-only cell payloads and the separate
+network store are unchanged. The fix prevents the bad write and does not repair an already
+cleared family in place. Use the fixed binary, then rebuild the chain stores from genesis.
+No service restart or user-store mutation is part of this source fix.
+
+**Files**: `crates/indexer/src/label_import.rs`,
+`crates/indexer/src/db/writer/addresses.rs`,
+`crates/indexer/tests/fixtures/native_typeid_lineage_mainnet_startup_cases.json`
+
+_Last updated: 2026-10-27_
