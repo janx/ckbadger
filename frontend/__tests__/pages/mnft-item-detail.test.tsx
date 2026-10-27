@@ -1,277 +1,280 @@
+import { QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-
+import {
+  act,
+  createTestQueryClient,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
-import { api } from '@/lib/api';
-import { render } from '../utils/test-utils';
+import {
+  api,
+  ApiRequestError,
+  type ItemProtocol,
+  type MnftItemDetail,
+  type ObjectCollection,
+} from '@/lib/api';
+import {
+  mnftProtocolProducer,
+  itemActivityFeedProducer,
+  itemTransactionsProducer,
+} from '@/__tests__/msw/fixtures/item-producer';
 
-vi.mock('@/lib/api', () => ({
-  api: {
-    getMnftItemDetail: vi.fn(),
-    getAddress: vi.fn(),
-    getMnftItemActivities: vi.fn(),
+vi.mock('@/lib/api', async (load) => {
+  const actual = await load<typeof import('@/lib/api')>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      getMnftItemDetail: vi.fn(),
+      getObjectCollection: vi.fn(),
+      getItemProtocol: vi.fn(),
+      getItemCellVersions: vi.fn(),
+      getItemActivityFeed: vi.fn(),
+      getItemTransactions: vi.fn(),
+    },
+  };
+});
+vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
+
+const id = mnftProtocolProducer.itemId;
+const protocol = mnftProtocolProducer.versions[0];
+const detail: MnftItemDetail = {
+  nftId: id,
+  standard: 'm-nft',
+  isLive: true,
+  ownerLockHash: protocol.cell.ownerLockHash,
+  ownerAddress: protocol.cell.ownerAddress,
+  createdAtBlock: protocol.cell.blockNumber,
+  createdAtTx: protocol.cell.txHash,
+  tokenIndex: 99,
+  characteristicHex: protocol.decoded.characteristicHex,
+  configure: protocol.decoded.configure,
+  state: protocol.decoded.state,
+  permissions: protocol.decoded.permissions,
+  claimed: protocol.decoded.claimed,
+  locked: protocol.decoded.locked,
+  txHash: protocol.cell.txHash,
+  outputIndex: protocol.cell.outputIndex,
+  class: {
+    classId: id.slice(0, 50),
+    issuerId: id.slice(0, 42),
+    name: 'Class A',
+    description: 'Class description recorded on chain',
+    renderer: 'https://example.com/renderer.png',
+    total: 1000,
+    issued: 200,
+    configure: protocol.decoded.configure,
+    permissions: protocol.decoded.permissions,
   },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
-}));
+  issuer: {
+    issuerId: id.slice(0, 42),
+    name: 'Issuer A',
+    classCount: 2,
+    setCount: 3,
+    infoHex: '0x7b7d',
+  },
+  lifecycle: [],
+  composition: {
+    tier: 'centralized_mixture',
+    onchainCount: 0,
+    pureCkbCount: 0,
+    decentralizedMixtureCount: 0,
+    centralizedMixtureCount: 2,
+    unknownCount: 0,
+    onchainRatio: '0',
+  },
+};
+const collection: ObjectCollection = {
+  collectionId: detail.class.classId,
+  standard: 'm-nft',
+  name: 'Class A',
+  totalCount: 200,
+  liveCount: 198,
+  holdersCount: 150,
+  activitiesCount: 221,
+  ownedCapacity: '32285294386739',
+  ownedKnowledge: '32053400000000',
+  composition: detail.composition,
+};
 
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div data-testid="header">Header</div>,
-}));
-
-const mockReplace = vi.fn();
-let mockSearchParams = new URLSearchParams();
-let mockPathname = '';
-
-vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ objectId: '0xmnft' }),
-  usePathname: () => mockPathname,
-  useRouter: () => ({ replace: mockReplace }),
-  useSearchParams: () => mockSearchParams,
-}));
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(api.getMnftItemDetail).mockResolvedValue(detail);
+  vi.mocked(api.getItemProtocol).mockResolvedValue(mnftProtocolProducer);
+  vi.mocked(api.getObjectCollection).mockResolvedValue(collection);
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(itemActivityFeedProducer);
+  vi.mocked(api.getItemTransactions).mockResolvedValue(itemTransactionsProducer);
+});
 
 describe('MnftItemDetailPage', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReplace.mockReset();
-    mockSearchParams = new URLSearchParams();
-    mockPathname = '/objects/mnft/0xmnft';
-    vi.mocked(api.getAddress).mockResolvedValue({
-      lockScriptHash: '0xlock',
-      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-      balance: '0',
-      commonKnowledgeSize: '0',
-      liveCellsCount: 0,
-      transactionsCount: 0,
-    } as any);
-    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
-  });
-
-  it('renders mnft identity, ownership, and lifecycle links', async () => {
-    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
-      nftId: '0xmnft',
-      standard: 'm-nft',
-      isLive: true,
-      ownerLockHash: '0xlock',
-      createdAtBlock: 123,
-      tokenIndex: 99,
-      characteristicHex: '0x0102030405060708',
-      configure: 3,
-      permissions: {
-        allowClaim: false,
-        allowLock: false,
-        allowExtension: true,
-        allowCharacteristicUpdate: true,
-        allowTransferBeforeClaim: true,
-        allowTransferAfterClaim: true,
-        allowDestroyBeforeClaim: true,
-        allowDestroyAfterClaim: true,
-      },
-      state: 1,
-      claimed: true,
-      locked: false,
-      txHash: '0xtx',
-      outputIndex: 4,
-      class: {
-        classId: '0xclass',
-        issuerId: '0xissuer',
-        name: 'Class A',
-        description: 'Class description',
-        renderer: 'renderer:v1',
-        total: 1000,
-        issued: 200,
-        configure: 1,
-        permissions: {
-          allowClaim: false,
-          allowLock: true,
-          allowExtension: true,
-          allowCharacteristicUpdate: true,
-          allowTransferBeforeClaim: true,
-          allowTransferAfterClaim: true,
-          allowDestroyBeforeClaim: true,
-          allowDestroyAfterClaim: true,
-        },
-      },
-      issuer: {
-        issuerId: '0xissuer',
-        name: 'Issuer A',
-        classCount: 2,
-        setCount: 3,
-        infoHex: '0x7b7d',
-      },
-      lifecycle: [
-        {
-          event: 'mint',
-          blockNumber: 123,
-          txHash: null,
-          outputIndex: null,
-          note: 'minted',
-        },
-        {
-          event: 'live',
-          blockNumber: null,
-          txHash: '0xtx',
-          outputIndex: 4,
-          note: 'live',
-        },
-      ],
-    });
-
-    render(<MnftItemDetailPage objectId="0xmnft" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Class A #99')).toBeInTheDocument();
-    });
-
-    // Breadcrumb navigation
-    const breadcrumb = screen.getByRole('navigation');
-    expect(breadcrumb).toBeInTheDocument();
+  it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+    await screen.findByRole('region', { name: 'Raw item evidence' });
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Objects');
     expect(screen.getByRole('link', { name: /^Objects$/ })).toHaveAttribute(
       'href',
       '/mainnet/inventory/objects'
     );
-    // Properties panel: state & configure
-    expect(screen.getByText('locked')).toBeInTheDocument();
-    expect(screen.getByText('transferable, burnable')).toBeInTheDocument();
-
-    // Issuer & Class panel
-    expect(screen.getAllByText('Class A').length).toBeGreaterThan(0);
-    expect(screen.getByText('Issuer A')).toBeInTheDocument();
-
-    // Links: created at block, cell outpoint, class
+    expect(screen.getByText(/State 0x03 · claimed · locked/)).toBeInTheDocument();
+    expect(screen.getByText(/Issued in/)).toHaveTextContent('Issuer A');
+    expect(screen.getByRole('link', { name: 'Open the class →' })).toHaveAttribute(
+      'href',
+      `/mainnet/classes/${detail.class.classId}`
+    );
+    expect(screen.getByText('198 of 200 issued')).toBeInTheDocument();
     expect(
       screen
         .getAllByRole('link')
-        .some((link) => link.getAttribute('href') === '/mainnet/blocks/123')
+        .some(
+          (link) => link.getAttribute('href') === `/mainnet/blocks/${protocol.cell.blockNumber}`
+        )
     ).toBe(true);
     expect(
       screen
         .getAllByRole('link')
-        .some((link) => link.getAttribute('href') === '/mainnet/cell/0xtx-4')
+        .some(
+          (link) =>
+            link.getAttribute('href') ===
+            `/mainnet/cell/${protocol.cell.txHash}/${protocol.cell.outputIndex}`
+        )
     ).toBe(true);
+    expect(screen.getByRole('heading', { name: 'm-NFT token ID' })).toBeInTheDocument();
     expect(
-      screen
-        .getAllByRole('link')
-        .some((link) => link.getAttribute('href') === '/mainnet/classes/0xclass')
-    ).toBe(true);
+      screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
+    ).toBeInTheDocument();
+    expect(api.getItemCellVersions).not.toHaveBeenCalled(); // Protocol response already carries these same canonical versions.
+    const permissions = screen.getByRole('region', { name: 'mNFT permissions' });
+    expect(within(permissions).getByText('Destroy after claim').parentElement).toHaveTextContent(
+      'Forbidden'
+    );
+    expect(within(permissions).getByText('Transfer after claim').parentElement).toHaveTextContent(
+      'Allowed'
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
+    expect(api.getItemTransactions).toHaveBeenCalledWith('mnft', id, {
+      limit: 50,
+      cursor: undefined,
+    });
+    expect(screen.getAllByText(/cell after/).length).toBeGreaterThan(0);
+  });
 
-    // Payload Data hex viewer
-    expect(screen.getByText(/Payload Data/)).toBeInTheDocument();
-    expect(screen.getByText('8 bytes', { exact: false })).toBeInTheDocument();
+  it('uses the protocol claim/lock interpretation instead of the old inverted permission labels', async () => {
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      ...detail,
+      configure: 3,
+      state: 1,
+      claimed: true,
+      locked: false,
+      permissions: { ...detail.permissions, allowClaim: false, allowLock: false },
+    });
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByText(/State 0x01 · claimed · unlocked/)).toBeInTheDocument();
+    const permissions = screen.getByRole('region', { name: 'mNFT permissions' });
+    expect(within(permissions).getByText('Claim').parentElement).toHaveTextContent('Forbidden');
+    expect(within(permissions).getByText('Lock').parentElement).toHaveTextContent('Forbidden');
+    expect(screen.queryByText('transferable, burnable')).not.toBeInTheDocument();
   });
 
   it('starts a newly navigated-to token on its first activity page', async () => {
-    // Moving from one token to another on the same route (search, history)
-    // changes only the route parameter, so the element stays mounted. The
-    // activity page of the token left behind must not follow the user.
-    const detailFor = (nftId: string, tokenIndex: number) => ({
-      nftId,
-      standard: 'm-nft',
-      isLive: true,
-      ownerLockHash: '0xlock',
-      createdAtBlock: 123,
-      tokenIndex,
-      characteristicHex: '0x',
-      configure: 0,
-      permissions: {
-        allowClaim: true,
-        allowLock: true,
-        allowExtension: true,
-        allowCharacteristicUpdate: true,
-        allowTransferBeforeClaim: true,
-        allowTransferAfterClaim: true,
-        allowDestroyBeforeClaim: true,
-        allowDestroyAfterClaim: true,
-      },
-      state: 0,
-      claimed: false,
-      locked: false,
-      txHash: '0xtx',
-      outputIndex: 0,
-      class: {
-        classId: '0xclass',
-        issuerId: '0xissuer',
-        name: 'Class A',
-        description: null,
-        renderer: null,
-        total: 1000,
-        issued: 200,
-        configure: 0,
-        permissions: {
-          allowClaim: true,
-          allowLock: true,
-          allowExtension: true,
-          allowCharacteristicUpdate: true,
-          allowTransferBeforeClaim: true,
-          allowTransferAfterClaim: true,
-          allowDestroyBeforeClaim: true,
-          allowDestroyAfterClaim: true,
-        },
-      },
-      issuer: {
-        issuerId: '0xissuer',
-        name: 'Issuer A',
-        classCount: 2,
-        setCount: 3,
-        infoHex: '0x7b7d',
-      },
-      lifecycle: [],
-    });
-    vi.mocked(api.getMnftItemDetail).mockImplementation(
-      async (id: string) => (id === '0xaaa' ? detailFor('0xaaa', 1) : detailFor('0xbbb', 2)) as any
-    );
-    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
-      data: [],
-      limit: 50,
+    vi.mocked(api.getItemActivityFeed).mockResolvedValue({
+      ...itemActivityFeedProducer,
       hasMore: true,
-      nextCursor: 'token-1-page-2',
-    } as any);
-
-    mockPathname = '/objects/mnft/0xaaa';
-    const { rerender } = render(<MnftItemDetailPage objectId="0xaaa" />);
-    await waitFor(() => {
-      expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xaaa', { limit: 50 });
+      nextCursor: '100:2',
     });
+    const { rerender } = render(<MnftItemDetailPage objectId={id} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
-    await waitFor(() => {
-      expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xaaa', {
+    await waitFor(() =>
+      expect(api.getItemActivityFeed).toHaveBeenCalledWith('mnft', id, {
         limit: 50,
-        cursor: 'token-1-page-2',
-      });
-    });
-    expect(screen.getByText('Page 2')).toBeInTheDocument();
-
-    mockPathname = '/objects/mnft/0xbbb';
-    mockSearchParams = new URLSearchParams();
-    mockReplace.mockClear();
-    vi.mocked(api.getMnftItemActivities).mockClear();
-    rerender(<MnftItemDetailPage objectId="0xbbb" />);
-
-    await waitFor(() => {
-      expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xbbb', { limit: 50 });
-    });
-    expect(await screen.findByText('Page 1')).toBeInTheDocument();
-    expect(api.getMnftItemActivities).not.toHaveBeenCalledWith(
-      '0xbbb',
-      expect.objectContaining({ cursor: expect.anything() })
+        cursor: '100:2',
+      })
     );
-    expect(mockReplace.mock.calls.some(([url]) => String(url).includes('activity_cursor'))).toBe(
-      false
+    const nextId = '0x' + '34'.repeat(28);
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      ...detail,
+      nftId: nextId,
+      tokenIndex: 100,
+    });
+    vi.mocked(api.getItemProtocol).mockResolvedValue({ ...mnftProtocolProducer, itemId: nextId });
+    vi.mocked(api.getItemActivityFeed).mockClear();
+    rerender(<MnftItemDetailPage objectId={nextId} />);
+    await screen.findByRole('heading', { name: 'Class A #100' });
+    await waitFor(() =>
+      expect(api.getItemActivityFeed).toHaveBeenCalledWith('mnft', nextId, {
+        limit: 50,
+        cursor: undefined,
+      })
     );
+    expect(api.getItemActivityFeed).not.toHaveBeenCalledWith(
+      'mnft',
+      nextId,
+      expect.objectContaining({ cursor: expect.any(String) })
+    );
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
   });
 
-  it('renders not found panel when item is missing', async () => {
-    vi.mocked(api.getMnftItemDetail).mockRejectedValue(new Error('API error: 404'));
+  it('shows an absent item only for a real 404 response', async () => {
+    vi.mocked(api.getMnftItemDetail).mockRejectedValue(
+      new ApiRequestError(404, 'not_found', 'missing')
+    );
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('heading', { name: 'mNFT item not found' })).toBeInTheDocument();
+    expect(api.getItemProtocol).not.toHaveBeenCalled();
+  });
 
-    render(<MnftItemDetailPage objectId="0xmnft" />);
+  it('preserves a read error instead of calling the item missing', async () => {
+    vi.mocked(api.getMnftItemDetail).mockRejectedValue(
+      new ApiRequestError(500, 'internal_error', 'canonical item mismatch')
+    );
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('canonical item mismatch');
+    expect(screen.queryByText('mNFT item not found')).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => {
-      expect(screen.getByText('mNFT item not found')).toBeInTheDocument();
+  it('retains item content while showing a background read failure', async () => {
+    const client = createTestQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <MnftItemDetailPage objectId={id} />
+      </QueryClientProvider>
+    );
+    await screen.findByRole('heading', { name: 'Class A #99' });
+    vi.mocked(api.getMnftItemDetail).mockRejectedValue(new Error('refresh failed'));
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['mnft-item-detail', id] });
     });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing previously loaded data.');
+    expect(screen.getByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+  });
+
+  it('keeps burned cell history and raw bytes without inventing a current owner', async () => {
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      ...detail,
+      isLive: false,
+      ownerLockHash: null,
+      ownerAddress: null,
+      txHash: null,
+      outputIndex: null,
+    });
+    const consumed: Extract<ItemProtocol, { kind: 'm-nft' }> =
+      structuredClone(mnftProtocolProducer);
+    consumed.versions[0].cell.isLive = false;
+    consumed.versions[0].cell.consumedByTx = '0x' + '56'.repeat(32);
+    consumed.versions[0].cell.consumedAtBlock = 101;
+    vi.mocked(api.getItemProtocol).mockResolvedValue(consumed);
+    render(<MnftItemDetailPage objectId={id} />);
+    await screen.findByRole('region', { name: 'Raw item evidence' });
+    expect(screen.getByText('Burned')).toBeInTheDocument();
+    expect(screen.getAllByText('No live cell')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'Consumed in transaction →' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
+    ).toBeInTheDocument();
   });
 });
