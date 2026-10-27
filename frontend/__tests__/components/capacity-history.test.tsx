@@ -1,6 +1,8 @@
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
 import { CapacityHistory } from '@/components/asset/capacity-history';
 import type { AssetCapacityHistory } from '@/lib/api';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { clusterCapacityHistoryProducer } from '@/__tests__/msw/fixtures/item-producer';
 const history: AssetCapacityHistory = {
   source: 'indexedChainTimeUtc8',
   completeThrough: '2023-11-14',
@@ -54,3 +56,27 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   ).toThrow('occupied');
   log.mockRestore();
 });
+
+it.each([928, 358])(
+  'draws real producer micro-CKB capacity at %spx without duplicate zero ticks or invalid geometry',
+  (width) => {
+    stubChartWidth(width);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <CapacityHistory subject="Producer collection" history={clusterCapacityHistoryProducer} />
+      );
+      const plot = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
+      expect(plot).toHaveTextContent('0.0000005 CKB');
+      expect(plot).toHaveTextContent('0.0000015 CKB');
+      expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
+      expect(errors).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000120');
+      fireEvent.keyDown(plot, { key: 'ArrowLeft' });
+      expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000100');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  }
+);

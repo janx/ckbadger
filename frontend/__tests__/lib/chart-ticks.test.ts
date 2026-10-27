@@ -29,6 +29,17 @@ describe('niceStep', () => {
 });
 
 describe('stepDecimals', () => {
+  it.each([
+    [5e-7, 7],
+    [1e-8, 8],
+    [2.5e-8, 9],
+    [1e-12, 12],
+    [-5e-7, 7],
+  ])(
+    'does not round a nonzero %s step down to a zero integer at insufficient precision',
+    (step, decimals) => expect(stepDecimals(step)).toBe(decimals)
+  );
+
   it('counts the decimals a step needs', () => {
     expect(stepDecimals(500)).toBe(0);
     expect(stepDecimals(2.5)).toBe(1);
@@ -38,6 +49,21 @@ describe('stepDecimals', () => {
 });
 
 describe('niceTicks', () => {
+  it('preserves distinct micro-CKB ticks and an exact nonzero anchor', () => {
+    const ticks = niceTicks(0, 0.0000012);
+    expect(ticks.step).toBe(0.0000005);
+    expect(ticks.values).toEqual([0, 0.0000005, 0.000001, 0.0000015]);
+    expect(ticks.values.map((value) => formatTick(value, ticks.step))).toEqual([
+      '0',
+      '0.0000005',
+      '0.0000010',
+      '0.0000015',
+    ]);
+    expect(niceTicks(0.00000001, 0.00000003, 4, 0.00000002).values).toEqual([
+      0.00000001, 0.00000002, 0.00000003,
+    ]);
+  });
+
   it('replaces the old min..max thirds (11.2 / 10.2 / 9.3) with round block-time ticks', () => {
     expect(niceTicks(8.54, 11).values).toEqual([8, 9, 10, 11]);
   });

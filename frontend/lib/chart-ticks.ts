@@ -35,7 +35,10 @@ export function niceStep(raw: number): number {
 export function stepDecimals(step: number): number {
   for (let d = 0; d <= 12; d++) {
     const scaled = step * 10 ** d;
-    if (Math.abs(scaled - Math.round(scaled)) < 1e-6) return d;
+    const integer = Math.round(scaled);
+    // Float tolerance may remove arithmetic noise around a nonzero integer, but a
+    // nonzero step rounding to zero has not reached its required decimal precision.
+    if ((integer !== 0 || step === 0) && Math.abs(scaled - integer) < 1e-6) return d;
   }
   throw new Error(`stepDecimals: ${step} has no short decimal form`);
 }
