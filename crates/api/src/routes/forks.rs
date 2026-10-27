@@ -276,7 +276,12 @@ fn reorg_event_response(record: &ReorgEventRecord) -> Result<ReorgEventResponse,
         resolved_by: None,
         resolution_action: None,
         resolution_notes: None,
-        preview_status: "not_loaded".to_string(),
+        preview_status: if record.event.orphaned_blocks == 0 {
+            "no_old_branch"
+        } else {
+            "not_loaded"
+        }
+        .to_string(),
         preview: None,
     })
 }
@@ -774,6 +779,22 @@ fn canonical_block_response(
     })
 }
 
+fn cached_canonical_header(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<i64, CachedBlockHeader>,
+    number: i64,
+    context: &str,
+) -> anyhow::Result<CachedBlockHeader> {
+    if let Some(header) = cache.get(&number) {
+        return Ok(header.clone());
+    }
+    let header = store
+        .get_block_header(number)?
+        .ok_or_else(|| anyhow::anyhow!("missing canonical block {number} while {context}"))?;
+    cache.insert(number, header.clone());
+    Ok(header)
+}
+
 /// Read one current canonical view for the whole historical branch. Re-entry
 /// after a later switch is identified by the exact hash at the same height;
 /// the persisted event still records what this node dropped at that moment.
@@ -790,28 +811,29 @@ fn enrich_branch_fate(
         return Ok((Vec::new(), None));
     };
     let mut canonical_branch = Vec::new();
+    let mut headers = HashMap::new();
     let branch_end = event.old_tip.max(event.new_tip).min(tip);
     for number in (event.fork_point + 1)..=branch_end {
-        let header = store.get_block_header(number)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing canonical block {number} within fork {} branch view at tip {tip}",
-                event.fork_point
-            )
-        })?;
+        let header = cached_canonical_header(
+            store,
+            &mut headers,
+            number,
+            &format!("reading fork {} branch view at tip {tip}", event.fork_point),
+        )?;
         canonical_branch.push(canonical_block_response(number, &header)?);
     }
-    for block in blocks.iter_mut() {
+    let mut candidates = Vec::new();
+    for (index, block) in blocks.iter_mut().enumerate() {
         if block.number > tip {
             block.fate = "awaiting_canonical_tip".to_string();
             continue;
         }
-        let current = store.get_block_header(block.number)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing canonical block {} while resolving old branch block {}",
-                block.number,
-                block.hash
-            )
-        })?;
+        let current = cached_canonical_header(
+            store,
+            &mut headers,
+            block.number,
+            &format!("resolving old branch block {}", block.hash),
+        )?;
         if hex0x(&current.hash) == block.hash {
             block.fate = "canonical_now".to_string();
             continue;
@@ -842,22 +864,48 @@ fn enrich_branch_fate(
             )
         })?;
         let old_epoch = historical.epoch().number();
-        let mut epoch_finished = false;
-        for number in (block.number + 1)..=tip {
-            let header = store.get_block_header(number)?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing canonical block {number} while scanning uncle fate for {}",
-                    block.hash
-                )
-            })?;
-            if header.epoch_number > i64::try_from(old_epoch)? {
-                epoch_finished = true;
-                break;
-            }
+        candidates.push((index, hash, old_epoch, block.number));
+    }
+    if !candidates.is_empty() {
+        let tip_header =
+            cached_canonical_header(store, &mut headers, tip, "reading uncle fate tip")?;
+        anyhow::ensure!(
+            tip_header.epoch_number >= 0,
+            "negative canonical epoch at uncle fate tip {tip}"
+        );
+        let max_epoch = candidates
+            .iter()
+            .map(|(_, _, epoch, _)| *epoch)
+            .max()
+            .ok_or_else(|| anyhow::anyhow!("missing uncle candidate epoch"))?;
+        let first_scan = candidates
+            .iter()
+            .map(|(_, _, _, height)| *height)
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("missing uncle candidate height"))?
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("uncle scan height overflow"))?;
+        let mut by_hash = HashMap::new();
+        for &(index, hash, epoch, height) in &candidates {
+            anyhow::ensure!(
+                by_hash.insert(hash, (index, epoch, height)).is_none(),
+                "duplicate historical old block hash 0x{}",
+                hex::encode(hash)
+            );
+        }
+        let mut unresolved = candidates.len();
+        // One canonical pass per event, even if several old blocks share an
+        // epoch. Only uncle-bearing blocks require a node-store block read.
+        for number in first_scan..=tip {
+            let header =
+                cached_canonical_header(store, &mut headers, number, "scanning uncle fate")?;
             anyhow::ensure!(
                 header.epoch_number >= 0 && header.uncles_count >= 0,
                 "invalid canonical epoch or uncle count at block {number}"
             );
+            if header.epoch_number > i64::try_from(max_epoch)? {
+                break;
+            }
             if header.uncles_count == 0 {
                 continue;
             }
@@ -878,29 +926,47 @@ fn enrich_branch_fate(
                 header.uncles_count,
                 canonical.data().uncles().len()
             );
-            if canonical
-                .uncles()
-                .into_iter()
-                .any(|uncle| uncle.hash().as_slice() == hash)
-            {
-                block.uncle_in = Some(UncleInclusionResponse {
+            for uncle in canonical.uncles() {
+                let uncle_hash: [u8; 32] = uncle.hash().as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!("invalid uncle hash at canonical block {number}")
+                })?;
+                let Some(&(index, old_epoch, old_height)) = by_hash.get(&uncle_hash) else {
+                    continue;
+                };
+                anyhow::ensure!(number > old_height && header.epoch_number == i64::try_from(old_epoch)?,
+                    "invalid inclusion of old block 0x{} at canonical block {number}: old_height={old_height} old_epoch={old_epoch} canonical_epoch={}",
+                    hex::encode(uncle_hash), header.epoch_number);
+                anyhow::ensure!(
+                    blocks[index].uncle_in.is_none(),
+                    "old block 0x{} included as uncle more than once",
+                    hex::encode(uncle_hash)
+                );
+                blocks[index].uncle_in = Some(UncleInclusionResponse {
                     block_number: number,
                     block_hash: hex0x(&header.hash),
-                    distance: number.checked_sub(block.number).ok_or_else(|| {
-                        anyhow::anyhow!("uncle distance underflow for {}", block.hash)
+                    distance: number.checked_sub(old_height).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "uncle distance underflow for 0x{}",
+                            hex::encode(uncle_hash)
+                        )
                     })?,
                 });
+                unresolved -= 1;
+            }
+            if unresolved == 0 {
                 break;
             }
         }
-        block.fate = if block.uncle_in.is_some() {
-            "included_as_uncle"
-        } else if epoch_finished {
-            "not_included_as_uncle"
-        } else {
-            "uncle_fate_pending"
+        for (index, _, old_epoch, _) in candidates {
+            blocks[index].fate = if blocks[index].uncle_in.is_some() {
+                "included_as_uncle"
+            } else if tip_header.epoch_number > i64::try_from(old_epoch)? {
+                "not_included_as_uncle"
+            } else {
+                "uncle_fate_pending"
+            }
+            .to_string();
         }
-        .to_string();
     }
     for tx in transactions.iter_mut() {
         if tx.tx_index == 0 {

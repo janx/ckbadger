@@ -1,0 +1,29 @@
+{
+  "adoptedBranch": [],
+  "canonicalBranch": [],
+  "canonicalTipNumber": null,
+  "event": {
+    "depth": 3,
+    "detectedAt": "2025-07-31T22:13:20+00:00",
+    "eventType": "deep",
+    "forkPointHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "forkPointNumber": 10,
+    "id": 1754000000000,
+    "newTipHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "newTipNumber": 13,
+    "oldTipHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "oldTipNumber": 12,
+    "orphanedBlocksCount": 0,
+    "orphanedTxsCount": 0,
+    "preview": null,
+    "previewStatus": "no_old_branch",
+    "resolutionAction": null,
+    "resolutionNotes": null,
+    "resolvedAt": null,
+    "resolvedBy": null,
+    "reversesEvents": [],
+    "revertedByEvent": null
+  },
+  "orphanedBlocks": [],
+  "orphanedTransactions": []
+}

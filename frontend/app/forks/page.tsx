@@ -10,6 +10,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { formatObserverTimeUtc8 } from '@/lib/fork-time';
 
 const eventLink = (event: ReorgEvent) => `/forks/${event.id}`;
 const hash = (value: string) => <span className="break-all font-mono">{value}</span>;
@@ -105,7 +106,7 @@ export default function ForksPage() {
                       minWidth: 175,
                       render: (event) => (
                         <Link href={eventLink(event)} className="text-emphasis hover:underline">
-                          {new Date(event.detectedAt).toLocaleString()}
+                          {formatObserverTimeUtc8(event.detectedAt)}
                         </Link>
                       ),
                     },
@@ -121,7 +122,7 @@ export default function ForksPage() {
                     },
                     {
                       key: 'branch',
-                      label: 'Old → adopted tip',
+                      label: 'Old/indexed → new/node tip',
                       minWidth: 155,
                       render: (event) => (
                         <span>
@@ -142,8 +143,10 @@ export default function ForksPage() {
                       label: 'Old block fate',
                       minWidth: 155,
                       render: (event) =>
-                        event.preview?.fate.replaceAll('_', ' ') ??
-                        event.previewStatus.replaceAll('_', ' '),
+                        event.eventType === 'deep'
+                          ? 'No rollback at detection'
+                          : (event.preview?.fate.replaceAll('_', ' ') ??
+                            event.previewStatus.replaceAll('_', ' ')),
                     },
                     {
                       key: 'uncle',
@@ -158,35 +161,94 @@ export default function ForksPage() {
                           '—'
                         ),
                     },
+                    {
+                      key: 'miners',
+                      label: 'Old → current miner locks',
+                      minWidth: 210,
+                      render: (event) =>
+                        event.preview ? (
+                          <div className="space-y-1 break-all text-xs">
+                            <div>
+                              Old: {event.preview.oldMinerLockHash ?? 'witness unavailable'}
+                            </div>
+                            <div>
+                              Current:{' '}
+                              {event.preview.competingMinerLockHash ??
+                                (event.preview.fate === 'canonical_now'
+                                  ? 'same block now'
+                                  : 'witness unavailable')}
+                            </div>
+                          </div>
+                        ) : (
+                          'No miner comparison'
+                        ),
+                    },
+                    {
+                      key: 'timeGap',
+                      label: 'Header time gap',
+                      minWidth: 120,
+                      render: (event) =>
+                        event.preview?.timestampGapMs == null
+                          ? '—'
+                          : `${event.preview.timestampGapMs > 0 ? '+' : ''}${event.preview.timestampGapMs.toLocaleString()} ms`,
+                    },
                   ]}
                   mobileRow={(event) => (
                     <div className="min-w-0 space-y-2 text-xs">
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link href={eventLink(event)} className="text-emphasis">
-                          {new Date(event.detectedAt).toLocaleString()}
+                          {formatObserverTimeUtc8(event.detectedAt)}
                         </Link>
                         <span>
                           {event.depth} block{event.depth === 1 ? '' : 's'}
                         </span>
                       </div>
                       <div>
-                        Fork #{event.forkPointNumber.toLocaleString()} · old #
-                        {event.oldTipNumber.toLocaleString()} → adopted #
+                        Fork #{event.forkPointNumber.toLocaleString()} ·{' '}
+                        {event.eventType === 'deep' ? 'indexed' : 'old'} #
+                        {event.oldTipNumber.toLocaleString()} →{' '}
+                        {event.eventType === 'deep' ? 'node' : 'adopted'} #
                         {event.newTipNumber.toLocaleString()}
                       </div>
                       <div>
-                        Old block:{' '}
-                        {event.preview?.fate.replaceAll('_', ' ') ??
-                          event.previewStatus.replaceAll('_', ' ')}
+                        {event.eventType === 'deep' ? (
+                          'No rollback at detection'
+                        ) : (
+                          <>
+                            Old block:{' '}
+                            {event.preview?.fate.replaceAll('_', ' ') ??
+                              event.previewStatus.replaceAll('_', ' ')}
+                          </>
+                        )}
                       </div>
                       {event.preview && (
-                        <div>
-                          Uncle inclusion:{' '}
-                          {event.preview.uncleInBlock == null
-                            ? 'none observed'
-                            : `#${event.preview.uncleInBlock}`}{' '}
-                          · later committed transactions: {event.preview.committedLaterTransactions}
-                        </div>
+                        <>
+                          <div>
+                            Uncle inclusion:{' '}
+                            {event.preview.uncleInBlock == null
+                              ? 'none observed'
+                              : `#${event.preview.uncleInBlock}`}{' '}
+                            · later committed transactions:{' '}
+                            {event.preview.committedLaterTransactions}
+                          </div>
+                          <div className="break-all">
+                            Old miner lock:{' '}
+                            {event.preview.oldMinerLockHash ?? 'witness unavailable'}
+                          </div>
+                          <div className="break-all">
+                            Current competing miner lock:{' '}
+                            {event.preview.competingMinerLockHash ??
+                              (event.preview.fate === 'canonical_now'
+                                ? 'same block now'
+                                : 'witness unavailable')}
+                          </div>
+                          {event.preview.timestampGapMs != null && (
+                            <div>
+                              Header time gap: {event.preview.timestampGapMs > 0 ? '+' : ''}
+                              {event.preview.timestampGapMs.toLocaleString()} ms
+                            </div>
+                          )}
+                        </>
                       )}
                       <div className="text-text-dim break-all">
                         Old tip {hash(event.oldTipHash)}

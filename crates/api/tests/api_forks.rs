@@ -143,6 +143,161 @@ async fn overview_fails_if_a_block_bearing_day_has_no_daily_stats() {
 }
 
 #[tokio::test]
+async fn deep_detection_reports_recorded_tips_without_claiming_a_rollback() {
+    let store = test_store();
+    let id = 1_754_000_000_000i64;
+    let record = ReorgEvent {
+        detected_at: id / 1000,
+        kind: ReorgEventKind::Deep,
+        fork_point: 10,
+        fork_point_hash: vec![0x11; 32],
+        old_tip: 12,
+        old_tip_hash: vec![0x22; 32],
+        new_tip: 13,
+        new_tip_hash: vec![0x33; 32],
+        depth: 3,
+        orphaned_blocks: 0,
+        orphaned_txs: 0,
+        reverted_by_event: None,
+        reverses_events: vec![],
+    };
+    let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            key.as_bytes(),
+            &bincode::serialize(&record).unwrap(),
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, detail) = get_json(&app, &format!("/forks/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["event"]["eventType"], "deep");
+    assert_eq!(detail["event"]["previewStatus"], "no_old_branch");
+    assert_eq!(detail["event"]["orphanedBlocksCount"], 0);
+    assert_eq!(detail["orphanedBlocks"], serde_json::json!([]));
+    assert_eq!(detail["adoptedBranch"], serde_json::json!([]));
+    emit_fixture("fork-deep-detail.json", &detail);
+}
+
+#[tokio::test]
+async fn detail_resolves_two_old_blocks_from_one_canonical_uncle_pass() {
+    use ckb_types::{
+        core::{BlockBuilder, EpochNumberWithFraction},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    let fork_hash = [0x33; 32];
+    let epoch = EpochNumberWithFraction::new(1, 0, 1800);
+    let old11 = BlockBuilder::default()
+        .number(11u64.pack())
+        .epoch(epoch.pack())
+        .parent_hash(packed::Byte32::new(fork_hash))
+        .timestamp(1_700_000_000_010u64.pack())
+        .build();
+    let old12 = BlockBuilder::default()
+        .number(12u64.pack())
+        .epoch(epoch.pack())
+        .parent_hash(old11.hash())
+        .timestamp(1_700_000_001_010u64.pack())
+        .build();
+    let canonical11 = BlockBuilder::default()
+        .number(11u64.pack())
+        .epoch(epoch.pack())
+        .parent_hash(packed::Byte32::new(fork_hash))
+        .timestamp(1_700_000_000_000u64.pack())
+        .build();
+    let canonical12 = BlockBuilder::default()
+        .number(12u64.pack())
+        .epoch(epoch.pack())
+        .parent_hash(canonical11.hash())
+        .timestamp(1_700_000_001_000u64.pack())
+        .build();
+    let canonical13 = BlockBuilder::default()
+        .number(13u64.pack())
+        .epoch(epoch.pack())
+        .parent_hash(canonical12.hash())
+        .timestamp(1_700_000_002_000u64.pack())
+        .uncle(old11.as_uncle())
+        .uncle(old12.as_uncle())
+        .build();
+    let chain = seed_ckb_chain(&[
+        old11.clone(),
+        old12.clone(),
+        canonical11.clone(),
+        canonical12.clone(),
+        canonical13.clone(),
+    ]);
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, 1_700_000_000_000),
+            (10, 1_700_000_000_000),
+            (11, 1_700_000_000_000),
+            (12, 1_700_000_001_000),
+            (13, 1_700_000_002_000),
+        ],
+    );
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, hash, uncles) in [
+        (10, fork_hash.to_vec(), 0),
+        (11, canonical11.hash().as_slice().to_vec(), 0),
+        (12, canonical12.hash().as_slice().to_vec(), 0),
+        (13, canonical13.hash().as_slice().to_vec(), 2),
+    ] {
+        let mut header = store.get_block_header(number).unwrap().unwrap();
+        header.hash = hash;
+        header.uncles_count = uncles;
+        header.transactions_count = 0;
+        batch.put_block_header(number, &header);
+    }
+    batch.commit().unwrap();
+    let id = 1_754_000_000_000i64;
+    let record = ReorgEvent {
+        detected_at: id / 1000,
+        kind: ReorgEventKind::Automatic,
+        fork_point: 10,
+        fork_point_hash: fork_hash.to_vec(),
+        old_tip: 12,
+        old_tip_hash: old12.hash().as_slice().to_vec(),
+        new_tip: 13,
+        new_tip_hash: canonical13.hash().as_slice().to_vec(),
+        depth: 2,
+        orphaned_blocks: 2,
+        orphaned_txs: 0,
+        reverted_by_event: None,
+        reverses_events: vec![],
+    };
+    let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            key.as_bytes(),
+            &bincode::serialize(&record).unwrap(),
+        )
+        .unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, detail) = get_json(&app, &format!("/forks/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["orphanedBlocks"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["orphanedBlocks"][0]["number"], 11);
+    assert_eq!(detail["orphanedBlocks"][1]["number"], 12);
+    assert_eq!(detail["orphanedBlocks"][0]["fate"], "included_as_uncle");
+    assert_eq!(detail["orphanedBlocks"][1]["fate"], "included_as_uncle");
+    assert_eq!(detail["orphanedBlocks"][0]["uncleIn"]["distance"], 2);
+    assert_eq!(detail["orphanedBlocks"][1]["uncleIn"]["distance"], 1);
+    assert_eq!(detail["adoptedBranch"].as_array().unwrap().len(), 3);
+    emit_fixture("fork-multi-uncle-detail.json", &detail);
+}
+
+#[tokio::test]
 async fn detail_proves_uncle_inclusion_competing_gap_and_later_tx_commit() {
     use ckb_types::{
         core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},

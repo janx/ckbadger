@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import uncleFixture from '@/__tests__/fixtures/fork-api-producer/fork-uncle-detail.json';
 import reentryFixture from '@/__tests__/fixtures/fork-api-producer/fork-reentry-detail.json';
 import unincludedFixture from '@/__tests__/fixtures/fork-api-producer/fork-unincluded-detail.json';
+import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 
 vi.mock('@/src/navigation', () => ({
   notFound: vi.fn(),
@@ -35,6 +36,7 @@ describe('ForkDetailPage', () => {
     expect(screen.getByRole('table', { name: 'Historically adopted branch' })).toBeInTheDocument();
     expect(screen.getAllByText('included as uncle').length).toBeGreaterThan(0);
     expect(screen.getAllByText('+50 ms').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Miner witness unavailable').length).toBeGreaterThan(0);
     expect(screen.getAllByText('committed later').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1,234 shannons').length).toBeGreaterThan(0);
   });
@@ -65,5 +67,15 @@ describe('ForkDetailPage', () => {
     );
     const orphanHash = unincludedFixture.orphanedTransactions[1].hash;
     expect(screen.queryByRole('link', { name: orphanHash })).not.toBeInTheDocument();
+  });
+
+  it('describes a deep detection as a pause without claiming either branch was adopted or dropped', async () => {
+    vi.mocked(api.getForkDetail).mockResolvedValue(fixture(deepFixture));
+    render(<ForkDetailPage />);
+    expect(await screen.findByText('Two tips at detection')).toBeInTheDocument();
+    expect(screen.getByText(/paused indexing before rollback/)).toBeInTheDocument();
+    expect(screen.getByText('Indexed tip · no rollback')).toBeInTheDocument();
+    expect(screen.getByText('Node tip · not adopted by indexer')).toBeInTheDocument();
+    expect(screen.queryByText('Old branch · dropped at detection')).not.toBeInTheDocument();
   });
 });

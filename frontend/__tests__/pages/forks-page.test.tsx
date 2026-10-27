@@ -5,6 +5,7 @@ import ForksPage from '@/app/forks/page';
 import { api } from '@/lib/api';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
 import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overview.json';
+import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
@@ -27,6 +28,8 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(screen.getByText('Forks & uncles')).toBeInTheDocument());
     await waitFor(() => expect(screen.getAllByText('included as uncle').length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/Old: witness unavailable/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+50 ms/).length).toBeGreaterThan(0);
     expect(screen.getByText('Uncles · 30 completed days')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(
@@ -34,6 +37,7 @@ describe('ForksPage', () => {
     ).toBeInTheDocument();
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
     expect(api.getForkOverview).toHaveBeenCalledWith(30);
+    expect(screen.getAllByText(/UTC\+8/).length).toBeGreaterThan(0);
   });
   it('distinguishes no node switches from an overview load failure', async () => {
     vi.mocked(api.getForks).mockResolvedValue({
@@ -49,5 +53,17 @@ describe('ForksPage', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('missing daily block stats')
     );
     expect(screen.getByText(/No branch switches observed by this node/)).toBeInTheDocument();
+  });
+  it('labels a deep detection as no rollback instead of an adopted branch', async () => {
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: [{ ...deepFixture.event, previewStatus: 'no_old_branch', preview: null }],
+    } as Awaited<ReturnType<typeof api.getForks>>);
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() =>
+      expect(screen.getAllByText('No rollback at detection').length).toBeGreaterThan(0)
+    );
+    expect(screen.getByText(/indexed #12 → node #13/)).toBeInTheDocument();
   });
 });
