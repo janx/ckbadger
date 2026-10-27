@@ -556,20 +556,12 @@ async fn test_forks_uses_persisted_reorg_detected_at_timestamp() {
     assert_eq!(json_recent["deepFork"]["detected"], true);
     assert_eq!(json_recent["deepFork"]["detectedAt"], expected_detected_at);
 
-    let request_list = Request::builder()
-        .uri("/api/v1/forks")
-        .body(Body::empty())
-        .unwrap();
-    let response_list = app.oneshot(request_list).await.unwrap();
-    assert_eq!(response_list.status(), StatusCode::OK);
-    let body_list = response_list
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let json_list: serde_json::Value = serde_json::from_slice(&body_list).unwrap();
+    let (status_list, json_list) = get_json(&app, "/forks").await;
+    assert_eq!(status_list, StatusCode::OK, "{json_list}");
     assert_eq!(json_list["data"][0]["detectedAt"], expected_detected_at);
+    assert_eq!(json_list["data"][0]["oldTipNumber"], 100);
+    assert_eq!(json_list["data"][0]["newTipNumber"], 160);
+    assert_eq!(json_list["data"][0]["previewStatus"], "no_old_branch");
 }
 
 #[tokio::test]
@@ -3373,18 +3365,19 @@ fn seed_reorg_event_of_kind(
     seq: u8,
     kind: ckbadger_store::types::ReorgEventKind,
 ) {
+    let deep = kind == ckbadger_store::types::ReorgEventKind::Deep;
     let event = ReorgEvent {
         detected_at: detected_at_ms / 1000,
         kind,
         fork_point,
         fork_point_hash: vec![seq; 32],
-        old_tip: fork_point + i64::from(depth),
+        old_tip: fork_point + if deep { 0 } else { i64::from(depth) },
         old_tip_hash: vec![0x11; 32],
-        new_tip: fork_point + i64::from(depth) + 1,
+        new_tip: fork_point + i64::from(depth) + if deep { 0 } else { 1 },
         new_tip_hash: vec![0x22; 32],
         depth,
-        orphaned_blocks: i64::from(depth),
-        orphaned_txs: i64::from(depth) * 2,
+        orphaned_blocks: if deep { 0 } else { i64::from(depth) },
+        orphaned_txs: if deep { 0 } else { i64::from(depth) * 2 },
         reverted_by_event: None,
         reverses_events: Vec::new(),
     };
@@ -3398,26 +3391,127 @@ fn seed_reorg_event_of_kind(
         .unwrap();
 }
 
+/// The list now reads the retained old branch for its fate preview. Seed the
+/// historical blocks, their adopted competitors, and the exact current header
+/// hashes together so the persisted events describe a possible chain state.
+fn seed_retained_reorg_list_history(store: &Arc<CkbadgerStore>) -> TestCkbChain {
+    use ckb_types::{
+        core::{BlockBuilder, EpochNumberWithFraction},
+        packed,
+        prelude::*,
+    };
+
+    let epoch = EpochNumberWithFraction::new(1, 0, 1800);
+    let timestamp = 1_700_000_000_000u64;
+    let initial_fork_hash = [0xA1; 32];
+    let mut canonical = Vec::new();
+    let mut parent = packed::Byte32::new(initial_fork_hash);
+    for number in 17_101u64..=17_146 {
+        let block = BlockBuilder::default()
+            .number(number.pack())
+            .epoch(epoch.pack())
+            .parent_hash(parent)
+            .timestamp((timestamp + (number - 17_100) * 1_000).pack())
+            .build();
+        parent = block.hash();
+        canonical.push(block);
+    }
+
+    let mut old_blocks = Vec::new();
+    for (detected_at_ms, fork_point, depth, seq) in [
+        (1_754_000_000_000i64, 17_100i64, 3i32, 0xA1u8),
+        (1_754_000_600_000i64, 17_140i64, 5i32, 0xB2u8),
+    ] {
+        let fork_hash = if fork_point == 17_100 {
+            packed::Byte32::new(initial_fork_hash)
+        } else {
+            canonical[usize::try_from(fork_point - 17_101).unwrap()].hash()
+        };
+        let mut old_parent = fork_hash.clone();
+        for number in (fork_point + 1)..=(fork_point + i64::from(depth)) {
+            let block = BlockBuilder::default()
+                .number(u64::try_from(number).unwrap().pack())
+                .epoch(epoch.pack())
+                .parent_hash(old_parent)
+                .timestamp(
+                    (timestamp + u64::try_from(number - 17_100).unwrap() * 1_000 + 50).pack(),
+                )
+                .build();
+            old_parent = block.hash();
+            old_blocks.push(block);
+        }
+        let new_tip = fork_point + i64::from(depth) + 1;
+        let event = ReorgEvent {
+            detected_at: detected_at_ms / 1000,
+            kind: ckbadger_store::types::ReorgEventKind::Automatic,
+            fork_point,
+            fork_point_hash: fork_hash.as_slice().to_vec(),
+            old_tip: fork_point + i64::from(depth),
+            old_tip_hash: old_parent.as_slice().to_vec(),
+            new_tip,
+            new_tip_hash: canonical[usize::try_from(new_tip - 17_101).unwrap()]
+                .hash()
+                .as_slice()
+                .to_vec(),
+            depth,
+            orphaned_blocks: i64::from(depth),
+            orphaned_txs: 0,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
+        };
+        let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                key.as_bytes(),
+                &bincode::serialize(&event).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let mut headers = vec![(0, i64::try_from(timestamp).unwrap())];
+    headers.extend((17_100i64..=17_146).map(|number| {
+        (
+            number,
+            i64::try_from(timestamp).unwrap() + (number - 17_100) * 1_000,
+        )
+    }));
+    seed_block_headers_at(store, &headers);
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut fork_header = store.get_block_header(17_100).unwrap().unwrap();
+    fork_header.hash = initial_fork_hash.to_vec();
+    batch.put_block_header(17_100, &fork_header);
+    for block in &canonical {
+        let number = i64::try_from(block.number()).unwrap();
+        let mut header = store.get_block_header(number).unwrap().unwrap();
+        header.hash = block.hash().as_slice().to_vec();
+        header.transactions_count = 0;
+        batch.put_block_header(number, &header);
+    }
+    batch.commit().unwrap();
+
+    old_blocks.extend(canonical);
+    seed_ckb_chain(&old_blocks)
+}
+
 /// Every automatic reorg is persisted under a `reorg:<ts_ms>:<uuid>` history
 /// key. `/forks` reporting `total: 0` minutes after "Reorg completed" is the
 /// endpoint lying about what the store holds.
 #[tokio::test]
 async fn test_forks_lists_persisted_reorg_events() {
     let store = test_store();
-    seed_reorg_event(&store, 1_754_000_000_000, 17_100, 3, 0xA1);
-    seed_reorg_event(&store, 1_754_000_600_000, 17_140, 5, 0xB2);
+    let chain = seed_retained_reorg_list_history(&store);
 
-    let config = test_config(store);
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
     let app = create_router(config).await;
 
-    let request = Request::builder()
-        .uri("/api/v1/forks")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let (status, json) = get_json(&app, "/forks").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
 
     assert_eq!(json["total"], 2, "persisted reorg history must be listed");
     let data = json["data"].as_array().unwrap();
@@ -3426,6 +3520,10 @@ async fn test_forks_lists_persisted_reorg_events() {
     assert_eq!(data[0]["forkPointNumber"], 17_140);
     assert_eq!(data[0]["depth"], 5);
     assert_eq!(data[1]["forkPointNumber"], 17_100);
+    assert_eq!(data[0]["previewStatus"], "available");
+    assert_eq!(data[0]["preview"]["fate"], "uncle_fate_pending");
+    assert_eq!(data[1]["previewStatus"], "available");
+    assert_eq!(data[1]["preview"]["fate"], "uncle_fate_pending");
 }
 
 /// A shallow reorg is resolved automatically, so `deepFork.detected` stays
