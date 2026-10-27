@@ -1,0 +1,8 @@
+[
+  ["prev.type", "String", 0, 1, "options", ["image"]],
+  ["relief", "String", 0, 1, "options", ["NERVAPE 3X"]],
+  ["prev.bg", "String", 0, 32, "btcfs"],
+  ["Color", "String", 32, 1, "nervapeColor"],
+  ["Serial", "String", 33, 18, "utf8"],
+  ["Note", "String", 51, 2, "nervapeNote"]
+]

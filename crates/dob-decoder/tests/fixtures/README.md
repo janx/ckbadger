@@ -36,3 +36,33 @@ Rule arguments remain literal. Legacy numeric pools use decimal strings so that
 the complete `u64` range, including rational numerators and denominators, remains
 exact through JSON. No allele selection, modulo arithmetic or float trait
 calculation is duplicated here; stored CKB-VM results supply expressed traits.
+
+## Mainnet 3X binary oracle
+
+`nervape3x-98b7af5e.elf` is the exact 86,904-byte `output_data` of mainnet
+outpoint `0xa83ad17ec7f70abd06bc3de0120e0fa39c5b2869b9e3b14189d927f737276f82:0`,
+created at block 20,743,475. It was read from the local node on 2026-10-27.
+The test recomputes its CKB-personalized Blake2b-256 hash and requires
+`0x98b7af5e071c0d4af030447b25bb436ee4e9dd687daac7bca4bee7a0393b78e1`.
+At capture the cell's Type ID args were
+`0xf9e6e61b29ef7356cdacce217065bc1ec7ec95cf33f62d2c800b913a66688e3d`.
+That mutable reference is not used to select the helper's grammar.
+
+This deployment is not in the upstream repository's migration list. Support
+therefore includes direct, offline CKB-VM regression evidence from the fixed
+chain binary, rather than a claim that we reproduced its source build:
+
+- The actual six-gene `nervape3x-pattern.json` and 53-byte object DNA produce
+  the same values when each gene's byte range is supplied alone at offset zero.
+- All 49 offset/length combinations over the boundary corpus read the same bytes
+  as the helper, including overlaps, empty slices and clipped declarations.
+- The 25 implemented rule names use the same segment in the full and isolated
+  DNA cases. Two parser-accepted but unimplemented serial rules exit with code
+  101; their byte descriptions do not claim a successful expressed value.
+
+These are fixed protocol regression tests, not an independent source-build
+proof. They run in the existing CKB-VM and need no local node or network. The
+pattern was captured from cluster
+`0x26a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c`;
+the DNA belongs to object
+`0x51c75ad6c509e05ec5933e32093a5b32eeab7fe59dbe9ecc05546306002796f2`.

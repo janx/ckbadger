@@ -13,9 +13,11 @@ use serde_json::{json, Value};
 
 const LEGACY: &str = "b82abd59ade361a014f0abb692f71b0feb880693c3ccb95b9137b73551d872ce";
 const JSON_DOB0: &str = "13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c";
-const NERVAPE: [&str; 2] = [
+const NERVAPE: [&str; 3] = [
     "9c3d6729aac887b2501064ab50ad89a1a27cf27abf34f2ea4f2847302156a422",
     "279af749dddf2f3357ad9d84487ec64672e4d19088f78665b5fcf86821eceeba",
+    // Mainnet 3X: fixed chain binary, directly verified in nervape_pattern_vm.
+    "98b7af5e071c0d4af030447b25bb436ee4e9dd687daac7bca4bee7a0393b78e1",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
