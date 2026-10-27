@@ -34,6 +34,10 @@ describe('stepDecimals', () => {
     [1e-8, 8],
     [2.5e-8, 9],
     [1e-12, 12],
+    [1e-13, 13],
+    [2.5e-24, 25],
+    [1e-255, 255],
+    [2.5e-255, 256],
     [-5e-7, 7],
   ])(
     'does not round a nonzero %s step down to a zero integer at insufficient precision',
@@ -49,6 +53,28 @@ describe('stepDecimals', () => {
 });
 
 describe('niceTicks', () => {
+  it.each([13, 24, 101, 255])('keeps distinct ticks at %s decimal places', (decimals) => {
+    const unit = Number(`1e-${decimals}`);
+    const ticks = niceTicks(0, Number(`3e-${decimals}`));
+    expect(ticks.values).toEqual([0, unit, Number(`2e-${decimals}`), Number(`3e-${decimals}`)]);
+    expect(ticks.values.map((value) => formatTick(value, ticks.step))).toEqual([
+      '0',
+      `1e-${decimals}`,
+      `2e-${decimals}`,
+      `3e-${decimals}`,
+    ]);
+    expect(niceTicks(-unit, unit, 3).values).toEqual([-unit, 0, unit]);
+    expect(formatTick(-unit, ticks.step)).toBe(`${MINUS}1e-${decimals}`);
+  });
+
+  it('retains a tiny nonzero anchor and expands a flat high-decimal series', () => {
+    expect(niceTicks(1e-255, 3e-255, 4, 2e-255).values).toEqual([1e-255, 2e-255, 3e-255]);
+    const flat = niceTicks(1e-255, 1e-255).values;
+    expect(flat[0]).toBeLessThan(1e-255);
+    expect(flat.at(-1)).toBeGreaterThan(1e-255);
+    expect(new Set(flat).size).toBe(flat.length);
+  });
+
   it('preserves distinct micro-CKB ticks and an exact nonzero anchor', () => {
     const ticks = niceTicks(0, 0.0000012);
     expect(ticks.step).toBe(0.0000005);

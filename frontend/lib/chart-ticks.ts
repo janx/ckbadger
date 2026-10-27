@@ -33,14 +33,40 @@ export function niceStep(raw: number): number {
 
 /** Decimals needed to print multiples of `step` exactly (0.25 → 2, 2.5 → 1, 500 → 0). */
 export function stepDecimals(step: number): number {
-  for (let d = 0; d <= 12; d++) {
-    const scaled = step * 10 ** d;
+  assertFinite('stepDecimals: step', step);
+  if (step === 0) return 0;
+  const [mantissa, exponentText] = step.toExponential().split('e');
+  const exponent = Number(exponentText);
+  // Shift the decimal exponent rather than multiply by 10 ** d: token decimals
+  // can reach 255, and representable numbers can need up to 324 decimal places.
+  for (let d = Math.max(0, -exponent); d <= 324; d++) {
+    const scaled = Number(`${mantissa}e${exponent + d}`);
     const integer = Math.round(scaled);
     // Float tolerance may remove arithmetic noise around a nonzero integer, but a
     // nonzero step rounding to zero has not reached its required decimal precision.
-    if ((integer !== 0 || step === 0) && Math.abs(scaled - integer) < 1e-6) return d;
+    if (integer !== 0 && Math.abs(scaled - integer) < 1e-6) return d;
   }
   throw new Error(`stepDecimals: ${step} has no short decimal form`);
+}
+
+/** Round a plotted number to the tick's decimal grid without toFixed's 100-digit limit. */
+function tickDecimal(value: number, decimals: number): string {
+  assertFinite('tickDecimal: value', value);
+  const [mantissa, exponentText = '0'] = Math.abs(value).toString().split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  const coefficient = BigInt(whole + fraction);
+  const shift = decimals + Number(exponentText) - fraction.length;
+  let rounded: bigint;
+  if (shift >= 0) {
+    rounded = coefficient * BigInt(10) ** BigInt(shift);
+  } else {
+    const divisor = BigInt(10) ** BigInt(-shift);
+    rounded = (coefficient + divisor / BigInt(2)) / divisor;
+  }
+  const digits = rounded.toString().padStart(decimals + 1, '0');
+  const fixed =
+    decimals === 0 ? digits : `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}`;
+  return value < 0 && rounded !== BigInt(0) ? `-${fixed}` : fixed;
 }
 
 /**
@@ -74,7 +100,7 @@ export function niceTicks(min: number, max: number, target = 4, anchor = 0): Tic
   const last = Math.ceil((hi - anchor) / step - 1e-9);
   const values: number[] = [];
   for (let i = first; i <= last; i++) {
-    values.push(Number((anchor + i * step).toFixed(decimals)));
+    values.push(Number(tickDecimal(anchor + i * step, decimals)));
   }
   return { values, step };
 }
@@ -85,7 +111,8 @@ function trimZeros(s: string): string {
 
 /**
  * A tick label: thousands as k / M / B (trailing zeros trimmed: 500, 1k, 2.5k, 10k), smaller
- * values with the decimals their step needs (2.4, 2.6 …), negatives with a real minus sign.
+ * values with the decimals their step needs (2.4, 2.6 …), micro-token values in scientific
+ * notation, negatives with a real minus sign. Exact data readouts remain separate from axis labels.
  */
 export function formatTick(value: number, step: number): string {
   assertFinite('formatTick: value', value);
@@ -100,7 +127,8 @@ export function formatTick(value: number, step: number): string {
   for (const [div, suffix] of units) {
     if (abs >= div) return `${sign}${trimZeros((abs / div).toFixed(3))}${suffix}`;
   }
-  return `${sign}${abs.toFixed(stepDecimals(step))}`;
+  const decimal = tickDecimal(abs, stepDecimals(step));
+  return `${sign}${abs < 1e-8 ? Number(decimal).toExponential() : decimal}`;
 }
 
 /** The smallest 1 / 1.5 / 2 / 2.5 / 3 / 4 / 5 / 6 / 8 × 10^k value that is at least `x`. */
