@@ -263,17 +263,26 @@ fn epoch_at_or_after(header: &CachedBlockHeader, target: &str) -> Result<bool> {
         den.parse::<i128>()?,
     );
     ensure!(
+        den > 0 && num >= 0 && num < den,
+        "invalid target epoch fraction {target}"
+    );
+    ensure!(
         header.epoch_length > 0
             && header.epoch_index >= 0
             && header.epoch_index < header.epoch_length,
         "Fiber tip header invalid epoch fraction"
     );
-    Ok(
-        i128::from(header.epoch_number) * den * i128::from(header.epoch_length)
-            + i128::from(header.epoch_index) * den
-            >= whole * den * i128::from(header.epoch_length)
-                + num * i128::from(header.epoch_length),
-    )
+    let header_whole = i128::from(header.epoch_number);
+    if header_whole != whole {
+        return Ok(header_whole > whole);
+    }
+    let left = i128::from(header.epoch_index)
+        .checked_mul(den)
+        .ok_or_else(|| anyhow!("Fiber tip epoch comparison overflow"))?;
+    let right = num
+        .checked_mul(i128::from(header.epoch_length))
+        .ok_or_else(|| anyhow!("Fiber target epoch comparison overflow"))?;
+    Ok(left >= right)
 }
 
 fn commitment_epoch_rule(
@@ -581,6 +590,11 @@ mod tests {
             ready_epoch(&header, 0xa000_0200_0000_0001).unwrap(),
             "101+1/3"
         );
+        header.epoch_number = i64::MAX;
+        header.epoch_index = i32::MAX - 1;
+        header.epoch_length = i32::MAX;
+        assert!(epoch_at_or_after(&header, "100+0/1").unwrap());
+        assert!(!epoch_at_or_after(&header, "9223372036854775808+0/1").unwrap());
     }
 
     #[test]

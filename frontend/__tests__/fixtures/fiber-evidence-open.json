@@ -1,0 +1,35 @@
+{
+  "channelId": "0xf0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+  "currentCommitment": null,
+  "funding": {
+    "blockNumber": 10,
+    "capacity": "30000000000",
+    "consumedByTx": null,
+    "isLive": true,
+    "lockArgs": "0x4444444444444444444444444444444444444444",
+    "lockCodeHash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+    "lockHashType": "type",
+    "outputIndex": 0,
+    "txHash": "0xee6c28c44431e0230b04c7ebfb5005eb3410a7bf46fcd2bd386e8e70418444b4"
+  },
+  "openingPartyFlows": [
+    {
+      "lockScriptHash": "0x81dc08f32082179afe569100d9b7d13498b1edd432f2936c651f4a0465f49932",
+      "observedNetInput": "30100000000",
+      "openingInputCapacity": "100000000000",
+      "openingOutputCapacity": "69900000000"
+    }
+  ],
+  "settlementOutputs": [],
+  "stages": [
+    {
+      "blockNumber": 10,
+      "inputs": 1,
+      "outputs": 2,
+      "stage": "opening",
+      "timestamp": "1700000001000",
+      "txHash": "0xee6c28c44431e0230b04c7ebfb5005eb3410a7bf46fcd2bd386e8e70418444b4",
+      "witnessCount": 0
+    }
+  ]
+}
