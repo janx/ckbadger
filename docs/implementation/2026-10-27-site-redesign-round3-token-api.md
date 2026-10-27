@@ -29,6 +29,16 @@
 - Catalog time is O(token metadata + unlabelled-token holder rows up to first positive balance + Spore rows + collection aggregates), with one decoded Spore payload at a time and retained token/collection metadata. History/feed time is O(the token transfer prefix), distribution O(the holder prefix), and rendered live count O(the token cell prefix). No frontend-page sampling or whole-header scan.
 - All raw lane evidence lives under `.worktrees/site-redesign-round3-token/.lane-results/` (not committed). Normal pre-commit hooks passed: workspace all-target strict Clippy, Rust formatting, and Prettier (`d4-commit-hooks.log`).
 
+## Follow-up: canonical transaction lookup cost
+
+- Root's isolated mainnet probe found USDi's 18,646 transfer rows / 18,278 distinct transactions took 9.228–10.591 seconds for a two-row feed page, and 7.051 seconds for history. Before evidence is retained at `.worktrees/site-redesign-round3-results/d4-live-token.json` and `d4-token-live-api.log`; this lane did not run or change services.
+- The transfer visitor already located and validated each transaction, then discarded its index entry. `token_scope` collected hashes and the shared feed helper located the same full transaction set again. Both passes used individual location/index reads.
+- One shared canonical scope now resolves at most 1,024 transaction hashes per batch with the existing store batch reader. The transfer visitor buffers at most 1,024 rows, reuses the previous batch's last validated transaction for split transfer legs, and passes validated entries to both history and feed projections. The feed retains these entries instead of performing a second localization. It still validates every transfer row, deduplicates by exact transaction hash and sorts by real block/transaction index. Full-scope totals, cursor semantics and response fields are unchanged.
+- Regression-first evidence: 1,026 transactions including a transfer split across the 1,024-row boundary required 4,104 individual reads in Token scope and 2,052 in the generic scope. Both regressions failed against the old implementation (`d4-feed-batch-red.log`). They now require zero individual reads and exactly four multi-get calls, two batches with separate hash-location and transaction-index phases. This proves the removed redundant reads; it is not a substitute for a live wall-time benchmark.
+- Five focused tests additionally preserve cross-boundary timestamp errors, missing/mismatched canonical rows beyond the first batch, invalid hash lengths and bounded batch size. The read-call counter feature is enabled only as an API dev dependency. No persistent state, index, cache or new calculation fallback was introduced.
+- Final follow-up validation: five batch unit tests and the complete assets (62), Token redesign (13), and tokens (21) endpoint suites passed. Logs: `d4-feed-batch-final-unit-green.log` and `d4-feed-batch-affected-green.log`; the normal pre-commit hook log is `d4-feed-batch-commit-hooks.log`.
+- Root will rebuild the same isolated debug API and repeat the saved mainnet probe under new artifact names. The existing mainnet before results remain unchanged.
+
 ## Result
 
 - Re-sync required: no.

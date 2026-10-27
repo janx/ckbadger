@@ -84,6 +84,7 @@ mime_guess = { workspace = true }
 rquickjs = { version = "0.12", features = ["futures"] }
 
 [dev-dependencies]
+ckbadger-store = { path = "../ckbadger-store", features = ["read-call-counters"] }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
 http-body-util = { workspace = true }

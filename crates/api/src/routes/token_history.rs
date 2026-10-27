@@ -17,7 +17,7 @@ use ckbadger_common::{stats_bucket::stats_day, TokenBalance};
 use ckbadger_store::{keys, CkbadgerStore, TokenTransferRecord};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -29,13 +29,20 @@ pub(super) struct FeedParams {
 }
 
 /// Visit every transfer row, validating key, payload and canonical transaction.
-/// Repeated transfer legs in a transaction share its validated identity.
+/// Buffer at most 1024 transfer rows. The last transaction survives a batch
+/// boundary so a transaction with many transfer legs is still located once.
 fn visit_transfers(
     store: &CkbadgerStore,
     hash: &[u8],
-    mut visit: impl FnMut(i64, i32, i32, TokenTransferRecord) -> anyhow::Result<()>,
+    mut visit: impl FnMut(
+        i64,
+        i32,
+        &asset_feed::AssetTransaction,
+        TokenTransferRecord,
+    ) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    let mut previous: Option<(Vec<u8>, (i64, i32, i64))> = None;
+    let mut previous = None;
+    let mut batch = Vec::with_capacity(asset_feed::TRANSACTION_BATCH_SIZE);
     for item in store.prefix_iterator_cf(store.cf_token_transfers(), hash) {
         let (key, value) = item?;
         if !key.starts_with(hash) {
@@ -60,49 +67,92 @@ fn visit_transfers(
             hex::encode(&key),
             hex::encode(&row.tx_hash)
         );
-        let location = if let Some((_, location)) =
-            previous.as_ref().filter(|(hash, _)| hash == &row.tx_hash)
-        {
-            *location
-        } else {
-            let (height, index, entry) =
-                store.get_tx_by_hash(&row.tx_hash)?.with_context(|| {
-                    format!(
-                        "token transfer missing canonical tx=0x{} block={block}",
-                        hex::encode(&row.tx_hash)
-                    )
-                })?;
-            ensure!(
-                entry.timestamp == row.timestamp,
-                "token transfer timestamp mismatch tx=0x{} block={block}",
-                hex::encode(&row.tx_hash)
-            );
-            previous = Some((row.tx_hash.clone(), (height, index, entry.timestamp)));
-            (height, index, entry.timestamp)
-        };
-        ensure!(
-            location.2 == row.timestamp,
-            "token transfer timestamp mismatch tx=0x{} block={block}",
-            hex::encode(&row.tx_hash)
-        );
-        ensure!(
-            location.0 == block,
-            "token transfer canonical block mismatch tx=0x{} transfer={block} canonical={}",
-            hex::encode(&row.tx_hash),
-            location.0
-        );
-        visit(block, sequence, location.1, row)?;
+        batch.push((block, sequence, row));
+        if batch.len() == asset_feed::TRANSACTION_BATCH_SIZE {
+            visit_transfer_batch(store, &mut batch, &mut previous, &mut visit)?;
+        }
+    }
+    if !batch.is_empty() {
+        visit_transfer_batch(store, &mut batch, &mut previous, &mut visit)?;
     }
     Ok(())
 }
 
-fn token_scope(state: &AppState, hash: &[u8]) -> anyhow::Result<Vec<asset_feed::AssetTransaction>> {
-    let mut hashes = HashSet::new();
-    visit_transfers(&state.store, hash, |_, _, _, row| {
-        hashes.insert(row.tx_hash);
+fn visit_transfer_batch(
+    store: &CkbadgerStore,
+    batch: &mut Vec<(i64, i32, TokenTransferRecord)>,
+    previous: &mut Option<asset_feed::AssetTransaction>,
+    visit: &mut impl FnMut(
+        i64,
+        i32,
+        &asset_feed::AssetTransaction,
+        TokenTransferRecord,
+    ) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let last_hash = batch
+        .last()
+        .context("empty token transfer batch")?
+        .2
+        .tx_hash
+        .clone();
+    let hashes = batch
+        .iter()
+        .filter(|(_, _, row)| {
+            !previous
+                .as_ref()
+                .is_some_and(|tx| tx.entry.tx_hash.as_slice() == row.tx_hash)
+        })
+        .map(|(_, _, row)| row.tx_hash.clone());
+    let mut transactions: HashMap<_, _> = asset_feed::canonical_scope(store, hashes)?
+        .into_iter()
+        .map(|tx| (tx.entry.tx_hash.to_vec(), tx))
+        .collect();
+    if let Some(tx) = previous.take() {
+        transactions.insert(tx.entry.tx_hash.to_vec(), tx);
+    }
+    for (block, sequence, row) in batch.drain(..) {
+        let tx = transactions.get(&row.tx_hash).with_context(|| {
+            format!(
+                "token transfer batch missing validated tx=0x{} block={block}",
+                hex::encode(&row.tx_hash)
+            )
+        })?;
+        ensure!(
+            tx.entry.timestamp == row.timestamp,
+            "token transfer timestamp mismatch tx=0x{} block={block}",
+            hex::encode(&row.tx_hash)
+        );
+        ensure!(
+            tx.block_number == block,
+            "token transfer canonical block mismatch tx=0x{} transfer={block} canonical={}",
+            hex::encode(&row.tx_hash),
+            tx.block_number
+        );
+        visit(block, sequence, tx, row)?;
+    }
+    *previous = Some(transactions.remove(&last_hash).with_context(|| {
+        format!(
+            "token transfer batch missing last validated tx=0x{}",
+            hex::encode(&last_hash)
+        )
+    })?);
+    Ok(())
+}
+
+fn token_scope(
+    store: &CkbadgerStore,
+    hash: &[u8],
+) -> anyhow::Result<Vec<asset_feed::AssetTransaction>> {
+    let mut seen = HashSet::new();
+    let mut scope = Vec::new();
+    visit_transfers(store, hash, |_, _, tx, _| {
+        if seen.insert(tx.entry.tx_hash) {
+            scope.push(tx.clone());
+        }
         Ok(())
     })?;
-    asset_feed::canonical_scope(&state.store, hashes)
+    asset_feed::sort_scope(&mut scope);
+    Ok(scope)
 }
 
 pub(super) async fn activity_feed(
@@ -113,7 +163,7 @@ pub(super) async fn activity_feed(
     let hash = parse_hash32(&hash, "type_hash")?;
     require_token(&state.store, &hash)?;
     tokio::task::spawn_blocking(move || {
-        let scope = token_scope(&state, &hash).map_err(internal)?;
+        let scope = token_scope(&state.store, &hash).map_err(internal)?;
         asset_feed::activities(&state, scope, params.limit, params.cursor.as_deref())
     })
     .await
@@ -127,7 +177,7 @@ pub(super) async fn transactions(
     let hash = parse_hash32(&hash, "type_hash")?;
     require_token(&state.store, &hash)?;
     tokio::task::spawn_blocking(move || {
-        let scope = token_scope(&state, &hash).map_err(internal)?;
+        let scope = token_scope(&state.store, &hash).map_err(internal)?;
         asset_feed::transactions(&state, scope, params.limit, params.cursor.as_deref())
     })
     .await
@@ -218,7 +268,8 @@ fn build_history(state: &AppState, hash: &[u8]) -> anyhow::Result<History> {
     let mut weeks = BTreeMap::<NaiveDate, i64>::new();
     let mut events = Vec::new();
     let mut count = 0i64;
-    visit_transfers(store, hash, |block, seq, index, row| {
+    visit_transfers(store, hash, |block, seq, tx, row| {
+        let index = tx.tx_index;
         ensure!(
             block <= tip,
             "token history transfer after tip: block={block} tip={tip}"
@@ -538,4 +589,166 @@ pub(super) fn live_cells_count(state: &AppState, hash: &[u8]) -> anyhow::Result<
             .context("token live cell count overflow")?;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use ckbadger_store::{StoreBatch, TxIndexEntry};
+
+    const TOKEN: [u8; 32] = [0x71; 32];
+
+    fn tx_hash(block: i64) -> [u8; 32] {
+        let mut hash = [0x81; 32];
+        hash[..8].copy_from_slice(&block.to_be_bytes());
+        hash
+    }
+
+    // Descending scan: the two legs at height 2 straddle the 1024-row boundary.
+    fn fixture() -> (tempfile::TempDir, CkbadgerStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for block in 0..1026 {
+            let hash = tx_hash(block);
+            batch.put_tx_hash_map(&hash, block, 3);
+            batch.put_tx_index(
+                block,
+                3,
+                &TxIndexEntry {
+                    tx_hash: hash,
+                    is_cellbase: false,
+                    timestamp: block * 1000,
+                    inputs_count: 1,
+                    outputs_count: 2,
+                    fee: 10,
+                    tx_size: 100,
+                    cycles: Some(42),
+                    semantic_tags: 0,
+                },
+            );
+            for sequence in 0..if block == 2 { 2 } else { 1 } {
+                batch.put_token_transfer(
+                    &TOKEN,
+                    block,
+                    sequence,
+                    &TokenTransferRecord {
+                        tx_hash: hash.to_vec(),
+                        block_number: block,
+                        from_lock_hash: Some(vec![0x31; 32]),
+                        to_lock_hash: vec![0x32; 32],
+                        amount: 10,
+                        is_mint: false,
+                        is_burn: false,
+                        timestamp: block * 1000,
+                    },
+                );
+            }
+        }
+        batch.commit().unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn token_scope_reuses_validated_transactions_in_bounded_batches() {
+        let (_dir, store) = fixture();
+        store.reset_read_call_counters();
+        let scope = token_scope(&store, &TOKEN).unwrap();
+        assert_eq!(scope.len(), 1026);
+        for (row, block) in scope.iter().zip((0..1026).rev()) {
+            assert_eq!((row.block_number, row.tx_index), (block, 3));
+            assert_eq!(row.entry.tx_hash, tx_hash(block));
+            assert_eq!(row.entry.cycles, Some(42));
+        }
+        assert_eq!(store.read_call_counts(), (0, 4),
+            "two bounded batches, each with one location and one index multi-get; no second localization");
+    }
+
+    #[test]
+    fn canonical_scope_batches_unique_hashes_without_changing_order_or_entries() {
+        let (_dir, store) = fixture();
+        store.reset_read_call_counters();
+        let hashes = (0..1026).flat_map(|block| [tx_hash(block).to_vec(), tx_hash(block).to_vec()]);
+        let scope = asset_feed::canonical_scope(&store, hashes).unwrap();
+        assert_eq!(scope.len(), 1026);
+        assert_eq!(scope[0].entry.tx_hash, tx_hash(1025));
+        assert_eq!(scope.last().unwrap().entry.tx_hash, tx_hash(0));
+        assert!(scope
+            .iter()
+            .all(|row| row.tx_index == 3 && row.entry.cycles == Some(42)));
+        assert_eq!(
+            store.read_call_counts(),
+            (0, 4),
+            "duplicate hashes must not create additional point lookups or unbounded batches"
+        );
+    }
+
+    #[test]
+    fn token_scope_rejects_missing_and_mismatched_canonical_rows_in_later_batch() {
+        for corrupt_hash in [false, true] {
+            let (_dir, store) = fixture();
+            if corrupt_hash {
+                let mut entry = store.get_tx_index(0, 3).unwrap().unwrap();
+                entry.tx_hash = [0xff; 32];
+                let mut batch = StoreBatch::new(&store);
+                batch.put_tx_index(0, 3, &entry);
+                batch.commit().unwrap();
+            } else {
+                store
+                    .delete_cf(store.cf_tx_hash_map(), &tx_hash(0))
+                    .unwrap();
+            }
+            let error = token_scope(&store, &TOKEN).err().unwrap().to_string();
+            assert!(error.contains(&hex::encode(tx_hash(0))), "{error}");
+            assert!(
+                error.contains(if corrupt_hash {
+                    "hash mismatch"
+                } else {
+                    "missing canonical"
+                }),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn asset_batch_rejects_invalid_hashes_and_oversized_requests_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        for (hashes, expected) in [
+            (vec![vec![0; 31]], "invalid transaction hash length"),
+            (vec![vec![0; 32]; 1025], "batch exceeds 1024"),
+        ] {
+            let error = asset_feed::canonical_transactions(&store, &hashes)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+        assert_eq!(store.read_call_counts(), (0, 0));
+    }
+
+    #[test]
+    fn token_scope_validates_every_transfer_leg_across_batch_boundary() {
+        let (_dir, store) = fixture();
+        let key = keys::encode_token_transfer_key(&TOKEN, 2, 0);
+        let mut row: TokenTransferRecord = bincode::deserialize(
+            &store
+                .get_cf(store.cf_token_transfers(), &key)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        row.timestamp += 1;
+        store
+            .put_cf(
+                store.cf_token_transfers(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+        let error = token_scope(&store, &TOKEN).err().unwrap().to_string();
+        assert!(error.contains("timestamp mismatch"), "{error}");
+        assert!(error.contains(&hex::encode(tx_hash(2))), "{error}");
+    }
 }

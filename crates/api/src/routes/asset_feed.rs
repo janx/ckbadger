@@ -14,10 +14,59 @@ use crate::{
     AppState,
 };
 
+pub(crate) const TRANSACTION_BATCH_SIZE: usize = 1024;
+
+#[derive(Clone)]
 pub(crate) struct AssetTransaction {
     pub block_number: i64,
     pub tx_index: i32,
     pub entry: TxIndexEntry,
+}
+
+/// Resolve one bounded batch in the pinned canonical view. Callers retain these
+/// entries instead of locating the same transaction again during projection.
+pub(crate) fn canonical_transactions(
+    store: &CkbadgerStore,
+    hashes: &[Vec<u8>],
+) -> anyhow::Result<Vec<AssetTransaction>> {
+    ensure!(
+        hashes.len() <= TRANSACTION_BATCH_SIZE,
+        "asset transaction batch exceeds {TRANSACTION_BATCH_SIZE}: {}",
+        hashes.len()
+    );
+    for hash in hashes {
+        ensure!(
+            hash.len() == 32,
+            "asset feed invalid transaction hash length {}",
+            hash.len()
+        );
+    }
+    store
+        .get_txs_by_hash_batch(hashes)?
+        .into_iter()
+        .map(|(hash, row)| {
+            let (block_number, tx_index, entry) = row.with_context(|| {
+                format!(
+                    "asset feed missing canonical transaction 0x{}",
+                    hex::encode(&hash)
+                )
+            })?;
+            ensure!(
+                block_number >= 0 && tx_index >= 0,
+                "asset feed invalid location block={block_number} index={tx_index} tx=0x{}",
+                hex::encode(&hash)
+            );
+            Ok(AssetTransaction {
+                block_number,
+                tx_index,
+                entry,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn sort_scope(scope: &mut [AssetTransaction]) {
+    scope.sort_by_key(|row| std::cmp::Reverse((row.block_number, row.tx_index)));
 }
 
 /// Discovery owns whether an orphan history outpoint belongs to its scope.
@@ -28,33 +77,19 @@ pub(crate) fn canonical_scope(
 ) -> anyhow::Result<Vec<AssetTransaction>> {
     let mut seen = HashSet::new();
     let mut scope = Vec::new();
+    let mut batch = Vec::with_capacity(TRANSACTION_BATCH_SIZE);
     for hash in hashes {
-        ensure!(
-            hash.len() == 32,
-            "asset feed invalid transaction hash length {}",
-            hash.len()
-        );
         if !seen.insert(hash.clone()) {
             continue;
         }
-        let (block_number, tx_index, entry) = store.get_tx_by_hash(&hash)?.with_context(|| {
-            format!(
-                "asset feed missing canonical transaction 0x{}",
-                hex::encode(&hash)
-            )
-        })?;
-        ensure!(
-            block_number >= 0 && tx_index >= 0,
-            "asset feed invalid location block={block_number} index={tx_index} tx=0x{}",
-            hex::encode(&hash)
-        );
-        scope.push(AssetTransaction {
-            block_number,
-            tx_index,
-            entry,
-        });
+        batch.push(hash);
+        if batch.len() == TRANSACTION_BATCH_SIZE {
+            scope.extend(canonical_transactions(store, &batch)?);
+            batch.clear();
+        }
     }
-    scope.sort_by_key(|row| std::cmp::Reverse((row.block_number, row.tx_index)));
+    scope.extend(canonical_transactions(store, &batch)?);
+    sort_scope(&mut scope);
     Ok(scope)
 }
 
