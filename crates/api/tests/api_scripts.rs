@@ -2491,9 +2491,13 @@ async fn assert_retired_family_usage_and_utilization(app: &axum::Router, active:
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let chart: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(chart["capacityShare"]["data"].as_array().unwrap().len(), 2);
+    assert_eq!(chart["capacityShare"]["data"][0]["date"], "2024-01-15");
+    assert_eq!(chart["capacityShare"]["data"][1]["date"], "2024-01-16");
     for (name, expected) in [
         ("capacityShare", ["1000", "800"]),
         ("usedShare", ["600", "500"]),
@@ -2520,7 +2524,23 @@ async fn assert_retired_family_usage_and_utilization(app: &axum::Router, active:
 
 async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     let store = test_store();
-    seed_block_headers_at(&store, &[(30, 1_704_153_601_000), (40, 1_704_153_602_000)]);
+    // The complete-day chart walks the canonical height index to certify its
+    // calendar boundary. A sparse header fixture is not an indexed chain.
+    seed_block_headers_at(
+        &store,
+        &(0..=40)
+            .map(|number| {
+                let timestamp = if number == 40 {
+                    utc_ms("2024-01-17T02:00:00Z")
+                } else if number >= 31 {
+                    utc_ms("2024-01-16T02:00:00Z") + (number - 31) * 1000
+                } else {
+                    utc_ms("2024-01-15T02:00:00Z") + number * 1000
+                };
+                (number, timestamp)
+            })
+            .collect::<Vec<_>>(),
+    );
     let reference = vec![0x31; 32];
     let binary = vec![0x41; 32];
     let history = ScriptVersionInfo {
@@ -4112,11 +4132,16 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
     let store = test_store();
     seed_block_headers_at(
         &store,
-        &[
-            (10, 1_704_153_601_000),
-            (11, 1_704_153_602_000),
-            (12, 1_704_153_603_000),
-        ],
+        &(0..=12)
+            .map(|number| {
+                let timestamp = if number == 12 {
+                    utc_ms("2024-01-17T02:00:00Z")
+                } else {
+                    utc_ms("2024-01-15T02:00:00Z") + number * 1000
+                };
+                (number, timestamp)
+            })
+            .collect::<Vec<_>>(),
     );
     let reference = vec![0x31; 32];
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
@@ -4302,9 +4327,18 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["capacityShare"]["data"].as_array().unwrap().len(), 2);
+        assert_eq!(json["capacityShare"]["data"][0]["date"], "2024-01-15");
+        assert_eq!(json["capacityShare"]["data"][1]["date"], "2024-01-16");
         for (chart, expected) in [("capacityShare", 800), ("usedShare", 500)] {
             let total: i128 = json[chart]["data"][0]["values"]
                 .as_object()
