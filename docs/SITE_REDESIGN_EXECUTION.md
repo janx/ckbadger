@@ -249,3 +249,23 @@ stores need no schema migration or re-sync for this fix alone. Stop the old supe
 replacing its binary, build the corrected revision, then rebuild the affected chain stores from
 genesis and run the normal verification. The separate network store does not require rebuilding.
 This task leaves the user's services, `work/` data and running release binary unchanged.
+
+## 2026-10-27 full mainnet verification closure
+
+After the asset-contract correction and the accepted layered calendar verifier,
+run `20261027T084559Z-08e068e3` passed **all 64 checks**, with
+`scopeComplete: true`, no skipped/inconclusive/error/failed checks, in 428.16 s.
+This is a complete run, distinct from the earlier 63-pass run and the subsequent
+selected entity-check run. The indexed calendar remains an explicitly declared
+dependency; passing does not claim an independent proof of every historical date.
+
+CLI and API both used the isolated release artifact for `625e0476`, SHA-256
+`2f7f6b159c6207e7b2f1ca219cd748bd5443ec71099940abc6947d7e64b97821`.
+The API used port 18102 and separate RocksDB secondary directories, then was
+stopped. Existing services, binaries and primary stores were not replaced or
+restarted. Re-sync required: **no** for this verification closure.
+
+- Report: `work/mainnet/perf/verify/20261027T084559Z-08e068e3/report.json`.
+- Reproducer and process/command logs: `.worktrees/site-redesign-round2-results/verify-round1-full.py`,
+  `round1-full-verify.json`, `round1-full-verify.log`, and `round1-full-api.log`.
+- Next implementation round: [D3 Address v3](SITE_REDESIGN_ROUND2.md).

@@ -299,6 +299,12 @@ calendar, with **zero tolerance** —
   a separate one-entity export probe took 2.23 s and returned 183,343 bytes.
   This measured the layered contract above, not the former independent full-chain
   date proof. It was a selected-check run, not a rerun of all 64 checks.
+  A subsequent full mainnet run, `20261027T084559Z-08e068e3`, passed **all 64
+  checks** in 428.16 s with `scopeComplete: true` and no skips, errors, failures,
+  or inconclusive checks. CLI and the isolated read-only API used the same
+  `625e0476` release artifact; the entity check covered eight entities at anchor
+  20,847,472 in 194.60 s. The calendar dependency is unchanged. The report is
+  `work/mainnet/perf/verify/20261027T084559Z-08e068e3/report.json`.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
   fully covered and why. It also saves the indexed calendar and identifies
