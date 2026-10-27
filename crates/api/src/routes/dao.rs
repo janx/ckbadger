@@ -1462,29 +1462,34 @@ mod tests {
     }
 
     #[test]
-    fn test_build_total_depositors_series_uses_cumulative_depositors() {
+    fn test_build_total_depositors_series_uses_current_not_cumulative_depositors() {
         let snapshots = vec![
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-17".to_string(),
+                depositors_count: 10,
                 cumulative_depositors: 10,
                 ..snapshot(1, 0, 0)
             },
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-18".to_string(),
+                depositors_count: 8,
                 cumulative_depositors: 12,
                 ..snapshot(1, 0, 0)
             },
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-19".to_string(),
+                depositors_count: 9,
                 cumulative_depositors: 13,
                 ..snapshot(1, 0, 0)
             },
         ];
         let series = build_total_depositors_series(&snapshots).unwrap();
-        // Cumulative depositors only grow (all-time unique depositors).
+        // The chart's secondary series is current depositors. It may fall as
+        // people complete withdrawals even while all-time unique grows.
         assert_eq!(series.get("2026-02-17"), Some(&10));
-        assert_eq!(series.get("2026-02-18"), Some(&12));
-        assert_eq!(series.get("2026-02-19"), Some(&13));
+        assert_eq!(series.get("2026-02-18"), Some(&8));
+        assert_eq!(series.get("2026-02-19"), Some(&9));
+        assert_eq!(snapshots[2].cumulative_depositors, 13);
     }
 
     #[test]
