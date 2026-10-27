@@ -204,6 +204,7 @@ pub struct ClusterResponse {
     pub owner_lock_hash: Option<String>,
     pub owner_address: Option<String>,
     pub spores_count: i32,
+    pub total_count: i64,
     pub holders_count: i64,
     pub activities_count: i64,
     /// None when spores reference an ID with no minted cluster cell.
@@ -754,6 +755,7 @@ fn build_cluster_responses_from_cached_entries(
                 .map(|h| format!("0x{}", hex::encode(h))),
             owner_address: None,
             spores_count: spores_count as i32,
+            total_count: cluster_aggregate.map(|a| a.total_count).unwrap_or(0),
             holders_count: cluster_aggregate.map(|a| a.owner_count).unwrap_or(0),
             activities_count: 0,
             created_at_block,
@@ -1038,7 +1040,6 @@ async fn get_spores_by_cluster(
     ))
 }
 
-/// Get cluster — point lookup + count from secondary index (no full scan).
 /// One existence/source contract for detail, insights and full feeds. A
 /// cluster may be empty, inferred from Spore membership, or virtual (sole).
 pub(crate) fn read_cluster(
@@ -1094,16 +1095,19 @@ async fn get_cluster(
 
     let read_state = state.clone();
     let read_id = id.clone();
-    let (cluster_entry, cluster_aggregate) =
-        tokio::task::spawn_blocking(move || read_cluster(&read_state, &read_id))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))??;
+    let (cluster_entry, cluster_aggregate, current) = tokio::task::spawn_blocking(move || {
+        let (entry, aggregate) = read_cluster(&read_state, &read_id)?;
+        let current = super::asset_history::cluster_current(&read_state, &read_id)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+        Ok::<_, ApiRouteError>((entry, aggregate, current))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
 
     // Read counts from pre-computed aggregate (zero RocksDB scans). The
     // displayed count is the LIVE count: every neighbouring field (items list,
     // holders, composition) is live-based, and presenting the ever-minted
-    // total here contradicted them. The total remains available on the
-    // /assets aggregate surface as totalCount.
+    // total here contradicted them. totalCount separately exposes all minted items.
     let spores_count = cluster_aggregate
         .as_ref()
         .map(|agg| agg.live_count)
@@ -1121,21 +1125,17 @@ async fn get_cluster(
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (name, description, owner_lock_hash, created_at_block) = if is_sole_spores_sentinel(&id) {
+    let (name, description, created_at_block) = if is_sole_spores_sentinel(&id) {
         (
             Some("Sole Spores".to_string()),
             Some("Spores not belonging to any cluster".to_string()),
-            None,
             None,
         )
     } else {
         let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
         let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
-        let owner_lock_hash = cluster_entry
-            .as_ref()
-            .and_then(|e| e.owner_lock_hash.clone());
         let created_at_block = cluster_entry.as_ref().map(|e| e.created_at_block);
-        (name, description, owner_lock_hash, created_at_block)
+        (name, description, created_at_block)
     };
     let owned_capacity = cluster_aggregate
         .as_ref()
@@ -1148,11 +1148,17 @@ async fn get_cluster(
         cluster_id: format!("0x{}", hex::encode(&id)),
         name,
         description,
-        owner_lock_hash: owner_lock_hash
+        owner_lock_hash: current
             .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
-        owner_address: None,
+            .map(|cell| cell.response.owner_lock_hash.clone()),
+        owner_address: current
+            .as_ref()
+            .map(|cell| cell.response.owner_address.clone()),
         spores_count: spores_count as i32,
+        total_count: cluster_aggregate
+            .as_ref()
+            .map(|a| a.total_count)
+            .unwrap_or(0),
         holders_count,
         activities_count,
         created_at_block,
@@ -1683,27 +1689,17 @@ async fn get_cluster_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<super::asset_calendar::CompletedCapacityChart> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
     let id = parse_cluster_id_param(&cluster_id)?;
 
-    let store = state.store.clone();
+    let state_c = state.clone();
     let id_c = id.clone();
-    let cluster_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+    let (cluster_entry, _) = tokio::task::spawn_blocking(move || read_cluster(&state_c, &id_c))
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let spores_count = tokio::task::spawn_blocking(move || store.count_spores_in_cluster(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
-        return Err(ApiError::not_found("Cluster not found"));
-    }
+        .map_err(|e| ApiError::internal(e.to_string()))??;
 
     let name = if is_sole_spores_sentinel(&id) {
         "Sole Spores".to_string()
@@ -1713,6 +1709,20 @@ async fn get_cluster_capacity_chart(
             .and_then(|e| e.name.clone())
             .unwrap_or_else(|| "Spore Cluster".to_string())
     };
+    let calendar = super::asset_calendar::CapacityCalendar::read(&state.store, from_date, to_date)?;
+    if calendar.is_empty() {
+        let chart = build_capacity_history_chart_with_initial(
+            Vec::new(),
+            format!("{name} Capacity History"),
+            0,
+            0,
+            None,
+            None,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        return ok(calendar.wrap(chart));
+    }
+    let to_date = Some(calendar.to);
     let store = state.store.clone();
     let id_c = id.clone();
     let daily = tokio::task::spawn_blocking(move || {
@@ -1743,31 +1753,33 @@ async fn get_cluster_capacity_chart(
         (0, 0)
     };
 
-    ok(build_capacity_history_chart_with_initial(
-        daily
-            .into_iter()
-            .map(|(date, delta)| {
-                (
-                    date,
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                )
-            })
-            .collect(),
-        format!("{name} Capacity History"),
-        initial_capacity,
-        initial_used,
-        from_date,
-        to_date,
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?)
+    ok(calendar.wrap(
+        build_capacity_history_chart_with_initial(
+            daily
+                .into_iter()
+                .map(|(date, delta)| {
+                    (
+                        date,
+                        delta.owned_capacity_delta,
+                        delta.owned_knowledge_delta,
+                    )
+                })
+                .collect(),
+            format!("{name} Capacity History"),
+            initial_capacity,
+            initial_used,
+            from_date,
+            to_date,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?,
+    ))
 }
 
 async fn get_spore_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<super::asset_calendar::CompletedCapacityChart> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -1783,6 +1795,20 @@ async fn get_spore_capacity_chart(
         return Err(ApiError::not_found("Spore not found"));
     }
 
+    let calendar = super::asset_calendar::CapacityCalendar::read(&state.store, from_date, to_date)?;
+    if calendar.is_empty() {
+        let chart = build_capacity_history_chart_with_initial(
+            Vec::new(),
+            "Spore Capacity History".to_string(),
+            0,
+            0,
+            None,
+            None,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        return ok(calendar.wrap(chart));
+    }
+    let to_date = Some(calendar.to);
     let store = state.store.clone();
     let id_c = id.clone();
     let daily = tokio::task::spawn_blocking(move || {
@@ -1813,24 +1839,26 @@ async fn get_spore_capacity_chart(
         (0, 0)
     };
 
-    ok(build_capacity_history_chart_with_initial(
-        daily
-            .into_iter()
-            .map(|(date, delta)| {
-                (
-                    date,
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                )
-            })
-            .collect(),
-        "Spore Capacity History".to_string(),
-        initial_capacity,
-        initial_used,
-        from_date,
-        to_date,
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?)
+    ok(calendar.wrap(
+        build_capacity_history_chart_with_initial(
+            daily
+                .into_iter()
+                .map(|(date, delta)| {
+                    (
+                        date,
+                        delta.owned_capacity_delta,
+                        delta.owned_knowledge_delta,
+                    )
+                })
+                .collect(),
+            "Spore Capacity History".to_string(),
+            initial_capacity,
+            initial_used,
+            from_date,
+            to_date,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?,
+    ))
 }
 
 async fn get_spores_by_owner(

@@ -3261,7 +3261,7 @@ async fn get_object_collection_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<super::asset_calendar::CompletedCapacityChart> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -3272,6 +3272,25 @@ async fn get_object_collection_capacity_chart(
     let resolved = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
     let agg = resolved.aggregate;
 
+    let raw_standard = agg.standard.asset_standard().to_string();
+    let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
+    let title = resolve_object_collection_name(&standard, agg.name.as_deref())
+        .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
+
+    let calendar = super::asset_calendar::CapacityCalendar::read(&state.store, from_date, to_date)?;
+    if calendar.is_empty() {
+        let chart = build_capacity_history_chart_with_initial(
+            Vec::new(),
+            format!("{title} Capacity History"),
+            0,
+            0,
+            None,
+            None,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        return ok(calendar.wrap(chart));
+    }
+    let to_date = Some(calendar.to);
     let daily = collection_capacity_deltas(
         state.store.as_ref(),
         &collection_id_bytes,
@@ -3305,20 +3324,18 @@ async fn get_object_collection_capacity_chart(
     } else {
         (0, 0)
     };
-    let raw_standard = agg.standard.asset_standard().to_string();
-    let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
-    let title = resolve_object_collection_name(&standard, agg.name.as_deref())
-        .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
 
-    ok(build_capacity_history_chart_with_initial(
-        daily,
-        format!("{title} Capacity History"),
-        initial_capacity,
-        initial_used,
-        from_date,
-        to_date,
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?)
+    ok(calendar.wrap(
+        build_capacity_history_chart_with_initial(
+            daily,
+            format!("{title} Capacity History"),
+            initial_capacity,
+            initial_used,
+            from_date,
+            to_date,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?,
+    ))
 }
 
 #[cfg(test)]

@@ -101,6 +101,8 @@ async fn test_inferred_cluster_without_cluster_cell_has_null_creation_block() {
 #[tokio::test]
 async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let store = test_store();
+    // The last delta day is complete only after the indexed clock advances.
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-18T00:00:00Z"))]);
     let cluster_id = [0x42u8; 32];
     let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
 
@@ -503,6 +505,8 @@ async fn test_spore_cluster_activities_supports_action_filter() {
 #[tokio::test]
 async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     let store = test_store();
+    // The last delta day is complete only after the indexed clock advances.
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-18T00:00:00Z"))]);
     let spore_id = [0x77u8; 32];
     let spore_id_hex = format!("0x{}", hex::encode(spore_id));
 

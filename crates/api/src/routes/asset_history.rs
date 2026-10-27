@@ -87,6 +87,169 @@ fn script(code: &[u8], hash_type: i16, args: &[u8]) -> anyhow::Result<ScriptResp
     })
 }
 
+pub(crate) fn canonical_version_at(
+    state: &AppState,
+    id: &[u8],
+    tx_hash: &[u8],
+    index: i16,
+) -> anyhow::Result<CanonicalCellVersion> {
+    let context = format!(
+        "item=0x{} outpoint=0x{}:{index}",
+        hex::encode(id),
+        hex::encode(tx_hash)
+    );
+    ensure!(tx_hash.len() == 32 && index >= 0, "invalid {context}");
+    let live = state
+        .store
+        .get_cell(tx_hash, index, &state.append_only_store)
+        .with_context(|| context.clone())?;
+    let consumed = state
+        .store
+        .get_consumed_cell_info(tx_hash, index, &state.append_only_store)
+        .with_context(|| context.clone())?;
+    let (cell, block, consumed_by_tx, consumed_at_block, consumer_location, is_live) =
+        match (live, consumed) {
+            (Some(_), Some(_)) => {
+                return Err(anyhow!(
+                    "both live and consumed canonical markers: {context}"
+                ))
+            }
+            (None, None) => {
+                return Err(anyhow!(
+                    "item reverse index has no canonical marker: {context}"
+                ))
+            }
+            (Some(c), None) => (c.cell, c.created_at_block, None, None, None, true),
+            (None, Some(c)) => {
+                let consumer = c
+                    .consumed_by_tx
+                    .ok_or_else(|| anyhow!("consumed marker missing consumer: {context}"))?;
+                let (number, consumer_index, _) = state
+                    .store
+                    .get_tx_by_hash(&consumer)?
+                    .ok_or_else(|| anyhow!("consumer missing canonical transaction: {context}"))?;
+                ensure!(
+                    number == c.consumed_at_block && number >= c.created_at_block,
+                    "consumer block mismatch: {context}"
+                );
+                (
+                    c.cell,
+                    c.created_at_block,
+                    Some(consumer),
+                    Some(c.consumed_at_block),
+                    Some((number, consumer_index)),
+                    false,
+                )
+            }
+        };
+    let (tx_block, tx_index, tx) = state
+        .store
+        .get_tx_by_hash(tx_hash)?
+        .ok_or_else(|| anyhow!("creation missing canonical transaction: {context}"))?;
+    ensure!(
+        tx_block == block && index < tx.outputs_count,
+        "creation location/output mismatch: {context}"
+    );
+    if let Some(consumer) = consumer_location {
+        ensure!(
+            consumer > (tx_block, tx_index),
+            "invalid consumer order: {context}, creation={tx_block}:{tx_index}, consumer={}:{}",
+            consumer.0,
+            consumer.1
+        );
+    }
+    let lock = script(&cell.lock_code_hash, cell.lock_hash_type, &cell.lock_args)
+        .with_context(|| context.clone())?;
+    ensure!(
+        crate::utils::address::compute_script_hash(
+            &cell.lock_code_hash,
+            u8::try_from(cell.lock_hash_type)?,
+            &cell.lock_args
+        ) == cell.lock_script_hash,
+        "lock script hash mismatch: {context}"
+    );
+    let type_script = match (
+        &cell.type_code_hash,
+        cell.type_hash_type,
+        &cell.type_args,
+        &cell.type_script_hash,
+    ) {
+        (Some(code), Some(ht), Some(args), Some(hash)) => {
+            let response = script(code, ht, args).with_context(|| context.clone())?;
+            ensure!(
+                crate::utils::address::compute_script_hash(code, u8::try_from(ht)?, args) == *hash,
+                "type script hash mismatch: {context}"
+            );
+            Some(response)
+        }
+        (None, None, None, None) => None,
+        _ => return Err(anyhow!("partial type script: {context}")),
+    };
+    let data_bytes = usize::try_from(cell.data_size)
+        .with_context(|| format!("negative data length: {context}"))?;
+    let lock_bytes = 33 + cell.lock_args.len();
+    let type_bytes = cell.type_args.as_ref().map_or(0, |args| 33 + args.len());
+    let occupied = i64::try_from(8 + lock_bytes + type_bytes + data_bytes)?
+        .checked_mul(100_000_000)
+        .ok_or_else(|| anyhow!("occupied capacity overflow: {context}"))?;
+    ensure!(
+        cell.occupied_capacity == occupied && cell.capacity >= occupied,
+        "cell occupied/capacity mismatch: {context}, stored={} actual={occupied} capacity={}",
+        cell.occupied_capacity,
+        cell.capacity
+    );
+    let owner_address = crate::utils::address::encode_lock_address(
+        &cell.lock_script_hash,
+        &cell.lock_code_hash,
+        cell.lock_hash_type,
+        &cell.lock_args,
+        &state.ckb_network,
+    )?;
+    Ok(CanonicalCellVersion {
+        response: CellVersion {
+            tx_hash: format!("0x{}", hex::encode(tx_hash)),
+            output_index: index,
+            block_number: block,
+            tx_index,
+            timestamp: tx.timestamp.to_string(),
+            is_live,
+            consumed_by_tx: consumed_by_tx
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            consumed_at_block,
+            owner_lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
+            owner_address,
+            capacity: cell.capacity.to_string(),
+            occupied_capacity: occupied.to_string(),
+            lock,
+            type_script,
+            anatomy: CellAnatomy {
+                capacity_bytes: 8,
+                lock_bytes,
+                type_bytes,
+                data_bytes,
+            },
+            data_hash: cell
+                .data_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            lock_name: state
+                .store
+                .get_script_info(&cell.lock_code_hash)?
+                .and_then(|info| info.name),
+            type_name: match &cell.type_code_hash {
+                Some(code) => state
+                    .store
+                    .get_script_info(code)?
+                    .and_then(|info| info.name),
+                None => None,
+            },
+        },
+        tx_hash: tx_hash.to_vec(),
+        cell,
+    })
+}
+
 pub(crate) fn canonical_versions(
     state: &AppState,
     id: &[u8],
@@ -113,142 +276,7 @@ pub(crate) fn canonical_versions(
             forward.as_deref() == Some(id),
             "item reverse history disagrees with forward outpoint index: {context}"
         );
-        let live = state
-            .store
-            .get_cell(&tx_hash, index, &state.append_only_store)
-            .with_context(|| context.clone())?;
-        let consumed = state
-            .store
-            .get_consumed_cell_info(&tx_hash, index, &state.append_only_store)
-            .with_context(|| context.clone())?;
-        let (cell, block, consumed_by_tx, consumed_at_block, consumer_location, is_live) =
-            match (live, consumed) {
-                (Some(_), Some(_)) => {
-                    return Err(anyhow!(
-                        "both live and consumed canonical markers: {context}"
-                    ))
-                }
-                (None, None) => {
-                    return Err(anyhow!(
-                        "item reverse index has no canonical marker: {context}"
-                    ))
-                }
-                (Some(c), None) => (c.cell, c.created_at_block, None, None, None, true),
-                (None, Some(c)) => {
-                    let consumer = c
-                        .consumed_by_tx
-                        .ok_or_else(|| anyhow!("consumed marker missing consumer: {context}"))?;
-                    let (number, consumer_index, _) =
-                        state.store.get_tx_by_hash(&consumer)?.ok_or_else(|| {
-                            anyhow!("consumer missing canonical transaction: {context}")
-                        })?;
-                    ensure!(
-                        number == c.consumed_at_block && number >= c.created_at_block,
-                        "consumer block mismatch: {context}"
-                    );
-                    (
-                        c.cell,
-                        c.created_at_block,
-                        Some(consumer),
-                        Some(c.consumed_at_block),
-                        Some((number, consumer_index)),
-                        false,
-                    )
-                }
-            };
-        let (tx_block, tx_index, tx) = state
-            .store
-            .get_tx_by_hash(&tx_hash)?
-            .ok_or_else(|| anyhow!("creation missing canonical transaction: {context}"))?;
-        ensure!(
-            tx_block == block && index < tx.outputs_count,
-            "creation location/output mismatch: {context}"
-        );
-        if let Some(consumer) = consumer_location {
-            ensure!(
-                consumer > (tx_block, tx_index),
-                "invalid consumer order: {context}, creation={tx_block}:{tx_index}, consumer={}:{}",
-                consumer.0,
-                consumer.1
-            );
-        }
-        let lock = script(&cell.lock_code_hash, cell.lock_hash_type, &cell.lock_args)
-            .with_context(|| context.clone())?;
-        let type_script = match (
-            &cell.type_code_hash,
-            cell.type_hash_type,
-            &cell.type_args,
-            &cell.type_script_hash,
-        ) {
-            (Some(code), Some(ht), Some(args), Some(_)) => {
-                Some(script(code, ht, args).with_context(|| context.clone())?)
-            }
-            (None, None, None, None) => None,
-            _ => return Err(anyhow!("partial type script: {context}")),
-        };
-        let data_bytes = usize::try_from(cell.data_size)
-            .with_context(|| format!("negative data length: {context}"))?;
-        let lock_bytes = 33 + cell.lock_args.len();
-        let type_bytes = cell.type_args.as_ref().map_or(0, |args| 33 + args.len());
-        let occupied = i64::try_from(8 + lock_bytes + type_bytes + data_bytes)?
-            .checked_mul(100_000_000)
-            .ok_or_else(|| anyhow!("occupied capacity overflow: {context}"))?;
-        ensure!(
-            cell.occupied_capacity == occupied && cell.capacity >= occupied,
-            "cell occupied/capacity mismatch: {context}, stored={} actual={occupied} capacity={}",
-            cell.occupied_capacity,
-            cell.capacity
-        );
-        let owner_address = crate::utils::address::encode_lock_address(
-            &cell.lock_script_hash,
-            &cell.lock_code_hash,
-            cell.lock_hash_type,
-            &cell.lock_args,
-            &state.ckb_network,
-        )?;
-        versions.push(CanonicalCellVersion {
-            response: CellVersion {
-                tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                output_index: index,
-                block_number: block,
-                tx_index,
-                timestamp: tx.timestamp.to_string(),
-                is_live,
-                consumed_by_tx: consumed_by_tx
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
-                consumed_at_block,
-                owner_lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
-                owner_address,
-                capacity: cell.capacity.to_string(),
-                occupied_capacity: occupied.to_string(),
-                lock,
-                type_script,
-                anatomy: CellAnatomy {
-                    capacity_bytes: 8,
-                    lock_bytes,
-                    type_bytes,
-                    data_bytes,
-                },
-                data_hash: cell
-                    .data_hash
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
-                lock_name: state
-                    .store
-                    .get_script_info(&cell.lock_code_hash)?
-                    .and_then(|info| info.name),
-                type_name: match &cell.type_code_hash {
-                    Some(code) => state
-                        .store
-                        .get_script_info(code)?
-                        .and_then(|info| info.name),
-                    None => None,
-                },
-            },
-            tx_hash,
-            cell,
-        });
+        versions.push(canonical_version_at(state, id, &tx_hash, index)?);
     }
     versions.sort_by_key(|v| {
         (
@@ -400,6 +428,10 @@ protocol_handler!(dotcell_protocol, DotCell);
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
+            "/spore/clusters/{cluster_id}/protocol",
+            get(super::asset_protocol::cluster_protocol),
+        )
+        .route(
             "/assets/identities/did/pds",
             get(super::asset_protocol::pds_groups),
         )
@@ -442,4 +474,51 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/assets/identities/dotcell/items/{id_or_name}/cell-versions",
             get(dotcell),
         )
+}
+
+/// Cluster metadata has no item reverse index. Current physical existence is
+/// instead proved by the canonical live type-instance index, across every
+/// Cluster deployment recognized by the same registry as the owning parser.
+pub(crate) fn cluster_current(
+    state: &AppState,
+    id: &[u8],
+) -> anyhow::Result<Option<CanonicalCellVersion>> {
+    use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
+    let mut found = None;
+    for (code, _) in PROTOCOL_REGISTRY
+        .iter()
+        .filter(|(_, kind)| *kind == ProtocolScript::Cluster)
+    {
+        for hash_type in
+            (0..=u8::MAX).filter(|byte| ckbadger_common::hash_type_label(*byte).is_some())
+        {
+            let type_hash = crate::utils::address::compute_script_hash(code, hash_type, id);
+            for row in state
+                .store
+                .prefix_iterator_cf(state.store.cf_cell_by_type(), &type_hash)
+            {
+                let (key, value) = row?;
+                if !key.starts_with(&type_hash) {
+                    break;
+                }
+                ensure!(
+                    key.len() == 74 && value.is_empty(),
+                    "malformed cluster live type index: cluster=0x{} key=0x{}",
+                    hex::encode(id),
+                    hex::encode(&key)
+                );
+                let block = i64::from_be_bytes(key[32..40].try_into()?);
+                let (tx, index) = ckbadger_store::keys::decode_outpoint(&key[40..]);
+                let version = canonical_version_at(state, id, &tx, index)?;
+                ensure!(version.response.is_live && version.response.block_number==block && version.cell.type_script_hash.as_deref()==Some(type_hash.as_slice()),"cluster live type index disagrees with canonical cell: cluster=0x{} outpoint=0x{}:{index}",hex::encode(id),hex::encode(tx));
+                ensure!(
+                    found.is_none(),
+                    "multiple live cluster cells: cluster=0x{}",
+                    hex::encode(id)
+                );
+                found = Some(version);
+            }
+        }
+    }
+    Ok(found)
 }

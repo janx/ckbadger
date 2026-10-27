@@ -54,6 +54,10 @@ fn cell(id: &[u8], capacity: i64, owner: u8) -> LiveCellInfo {
 }
 
 fn history_fixture() -> (Arc<CkbadgerStore>, Vec<u8>) {
+    history_fixture_with_corrupt_script(None)
+}
+
+fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerStore>, Vec<u8>) {
     let store = test_store();
     let id = vec![0x44; 20];
     let mint = vec![0x51; 32];
@@ -82,7 +86,14 @@ fn history_fixture() -> (Arc<CkbadgerStore>, Vec<u8>) {
         100,
         Some(&transfer),
     );
-    batch.put_cell(&transfer, 0, &cell(&id, 320_00000000, 2), 100);
+    let mut current = cell(&id, 320_00000000, 2);
+    match corrupt {
+        Some("lock") => current.lock_args[0] ^= 1,
+        Some("type") => current.type_args.as_mut().unwrap()[0] ^= 1,
+        None => {}
+        Some(other) => panic!("invalid fixture corruption {other}"),
+    }
+    batch.put_cell(&transfer, 0, &current, 100);
     seed_tx(&mut batch, &mint, 100, 1);
     seed_tx(&mut batch, &transfer, 100, 2);
     // Immutable payload left by a reorg has no canonical reverse index/marker.
@@ -471,11 +482,67 @@ async fn spore_genetics_fixture_options(
             )
             .unwrap();
     }
-    let chain = seed_ckb_chain(&[BlockBuilder::default()
-        .number(100u64.pack())
-        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
-        .transactions(transactions)
-        .build()]);
+    // The collection's own Cell is separate from member holdings and their reverse index.
+    let mut entry = store.get_spore(&cluster).unwrap().unwrap();
+    let raw = mol_table(&[
+        mol_bytes(entry.name.as_ref().unwrap().as_bytes()),
+        mol_bytes(entry.description.as_ref().unwrap().as_bytes()),
+        vec![],
+    ]);
+    let code = hex::decode(
+        ckbadger_indexer::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2.trim_start_matches("0x"),
+    )
+    .unwrap();
+    let mut payload = cell(&cluster, 1000_00000000, 1);
+    payload.type_code_hash = Some(code.clone());
+    payload.type_script_hash = Some(compute_script_hash(&code, 1, &cluster));
+    payload.data_size = raw.len() as i32;
+    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
+    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+    let script = |code: &[u8], args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code).unwrap())
+            .hash_type(1u8.into())
+            .args(Bytes::copy_from_slice(args).pack())
+            .build()
+    };
+    let cluster_tx = TransactionBuilder::default()
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity((payload.capacity as u64).pack())
+                .lock(script(&payload.lock_code_hash, &payload.lock_args))
+                .type_(Some(script(&code, &cluster)).pack())
+                .build(),
+        )
+        .output_data(Bytes::from(raw).pack())
+        .build();
+    let cluster_tx_hash = cluster_tx.hash().as_slice().to_vec();
+    entry.created_at_tx = cluster_tx_hash.clone();
+    entry.owner_lock_hash = Some(payload.lock_script_hash.clone());
+    entry.is_live = true;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_spore(&cluster, &entry);
+    batch.put_cell(&cluster_tx_hash, 0, &payload, 99);
+    batch.put_cell_by_type(
+        payload.type_script_hash.as_ref().unwrap(),
+        99,
+        &cluster_tx_hash,
+        0,
+    );
+    seed_tx(&mut batch, &cluster_tx_hash, 99, 0);
+    batch.commit().unwrap();
+    let chain = seed_ckb_chain(&[
+        BlockBuilder::default()
+            .number(99u64.pack())
+            .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+            .transaction(cluster_tx)
+            .build(),
+        BlockBuilder::default()
+            .number(100u64.pack())
+            .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+            .transactions(transactions)
+            .build(),
+    ]);
     create_router(test_config_with_ckb_db_path(
         store.clone(),
         store,
@@ -492,6 +559,15 @@ async fn collection_insights_count_full_scope_and_gallery_filters_before_cursor(
     let (status, insights) = get_json(&app, &format!("/spore/clusters/0x{cluster}/insights")).await;
     assert_eq!(status, StatusCode::OK, "{insights}");
     capture_producer("collection-insights", &insights);
+    let (status, gallery) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{cluster}/gallery?limit=100"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{gallery}");
+    assert_eq!(gallery["data"].as_array().unwrap().len(), 8);
+    capture_producer("collection-gallery", &gallery);
+
     assert_eq!(insights["genetics"]["liveItems"], 8);
     assert_eq!(insights["genetics"]["decodedItems"], 8);
     assert_eq!(
@@ -1433,6 +1509,25 @@ async fn same_spore_producer_detail_protocol_genetics_and_cell_versions_agree() 
     capture_producer("cluster-detail", &cluster);
     assert_eq!(cluster["ownedCapacity"], (500_00000000i128 * 8).to_string());
     assert_eq!(cluster["composition"]["unknownCount"], 8);
+    let (status, cluster_protocol) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}/protocol", hex::encode([0x77; 32])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cluster_protocol}");
+    capture_producer("cluster-protocol", &cluster_protocol);
+    assert_eq!(
+        cluster_protocol["current"]["decoded"]["description"],
+        cluster["description"]
+    );
+    assert_eq!(
+        cluster_protocol["current"]["cell"]["ownerLockHash"],
+        cluster["ownerLockHash"]
+    );
+    assert_eq!(
+        cluster_protocol["current"]["cell"]["blockNumber"],
+        cluster["createdAtBlock"]
+    );
     let (status, collection) = get_json(
         &app,
         &format!("/assets/objects/0x{}", hex::encode([0x77; 32])),
@@ -1441,4 +1536,322 @@ async fn same_spore_producer_detail_protocol_genetics_and_cell_versions_agree() 
     assert_eq!(status, StatusCode::OK, "{collection}");
     capture_producer("object-collection-detail", &collection);
     assert_eq!(collection["ownedCapacity"], cluster["ownedCapacity"]);
+}
+
+#[tokio::test]
+async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-25T00:00:00Z")),
+            (1, utc_ms("2026-10-27T00:00:00Z")),
+            (2, utc_ms("2026-10-24T00:00:00Z")),
+        ],
+    );
+    let cluster = [0x77; 32];
+    let item = [0x78; 32];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_spore(
+        &cluster,
+        &ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: None,
+            name: Some("Calendar".into()),
+            description: None,
+            is_live: false,
+            created_at_block: 0,
+            created_at_tx: vec![0x11; 32],
+            extra: ObjectExtra::SporeCluster,
+        },
+    );
+    batch.put_spore(
+        &item,
+        &ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: Some(cluster.to_vec()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x55; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 0,
+            created_at_tx: vec![0x12; 32],
+            extra: ObjectExtra::Spore {
+                content_type: "text/plain".into(),
+                content_length: 0,
+                media_profile: SporeMediaProfile::default(),
+            },
+        },
+    );
+    batch.put_cluster_aggregate(
+        &cluster,
+        &ClusterAggregate {
+            total_count: 3,
+            live_count: 1,
+            owner_count: 1,
+            unknown_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    for (date, capacity, used) in [(20261025, 100, 50), (20261026, 20, 10), (20261027, 999, 99)] {
+        store
+            .put_spore_daily_delta(
+                &item,
+                date,
+                &SporeDailyDelta {
+                    owned_capacity_delta: capacity,
+                    owned_knowledge_delta: used,
+                },
+            )
+            .unwrap();
+        store
+            .put_cluster_daily_delta(
+                &cluster,
+                date,
+                &ClusterDailyDelta {
+                    owned_capacity_delta: capacity,
+                    owned_knowledge_delta: used,
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, detail) =
+        get_json(&app, &format!("/spore/clusters/0x{}", hex::encode(cluster))).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    // total/live distinction is asserted after the calendar checks below.
+    assert_eq!(detail["sporesCount"], 1);
+    for (name, base) in [
+        (
+            "cluster-capacity-history",
+            format!("/spore/clusters/0x{}", hex::encode(cluster)),
+        ),
+        (
+            "spore-capacity-history",
+            format!("/spore/objects/0x{}", hex::encode(item)),
+        ),
+        (
+            "object-collection-capacity-history",
+            format!("/assets/objects/0x{}", hex::encode(cluster)),
+        ),
+    ] {
+        let (status, json) = get_json(
+            &app,
+            &format!("{base}/charts/capacity-history?to=2026-10-29"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["data"].as_array().unwrap().len(), 2, "{json}");
+        assert_eq!(json["data"][1]["date"], "2026-10-26");
+        assert_eq!(
+            json["data"][1]["values"],
+            serde_json::json!({"used":"60","unused":"60"})
+        );
+        assert_eq!(json["completeThrough"], "2026-10-26");
+        assert_eq!(json["anchor"]["blockNumber"], 2);
+        assert_eq!(json["source"], "indexedChainTimeUtc8");
+        capture_producer(name, &json);
+        let (status, json) = get_json(
+            &app,
+            &format!("{base}/charts/capacity-history?from=2026-10-27&to=2026-10-29"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["data"], serde_json::json!([]));
+    }
+    assert_eq!(detail["totalCount"], 3);
+}
+
+async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    let id = [0x77; 32];
+    let description=serde_json::json!({"dob":{"ver":0,"decoder":{"type":"code_hash","hash":"13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["Face","String",0,1,"options",["Red","Blue"]]]}}).to_string();
+    let raw = mol_table(&[
+        mol_bytes(b"Genes"),
+        mol_bytes(description.as_bytes()),
+        vec![],
+    ]);
+    let code = hex::decode(
+        ckbadger_indexer::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2.trim_start_matches("0x"),
+    )
+    .unwrap();
+    let mut payload = cell(&id, 1000_00000000, 1);
+    payload.type_code_hash = Some(code.clone());
+    payload.type_script_hash = Some(compute_script_hash(&code, 1, &id));
+    payload.data_size = raw.len() as i32;
+    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
+    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+    let script = |code: &[u8], args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code).unwrap())
+            .hash_type(1u8.into())
+            .args(Bytes::copy_from_slice(args).pack())
+            .build()
+    };
+    let tx = TransactionBuilder::default()
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity((payload.capacity as u64).pack())
+                .lock(script(&payload.lock_code_hash, &payload.lock_args))
+                .type_(Some(script(&code, &id)).pack())
+                .build(),
+        )
+        .output_data(Bytes::from(raw).pack())
+        .build();
+    let hash = tx.hash().as_slice().to_vec();
+    let chain = seed_ckb_chain(&[BlockBuilder::default()
+        .number(100u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build()]);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_spore(
+        &id,
+        &ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(payload.lock_script_hash.clone()),
+            name: Some("Genes".into()),
+            description: Some(description),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: hash.clone(),
+            extra: ObjectExtra::SporeCluster,
+        },
+    );
+    if mode > 0 {
+        batch.put_cell(&hash, 0, &payload, 100);
+        batch.put_cell_by_type(
+            payload.type_script_hash.as_ref().unwrap(),
+            if mode == 2 { 99 } else { 100 },
+            &hash,
+            0,
+        );
+        seed_tx(&mut batch, &hash, 100, 1);
+    }
+    if mode == 3 {
+        batch.put_cell(&[0xff; 32], 0, &payload, 100);
+        batch.put_cell_by_type(
+            payload.type_script_hash.as_ref().unwrap(),
+            100,
+            &[0xff; 32],
+            0,
+        );
+        seed_tx(&mut batch, &[0xff; 32], 100, 2);
+    }
+    batch.commit().unwrap();
+    create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await
+}
+#[tokio::test]
+async fn cluster_protocol_reads_current_type_index_and_never_item_reverse_history() {
+    let app = cluster_protocol_fixture(1).await;
+    let url = format!("/spore/clusters/0x{}", hex::encode([0x77; 32]));
+    let (status, json) = get_json(&app, &format!("{url}/protocol")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["current"]["decoded"]["name"], "Genes");
+    assert!(json["current"]["decoded"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("dob"));
+    assert_eq!(json["current"]["cell"]["capacity"], "100000000000");
+    assert_eq!(json["source"], "canonicalLiveTypeIndex");
+    let (status, detail) = get_json(&app, &url).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["ownerLockHash"],
+        json["current"]["cell"]["ownerLockHash"]
+    );
+    assert_eq!(
+        detail["ownerAddress"],
+        json["current"]["cell"]["ownerAddress"]
+    );
+}
+#[tokio::test]
+async fn cluster_metadata_does_not_imply_a_current_cell_or_owner() {
+    let app = cluster_protocol_fixture(0).await;
+    let url = format!("/spore/clusters/0x{}", hex::encode([0x77; 32]));
+    let (status, json) = get_json(&app, &format!("{url}/protocol")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["current"].is_null());
+    let (status, detail) = get_json(&app, &url).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert!(detail["ownerLockHash"].is_null(), "{detail}");
+    assert!(detail["ownerAddress"].is_null());
+}
+#[tokio::test]
+async fn cluster_current_cell_rejects_stale_type_key_and_multiple_live_cells() {
+    for mode in [2, 3] {
+        let app = cluster_protocol_fixture(mode).await;
+        let (status, json) = get_json(
+            &app,
+            &format!("/spore/clusters/0x{}/protocol", hex::encode([0x77; 32])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        assert!(
+            json["message"].as_str().unwrap().contains(if mode == 2 {
+                "disagrees"
+            } else {
+                "multiple live"
+            }),
+            "{json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn canonical_versions_reject_payload_script_hash_mismatch() {
+    for kind in ["lock", "type"] {
+        let (store, id) = history_fixture_with_corrupt_script(Some(kind));
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(
+            &app,
+            &format!(
+                "/assets/identities/did/items/0x{}/cell-versions",
+                hex::encode(id)
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{kind}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("{kind} script hash mismatch")),
+            "{json}"
+        );
+        assert!(
+            message.contains(&format!("outpoint=0x{}:0", hex::encode([0x52; 32]))),
+            "{json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cluster_capacity_chart_rejects_spore_item_namespace() {
+    let app = spore_genetics_fixture(false).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/spore/clusters/0x{}/charts/capacity-history",
+            hex::encode([2; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
 }

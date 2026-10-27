@@ -558,6 +558,36 @@ fn pds_groups_read(state: &crate::AppState) -> crate::response::ApiResult<Value>
     )
 }
 
+pub(crate) async fn cluster_protocol(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
+    axum::extract::Path(raw): axum::extract::Path<String>,
+) -> crate::response::ApiResult<Value> {
+    tokio::task::spawn_blocking(move||{
+        let id=super::spore::parse_cluster_id_param(&raw)?;
+        super::spore::read_cluster(&state,&id)?;
+        let result=(||->Result<Value>{
+            let current=super::asset_history::cluster_current(&state,&id)?;
+            let Some(current)=current else {return Ok(serde_json::json!({"kind":"spore_cluster","clusterId":format!("0x{}",hex::encode(&id)),"source":"canonicalLiveTypeIndex","current":null}))};
+            let tx=raw_transaction(&state,&current)?;
+            let index=usize::try_from(current.response.output_index)?;
+            let data=hex::decode(tx.outputs_data[index].trim_start_matches("0x"))?;
+            let parsed=ckbadger_indexer::parser::SporeParser::parse_cluster_cell(&tx.outputs[index],&tx.outputs_data[index]).ok_or_else(||anyhow::anyhow!("invalid cluster payload"))?;
+            anyhow::ensure!(parsed.cluster_id==id,"cluster payload ID disagrees with canonical index");
+            let parts=molecule_fields(&data)?;
+            anyhow::ensure!(parts.len()==2 || parts.len()==3,"unsupported cluster field count {}",parts.len());
+            let mut fields=Vec::new();
+            let mut offset=4+parts.len()*4;
+            for (index,part) in parts.iter().enumerate() {
+                fields.push(field(&data,["name","description","mutantId"][index],offset,offset+part.len())?);
+                offset+=part.len();
+            }
+            let current=ProtocolVersion{cell:current.response,data_hex:format!("0x{}",hex::encode(data)),fields,decoded:serde_json::json!({"name":parsed.name,"description":parsed.description})};
+            Ok(serde_json::json!({"kind":"spore_cluster","clusterId":format!("0x{}",hex::encode(&id)),"source":"canonicalLiveTypeIndex","current":current}))
+        })();
+        crate::response::ok(result.map_err(|e|crate::response::ApiError::internal(format!("cluster=0x{}: {e:#}",hex::encode(&id))))?)
+    }).await.map_err(|e|crate::response::ApiError::internal(e.to_string()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

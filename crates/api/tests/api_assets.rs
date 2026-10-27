@@ -700,6 +700,8 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
 #[tokio::test]
 async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let store = test_store();
+    // Close the last persisted stats day with the owning indexed calendar.
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-18T00:00:00Z"))]);
     let collection_id = [0x24u8; 24];
     let collection_id_hex = format!("0x{}", hex::encode(collection_id));
 
@@ -792,6 +794,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
 #[tokio::test]
 async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let store = test_store();
+    // Close the last persisted stats day with the owning indexed calendar.
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-16T00:00:00Z"))]);
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
@@ -1023,6 +1027,8 @@ async fn test_burned_out_collection_with_zero_net_daily_delta_has_exact_zero_cap
 #[tokio::test]
 async fn test_spore_collection_detail_reads_cluster_daily_history() {
     let store = test_store();
+    // Close the last persisted stats day with the owning indexed calendar.
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-16T00:00:00Z"))]);
     let collection_id = [0x3au8; 32];
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cluster_aggregate(
@@ -1275,6 +1281,8 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
 #[tokio::test]
 async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let store = test_store();
+    // Close the last persisted stats day with the owning indexed calendar.
+    seed_block_headers_at(&store, &[(0, utc_ms("2024-01-16T00:00:00Z"))]);
     let collection_id = b"did_ckb_collection______________".to_vec();
     let did_id = [0xA5u8; 32];
 
@@ -1379,11 +1387,11 @@ fn seed_did_live_cell(batch: &mut StoreBatch<'_>, id: &[u8], hash: &[u8], block:
         &LiveCellInfo {
             capacity: 320_00000000,
             occupied_capacity: (94 + id.len() as i64) * 100_000000,
-            lock_script_hash: vec![0x31; 32],
+            lock_script_hash: compute_script_hash(&[0x51; 32], 1, &[0x61; 20]),
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![0x61; 20],
-            type_script_hash: Some(vec![0x71; 32]),
+            type_script_hash: Some(compute_script_hash(&[0x81; 32], 1, id)),
             type_code_hash: Some(vec![0x81; 32]),
             type_hash_type: Some(1),
             type_args: Some(id.to_vec()),
@@ -1409,7 +1417,7 @@ async fn test_assets_did_ckb_item_detail_supports_20_byte_item_ids() {
         &did_id,
         &IdentityEntry {
             standard: IdentityStandard::DidCkb,
-            owner_lock_hash: Some(vec![0x31; 32]),
+            owner_lock_hash: Some(compute_script_hash(&[0x51; 32], 1, &[0x61; 20])),
             name: None,
             is_live: true,
             created_at_block: 21_080_336,
@@ -1580,7 +1588,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             &did_id,
             &IdentityEntry {
                 standard: IdentityStandard::DidCkb,
-                owner_lock_hash: Some(vec![0x31; 32]),
+                owner_lock_hash: Some(compute_script_hash(&[0x51; 32], 1, &[0x61; 20])),
                 name: Some("did:alice.ckb".to_string()),
                 is_live: true,
                 created_at_block: 100,
@@ -1613,11 +1621,11 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         0,
         &LiveCellInfo {
             capacity: 128_00000000,
-            lock_script_hash: vec![0x41; 32],
+            lock_script_hash: compute_script_hash(&[0x51; 32], 1, &[0x61; 20]),
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![0x61; 20],
-            type_script_hash: Some(vec![0x71; 32]),
+            type_script_hash: Some(compute_script_hash(&[0x81; 32], 1, &did_id)),
             type_code_hash: Some(vec![0x81; 32]),
             type_hash_type: Some(1),
             type_args: Some(did_id.to_vec()),
@@ -4873,7 +4881,7 @@ async fn dotcell_capacity_history_chart_resolves_the_alias() {
         hex20(SUPPORT_OWNER20),
         dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
         true,
-        1_700_000_000_000,
+        utc_ms("2024-01-16T00:00:00Z"),
     );
     store
         .put_mnft_daily_delta(

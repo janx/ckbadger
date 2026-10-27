@@ -2,6 +2,7 @@ pub(crate) mod activities;
 mod address_holdings;
 pub(crate) mod address_pool;
 pub(crate) mod address_presence;
+mod asset_calendar;
 mod asset_feed;
 mod asset_genetics;
 mod asset_history;

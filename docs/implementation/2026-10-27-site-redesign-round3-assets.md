@@ -32,4 +32,12 @@ Implementation in progress. Re-sync required: no.
 
 Protocol references checked: web5fans/did-ckb `f37c14af`, nervina-labs/ckb-nft-scripts `88caddde`, dotbitHQ/das-contracts `5186304b`; parent-supplied DOB exact-binary fixtures and provenance are documented in `crates/dob-decoder/tests/fixtures/README.md`.
 
-The first API slice does not yet finish cluster-cell raw evidence or complete-day cutoffs on the older capacity chart handlers; those are explicit follow-up work in this lane, not placeholders declared complete.
+The second API slice adds `/spore/clusters/{id}/protocol`: current cluster Cell evidence comes from the canonical live type-instance index across registered Cluster deployments, never from item reverse history or stale metadata ownership. The cluster detail uses the same proof for its current owner and exposes `totalCount` separately from live `sporesCount`. No current Cell is represented by `current: null` and null current owner fields.
+
+The three existing Spore/collection capacity-history routes retain their chart fields and their single arithmetic builder. They now bound results to the last complete UTC+8 day from the pinned indexed chain clock and expose `source`, `completeThrough`, and `anchor`. Missing or malformed calendar evidence is an error. Future-only requests have empty data with the real anchor. Raw timestamp reversal does not change day assignment.
+
+Regression-first coverage also rejects mismatched payload script hashes, stale/duplicate current type-index rows, and item IDs in the Cluster chart namespace. The same immutable cell proof computes exact occupied capacity and validates lock/type script hashes for every item and cluster. The producer fixture includes a real cluster Cell and eight members; its cluster capacity totals count member holdings, not the separate cluster Cell.
+
+Validation: 31 asset-history endpoint tests, 62 assets tests, and 28 Spore tests; normal commit hooks run formatting and strict workspace Clippy. No persistent write path changes. Re-sync required: no.
+
+The remaining focused follow-up changes current DOB Type ID executable discovery to the canonical live type-instance index. The script-reference usage mapping is not a complete directory of decoder-only deployments; it must not determine whether such a decoder exists.
