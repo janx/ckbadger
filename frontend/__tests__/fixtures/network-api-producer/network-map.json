@@ -1,0 +1,21 @@
+{
+  "located": 1,
+  "locationUnavailable": 1,
+  "points": [
+    {
+      "advertiserCount": 0,
+      "asn": "AS65000 Ex",
+      "clientVersion": "0.119.0",
+      "country": "US",
+      "firstSeen": 200,
+      "lastSeen": 200,
+      "lat": 0.0,
+      "localSessionObserved": false,
+      "lon": 0.0,
+      "peerId": "7065657241",
+      "reachable": true
+    }
+  ],
+  "roundId": 5,
+  "verifiedRetained": 2
+}

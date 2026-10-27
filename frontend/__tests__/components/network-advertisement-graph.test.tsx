@@ -4,8 +4,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
+import producerAdvertisements from '@/__tests__/fixtures/network-api-producer/network-advertisements.json';
 
 describe('AdvertisementGraph', () => {
+  it('renders the latest-round producer payload as a directed, scoped observation', async () => {
+    server.use(
+      http.get('/api/:network/v1/network/advertisements', () =>
+        HttpResponse.json(producerAdvertisements)
+      )
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AdvertisementGraph roundId={5} />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByText('addrpeerC')).toBeInTheDocument();
+    expect(screen.getByText(/1 unique advertiser/i)).toHaveTextContent(
+      '1 retained endpoint alias observations'
+    );
+    expect(screen.getByRole('listitem')).toHaveTextContent('7065657241');
+  });
+
   it('reconciles a newer completed round instead of leaving a stale-round message forever', async () => {
     server.use(
       http.get('/api/:network/v1/network/advertisements', () =>

@@ -1,0 +1,14 @@
+{
+  "coverage": "retainedLatestObservationOnly",
+  "distinctPeerPairs": 1,
+  "edges": [
+    {
+      "advertiserPeerId": "7065657241",
+      "alias": "addrpeerC",
+      "observedAt": 200,
+      "targetPeerId": "7065657243"
+    }
+  ],
+  "finishedAt": 200,
+  "roundId": 5
+}

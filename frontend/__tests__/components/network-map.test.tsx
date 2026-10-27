@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import { layoutMapPoints, NetworkMapView } from '@/app/network/network-map';
 import type { NetworkMap } from '@/lib/api';
+import producerMap from '@/__tests__/fixtures/network-api-producer/network-map.json';
 
 const first: NetworkMap['points'][number] = {
   peerId: 'a',
@@ -22,6 +23,21 @@ const first: NetworkMap['points'][number] = {
 const second = { ...first, peerId: 'b', reachable: false, clientVersion: 'ckb/0.113' };
 
 describe('NetworkMapView', () => {
+  it('renders the API producer map payload with retained scope and unknown location count', async () => {
+    server.use(http.get('/api/:network/v1/network/map', () => HttpResponse.json(producerMap)));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <NetworkMapView />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByText('0.119.0')).toBeInTheDocument();
+    expect(screen.getByText('AS65000 Ex')).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 retained verified peers/)).toHaveTextContent(
+      '1 locations are unavailable'
+    );
+  });
+
   it('displaces coincident dots deterministically without changing source coordinates', () => {
     const layout = layoutMapPoints([second, first]);
     expect(layout.map(({ point }) => point.peerId)).toEqual(['a', 'b']);

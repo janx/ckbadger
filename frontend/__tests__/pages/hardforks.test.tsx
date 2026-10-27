@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
+import producerMainnet from '@/__tests__/fixtures/network-api-producer/hardforks-mainnet.json';
 
 const getHardforksMock = vi.hoisted(() => vi.fn());
 
@@ -56,6 +57,16 @@ const mockTimeline = {
 describe('HardforksPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('renders the mainnet consensus producer payload at its unsynced tip', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(producerMainnet);
+    render(<HardforksPage />);
+    expect(await screen.findByText('CKB Edition Mirana')).toBeInTheDocument();
+    expect(screen.getByText('RFC 0049')).toBeInTheDocument();
+    expect(screen.getByText(/mainnet · tip epoch 0/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /View activation block/ })).not.toBeInTheDocument();
   });
 
   it('renders timeline rows from API data', async () => {

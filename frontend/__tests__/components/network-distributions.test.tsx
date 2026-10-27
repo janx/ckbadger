@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { mergePeerCounts, NetworkTrends } from '@/app/network/trends';
+import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
 
 const API_BASE = '/api/:network/v1';
 
@@ -69,21 +70,17 @@ describe('NetworkDistributions', () => {
 
 describe('NetworkTrends', () => {
   it('renders missing retained days as a visual gap with unavailable round counts', async () => {
-    const days = [1751328000, 1751414400, 1751500800];
     server.use(
       http.get(`${API_BASE}/network/history`, ({ request }) => {
         const metric = new URL(request.url).searchParams.get('metric') ?? '';
-        const scalar = metric === 'reachablePeers' ? 6 : 10;
+        if (metric === 'verifiedPeers') return HttpResponse.json(producerGaps);
         return HttpResponse.json({
+          ...producerGaps,
           metric,
-          granularity: 'day',
-          points: [days[0], days[2]].map((ts) => ({ ts, scalar, buckets: [] })),
-          dailyCoverage: days.map((ts, index) => ({
-            ts,
-            hasRetainedObservation: index !== 1,
-            roundsPerDay: null,
+          points: producerGaps.points.map((point) => ({
+            ...point,
+            scalar: metric === 'reachablePeers' ? 5 : 0,
           })),
-          roundCountAvailability: 'notRecorded',
         });
       })
     );

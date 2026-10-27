@@ -1,0 +1,36 @@
+{
+  "coverageFrom": 864000,
+  "coverageTo": 1036800,
+  "dailyCoverage": [
+    {
+      "hasRetainedObservation": true,
+      "roundsPerDay": null,
+      "ts": 864000
+    },
+    {
+      "hasRetainedObservation": false,
+      "roundsPerDay": null,
+      "ts": 950400
+    },
+    {
+      "hasRetainedObservation": true,
+      "roundsPerDay": null,
+      "ts": 1036800
+    }
+  ],
+  "granularity": "day",
+  "metric": "verifiedPeers",
+  "points": [
+    {
+      "buckets": [],
+      "scalar": 7,
+      "ts": 864000
+    },
+    {
+      "buckets": [],
+      "scalar": 7,
+      "ts": 1036800
+    }
+  ],
+  "roundCountAvailability": "notRecorded"
+}
