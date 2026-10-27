@@ -148,10 +148,21 @@ export const txStats: TxStatsResponse = {
 };
 
 export const daoStatistics: DaoStatistics = {
+  tipBlockNumber: 20835366,
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',
   totalDepositors: 16673,
   activeDeposits: 22379,
+  depositCellsCount: 20689,
+  withdrawalRequestCellsCount: 1690,
+  pendingWithdrawalCapacity: '90872260089687313',
+  pendingWithdrawalCapacityCkb: '908722600.89687313',
+  daoCapacity: '903761821733487013',
+  daoFreeCapacity: '903000000000000000',
+  tipTotalIssuance: '4000000000000000000',
+  tipProtocolOccupiedCapacity: '1200000000000000000',
+  rolling24hBaselineBlockNumber: 20830000,
+  rolling24hCutoffChainTimeMs: '1792972800000',
   totalCompensationPaid: '76079761235165103',
   totalCompensationPaidCkb: '760797612.35165103',
   unclaimedCompensation: '83759101156488264',

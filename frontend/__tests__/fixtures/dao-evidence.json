@@ -1,0 +1,312 @@
+{
+  "ar": {
+    "genesisAr": "10000000000000000",
+    "genesisBlockNumber": 0,
+    "milestones": [
+      {
+        "ar": "10000000000000000",
+        "arIndex": "1.0000000000000000",
+        "blockNumber": 0,
+        "chainTimeMs": "0"
+      },
+      {
+        "ar": "10100000000000000",
+        "arIndex": "1.0100000000000000",
+        "blockNumber": 3,
+        "chainTimeMs": "31536000000"
+      },
+      {
+        "ar": "10200000000000000",
+        "arIndex": "1.0200000000000000",
+        "blockNumber": 5,
+        "chainTimeMs": "31536002000"
+      }
+    ],
+    "sinceGenesisGrowthPercent": "2.0000",
+    "tipAr": "10200000000000000",
+    "tipChainTimeMs": "31536002000",
+    "year365": {
+      "anchorAr": "10000000000000000",
+      "anchorBlockNumber": 2,
+      "anchorChainTimeMs": "2000",
+      "elapsedChainTimeMs": "31536000000",
+      "observedGrowthPercent": "2.0000"
+    }
+  },
+  "concentration": {
+    "currentDepositors": 2,
+    "owners": [
+      {
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfzyg3zyg3zyg3zyg3zyg3zyg3zyg3zygssd2hqn",
+        "capacity": "30000000000",
+        "depositCount": 1,
+        "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "lockHashType": "type",
+        "lockKind": null,
+        "lockScriptHash": "0xdf1b29cb0d9466e0ffbcdf05c4d598edc1fd8fc6b723fbbd8b8f5414ddca3ab0",
+        "rank": 1,
+        "sharePercent": "60.00"
+      },
+      {
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg89hyyu",
+        "capacity": "20000000000",
+        "depositCount": 1,
+        "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "lockHashType": "type",
+        "lockKind": null,
+        "lockScriptHash": "0x29e560749fc5c785e3c1cfc3e14c0e608ec87120f0c066facf023ee8bd569d84",
+        "rank": 2,
+        "sharePercent": "40.00"
+      }
+    ],
+    "top100Capacity": "50000000000",
+    "top100SharePercent": "100.00",
+    "top10Capacity": "50000000000",
+    "top10SharePercent": "100.00",
+    "top1Capacity": "30000000000",
+    "top1SharePercent": "60.00"
+  },
+  "header": {
+    "ar": "10200000000000000",
+    "blockNumber": 5,
+    "c": "1000000000000000",
+    "daoHex": "0x0080c6a47e8d03000080b590d83c24000065cd1d0000000000e1f50500000000",
+    "s": "500000000",
+    "u": "100000000"
+  },
+  "phase0": {
+    "capacity": "50000000000",
+    "count": 2
+  },
+  "phase1": {
+    "capacity": "90000000000",
+    "count": 2
+  },
+  "phase1ReadyByEpochLock": {
+    "capacity": "40000000000",
+    "count": 1
+  },
+  "phase1WaitingForEpochLock": {
+    "capacity": "50000000000",
+    "count": 1
+  },
+  "tipBlockNumber": 5,
+  "tipEpoch": {
+    "display": "185+2/4",
+    "index": 2,
+    "length": 4,
+    "number": 185
+  },
+  "windows": [
+    {
+      "capacity": "30000000000",
+      "count": 1,
+      "fromEpochOffset": 0,
+      "nominalDay": 1,
+      "throughEpochOffset": 6
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 6,
+      "nominalDay": 2,
+      "throughEpochOffset": 12
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 12,
+      "nominalDay": 3,
+      "throughEpochOffset": 18
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 18,
+      "nominalDay": 4,
+      "throughEpochOffset": 24
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 24,
+      "nominalDay": 5,
+      "throughEpochOffset": 30
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 30,
+      "nominalDay": 6,
+      "throughEpochOffset": 36
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 36,
+      "nominalDay": 7,
+      "throughEpochOffset": 42
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 42,
+      "nominalDay": 8,
+      "throughEpochOffset": 48
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 48,
+      "nominalDay": 9,
+      "throughEpochOffset": 54
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 54,
+      "nominalDay": 10,
+      "throughEpochOffset": 60
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 60,
+      "nominalDay": 11,
+      "throughEpochOffset": 66
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 66,
+      "nominalDay": 12,
+      "throughEpochOffset": 72
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 72,
+      "nominalDay": 13,
+      "throughEpochOffset": 78
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 78,
+      "nominalDay": 14,
+      "throughEpochOffset": 84
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 84,
+      "nominalDay": 15,
+      "throughEpochOffset": 90
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 90,
+      "nominalDay": 16,
+      "throughEpochOffset": 96
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 96,
+      "nominalDay": 17,
+      "throughEpochOffset": 102
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 102,
+      "nominalDay": 18,
+      "throughEpochOffset": 108
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 108,
+      "nominalDay": 19,
+      "throughEpochOffset": 114
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 114,
+      "nominalDay": 20,
+      "throughEpochOffset": 120
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 120,
+      "nominalDay": 21,
+      "throughEpochOffset": 126
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 126,
+      "nominalDay": 22,
+      "throughEpochOffset": 132
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 132,
+      "nominalDay": 23,
+      "throughEpochOffset": 138
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 138,
+      "nominalDay": 24,
+      "throughEpochOffset": 144
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 144,
+      "nominalDay": 25,
+      "throughEpochOffset": 150
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 150,
+      "nominalDay": 26,
+      "throughEpochOffset": 156
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 156,
+      "nominalDay": 27,
+      "throughEpochOffset": 162
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 162,
+      "nominalDay": 28,
+      "throughEpochOffset": 168
+    },
+    {
+      "capacity": "0",
+      "count": 0,
+      "fromEpochOffset": 168,
+      "nominalDay": 29,
+      "throughEpochOffset": 174
+    },
+    {
+      "capacity": "20000000000",
+      "count": 1,
+      "fromEpochOffset": 174,
+      "nominalDay": 30,
+      "throughEpochOffset": 180
+    }
+  ]
+}

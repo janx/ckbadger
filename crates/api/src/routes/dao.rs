@@ -25,6 +25,11 @@ use crate::utils::{
 use crate::AppState;
 use tracing::instrument;
 
+#[path = "dao_epoch.rs"]
+mod dao_epoch;
+#[path = "dao_evidence.rs"]
+mod dao_evidence;
+
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);
 const DAO_ADDRESS_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -35,6 +40,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dao/deposits/{lock_hash}", get(get_deposits_by_address))
         .route("/dao/summary/{lock_hash}", get(get_address_dao_summary))
         .route("/dao/statistics", get(get_statistics))
+        .route("/dao/evidence", get(dao_evidence::get_evidence))
         .route("/dao/top-depositors", get(get_top_depositors))
         .route("/dao/calculator", get(calculate_compensation))
         .route("/dao/charts/total-deposit", get(get_total_deposit_chart))
@@ -197,6 +203,15 @@ pub struct DaoStatisticsResponse {
     pub total_deposited_ckb: String,
     pub total_depositors: i32,
     pub active_deposits: i32,
+    pub deposit_cells_count: i32,
+    pub withdrawal_request_cells_count: i32,
+    pub dao_capacity: String,
+    pub dao_free_capacity: String,
+    /// Raw DAO C and U copied into the same indexer singleton as dao_free_capacity.
+    pub tip_total_issuance: String,
+    pub tip_protocol_occupied_capacity: String,
+    pub rolling_24h_baseline_block_number: Option<i64>,
+    pub rolling_24h_cutoff_chain_time_ms: Option<String>,
     pub total_compensation_paid: String,
     pub total_compensation_paid_ckb: String,
     pub unclaimed_compensation: String,
@@ -563,6 +578,20 @@ fn dao_latest_to_response(
         total_deposited_ckb: shannon_to_ckb(&total_deposited),
         total_depositors: latest.total_depositors,
         active_deposits: latest.active_deposits,
+        deposit_cells_count: latest.deposit_cells_count,
+        withdrawal_request_cells_count: latest.withdrawal_request_cells_count,
+        dao_capacity: latest.dao_capacity.to_string(),
+        dao_free_capacity: latest.dao_free_capacity.to_string(),
+        tip_total_issuance: latest.tip_total_issuance.to_string(),
+        tip_protocol_occupied_capacity: latest.tip_occupied_capacity.to_string(),
+        rolling_24h_baseline_block_number: latest
+            .rolling_24h
+            .as_ref()
+            .map(|r| r.baseline_block_number),
+        rolling_24h_cutoff_chain_time_ms: latest
+            .rolling_24h
+            .as_ref()
+            .map(|r| r.cutoff_chain_time_ms.to_string()),
         total_compensation_paid: total_compensation_paid.clone(),
         total_compensation_paid_ckb: shannon_to_ckb(&total_compensation_paid),
         unclaimed_compensation: unclaimed_compensation.clone(),
@@ -1062,7 +1091,7 @@ fn build_total_depositors_series(
 
     Ok(snapshots
         .iter()
-        .map(|snapshot| (snapshot.date.clone(), snapshot.cumulative_depositors))
+        .map(|snapshot| (snapshot.date.clone(), snapshot.depositors_count))
         .collect())
 }
 
@@ -1118,7 +1147,7 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         data,
         title: "Total Deposit".to_string(),
         y_axis_label: "CKB".to_string(),
-        y2_axis_label: Some("Depositors".to_string()),
+        y2_axis_label: Some("Current depositors".to_string()),
     };
 
     if chart_response_has_data(&response) {

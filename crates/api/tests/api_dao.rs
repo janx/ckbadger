@@ -1,6 +1,17 @@
 mod common;
 use common::*;
 
+fn write_dao_fixture(name: &str, value: &serde_json::Value) {
+    if let Ok(dir) = std::env::var("D6_FIXTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            format!("{dir}/{name}.json"),
+            serde_json::to_vec_pretty(value).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn dao_calculator_annualizes_using_header_chain_time_not_block_distance() {
     const YEAR_MS: i64 = 31_557_600_000;
@@ -75,6 +86,324 @@ async fn test_dao_stats_empty_db() {
         .as_str()
         .unwrap()
         .contains("dao_latest_stats not written yet"));
+}
+
+fn dao_evidence_header(
+    number: u8,
+    epoch: (i64, i32, i32),
+    raw_ms: i64,
+    chain_ms: i64,
+    ar: u64,
+) -> CachedBlockHeader {
+    let mut dao = vec![0u8; 32];
+    dao[..8].copy_from_slice(&1_000_000_000_000_000u64.to_le_bytes());
+    dao[8..16].copy_from_slice(&ar.to_le_bytes());
+    dao[16..24].copy_from_slice(&500_000_000u64.to_le_bytes());
+    dao[24..32].copy_from_slice(&100_000_000u64.to_le_bytes());
+    CachedBlockHeader {
+        hash: vec![number; 32],
+        parent_hash: vec![number.saturating_sub(1); 32],
+        timestamp: raw_ms,
+        epoch_number: epoch.0,
+        epoch_index: epoch.1,
+        epoch_length: epoch.2,
+        dao,
+        transactions_count: 1,
+        uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
+        cycles: None,
+        chain_time_ms: chain_ms,
+    }
+}
+
+fn dao_evidence_entry(capacity: i64, deposit_block: i64, lock: u8) -> DaoDepositCacheEntry {
+    DaoDepositCacheEntry {
+        capacity,
+        occupied_capacity: 102_00000000,
+        deposit_block_number: deposit_block,
+        deposit_timestamp: 0,
+        deposit_chain_time_ms: 0,
+        lock_script_hash: vec![lock; 32],
+        deposit_ar: 10_000_000_000_000_000,
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_output_index: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_request_occupied_capacity: None,
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+    }
+}
+
+/// The producer fixture covers exact phase boundaries, changed epoch lengths,
+/// a raw timestamp rollback, both readiness states, owner denominator and AR.
+#[tokio::test]
+async fn dao_evidence_partitions_all_live_cells_and_exports_contract() {
+    use ckbadger_store::LockScriptEntry;
+
+    let store = test_store();
+    let year = 365 * 86_400_000i64;
+    let epochs = [
+        (0, 0, 1),
+        (5, 1, 2),
+        (10, 1, 2),
+        (100, 1, 4),
+        (185, 1, 4),
+        (185, 2, 4),
+    ];
+    let times = [0, 1_000, 2_000, year, year + 1_000, year + 2_000];
+    let mut batch = StoreBatch::new(store.as_ref());
+    for number in 0..6u8 {
+        let raw = if number == 4 {
+            year - 500
+        } else {
+            times[number as usize]
+        };
+        let ar = if number <= 2 {
+            10_000_000_000_000_000
+        } else if number == 3 {
+            10_100_000_000_000_000
+        } else {
+            10_200_000_000_000_000
+        };
+        batch.put_block_header(
+            i64::from(number),
+            &dao_evidence_header(
+                number,
+                epochs[number as usize],
+                raw,
+                times[number as usize],
+                ar,
+            ),
+        );
+    }
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    for (id, deposit_block, capacity, lock, request_block) in [
+        (0xA1, 1, 200_00000000i64, 0x11, None),
+        (0xA2, 2, 300_00000000i64, 0x22, None),
+        (0xA3, 1, 400_00000000i64, 0x33, Some(3)),
+        (0xA4, 2, 500_00000000i64, 0x44, Some(4)),
+    ] {
+        let mut entry = dao_evidence_entry(capacity, deposit_block, lock);
+        entry.deposit_timestamp = times[deposit_block as usize];
+        entry.deposit_chain_time_ms = times[deposit_block as usize];
+        let args = vec![lock; 20];
+        let lock_hash = compute_script_hash(&code_hash, 1, &args);
+        entry.lock_script_hash = lock_hash.clone();
+        batch.put_lock_script(
+            &lock_hash,
+            &LockScriptEntry {
+                code_hash: code_hash.clone(),
+                hash_type: 1,
+                args,
+            },
+        );
+        if let Some(block) = request_block {
+            entry.status = 1;
+            entry.withdraw_request_block = Some(block);
+            entry.withdraw_request_tx = Some(vec![id + 1; 32]);
+            entry.withdraw_request_output_index = Some(0);
+            entry.withdraw_request_ar = Some(if block == 3 {
+                10_100_000_000_000_000
+            } else {
+                10_200_000_000_000_000
+            });
+            entry.withdraw_request_occupied_capacity = Some(102_00000000);
+        }
+        batch.put_dao_deposit(&ckbadger_store::keys::encode_outpoint(&[id; 32], 0), &entry);
+    }
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| status.tip_block_number = 5)
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["tipEpoch"]["display"], "185+2/4");
+    assert_eq!(json["phase0"]["capacity"], "50000000000");
+    assert_eq!(json["phase0"]["count"], 2);
+    assert_eq!(json["phase1"]["capacity"], "90000000000");
+    assert_eq!(json["phase1ReadyByEpochLock"]["capacity"], "40000000000");
+    assert_eq!(json["phase1WaitingForEpochLock"]["capacity"], "50000000000");
+    assert_eq!(json["windows"][0]["capacity"], "30000000000");
+    assert_eq!(json["windows"][29]["capacity"], "20000000000");
+    assert_eq!(json["concentration"]["currentDepositors"], 2);
+    assert_eq!(json["concentration"]["top1SharePercent"], "60.00");
+    assert_eq!(json["ar"]["year365"]["anchorBlockNumber"], 2);
+    assert_eq!(json["header"]["ar"], "10200000000000000");
+    write_dao_fixture("dao-evidence", &json);
+}
+
+#[tokio::test]
+async fn dao_evidence_represents_genesis_with_no_history_or_deposits() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        0,
+        &dao_evidence_header(0, (0, 0, 1), 1_000, 1_000, 10_000_000_000_000_000),
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| status.tip_block_number = 0)
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["phase0"]["capacity"], "0");
+    assert_eq!(json["phase1"]["count"], 0);
+    assert_eq!(json["concentration"]["currentDepositors"], 0);
+    assert!(json["concentration"]["top1SharePercent"].is_null());
+    assert!(json["ar"]["year365"].is_null());
+    assert_eq!(json["windows"].as_array().unwrap().len(), 30);
+}
+
+#[tokio::test]
+async fn dao_evidence_fails_on_missing_canonical_deposit_header() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        0,
+        &dao_evidence_header(0, (0, 0, 1), 0, 0, 10_000_000_000_000_000),
+    );
+    batch.put_block_header(
+        2,
+        &dao_evidence_header(2, (2, 0, 1), 2_000, 2_000, 10_000_000_000_000_000),
+    );
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0xA1; 32], 0),
+        &dao_evidence_entry(200_00000000, 1, 0x11),
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| status.tip_block_number = 2)
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing canonical DAO header at block 1"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn dao_evidence_rejects_contradictory_lifecycle_markers_with_outpoint_context() {
+    for defect in [
+        "phase1 missing tx",
+        "phase1 missing AR",
+        "phase0 completion",
+    ] {
+        let store = test_store();
+        let mut batch = StoreBatch::new(store.as_ref());
+        for (number, epoch) in [(0, (0, 0, 1)), (1, (5, 1, 2)), (2, (5, 3, 4))] {
+            batch.put_block_header(
+                number,
+                &dao_evidence_header(
+                    number as u8,
+                    epoch,
+                    number * 1_000,
+                    number * 1_000,
+                    10_000_000_000_000_000,
+                ),
+            );
+        }
+        let mut entry = dao_evidence_entry(200_00000000, 1, 0x11);
+        match defect {
+            "phase1 missing tx" | "phase1 missing AR" => {
+                entry.status = 1;
+                entry.withdraw_request_block = Some(2);
+                entry.withdraw_request_tx = Some(vec![0xB1; 32]);
+                entry.withdraw_request_output_index = Some(0);
+                entry.withdraw_request_ar = Some(10_000_000_000_000_000);
+                entry.withdraw_request_occupied_capacity = Some(102_00000000);
+                if defect == "phase1 missing tx" {
+                    entry.withdraw_request_tx = None;
+                } else {
+                    entry.withdraw_request_ar = None;
+                }
+            }
+            "phase0 completion" => entry.withdraw_tx = Some(vec![0xC1; 32]),
+            _ => unreachable!(),
+        }
+        batch.put_dao_deposit(
+            &ckbadger_store::keys::encode_outpoint(&[0xA1; 32], 0),
+            &entry,
+        );
+        batch.commit().unwrap();
+        store
+            .update_sync_status(|status| status.tip_block_number = 2)
+            .unwrap();
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/dao/evidence").await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{defect}: {json}"
+        );
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains("a1a1a1") && message.contains("invalid DAO lifecycle"),
+            "{defect}: {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn dao_evidence_rejects_owner_script_payload_under_wrong_hash() {
+    use ckbadger_store::LockScriptEntry;
+    let store = test_store();
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let lock_hash = compute_script_hash(&code_hash, 1, &[0x11; 20]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        0,
+        &dao_evidence_header(0, (0, 0, 1), 0, 0, 10_000_000_000_000_000),
+    );
+    batch.put_block_header(
+        1,
+        &dao_evidence_header(1, (1, 0, 1), 1_000, 1_000, 10_000_000_000_000_000),
+    );
+    let mut entry = dao_evidence_entry(200_00000000, 1, 0x11);
+    entry.deposit_timestamp = 1_000;
+    entry.deposit_chain_time_ms = 1_000;
+    entry.lock_script_hash = lock_hash.clone();
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0xA1; 32], 0),
+        &entry,
+    );
+    // The key is the hash of args 0x11, but the persisted value has args 0x22.
+    batch.put_lock_script(
+        &lock_hash,
+        &LockScriptEntry {
+            code_hash,
+            hash_type: 1,
+            args: vec![0x22; 20],
+        },
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| status.tip_block_number = 1)
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not hash to indexed owner"),
+        "{json}"
+    );
 }
 
 #[tokio::test]
@@ -159,6 +488,14 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     assert_eq!(json["totalDeposited"], "12300000000");
     assert_eq!(json["totalDepositors"], 7);
     assert_eq!(json["activeDeposits"], 9);
+    assert_eq!(json["depositCellsCount"], 9);
+    assert_eq!(json["withdrawalRequestCellsCount"], 0);
+    assert_eq!(json["daoCapacity"], "12800000000");
+    assert_eq!(json["daoFreeCapacity"], "2600000000");
+    assert_eq!(json["tipTotalIssuance"], "0");
+    assert_eq!(json["tipProtocolOccupiedCapacity"], "0");
+    assert_eq!(json["rolling24hBaselineBlockNumber"], 9);
+    assert_eq!(json["rolling24hCutoffChainTimeMs"], "1699913600000");
     assert_eq!(json["estimatedApc"], "2.74");
     assert_eq!(json["tipBlockNumber"], 10);
     assert_eq!(json["depositChange24h"], "-3");
@@ -491,6 +828,22 @@ fn total_deposit_snapshot(date: &str, total_deposited: i128, depositors: i64) ->
         daily_depositor_addresses: 0,
         protocol_deposited: None,
     }
+}
+
+/// A depositor may have withdrawn all of their cells while remaining in the
+/// historical ever-depositor count. The chart secondary line says *current*.
+#[tokio::test]
+async fn total_deposit_chart_uses_current_depositors_not_ever_depositors() {
+    let store = test_store();
+    let mut snapshot = total_deposit_snapshot("2024-01-15", 123_00000000, 7);
+    snapshot.cumulative_depositors = 70;
+    put_total_deposit_snapshot(&store, &snapshot);
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/charts/total-deposit").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value2"], "7");
+    assert_eq!(json["y2AxisLabel"], "Current depositors");
 }
 
 fn put_total_deposit_snapshot(store: &CkbadgerStore, snapshot: &DaoDailySnapshot) {

@@ -1648,10 +1648,21 @@ interface AddressDaoSummary {
 }
 
 interface DaoStatistics {
+  tipBlockNumber: number;
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
   activeDeposits: number;
+  depositCellsCount: number;
+  withdrawalRequestCellsCount: number;
+  pendingWithdrawalCapacity: string;
+  pendingWithdrawalCapacityCkb: string;
+  daoCapacity: string;
+  daoFreeCapacity: string;
+  tipTotalIssuance: string;
+  tipProtocolOccupiedCapacity: string;
+  rolling24hBaselineBlockNumber: number | null;
+  rolling24hCutoffChainTimeMs: string | null;
   totalCompensationPaid: string;
   totalCompensationPaidCkb: string;
   unclaimedCompensation: string;
@@ -1668,6 +1679,79 @@ interface DaoStatistics {
   depositorsChange24h: number | null;
   claimedCompensationChange24h: string | null;
   unclaimedCompensationChange24h: string | null;
+}
+
+interface DaoEpoch {
+  number: number;
+  index: number;
+  length: number;
+  display: string;
+}
+
+interface DaoAmountCount {
+  capacity: string;
+  count: number;
+}
+
+interface DaoWindowBucket extends DaoAmountCount {
+  nominalDay: number;
+  fromEpochOffset: number;
+  throughEpochOffset: number;
+}
+
+interface DaoOwner {
+  rank: number;
+  lockScriptHash: string;
+  address: string;
+  lockCodeHash: string;
+  lockHashType: string;
+  lockKind: string | null;
+  depositCount: number;
+  capacity: string;
+  sharePercent: string;
+}
+
+interface DaoEvidence {
+  tipBlockNumber: number;
+  tipEpoch: DaoEpoch;
+  phase0: DaoAmountCount;
+  phase1: DaoAmountCount;
+  phase1ReadyByEpochLock: DaoAmountCount;
+  phase1WaitingForEpochLock: DaoAmountCount;
+  windows: DaoWindowBucket[];
+  concentration: {
+    currentDepositors: number;
+    top1Capacity: string;
+    top10Capacity: string;
+    top100Capacity: string;
+    top1SharePercent: string | null;
+    top10SharePercent: string | null;
+    top100SharePercent: string | null;
+    owners: DaoOwner[];
+  };
+  ar: {
+    tipAr: string;
+    genesisAr: string;
+    genesisBlockNumber: number;
+    tipChainTimeMs: string;
+    sinceGenesisGrowthPercent: string;
+    milestones: { blockNumber: number; chainTimeMs: string; ar: string; arIndex: string }[];
+    year365: {
+      anchorBlockNumber: number;
+      anchorChainTimeMs: string;
+      anchorAr: string;
+      elapsedChainTimeMs: string;
+      observedGrowthPercent: string;
+    } | null;
+  };
+  header: {
+    blockNumber: number;
+    daoHex: string;
+    c: string;
+    ar: string;
+    s: string;
+    u: string;
+  };
 }
 
 interface DaoTopDepositor {
@@ -2899,6 +2983,7 @@ export type {
   DaoDeposit,
   AddressDaoSummary,
   DaoStatistics,
+  DaoEvidence,
   DaoTopDepositor,
   DaoTopDepositorsResponse,
   DaoCalculatorResult,
@@ -3736,6 +3821,10 @@ export const api = {
 
   getDaoStatistics: (): Promise<DaoStatistics> => {
     return fetchApi('/dao/statistics');
+  },
+
+  getDaoEvidence: (): Promise<DaoEvidence> => {
+    return fetchApi('/dao/evidence');
   },
 
   getDaoTopDepositors: (): Promise<DaoTopDepositorsResponse> => {

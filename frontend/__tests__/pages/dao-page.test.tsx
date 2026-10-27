@@ -1,241 +1,115 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
-import { render } from '../utils/test-utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { screen } from '@testing-library/react';
+import { render } from '@/__tests__/utils/test-utils';
 import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
+import evidence from '@/__tests__/fixtures/dao-evidence.json';
 
 vi.mock('@/lib/api', () => ({
-  api: {
-    getDaoStatistics: vi.fn(),
-    getDaoDeposits: vi.fn(),
-    getDaoTopDepositors: vi.fn(),
-    lookupScripts: vi.fn(),
-  },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
+  api: {
+    getDaoStatistics: vi.fn(),
+    getDaoEvidence: vi.fn(),
+    getDaoTotalDepositChart: vi.fn(),
+    getDaoCirculationRatioChart: vi.fn(),
+    getGlobalActivities: vi.fn(),
+    getTransactions: vi.fn(),
+  },
 }));
+vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="header" /> }));
 
-vi.mock('@/components/layout/header', () => ({
-  Header: () => <div data-testid="header">Header</div>,
-}));
+const stats = {
+  ...daoStatistics,
+  tipBlockNumber: 5,
+  totalDeposited: '50000000000',
+  totalDepositedCkb: '500',
+  daoFreeCapacity: '40000000000',
+  tipTotalIssuance: '1000000000000000',
+  tipProtocolOccupiedCapacity: '100000000',
+};
+const history = {
+  data: [{ date: '2024-01-15', value: '500', value2: '2' }],
+  title: 'Total Deposit',
+  yAxisLabel: 'CKB',
+  y2AxisLabel: 'Current depositors',
+};
+const ratio = { data: [{ date: '2024-01-15', value: '1.25' }], title: 'Ratio', yAxisLabel: '%' };
 
 describe('DaoPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    // The full /dao/statistics contract (every field is required by DaoStatisticsResponse).
-    vi.mocked(api.getDaoStatistics).mockResolvedValue({
-      ...daoStatistics,
-    });
-    vi.mocked(api.getDaoDeposits).mockResolvedValue({
-      data: [
-        {
-          txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          outputIndex: 0,
-          address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-          lockScriptHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
-          capacity: '10200000000',
-          status: 'deposited',
-          depositTimestamp: '2026-02-20T00:00:00Z',
-          withdrawRequestTxHash: null,
-          withdrawRequestOutputIndex: null,
-          withdrawTxHash: null,
-          withdrawToOutputIndex: null,
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
-    vi.mocked(api.lookupScripts).mockResolvedValue({
-      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8': {
-        name: 'Default Lock',
-      },
-    } as any);
-  });
-
-  it('renders script label in deposits table', async () => {
-    render(<DaoPage />);
-
-    expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(api.getDaoDeposits).toHaveBeenCalledWith({
-        limit: 50,
-        status: 0,
-        cursor: undefined,
-      });
-      expect(screen.getByText('Default Lock')).toBeInTheDocument();
-    });
-
-    expect(screen.getByRole('link', { name: 'Default Lock' })).toHaveAttribute(
-      'href',
-      '/mainnet/scripts/Default%20Lock'
-    );
-    expect(screen.getByRole('button', { name: 'Active Deposits' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Deposits' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Depositors' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
-    expect(screen.getByText('Showing 1-1 of 1 deposits, 50 per page')).toBeInTheDocument();
-    expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
-  });
-
-  it('shows undefined average deposit time as an em dash', async () => {
-    vi.mocked(api.getDaoStatistics).mockResolvedValue({
-      ...daoStatistics,
-      averageDepositDays: null,
-    });
-    render(<DaoPage />);
-    expect(await screen.findByText('Average Deposit Time')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThan(0));
-  });
-
-  it('does not append days to the already formatted average deposit time', async () => {
-    render(<DaoPage />);
-    expect(await screen.findByText('1.3K days+')).toBeInTheDocument();
-    expect(screen.getByText('Average Deposit Time').parentElement).not.toHaveTextContent(
-      '1.3K days+days'
-    );
-  });
-
-  it('distinguishes unavailable 24-hour DAO changes from exact zero changes', async () => {
-    vi.mocked(api.getDaoStatistics).mockResolvedValue({
-      ...daoStatistics,
-      depositChange24h: null,
-      depositorsChange24h: 0,
-      claimedCompensationChange24h: null,
-      unclaimedCompensationChange24h: null,
-    });
-    render(<DaoPage />);
-    await waitFor(() => expect(screen.getAllByText('24h: —')).toHaveLength(3));
-    expect(screen.getByText('→ 0')).toBeInTheDocument();
-  });
-
-  it('renders withdraw request tx as reference for withdrawing rows', async () => {
-    vi.mocked(api.getDaoDeposits).mockResolvedValueOnce({
-      data: [
-        {
-          txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          outputIndex: 0,
-          address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-          lockScriptHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
-          capacity: '10200000000',
-          status: 'withdrawing',
-          depositTimestamp: '2026-02-20T00:00:00Z',
-          withdrawRequestTxHash:
-            '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-          withdrawRequestOutputIndex: 3,
-          withdrawTxHash: null,
-          withdrawToOutputIndex: null,
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
-
-    render(<DaoPage />);
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getAllByRole('link')
-          .some(
-            (link) =>
-              link.getAttribute('href') ===
-              '/mainnet/cell/0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-3'
-          )
-      ).toBe(true);
-    });
-  });
-
-  it('renders withdraw-to cell as reference for withdrawn rows', async () => {
-    vi.mocked(api.getDaoDeposits).mockResolvedValueOnce({
-      data: [
-        {
-          txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          outputIndex: 0,
-          address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-          lockScriptHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
-          capacity: '10200000000',
-          status: 'withdrawn',
-          depositTimestamp: '2026-02-20T00:00:00Z',
-          withdrawRequestTxHash:
-            '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-          withdrawRequestOutputIndex: 1,
-          withdrawTxHash: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-          withdrawToOutputIndex: 2,
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as any);
-
-    render(<DaoPage />);
-
-    await waitFor(() => {
-      expect(
-        screen
-          .getAllByRole('link')
-          .some(
-            (link) =>
-              link.getAttribute('href') ===
-              '/mainnet/cell/0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-2'
-          )
-      ).toBe(true);
-    });
-  });
-});
-
-describe('DaoPage issuance and compensation breakdowns', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(api.getDaoDeposits).mockResolvedValue({
+    vi.resetAllMocks();
+    vi.mocked(api.getDaoStatistics).mockResolvedValue(stats);
+    vi.mocked(api.getDaoEvidence).mockResolvedValue(evidence);
+    vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(history);
+    vi.mocked(api.getDaoCirculationRatioChart).mockResolvedValue(ratio);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],
-      total: 0,
-      limit: 50,
       hasMore: false,
       nextCursor: null,
-    } as any);
-    vi.mocked(api.lookupScripts).mockResolvedValue({} as any);
-  });
-
-  it('prints every part exactly from its shannons, with exact shares', async () => {
-    vi.mocked(api.getDaoStatistics).mockResolvedValue({
-      ...daoStatistics,
+      limit: 12,
     });
-    render(<DaoPage />);
-    const issuance = await screen.findByTestId('dao-secondary-issuance');
-    // mining 96304962619313853, compensation 159838862391653367, burnt 674731136445379763 shannons
-    await waitFor(() => expect(issuance).toHaveTextContent('Mining Reward963,049,626.19313853'));
-    expect(issuance).toHaveTextContent('Deposit Compensation1,598,388,623.91653367');
-    expect(issuance).toHaveTextContent('Burnt6,747,311,364.45379763');
-    expect(issuance.querySelector('[data-part="mining"]')).toHaveAttribute('data-percent', '10.3');
-    const compensation = screen.getByTestId('dao-compensation');
-    expect(compensation).toHaveTextContent('Claimed760,797,612.35165103');
-    expect(compensation).toHaveTextContent('Unclaimed837,591,011.56488264');
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      hasMore: false,
+      nextCursor: null,
+      limit: 12,
+    });
   });
 
-  it('shows a missing amount as an error, never as 0', async () => {
-    const { miningReward: _gone, ...broken } = daoStatistics;
-    vi.mocked(api.getDaoStatistics).mockResolvedValue({
-      ...broken,
-    } as any);
+  it('renders the API-produced epoch, owner, AR and raw DAO evidence', async () => {
     render(<DaoPage />);
-    const issuance = await screen.findByTestId('dao-secondary-issuance');
-    expect(await within(issuance).findByRole('alert')).toHaveTextContent(
-      'miningReward "undefined" is not an integer shannon amount'
+    expect(screen.getByTestId('header')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'When deposits can leave' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/at indexed epoch 185\+2\/4/)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
+      'DAO epoch lock met: 400.00000000 CKB in 1 withdrawal-request cells'
     );
-    // The compensation breakdown does not depend on it and still reads.
-    expect(screen.getByTestId('dao-compensation')).toHaveTextContent('Claimed760,797,612.35165103');
+    expect(screen.getByText(/Current depositors: 2/)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
+    expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
+      'href',
+      '/mainnet/block/5'
+    );
+  });
+
+  it('shows evidence API errors instead of fabricated zero values', async () => {
+    vi.mocked(api.getDaoEvidence).mockRejectedValue(
+      new Error('missing canonical DAO header at block 4')
+    );
+    render(<DaoPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'missing canonical DAO header at block 4'
+    );
+    expect(
+      screen.queryByRole('heading', { name: 'When deposits can leave' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps capacity use visible at its statistics anchor when evidence has advanced', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({ ...stats, tipBlockNumber: 4 });
+    render(<DaoPage />);
+    expect(
+      await screen.findByText('Current capacity use at statistics block #4')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Protocol occupied includes the genesis virtual occupied baseline/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Verify statistics anchor block #4 →' })
+    ).toHaveAttribute('href', '/mainnet/block/4');
+  });
+
+  it('shows a canonical history error without an endless loading message', async () => {
+    vi.mocked(api.getDaoTotalDepositChart).mockRejectedValue(new Error('missing chart snapshot'));
+    render(<DaoPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'DAO daily history could not be loaded'
+    );
+    expect(screen.queryByText('Loading canonical daily history…')).not.toBeInTheDocument();
   });
 });
