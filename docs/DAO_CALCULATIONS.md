@@ -497,13 +497,21 @@ protocolTotalShannons = cum_miner_secondary + secondary_pool + claimed_compensat
 phase1CompensationShannons = unclaimed_compensation - active_unmade
 ```
 
-The API converts each shannon value to whole CKB for the stacked-area series. It does not
+The API converts each shannon value to an exact decimal CKB string for the stacked-area
+series, retaining all eight fractional digits when needed. It does not
 reconstruct these amounts from capacity percentages: miner issuance is the sum of exact
 per-block deltas, DAO compensation follows individual deposit lifecycles, and burnt/treasury is
 the exact residual of `S`. `protocolTotalShannons` remains in shannons and is not a displayed
 stack. `phase1CompensationShannons` also remains in shannons; it is materialized into the daily
 snapshot from the same exact lifecycle pass and lets verification normalize the official
 Explorer's legacy overlapping treasury partition without rescanning DAO entries at read time.
+
+The supply and secondary-issuance histories contain complete indexed calendar days only.
+The monotonic `chain_time_ms` calendar determines the current incomplete day, independently
+of the host clock. A certified blockless day carries the previous exact cumulative values,
+including the secondary-issuance evidence fields; a missing snapshot for a day containing
+canonical blocks is an error. Current DAO statistics remain a separately anchored response
+and must not be compared to the last complete chart day as if they described the same block.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::get_secondary_issuance_chart()`
 
