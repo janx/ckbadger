@@ -116,7 +116,7 @@ fn resolve_latest_block_and_ar_from_tip(
     Ok((block_number, ar, header.timestamp, s))
 }
 
-fn resolve_latest_block_and_ar(
+pub(super) fn resolve_latest_block_and_ar(
     state: &AppState,
     context: &str,
 ) -> Result<(i64, u64, i64, u64), ApiRouteError> {
@@ -261,7 +261,7 @@ pub struct CalculatorResponse {
 
 /// Convert a DAO deposit entry from the store to an API response.
 /// The outpoint_key encodes tx_hash(32B) + output_index(2B BE).
-fn deposit_to_response(
+pub(super) fn deposit_to_response(
     outpoint_key: &[u8],
     entry: &ckbadger_store::DaoDepositCacheEntry,
     state: &AppState,
@@ -497,7 +497,7 @@ async fn get_deposits_by_address(
 /// Takes the whole state (not just the store) so the genesis baseline comes from
 /// `AppState::genesis_baseline()` — the single read path for it, including its
 /// "still initializing" reporting — instead of a second, divergent copy here.
-fn estimated_apc_from_state(state: &AppState) -> Result<String, ApiRouteError> {
+pub(super) fn estimated_apc_from_state(state: &AppState) -> Result<String, ApiRouteError> {
     let tip = state
         .store
         .get_sync_tip_block()

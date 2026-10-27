@@ -291,19 +291,21 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 ### cells (crates/api/src/routes/cells.rs)
 
-| Method | Path                                             | Handler                     | Purpose                                                                                                                                                                         |
-| ------ | ------------------------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/cells/live-summary`                     | `get_live_cell_summary`     | Exact O(1) live-cell class/data counts at a verifiable canonical tip                                                                                                            |
-| GET    | `/api/v1/cells/live`                             | `list_live_cells`           | List live cells with optional lock/type/type_code_hash filters (cursor)                                                                                                         |
-| GET    | `/api/v1/cells/by-script`                        | `list_cells_by_script`      | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`)                                                                               |
-| GET    | `/api/v1/cells/{tx_hash}/{output_index}`         | `get_cell`                  | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                                                                                               |
-| GET    | `/api/v1/addresses/top`                          | `get_top_addresses`         | Top addresses by balance (warmup cache)                                                                                                                                         |
-| GET    | `/api/v1/addresses/active`                       | `get_active_addresses`      | Most-active addresses in last N `days` (warmup cache)                                                                                                                           |
-| GET    | `/api/v1/addresses/{addr}`                       | `get_address`               | Address summary (balance, used_capacity, live_cells_count, lock_script info)                                                                                                    |
-| GET    | `/api/v1/addresses/{addr}/transactions`          | `get_address_transactions`  | List recent transactions for an address (cursor)                                                                                                                                |
-| GET    | `/api/v1/addresses/prefix/{prefix}/transactions` | `get_prefix_transactions`   | List the transactions a protocol NAMED a 20-byte lock-hash prefix in without it holding a cell (cursor) — the `addr_txs_by_prefix` half of an address's history, read as itself |
-| GET    | `/api/v1/addresses/{addr}/tokens`                | `get_address_tokens`        | List token balances for an address (cursor)                                                                                                                                     |
-| GET    | `/api/v1/addresses/{addr}/dotcell-names`         | `get_address_dotcell_names` | List the `.cell` names this address owns (cursor). A name's owner is the first 20 bytes of its owner's lock hash, so this is a prefix seek on the address's own lock hash       |
+| Method | Path                                             | Handler                      | Purpose                                                                                                                                                                         |
+| ------ | ------------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/cells/live-summary`                     | `get_live_cell_summary`      | Exact O(1) live-cell class/data counts at a verifiable canonical tip                                                                                                            |
+| GET    | `/api/v1/cells/live`                             | `list_live_cells`            | List live cells with optional lock/type/type_code_hash filters (cursor)                                                                                                         |
+| GET    | `/api/v1/cells/by-script`                        | `list_cells_by_script`       | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`)                                                                               |
+| GET    | `/api/v1/cells/{tx_hash}/{output_index}`         | `get_cell`                   | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                                                                                               |
+| GET    | `/api/v1/addresses/top`                          | `get_top_addresses`          | Top addresses by balance (warmup cache)                                                                                                                                         |
+| GET    | `/api/v1/addresses/active`                       | `get_active_addresses`       | Most-active addresses in last N `days` (warmup cache)                                                                                                                           |
+| GET    | `/api/v1/addresses/{addr}`                       | `get_address`                | Address summary (balance, used_capacity, live_cells_count, lock_script info)                                                                                                    |
+| GET    | `/api/v1/addresses/{addr}/transactions`          | `get_address_transactions`   | List recent transactions for an address (cursor)                                                                                                                                |
+| GET    | `/api/v1/addresses/prefix/{prefix}/transactions` | `get_prefix_transactions`    | List the transactions a protocol NAMED a 20-byte lock-hash prefix in without it holding a cell (cursor) — the `addr_txs_by_prefix` half of an address's history, read as itself |
+| GET    | `/api/v1/addresses/{addr}/tokens`                | `get_address_tokens`         | List token balances for an address (cursor)                                                                                                                                     |
+| GET    | `/api/v1/addresses/{addr}/holdings`              | `address_holdings::holdings` | Exact current physical holdings and six-class live-cell capacity totals                                                                                                         |
+| GET    | `/api/v1/addresses/{addr}/cells`                 | `address_holdings::cells`    | Current physical cells, optionally filtered by class before cursor pagination                                                                                                   |
+| GET    | `/api/v1/addresses/{addr}/dotcell-names`         | `get_address_dotcell_names`  | List the `.cell` names this address owns (cursor). A name's owner is the first 20 bytes of its owner's lock hash, so this is a prefix seek on the address's own lock hash       |
 
 **Params**
 
@@ -405,6 +407,87 @@ merged transaction list beneath it. Pool rows stay out of both and are reported 
 - `Vec<TopAddressResponse>` / `Vec<ActiveAddressResponse>`
 - `CursorPaginatedResponse<AddressTransactionResponse>` — tx_type, capacity_change, script_labels
 - `CursorPaginatedResponse<AddressTokenResponse>` — per-address token balance
+
+**Current address holdings (Address v3)**
+
+`GET /addresses/{addr}/holdings` streams the complete existing owner live-cell
+index in one pinned read view. It returns:
+
+- `lockScriptHash`, `balance`, `occupiedCapacity`, `freeCapacity`,
+  `daoFreeCapacity`, `liveCellsCount`.
+- `classes`: fixed keys `dao`, `token`, `object`, `identity`, `script`, `plain`;
+  each contains `cellCount`, `capacity`, `occupiedCapacity`.
+- `holdings`: `dao` counts live DAO cells (both phases), `token` counts distinct
+  types with a positive balance, `object` and `identity` count current items.
+  A zero-amount token cell contributes capacity and a token cell count, but no
+  positive-balance token holding; this agrees with `/addresses/{addr}/tokens`.
+- `depositCellsCount`, `withdrawalRequestCellsCount`, `daoUnclaimedCompensation`,
+  `estimatedApc` (string, or null without current DAO cells).
+- `objectComposition`: fixed counters `pureCkb`, `btcCkb`,
+  `decentralizedMixture`, `centralizedMixture`, `unknown`, `decodePending`.
+- `objectCollections`: `{id: string|null, standard: string, name: string|null,
+itemCount: number, compositionCounts: <the same six counters>}`. These are
+  whole-owner totals, independent of the currently displayed item page.
+
+All capacities/compensation are exact decimal **shannon strings**. The disjoint
+partition is `balance = occupiedCapacity + freeCapacity + daoFreeCapacity`;
+`freeCapacity` excludes DAO free capacity. DAO holdings follow the current cell
+lock, including a withdrawal request received from another depositor. The older
+`/dao/deposits/{lock_hash}` and `/dao/summary/{lock_hash}` describe the original
+depositor's lifecycle history and must not stand in for current holdings.
+
+`GET /addresses/{addr}/cells` accepts `class=dao|token|object|identity|script|plain`
+(omit for all), `limit` (default 50, range 1–100), and an opaque `cursor`. Cursors
+are bound to the owner and class; changing either requires starting a new page.
+The response is `CursorPaginatedResponse<AddressCell>`, with an exact `total` of
+all matching current cells. Each row has these required keys:
+
+```typescript
+interface AddressCell {
+  txHash: string;
+  outputIndex: number;
+  capacity: string;
+  occupiedCapacity: string;
+  lockScriptHash: string;
+  typeScriptHash: string | null;
+  typeCodeHash: string | null;
+  typeHashType: string | null; // exact data/type/data1/data2, never inferred
+  dataSize: number;
+  createdAtBlock: number;
+  class: 'dao' | 'token' | 'object' | 'identity' | 'script' | 'plain';
+  display: TransactionCellDisplay | null;
+  expiresAt: number | null; // identity Unix seconds, where the protocol has expiry
+  heldSinceBlock: number | null; // identity continuous physical ownership
+  dao: DaoDepositResponse | null; // original deposit evidence for this current cell
+}
+```
+
+`display` reuses the transaction-cell descriptor. Current mNFT holdings may use
+the current class name/composition, while historical transaction tiles retain
+their immutable-evidence rules. `createdAtBlock` is the current outpoint creation
+height; identity `heldSinceBlock` additionally follows canonical same-owner
+consume/recreate links. Transfers and disconnected burn/remint lifecycles reset
+that interval. For a DAO request, the row outpoint/lock is the current cell and
+`dao.txHash`/`dao.lockScriptHash` identify the original deposit/depositor.
+
+Both endpoints use O(owner live cells) reads with streaming aggregation and no
+scan ceiling. The page retains at most `limit + 1` cells. The summary retains
+distinct item/token identities and collection counters, not every cell payload,
+and reads no raw node transactions. Only returned cell descriptors requiring
+raw bytes read the configured node RocksDB; absence is an explicit error, with
+no RPC fallback. Identity page rows also read that item's existing reverse
+outpoint history. Broken index targets, inconsistent balance aggregates, or
+contradictory item evidence are errors, not partial totals. No store is written.
+
+These physical counts deliberately exclude protocol-named `.cell` rights held
+through an owner/manager lock-hash prefix. Keep `/addresses/{addr}/dotcell-names`
+as a separate named-rights view; do not add its cells/capacity to this partition.
+
+Address transaction rows expose required `cycles: number|null` and
+`cyclesStatus: 'complete'|'pending'|'failed'`. Committed cellbase/genesis rows
+have zero complete execution; pending/failed persisted sentinels are never
+exposed as measured cycles. Pool rows use the node's exact cycles and complete
+status.
 
 ---
 

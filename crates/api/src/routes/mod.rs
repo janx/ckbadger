@@ -1,4 +1,5 @@
 pub(crate) mod activities;
+mod address_holdings;
 pub(crate) mod address_pool;
 pub(crate) mod address_presence;
 pub mod assets;
@@ -41,6 +42,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(blocks::routes())
         .merge(transactions::routes())
         .merge(cells::routes())
+        .merge(address_holdings::routes())
         .merge(statistics::routes())
         .merge(graph::routes())
         .merge(hardforks::routes())
