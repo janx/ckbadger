@@ -269,13 +269,13 @@ export function TxStructure({
                 onFocus={() => setHover({ kind: 'group', id: g.id })}
                 onBlur={() => setHover(null)}
                 className={cn(
-                  'grid gap-2 py-3 text-xs sm:grid-cols-2 lg:grid-cols-4',
+                  'grid min-w-0 gap-2 py-3 text-xs sm:grid-cols-2 lg:grid-cols-4',
                   (hover?.id === g.id ||
                     (hover?.kind === 'cell' && g.cellIds.includes(hover.id))) &&
                     'bg-base-surface'
                 )}
               >
-                <span>
+                <span className="min-w-0 break-all">
                   <span className="text-text-dim mr-2">{g.kind}</span>
                   <Link href={g.href} className="text-text-bright hover:text-jade">
                     {g.label}
@@ -284,9 +284,9 @@ export function TxStructure({
                     {g.executed ? 'executed' : 'not executed'}
                   </span>
                 </span>
-                <span className="text-text-dim">{g.cellIds.join(', ')}</span>
-                <div>{g.witness}</div>
-                <div>
+                <span className="text-text-dim min-w-0 break-all">{g.cellIds.join(', ')}</span>
+                <div className="min-w-0 break-all">{g.witness}</div>
+                <div className="min-w-0 break-all">
                   {g.dependency}
                   {g.cycles !== undefined && (
                     <span className="text-text-dim block">

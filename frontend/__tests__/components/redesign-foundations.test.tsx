@@ -229,6 +229,34 @@ describe('byte and DNA inspection', () => {
 });
 
 describe('transaction and activity foundations', () => {
+  it('keeps a full dependency outpoint inside a shrinkable script-group column', () => {
+    const outpoint = `0x${'ab'.repeat(32)}:4294967295 (depGroup)`;
+    const { container } = render(
+      <TxStructure
+        txHash="0xlong-dependency"
+        inputs={[cell]}
+        outputs={[]}
+        fee="0"
+        groups={[
+          {
+            id: 'lock:long',
+            kind: 'lock',
+            label: 'long dependency',
+            href: '/scripts/long',
+            cellIds: [cell.id],
+            executed: true,
+            witness: 'Witness 0',
+            dependency: outpoint,
+          },
+        ]}
+      />
+    );
+    const group = container.querySelector('[data-group-id="lock:long"]');
+    expect(group).toHaveClass('min-w-0');
+    const dependency = screen.getByText(outpoint);
+    expect(dependency).toHaveClass('min-w-0', 'break-all');
+    expect(dependency).toHaveTextContent(outpoint);
+  });
   it('cross-highlights resolved script groups, cells and continuity using hover and keyboard focus', () => {
     const output = { ...cell, id: 'out:0', label: 'output 0', state: 'live' };
     const { container } = render(
