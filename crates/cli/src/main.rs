@@ -940,6 +940,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
                 ckb_network: config.ckb.network.clone(),
+                metadata_path: work.metadata.clone(),
                 host: config.api.host.clone(),
                 port: config.api.port,
                 rate_limit: config.api.rate_limit,

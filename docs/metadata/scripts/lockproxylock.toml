@@ -1,4 +1,5 @@
 name = "LockProxyLock"
+role = "lock"
 description = "Delegates unlocking authority to another lock script."
 
 [mainnet]

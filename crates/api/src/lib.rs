@@ -81,6 +81,7 @@ pub struct AppState {
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
+    pub script_roles: std::collections::HashMap<String, (String, String)>,
     /// The chain's consensus parameters (proposal window, block limits), read
     /// from the node's `get_consensus` on first use. Use [`AppState::consensus`].
     pub consensus: Arc<ConsensusCell>,
@@ -231,6 +232,8 @@ pub struct AppConfig {
     pub crawler_enabled: bool,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
+    /// Effective workdir metadata overlay, if present (same source as indexer label import).
+    pub metadata_path: Option<PathBuf>,
     /// Consensus parameters the caller already holds — test fixtures hand the
     /// API a chain's parameters this way. Production passes `None`: the API
     /// reads them from the node's `get_consensus` on first use.
@@ -294,6 +297,11 @@ pub async fn dispatch_initial_warmup(state: Arc<AppState>, defer: bool) {
 }
 
 pub async fn create_router(config: AppConfig) -> Router {
+    let script_roles = ckbadger_indexer::label_import::effective_script_roles(
+        config.metadata_path.as_deref(),
+        &config.ckb_network,
+    )
+    .expect("failed to read effective script metadata roles");
     let ws_manager = Arc::new(WsManager::new());
 
     let cache = CacheBackend::new();
@@ -333,6 +341,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        script_roles,
         consensus: Arc::new(match config.consensus {
             Some(params) => ConsensusCell::preloaded(params),
             None => ConsensusCell::new(),

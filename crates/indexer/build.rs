@@ -33,6 +33,8 @@ struct ScriptMetadata {
     metadata_slug: Option<String>,
     name: String,
     #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     website: Option<String>,

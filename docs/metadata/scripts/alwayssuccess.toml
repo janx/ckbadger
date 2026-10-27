@@ -1,4 +1,5 @@
 name = "AlwaysSuccess"
+role = "lock+type"
 description = "A simple script that always succeeds."
 
 [mainnet]

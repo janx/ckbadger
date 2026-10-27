@@ -1,4 +1,5 @@
 name = "TimeLock"
+role = "lock"
 description = "Since-based lock (time/block/epoch) with additional lock script verification."
 
 [mainnet]

@@ -277,6 +277,7 @@ pub fn test_config_with_ckb_db_path(
         crawler_enabled: false,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
+        metadata_path: None,
         consensus: Some(mainnet_consensus()),
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
@@ -312,6 +313,11 @@ pub fn test_config_with_network(
 }
 
 pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
+    let script_roles = ckbadger_indexer::label_import::effective_script_roles(
+        config.metadata_path.as_deref(),
+        &config.ckb_network,
+    )
+    .unwrap();
     Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
@@ -321,6 +327,7 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         cache: CacheBackend::new(),
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
+        script_roles,
         consensus: Arc::new(match config.consensus {
             Some(params) => ConsensusCell::preloaded(params),
             None => ConsensusCell::new(),

@@ -1,4 +1,5 @@
 name = "EasyToDiscoverType"
+role = "type"
 description = "Reveals cell data through type script arguments."
 
 [mainnet]

@@ -1,4 +1,5 @@
 name = "Godwoken ETH Account Lock"
+role = "lock"
 description = "A layer-2 lock script, ETH account lock is a script that verifies the layer-2 account signature."
 website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#eth-account-lock"
 

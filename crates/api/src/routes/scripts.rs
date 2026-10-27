@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use ckb_types::{packed, prelude::*};
 use ckbadger_store::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -14,8 +15,10 @@ use std::sync::Arc;
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
     decode_cursor_single, default_limit, encode_cursor_single, ok, ApiError, ApiResult,
-    ApiRouteError, CursorPaginatedResponse, ScriptFamilyDetailResponse,
-    ScriptFamilyListItemResponse, ScriptObservedReferenceResponse, ScriptVersionDeploymentResponse,
+    ApiRouteError, CursorPaginatedResponse, ScriptCodeClassTotalResponse,
+    ScriptCustodyOwnerResponse, ScriptCustodyResponse, ScriptFamiliesListResponse,
+    ScriptFamilyDetailResponse, ScriptFamilyListItemResponse, ScriptHistoryMarkerResponse,
+    ScriptObservedReferenceResponse, ScriptRoleCountsResponse, ScriptVersionDeploymentResponse,
     ScriptVersionDetailResponse,
 };
 use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
@@ -75,6 +78,7 @@ pub struct ListParams {
     #[serde(rename = "decoder_type")]
     _decoder_type: Option<String>,
     search: Option<String>,
+    role: Option<String>,
     #[serde(default = "default_script_sort_key")]
     sort_key: ScriptSortKey,
     #[serde(default = "default_sort_direction")]
@@ -255,6 +259,454 @@ fn script_kind_from_counts(lock_cells_count: i64, type_cells_count: i64) -> Opti
         (true, false) => Some("lock".to_string()),
         (false, true) => Some("type".to_string()),
         (false, false) => None,
+    }
+}
+
+/// Usage is the authority once the chain observes a role. An unused family
+/// uses its declared role from the same effective bundled/workdir registry
+/// metadata as label import. Check names so stale declarations fail loudly.
+fn script_kind_for_family(
+    state: &AppState,
+    info: &ckbadger_store::types::ScriptFamilyInfo,
+) -> Result<Option<String>, ApiRouteError> {
+    if let Some(observed) = script_kind_from_counts(info.lock_cells_count, info.type_cells_count) {
+        return Ok(Some(observed));
+    }
+    let Some((name, role)) = state.script_roles.get(&info.family_id) else {
+        return Ok(None);
+    };
+    if name != &info.name {
+        return Err(ApiError::internal(format!(
+            "effective script role name conflicts with imported family {} ({})",
+            info.family_id, info.name
+        )));
+    }
+    Ok(Some(role.clone()))
+}
+
+const SECP_TYPE_HASH: &str = "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+const MULTISIG_TYPE_HASHES: [&str; 2] = [
+    "5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+    "d1a9f877aed3f5e07cb9c52b61ab96d06f250ae6883cc7f0a2423db0976fc821",
+];
+const MULTISIG_DATA1_HASH: &str =
+    "36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29";
+
+fn custody_without_witness(
+    class: &str,
+    cell: Option<&ckbadger_store::types::LiveCellInfo>,
+) -> ScriptCustodyResponse {
+    ScriptCustodyResponse {
+        class: class.to_string(),
+        lock_code_hash: cell.map(|c| format!("0x{}", hex::encode(&c.lock_code_hash))),
+        lock_hash_type: cell
+            .and_then(|c| u8::try_from(c.lock_hash_type).ok())
+            .and_then(hash_type_to_string)
+            .map(str::to_string),
+        lock_args: cell.map(|c| format!("0x{}", hex::encode(&c.lock_args))),
+        threshold: None,
+        key_count: None,
+        require_first_n: None,
+        key_hashes: Vec::new(),
+        verified_by_tx: None,
+        witness_state: if class == "fixed" || class == "unspendable" {
+            "not_applicable"
+        } else {
+            "unavailable"
+        }
+        .to_string(),
+        owners: Vec::new(),
+    }
+}
+
+fn classify_code_cell_lock(
+    cell: &ckbadger_store::types::LiveCellInfo,
+) -> Result<ScriptCustodyResponse, ApiRouteError> {
+    let kind = match (cell.lock_code_hash.as_slice(), cell.lock_hash_type) {
+        (hash, 0) if hash == [0u8; 32] => "unspendable",
+        (hash, 1) if hex::encode(hash) == SECP_TYPE_HASH && cell.lock_args.len() == 20 => "one_key",
+        (hash, 1)
+            if MULTISIG_TYPE_HASHES.contains(&hex::encode(hash).as_str())
+                && matches!(cell.lock_args.len(), 20 | 28) =>
+        {
+            "multisig"
+        }
+        (hash, 2)
+            if hex::encode(hash) == MULTISIG_DATA1_HASH
+                && matches!(cell.lock_args.len(), 20 | 28) =>
+        {
+            "multisig"
+        }
+        _ => "unsupported",
+    };
+    if hash_type_to_string(u8::try_from(cell.lock_hash_type).map_err(|_| {
+        ApiError::internal(format!(
+            "invalid code-cell lock hash type {}",
+            cell.lock_hash_type
+        ))
+    })?)
+    .is_none()
+    {
+        return Err(ApiError::internal(format!(
+            "invalid code-cell lock hash type {}",
+            cell.lock_hash_type
+        )));
+    }
+    Ok(custody_without_witness(kind, Some(cell)))
+}
+
+/// A lock cannot have supplied a signing witness if none of its cells has ever
+/// been consumed. The address balance counts *all* cells under this exact lock
+/// hash, including non-code cells; a missing row is insufficient evidence.
+fn mark_never_signed_if_proven(
+    state: &AppState,
+    cell: &ckbadger_store::types::LiveCellInfo,
+    custody: &mut ScriptCustodyResponse,
+) -> Result<(), ApiRouteError> {
+    if custody.class != "multisig" {
+        return Ok(());
+    }
+    let balance = state
+        .store
+        .get_addr_balance(&cell.lock_script_hash)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "custodian address balance 0x{}: {e}",
+                hex::encode(&cell.lock_script_hash)
+            ))
+        })?;
+    if let Some(balance) = balance {
+        if balance.total_cells_count < i64::from(balance.live_cells_count)
+            || balance.live_cells_count < 0
+        {
+            return Err(ApiError::internal(format!(
+                "invalid custodian cell counts at lock 0x{}: total={} live={}",
+                hex::encode(&cell.lock_script_hash),
+                balance.total_cells_count,
+                balance.live_cells_count
+            )));
+        }
+        if balance.total_cells_count > 0
+            && balance.total_cells_count == i64::from(balance.live_cells_count)
+        {
+            custody.witness_state = "never_signed".to_string();
+        }
+    }
+    Ok(())
+}
+
+/// The legacy and v2 system multisig locks commit the S/R/M/N config plus N
+/// key hashes in the first twenty bytes of lock args. Signatures follow that
+/// config in the first group witness and are deliberately excluded from the
+/// committed hash. See ckb-system-scripts/secp256k1_blake160_multisig_all.c.
+fn verified_multisig_config(
+    lock_args: &[u8],
+    witness: &[u8],
+    tx_hash: &[u8],
+) -> Result<ScriptCustodyResponse, ApiRouteError> {
+    let parsed = packed::WitnessArgs::from_slice(witness).map_err(|e| {
+        ApiError::internal(format!(
+            "multisig witness in tx 0x{} is invalid WitnessArgs: {e}",
+            hex::encode(tx_hash)
+        ))
+    })?;
+    let lock = parsed.lock().to_opt().ok_or_else(|| {
+        ApiError::internal(format!(
+            "multisig witness in tx 0x{} has no lock field",
+            hex::encode(tx_hash)
+        ))
+    })?;
+    let bytes = lock.raw_data();
+    if bytes.len() < 4 {
+        return Err(ApiError::internal(format!(
+            "multisig witness in tx 0x{} lacks S/R/M/N",
+            hex::encode(tx_hash)
+        )));
+    }
+    let (s, r, m, n) = (bytes[0], bytes[1], bytes[2], bytes[3]);
+    if s != 0 || n == 0 || m == 0 || m > n || r > m {
+        return Err(ApiError::internal(format!(
+            "invalid multisig config in tx 0x{}: S={s} R={r} M={m} N={n}",
+            hex::encode(tx_hash)
+        )));
+    }
+    let config_len = 4usize + 20usize * n as usize;
+    let expected_len = config_len + 65usize * m as usize;
+    if bytes.len() != expected_len {
+        return Err(ApiError::internal(format!(
+            "multisig witness length mismatch in tx 0x{}: got {} expected {expected_len}",
+            hex::encode(tx_hash),
+            bytes.len()
+        )));
+    }
+    if !matches!(lock_args.len(), 20 | 28)
+        || ckb_hash::blake2b_256(&bytes[..config_len])[..20] != lock_args[..20]
+    {
+        return Err(ApiError::internal(format!(
+            "multisig config hash differs from lock args in tx 0x{}",
+            hex::encode(tx_hash)
+        )));
+    }
+    Ok(ScriptCustodyResponse {
+        class: "multisig".to_string(),
+        lock_code_hash: None,
+        lock_hash_type: None,
+        lock_args: Some(format!("0x{}", hex::encode(lock_args))),
+        threshold: Some(m),
+        key_count: Some(n),
+        require_first_n: Some(r),
+        key_hashes: bytes[4..config_len]
+            .as_chunks::<20>()
+            .0
+            .iter()
+            .map(|key| format!("0x{}", hex::encode(key)))
+            .collect(),
+        verified_by_tx: Some(format!("0x{}", hex::encode(tx_hash))),
+        witness_state: "verified".to_string(),
+        owners: Vec::new(),
+    })
+}
+
+fn attach_multisig_witness(
+    state: &AppState,
+    tx_hash: &[u8],
+    output_index: i16,
+    cell: &ckbadger_store::types::LiveCellInfo,
+    consuming_tx: Option<&[u8]>,
+    custody: &mut ScriptCustodyResponse,
+) -> Result<(), ApiRouteError> {
+    if custody.class != "multisig" {
+        return Ok(());
+    }
+    let Some(consuming_tx) = consuming_tx else {
+        return Ok(());
+    };
+    let Some(reader) = &state.ckb_store else {
+        return Ok(());
+    };
+    let hash: [u8; 32] = consuming_tx.try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "invalid consuming tx hash for 0x{}:{}",
+            hex::encode(tx_hash),
+            output_index
+        ))
+    })?;
+    let view = reader.get_transaction(&hash).ok_or_else(|| {
+        ApiError::internal(format!(
+            "missing committed upgrade tx 0x{} from node store",
+            hex::encode(consuming_tx)
+        ))
+    })?;
+    let tx = ckb_store_reader::convert_transaction_view(&view);
+    let mut first_group_input = None;
+    let mut target_seen = false;
+    for (index, input) in tx.inputs.iter().enumerate() {
+        let input_hash = hex::decode(input.previous_output.tx_hash.trim_start_matches("0x"))
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "invalid upgrade input hash in 0x{}: {e}",
+                    hex::encode(consuming_tx)
+                ))
+            })?;
+        let input_index =
+            u32::from_str_radix(input.previous_output.index.trim_start_matches("0x"), 16).map_err(
+                |e| {
+                    ApiError::internal(format!(
+                        "invalid upgrade input index in 0x{}: {e}",
+                        hex::encode(consuming_tx)
+                    ))
+                },
+            )?;
+        let input_index = i16::try_from(input_index).map_err(|_| {
+            ApiError::internal(format!(
+                "upgrade input index exceeds i16 in 0x{}",
+                hex::encode(consuming_tx)
+            ))
+        })?;
+        if input_hash == tx_hash && input_index == output_index {
+            target_seen = true;
+        }
+        let input_cell = state
+            .append_only_store
+            .get_cell_by_outpoint_key(&ckbadger_store::keys::encode_outpoint(
+                &input_hash,
+                input_index,
+            ))
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "upgrade input cell in 0x{}: {e}",
+                    hex::encode(consuming_tx)
+                ))
+            })?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing canonical upgrade input 0x{}:{} in tx 0x{}",
+                    hex::encode(input_hash),
+                    input_index,
+                    hex::encode(consuming_tx)
+                ))
+            })?;
+        if input_cell.lock_script_hash == cell.lock_script_hash && first_group_input.is_none() {
+            first_group_input = Some(index);
+        }
+    }
+    if !target_seen {
+        return Err(ApiError::internal(format!(
+            "consuming tx 0x{} does not input code cell 0x{}:{}",
+            hex::encode(consuming_tx),
+            hex::encode(tx_hash),
+            output_index
+        )));
+    }
+    let witness_index = first_group_input.ok_or_else(|| {
+        ApiError::internal(format!(
+            "no lock group for code cell 0x{}:{} in 0x{}",
+            hex::encode(tx_hash),
+            output_index,
+            hex::encode(consuming_tx)
+        ))
+    })?;
+    let witness = tx.witnesses.get(witness_index).ok_or_else(|| {
+        ApiError::internal(format!(
+            "missing multisig witness {witness_index} in 0x{}",
+            hex::encode(consuming_tx)
+        ))
+    })?;
+    let witness = hex::decode(witness.trim_start_matches("0x")).map_err(|e| {
+        ApiError::internal(format!(
+            "invalid witness hex in 0x{}: {e}",
+            hex::encode(consuming_tx)
+        ))
+    })?;
+    let verified = verified_multisig_config(&cell.lock_args, &witness, consuming_tx)?;
+    custody.threshold = verified.threshold;
+    custody.key_count = verified.key_count;
+    custody.require_first_n = verified.require_first_n;
+    custody.key_hashes = verified.key_hashes;
+    custody.verified_by_tx = verified.verified_by_tx;
+    custody.witness_state = verified.witness_state;
+    Ok(())
+}
+
+fn reference_custody(
+    state: &AppState,
+    reference_hash: &[u8],
+    hash_type: u8,
+) -> Result<ScriptCustodyResponse, ApiRouteError> {
+    match hash_type {
+        0 | 2 | 4 => Ok(custody_without_witness("fixed", None)),
+        1 => {
+            let current = reference_form_member_version(
+                &state.store,
+                &state.append_only_store,
+                hash_type,
+                reference_hash,
+                &|_| true,
+            )
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "current code binding for type reference 0x{}: {e}",
+                    hex::encode(reference_hash)
+                ))
+            })?;
+            if current.is_none() {
+                return Ok(custody_without_witness("retired", None));
+            }
+            let cells = state
+                .store
+                .list_cells_by_type(reference_hash, usize::MAX, None, &state.append_only_store)
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "code cells for type reference 0x{}: {e}",
+                        hex::encode(reference_hash)
+                    ))
+                })?;
+            if cells.is_empty() {
+                return Ok(custody_without_witness("retired", None));
+            }
+            let mut version = None;
+            let mut owners: BTreeMap<(Vec<u8>, i16, Vec<u8>), (String, Vec<String>, bool)> =
+                BTreeMap::new();
+            for (tx_hash, output_index, cell) in cells {
+                let data_hash = cell.data_hash.as_ref().ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "live code cell 0x{}:{} for type reference 0x{} lacks data hash",
+                        hex::encode(&tx_hash),
+                        output_index,
+                        hex::encode(reference_hash)
+                    ))
+                })?;
+                if version
+                    .as_ref()
+                    .is_some_and(|previous| previous != data_hash)
+                {
+                    return Ok(custody_without_witness("ambiguous", None));
+                }
+                version = Some(data_hash.clone());
+                let mut custody = classify_code_cell_lock(&cell.cell)?;
+                mark_never_signed_if_proven(state, &cell.cell, &mut custody)?;
+                let key = (
+                    cell.lock_code_hash.clone(),
+                    cell.lock_hash_type,
+                    cell.lock_args.clone(),
+                );
+                let entry = owners.entry(key).or_insert_with(|| {
+                    (
+                        custody.class,
+                        Vec::new(),
+                        custody.witness_state == "never_signed",
+                    )
+                });
+                entry
+                    .1
+                    .push(format!("0x{}:{}", hex::encode(&tx_hash), output_index));
+            }
+            let mut owner_rows = Vec::with_capacity(owners.len());
+            let single_owner_never_signed =
+                owners.len() == 1 && owners.values().next().is_some_and(|(_, _, never)| *never);
+            for ((code_hash, hash_type, args), (class, code_cells, _)) in owners {
+                owner_rows.push(ScriptCustodyOwnerResponse {
+                    lock_code_hash: format!("0x{}", hex::encode(code_hash)),
+                    lock_hash_type: hash_type_to_string(u8::try_from(hash_type).map_err(|_| {
+                        ApiError::internal(format!(
+                            "invalid lock hash type {hash_type} for reference 0x{}",
+                            hex::encode(reference_hash)
+                        ))
+                    })?)
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "invalid lock hash type {hash_type} for reference 0x{}",
+                            hex::encode(reference_hash)
+                        ))
+                    })?
+                    .to_string(),
+                    lock_args: format!("0x{}", hex::encode(args)),
+                    class,
+                    code_cells,
+                });
+            }
+            let mut custody = if owner_rows.len() == 1 {
+                let owner = &owner_rows[0];
+                ScriptCustodyResponse {
+                    class: owner.class.clone(),
+                    lock_code_hash: Some(owner.lock_code_hash.clone()),
+                    lock_hash_type: Some(owner.lock_hash_type.clone()),
+                    lock_args: Some(owner.lock_args.clone()),
+                    ..custody_without_witness(&owner.class, None)
+                }
+            } else {
+                custody_without_witness("mixed", None)
+            };
+            if single_owner_never_signed {
+                custody.witness_state = "never_signed".to_string();
+            }
+            custody.owners = owner_rows;
+            Ok(custody)
+        }
+        _ => Err(ApiError::internal(format!(
+            "unknown script reference hash type {hash_type}: 0x{}",
+            hex::encode(reference_hash)
+        ))),
     }
 }
 
@@ -542,12 +994,15 @@ fn family_display_name(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
     info.name.as_str()
 }
 
-fn family_used_as_for_sort(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
+fn family_used_as_for_sort<'a>(
+    info: &ckbadger_store::types::ScriptFamilyInfo,
+    declared: Option<&'a str>,
+) -> &'a str {
     match (info.lock_cells_count > 0, info.type_cells_count > 0) {
         (true, true) => "lock+type",
         (true, false) => "lock",
         (false, true) => "type",
-        (false, false) => "",
+        (false, false) => declared.unwrap_or(""),
     }
 }
 
@@ -565,6 +1020,7 @@ fn compare_script_family_entries(
     right: &(String, ckbadger_store::types::ScriptFamilyInfo),
     sort_key: ScriptSortKey,
     direction: SortDirection,
+    roles: &HashMap<String, String>,
 ) -> Ordering {
     let compared = match sort_key {
         ScriptSortKey::Name => apply_direction(
@@ -572,7 +1028,9 @@ fn compare_script_family_entries(
             direction,
         ),
         ScriptSortKey::UsedAs => apply_direction(
-            family_used_as_for_sort(&left.1).cmp(family_used_as_for_sort(&right.1)),
+            family_used_as_for_sort(&left.1, roles.get(&left.0).map(String::as_str)).cmp(
+                family_used_as_for_sort(&right.1, roles.get(&right.0).map(String::as_str)),
+            ),
             direction,
         ),
         ScriptSortKey::Description => apply_direction(
@@ -615,6 +1073,7 @@ fn compare_script_family_entries(
 }
 
 fn script_family_to_response(
+    state: &AppState,
     family_id: &str,
     info: &ckbadger_store::types::ScriptFamilyInfo,
 ) -> Result<ScriptFamilyListItemResponse, ApiRouteError> {
@@ -623,7 +1082,7 @@ fn script_family_to_response(
         family_id: family_id.to_string(),
         name: info.name.clone(),
         description: info.description.clone(),
-        script_kind: script_kind_from_counts(info.lock_cells_count, info.type_cells_count),
+        script_kind: script_kind_for_family(state, info)?,
         deprecated: info.deprecated,
         website: info.website.clone(),
         live_cells_count: info.live_cells_count,
@@ -631,6 +1090,7 @@ fn script_family_to_response(
         owned_capacity_sum: owned_capacity.to_string(),
         owned_knowledge_sum: owned_knowledge.to_string(),
         versions_count: info.versions_count,
+        code_classes: family_code_classes(state, family_id)?,
     })
 }
 
@@ -644,8 +1104,10 @@ fn reference_totals(info: &ckbadger_store::types::ScriptReferenceInfo) -> (i64, 
 }
 
 fn reference_info_to_response(
-    info: &ckbadger_store::types::ScriptReferenceInfo,
+    state: &AppState,
+    member: &FamilyMemberForm,
 ) -> Result<ScriptObservedReferenceResponse, ApiRouteError> {
+    let info = &member.info;
     let (live_cells_count, cells_count, owned_capacity_sum, owned_knowledge_sum) =
         reference_totals(info);
     if owned_capacity_sum < 0 || owned_knowledge_sum < 0 || owned_knowledge_sum > owned_capacity_sum
@@ -661,13 +1123,96 @@ fn reference_info_to_response(
     Ok(ScriptObservedReferenceResponse {
         reference_hash: format!("0x{}", hex::encode(&info.reference_hash)),
         hash_type: hash_type_to_string(info.hash_type)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("unknown({})", info.hash_type)),
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid hash type {} for reference 0x{}",
+                    info.hash_type,
+                    hex::encode(&info.reference_hash)
+                ))
+            })?
+            .to_string(),
         live_cells_count,
         cells_count,
         owned_capacity_sum: owned_capacity_sum.to_string(),
         owned_knowledge_sum: owned_knowledge_sum.to_string(),
+        current_version_hash: member
+            .current_version_hash
+            .as_ref()
+            .map(|hash| format!("0x{}", hex::encode(hash))),
+        custody: reference_custody(state, &member.reference_hash, member.hash_type)?,
     })
+}
+
+fn class_totals_for_members(
+    state: &AppState,
+    members: &[FamilyMemberForm],
+) -> Result<Vec<ScriptCodeClassTotalResponse>, ApiRouteError> {
+    let mut totals: BTreeMap<String, (i64, i128, i64)> = BTreeMap::new();
+    for member in members {
+        let capacity = member.info.lock_owned_capacity_sum;
+        if capacity < 0 || member.info.lock_live_cells_count < 0 {
+            return Err(ApiError::internal(format!(
+                "negative lock usage for script reference 0x{} hash_type={}",
+                hex::encode(&member.reference_hash),
+                member.hash_type
+            )));
+        }
+        let custody = reference_custody(state, &member.reference_hash, member.hash_type)?;
+        let entry = totals.entry(custody.class).or_default();
+        entry.0 = entry
+            .0
+            .checked_add(member.info.lock_live_cells_count)
+            .ok_or_else(|| ApiError::internal("script class lock-cell count overflow"))?;
+        entry.1 = entry
+            .1
+            .checked_add(capacity)
+            .ok_or_else(|| ApiError::internal("script class capacity overflow"))?;
+        entry.2 += 1;
+    }
+    Ok(totals
+        .into_iter()
+        .map(|(class, (lock_cells_count, capacity, reference_count))| {
+            ScriptCodeClassTotalResponse {
+                class,
+                lock_cells_count,
+                lock_owned_capacity_sum: capacity.to_string(),
+                reference_count,
+            }
+        })
+        .collect())
+}
+
+fn family_members(
+    state: &AppState,
+    family_id: &str,
+) -> Result<Vec<FamilyMemberForm>, ApiRouteError> {
+    let versions = state
+        .store
+        .list_script_versions()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let family_versions: Vec<_> = versions
+        .into_iter()
+        .filter(|(_, info)| info.family_id.as_deref() == Some(family_id))
+        .collect();
+    let allowed_versions = family_versions
+        .iter()
+        .map(|(hash, _)| hash.clone())
+        .collect();
+    let registered = registered_reference_set(&family_versions);
+    family_member_reference_forms(
+        state,
+        family_id,
+        Some(family_id),
+        &allowed_versions,
+        &registered,
+    )
+}
+
+fn family_code_classes(
+    state: &AppState,
+    family_id: &str,
+) -> Result<Vec<ScriptCodeClassTotalResponse>, ApiRouteError> {
+    class_totals_for_members(state, &family_members(state, family_id)?)
 }
 
 fn checked_version_totals(
@@ -770,44 +1315,69 @@ fn first_code_cell_timestamp(
     version_hash: &[u8],
     code_cells: &[VersionCodeCell],
 ) -> Result<Option<i64>, ApiRouteError> {
-    let mut earliest = None;
-
-    for (_, _, cell, _) in code_cells {
-        let timestamp = code_cell_timestamp(state, version_hash, cell.created_at_block)?;
-        earliest = Some(earliest.map_or(timestamp, |current: i64| current.min(timestamp)));
-    }
-
-    Ok(earliest)
+    let Some(block) = code_cells
+        .iter()
+        .map(|(_, _, cell, _)| cell.created_at_block)
+        .min()
+    else {
+        return Ok(None);
+    };
+    Ok(Some(code_cell_timestamp(state, version_hash, block)?))
 }
 
 fn script_version_deployments(
     state: &AppState,
     version_hash: &[u8],
-    info: &ckbadger_store::types::ScriptVersionInfo,
+    _info: &ckbadger_store::types::ScriptVersionInfo,
     code_cells: &[VersionCodeCell],
 ) -> Result<Vec<ScriptVersionDeploymentResponse>, ApiRouteError> {
     code_cells
         .iter()
-        .map(|(tx_hash, output_index, cell, _)| {
+        .map(|(tx_hash, output_index, cell, is_live)| {
             let hash_type = if cell.type_script_hash.is_some() {
                 "type".to_string()
             } else {
-                info.canonical_hash_type
-                    .and_then(hash_type_to_string)
-                    .unwrap_or("data")
-                    .to_string()
+                "data".to_string()
             };
             let type_reference_hash = cell
                 .type_script_hash
                 .as_ref()
-                .or_else(|| {
-                    if info.canonical_hash_type == Some(1) {
-                        info.canonical_reference_hash.as_ref()
-                    } else {
-                        None
-                    }
-                })
                 .map(|hash| format!("0x{}", hex::encode(hash)));
+
+            let consumed = if *is_live {
+                None
+            } else {
+                Some(
+                    state
+                        .store
+                        .get_consumed_cell_info(tx_hash, *output_index, &state.append_only_store)
+                        .map_err(|e| {
+                            ApiError::internal(format!(
+                                "consumed code cell 0x{}:{}: {e}",
+                                hex::encode(tx_hash),
+                                output_index
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            ApiError::internal(format!(
+                                "indexed dead code cell is missing consumed marker: 0x{}:{}",
+                                hex::encode(tx_hash),
+                                output_index
+                            ))
+                        })?,
+                )
+            };
+
+            let mut custody = classify_code_cell_lock(&cell.cell)?;
+            mark_never_signed_if_proven(state, &cell.cell, &mut custody)?;
+            attach_multisig_witness(
+                state,
+                tx_hash,
+                *output_index,
+                &cell.cell,
+                consumed.as_ref().and_then(|c| c.consumed_by_tx.as_deref()),
+                &mut custody,
+            )?;
 
             Ok(ScriptVersionDeploymentResponse {
                 hash_type,
@@ -816,6 +1386,14 @@ fn script_version_deployments(
                 code_cell_tx_hash: format!("0x{}", hex::encode(tx_hash)),
                 code_cell_output_index: i32::from(*output_index),
                 deployed_at: code_cell_timestamp(state, version_hash, cell.created_at_block)?,
+                created_at_block: cell.created_at_block,
+                status: if *is_live { "live" } else { "consumed" }.to_string(),
+                consumed_at_block: consumed.as_ref().map(|c| c.consumed_at_block),
+                consumed_by_tx: consumed
+                    .as_ref()
+                    .and_then(|c| c.consumed_by_tx.as_ref())
+                    .map(|hash| format!("0x{}", hex::encode(hash))),
+                custody,
             })
         })
         .collect()
@@ -915,28 +1493,38 @@ fn observed_references_by_version(
     state: &AppState,
     family_id: &str,
     versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
-) -> Result<HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>>, ApiRouteError> {
+) -> Result<
+    (
+        HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>>,
+        Vec<ScriptObservedReferenceResponse>,
+        Vec<FamilyMemberForm>,
+    ),
+    ApiRouteError,
+> {
     let mut by_version: HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>> = HashMap::new();
+    let mut all_references = Vec::new();
     let allowed_versions: HashSet<Vec<u8>> = versions
         .iter()
         .map(|(version_hash, _)| version_hash.clone())
         .collect();
     let registered_references = registered_reference_set(versions);
 
-    for member in family_member_reference_forms(
+    let members = family_member_reference_forms(
         state,
         family_id,
         Some(family_id),
         &allowed_versions,
         &registered_references,
-    )? {
-        let Some(version_hash) = member.current_version_hash else {
-            continue;
-        };
-        by_version
-            .entry(version_hash)
-            .or_default()
-            .push(reference_info_to_response(&member.info)?);
+    )?;
+    for member in &members {
+        let response = reference_info_to_response(state, member)?;
+        if let Some(version_hash) = &member.current_version_hash {
+            by_version
+                .entry(version_hash.clone())
+                .or_default()
+                .push(response.clone());
+        }
+        all_references.push(response);
     }
 
     for references in by_version.values_mut() {
@@ -950,7 +1538,12 @@ fn observed_references_by_version(
         });
     }
 
-    Ok(by_version)
+    all_references.sort_by(|a, b| {
+        a.reference_hash
+            .cmp(&b.reference_hash)
+            .then_with(|| a.hash_type.cmp(&b.hash_type))
+    });
+    Ok((by_version, all_references, members))
 }
 
 fn load_script_family_by_name(
@@ -1066,6 +1659,10 @@ fn script_version_to_detail_response(
     sort_code_cells(&mut code_cells);
 
     let deployed_at = first_code_cell_timestamp(state, version_hash, &code_cells)?;
+    let first_deployed_block = code_cells
+        .iter()
+        .map(|(_, _, cell, _)| cell.created_at_block)
+        .min();
     let code_cells_live_count = code_cells
         .iter()
         .filter(|(_, _, _, is_live)| *is_live)
@@ -1094,6 +1691,7 @@ fn script_version_to_detail_response(
             .and_then(hash_type_to_string)
             .map(str::to_string),
         deployed_at,
+        first_deployed_block,
         live_cells_count,
         cells_count,
         owned_capacity_sum: owned_capacity_sum.to_string(),
@@ -1103,6 +1701,146 @@ fn script_version_to_detail_response(
         deployments,
         references: observed_references,
     })
+}
+
+fn script_history(
+    state: &AppState,
+    family_versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
+    versions: &[ScriptVersionDetailResponse],
+) -> Result<Vec<ScriptHistoryMarkerResponse>, ApiRouteError> {
+    fn calendar(state: &AppState, block_number: i64) -> Result<(i64, String), ApiRouteError> {
+        let header = state
+            .store
+            .get_block_header(block_number)
+            .map_err(|e| ApiError::internal(format!("script history block {block_number}: {e}")))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "script history missing block header {block_number}"
+                ))
+            })?;
+        let indexed_day = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "script history block {block_number} invalid chain time: {e}"
+                ))
+            })?
+            .format("%Y-%m-%d")
+            .to_string();
+        Ok((header.chain_time_ms, indexed_day))
+    }
+    let mut history = Vec::new();
+    for ((version_hash, info), response) in family_versions.iter().zip(versions) {
+        if response.version_hash != format!("0x{}", hex::encode(version_hash)) {
+            return Err(ApiError::internal(format!(
+                "version response order mismatch for 0x{}",
+                hex::encode(version_hash)
+            )));
+        }
+        for deployment in &response.deployments {
+            let mut references: Vec<(String, String)> = Vec::new();
+            if let Some(type_hash) = &deployment.type_reference_hash {
+                let raw = hex::decode(type_hash.trim_start_matches("0x"))
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                if info
+                    .type_id_deployments
+                    .iter()
+                    .any(|(hash, block)| hash == &raw && *block == deployment.created_at_block)
+                {
+                    references.push((type_hash.clone(), "type".to_string()));
+                }
+            }
+            for (reference, hash_type) in &info.registered_references {
+                if matches!(hash_type, 0 | 2 | 4) && reference == version_hash {
+                    references.push((
+                        format!("0x{}", hex::encode(reference)),
+                        hash_type_to_string(*hash_type)
+                            .ok_or_else(|| {
+                                ApiError::internal(format!(
+                                    "invalid registered hash type {}",
+                                    hash_type
+                                ))
+                            })?
+                            .to_string(),
+                    ));
+                }
+            }
+            for (reference_hash, hash_type) in references {
+                let (chain_time_ms, indexed_day) = calendar(state, deployment.created_at_block)?;
+                let tx_hash = hex::decode(deployment.code_cell_tx_hash.trim_start_matches("0x"))
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                let tx_index = state.store.get_tx_location(&tx_hash).map_err(|e| ApiError::internal(e.to_string()))?.map(|(block, index)| {
+                    if block != deployment.created_at_block { return Err(ApiError::internal(format!("code cell tx 0x{} location block {} differs from deployment block {}", hex::encode(&tx_hash), block, deployment.created_at_block))); }
+                    Ok(index)
+                }).transpose()?;
+                history.push(ScriptHistoryMarkerResponse {
+                    reference_hash: reference_hash.clone(),
+                    hash_type: hash_type.clone(),
+                    version_hash: Some(response.version_hash.clone()),
+                    event: "deployed".to_string(),
+                    block_number: deployment.created_at_block,
+                    tx_index,
+                    timestamp: deployment.deployed_at,
+                    chain_time_ms,
+                    indexed_day,
+                    code_cell_tx_hash: deployment.code_cell_tx_hash.clone(),
+                    code_cell_output_index: deployment.code_cell_output_index,
+                    event_tx_hash: deployment.code_cell_tx_hash.clone(),
+                    custody: deployment.custody.clone(),
+                });
+                if let Some(block_number) = deployment.consumed_at_block {
+                    let (chain_time_ms, indexed_day) = calendar(state, block_number)?;
+                    history.push(ScriptHistoryMarkerResponse {
+                        reference_hash,
+                        hash_type,
+                        version_hash: Some(response.version_hash.clone()),
+                        event: "consumed".to_string(),
+                        block_number,
+                        tx_index: deployment.consumed_by_tx.as_ref().map(|hash| hex::decode(hash.trim_start_matches("0x")).map_err(|e| ApiError::internal(e.to_string()))).transpose()?.map(|hash| state.store.get_tx_location(&hash).map_err(|e| ApiError::internal(e.to_string()))).transpose()?.flatten().map(|(block, index)| {
+                            if block != block_number { return Err(ApiError::internal(format!("consuming tx location block {block} differs from marker block {block_number}"))); }
+                            Ok(index)
+                        }).transpose()?,
+                        timestamp: code_cell_timestamp(state, version_hash, block_number)?,
+                        chain_time_ms,
+                        indexed_day,
+                        code_cell_tx_hash: deployment.code_cell_tx_hash.clone(),
+                        code_cell_output_index: deployment.code_cell_output_index,
+                        event_tx_hash: deployment.consumed_by_tx.clone().ok_or_else(|| ApiError::internal(format!("consumed code cell {}:{} lacks consuming transaction", deployment.code_cell_tx_hash, deployment.code_cell_output_index)))?,
+                        custody: deployment.custody.clone(),
+                    });
+                }
+            }
+        }
+    }
+    history.sort_by(|a, b| {
+        a.block_number
+            .cmp(&b.block_number)
+            .then_with(|| a.tx_index.cmp(&b.tx_index))
+            .then_with(|| a.reference_hash.cmp(&b.reference_hash))
+            .then_with(|| a.hash_type.cmp(&b.hash_type))
+            .then_with(|| a.code_cell_output_index.cmp(&b.code_cell_output_index))
+            .then_with(|| a.event.cmp(&b.event))
+    });
+    Ok(history)
+}
+
+/// Shared family chronology for code-cell and Script routes. Family membership
+/// and deployment evidence are computed by the same path as the Script detail.
+#[expect(dead_code, reason = "shared by CodeCell route after integration")]
+pub(crate) fn script_family_history(
+    state: &Arc<AppState>,
+    family_id: &str,
+) -> Result<Vec<ScriptHistoryMarkerResponse>, ApiRouteError> {
+    let family_versions = load_family_versions(state, family_id)?;
+    let (mut references, _, _) =
+        observed_references_by_version(state, family_id, &family_versions)?;
+    let versions = family_versions
+        .iter()
+        .map(|(hash, info)| {
+            let refs = references.remove(hash).unwrap_or_default();
+            script_version_to_detail_response(state, hash, info, refs)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    script_history(state, &family_versions, &versions)
 }
 
 /// Build a ScriptLookupInfo from a resolved script identifier.
@@ -1526,7 +2264,7 @@ async fn get_code_cells(
 async fn list_scripts(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
-) -> ApiResult<CursorPaginatedResponse<ScriptFamilyListItemResponse>> {
+) -> ApiResult<ScriptFamiliesListResponse> {
     let limit = params.limit.clamp(1, 100) as usize;
     let _network = params.network.as_deref().unwrap_or(&state.ckb_network);
     let all_families = load_script_families_cached(&state)?;
@@ -1550,14 +2288,88 @@ async fn list_scripts(
         })
         .collect();
 
-    for (_, info) in &filtered {
+    let mut roles = HashMap::new();
+    for (family_id, info) in &filtered {
         checked_family_totals(info, "list script families")?;
+        if let Some(role) = script_kind_for_family(&state, info)? {
+            roles.insert(family_id.clone(), role);
+        }
+    }
+    let role_counts = ScriptRoleCountsResponse {
+        all: filtered.len() as i64,
+        locks: filtered
+            .iter()
+            .filter(|(id, _)| {
+                roles
+                    .get(id)
+                    .is_some_and(|role| role == "lock" || role == "lock+type")
+            })
+            .count() as i64,
+        types: filtered
+            .iter()
+            .filter(|(id, _)| {
+                roles
+                    .get(id)
+                    .is_some_and(|role| role == "type" || role == "lock+type")
+            })
+            .count() as i64,
+    };
+    if let Some(role) = params.role.as_deref() {
+        if !matches!(role, "lock" | "type") {
+            return Err(ApiError::bad_request(format!(
+                "Invalid script role {role:?}: expected lock or type"
+            )));
+        }
+        filtered.retain(|(id, _)| {
+            roles
+                .get(id)
+                .is_some_and(|actual| actual == role || actual == "lock+type")
+        });
     }
     filtered.sort_by(|a, b| {
-        compare_script_family_entries(a, b, params.sort_key, params.sort_direction)
+        compare_script_family_entries(a, b, params.sort_key, params.sort_direction, &roles)
     });
 
     let total = filtered.len() as i64;
+    let all_items = filtered
+        .iter()
+        .map(|(family_id, info)| script_family_to_response(&state, family_id, info))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut class_totals: BTreeMap<String, (i64, i128, i64)> = BTreeMap::new();
+    for item in &all_items {
+        for class in &item.code_classes {
+            let capacity: i128 = class.lock_owned_capacity_sum.parse().map_err(|e| {
+                ApiError::internal(format!(
+                    "invalid class capacity for family {}: {e}",
+                    item.family_id
+                ))
+            })?;
+            let entry = class_totals.entry(class.class.clone()).or_default();
+            entry.0 = entry
+                .0
+                .checked_add(class.lock_cells_count)
+                .ok_or_else(|| ApiError::internal("script list class cell count overflow"))?;
+            entry.1 = entry
+                .1
+                .checked_add(capacity)
+                .ok_or_else(|| ApiError::internal("script list class capacity overflow"))?;
+            entry.2 = entry
+                .2
+                .checked_add(class.reference_count)
+                .ok_or_else(|| ApiError::internal("script list class reference count overflow"))?;
+        }
+    }
+    let class_summary = class_totals
+        .into_iter()
+        .map(|(class, (lock_cells_count, capacity, reference_count))| {
+            ScriptCodeClassTotalResponse {
+                class,
+                lock_cells_count,
+                lock_owned_capacity_sum: capacity.to_string(),
+                reference_count,
+            }
+        })
+        .collect();
 
     // An offset cursor, not a key — but a malformed one silently collapsing to
     // 0 hands the client page 1 again, so it is reported like every other
@@ -1573,7 +2385,7 @@ async fn list_scripts(
             })?,
     };
 
-    let page: Vec<_> = filtered
+    let page: Vec<_> = all_items
         .into_iter()
         .skip(start_idx)
         .take(limit + 1)
@@ -1587,17 +2399,11 @@ async fn list_scripts(
         None
     };
 
-    let scripts: Vec<ScriptFamilyListItemResponse> = page
-        .iter()
-        .map(|(family_id, info)| script_family_to_response(family_id, info))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    ok(CursorPaginatedResponse::new(
-        scripts,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(ScriptFamiliesListResponse {
+        page: CursorPaginatedResponse::new(page, total, limit as i64, next_cursor),
+        class_summary,
+        role_counts,
+    })
 }
 
 async fn get_script(
@@ -1606,21 +2412,22 @@ async fn get_script(
 ) -> ApiResult<ScriptFamilyDetailResponse> {
     let (family_id, family) = load_script_family_by_name(&state, &name)?;
     let family_versions = load_family_versions(&state, &family_id)?;
-    let mut observed_references =
+    let (mut observed_references, all_references, members) =
         observed_references_by_version(&state, &family_id, &family_versions)?;
+    let code_classes = class_totals_for_members(&state, &members)?;
     let mut versions = family_versions
-        .into_iter()
+        .iter()
         .map(|(version_hash, version_info)| {
-            let refs = observed_references
-                .remove(&version_hash)
-                .unwrap_or_default();
-            script_version_to_detail_response(&state, &version_hash, &version_info, refs)
+            let refs = observed_references.remove(version_hash).unwrap_or_default();
+            script_version_to_detail_response(&state, version_hash, version_info, refs)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let history = script_history(&state, &family_versions, &versions)?;
+
     versions.sort_by(|left, right| {
-        match (left.deployed_at, right.deployed_at) {
-            (Some(left_ts), Some(right_ts)) => right_ts.cmp(&left_ts),
+        match (left.first_deployed_block, right.first_deployed_block) {
+            (Some(left_block), Some(right_block)) => right_block.cmp(&left_block),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
@@ -1630,12 +2437,13 @@ async fn get_script(
 
     let (owned_capacity_sum, owned_knowledge_sum) =
         checked_family_totals(&family, "script family detail")?;
+    let script_kind = script_kind_for_family(&state, &family)?;
 
     ok(ScriptFamilyDetailResponse {
         family_id,
         name: family.name,
         description: family.description,
-        script_kind: script_kind_from_counts(family.lock_cells_count, family.type_cells_count),
+        script_kind,
         website: family.website,
         live_cells_count: family.live_cells_count,
         cells_count: family.cells_count,
@@ -1643,6 +2451,9 @@ async fn get_script(
         owned_knowledge_sum: owned_knowledge_sum.to_string(),
         versions_count: family.versions_count,
         versions,
+        references: all_references,
+        code_classes,
+        history,
     })
 }
 
@@ -2094,13 +2905,41 @@ mod tests {
     use super::{
         apply_script_chart_delta, checked_capacity_totals,
         latest_complete_script_chart_date_from_tip, reference_own_stats, resolve_code_cell,
-        resolve_script_capacity_chart_bounds, CodeCellQuery, ListParams,
+        resolve_script_capacity_chart_bounds, verified_multisig_config, CodeCellQuery, ListParams,
     };
     use axum::extract::Query;
     use axum::http::StatusCode;
     use axum::http::Uri;
+    use ckb_types::{packed, prelude::*};
     use ckbadger_store::ScriptInfo;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn multisig_config_is_reported_only_when_witness_matches_lock_args() {
+        let mut config = vec![0, 1, 3, 5];
+        for key in 1..=5 {
+            config.extend([key; 20]);
+        }
+        let args = ckb_hash::blake2b_256(&config)[..20].to_vec();
+        let mut lock = config;
+        lock.extend([0u8; 65 * 3]);
+        let witness = packed::WitnessArgs::new_builder()
+            .lock(
+                packed::BytesOpt::new_builder()
+                    .set(Some(lock.pack()))
+                    .build(),
+            )
+            .build();
+        let custody = verified_multisig_config(&args, witness.as_slice(), &[0x55; 32]).unwrap();
+        assert_eq!(custody.threshold, Some(3));
+        assert_eq!(custody.key_count, Some(5));
+        assert_eq!(custody.require_first_n, Some(1));
+        assert_eq!(custody.key_hashes.len(), 5);
+        assert_eq!(custody.witness_state, "verified");
+        let mut wrong = args;
+        wrong[0] ^= 1;
+        assert!(verified_multisig_config(&wrong, witness.as_slice(), &[0x55; 32]).is_err());
+    }
 
     #[test]
     fn apply_script_chart_delta_accepts_delta_beyond_i64() {

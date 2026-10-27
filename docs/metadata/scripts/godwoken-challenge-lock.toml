@@ -1,4 +1,5 @@
 name = "Godwoken Challenge Lock"
+role = "lock"
 description = "When a Godwoken node found that an invalid state exists in the Rollup, the node can send the RollupEnterChallenge action to the Rollup cell and generate a challenging cell."
 website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#challenge-lock"
 

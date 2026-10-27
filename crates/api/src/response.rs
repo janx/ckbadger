@@ -212,6 +212,69 @@ pub struct ScriptFamilyListItemResponse {
     pub owned_capacity_sum: String,
     pub owned_knowledge_sum: String,
     pub versions_count: i64,
+    /// Classification of the current registered reference forms. A family may
+    /// contain both pinned and replaceable references.
+    pub code_classes: Vec<ScriptCodeClassTotalResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCodeClassTotalResponse {
+    pub class: String,
+    pub lock_cells_count: i64,
+    pub lock_owned_capacity_sum: String,
+    pub reference_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptFamiliesListResponse {
+    #[serde(flatten)]
+    pub page: CursorPaginatedResponse<ScriptFamilyListItemResponse>,
+    /// All matching families, independent of the current cursor and limit.
+    /// Counts and capacity cover lock use of every classified reference.
+    pub class_summary: Vec<ScriptCodeClassTotalResponse>,
+    pub role_counts: ScriptRoleCountsResponse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptRoleCountsResponse {
+    pub all: i64,
+    pub locks: i64,
+    pub types: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCustodyResponse {
+    /// `fixed`, `unspendable`, `one_key`, `multisig`, `unsupported`,
+    /// `retired`, `mixed`, or `ambiguous`.
+    pub class: String,
+    pub lock_code_hash: Option<String>,
+    pub lock_hash_type: Option<String>,
+    pub lock_args: Option<String>,
+    pub threshold: Option<u8>,
+    pub key_count: Option<u8>,
+    pub require_first_n: Option<u8>,
+    pub key_hashes: Vec<String>,
+    /// The exact spending transaction that supplied verified multisig config.
+    pub verified_by_tx: Option<String>,
+    /// `never_signed`, `verified`, `unavailable`, or `not_applicable`.
+    pub witness_state: String,
+    /// Every distinct current custodian for a type reference. Multiple
+    /// identical-binary code cells may have different owner locks.
+    pub owners: Vec<ScriptCustodyOwnerResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCustodyOwnerResponse {
+    pub lock_code_hash: String,
+    pub lock_hash_type: String,
+    pub lock_args: String,
+    pub class: String,
+    pub code_cells: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +286,8 @@ pub struct ScriptObservedReferenceResponse {
     pub cells_count: i64,
     pub owned_capacity_sum: String,
     pub owned_knowledge_sum: String,
+    pub current_version_hash: Option<String>,
+    pub custody: ScriptCustodyResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,6 +299,11 @@ pub struct ScriptVersionDeploymentResponse {
     pub code_cell_tx_hash: String,
     pub code_cell_output_index: i32,
     pub deployed_at: i64,
+    pub created_at_block: i64,
+    pub status: String,
+    pub consumed_at_block: Option<i64>,
+    pub consumed_by_tx: Option<String>,
+    pub custody: ScriptCustodyResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +318,7 @@ pub struct ScriptVersionDetailResponse {
     pub canonical_reference_hash: Option<String>,
     pub canonical_hash_type: Option<String>,
     pub deployed_at: Option<i64>,
+    pub first_deployed_block: Option<i64>,
     pub live_cells_count: i64,
     pub cells_count: i64,
     pub owned_capacity_sum: String,
@@ -272,6 +343,29 @@ pub struct ScriptFamilyDetailResponse {
     pub owned_knowledge_sum: String,
     pub versions_count: i64,
     pub versions: Vec<ScriptVersionDetailResponse>,
+    /// Includes retired registered references that have no current version.
+    pub references: Vec<ScriptObservedReferenceResponse>,
+    pub code_classes: Vec<ScriptCodeClassTotalResponse>,
+    pub history: Vec<ScriptHistoryMarkerResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptHistoryMarkerResponse {
+    pub reference_hash: String,
+    pub hash_type: String,
+    pub version_hash: Option<String>,
+    pub event: String,
+    pub block_number: i64,
+    pub tx_index: Option<i32>,
+    pub timestamp: i64,
+    /// Monotonic indexed calendar clock used by the capacity chart.
+    pub chain_time_ms: i64,
+    pub indexed_day: String,
+    pub code_cell_tx_hash: String,
+    pub code_cell_output_index: i32,
+    pub event_tx_hash: String,
+    pub custody: ScriptCustodyResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

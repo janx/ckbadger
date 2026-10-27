@@ -58,6 +58,8 @@ pub(crate) struct ScriptMetadata {
     pub metadata_slug: Option<String>,
     pub name: String,
     #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub website: Option<String>,
@@ -357,7 +359,7 @@ pub fn run_label_import(
 
     if let Some(ref metadata_path) = config.metadata_path {
         info!("Overlaying workdir metadata from: {}", metadata_path);
-        overlay_from_dir(metadata_path, &mut tokens, &mut scripts)?;
+        overlay_from_dir(Path::new(metadata_path), &mut tokens, &mut scripts)?;
     }
 
     import_all(store, &config.network, &tokens, &scripts)
@@ -373,6 +375,47 @@ pub fn run_label_import_bundled(store: &CkbadgerStore, network: &str) -> Result<
     let tokens = bundled::udt_labels();
     let scripts = bundled::script_labels();
     import_all(store, network, &tokens, &scripts)
+}
+
+/// Read-only counterpart of label import's bundled-plus-workdir metadata
+/// precedence. The API uses declared roles only for registered families with
+/// no observed lock/type usage, without changing chain-store schema or writes.
+pub fn effective_script_roles(
+    metadata_path: Option<&Path>,
+    network: &str,
+) -> Result<std::collections::HashMap<String, (String, String)>> {
+    let mut tokens = bundled::udt_labels();
+    let mut scripts = bundled::script_labels();
+    if let Some(path) = metadata_path {
+        overlay_from_dir(path, &mut tokens, &mut scripts)?;
+    }
+    let mut roles = std::collections::HashMap::new();
+    for script in scripts {
+        if script.disabled {
+            continue;
+        }
+        let active = match network {
+            "mainnet" => script.mainnet.is_some(),
+            "testnet" => script.testnet.is_some(),
+            _ => script.mainnet.is_some() || script.testnet.is_some(),
+        };
+        if !active {
+            continue;
+        }
+        let Some(role) = script.role else {
+            continue;
+        };
+        anyhow::ensure!(
+            matches!(role.as_str(), "lock" | "type" | "lock+type"),
+            "invalid script metadata role {role}: {}",
+            script.name
+        );
+        let slug = script
+            .metadata_slug
+            .ok_or_else(|| anyhow::anyhow!("script metadata missing slug: {}", script.name))?;
+        roles.insert(slug, (script.name, role));
+    }
+    Ok(roles)
 }
 
 fn import_all(
@@ -419,11 +462,11 @@ fn import_all(
 }
 
 fn overlay_from_dir(
-    metadata_path: &str,
+    metadata_path: &Path,
     tokens: &mut Vec<TokenMetadata>,
     scripts: &mut Vec<ScriptMetadata>,
 ) -> Result<()> {
-    let base = Path::new(metadata_path);
+    let base = metadata_path;
 
     let tokens_dir = base.join("tokens");
     if tokens_dir.exists() {
@@ -1095,6 +1138,25 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn effective_script_roles_use_same_workdir_overlay_as_label_import() {
+        let bundled = effective_script_roles(None, "mainnet").unwrap();
+        assert_eq!(
+            bundled.get("timelock").map(|(_, role)| role.as_str()),
+            Some("lock")
+        );
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        let override_toml = include_str!("../../../docs/metadata/scripts/timelock.toml")
+            .replace("role = \"lock\"", "role = \"type\"");
+        std::fs::write(dir.path().join("scripts/timelock.toml"), override_toml).unwrap();
+        let effective = effective_script_roles(Some(dir.path()), "mainnet").unwrap();
+        assert_eq!(
+            effective.get("timelock").map(|(_, role)| role.as_str()),
+            Some("type")
+        );
+    }
+
+    #[test]
     fn test_parse_hash_type() {
         assert_eq!(ScriptParser::parse_hash_type("data"), 0);
         assert_eq!(ScriptParser::parse_hash_type("type"), 1);
@@ -1343,7 +1405,7 @@ disabled = true
 
         let mut tokens = vec![];
         let mut scripts = vec![];
-        overlay_from_dir(metadata_path.to_str().unwrap(), &mut tokens, &mut scripts).unwrap();
+        overlay_from_dir(&metadata_path, &mut tokens, &mut scripts).unwrap();
 
         assert_eq!(tokens.len(), 2);
         // read_dir order is not guaranteed, so find by symbol
@@ -2113,6 +2175,7 @@ canonical_hash_type = "data1"
             description: Some("version differs by network".to_string()),
             website: None,
             category: Some("lock".to_string()),
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![ScriptDeploymentEntry {
@@ -2185,6 +2248,7 @@ canonical_hash_type = "data1"
             description: Some("original".to_string()),
             website: None,
             category: Some("lock".to_string()),
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![ScriptDeploymentEntry {
@@ -2213,6 +2277,7 @@ canonical_hash_type = "data1"
             description: Some("renamed".to_string()),
             website: None,
             category: Some("lock".to_string()),
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![ScriptDeploymentEntry {
@@ -2315,6 +2380,7 @@ canonical_hash_type = "data1"
             description: Some("CKB built-in type ID".to_string()),
             website: None,
             category: None,
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![],
@@ -2410,6 +2476,7 @@ canonical_hash_type = "data1"
             description: Some("deprecated but still named".to_string()),
             website: None,
             category: Some("lock".to_string()),
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![ScriptDeploymentEntry {
@@ -2466,6 +2533,7 @@ canonical_hash_type = "data1"
             description: Some("same version hash across networks".to_string()),
             website: Some("https://example.com".to_string()),
             category: Some("lock".to_string()),
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![ScriptDeploymentEntry {
@@ -2983,6 +3051,7 @@ mod version_identity_tests {
             description: Some("test".to_string()),
             website: None,
             category: Some("lock".to_string()),
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions,
@@ -3070,6 +3139,7 @@ mod version_identity_tests {
             description: None,
             website: None,
             category: None,
+            role: None,
             disabled: false,
             mainnet: Some(ScriptNetworkMetadata {
                 versions: vec![ScriptDeploymentEntry {
