@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ckbadger_common::{LabelImportConfig, LabelImportResult};
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -381,7 +381,7 @@ fn import_all(
     tokens: &[TokenMetadata],
     scripts: &[ScriptMetadata],
 ) -> Result<LabelImportResult> {
-    validate_script_registrations(store, scripts, network)?;
+    let registrations = validate_script_registrations(store, scripts, network)?;
     let mut result = LabelImportResult::default();
     for token in tokens {
         if token.disabled {
@@ -404,7 +404,7 @@ fn import_all(
         if script.disabled {
             continue;
         }
-        match upsert_script_label(store, script, network) {
+        match upsert_script_label_validated(store, script, network, &registrations) {
             Ok(()) => result.script_labels_imported += 1,
             Err(e) => result.errors.push(format!("Script {}: {}", script.name, e)),
         }
@@ -611,66 +611,193 @@ fn validate_existing_family(
     Ok(())
 }
 
+/// Active metadata is resolved once before any label writes. Excluded entries
+/// must not revoke another entry's active binary or reference registration.
+#[derive(Default)]
+struct ScriptRegistrations {
+    binaries: std::collections::HashMap<Vec<u8>, String>,
+    references: std::collections::HashMap<(Vec<u8>, u8), String>,
+    label_hashes: std::collections::HashSet<Vec<u8>>,
+}
+
+fn deployment_reference(deployment: &ImportDeployment) -> &str {
+    match deployment {
+        ImportDeployment::Version(version) => &version.canonical_ref_hash,
+        ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
+    }
+}
+
 fn validate_script_registrations(
     store: &CkbadgerStore,
     scripts: &[ScriptMetadata],
     network: &str,
-) -> Result<()> {
-    let mut binaries = std::collections::HashMap::new();
-    let mut references = std::collections::HashMap::new();
+) -> Result<ScriptRegistrations> {
+    anyhow::ensure!(
+        store.cf_handle_exists(ckbadger_store::CF_SCRIPT_VERSIONS),
+        "label import requires the domain store: network={network}"
+    );
+    let existing_versions = store
+        .list_script_versions()
+        .with_context(|| format!("label import preflight: network={network}"))?;
+    ckbadger_store::ScriptFamilyMembershipIndex::new(
+        existing_versions.iter().map(|(_, version)| version),
+    ).with_context(|| format!("label import persisted membership is invalid: network={network}; verify the owning writer and rebuild the damaged store"))?;
+    let mut active_registrations = ScriptRegistrations::default();
     for script in scripts.iter().filter(|script| !script.disabled) {
         let family = script_family_id(script)?;
-        let (active, _) = selected_script_deployments(script, network);
-        let registrations = registered_versions(&active)?;
-        validate_existing_family(store, family, &registrations)?;
+        let context = || format!("label import preflight: network={network} family={family}");
+        store.get_script_family(family).with_context(context)?;
+        let (active, excluded) = selected_script_deployments(script, network);
+        let registrations = registered_versions(&active).with_context(context)?;
+        validate_existing_family(store, family, &registrations).with_context(context)?;
+        for deployment in &active {
+            active_registrations
+                .label_hashes
+                .insert(decode_hex(deployment_reference(deployment)).with_context(context)?);
+        }
         for (hash, registration) in registrations {
-            if let Some(previous) = binaries.insert(hash.clone(), family) {
+            if let Some(previous) = active_registrations
+                .binaries
+                .insert(hash.clone(), family.into())
+            {
                 anyhow::ensure!(
                     previous == family,
-                    "binary registered in conflicting families: binary=0x{} families={}/{}",
-                    hex::encode(&hash),
-                    previous,
-                    family
+                    "binary registered in conflicting families: network={} binary=0x{} families={}/{}",
+                    network, hex::encode(&hash), previous, family
                 );
             }
             for (reference, kind) in registration.references {
-                if let Some(previous) = references.insert((reference.clone(), kind), family) {
-                    anyhow::ensure!(previous == family, "reference registered in conflicting families: reference=0x{} hash_type={} families={}/{}", hex::encode(reference), kind, previous, family);
+                if let Some(previous) = active_registrations
+                    .references
+                    .insert((reference.clone(), kind), family.into())
+                {
+                    anyhow::ensure!(previous == family, "reference registered in conflicting families: network={} reference=0x{} hash_type={} families={}/{}", network, hex::encode(reference), kind, previous, family);
                 }
             }
         }
+        // Cleanup used to swallow malformed excluded metadata and corrupt rows.
+        // Validate every touched read before token import or any script mutation;
+        // per-entry write errors are otherwise only collected in the summary.
+        for deployment in &excluded {
+            let reference = deployment_reference(deployment);
+            let code_hash = decode_hex(reference)
+                .with_context(|| format!("{} excluded reference={reference}", context()))?;
+            store
+                .get_script_info(&code_hash)
+                .with_context(|| format!("{} excluded reference={reference}", context()))?;
+            if let ImportDeployment::Version(version) = deployment {
+                let hash = decode_hex(&version.version_hash).with_context(|| {
+                    format!("{} excluded binary={}", context(), version.version_hash)
+                })?;
+                if hash.iter().any(|&b| b != 0) {
+                    store.get_script_version(&hash).with_context(|| {
+                        format!("{} excluded binary={}", context(), version.version_hash)
+                    })?;
+                }
+            }
+        }
+        for hash in store
+            .list_script_version_hashes_by_family(family)
+            .with_context(context)?
+        {
+            let version = store
+                .get_script_version(&hash)
+                .with_context(context)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{} family index points to missing version: binary=0x{}",
+                        context(),
+                        hex::encode(&hash)
+                    )
+                })?;
+            anyhow::ensure!(
+                version.family_id.as_deref() == Some(family),
+                "{} family index contradicts version: binary=0x{} version_family={:?}",
+                context(),
+                hex::encode(&hash),
+                version.family_id
+            );
+        }
     }
-    Ok(())
+    // An observation can retain existing binary attribution, but cannot repair
+    // missing/wrong attribution or grant a copied Type ID a registration. Check
+    // all observations against the complete active registry, independently of
+    // metadata order, in one scan before any writes.
+    for (hash, version) in existing_versions {
+        // A direct binary declaration is the normal metadata assignment path.
+        // It can label this exact previously-unknown binary, but cannot assign
+        // any other observed historical version. Persisted damage was rejected
+        // above before considering these planned registrations.
+        let declared_family = version
+            .family_id
+            .as_ref()
+            .or_else(|| active_registrations.binaries.get(&hash));
+        for (reference, block) in &version.type_id_deployments {
+            if let Some(family) = active_registrations.references.get(&(reference.clone(), 1)) {
+                anyhow::ensure!(declared_family == Some(family),
+                    "label import observed registered type-id contradicts family: network={} reference=0x{} block={} binary=0x{} registered_family={} version_family={:?}; verify metadata and the owning writer, then rebuild from genesis", network, hex::encode(reference), block, hex::encode(&hash), family, version.family_id);
+            }
+        }
+    }
+    Ok(active_registrations)
 }
 
+/// Remove metadata-owned registration and its display preference only. A
+/// chain-derived display reference was never part of this imported set.
+fn revoke_imported_references(version: &mut ckbadger_store::ScriptVersionInfo) {
+    if let (Some(reference), Some(kind)) = (
+        &version.canonical_reference_hash,
+        version.canonical_hash_type,
+    ) {
+        if version
+            .registered_references
+            .contains(&(reference.clone(), kind))
+        {
+            version.canonical_reference_hash = None;
+            version.canonical_hash_type = None;
+        }
+    }
+    version.registered_references.clear();
+}
+
+#[cfg(test)]
 fn upsert_script_label(
     store: &CkbadgerStore,
     script: &ScriptMetadata,
     network: &str,
 ) -> Result<()> {
-    // Only import deployments for the configured network.
+    let registrations =
+        validate_script_registrations(store, std::slice::from_ref(script), network)?;
+    upsert_script_label_validated(store, script, network, &registrations)
+}
+
+fn upsert_script_label_validated(
+    store: &CkbadgerStore,
+    script: &ScriptMetadata,
+    network: &str,
+    active_registrations: &ScriptRegistrations,
+) -> Result<()> {
     let family_id = script_family_id(script)?;
     let (active, excluded) = selected_script_deployments(script, network);
     let registrations = registered_versions(&active)?;
-    validate_existing_family(store, family_id, &registrations)?;
+    let previous_name = store
+        .get_script_family(family_id)?
+        .map(|family| family.name);
 
-    // Only create/update the family when there are active deployments for this
-    // network. Without this guard, scripts with deployments on only the other
-    // network leak into this network's /scripts listing with versions_count=0.
     if !active.is_empty() {
         upsert_script_family(store, script, family_id, &active)?;
     }
 
-    // Clean up entries from the excluded network: clear label fields so they don't
-    // appear in name-based queries. Preserves indexer-maintained usage stats.
     for deployment in &excluded {
-        let code_hash_hex = match deployment {
-            ImportDeployment::Version(version) => &version.canonical_ref_hash,
-            ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
-        };
-        if let Ok(code_hash) = decode_hex(code_hash_hex) {
-            if let Ok(Some(mut info)) = store.get_script_info(&code_hash) {
-                if info.name.as_deref() == Some(&script.name) {
+        let code_hash = decode_hex(deployment_reference(deployment))?;
+        if !active_registrations.label_hashes.contains(&code_hash) {
+            if let Some(mut info) = store.get_script_info(&code_hash)? {
+                if info.name.as_deref() == Some(&script.name)
+                    || info
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| Some(name) == previous_name.as_ref())
+                {
                     info.name = None;
                     info.deprecated = false;
                     info.description = None;
@@ -680,41 +807,51 @@ fn upsert_script_label(
             }
         }
         if let ImportDeployment::Version(version) = deployment {
-            if let Ok(data_hash) = decode_hex(&version.version_hash) {
-                let is_zero_data = data_hash.iter().all(|&b| b == 0);
-                if !is_zero_data {
-                    if let Ok(Some(mut version_info)) = store.get_script_version(&data_hash) {
-                        if version_info.name.as_deref() == Some(&script.name) {
-                            store.delete_script_version_by_label(&script.name, &data_hash)?;
-                            if let Some(existing_family_id) = version_info.family_id.as_deref() {
-                                store.delete_script_version_by_family_direct(
-                                    existing_family_id,
-                                    &data_hash,
-                                )?;
-                            }
-                            version_info.name = None;
-                            version_info.family_id = None;
-                            version_info.deprecated = false;
-                            version_info.category = None;
-                            version_info.description = None;
-                            version_info.website = None;
-                            version_info.canonical_reference_hash = None;
-                            version_info.canonical_hash_type = None;
-                            version_info.registered_references.clear();
-                            store.put_script_version(&data_hash, &version_info)?;
-                        }
+            let data_hash = decode_hex(&version.version_hash)?;
+            if data_hash.iter().all(|&b| b == 0)
+                || active_registrations.binaries.contains_key(&data_hash)
+            {
+                continue;
+            }
+            if let Some(mut version_info) = store.get_script_version(&data_hash)? {
+                let belongs_to_family = version_info.family_id.as_deref() == Some(family_id)
+                    || (version_info.family_id.is_none()
+                        && version_info.name.as_deref() == Some(&script.name));
+                if !belongs_to_family {
+                    continue;
+                }
+                let before = version_info.clone();
+                revoke_imported_references(&mut version_info);
+                // Local deployment evidence retains an already-known bytecode
+                // family. It does not register any observed reference: only
+                // imported anchors confer permanent Type ID family membership.
+                if version_info.type_id_deployments.is_empty() {
+                    if let Some(name) = &version_info.name {
+                        store.delete_script_version_by_label(name, &data_hash)?;
                     }
+                    if let Some(family) = &version_info.family_id {
+                        store.delete_script_version_by_family_direct(family, &data_hash)?;
+                    }
+                    version_info.name = None;
+                    version_info.family_id = None;
+                    version_info.deprecated = false;
+                    version_info.category = None;
+                    version_info.description = None;
+                    version_info.website = None;
+                    version_info.canonical_reference_hash = None;
+                    version_info.canonical_hash_type = None;
+                }
+                if version_info != before {
+                    store.put_script_version(&data_hash, &version_info)?;
                 }
             }
         }
     }
 
-    // Registrations are a complete metadata declaration, not an append-only
-    // history. Removing a whole version must revoke its anchors as well.
-    // Chain-derived versions without imported anchors retain their display
-    // metadata, observations and usage.
+    // Registrations are a complete metadata declaration. Revoking the last
+    // imported anchor preserves chain observations, attribution and usage.
     for version_hash in store.list_script_version_hashes_by_family(family_id)? {
-        if registrations.contains_key(&version_hash) {
+        if active_registrations.binaries.contains_key(&version_hash) {
             continue;
         }
         let mut version = store.get_script_version(&version_hash)?.ok_or_else(|| {
@@ -725,9 +862,7 @@ fn upsert_script_label(
             )
         })?;
         if !version.registered_references.is_empty() {
-            version.registered_references.clear();
-            version.canonical_reference_hash = None;
-            version.canonical_hash_type = None;
+            revoke_imported_references(&mut version);
             store.put_script_version(&version_hash, &version)?;
         }
     }
@@ -1378,6 +1513,339 @@ disabled = true
         assert!(
             result.script_labels_imported > 0,
             "expected script labels imported, got 0"
+        );
+    }
+
+    fn startup_metadata() -> ScriptMetadata {
+        serde_json::from_value(serde_json::json!({
+            "metadata_slug": "startup-family", "name": "Startup Family",
+            "mainnet": {"versions": [{"version_hash": format!("0x{}", "41".repeat(32)), "canonical_ref_hash": format!("0x{}", "51".repeat(32)), "canonical_hash_type": "type"}]},
+            "testnet": {"versions": [{"version_hash": format!("0x{}", "42".repeat(32)), "canonical_ref_hash": format!("0x{}", "62".repeat(32)), "canonical_hash_type": "type"}]}
+        })).unwrap()
+    }
+
+    #[test]
+    fn startup_excluded_observed_binary_preserves_attribution_on_both_networks() {
+        for network in ["mainnet", "testnet"] {
+            for imported_display in [false, true] {
+                let dir = TempDir::new().unwrap();
+                let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+                let mut script = startup_metadata();
+                if network == "testnet" {
+                    std::mem::swap(&mut script.mainnet, &mut script.testnet);
+                }
+                let foreign_network = if network == "mainnet" {
+                    "testnet"
+                } else {
+                    "mainnet"
+                };
+                upsert_script_label(&store, &script, foreign_network).unwrap();
+                let mut observed = store.get_script_version(&[0x42; 32]).unwrap().unwrap();
+                observed.type_id_deployments = vec![(vec![0x51; 32], 123)];
+                observed.lock_cells_count = 17;
+                observed.lock_live_cells_count = 6;
+                if !imported_display {
+                    observed.canonical_reference_hash = Some(vec![0x51; 32]);
+                }
+                store.put_script_version(&[0x42; 32], &observed).unwrap();
+                let mut expected = observed;
+                expected.registered_references.clear();
+                if imported_display {
+                    expected.canonical_reference_hash = None;
+                    expected.canonical_hash_type = None;
+                }
+                for _ in 0..2 {
+                    let result = import_all(&store, network, &[], &[script.clone()]).unwrap();
+                    assert!(result.errors.is_empty(), "{:?}", result.errors);
+                    assert_eq!(
+                        store.get_script_version(&[0x42; 32]).unwrap().unwrap(),
+                        expected
+                    );
+                    assert!(store
+                        .list_script_version_hashes_by_family("startup-family")
+                        .unwrap()
+                        .contains(&vec![0x42; 32]));
+                    assert!(store
+                        .list_script_version_hashes_by_label("Startup Family")
+                        .unwrap()
+                        .contains(&vec![0x42; 32]));
+                    assert!(store
+                        .get_script_info(&[0x62; 32])
+                        .unwrap()
+                        .unwrap()
+                        .name
+                        .is_none());
+                }
+                // Revoking the last active anchor does not erase existing bytecode
+                // attribution or turn observations into imported registrations.
+                if network == "mainnet" {
+                    script.mainnet.as_mut().unwrap().versions.clear();
+                } else {
+                    script.testnet.as_mut().unwrap().versions.clear();
+                }
+                for _ in 0..2 {
+                    import_all(&store, network, &[], &[script.clone()]).unwrap();
+                    assert_eq!(
+                        store.get_script_version(&[0x42; 32]).unwrap().unwrap(),
+                        expected
+                    );
+                    let versions = store.list_script_versions().unwrap();
+                    let membership = ckbadger_store::ScriptFamilyMembershipIndex::new(
+                        versions.iter().map(|(_, version)| version),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        membership.resolve_family(&[0x51; 32], 1, None).unwrap(),
+                        None,
+                        "retaining binary attribution must not register its observed Type ID"
+                    );
+                    assert_eq!(
+                        membership
+                            .resolve_family(&[0x51; 32], 1, Some(&[0x42; 32]))
+                            .unwrap(),
+                        Some("startup-family")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn startup_explicit_registration_of_observed_unknown_binary_is_allowed() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut observed = ScriptVersionInfo {
+            version_hash: vec![0x41; 32],
+            type_id_deployments: vec![(vec![0x51; 32], 123)],
+            lock_cells_count: 17,
+            lock_live_cells_count: 6,
+            ..Default::default()
+        };
+        store.put_script_version(&[0x41; 32], &observed).unwrap();
+        let result = import_all(&store, "mainnet", &[], &[startup_metadata()]).unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let imported = store.get_script_version(&[0x41; 32]).unwrap().unwrap();
+        assert_eq!(imported.family_id.as_deref(), Some("startup-family"));
+        assert_eq!(imported.registered_references, vec![(vec![0x51; 32], 1)]);
+        assert_eq!(imported.type_id_deployments, observed.type_id_deployments);
+        assert_eq!(imported.lock_cells_count, 17);
+        assert_eq!(imported.lock_live_cells_count, 6);
+        // The same None family is corruption when its registration was already
+        // persisted. Explicit metadata must not silently heal that damaged row.
+        observed.registered_references = imported.registered_references;
+        store.put_script_version(&[0x41; 32], &observed).unwrap();
+        let before = store.list_script_versions().unwrap();
+        let error = import_all(&store, "mainnet", &[], &[startup_metadata()]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("registered references lack a family"),
+            "{error:#}"
+        );
+        assert_eq!(store.list_script_versions().unwrap(), before);
+    }
+
+    #[test]
+    fn startup_direct_metadata_cannot_repair_damaged_discovered_lineage() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut script = startup_metadata();
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        let damaged = ScriptVersionInfo {
+            version_hash: vec![0x42; 32],
+            type_id_deployments: vec![(vec![0x51; 32], 123)],
+            lock_cells_count: 17,
+            lock_live_cells_count: 6,
+            ..Default::default()
+        };
+        store.put_script_version(&[0x42; 32], &damaged).unwrap();
+        // W/A is already registered, while the discovered V/A lost its family.
+        // Adding V to metadata must not become an in-place corruption repair.
+        let mut declaration = script.testnet.as_ref().unwrap().versions[0].clone();
+        declaration.canonical_ref_hash = format!("0x{}", "51".repeat(32));
+        script.mainnet.as_mut().unwrap().versions.push(declaration);
+        let before_versions = store.list_script_versions().unwrap();
+        let before_families = store.list_script_families().unwrap();
+        let before_info = store.get_cf(store.cf_script_info(), &[0x51; 32]).unwrap();
+        let error = import_all(&store, "mainnet", &[], &[script]).unwrap_err();
+        let message = format!("{error:#}");
+        for context in [
+            "mainnet",
+            "123",
+            "observed registered type-id contradicts family",
+            &hex::encode([0x42; 32]),
+        ] {
+            assert!(message.contains(context), "missing {context}: {message}");
+        }
+        assert_eq!(store.list_script_versions().unwrap(), before_versions);
+        assert_eq!(store.list_script_families().unwrap(), before_families);
+        assert_eq!(
+            store.get_cf(store.cf_script_info(), &[0x51; 32]).unwrap(),
+            before_info
+        );
+    }
+
+    #[test]
+    fn startup_corrupt_family_fails_before_token_import() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_cf(store.cf_script_families(), b"startup-family", b"corrupt")
+            .unwrap();
+        let token = bundled::udt_labels()
+            .into_iter()
+            .find(|token| !token.disabled && token.mainnet.is_some())
+            .unwrap();
+        let token_hash = compute_type_hash(token.mainnet.as_ref().unwrap()).unwrap();
+        let error = import_all(&store, "mainnet", &[token], &[startup_metadata()]).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("mainnet") && message.contains("startup-family"),
+            "{message}"
+        );
+        assert!(store.get_token(&token_hash).unwrap().is_none());
+        assert!(store.list_script_versions().unwrap().is_empty());
+        assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+        assert_eq!(
+            store
+                .get_cf(store.cf_script_families(), b"startup-family")
+                .unwrap()
+                .unwrap(),
+            b"corrupt"
+        );
+    }
+
+    #[test]
+    fn startup_observed_anchor_conflict_fails_before_any_import_write() {
+        for family in [None, Some("wrong-family")] {
+            let dir = TempDir::new().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+            let script = startup_metadata();
+            let observed = ScriptVersionInfo {
+                version_hash: vec![0x42; 32],
+                family_id: family.map(str::to_owned),
+                type_id_deployments: vec![(vec![0x51; 32], 123)],
+                ..Default::default()
+            };
+            store.put_script_version(&[0x42; 32], &observed).unwrap();
+            let before = store.list_script_versions().unwrap();
+            let token = bundled::udt_labels()
+                .into_iter()
+                .find(|token| !token.disabled && token.mainnet.is_some())
+                .unwrap();
+            let token_hash = compute_type_hash(token.mainnet.as_ref().unwrap()).unwrap();
+            let error = import_all(&store, "mainnet", &[token], &[script]).unwrap_err();
+            let message = format!("{error:#}");
+            for context in [
+                "mainnet",
+                "123",
+                &hex::encode([0x42; 32]),
+                &hex::encode([0x51; 32]),
+                "startup-family",
+            ] {
+                assert!(message.contains(context), "missing {context}: {message}");
+            }
+            assert_eq!(store.list_script_versions().unwrap(), before);
+            assert!(
+                store.get_token(&token_hash).unwrap().is_none(),
+                "preflight must precede token writes as well as script writes"
+            );
+            assert!(store.list_script_families().unwrap().is_empty());
+            assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn startup_excluded_metadata_and_corrupt_rows_fail_before_writes() {
+        for corrupt_row in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+            let mut script = startup_metadata();
+            if corrupt_row {
+                store
+                    .put_cf(store.cf_script_info(), &[0x62; 32], b"corrupt")
+                    .unwrap();
+            } else {
+                script.testnet.as_mut().unwrap().versions[0].canonical_ref_hash = "0xgg".into();
+            }
+            let error = import_all(&store, "mainnet", &[], &[script]).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("mainnet") && message.contains("startup-family"),
+                "{message}"
+            );
+            assert!(
+                message.contains(if corrupt_row { "62626262" } else { "0xgg" }),
+                "{message}"
+            );
+            assert!(store.list_script_versions().unwrap().is_empty());
+            assert!(store.list_script_families().unwrap().is_empty());
+            assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn startup_cleanup_uses_stable_family_and_preserves_other_active_registration() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut script = startup_metadata();
+        upsert_script_label(&store, &script, "testnet").unwrap();
+        script.name = "Renamed Family".into();
+        import_all(&store, "mainnet", &[], &[script.clone()]).unwrap();
+        let stale = store.get_script_version(&[0x42; 32]).unwrap().unwrap();
+        assert!(stale.family_id.is_none());
+        assert!(stale.name.is_none());
+        assert!(stale.registered_references.is_empty());
+        assert!(store
+            .list_script_version_hashes_by_label("Startup Family")
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .get_script_info(&[0x62; 32])
+            .unwrap()
+            .unwrap()
+            .name
+            .is_none());
+
+        // An excluded entry must not revoke a reference explicitly active in
+        // another metadata entry, regardless of metadata iteration order.
+        let mut other = startup_metadata();
+        other.metadata_slug = Some("other-family".into());
+        other.mainnet = other.testnet.take();
+        script.name = "Startup Family".into();
+        for scripts in [
+            [other.clone(), script.clone()],
+            [script.clone(), other.clone()],
+        ] {
+            import_all(&store, "mainnet", &[], &scripts).unwrap();
+            let active = store.get_script_version(&[0x42; 32]).unwrap().unwrap();
+            assert_eq!(active.family_id.as_deref(), Some("other-family"));
+            assert_eq!(active.registered_references, vec![(vec![0x62; 32], 1)]);
+            assert_eq!(
+                store
+                    .get_script_info(&[0x62; 32])
+                    .unwrap()
+                    .unwrap()
+                    .name
+                    .as_deref(),
+                Some("Startup Family")
+            );
+        }
+    }
+
+    #[test]
+    fn startup_import_rejects_append_only_without_mutating_cell_payload() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        store
+            .put_cf(store.cf_cells(), &[0x71; 36], b"immutable-payload")
+            .unwrap();
+        let error = import_all(&store, "mainnet", &[], &[startup_metadata()]).unwrap_err();
+        assert!(error.to_string().contains("domain"), "{error:#}");
+        assert_eq!(
+            store
+                .get_cf(store.cf_cells(), &[0x71; 36])
+                .unwrap()
+                .unwrap(),
+            b"immutable-payload"
         );
     }
 
