@@ -4,7 +4,7 @@
 
 Independently accept D3 (Address v3), then make D4–D8 executable without repeating completed round-1 work or treating the existence of an old page as board acceptance.
 
-Audit baseline: `d3b770f5`, branch `test/site-redesign-round2-acceptance`. This is a source/contract audit, not a live-store or browser acceptance result. D3 API and frontend work is in progress in separate owner lanes. No acceptance box below is checked until the corresponding result is recorded.
+Initial audit baseline: `d3b770f5`, branch `test/site-redesign-round2-acceptance`. The baseline findings and D4–D8 gaps below are a source/contract audit. D3's final fixed-version browser, producer-contract and focused-test results are recorded separately under **D3 final acceptance**.
 
 D4–D8 are not in this round's implementation scope; they remain authorized work in subsequent rounds of the original plan.
 
@@ -42,6 +42,8 @@ These are literals from the approved board at header height **20,828,901**, not 
 | Occupied by class         | objects 3,761; tokens 2,140; DAO 520; identities 227; other scripts 353; plain 126 CKB |
 
 The occupied rows sum to 7,127 CKB. `occupied + ordinary free + DAO free = total capacity`. DAO-held capacity is not DAO-free capacity. The implementation must use actual per-cell occupied bytes, never a fixed 102 CKB assumption. Reproducing this snapshot requires its exact evidence; newer heights require a recorded reason for changed values, not copied board constants.
+
+The D3 contract distinguishes token holding marks (distinct types with a positive balance) from physical token cells and their capacity. A live zero-amount token cell contributes to the latter, without inventing a positive-balance holding. DAO rows likewise represent currently lock-owned deposit/request cells; the original depositor's historical list cannot supply a current holder's inventory after transfer or withdrawal.
 
 ### Required D3 acceptance matrix
 
@@ -138,9 +140,52 @@ Network remains a read of the existing crawler store. This plan does not authori
 | D8.2 Shared artwork               | Crash already differs from404 and uses bundled serif, but is a simple text card;404 still uses mono glitch numerals / `NotFoundCellOcean`          | Approved EVA-style template and vessels, real new-block feed, canonical anatomy colours and explicitly scoped evidence; no replay passed off as live; bounded disconnected state and reduced-motion |
 | D8.3 Error routing                | `RouteErrorBoundary` correctly separates route404 and crash; individual pages may still collapse fetch errors into “not found”                     | Preserve completed Fix16, audit new page swaps for real404 vs transport/internal error; both widths, keyboard recovery links, local fonts, long error text                                          |
 
+## D3 final acceptance
+
+Accepted source: API `9618fbb7`, frontend `4d8ccdcf`. The isolated acceptance branch cherry-picked these as `ee800de8` and **`e046eabb932f85b8848bdfb01c50c579eb877617`**. No production file was modified in the acceptance lane. The final browser run served that combined source on task-only `127.0.0.1:3136` and completed at `2026-10-27T09:27:36.420Z`.
+
+| Evidence                           | Result and scope                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Independent fixed-version browser  | **22 states passed; zero assertion failures or page errors.** Both 1440 and 390 px: board activities / partition hover / transactions / live cells; named-only activities / transactions; empty; initial source error; retained-data refresh error; transferred DAO activities / live cells.                                                                                                                                                 |
+| Independent focused frontend tests | **185 passed in five files**: address page 44, new address components 4, redesign foundations 22, API client 76, shared activity rows 39. These ran as a 146-test batch plus the 39-test shared activity suite. No Rust rebuild or full frontend suite was duplicated in this lane.                                                                                                                                                          |
+| Actual producer to consumer shape  | The typed `addressProducerCells` and `addressProducerHoldings` exports were transpiled and compared by deep equality with the API lane's actual `create_router` JSON captures. Both matched every field and value, including explicit nulls.                                                                                                                                                                                                 |
+| API source and regression review   | Reviewed the owner lane's 18-test address suite and its reported 83-test affected gate. Complete owner scope, filter-before-pagination, exact partitions, positive token kinds versus zero-amount physical cells, current DAO request ownership, identity continuity, `.cell` named rights and strict missing-evidence errors have targeted coverage. API execution results belong to the owner/root gates, not an invented independent run. |
+| Read-view scope                    | The holdings response computes its full partition under the existing request pin. Paged sections are separate HTTP requests; the UI does not sum them into the balance. This acceptance did not add or run a new secondary-catch-up race fixture.                                                                                                                                                                                            |
+
+The browser assertions check exact decimal values, entity-title size, document/table/tile geometry, occupied-partition hover association, real entity links with network prefixes, and all three history views. The named-only fixture keeps `support.cell` and transaction participation with zero physical capacity. The error fixture does not become an empty inventory. The refetch fixture retains the previous exact balance with an explicit stale-data alert. The captured API fixture proves that a received DAO request links to its current outpoint and request block **7**, rather than its original deposit at block **5**, and preserves a `data1` type-script reference.
+
+Review defects were fixed in the owning lanes before acceptance: original-depositor history used as current DAO inventory; hidden background-refresh errors; consumer DTO fields absent from the producer; zero-token cells counted as positive-balance holding kinds; object-tile hash overflow; and withdrawal-request rows labelled with the deposit's block/time. Regression logs are retained in the frontend/API owner reports. The final replay has no remaining blocking finding.
+
+### Fixture and live evidence are distinct
+
+The browser uses deterministic fixtures, including captured Rust responses; it does not claim to render the current user database. Root separately ran a read-only mainnet probe with the API commit's CLI, then stopped its temporary port 18103. Its `.worktrees/site-redesign-round2-results/d3-live-address.json` records 40 physical live cells, DAO 5 / positive token kinds 9 / objects 14 / identities 1, and complete cursor traversal for all six classes with exact count/capacity/occupied agreement. It also records the board's exact total and partition: `965117835338057 = 712700000000 + 5457135338057 + 958948000000000` shannons. Root's separate fast verification passed 7/7 with `scopeComplete=true`, run `20261027T092459Z-35db3a67`.
+
+That live result is **not** identical to every board fixture field: its object composition is 0 pure CKB, 10 BTC+CKB, 3 centralized and 1 decode-pending; the frozen board fixture has 1 pure CKB. Other-script/plain held-capacity splits also differ while the occupied figures agree. A pending item must remain pending; board literals are not a reason to replace chain-derived evidence. Neither probe nor UI promises an atomic snapshot across separate HTTP requests.
+
+### Reproduction and cleanup
+
+Ignored local artifacts are retained at `/home/f0rk/projects/ckbadger/.worktrees/site-redesign-round2-acceptance/docs/superpowers/plans/2026-10-27-address-acceptance/`:
+
+- `browser-acceptance.cjs`, `browser-results.json`, `final-browser.log`: final source provenance and all 22 assertion records.
+- `*-1440.png`, `*-390.png`, and `*-viewport.png`: full-page and viewport screenshots. Representative views are `board-activities-1440.png`, `board-transactions-390-viewport.png`, `named-only-activities-1440.png`, `transferred-dao-activities-1440.png`, and `refetch-error-activities-390-viewport.png`.
+- `address-preview.html` / `address-preview.tsx`: archived fixture entry points; copy to `frontend/.address-preview.html` / `.tsx` and serve with the project's installed Vite on an unused local port.
+- `check-producer-fixture.cjs`, `producer-match.log`, `focused-frontend.log`, `focused-activity.log`: exact JSON comparison and independent focused-test output.
+- Earlier `wip-*.log` and `wip-browser-results.json` are diagnostic runs, not the final immutable result.
+
+Final browser invocation, from the acceptance tree:
+
+```bash
+TMPDIR=/home/f0rk/projects/ckbadger/.worktrees/t \
+PREVIEW_SOURCE_REVISION=e046eabb \
+ADDRESS_PREVIEW_URL=http://127.0.0.1:3136/.address-preview.html \
+node docs/superpowers/plans/2026-10-27-address-acceptance/browser-acceptance.cjs
+```
+
+The browser exited, the task-owned Vite process was stopped, and temporary frontend entry files/dependency symlinks were removed. Archived evidence remains. No user service was restarted and no chain-store or network-store write was made by this lane.
+
 ## Suggested execution slices
 
-1. Finish D3 with the matrix above; reuse owner enrichment for D5 gap67 where it is genuinely the same read contract.
+1. D3 acceptance above is complete; reuse owner enrichment for D5 gap67 where it is genuinely the same read contract.
 2. D4 token contract/page, then object/collection/DOB, then m-NFT and identity pages. Shared activity/transaction components land before each page acceptance.
 3. D5 script/custody + cells read contracts, then both script and cell boards. Preserve the dropped gap44 decision.
 4. D6 DAO read contracts and shared chart-detail shell, then all chart variants.
@@ -149,7 +194,7 @@ Network remains a read of the existing crawler store. This plan does not authori
 
 ## Result
 
-- This document records a static baseline and executable acceptance work; **D3 browser acceptance is pending** and D4–D8 are not declared complete.
+- D3 passed independent fixed-version browser and focused-contract acceptance. D4–D8 remain the executable gap list for subsequent rounds and are not declared complete.
 - Storage target: none. No domain, append-only or network write path changes.
 - Re-sync required: **no** for this documentation/acceptance task and the remaining read-time/UI scope. Existing write-path fixes retain their separately documented rebuild requirements.
-- Next: receive D3 owner commits, validate their actual API contract against A01–A16, then append results and reproduction artifacts here. Root owns the consolidated execution report.
+- Next: root completes the integrated gate and consolidated execution report, then continues the D4–D8 slices above.
