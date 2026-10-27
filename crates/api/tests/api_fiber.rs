@@ -325,7 +325,11 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
         .update_sync_status(|status| status.tip_block_number = 10)
         .unwrap();
     let owner_hash = compute_script_hash(&owner_code, 1, &owner_args);
-    let empty_data_hash = packed::CellOutput::calc_data_hash(&[]).as_slice().to_vec();
+    // The indexer stores the CKB Blake2b digest even for empty data. The
+    // protocol's CellOutput::calc_data_hash instead uses a zero sentinel.
+    let empty_data_hash =
+        ckbadger_indexer::parser::script::ScriptParser::compute_data_hash(&[]).to_vec();
+    assert_ne!(empty_data_hash, vec![0; 32]);
     let previous_cell = LiveCellInfo {
         capacity: 100_000_000_000,
         occupied_capacity: 6_100_000_000,

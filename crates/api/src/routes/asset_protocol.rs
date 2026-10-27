@@ -279,19 +279,43 @@ pub(crate) fn raw_transaction(
         data.len() == version.cell.data_size as usize,
         "protocol data size mismatch: {context}"
     );
-    let digest = ckb_types::packed::CellOutput::calc_data_hash(&data);
     let expected = version
         .cell
         .data_hash
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("canonical data hash missing: {context}"))?;
-    anyhow::ensure!(
-        digest.as_slice() == expected,
-        "protocol data hash mismatch: {context}"
-    );
+    verify_indexed_data_hash(&data, expected, &context)?;
     Ok(super::transactions::indexer_tx_view(
         &ckb_store_reader::convert_transaction_view(&tx),
     ))
+}
+
+/// Compare original node bytes with the indexer's persisted CellData hash.
+/// CKB's `CellOutput::calc_data_hash` substitutes a zero sentinel for empty
+/// data, but the indexer stores the Blake2b digest for every byte sequence.
+fn verify_indexed_data_hash(data: &[u8], indexed: &[u8], context: &str) -> Result<()> {
+    let digest = ckbadger_indexer::parser::script::ScriptParser::compute_data_hash(data);
+    anyhow::ensure!(
+        digest.as_slice() == indexed,
+        "protocol data hash mismatch: {context}"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod data_hash_tests {
+    use super::verify_indexed_data_hash;
+
+    #[test]
+    fn empty_data_requires_the_indexer_digest_not_the_protocol_zero_sentinel() {
+        let digest = ckbadger_indexer::parser::script::ScriptParser::compute_data_hash(&[]);
+        assert_ne!(digest, [0; 32]);
+        verify_indexed_data_hash(&[], &digest, "empty cell").unwrap();
+        let error = verify_indexed_data_hash(&[], &[0; 32], "empty cell").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("protocol data hash mismatch: empty cell"));
+    }
 }
 
 /// DOB metadata names native TYPE_ID args, not a script usage reference. A
