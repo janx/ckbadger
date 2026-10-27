@@ -1659,16 +1659,28 @@ fn script_version_to_detail_response(
     sort_code_cells(&mut code_cells);
 
     let deployed_at = first_code_cell_timestamp(state, version_hash, &code_cells)?;
-    let first_deployed_block = code_cells
-        .iter()
-        .map(|(_, _, cell, _)| cell.created_at_block)
-        .min();
     let code_cells_live_count = code_cells
         .iter()
         .filter(|(_, _, _, is_live)| *is_live)
         .count() as i64;
     let code_cells_total = code_cells.len() as i64;
     let deployments = script_version_deployments(state, version_hash, info, &code_cells)?;
+    let first_position = deployments
+        .iter()
+        .map(|deployment| {
+            Ok((
+                deployment.created_at_block,
+                required_script_tx_index(
+                    state,
+                    &deployment.code_cell_tx_hash,
+                    deployment.created_at_block,
+                    "code cell creation",
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?
+        .into_iter()
+        .min();
 
     Ok(ScriptVersionDetailResponse {
         version_hash: format!("0x{}", hex::encode(version_hash)),
@@ -1691,7 +1703,8 @@ fn script_version_to_detail_response(
             .and_then(hash_type_to_string)
             .map(str::to_string),
         deployed_at,
-        first_deployed_block,
+        first_deployed_block: first_position.map(|(block, _)| block),
+        first_deployed_tx_index: first_position.map(|(_, index)| index),
         live_cells_count,
         cells_count,
         owned_capacity_sum: owned_capacity_sum.to_string(),
@@ -1701,6 +1714,34 @@ fn script_version_to_detail_response(
         deployments,
         references: observed_references,
     })
+}
+
+fn required_script_tx_index(
+    state: &AppState,
+    tx_hash: &str,
+    expected_block: i64,
+    event: &str,
+) -> Result<i32, ApiRouteError> {
+    let bytes = hex::decode(tx_hash.trim_start_matches("0x")).map_err(|e| {
+        ApiError::internal(format!(
+            "{event} transaction {tx_hash} has invalid hash: {e}"
+        ))
+    })?;
+    let (block, index) = state
+        .store
+        .get_tx_location(&bytes)
+        .map_err(|e| ApiError::internal(format!("{event} transaction {tx_hash}: {e}")))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "{event} transaction {tx_hash} at block {expected_block} lacks canonical tx location"
+            ))
+        })?;
+    if block != expected_block {
+        return Err(ApiError::internal(format!(
+            "{event} transaction {tx_hash} location block {block} differs from code cell block {expected_block}"
+        )));
+    }
+    Ok(index)
 }
 
 fn script_history(
@@ -1766,19 +1807,19 @@ fn script_history(
             }
             for (reference_hash, hash_type) in references {
                 let (chain_time_ms, indexed_day) = calendar(state, deployment.created_at_block)?;
-                let tx_hash = hex::decode(deployment.code_cell_tx_hash.trim_start_matches("0x"))
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                let tx_index = state.store.get_tx_location(&tx_hash).map_err(|e| ApiError::internal(e.to_string()))?.map(|(block, index)| {
-                    if block != deployment.created_at_block { return Err(ApiError::internal(format!("code cell tx 0x{} location block {} differs from deployment block {}", hex::encode(&tx_hash), block, deployment.created_at_block))); }
-                    Ok(index)
-                }).transpose()?;
+                let tx_index = required_script_tx_index(
+                    state,
+                    &deployment.code_cell_tx_hash,
+                    deployment.created_at_block,
+                    "code cell creation",
+                )?;
                 history.push(ScriptHistoryMarkerResponse {
                     reference_hash: reference_hash.clone(),
                     hash_type: hash_type.clone(),
                     version_hash: Some(response.version_hash.clone()),
                     event: "deployed".to_string(),
                     block_number: deployment.created_at_block,
-                    tx_index,
+                    tx_index: Some(tx_index),
                     timestamp: deployment.deployed_at,
                     chain_time_ms,
                     indexed_day,
@@ -1789,22 +1830,35 @@ fn script_history(
                 });
                 if let Some(block_number) = deployment.consumed_at_block {
                     let (chain_time_ms, indexed_day) = calendar(state, block_number)?;
+                    let consuming_tx = deployment.consumed_by_tx.as_ref().ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "consumed code cell {}:{} lacks consuming transaction",
+                            deployment.code_cell_tx_hash, deployment.code_cell_output_index
+                        ))
+                    })?;
+                    let consumed_tx_index = required_script_tx_index(
+                        state,
+                        consuming_tx,
+                        block_number,
+                        "code cell consumption",
+                    )?;
+                    if (block_number, consumed_tx_index) <= (deployment.created_at_block, tx_index)
+                    {
+                        return Err(ApiError::internal(format!("code cell {}:{} consumption at ({block_number},{consumed_tx_index}) does not follow creation at ({},{tx_index})", deployment.code_cell_tx_hash, deployment.code_cell_output_index, deployment.created_at_block)));
+                    }
                     history.push(ScriptHistoryMarkerResponse {
                         reference_hash,
                         hash_type,
                         version_hash: Some(response.version_hash.clone()),
                         event: "consumed".to_string(),
                         block_number,
-                        tx_index: deployment.consumed_by_tx.as_ref().map(|hash| hex::decode(hash.trim_start_matches("0x")).map_err(|e| ApiError::internal(e.to_string()))).transpose()?.map(|hash| state.store.get_tx_location(&hash).map_err(|e| ApiError::internal(e.to_string()))).transpose()?.flatten().map(|(block, index)| {
-                            if block != block_number { return Err(ApiError::internal(format!("consuming tx location block {block} differs from marker block {block_number}"))); }
-                            Ok(index)
-                        }).transpose()?,
+                        tx_index: Some(consumed_tx_index),
                         timestamp: code_cell_timestamp(state, version_hash, block_number)?,
                         chain_time_ms,
                         indexed_day,
                         code_cell_tx_hash: deployment.code_cell_tx_hash.clone(),
                         code_cell_output_index: deployment.code_cell_output_index,
-                        event_tx_hash: deployment.consumed_by_tx.clone().ok_or_else(|| ApiError::internal(format!("consumed code cell {}:{} lacks consuming transaction", deployment.code_cell_tx_hash, deployment.code_cell_output_index)))?,
+                        event_tx_hash: consuming_tx.clone(),
                         custody: deployment.custody.clone(),
                     });
                 }
@@ -2426,8 +2480,13 @@ async fn get_script(
     let history = script_history(&state, &family_versions, &versions)?;
 
     versions.sort_by(|left, right| {
-        match (left.first_deployed_block, right.first_deployed_block) {
-            (Some(left_block), Some(right_block)) => right_block.cmp(&left_block),
+        match (
+            left.first_deployed_block.zip(left.first_deployed_tx_index),
+            right
+                .first_deployed_block
+                .zip(right.first_deployed_tx_index),
+        ) {
+            (Some(left_position), Some(right_position)) => right_position.cmp(&left_position),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,

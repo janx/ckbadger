@@ -319,6 +319,7 @@ pub struct ScriptVersionDetailResponse {
     pub canonical_hash_type: Option<String>,
     pub deployed_at: Option<i64>,
     pub first_deployed_block: Option<i64>,
+    pub first_deployed_tx_index: Option<i32>,
     pub live_cells_count: i64,
     pub cells_count: i64,
     pub owned_capacity_sum: String,

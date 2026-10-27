@@ -51,6 +51,7 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
     );
     for (i, reference) in refs.iter().enumerate() {
         let tx = vec![0x20 + i as u8; 32];
+        batch.put_tx_hash_map(&tx, 10, i as i32);
         let lock_hash = vec![0x30 + i as u8; 32];
         batch.put_script_reference_info(
             1,
@@ -181,6 +182,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
         batch.put_script_reference_to_version(1, &reference, &version);
         for i in 0..2u8 {
             let tx = vec![0x91 + i; 32];
+            batch.put_tx_hash_map(&tx, 10, i32::from(i));
             batch.put_cell(
                 &tx,
                 0,
@@ -343,6 +345,7 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
         10,
     );
     batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
+    batch.put_tx_hash_map(&outpoint, 10, 1);
     batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
     batch.commit().unwrap();
 
@@ -2164,6 +2167,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     );
     batch.put_cell_by_type(&newer_type_hash, newer_block, &newer_tx_hash, 1);
     batch.put_cell_by_data_hash(&newer_version_hash, newer_block, &newer_tx_hash, 1);
+    batch.put_tx_hash_map(&older_tx_hash, older_block, 0);
+    batch.put_tx_hash_map(&newer_earliest_tx_hash, newer_earliest_block, 0);
+    batch.put_tx_hash_map(&newer_tx_hash, newer_block, 0);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -4154,4 +4160,207 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
             serde_json::json!(active.map(|index| format!("0x{}", hex::encode(&binaries[index]))))
         );
     }
+}
+
+#[tokio::test]
+async fn test_script_versions_order_same_block_by_canonical_tx_index() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(10, 1_704_153_601_000)]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        "same-block-order",
+        &ScriptFamilyInfo {
+            family_id: "same-block-order".to_string(),
+            name: "Same Block Order".to_string(),
+            versions_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Same Block Order", "same-block-order");
+    for (hash_byte, tx_byte, tx_index) in [(0xf1u8, 0x31u8, 0i32), (0x11, 0x32, 1)] {
+        let version = vec![hash_byte; 32];
+        let tx = vec![tx_byte; 32];
+        batch.put_script_version_by_family("same-block-order", &version);
+        batch.put_script_version(
+            &version,
+            &ScriptVersionInfo {
+                version_hash: version.clone(),
+                family_id: Some("same-block-order".to_string()),
+                registered_references: vec![(version.clone(), 0)],
+                canonical_reference_hash: Some(version.clone()),
+                canonical_hash_type: Some(0),
+                ..Default::default()
+            },
+        );
+        batch.put_script_reference_info(
+            0,
+            &version,
+            &ScriptReferenceInfo {
+                reference_hash: version.clone(),
+                hash_type: 0,
+                ..Default::default()
+            },
+        );
+        batch.put_script_reference_to_version(0, &version, &version);
+        batch.put_cell(
+            &tx,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x21; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 32,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(version.clone()),
+            },
+            10,
+        );
+        batch.put_cell_by_data_hash(&version, 10, &tx, 0);
+        batch.put_tx_hash_map(&tx, 10, tx_index);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Same%20Block%20Order")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        detail["versions"][0]["versionHash"],
+        format!("0x{}", hex::encode(vec![0x11; 32]))
+    );
+    assert_eq!(detail["versions"][0]["firstDeployedTxIndex"], 1);
+    assert_eq!(detail["history"][0]["txIndex"], 0);
+    assert_eq!(detail["history"][1]["txIndex"], 1);
+}
+
+async fn chronology_error_body(
+    creation_location: Option<(i64, i32)>,
+    consumption_location: Option<(i64, i32)>,
+    consumed_at_block: i64,
+) -> (StatusCode, String) {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(10, 1_704_153_601_000), (11, 1_704_153_602_000)]);
+    let version = vec![0x71; 32];
+    let tx = vec![0x72; 32];
+    let consumer = vec![0x73; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        "chronology-error",
+        &ScriptFamilyInfo {
+            family_id: "chronology-error".to_string(),
+            name: "Chronology Error".to_string(),
+            versions_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Chronology Error", "chronology-error");
+    batch.put_script_version_by_family("chronology-error", &version);
+    batch.put_script_version(
+        &version,
+        &ScriptVersionInfo {
+            version_hash: version.clone(),
+            family_id: Some("chronology-error".to_string()),
+            registered_references: vec![(version.clone(), 0)],
+            canonical_reference_hash: Some(version.clone()),
+            canonical_hash_type: Some(0),
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_info(
+        0,
+        &version,
+        &ScriptReferenceInfo {
+            reference_hash: version.clone(),
+            hash_type: 0,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(0, &version, &version);
+    batch.put_consumed_cell_with_consumer(
+        &tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x21; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version.clone()),
+        },
+        10,
+        consumed_at_block,
+        Some(&consumer),
+    );
+    batch.put_cell_by_data_hash(&version, 10, &tx, 0);
+    if let Some((block, index)) = creation_location {
+        batch.put_tx_hash_map(&tx, block, index);
+    }
+    if let Some((block, index)) = consumption_location {
+        batch.put_tx_hash_map(&consumer, block, index);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts/Chronology%20Error")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    (status, body)
+}
+
+#[tokio::test]
+async fn test_script_history_requires_canonical_creation_and_consumption_locations() {
+    for (creation, consumption, expected) in [
+        (None, Some((11, 0)), "code cell creation"),
+        (Some((10, 0)), None, "code cell consumption"),
+    ] {
+        let (status, body) = chronology_error_body(creation, consumption, 11).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert!(body.contains(expected), "{body}");
+        assert!(body.contains("lacks canonical tx location"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn test_script_history_rejects_consumer_not_after_creator() {
+    let (status, body) = chronology_error_body(Some((10, 1)), Some((10, 0)), 10).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains("does not follow creation"), "{body}");
 }
