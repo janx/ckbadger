@@ -1369,19 +1369,92 @@ fn code_cell_timestamp(
     Ok(header.timestamp)
 }
 
-fn first_code_cell_timestamp(
+pub(crate) struct FirstCodeCellDeployment {
+    pub tx_hash: Vec<u8>,
+    pub tx_index: i32,
+    pub output_index: i16,
+    pub block_number: i64,
+    pub timestamp_ms: i64,
+    pub epoch_number: i64,
+}
+
+pub(crate) fn first_code_cell_deployment(
     state: &AppState,
     version_hash: &[u8],
     code_cells: &[VersionCodeCell],
-) -> Result<Option<i64>, ApiRouteError> {
-    let Some(block) = code_cells
-        .iter()
-        .map(|(_, _, cell, _)| cell.created_at_block)
-        .min()
+) -> anyhow::Result<Option<FirstCodeCellDeployment>> {
+    let mut ordered = Vec::with_capacity(code_cells.len());
+    for (tx_hash, output_index, cell, _) in code_cells {
+        if cell.data_hash.as_deref() != Some(version_hash) {
+            anyhow::bail!(
+                "script deployment data hash mismatch: version_hash=0x{}, code_cell=0x{}:{}, block={}, cell_data_hash={:?}",
+                hex::encode(version_hash),
+                hex::encode(tx_hash),
+                output_index,
+                cell.created_at_block,
+                cell.data_hash.as_ref().map(hex::encode)
+            );
+        }
+        let tx_index = canonical_code_cell_tx_index(
+            state,
+            tx_hash,
+            cell.created_at_block,
+            i32::from(*output_index),
+        )?;
+        let header = state
+            .store
+            .get_block_header(cell.created_at_block)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "script deployment header read failed: version_hash=0x{}, code_cell=0x{}:{}, block={}, error={error}",
+                    hex::encode(version_hash),
+                    hex::encode(tx_hash),
+                    output_index,
+                    cell.created_at_block
+                )
+            })?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "script deployment header missing: version_hash=0x{}, code_cell=0x{}:{}, block={}",
+                    hex::encode(version_hash),
+                    hex::encode(tx_hash),
+                    output_index,
+                    cell.created_at_block
+                )
+            })?;
+        anyhow::ensure!(
+            tx_index >= 0 && tx_index < header.transactions_count,
+            "script deployment transaction index out of block bounds: version_hash=0x{}, code_cell=0x{}:{}, block={}, tx_index={}, block_tx_count={}",
+            hex::encode(version_hash),
+            hex::encode(tx_hash),
+            output_index,
+            cell.created_at_block,
+            tx_index,
+            header.transactions_count
+        );
+        ordered.push((
+            cell.created_at_block,
+            tx_index,
+            *output_index,
+            tx_hash,
+            header.timestamp,
+            header.epoch_number,
+        ));
+    }
+    let Some((block_number, tx_index, output_index, tx_hash, timestamp_ms, epoch_number)) = ordered
+        .into_iter()
+        .min_by(|left, right| (left.0, left.1, left.2).cmp(&(right.0, right.1, right.2)))
     else {
         return Ok(None);
     };
-    Ok(Some(code_cell_timestamp(state, version_hash, block)?))
+    Ok(Some(FirstCodeCellDeployment {
+        tx_hash: tx_hash.clone(),
+        tx_index,
+        output_index,
+        block_number,
+        timestamp_ms,
+        epoch_number,
+    }))
 }
 
 fn script_version_deployments(
@@ -1781,7 +1854,9 @@ fn script_version_to_detail_response(
             .map_err(|e| ApiError::internal(e.to_string()))?;
     sort_code_cells(&mut code_cells);
 
-    let deployed_at = first_code_cell_timestamp(state, version_hash, &code_cells)?;
+    let deployed_at = first_code_cell_deployment(state, version_hash, &code_cells)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map(|deployment| deployment.timestamp_ms);
     let code_cells_live_count = code_cells
         .iter()
         .filter(|(_, _, _, is_live)| *is_live)
@@ -1838,6 +1913,45 @@ fn script_version_to_detail_response(
         deployments,
         references: observed_references,
     })
+}
+
+fn canonical_code_cell_tx_index(
+    state: &AppState,
+    tx_hash: &[u8],
+    expected_block: i64,
+    output_index: i32,
+) -> anyhow::Result<i32> {
+    let (block, index, tx) = state.store.get_tx_by_hash(tx_hash)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "code cell 0x{}:{} at block {} lacks canonical transaction location",
+            hex::encode(tx_hash),
+            output_index,
+            expected_block
+        )
+    })?;
+    anyhow::ensure!(
+        block == expected_block,
+        "code cell 0x{}:{} indexed at block {} but canonical transaction is at block {}",
+        hex::encode(tx_hash),
+        output_index,
+        expected_block,
+        block
+    );
+    anyhow::ensure!(
+        tx.tx_hash.as_slice() == tx_hash,
+        "code cell 0x{}:{} canonical transaction index points to 0x{}",
+        hex::encode(tx_hash),
+        output_index,
+        hex::encode(tx.tx_hash)
+    );
+    anyhow::ensure!(
+        output_index >= 0 && output_index < i32::from(tx.outputs_count),
+        "code cell 0x{}:{} is outside canonical transaction output count {}",
+        hex::encode(tx_hash),
+        output_index,
+        tx.outputs_count
+    );
+    Ok(index)
 }
 
 fn required_script_tx_index(

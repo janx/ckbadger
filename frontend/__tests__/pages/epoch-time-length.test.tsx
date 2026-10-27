@@ -36,6 +36,7 @@ describe('EpochTimeLengthPage', () => {
         { rfc: '0032', activationEpoch: 5414 },
         { rfc: '0049', activationEpoch: 12293 },
       ],
+      scriptDeployments: [],
       tipEpoch: 13000,
       tipBlock: 19000000,
       events: [

@@ -360,6 +360,192 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
         .unwrap()
         .iter()
         .any(|feature| feature["rfc"] == "0032" && feature["activationEpoch"] == 5414));
+    assert!(json["scriptDeployments"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn hardforks_exposes_earliest_indexed_code_cell_per_named_script_version() {
+    let store = test_store();
+    let family_id = "known-lock";
+    let version_hash = vec![0x33; 32];
+    let second_version_hash = vec![0x22; 32];
+    let early_tx = vec![0x55; 32];
+    let later_same_block_tx = vec![0x44; 32];
+    let later_tx = vec![0x66; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        family_id,
+        &ScriptFamilyInfo {
+            family_id: family_id.into(),
+            name: "Known Lock".into(),
+            versions_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &version_hash,
+        &ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            family_id: Some(family_id.into()),
+            name: Some("Known Lock v2".into()),
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &second_version_hash,
+        &ScriptVersionInfo {
+            version_hash: second_version_hash.clone(),
+            family_id: Some(family_id.into()),
+            name: Some("Known Lock v3".into()),
+            ..Default::default()
+        },
+    );
+    for (block, tx_index, tx, timestamp) in [
+        (10, 0, &early_tx, 1_700_000_000_000i64),
+        (10, 1, &later_same_block_tx, 1_700_000_000_000i64),
+        (11, 0, &later_tx, 1_700_000_600_000i64),
+    ] {
+        batch.put_block_header(
+            block,
+            &CachedBlockHeader {
+                hash: vec![block as u8; 32],
+                parent_hash: vec![0; 32],
+                timestamp,
+                epoch_number: 42,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: if block == 10 { 2 } else { 1 },
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: timestamp,
+            },
+        );
+        let code_hash = if tx_index == 1 && block == 10 {
+            &second_version_hash
+        } else {
+            &version_hash
+        };
+        batch.put_cell(
+            tx,
+            0,
+            &LiveCellInfo {
+                capacity: 10_000_000_000,
+                lock_script_hash: vec![0x10; 32],
+                lock_code_hash: vec![0x20; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 32,
+                occupied_capacity: 7_300_000_000,
+                udt_amount: None,
+                data_hash: Some(code_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_data_hash(code_hash, block, tx, 0);
+        batch.put_tx_hash_map(tx, block, tx_index);
+        batch.put_tx_index(
+            block,
+            tx_index,
+            &TxIndexEntry {
+                tx_hash: tx.as_slice().try_into().unwrap(),
+                is_cellbase: false,
+                timestamp,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let mut config = test_config(store.clone());
+    let rpc = MockServer::start().await;
+    mount_consensus_rpc(&rpc, mainnet_get_consensus_result()).await;
+    config.ckb_rpc_url = rpc.uri();
+    let app = create_router(config).await;
+    let (status, body) = get_json(&app, "/hardforks").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let marks = body["scriptDeployments"].as_array().unwrap();
+    assert_eq!(
+        marks.len(),
+        2,
+        "one mark per version, even when one has two code cells"
+    );
+    assert_eq!(marks[0]["familyName"], "Known Lock");
+    assert_eq!(marks[0]["versionName"], "Known Lock v2");
+    assert_eq!(
+        marks[0]["versionHash"],
+        format!("0x{}", hex::encode(&version_hash))
+    );
+    assert_eq!(
+        marks[0]["codeCellTxHash"],
+        format!("0x{}", hex::encode(early_tx))
+    );
+    assert_eq!(marks[0]["codeCellOutputIndex"], 0);
+    assert_eq!(marks[0]["txIndex"], 0);
+    assert_eq!(marks[0]["blockNumber"], 10);
+    assert_eq!(marks[0]["timestampMs"], 1_700_000_000_000i64);
+    assert_eq!(marks[0]["epochNumber"], 42);
+    assert_eq!(marks[1]["versionName"], "Known Lock v3");
+    assert_eq!(
+        marks[1]["versionHash"],
+        format!("0x{}", hex::encode(&second_version_hash))
+    );
+    assert_eq!(
+        marks[1]["codeCellTxHash"],
+        format!("0x{}", hex::encode(&later_same_block_tx))
+    );
+    assert_eq!(marks[1]["blockNumber"], 10);
+    assert_eq!(marks[1]["txIndex"], 1);
+    if let Ok(dir) = std::env::var("D7_FIXTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("hardforks-deployments.json"),
+            serde_json::to_vec_pretty(&body).unwrap(),
+        )
+        .unwrap();
+    }
+    let stale_tx = vec![0x77; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &stale_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 10_000_000_000,
+            lock_script_hash: vec![0x10; 32],
+            lock_code_hash: vec![0x20; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 32,
+            occupied_capacity: 7_300_000_000,
+            udt_amount: None,
+            data_hash: Some(vec![0x99; 32]),
+        },
+        12,
+    );
+    batch.put_cell_by_data_hash(&version_hash, 12, &stale_tx, 0);
+    batch.commit().unwrap();
+    let (status, body) = get_json(&app, "/hardforks").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body
+        .to_string()
+        .contains("script deployment data hash mismatch"));
+    assert!(body.to_string().contains(&hex::encode(stale_tx)));
 }
 
 #[tokio::test]

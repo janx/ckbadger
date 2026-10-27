@@ -115,6 +115,7 @@ describe('BlockDetailPage', () => {
     vi.mocked(api.getHardforks).mockResolvedValue({
       network: 'mainnet',
       consensusFeatures: [],
+      scriptDeployments: [],
       tipEpoch: 13000,
       tipBlock: 19000000,
       events: [],
@@ -219,6 +220,7 @@ describe('BlockDetailPage', () => {
     vi.mocked(api.getHardforks).mockResolvedValue({
       network: 'mainnet',
       consensusFeatures: [],
+      scriptDeployments: [],
       tipEpoch: 13000,
       tipBlock: 19000000,
       events: [

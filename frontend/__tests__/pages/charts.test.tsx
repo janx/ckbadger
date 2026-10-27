@@ -194,6 +194,7 @@ const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
 const mockHardforkTimeline = {
   network: 'mainnet',
   consensusFeatures: [],
+  scriptDeployments: [],
   tipEpoch: 13000,
   tipBlock: 19000000,
   events: [

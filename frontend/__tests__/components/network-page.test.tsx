@@ -102,7 +102,7 @@ describe('NetworkClientPage', () => {
       )
     );
 
-    render(<NetworkClientPage />, { wrapper: createWrapper() });
+    const { container } = render(<NetworkClientPage />, { wrapper: createWrapper() });
 
     expect(await screen.findByText('Advertised candidates')).toBeInTheDocument();
     expect(screen.getByText('Same-network reachable')).toBeInTheDocument();
@@ -120,6 +120,7 @@ describe('NetworkClientPage', () => {
     expect(
       screen.getByText(/1 of 2 retained verified peers have approximate GeoIP coordinates/i)
     ).toBeInTheDocument();
+    expect(container.querySelector('[class*="gold"], [class*="warning"]')).toBeNull();
   });
 
   it('shows active progress separately from the last completed round', async () => {

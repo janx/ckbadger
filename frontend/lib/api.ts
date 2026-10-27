@@ -403,6 +403,19 @@ interface HardforkTimelineResponse {
   tipBlock: number;
   events: HardforkEvent[];
   consensusFeatures: Array<{ rfc: string; activationEpoch: number | null }>;
+  scriptDeployments: HardforkScriptDeployment[];
+}
+
+export interface HardforkScriptDeployment {
+  familyName: string;
+  versionName: string;
+  versionHash: string;
+  codeCellTxHash: string;
+  txIndex: number;
+  codeCellOutputIndex: number;
+  blockNumber: number;
+  timestampMs: number;
+  epochNumber: number;
 }
 
 interface CursorQueryParams {

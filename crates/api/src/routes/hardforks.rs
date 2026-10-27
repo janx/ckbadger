@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use crate::consensus::{load_hardfork_features, HardforkFeature};
 use crate::response::{ok, ApiError, ApiResult};
+use crate::routes::scripts::first_code_cell_deployment;
+use crate::utils::list_version_code_cells;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +48,21 @@ pub struct HardforkTimelineResponse {
     pub tip_block: i64,
     pub events: Vec<HardforkEventResponse>,
     pub consensus_features: Vec<HardforkFeature>,
+    pub script_deployments: Vec<ScriptDeploymentMarkerResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptDeploymentMarkerResponse {
+    pub family_name: String,
+    pub version_name: String,
+    pub version_hash: String,
+    pub code_cell_tx_hash: String,
+    pub tx_index: i32,
+    pub code_cell_output_index: i16,
+    pub block_number: i64,
+    pub timestamp_ms: i64,
+    pub epoch_number: i64,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -96,6 +113,7 @@ async fn list_hardforks(
         }
     }
     let store = state.store.clone();
+    let evidence_state = state.clone();
     let network_owned = network.to_string();
     let hardforks_owned: Vec<_> = hardforks.to_vec();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -136,12 +154,63 @@ async fn list_hardforks(
             });
         }
 
+        let mut script_deployments = Vec::new();
+        for (version_hash, info) in store.list_script_versions()? {
+            let Some(family_id) = info.family_id.as_deref() else {
+                continue;
+            };
+            let family = store.get_script_family(family_id)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "script version 0x{} points to missing family {}",
+                    hex::encode(&version_hash),
+                    family_id
+                )
+            })?;
+            if family.family_id != family_id {
+                anyhow::bail!(
+                    "script version 0x{} family id mismatch: indexed={}, record={}",
+                    hex::encode(&version_hash),
+                    family_id,
+                    family.family_id
+                );
+            }
+            let code_cells =
+                list_version_code_cells(&store, &evidence_state.append_only_store, &version_hash)?;
+            let Some(first) =
+                first_code_cell_deployment(&evidence_state, &version_hash, &code_cells)?
+            else {
+                continue;
+            };
+            script_deployments.push(ScriptDeploymentMarkerResponse {
+                family_name: family.name.clone(),
+                version_name: info.name.unwrap_or(family.name),
+                version_hash: format!("0x{}", hex::encode(version_hash)),
+                code_cell_tx_hash: format!("0x{}", hex::encode(first.tx_hash)),
+                tx_index: first.tx_index,
+                code_cell_output_index: first.output_index,
+                block_number: first.block_number,
+                timestamp_ms: first.timestamp_ms,
+                epoch_number: first.epoch_number,
+            });
+        }
+        script_deployments.sort_by(|left, right| {
+            left.block_number
+                .cmp(&right.block_number)
+                .then_with(|| left.tx_index.cmp(&right.tx_index))
+                .then_with(|| {
+                    left.code_cell_output_index
+                        .cmp(&right.code_cell_output_index)
+                })
+                .then_with(|| left.version_hash.cmp(&right.version_hash))
+        });
+
         Ok(HardforkTimelineResponse {
             network: network_owned,
             tip_epoch,
             tip_block,
             events,
             consensus_features,
+            script_deployments,
         })
     })
     .await

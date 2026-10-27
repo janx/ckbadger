@@ -38,8 +38,10 @@ function LoadingSkeleton() {
 
 function ReachabilityCaveat({ className }: { className?: string }) {
   return (
-    <div className={`border-warning/30 bg-warning/10 rounded border px-4 py-3 ${className ?? ''}`}>
-      <p className="text-warning font-mono text-xs leading-relaxed">
+    <div
+      className={`border-base-border bg-base-surface rounded border px-4 py-3 ${className ?? ''}`}
+    >
+      <p className="text-text-dim font-mono text-xs leading-relaxed">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
         network; nodes behind NAT or firewalls can stay hidden.
@@ -147,7 +149,7 @@ function PeersDashboard({
       identity="As this crawler saw the CKB L1 network. Reachability, advertisements and local peer sessions are distinct evidence."
     >
       {!enabled && (
-        <p role="status" className="text-warning text-[12px]">
+        <p role="status" className="text-info text-[12px]">
           Crawler disabled. This retained evidence is not live.
         </p>
       )}
@@ -156,7 +158,7 @@ function PeersDashboard({
           Round #{lastRound.roundId} · updated {updatedAgo}
         </span>
         {activeRound && (
-          <Badge variant="gold" className="uppercase">
+          <Badge variant="blue" className="uppercase">
             {activeRound.blockedReason
               ? `round #${activeRound.roundId} blocked`
               : `round #${activeRound.roundId} crawling ${activeRound.completedPeers}/${activeRound.candidatePeers}`}
@@ -165,7 +167,7 @@ function PeersDashboard({
       </div>
 
       <StatGrid columns={4}>
-        <StatBlock label="Advertised candidates" value={lastRound.candidatePeers} color="gold" />
+        <StatBlock label="Advertised candidates" value={lastRound.candidatePeers} />
         <StatBlock label="Same-network reachable" value={lastRound.reachablePeers} color="jade" />
         <StatBlock label="Verified retained" value={lastRound.verifiedRetainedPeers} color="aqua" />
         <StatBlock

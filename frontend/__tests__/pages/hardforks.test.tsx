@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import producerMainnet from '@/__tests__/fixtures/network-api-producer/hardforks-mainnet.json';
+import producerDeployments from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 
 const getHardforksMock = vi.hoisted(() => vi.fn());
 
@@ -24,6 +25,7 @@ const mockTimeline = {
     { rfc: '0032', activationEpoch: 5414 },
     { rfc: '0049', activationEpoch: 12293 },
   ],
+  scriptDeployments: [],
   tipEpoch: 13000,
   tipBlock: 19000000,
   events: [
@@ -95,6 +97,33 @@ describe('HardforksPage', () => {
     expect(screen.getByRole('link', { name: 'CKB2023' })).toHaveAttribute(
       'href',
       'https://example.com/ckb2023'
+    );
+  });
+
+  it('shows the producer-backed script deployment mark and exact evidence links', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(producerDeployments);
+    render(<HardforksPage />);
+
+    const mark = await screen.findByRole('button', { name: /Known Lock v2.*block #10/i });
+    fireEvent.focus(mark);
+    expect(
+      within(
+        screen.getByRole('complementary', { name: 'Selected script deployment evidence' })
+      ).getByText(/earliest indexed code-cell creation/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText('2023-11-14T22:13:20.000Z')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Known Lock family' })).toHaveAttribute(
+      'href',
+      '/mainnet/scripts/Known%20Lock'
+    );
+    expect(screen.getByRole('link', { name: 'Code cell 0x55555555…:0' })).toHaveAttribute(
+      'href',
+      '/mainnet/cell/0x5555555555555555555555555555555555555555555555555555555555555555-0'
+    );
+    expect(screen.getByRole('link', { name: 'Block #10' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/10'
     );
   });
 

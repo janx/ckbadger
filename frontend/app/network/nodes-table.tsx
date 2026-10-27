@@ -78,13 +78,13 @@ function optionalAge(timestamp: number | null): string {
 
 function crawlerDialStateBadge(state: NetworkPeerDisplayState): {
   label: string;
-  variant: 'green' | 'gold' | 'blue' | 'red' | 'gray';
+  variant: 'green' | 'neutral' | 'blue' | 'red' | 'gray';
 } {
   switch (state) {
     case 'reachable':
       return { label: 'Same-network Identify', variant: 'green' };
     case 'verifiedUnavailable':
-      return { label: 'Aliases exhausted · prior verification', variant: 'gold' };
+      return { label: 'Aliases exhausted · prior verification', variant: 'neutral' };
     case 'advertisedUnverified':
       return { label: 'Aliases exhausted', variant: 'gray' };
     case 'foreignNetwork':

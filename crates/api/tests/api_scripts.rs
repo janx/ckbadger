@@ -26,6 +26,17 @@ fn put_canonical_script_tx(
     );
 }
 
+fn set_script_fixture_block_tx_count(store: &CkbadgerStore, block: i64, count: i32) {
+    let mut header = store
+        .get_block_header(block)
+        .expect("read fixture header")
+        .expect("fixture block must exist");
+    header.transactions_count = count;
+    let mut batch = StoreBatch::new(store);
+    batch.put_block_header(block, &header);
+    batch.commit().expect("update fixture header");
+}
+
 #[tokio::test]
 async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence() {
     use ckbadger_store::types::AddressBalance;
@@ -43,6 +54,7 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
             (10, utc_ms("2024-01-01T23:59:59Z")),
         ],
     );
+    set_script_fixture_block_tx_count(&store, 10, 3);
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_family(
         family_id,
@@ -162,6 +174,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
         let version = vec![0x81; 32];
         let reference = vec![0x82; 32];
         seed_block_headers_at(&store, &[(10, 1_700_000_000_000)]);
+        set_script_fixture_block_tx_count(&store, 10, 2);
         let mut batch = StoreBatch::new(store.as_ref());
         batch.put_script_family(
             "mixed-holders",
@@ -320,6 +333,7 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
             (10, utc_ms("2024-01-01T23:59:59Z")),
         ],
     );
+    set_script_fixture_block_tx_count(&store, 10, 2);
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_family(
         family_id,
@@ -2541,6 +2555,8 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             })
             .collect::<Vec<_>>(),
     );
+    set_script_fixture_block_tx_count(&store, 30, 2);
+    set_script_fixture_block_tx_count(&store, 40, 2);
     let reference = vec![0x31; 32];
     let binary = vec![0x41; 32];
     let history = ScriptVersionInfo {
@@ -2866,7 +2882,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     batch.delete_cell(&[0x72; 32], 0);
     let consuming_tx = vec![0x74; 32];
     batch.put_consumed_cell_meta(&[0x72; 32], 0, 30, 40, Some(&consuming_tx));
-    batch.put_tx_hash_map(&consuming_tx, 40, 0);
+    put_canonical_script_tx(&mut batch, &consuming_tx, 40, 0, 1);
     let reactivated_tx = vec![0x75; 32];
     batch.put_cell(
         &reactivated_tx,
@@ -2892,7 +2908,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     batch.put_cell_by_type(&reference, 40, &reactivated_tx, 0);
     batch.put_cell_by_data_hash(&binary, 40, &reactivated_tx, 0);
-    batch.put_tx_hash_map(&reactivated_tx, 40, 1);
+    put_canonical_script_tx(&mut batch, &reactivated_tx, 40, 1, 1);
     batch.commit().unwrap();
     assert_retired_family_usage_and_utilization(&app, true).await;
     let mut inconsistent_family = store.get_script_family("retired-family").unwrap().unwrap();
@@ -4143,6 +4159,8 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
             })
             .collect::<Vec<_>>(),
     );
+    set_script_fixture_block_tx_count(&store, 10, 2);
+    set_script_fixture_block_tx_count(&store, 11, 2);
     let reference = vec![0x31; 32];
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
     let anchors = [vec![0x61; 32], vec![0x71; 32]];
@@ -4385,6 +4403,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
 async fn test_script_versions_order_same_block_by_canonical_tx_index() {
     let store = test_store();
     seed_block_headers_at(&store, &[(10, 1_704_153_601_000)]);
+    set_script_fixture_block_tx_count(&store, 10, 2);
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_family(
         "same-block-order",
@@ -4476,6 +4495,7 @@ async fn chronology_error_body_with_index(
 ) -> (StatusCode, String) {
     let store = test_store();
     seed_block_headers_at(&store, &[(10, 1_704_153_601_000), (11, 1_704_153_602_000)]);
+    set_script_fixture_block_tx_count(&store, 10, 2);
     let version = vec![0x71; 32];
     let tx = vec![0x72; 32];
     let consumer = vec![0x73; 32];
@@ -4588,13 +4608,21 @@ async fn chronology_error_body(
 #[tokio::test]
 async fn test_script_history_requires_canonical_creation_and_consumption_locations() {
     for (creation, consumption, expected) in [
-        (None, Some((11, 0)), "code cell creation"),
-        (Some((10, 0)), None, "code cell consumption"),
+        (
+            None,
+            Some((11, 0)),
+            "code cell 0x7272727272727272727272727272727272727272727272727272727272727272:0 at block 10 lacks canonical transaction location",
+        ),
+        (
+            Some((10, 0)),
+            None,
+            "code cell consumption transaction",
+        ),
     ] {
         let (status, body) = chronology_error_body(creation, consumption, 11).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         assert!(body.contains(expected), "{body}");
-        assert!(body.contains("lacks canonical tx location"), "{body}");
+        assert!(body.contains("lacks canonical"), "{body}");
     }
 }
 
@@ -4609,11 +4637,17 @@ async fn test_script_history_rejects_consumer_not_after_creator() {
 async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound() {
     let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, false, 1).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-    assert!(body.contains("missing tx_index"), "{body}");
+    assert!(
+        body.contains("tx_hash_map points to missing tx_index"),
+        "{body}"
+    );
 
     let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, true, 0).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-    assert!(body.contains("outside canonical output count"), "{body}");
+    assert!(
+        body.contains("outside canonical transaction output count 0"),
+        "{body}"
+    );
 }
 
 #[tokio::test]

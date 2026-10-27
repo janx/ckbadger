@@ -1,0 +1,115 @@
+{
+  "consensusFeatures": [
+    {
+      "activationEpoch": 5414,
+      "rfc": "0028"
+    },
+    {
+      "activationEpoch": 0,
+      "rfc": "0029"
+    },
+    {
+      "activationEpoch": 0,
+      "rfc": "0030"
+    },
+    {
+      "activationEpoch": 0,
+      "rfc": "0031"
+    },
+    {
+      "activationEpoch": 5414,
+      "rfc": "0032"
+    },
+    {
+      "activationEpoch": 0,
+      "rfc": "0036"
+    },
+    {
+      "activationEpoch": 0,
+      "rfc": "0038"
+    },
+    {
+      "activationEpoch": 12293,
+      "rfc": "0048"
+    },
+    {
+      "activationEpoch": 12293,
+      "rfc": "0049"
+    }
+  ],
+  "events": [
+    {
+      "activationBlock": null,
+      "activationDate": "2022-05-10",
+      "activationEpoch": 5414,
+      "editionYear": 2021,
+      "id": "mirana-2021",
+      "name": "CKB Edition Mirana",
+      "resources": [
+        {
+          "label": "CKB2021",
+          "url": "https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0037-ckb2021/0037-ckb2021.md"
+        },
+        {
+          "label": "Migration Guide",
+          "url": "https://github.com/jordanmack/nervos-ckb2021-hard-fork-migration-guide"
+        }
+      ],
+      "shortName": "Mirana",
+      "status": "upcoming",
+      "summary": "CKB-VM v1 activation, extension field, and consensus patch bundle."
+    },
+    {
+      "activationBlock": null,
+      "activationDate": "2025-07-01",
+      "activationEpoch": 12293,
+      "editionYear": 2024,
+      "id": "meepo-2024",
+      "name": "CKB Edition Meepo",
+      "resources": [
+        {
+          "label": "CKB2023",
+          "url": "https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md"
+        },
+        {
+          "label": "RFC49 VM V2",
+          "url": "https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0049-ckb-vm-version-2/0049-ckb-vm-version-2.md"
+        },
+        {
+          "label": "RFC50 Spawn",
+          "url": "https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0050-vm-syscalls-3/0050-vm-syscalls-3.md"
+        }
+      ],
+      "shortName": "Meepo",
+      "status": "upcoming",
+      "summary": "CKB-VM v2 activation with Spawn syscall and hash_type data2 support."
+    }
+  ],
+  "network": "mainnet",
+  "scriptDeployments": [
+    {
+      "blockNumber": 10,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "epochNumber": 42,
+      "familyName": "Known Lock",
+      "timestampMs": 1700000000000,
+      "txIndex": 0,
+      "versionHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "versionName": "Known Lock v2"
+    },
+    {
+      "blockNumber": 10,
+      "codeCellOutputIndex": 0,
+      "codeCellTxHash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+      "epochNumber": 42,
+      "familyName": "Known Lock",
+      "timestampMs": 1700000000000,
+      "txIndex": 1,
+      "versionHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "versionName": "Known Lock v3"
+    }
+  ],
+  "tipBlock": 11,
+  "tipEpoch": 42
+}

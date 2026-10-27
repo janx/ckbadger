@@ -6,6 +6,7 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { ScriptDeploymentTimeline } from '@/components/hardforks/script-deployment-timeline';
 
 export default function HardforksPage() {
   const network = useActiveNetwork();
@@ -96,6 +97,17 @@ export default function HardforksPage() {
                       ))}
                     </div>
                   ))}
+                </div>
+                <div className="border-base-border-subtle mt-7 border-t pt-4">
+                  <h3 className="text-text-bright mb-2 text-[13px]">
+                    Known code-version deployments
+                  </h3>
+                  <p className="text-text-dim mb-4 text-[11px]">
+                    Dots mark the earliest indexed code-cell creation for each named script version.
+                    Hover or focus a mark for its exact block, raw header time, epoch and cell
+                    evidence.
+                  </p>
+                  <ScriptDeploymentTimeline deployments={data.scriptDeployments} />
                 </div>
               </DetailSection>
               <DetailSection title="Editions and activation boundaries">

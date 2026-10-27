@@ -86,6 +86,7 @@
     }
   ],
   "network": "mainnet",
+  "scriptDeployments": [],
   "tipBlock": 0,
   "tipEpoch": 0
 }
