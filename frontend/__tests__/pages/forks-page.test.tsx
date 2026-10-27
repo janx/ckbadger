@@ -26,7 +26,8 @@ describe('ForksPage', () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
-    await waitFor(() => expect(screen.getByText('Forks & uncles')).toBeInTheDocument());
+    const title = await screen.findByRole('heading', { level: 1, name: 'Forks' });
+    expect(title).toHaveClass('text-[26px]');
     await waitFor(() => expect(screen.getAllByText('included as uncle').length).toBeGreaterThan(0));
     expect(screen.getAllByText(/Old: witness unavailable/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/\+50 ms/).length).toBeGreaterThan(0);

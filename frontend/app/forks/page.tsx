@@ -32,8 +32,8 @@ export default function ForksPage() {
       <Header />
       <main className="container mx-auto min-w-0 px-4 py-8">
         <DetailLayout
-          title="Forks & uncles"
-          kind="index"
+          title="Forks"
+          kind="topic"
           identity="Uncles belong to canonical chain history. Branch switches are events observed by this node."
           facts={
             overview.data
