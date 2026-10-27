@@ -288,3 +288,35 @@ D3 unit/integration tests, deterministic browser fixtures and actual mainnet
 evidence. D4–D8 remain the next authorized read-time/frontend rounds; their
 [gap audit](reports/2026-10-27-site-redesign-round2-acceptance-and-remaining-gaps.md)
 defines concrete contracts, page work and acceptance gates.
+
+## 2026-10-27 D4 completion
+
+Three round-3 lanes completed Inventory and asset read contracts, all D4 item
+pages, and the preserved class/identity collection routes on
+`integration/site-redesign-round3`. Final implementation revision: `fa13050a`.
+The complete Rust run at `599e4e61` passed 4,681 tests in 73 suites; the final
+collection API correction passed a separate complete API run of 1,316 tests in
+34 suites. Three existing opt-in native-VM tests remained unrun in the default
+workspace command. Final frontend source passed 1,585 tests in 192 files,
+type checking, lint and production build; final API source passed formatting,
+workspace check and strict all-target Clippy.
+
+Final browser acceptance passed 96 fixture states and 26 real mainnet page/width
+combinations at 1440/390 pixels. Five selected mainnet surfaces now agree on
+5,137 legacy Nervape activities; the live count closes at 2,777. The separate
+66-check asset probe covered 35 historical cells, with a subsequent 13-check
+raw-cell/TypeID/calendar probe. These are selected-entity evidence, not another
+full 64-check verification. All temporary APIs/previews were stopped; existing
+user services and primary stores were not changed.
+
+Re-sync required: **no for D4 read-time changes**; **yes for pre-existing metadata
+affected by the independently found two-field Cluster parser defect**. The
+owning parser was fixed for both live and bulk paths; append-only payloads are
+unchanged. A read-only mainnet historical usage audit found no use of the exact
+registered affected v1 reference, without claiming that every copied deployment
+or another network is unaffected.
+
+The [round-3 report](SITE_REDESIGN_ROUND3.md) and
+[detailed acceptance](reports/2026-10-27-site-redesign-round3-acceptance.md) record
+final binary provenance, cache/snapshot limits, performance observations and
+regression evidence. Next: D5 Scripts/Cells, followed by D6–D8.

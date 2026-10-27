@@ -22,8 +22,8 @@ is an initial source map, not proof that every listed contract is absent today.
 - Start with `docs/prompts/WORLD_VIEW.md`, `INFORMATION_DESIGN.md` and
   `ACTIVITY_DESIGN.md`. Items lead to their current and historical cell evidence;
   physical lock ownership remains distinct from protocol-named rights.
-- Read-time API and frontend work only: no new domain, append-only or network
-  writes, schema migration or backfill. Existing services and primary stores are
+- The planned scope is read-time API and frontend work: no new domain, append-only or network
+  write path, schema migration or backfill. Existing services and primary stores are
   not restarted, purged or rebuilt. An isolated read-only API may be used for
   live evidence, with separate secondary directories.
 - Exact amounts and full scopes precede pagination. Missing fields and decoding
@@ -36,6 +36,13 @@ is an initial source map, not proof that every listed contract is absent today.
   index or write-time work is introduced.
 - Bitcoin media stays link-out; decode-pending is not pure CKB. All numerical
   provenance and fixture/live differences must be recorded during acceptance.
+
+The raw Cluster endpoint exposed an existing two-field Molecule parser defect.
+The separate [owning-parser correction](reports/2026-10-27-cluster-v1-parser-correction.md)
+fixes that upstream source for API, bulk and live indexing. Previously affected
+domain metadata and dependent DOB results require replay; the task does not
+repair existing stores or change append-only payloads. This is an explicit
+exception to the original read-time-only implementation scope.
 
 ## Execution
 
@@ -79,8 +86,18 @@ checks and records fixture and real-chain evidence separately.
 
 ## Result
 
-Implementation is in progress. No D4 page is declared accepted solely because
-its previous route or a partial read contract already exists.
+D4 is complete at code revision `fa13050a`. Inventory, Token, Object, Collection,
+m-NFT and all four identity item pages are implemented; existing class and
+identity collection routes remain usable. See the
+[round-3 acceptance report](reports/2026-10-27-site-redesign-round3-acceptance.md)
+for source revisions, exact test scopes, before/after observations and limits.
 
-- Re-sync required: **no** for the planned read-time/frontend scope.
-- Next: complete the slices and their gates, then proceed to D5 Scripts/Cells.
+The full Rust run before the final API correction passed 4,681 tests; the final collection API correction
+passed a separate full API run of 1,316 tests. Frontend gates passed 1,585 tests,
+type checks, lint and production builds. Final acceptance includes 96 fixture
+browser states, 26 real mainnet page/width combinations, and the corrected
+5,137-activity mainnet collection closure. Temporary services were stopped.
+
+- Re-sync required: **no** for the planned read-time/frontend scope; **yes** for
+  existing two-field Cluster metadata affected by the separately found parser bug.
+- Next: D5 Scripts/Cells. D6–D8 remain subsequent rounds.
