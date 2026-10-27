@@ -12,5 +12,11 @@ describe('FiberNetworkGraph', () => {
     expect(screen.getByText('2 channels ever · 1 open')).toBeInTheDocument();
     expect(screen.getAllByText(/Unknown address/)).toHaveLength(2);
     expect(screen.getByText('3,000.00000000')).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 of 3 channel histories represented by pair lines/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 channel has a different number of distinct observed locks/)
+    ).toBeInTheDocument();
   });
 });

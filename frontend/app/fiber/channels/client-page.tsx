@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { FiberNetworkGraph } from '@/components/fiber/fiber-network-graph';
@@ -40,7 +40,6 @@ export default function FiberChannelsPage() {
         cursor: pagination.cursor,
         state: stateFilter === 'all' ? undefined : stateFilter,
       }),
-    placeholderData: keepPreviousData,
   });
   const stats = network.data?.summary;
   return (

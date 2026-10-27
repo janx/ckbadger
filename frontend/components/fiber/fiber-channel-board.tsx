@@ -31,6 +31,10 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
           ? 'Force-close waiting'
           : 'Settled';
   const tracked = evidence?.currentCommitment;
+  const updatedCommitment = evidence?.stages.find((stage) => stage.stage === 'currentCommitment');
+  if (updatedCommitment && (!tracked || updatedCommitment.txHash !== tracked.txHash)) {
+    throw new Error('Fiber current commitment stage differs from tracked commitment cell');
+  }
   return (
     <div className="space-y-8">
       <div className="border-base-border grid min-h-[72px] gap-4 border-y py-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -69,15 +73,17 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
           <div className="text-text-bright mt-1 font-mono text-[18px]">
             {channel.observedParties.length}
           </div>
-          <div className="text-text-dim text-[11px]">funding transaction non-Fiber locks</div>
+          <div className="text-text-dim text-[11px]">
+            non-Fiber locks seen on opening inputs or outputs
+          </div>
         </div>
       </div>
 
       <section aria-label="Channel parties" className="border-base-border border-t pt-4">
         <h2 className="text-text-bright text-[18px]">Parties seen on chain</h2>
         <p className="text-text-dim mt-1 text-[12px]">
-          These locks signed inputs in the opening transaction. They are not a live Fiber peer
-          directory.
+          These non-Fiber locks appeared on inputs or outputs of the opening transaction. An
+          output-only lock did not necessarily sign it. They are not a live Fiber peer directory.
         </p>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {channel.observedParties.map((party, index) => {
@@ -136,7 +142,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
       </section>
 
       <section aria-label="On-chain stages" className="border-base-border border-t pt-4">
-        <h2 className="text-text-bright text-[18px]">On chain in three steps</h2>
+        <h2 className="text-text-bright text-[18px]">On-chain stages</h2>
         <p className="text-text-dim mt-1 text-[12px]">
           Opening, close, and any final settlement are separate CKB transactions. A partial
           settlement can replace the commitment cell before the final step.
@@ -182,10 +188,40 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
               02 Close has not appeared on chain.
             </div>
           )}
+          {updatedCommitment && tracked && (
+            <div>
+              <div className="mb-2 flex flex-wrap items-baseline gap-3">
+                <span className="font-mono text-[12px] text-[#f2c55c]">03 UPDATED COMMITMENT</span>
+                <Link
+                  href={`/tx/${updatedCommitment.txHash}`}
+                  className="text-text-bright hover:text-jade break-all font-mono text-[12px]"
+                >
+                  {updatedCommitment.txHash}
+                </Link>
+                <Link
+                  href={`/blocks/${updatedCommitment.blockNumber}`}
+                  className="text-text-dim text-[12px]"
+                >
+                  block #{updatedCommitment.blockNumber}
+                </Link>
+              </div>
+              <p className="text-text-dim mb-2 text-[11px]">
+                Latest tracked commitment after a partial settlement; earlier replacements are not
+                indexed as channel stages.
+              </p>
+              <TransactionEvidence
+                hash={updatedCommitment.txHash}
+                label="Updated commitment"
+                focus={`out:${tracked.outputIndex}`}
+              />
+            </div>
+          )}
           {channel.settlementTxHash ? (
             <div>
               <div className="mb-2 flex flex-wrap items-baseline gap-3">
-                <span className="font-mono text-[12px] text-[#f2c55c]">03 SETTLEMENT</span>
+                <span className="font-mono text-[12px] text-[#f2c55c]">
+                  {updatedCommitment ? '04' : '03'} SETTLEMENT
+                </span>
                 <Link
                   href={`/tx/${channel.settlementTxHash}`}
                   className="text-text-bright hover:text-jade break-all font-mono text-[12px]"
@@ -203,7 +239,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
             </div>
           ) : (
             <div className="border-base-border text-text-dim border-t py-3 text-[12px]">
-              03{' '}
+              {updatedCommitment ? '04' : '03'}{' '}
               {channel.state === 'forceClosed'
                 ? 'Final settlement has not appeared on chain.'
                 : 'No separate settlement transaction is recorded.'}
@@ -281,8 +317,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
               <div className="border-base-border border-t pt-4">
                 <h3 className="text-text-bright text-[14px]">Final transaction outputs</h3>
                 <p className="text-text-dim mt-1 text-[11px]">
-                  Outputs to observed party locks are shown; they are not an off-chain payment
-                  history.
+                  All final transaction outputs are shown. Matches to observed party locks are
+                  marked; these are not an off-chain payment history.
                 </p>
                 {evidence.settlementOutputs.map((output) => (
                   <div

@@ -14,6 +14,11 @@ const short = (value: string) => `${value.slice(0, 8)}…${value.slice(-6)}`;
 export function FiberNetworkGraph({ network }: Props) {
   const [selected, setSelected] = useState<FiberPair | null>(null);
   const parties = network.parties;
+  const representedChannels = network.pairs.reduce((total, pair) => total + pair.channels, 0);
+  if (representedChannels > network.summary.totalChannels) {
+    throw new Error('Fiber pair channel count exceeds total observed channels');
+  }
+  const unpairedChannels = network.summary.totalChannels - representedChannels;
   const positions = new Map(
     parties.map((party, index) => {
       const angle = (2 * Math.PI * index) / Math.max(parties.length, 1) - Math.PI / 2;
@@ -31,6 +36,13 @@ export function FiberNetworkGraph({ network }: Props) {
           <p className="text-text-dim mt-1 text-[12px]">
             Lines join locks that opened a channel together. They do not show off-chain routes,
             payments, or live balances.
+          </p>
+          <p className="text-text-dim mt-1 text-[11px]">
+            {representedChannels.toLocaleString()} of{' '}
+            {network.summary.totalChannels.toLocaleString()} channel histories represented by pair
+            lines. {unpairedChannels.toLocaleString()}{' '}
+            {unpairedChannels === 1 ? 'channel has' : 'channels have'} a different number of
+            distinct observed locks.
           </p>
         </div>
         <span className="text-text-dim font-mono text-[11px]">
