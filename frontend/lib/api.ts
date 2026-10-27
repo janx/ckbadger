@@ -709,6 +709,64 @@ interface Address {
   pendingSummary: AddressPendingSummary | null;
 }
 
+/** Exact current owner holdings, calculated by the API's live-cell read path. */
+export type AddressCellClass = 'dao' | 'token' | 'object' | 'identity' | 'script' | 'plain';
+export interface AddressClassTotals {
+  cellCount: number;
+  capacity: string;
+  occupiedCapacity: string;
+}
+export interface AddressObjectComposition {
+  pureCkb: number;
+  btcCkb: number;
+  decentralizedMixture: number;
+  centralizedMixture: number;
+  unknown: number;
+  decodePending: number;
+}
+export interface AddressHoldings {
+  daoUnclaimedCompensation: string;
+  estimatedApc: string | null;
+  depositCellsCount: number;
+  withdrawalRequestCellsCount: number;
+  lockScriptHash: string;
+  balance: string;
+  occupiedCapacity: string;
+  /** Ordinary free capacity; DAO free is a disjoint partition. */
+  freeCapacity: string;
+  daoFreeCapacity: string;
+  liveCellsCount: number;
+  holdings: { dao: number; token: number; object: number; identity: number };
+  classes: Record<AddressCellClass, AddressClassTotals>;
+  objectComposition: AddressObjectComposition;
+  objectCollections: Array<{
+    id: string | null;
+    standard: string;
+    name: string | null;
+    itemCount: number;
+    compositionCounts: AddressObjectComposition;
+  }>;
+}
+export interface AddressCell {
+  txHash: string;
+  outputIndex: number;
+  capacity: string;
+  occupiedCapacity: string;
+  lockScriptHash: string;
+  typeScriptHash: string | null;
+  typeCodeHash: string | null;
+  typeHashType: string | null;
+  dataSize: number;
+  createdAtBlock: number;
+  class: AddressCellClass;
+  display: TransactionCellDisplay | null;
+  expiresAt: number | null;
+  /** Exact start of uninterrupted identity ownership, null for other classes. */
+  heldSinceBlock: number | null;
+  /** Original deposit evidence for a currently owned DAO cell, null for other classes. */
+  dao: DaoDeposit | null;
+}
+
 interface TopAddress {
   lockScriptHash: string;
   balance: string;
@@ -743,6 +801,7 @@ interface AddressTransaction {
   txSize: number | null;
   cycles: number | null;
   scriptLabels: string[];
+  cyclesStatus: 'complete' | 'pending' | 'failed';
 }
 
 interface AddressToken {
@@ -1179,7 +1238,7 @@ interface DaoDeposit {
   txHash: string;
   outputIndex: number;
   lockScriptHash: string;
-  address?: string;
+  address?: string | null;
   lockCodeHash: string | null;
   capacity: string;
   depositBlockNumber: number;
@@ -2836,6 +2895,21 @@ export const api = {
 
   getAddress: (addr: string): Promise<Address> => {
     return fetchApi(`/addresses/${addr}`);
+  },
+
+  getAddressHoldings: (addr: string): Promise<AddressHoldings> => {
+    return fetchApi(`/addresses/${encodeURIComponent(addr)}/holdings`);
+  },
+
+  getAddressCells: (
+    addr: string,
+    params: CursorQueryParams & { class?: AddressCellClass } = {}
+  ): Promise<CursorPaginatedResponse<AddressCell>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.class) query.set('class', params.class);
+    return fetchApi(`/addresses/${encodeURIComponent(addr)}/cells?${query}`);
   },
 
   getTopAddresses: (limit: number = 100): Promise<TopAddress[]> => {

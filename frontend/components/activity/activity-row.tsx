@@ -18,7 +18,9 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { classifyActivity } from '@/lib/activity-classify';
 import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
-import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
+import type { GlobalActivity, ParticipantInfo, PoolStatus, PoolInterpretation } from '@/lib/api';
+import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
+import type { ActivityBody } from '@/lib/activity-classify';
 import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 transition-colors';
@@ -32,11 +34,15 @@ export function ActivityRowHead({
   blockNumber,
   timestamp,
   showEvidence = true,
+  poolStatus,
+  timeAddedToPool,
 }: {
   title: ReactNode;
   hash: string;
-  blockNumber: number;
-  timestamp: string;
+  blockNumber: number | null;
+  timestamp: string | null;
+  poolStatus?: PoolStatus;
+  timeAddedToPool?: string;
   showEvidence?: boolean;
 }) {
   return (
@@ -46,15 +52,27 @@ export function ActivityRowHead({
       </span>
       {showEvidence && (
         <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
-          <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-            #{blockNumber.toLocaleString('en-US')}
-          </Link>
+          {blockNumber !== null ? (
+            <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
+              #{blockNumber.toLocaleString('en-US')}
+            </Link>
+          ) : poolStatus ? (
+            <PoolStatusBadge status={poolStatus} />
+          ) : (
+            <span>Unconfirmed</span>
+          )}
           {' · '}
           <Link href={`/tx/${hash}`} className="hover:text-jade text-text-dim transition-colors">
             {truncateHash(hash, 10, 6)}
           </Link>
           {' · '}
-          {formatTimeAgo(timestamp)}
+          {timestamp !== null ? (
+            formatTimeAgo(timestamp)
+          ) : timeAddedToPool ? (
+            <TimeInPool since={timeAddedToPool} />
+          ) : (
+            'Time unavailable'
+          )}
         </span>
       )}
     </div>
@@ -80,7 +98,7 @@ function ActivityDetails({
   activity,
   showScriptDetails = true,
 }: {
-  activity: GlobalActivity;
+  activity: ActivityBody & { txHash: string };
   showScriptDetails?: boolean;
 }) {
   const primary = classifyActivity(activity).primaryProtocolAction;
@@ -209,9 +227,18 @@ function Participants({ participants }: { participants: ActivityParticipant[] })
   );
 }
 
+export type ActivityRowData = Omit<GlobalActivity, 'blockNumber' | 'timestamp' | 'txIndex'> & {
+  blockNumber: number | null;
+  timestamp: string | null;
+  poolStatus?: PoolStatus;
+  timeAddedToPool?: string;
+  interpretation?: PoolInterpretation;
+};
 export type ActivityRowProps = {
-  activity: GlobalActivity;
+  activity: ActivityRowData;
   fresh?: boolean;
+  /** Participant endpoints cannot infer whole-transaction mint/burn from a single delta. */
+  headline?: string;
   className?: string;
   showParticipants?: boolean;
   showScriptDetails?: boolean;
@@ -224,6 +251,7 @@ export type ActivityRowProps = {
 export function ActivityRow({
   activity,
   fresh = false,
+  headline,
   className,
   mode = 'cross-user',
   participant,
@@ -252,14 +280,17 @@ export function ActivityRow({
         title={
           <>
             {mark && <ClassMark kind={mark} className="mr-2" />}
-            {activityHeadline(activity)}
+            {headline ?? activityHeadline(activity)}
           </>
         }
         hash={activity.txHash}
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
         showEvidence={showEvidence}
+        poolStatus={activity.poolStatus}
+        timeAddedToPool={activity.timeAddedToPool}
       />
+      <PoolInterpretationNotice interpretation={activity.interpretation} />
       <ActivityDetails activity={activity} showScriptDetails={showScriptDetails} />
       {showParticipants && <Participants participants={shown.participants} />}
     </article>

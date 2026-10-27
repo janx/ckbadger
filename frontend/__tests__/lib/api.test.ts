@@ -39,6 +39,23 @@ describe('api', () => {
       vi.restoreAllMocks();
     });
 
+    it('uses exact owner holdings and server-side class pagination endpoints', async () => {
+      server.use(
+        http.get('/api/:network/v1/addresses/ckb1owner/holdings', () =>
+          HttpResponse.json({ balance: '9007199254740993' })
+        ),
+        http.get('/api/:network/v1/addresses/ckb1owner/cells', ({ request }) => {
+          const query = new URL(request.url).searchParams;
+          expect(query.get('class')).toBe('identity');
+          expect(query.get('cursor')).toBe('20:0xab:1');
+          expect(query.get('limit')).toBe('50');
+          return HttpResponse.json({ data: [], hasMore: false, nextCursor: null, limit: 50 });
+        })
+      );
+      expect((await api.getAddressHoldings('ckb1owner')).balance).toBe('9007199254740993');
+      await api.getAddressCells('ckb1owner', { class: 'identity', limit: 50, cursor: '20:0xab:1' });
+    });
+
     it('passes block activity and pool pagination to their canonical endpoints', async () => {
       server.use(
         http.get('/api/:network/v1/activities', ({ request }) => {
