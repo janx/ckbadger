@@ -1676,13 +1676,18 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
     let store = test_store();
     let id = [0x77; 32];
     let description=serde_json::json!({"dob":{"ver":0,"decoder":{"type":"code_hash","hash":"13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["Face","String",0,1,"options",["Red","Blue"]]]}}).to_string();
-    let raw = mol_table(&[
-        mol_bytes(b"Genes"),
-        mol_bytes(description.as_bytes()),
-        vec![],
-    ]);
+    let mut fields = vec![mol_bytes(b"Genes"), mol_bytes(description.as_bytes())];
+    if mode != 4 {
+        fields.push(vec![]);
+    }
+    let raw = mol_table(&fields);
     let code = hex::decode(
-        ckbadger_indexer::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2.trim_start_matches("0x"),
+        if mode == 4 {
+            ckbadger_indexer::parser::spore::CLUSTER_CODE_HASH_TESTNET_V1
+        } else {
+            ckbadger_indexer::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2
+        }
+        .trim_start_matches("0x"),
     )
     .unwrap();
     let mut payload = cell(&id, 1000_00000000, 1);
@@ -2077,4 +2082,20 @@ async fn type_id_decoder_rejects_corrupt_current_proof_and_missing_raw_source() 
             "{json}"
         );
     }
+}
+
+#[tokio::test]
+async fn cluster_protocol_legacy_two_field_description_uses_owning_parser() {
+    let app = cluster_protocol_fixture(4).await;
+    let url = format!("/spore/clusters/0x{}", hex::encode([0x77; 32]));
+    let (status, protocol) = get_json(&app, &format!("{url}/protocol")).await;
+    assert_eq!(status, StatusCode::OK, "{protocol}");
+    let (status, detail) = get_json(&app, &url).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(protocol["current"]["decoded"]["name"], "Genes");
+    assert_eq!(
+        protocol["current"]["decoded"]["description"], detail["description"],
+        "{protocol}"
+    );
+    assert_eq!(protocol["current"]["fields"].as_array().unwrap().len(), 2);
 }

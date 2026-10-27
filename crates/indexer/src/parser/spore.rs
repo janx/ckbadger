@@ -258,14 +258,15 @@ impl SporeParser {
         let offset_name = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
         let offset_description = u32::from_le_bytes(data[8..12].try_into().ok()?) as usize;
 
-        let end_of_description = if data.len() >= 16 {
-            data[12..16]
-                .try_into()
-                .ok()
-                .map(|bytes: [u8; 4]| u32::from_le_bytes(bytes) as usize)
-                .unwrap_or(total_size)
-        } else {
-            total_size
+        // The first offset is the table-header size. V1 has two fields
+        // (12 bytes), so data[12..16] is the name's length, not an offset.
+        // V2 and compatible extended tables have a third field offset.
+        let end_of_description = match offset_name {
+            12 => total_size,
+            first_offset if first_offset >= 16 => {
+                u32::from_le_bytes(data.get(12..16)?.try_into().ok()?) as usize
+            }
+            _ => return None,
         };
 
         let name = Self::read_bytes_field(data, offset_name, offset_description)
@@ -555,6 +556,72 @@ mod tests {
 
         let result = SporeParser::parse_spore_cell(&output, "0x");
         assert!(result.is_none());
+    }
+
+    // Official spore_v1.mol ClusterData has two fields; V2 adds mutant_id.
+    fn create_cluster_v1_data(name: &str, description: &str) -> Vec<u8> {
+        let name = encode_molecule_bytes(name.as_bytes());
+        let description = encode_molecule_bytes(description.as_bytes());
+        let description_offset = 12 + name.len() as u32;
+        let total = description_offset + description.len() as u32;
+        let mut data = Vec::new();
+        data.extend_from_slice(&total.to_le_bytes());
+        data.extend_from_slice(&12u32.to_le_bytes());
+        data.extend_from_slice(&description_offset.to_le_bytes());
+        data.extend_from_slice(&name);
+        data.extend_from_slice(&description);
+        data
+    }
+
+    fn cluster_v1_output() -> CellOutput {
+        CellOutput {
+            capacity: "0x174876e800".into(),
+            lock: create_lock_script(),
+            type_: Some(Script {
+                code_hash: CLUSTER_CODE_HASH_TESTNET_V1.into(),
+                hash_type: "data1".into(),
+                args: format!("0x{}", "ab".repeat(32)),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_parse_cluster_v1_live_preserves_description() {
+        for (name, description) in [
+            ("Legacy", "A legacy collection"),
+            ("", "描述 🦋"),
+            ("Named", ""),
+        ] {
+            let raw = create_cluster_v1_data(name, description);
+            let parsed = SporeParser::parse_cluster_cell(
+                &cluster_v1_output(),
+                &format!("0x{}", hex::encode(&raw)),
+            )
+            .unwrap();
+            assert_eq!(parsed.name.as_deref(), Some(name));
+            assert_eq!(parsed.description.as_deref(), Some(description));
+        }
+    }
+
+    #[test]
+    fn test_parse_cluster_v1_bulk_preserves_description() {
+        for (name, description) in [
+            ("Legacy", "A legacy collection"),
+            ("", "描述 🦋"),
+            ("Named", ""),
+        ] {
+            let raw = create_cluster_v1_data(name, description);
+            let cell =
+                CellParser::parse_output(&cluster_v1_output(), &format!("0x{}", hex::encode(&raw)))
+                    .unwrap();
+            let parsed = SporeParser::parse_cluster_parsed_cell(&cell).unwrap();
+            assert_eq!(parsed.name.as_deref(), Some(name));
+            assert_eq!(parsed.description.as_deref(), Some(description));
+            assert_eq!(
+                cell.data, raw,
+                "parsing does not rewrite immutable cell data"
+            );
+        }
     }
 
     #[test]
