@@ -614,6 +614,55 @@ interface CellDataAnalysis {
   heuristicGuesses: CellDataGuess[];
 }
 
+interface CellOutputMolecule {
+  bytes: string;
+  fields: Array<{ label: string; start: number; end: number; occupied: boolean }>;
+  lockScriptHash: string;
+  typeScriptHash: string | null;
+}
+
+interface CellElf {
+  header: {
+    class: string;
+    endian: string;
+    machine: number;
+    entry: string;
+    programHeaderOffset: string;
+    sectionHeaderOffset: string;
+    flags: number;
+    headerSize: number;
+    programHeaderEntrySize: number;
+    programHeaderCount: number;
+    sectionHeaderEntrySize: number;
+    sectionHeaderCount: number;
+    sectionNameIndex: number;
+  };
+  programHeaders: Array<{
+    index: number;
+    kind: number;
+    flags: number;
+    fileOffset: string;
+    fileSize: string;
+    virtualAddress: string;
+    memorySize: string;
+    alignment: string;
+  }>;
+  sections: Array<{
+    index: number;
+    name: string;
+    kind: number;
+    flags: string;
+    address: string;
+    fileOffset: string | null;
+    fileSize: string | null;
+    memorySize: string;
+    alignment: string;
+  }>;
+  unassignedFileRanges: Array<{ start: number; end: number }>;
+  comment: string | null;
+  riscvAttributes: string | null;
+}
+
 interface Cell {
   txHash: string;
   outputIndex: number;
@@ -624,11 +673,19 @@ interface Cell {
   address?: string;
   typeScriptHash?: string;
   typeCodeHash?: string;
+  typeHashType?: string;
+  typeProtocolName?: string;
   dataSize: number;
   createdAtBlock: number;
+  createdTimestamp?: string;
   status?: 'live' | 'dead';
   consumedAtBlock?: number;
   consumedByTx?: string;
+  spentTimestamp?: string | null;
+  consumingInputIndex?: number | null;
+  lifetimeMs?: number | null;
+  liveAgeMs?: number | null;
+  liveAgeAtBlock?: number | null;
   lock?: Script;
   type?: Script;
   /**
@@ -640,6 +697,47 @@ interface Cell {
   protocolScript?: { lock: string | null; type: string | null };
   data?: string;
   dataAnalysis?: CellDataAnalysis;
+  cellOutputMolecule?: CellOutputMolecule;
+  elf?: CellElf;
+  codeCell?: {
+    versionHash: string;
+    currentReferences: Array<{
+      referenceHash: string;
+      hashType: string;
+      lockLiveCellsCount: number;
+      typeLiveCellsCount: number;
+    }>;
+    typeIdLineage: Array<{ typeScriptHash: string; observedAtBlock: number }>;
+    upgradeCohort: Array<{
+      previousTxHash: string;
+      previousOutputIndex: number;
+      currentTxHash: string;
+      currentOutputIndex: number;
+      typeScriptHash: string;
+      previousVersionHash: string | null;
+      currentVersionHash: string;
+      binaryChanged: boolean | null;
+    }>;
+  };
+  currentSpendRequirements?: Array<{
+    kind: 'lock' | 'type';
+    referenceHash: string;
+    hashType: 'data' | 'type' | 'data1' | 'data2';
+    resolution: 'builtin' | 'resolved' | 'ambiguous' | 'not_found' | 'unavailable';
+    versionHashes: string[];
+    candidateCells: Array<{
+      txHash: string;
+      outputIndex: number;
+      versionHash: string;
+      live: boolean;
+    }>;
+    historicalCells: Array<{
+      txHash: string;
+      outputIndex: number;
+      versionHash: string;
+      live: boolean;
+    }>;
+  }>;
   isDepGroup?: boolean;
   depGroupItems?: DepGroupItem[];
   codeCellOf?: CodeCellScript[];

@@ -1,0 +1,205 @@
+{
+  "address": "ckb1qq3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyqfnxvenxvenxvenxvenxvenxvenxvenxvcj5vgn2",
+  "capacity": "10000000000",
+  "cellOutputMolecule": {
+    "bytes": "0x9800000010000000180000006100000000e40b5402000000490000001000000030000000310000002222222222222222222222222222222222222222222222222222222222222222011400000033333333333333333333333333333333333333333700000010000000300000003100000055555555555555555555555555555555555555555555555555555555555555550102000000aabb",
+    "fields": [
+      {
+        "end": 4,
+        "label": "total_size",
+        "occupied": false,
+        "start": 0
+      },
+      {
+        "end": 8,
+        "label": "offset_capacity",
+        "occupied": false,
+        "start": 4
+      },
+      {
+        "end": 12,
+        "label": "offset_lock",
+        "occupied": false,
+        "start": 8
+      },
+      {
+        "end": 16,
+        "label": "offset_type",
+        "occupied": false,
+        "start": 12
+      },
+      {
+        "end": 24,
+        "label": "capacity",
+        "occupied": true,
+        "start": 16
+      },
+      {
+        "end": 28,
+        "label": "lock.total_size",
+        "occupied": false,
+        "start": 24
+      },
+      {
+        "end": 32,
+        "label": "lock.offset_code_hash",
+        "occupied": false,
+        "start": 28
+      },
+      {
+        "end": 36,
+        "label": "lock.offset_hash_type",
+        "occupied": false,
+        "start": 32
+      },
+      {
+        "end": 40,
+        "label": "lock.offset_args",
+        "occupied": false,
+        "start": 36
+      },
+      {
+        "end": 72,
+        "label": "lock.code_hash",
+        "occupied": true,
+        "start": 40
+      },
+      {
+        "end": 73,
+        "label": "lock.hash_type",
+        "occupied": true,
+        "start": 72
+      },
+      {
+        "end": 77,
+        "label": "lock.args_length",
+        "occupied": false,
+        "start": 73
+      },
+      {
+        "end": 97,
+        "label": "lock.args",
+        "occupied": true,
+        "start": 77
+      },
+      {
+        "end": 101,
+        "label": "type.total_size",
+        "occupied": false,
+        "start": 97
+      },
+      {
+        "end": 105,
+        "label": "type.offset_code_hash",
+        "occupied": false,
+        "start": 101
+      },
+      {
+        "end": 109,
+        "label": "type.offset_hash_type",
+        "occupied": false,
+        "start": 105
+      },
+      {
+        "end": 113,
+        "label": "type.offset_args",
+        "occupied": false,
+        "start": 109
+      },
+      {
+        "end": 145,
+        "label": "type.code_hash",
+        "occupied": true,
+        "start": 113
+      },
+      {
+        "end": 146,
+        "label": "type.hash_type",
+        "occupied": true,
+        "start": 145
+      },
+      {
+        "end": 150,
+        "label": "type.args_length",
+        "occupied": false,
+        "start": 146
+      },
+      {
+        "end": 152,
+        "label": "type.args",
+        "occupied": true,
+        "start": 150
+      }
+    ],
+    "lockScriptHash": "0xaa368106113229017f9e5ef36fdd33cc71e28cad8e738d8fbf9bd79a5cdad8ab",
+    "typeScriptHash": "0x9e525c8724256323ca50b74fcf6c55d840a7b81a10930b804940d425b6c12f49"
+  },
+  "codeCellOf": null,
+  "commonKnowledgeSize": "13800000000",
+  "commonKnowledgeSizeBreakdown": {
+    "capacityFieldBytes": 8,
+    "dataBytes": 42,
+    "lockScriptBytes": 53,
+    "totalBytes": 138,
+    "typeScriptBytes": 35
+  },
+  "consumedAtBlock": null,
+  "consumedByTx": null,
+  "consumingInputIndex": null,
+  "createdAtBlock": 123,
+  "createdTimestamp": "2023-11-14T22:13:20+00:00",
+  "currentSpendRequirements": [
+    {
+      "candidateCells": [],
+      "hashType": "type",
+      "kind": "lock",
+      "referenceHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "resolution": "not_found",
+      "versionHashes": []
+    },
+    {
+      "candidateCells": [],
+      "hashType": "type",
+      "kind": "type",
+      "referenceHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "resolution": "not_found",
+      "versionHashes": []
+    }
+  ],
+  "data": "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "dataAnalysis": {
+    "heuristicGuesses": [
+      {
+        "confidence": "high",
+        "humanValue": "42 zero bytes",
+        "kind": "zero_pattern",
+        "reason": "Payload is entirely zero bytes"
+      }
+    ]
+  },
+  "dataSize": 42,
+  "depGroupItems": null,
+  "isDepGroup": false,
+  "lifetimeMs": null,
+  "liveAgeMs": 0,
+  "lock": {
+    "args": "0x3333333333333333333333333333333333333333",
+    "codeHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "hashType": "type"
+  },
+  "lockScriptHash": "0xaa368106113229017f9e5ef36fdd33cc71e28cad8e738d8fbf9bd79a5cdad8ab",
+  "outputIndex": 1,
+  "protocolScript": {
+    "lock": null,
+    "type": null
+  },
+  "spentTimestamp": null,
+  "status": "live",
+  "txHash": "0xabababababababababababababababababababababababababababababababab",
+  "type": {
+    "args": "0xaabb",
+    "codeHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+    "hashType": "type"
+  },
+  "typeScriptHash": "0x9e525c8724256323ca50b74fcf6c55d840a7b81a10930b804940d425b6c12f49"
+}

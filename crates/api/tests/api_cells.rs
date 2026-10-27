@@ -1,27 +1,93 @@
 mod common;
 use common::*;
 
+fn fixture_data_hash(data: &[u8]) -> Vec<u8> {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(data);
+    let mut hash = vec![0; 32];
+    hasher.finalize(&mut hash);
+    hash
+}
+
+fn write_redesign_fixture(name: &str, value: &serde_json::Value) {
+    if let Ok(dir) = std::env::var("D5_FIXTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            format!("{dir}/{name}.json"),
+            serde_json::to_vec_pretty(value).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 fn cell_bytes_config(
     store: Arc<CkbadgerStore>,
     hash: &[u8],
     index: usize,
     data: Vec<u8>,
 ) -> AppConfig {
+    cell_bytes_config_with_capacity(store, hash, index, data, None)
+}
+
+fn cell_bytes_config_with_capacity(
+    store: Arc<CkbadgerStore>,
+    hash: &[u8],
+    index: usize,
+    data: Vec<u8>,
+    node_capacity: Option<u64>,
+) -> AppConfig {
     use ckb_types::{
+        bytes::Bytes,
         core::{BlockBuilder, TransactionBuilder},
         packed,
         prelude::*,
     };
+    let indexed = store.get_cell(hash, index as i16, &store).unwrap().unwrap();
+    let script = |code_hash: &[u8], hash_type: i16, args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code_hash).unwrap_or_default())
+            .hash_type((hash_type as u8).into())
+            .args(Bytes::from(args.to_vec()).pack())
+            .build()
+    };
+    let output_cell = packed::CellOutput::new_builder()
+        .capacity(node_capacity.unwrap_or(indexed.capacity as u64).pack())
+        .lock(script(
+            &indexed.lock_code_hash,
+            indexed.lock_hash_type,
+            &indexed.lock_args,
+        ))
+        .type_(
+            indexed
+                .type_code_hash
+                .as_ref()
+                .map(|code_hash| {
+                    script(
+                        code_hash,
+                        indexed.type_hash_type.unwrap_or(1),
+                        indexed.type_args.as_deref().unwrap_or(&[]),
+                    )
+                })
+                .pack(),
+        )
+        .build();
+    seed_block_headers_at(&store, &[(123, 1_700_000_000_000)]);
     let mut builder = TransactionBuilder::default();
     for output in 0..=index {
-        builder = builder.output(packed::CellOutput::default()).output_data(
-            if output == index {
-                data.clone()
+        builder = builder
+            .output(if output == index {
+                output_cell.clone()
             } else {
-                vec![]
-            }
-            .pack(),
-        );
+                packed::CellOutput::default()
+            })
+            .output_data(
+                if output == index {
+                    data.clone()
+                } else {
+                    vec![]
+                }
+                .pack(),
+            );
     }
     let tx = builder
         .build()
@@ -193,18 +259,18 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
         output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
+            lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: Some(vec![0x44; 32]),
+            type_script_hash: Some(compute_script_hash(&[0x55; 32], 1, &[0xaa, 0xbb])),
             type_code_hash: Some(vec![0x55; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0xaa, 0xbb]),
             data_size: 42,
             occupied_capacity: 138_00000000,
             udt_amount: None,
-            data_hash: None,
+            data_hash: Some(fixture_data_hash(&[0; 42])),
         },
         123,
     );
@@ -228,6 +294,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
+    write_redesign_fixture("cell-live", &json);
     assert_eq!(
         json["commonKnowledgeSize"],
         serde_json::Value::from("13800000000")
@@ -253,6 +320,101 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
         json["commonKnowledgeSizeBreakdown"]["totalBytes"],
         serde_json::Value::from(138)
     );
+    let molecule = &json["cellOutputMolecule"];
+    let bytes = hex::decode(molecule["bytes"].as_str().unwrap().trim_start_matches("0x")).unwrap();
+    let fields = molecule["fields"].as_array().unwrap();
+    let mut end = 0;
+    let mut occupied = 0;
+    for field in fields {
+        assert_eq!(
+            field["start"], end,
+            "field map must not overlap or leave gaps"
+        );
+        end = field["end"].as_u64().unwrap();
+        if field["occupied"] == true {
+            occupied += end - field["start"].as_u64().unwrap();
+        }
+    }
+    assert_eq!(end as usize, bytes.len());
+    assert_eq!(
+        u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize,
+        bytes.len()
+    );
+    assert_eq!(occupied, 8 + 53 + 35);
+    let lock_start = fields
+        .iter()
+        .find(|field| field["label"] == "lock.total_size")
+        .unwrap()["start"]
+        .as_u64()
+        .unwrap() as usize;
+    let lock_end = fields
+        .iter()
+        .find(|field| field["label"] == "lock.args")
+        .unwrap()["end"]
+        .as_u64()
+        .unwrap() as usize;
+    let mut hash = [0u8; 32];
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(&bytes[lock_start..lock_end]);
+    hasher.finalize(&mut hash);
+    assert_eq!(
+        molecule["lockScriptHash"],
+        format!("0x{}", hex::encode(hash))
+    );
+}
+
+#[tokio::test]
+async fn cell_rejects_same_length_node_data_mutation() {
+    let store = test_store();
+    let tx = [0xa1; 32];
+    let mut cell = cell_with(1, Some(1));
+    cell.data_hash = Some(fixture_data_hash(&[0x11; 42]));
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx, 1, &cell, 123);
+    batch.commit().unwrap();
+    let app = create_router(cell_bytes_config(store, &tx, 1, vec![0x22; 42])).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("data hash mismatch"));
+}
+
+#[tokio::test]
+async fn cell_rejects_original_output_capacity_mismatch() {
+    let store = test_store();
+    let tx = [0xa2; 32];
+    let cell = cell_with(1, Some(1));
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx, 1, &cell, 123);
+    batch.commit().unwrap();
+    let config = cell_bytes_config_with_capacity(store, &tx, 1, vec![0; 42], Some(101_00000000));
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("indexed output differs"));
+}
+
+#[tokio::test]
+async fn cell_rejects_mutated_stored_args_even_with_unchanged_stored_script_hash() {
+    let store = test_store();
+    let tx = [0xa3; 32];
+    let mut cell = cell_with(1, Some(1));
+    cell.lock_args[0] ^= 0xff;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx, 1, &cell, 123);
+    batch.commit().unwrap();
+    let app = create_router(cell_bytes_config(store, &tx, 1, vec![0; 42])).await;
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("lock script hash mismatch"));
 }
 
 #[tokio::test]
@@ -323,6 +485,8 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
     let lock_code_hash = hex::decode(DOTCELL_ACCOUNT_LOCK_MAINNET).unwrap();
     let type_code_hash = hex::decode(DOTCELL_ACCOUNT_TYPE_MAINNET).unwrap();
     let type_args = hex::decode(DOTCELL_NAMESPACE_ARGS_MAINNET).unwrap();
+    let occupied_capacity =
+        (8 + 33 + 33 + type_args.len() as i64 + i64::from(data_size)) * 100_000_000;
     LiveCellInfo {
         capacity: 240_00000000,
         lock_script_hash: compute_script_hash(&lock_code_hash, 1, &[]),
@@ -334,7 +498,7 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
         type_hash_type: Some(1),
         type_args: Some(type_args),
         data_size,
-        occupied_capacity: 0,
+        occupied_capacity,
         udt_amount: None,
         data_hash: None,
     }
@@ -350,6 +514,14 @@ async fn test_cell_detail_exposes_registry_protocol_slugs() {
     assert_eq!(status, StatusCode::OK, "got {json}");
     assert_eq!(json["protocolScript"]["lock"], "dotcell-account-lock");
     assert_eq!(json["protocolScript"]["type"], "dotcell-account");
+    assert_eq!(
+        json["cellOutputMolecule"]["lockScriptHash"],
+        json["lockScriptHash"]
+    );
+    assert_eq!(
+        json["cellOutputMolecule"]["typeScriptHash"],
+        json["typeScriptHash"]
+    );
 }
 
 /// `M2_OUT1_DATA` in the indexer's dotcell fixtures: `support.cell` as
@@ -382,7 +554,7 @@ async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCk
     let data_size = data.len() as i32;
     let tx = TransactionBuilder::default()
         .output(output)
-        .output_data(Bytes::from(data).pack())
+        .output_data(Bytes::from(data.clone()).pack())
         .build();
     let tx_hash: [u8; 32] = tx.hash().unpack();
     let block = ckb_types::core::BlockBuilder::default()
@@ -394,8 +566,11 @@ async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCk
 
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_cell(&tx_hash, 0, &dotcell_name_cell_info(data_size), 123);
+    let mut indexed = dotcell_name_cell_info(data_size);
+    indexed.data_hash = Some(fixture_data_hash(&data));
+    batch.put_cell(&tx_hash, 0, &indexed, 123);
     batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(123, 1_700_000_000_000)]);
 
     let config = test_config_with_ckb_db_path(
         store.clone(),
@@ -458,6 +633,11 @@ async fn test_cell_detail_undecodable_dotcell_data_is_an_internal_error() {
 
 #[tokio::test]
 async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
+    use ckb_types::{
+        core::{BlockBuilder, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
     let store = test_store();
     let tx_hash = vec![0xab; 32];
     let output_index = 0i16;
@@ -469,7 +649,7 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
+            lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
@@ -489,8 +669,59 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     // graph route requires creating tx location to exist
     batch.put_tx_hash_map(&tx_hash, 123, 0);
     batch.commit().unwrap();
+    seed_block_headers_at(
+        &store,
+        &[(123, 1_700_000_000_000), (456, 1_700_000_060_000)],
+    );
 
-    let config = test_config(store);
+    let input = packed::CellInput::new_builder()
+        .previous_output(
+            packed::OutPoint::new_builder()
+                .tx_hash(packed::Byte32::from_slice(&tx_hash).unwrap())
+                .index(0u32.pack())
+                .build(),
+        )
+        .build();
+    let spending = TransactionBuilder::default()
+        .input(input)
+        .output(packed::CellOutput::default())
+        .output_data(Vec::<u8>::new().pack())
+        .build()
+        .fake_hash(packed::Byte32::from_slice(&consumed_by_tx).unwrap());
+    let original_output = packed::CellOutput::new_builder()
+        .capacity(100_00000000u64.pack())
+        .lock(
+            packed::Script::new_builder()
+                .code_hash(packed::Byte32::from_slice(&[0x22; 32]).unwrap())
+                .hash_type(ckb_types::core::ScriptHashType::Type.into())
+                .args(ckb_types::bytes::Bytes::from(vec![0x33; 20]).pack())
+                .build(),
+        )
+        .build();
+    let original = TransactionBuilder::default()
+        .output(original_output)
+        .output_data(Vec::<u8>::new().pack())
+        .build()
+        .fake_hash(packed::Byte32::from_slice(&tx_hash).unwrap());
+    let chain = seed_ckb_chain(&[
+        BlockBuilder::default()
+            .number(123u64.pack())
+            .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1000).pack())
+            .transaction(original)
+            .build(),
+        BlockBuilder::default()
+            .number(456u64.pack())
+            .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1000).pack())
+            .transaction(spending)
+            .build(),
+    ]);
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
     let app = create_router(config).await;
     let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
     let consumed_by_tx_hex = format!("0x{}", hex::encode(&consumed_by_tx));
@@ -508,8 +739,11 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         .unwrap()
         .to_bytes();
     let cell_json: serde_json::Value = serde_json::from_slice(&cell_body).unwrap();
+    write_redesign_fixture("cell-spent", &cell_json);
     assert_eq!(cell_json["status"], "dead");
     assert_eq!(cell_json["consumedAtBlock"], serde_json::Value::from(456));
+    assert_eq!(cell_json["consumingInputIndex"], 0);
+    assert_eq!(cell_json["lifetimeMs"], 60_000);
     assert_eq!(
         cell_json["consumedByTx"],
         serde_json::Value::from(consumed_by_tx_hex.clone())
@@ -570,7 +804,11 @@ fn insert_by_script_cell(
         type_hash_type,
         type_args: type_code_hash.map(|_| vec![]),
         data_size: 0,
-        occupied_capacity: 61_00000000,
+        occupied_capacity: if type_code_hash.is_some() {
+            74_00000000
+        } else {
+            41_00000000
+        },
         udt_amount: None,
         data_hash: None,
     };
@@ -681,7 +919,7 @@ async fn test_cells_by_script_sparse_form_is_isolated_from_dense_sibling() {
 
     // Sparse form: one row, one total — the dense sibling never leaks in.
     let (status, json) = fetch_by_script(&app, &code_hash, "data", "lock", 20, None).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["total"], 1);
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
@@ -1074,20 +1312,30 @@ async fn test_get_address_fails_fast_on_invalid_stored_hash_type() {
 
 /// A live cell whose fields the individual tests perturb.
 fn cell_with(lock_hash_type: i16, type_hash_type: Option<i16>) -> LiveCellInfo {
+    let lock_code_hash = vec![0x22; 32];
+    let lock_args = vec![0x33; 20];
+    let type_code_hash = vec![0x55; 32];
+    let type_args = vec![0xaa, 0xbb];
     LiveCellInfo {
         capacity: 100_00000000,
-        lock_script_hash: vec![0x11; 32],
-        lock_code_hash: vec![0x22; 32],
+        lock_script_hash: if matches!(lock_hash_type, 0 | 1 | 2 | 4) {
+            compute_script_hash(&lock_code_hash, lock_hash_type as u8, &lock_args)
+        } else {
+            vec![0x11; 32]
+        },
+        lock_code_hash,
         lock_hash_type,
-        lock_args: vec![0x33; 20],
-        type_script_hash: Some(vec![0x44; 32]),
-        type_code_hash: Some(vec![0x55; 32]),
+        lock_args,
+        type_script_hash: type_hash_type
+            .filter(|hash_type| matches!(hash_type, 0 | 1 | 2 | 4))
+            .map(|hash_type| compute_script_hash(&type_code_hash, hash_type as u8, &type_args)),
+        type_code_hash: Some(type_code_hash),
         type_hash_type,
-        type_args: Some(vec![0xaa, 0xbb]),
+        type_args: Some(type_args),
         data_size: 42,
         occupied_capacity: 138_00000000,
         udt_amount: None,
-        data_hash: None,
+        data_hash: Some(fixture_data_hash(&[0; 42])),
     }
 }
 

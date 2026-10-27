@@ -1,6 +1,11 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::manual_is_multiple_of)]
 
+#[path = "cell_anatomy.rs"]
+mod cell_anatomy;
+#[path = "cell_elf.rs"]
+mod cell_elf;
+
 use axum::{
     extract::{Query, State},
     routing::get,
@@ -10,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ckb_types::prelude::Entity;
 use ckbadger_common::TokenBalance;
 
 use crate::cache::{CacheKeys, CacheTtl};
@@ -18,11 +24,13 @@ use crate::response::{
     CursorPaginatedResponse, ScriptResponse,
 };
 use crate::utils::address::compute_script_hash;
+use crate::utils::script_resolution::{list_version_code_cells, CurrentScriptVersionResolution};
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
     is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
     parse_hash32, parse_optional_block_tx_cursor, parse_output_index,
-    resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
+    resolve_code_hash_for_hash_type, resolve_script_form_by_hash, script_to_address,
+    shannon_to_ckb,
 };
 use crate::warmup::{
     CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
@@ -411,6 +419,13 @@ fn maybe_parse_spore_decode(
 
     let (content_type_start, content_type_end, content_type_bytes) =
         read_molecule_bytes_field(data, offset_content_type, offset_content)?;
+    segments.push(CellDataSegment {
+        label: "content_type_length".to_string(),
+        start: offset_content_type as i32,
+        end: content_type_start as i32,
+        meaning: "Molecule Bytes length word (u32 LE)".to_string(),
+        human_value: content_type_bytes.len().to_string(),
+    });
     let content_type = String::from_utf8_lossy(&content_type_bytes).replace('\0', "");
     segments.push(CellDataSegment {
         label: "content_type".to_string(),
@@ -422,6 +437,13 @@ fn maybe_parse_spore_decode(
 
     let (content_start, content_end, content_bytes) =
         read_molecule_bytes_field(data, offset_content, offset_cluster_id)?;
+    segments.push(CellDataSegment {
+        label: "content_length".to_string(),
+        start: offset_content as i32,
+        end: content_start as i32,
+        meaning: "Molecule Bytes length word (u32 LE)".to_string(),
+        human_value: content_bytes.len().to_string(),
+    });
     let content_human_value = summarize_spore_content_human_value(&content_type, &content_bytes);
     segments.push(CellDataSegment {
         label: "content".to_string(),
@@ -448,6 +470,13 @@ fn maybe_parse_spore_decode(
         } else if let Some((cluster_start, cluster_end, cluster_bytes)) =
             read_molecule_bytes_field(data, offset_cluster_id, total_size)
         {
+            segments.push(CellDataSegment {
+                label: "cluster_id_length".to_string(),
+                start: offset_cluster_id as i32,
+                end: cluster_start as i32,
+                meaning: "Molecule optional Bytes length word (u32 LE)".to_string(),
+                human_value: cluster_bytes.len().to_string(),
+            });
             segments.push(CellDataSegment {
                 label: "cluster_id".to_string(),
                 start: cluster_start as i32,
@@ -1678,6 +1707,17 @@ fn analyze_cell_data(
             })
     };
 
+    if info
+        .type_code_hash
+        .as_deref()
+        .is_some_and(is_spore_type_code_hash)
+        && !deterministic
+            .as_ref()
+            .is_some_and(|decoded| decoded.kind == "spore_cell")
+    {
+        anyhow::bail!("recognized Spore cell has invalid Molecule payload");
+    }
+
     let mut heuristic_guesses = if deterministic.is_none() {
         build_heuristic_guesses(data)
     } else {
@@ -1846,10 +1886,18 @@ pub struct CellResponse {
     pub tx_hash: String,
     pub output_index: i32,
     pub capacity: String,
+    #[serde(rename = "commonKnowledgeSize")]
+    pub occupied_capacity: String,
+    pub common_knowledge_size_breakdown: OccupiedCapacityBreakdown,
     pub lock_script_hash: String,
+    pub address: String,
     pub type_script_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_code_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_hash_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_protocol_name: Option<String>,
     pub data_size: i32,
     pub created_at_block: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1885,6 +1933,68 @@ pub struct CodeCellScript {
     pub deployment_type_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_data_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellReference {
+    pub reference_hash: String,
+    pub hash_type: String,
+    pub lock_live_cells_count: i64,
+    pub type_live_cells_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellEvidence {
+    /// Identity of these exact bytes, independent of the publishing outpoint.
+    pub version_hash: String,
+    pub current_references: Vec<CodeCellReference>,
+    pub upgrade_cohort: Vec<CodeCellUpgrade>,
+    pub type_id_lineage: Vec<CodeCellTypeIdLineage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellTypeIdLineage {
+    pub type_script_hash: String,
+    pub observed_at_block: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellUpgrade {
+    pub previous_tx_hash: String,
+    pub previous_output_index: u32,
+    pub current_tx_hash: String,
+    pub current_output_index: u32,
+    pub type_script_hash: String,
+    pub previous_version_hash: Option<String>,
+    pub current_version_hash: String,
+    pub binary_changed: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellSpendRequirement {
+    pub kind: String,
+    pub reference_hash: String,
+    pub hash_type: String,
+    /// Current chain candidate; never evidence of this cell's historical execution.
+    pub resolution: String,
+    pub version_hashes: Vec<String>,
+    pub candidate_cells: Vec<CellSpendCandidate>,
+    /// Consumed instances of the same version, separate from usable deps.
+    pub historical_cells: Vec<CellSpendCandidate>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellSpendCandidate {
+    pub tx_hash: String,
+    pub output_index: i16,
+    pub version_hash: String,
+    pub live: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1932,9 +2042,16 @@ pub struct CellDetailResponse {
     pub type_script_hash: Option<String>,
     pub data_size: i32,
     pub created_at_block: i64,
+    pub created_timestamp: String,
     pub status: String,
     pub consumed_at_block: Option<i64>,
     pub consumed_by_tx: Option<String>,
+    pub spent_timestamp: Option<String>,
+    pub consuming_input_index: Option<u32>,
+    pub lifetime_ms: Option<i64>,
+    /// Age at the indexed chain tip, using monotonic chain time.
+    pub live_age_ms: Option<i64>,
+    pub live_age_at_block: Option<i64>,
     pub lock: ScriptResponse,
     #[serde(rename = "type")]
     pub type_script: Option<ScriptResponse>,
@@ -1946,11 +2063,18 @@ pub struct CellDetailResponse {
     pub is_dep_group: bool,
     pub dep_group_items: Option<Vec<DepGroupItem>>,
     pub code_cell_of: Option<Vec<CodeCellScript>>,
+    /// Canonical serialized CellOutput, with a nonoverlapping field map.
+    pub cell_output_molecule: cell_anatomy::MoleculeCellOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elf: Option<cell_elf::ElfAnalysis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_cell: Option<CodeCellEvidence>,
+    pub current_spend_requirements: Vec<CellSpendRequirement>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dao_info: Option<DaoInfo>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OccupiedCapacityBreakdown {
     pub capacity_field_bytes: i64,
@@ -2114,15 +2238,72 @@ fn cell_info_to_response(
     info: &ckbadger_store::PositionedCellInfo,
     network: &str,
     virtual_occupied: i128,
-) -> CellResponse {
+) -> Result<CellResponse, ApiRouteError> {
     let is_special_burn = info.created_at_block == 0
         && ckbadger_common::burn_policy::burn_policy(network)
             .is_some_and(|p| info.lock_args.as_slice() == p.lock_args);
-    CellResponse {
+    let breakdown = estimated_occupied_capacity_breakdown(info);
+    let expected_occupied = breakdown
+        .total_bytes
+        .checked_mul(SHANNONS_PER_CKB)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell {}:{} occupied capacity overflow",
+                hex::encode(tx_hash),
+                output_index
+            ))
+        })?;
+    if info.occupied_capacity != expected_occupied {
+        return Err(ApiError::internal(format!(
+            "cell {}:{} indexed occupied capacity {} differs from exact anatomy {}",
+            hex::encode(tx_hash),
+            output_index,
+            info.occupied_capacity,
+            expected_occupied
+        )));
+    }
+    let address = script_to_address(
+        &info.lock_code_hash,
+        info.lock_hash_type,
+        &info.lock_args,
+        network,
+    )
+    .map_err(|error| {
+        ApiError::internal(format!(
+            "cell {}:{} owner address: {error}",
+            hex::encode(tx_hash),
+            output_index
+        ))
+    })?;
+    let type_hash_type = match (&info.type_code_hash, info.type_hash_type) {
+        (None, None) => None,
+        (Some(_), Some(kind)) => Some(
+            hash_type_to_str(kind)
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "cell {}:{} invalid type hash_type {kind}",
+                        hex::encode(tx_hash),
+                        output_index
+                    ))
+                })?
+                .to_string(),
+        ),
+        _ => {
+            return Err(ApiError::internal(format!(
+                "cell {}:{} incomplete type script",
+                hex::encode(tx_hash),
+                output_index
+            )))
+        }
+    };
+    Ok(CellResponse {
         tx_hash: format!("0x{}", hex::encode(tx_hash)),
         output_index: output_index as i32,
         capacity: info.capacity.to_string(),
+        occupied_capacity: info.occupied_capacity.to_string(),
+        common_knowledge_size_breakdown: breakdown,
         lock_script_hash: format!("0x{}", hex::encode(&info.lock_script_hash)),
+        address,
         type_script_hash: info
             .type_script_hash
             .as_ref()
@@ -2131,6 +2312,12 @@ fn cell_info_to_response(
             .type_code_hash
             .as_ref()
             .map(|h| format!("0x{}", hex::encode(h))),
+        type_hash_type,
+        type_protocol_name: info
+            .type_code_hash
+            .as_ref()
+            .and_then(|hash| PROTOCOL_REGISTRY.get(hash))
+            .map(|protocol| protocol.slug().to_string()),
         data_size: info.data_size,
         created_at_block: info.created_at_block,
         cell_type: if is_special_burn {
@@ -2145,7 +2332,7 @@ fn cell_info_to_response(
         },
         udt_amount: info.udt_amount.map(|amount| amount.to_string()),
         matched_script_kind: None,
-    }
+    })
 }
 
 fn estimated_occupied_capacity_breakdown(
@@ -2168,6 +2355,234 @@ fn estimated_occupied_capacity_breakdown(
         data_bytes,
         total_bytes,
     }
+}
+
+fn current_spend_requirements(
+    state: &AppState,
+    info: &ckbadger_store::PositionedCellInfo,
+    outpoint: &str,
+) -> Result<Vec<CellSpendRequirement>, ApiRouteError> {
+    let mut forms = vec![("lock", info.lock_code_hash.as_slice(), info.lock_hash_type)];
+    if let Some(type_hash) = info.type_code_hash.as_ref() {
+        let hash_type = info.type_hash_type.ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell {outpoint} type reference is missing hash_type"
+            ))
+        })?;
+        forms.push(("type", type_hash.as_slice(), hash_type));
+    }
+    forms
+        .into_iter()
+        .map(|(kind, hash, hash_type)| {
+            let hash_type_name = hash_type_to_str(hash_type).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cell {outpoint} {kind} reference has invalid hash_type {hash_type}"
+                ))
+            })?;
+            let built_in_type_id = kind == "type"
+                && hash_type == 1
+                && hex::encode(hash) == ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH;
+            let (resolution, hashes) = if built_in_type_id {
+                ("builtin", Vec::new())
+            } else {
+                let resolved = resolve_script_form_by_hash(
+                    &state.store,
+                    &state.append_only_store,
+                    hash_type as u8,
+                    hash,
+                )
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "cell {outpoint} current {kind} reference resolution: {error:#}"
+                    ))
+                })?;
+                match resolved {
+                    CurrentScriptVersionResolution::NotFound => ("not_found", Vec::new()),
+                    CurrentScriptVersionResolution::Resolved(version) => {
+                        ("resolved", vec![version.version_hash])
+                    }
+                    CurrentScriptVersionResolution::Ambiguous(versions) => {
+                        ("ambiguous", versions.version_hashes)
+                    }
+                }
+            };
+            let mut candidate_cells = Vec::new();
+            let mut historical_cells = Vec::new();
+            for version in &hashes {
+                let entries =
+                    list_version_code_cells(&state.store, &state.append_only_store, version)
+                        .map_err(|error| {
+                            ApiError::internal(format!(
+                                "cell {outpoint} current {kind} candidate cells: {error:#}"
+                            ))
+                        })?;
+                let (live, spent) = eligible_reference_cells(hash_type, hash, version, entries);
+                candidate_cells.extend(live);
+                historical_cells.extend(spent);
+            }
+            let resolution = available_reference_resolution(resolution, &hashes, &candidate_cells);
+            Ok(CellSpendRequirement {
+                kind: kind.into(),
+                reference_hash: format!("0x{}", hex::encode(hash)),
+                hash_type: hash_type_name.into(),
+                resolution: resolution.into(),
+                version_hashes: hashes
+                    .into_iter()
+                    .map(|hash| format!("0x{}", hex::encode(hash)))
+                    .collect(),
+                candidate_cells,
+                historical_cells,
+            })
+        })
+        .collect()
+}
+
+fn eligible_reference_cells(
+    hash_type: i16,
+    reference_hash: &[u8],
+    version_hash: &[u8],
+    entries: Vec<crate::utils::script_resolution::VersionCodeCell>,
+) -> (Vec<CellSpendCandidate>, Vec<CellSpendCandidate>) {
+    let mut live = Vec::new();
+    let mut historical = Vec::new();
+    for (tx_hash, output_index, cell, is_live) in entries {
+        if hash_type == 1 && cell.type_script_hash.as_deref() != Some(reference_hash) {
+            continue;
+        }
+        let entry = CellSpendCandidate {
+            tx_hash: format!("0x{}", hex::encode(tx_hash)),
+            output_index,
+            version_hash: format!("0x{}", hex::encode(version_hash)),
+            live: is_live,
+        };
+        if is_live {
+            live.push(entry);
+        } else {
+            historical.push(entry);
+        }
+    }
+    (live, historical)
+}
+
+fn available_reference_resolution<'a>(
+    resolution: &'a str,
+    hashes: &[Vec<u8>],
+    candidates: &[CellSpendCandidate],
+) -> &'a str {
+    if resolution != "builtin" && !hashes.is_empty() && candidates.is_empty() {
+        "unavailable"
+    } else {
+        resolution
+    }
+}
+
+/// Same-transaction Type ID ELF successors. Type ID's unique input/output
+/// continuation proves a predecessor; a generic type script can appear on
+/// multiple inputs and does not prove a one-to-one upgrade.
+fn code_cell_upgrade_cohort(
+    state: &AppState,
+    tx: &ckb_types::core::TransactionView,
+    tx_hash: &[u8],
+    outpoint: &str,
+) -> Result<Vec<CodeCellUpgrade>, ApiRouteError> {
+    use ckb_types::prelude::Unpack;
+    if tx.is_cellbase() {
+        return Ok(Vec::new());
+    }
+    let mut inputs = Vec::new();
+    for input in tx.inputs() {
+        let previous = input.previous_output();
+        let previous_hash = previous.tx_hash().as_slice().to_vec();
+        let index: u32 = previous.index().unpack();
+        if previous_hash == [0u8; 32] && index == u32::MAX {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} non-cellbase transaction contains null outpoint"
+            )));
+        }
+        let index_i16 = i16::try_from(index).map_err(|_| {
+            ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort input output index {index} exceeds store range"
+            ))
+        })?;
+        let consumed = state
+            .store
+            .get_consumed_cell_info(&previous_hash, index_i16, &state.append_only_store)
+            .map_err(|error| {
+                ApiError::internal(format!("cell {outpoint} upgrade cohort input: {error}"))
+            })?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cell {outpoint} upgrade cohort input 0x{}:{index} missing consumed marker",
+                    hex::encode(&previous_hash)
+                ))
+            })?;
+        if consumed.consumed_by_tx.as_deref() != Some(tx_hash) {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort input 0x{}:{index} has wrong consumer",
+                hex::encode(&previous_hash)
+            )));
+        }
+        if let Some(type_hash) = consumed.cell.type_script_hash {
+            inputs.push((previous_hash, index, type_hash, consumed.cell.data_hash));
+        }
+    }
+    let mut upgrades = Vec::new();
+    for (index, (output, data)) in tx.outputs().into_iter().zip(tx.outputs_data()).enumerate() {
+        let Some(type_script) = output.type_().to_opt() else {
+            continue;
+        };
+        if type_script.code_hash().as_slice()
+            != hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                .expect("constant hex")
+            || type_script.hash_type().as_slice() != [1]
+        {
+            continue;
+        }
+        let Some(_) = cell_elf::parse(&data.raw_data()).map_err(|error| {
+            ApiError::internal(format!(
+                "cell {outpoint} upgrade cohort output {index} ELF parse: {error:#}"
+            ))
+        })?
+        else {
+            continue;
+        };
+        let type_hash = type_script.calc_script_hash();
+        let matches: Vec<_> = inputs
+            .iter()
+            .filter(|(_, _, hash, _)| hash.as_slice() == type_hash.as_slice())
+            .collect();
+        if matches.is_empty() {
+            continue;
+        }
+        if matches.len() != 1 {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} Type ID upgrade cohort output {index} has {} matching inputs",
+                matches.len()
+            )));
+        }
+        let (previous_hash, previous_index, _, previous_version) = matches[0];
+        let mut hasher = ckb_hash::new_blake2b();
+        hasher.update(&data.raw_data());
+        let mut version = [0u8; 32];
+        hasher.finalize(&mut version);
+        upgrades.push(CodeCellUpgrade {
+            previous_tx_hash: format!("0x{}", hex::encode(previous_hash)),
+            previous_output_index: *previous_index,
+            current_tx_hash: format!("0x{}", hex::encode(tx_hash)),
+            current_output_index: u32::try_from(index).map_err(|_| {
+                ApiError::internal(format!("cell {outpoint} upgrade output index overflow"))
+            })?,
+            type_script_hash: format!("0x{}", hex::encode(type_hash.as_slice())),
+            previous_version_hash: previous_version
+                .as_ref()
+                .map(|hash| format!("0x{}", hex::encode(hash))),
+            current_version_hash: format!("0x{}", hex::encode(version)),
+            binary_changed: previous_version
+                .as_ref()
+                .map(|hash| hash.as_slice() != version),
+        });
+    }
+    Ok(upgrades)
 }
 
 /// A cell index key: script_hash(32B) + block_num(8B BE) + outpoint(34B).
@@ -2414,7 +2829,7 @@ async fn list_live_cells(
                 virtual_occupied,
             )
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Return pre-computed total when filtering by lock_script_hash only.
     let total = match (&lock_hash_bytes, &type_hash_bytes, &type_code_hash_bytes) {
@@ -2771,11 +3186,11 @@ async fn list_cells_by_script(
                 info,
                 &state.ckb_network,
                 virtual_occupied,
-            );
+            )?;
             cell.matched_script_kind = Some(phase.as_str().to_string());
-            cell
+            Ok(cell)
         })
-        .collect();
+        .collect::<Result<_, ApiRouteError>>()?;
 
     match total {
         Some(total) => ok(CursorPaginatedResponse::new(
@@ -3244,30 +3659,40 @@ async fn get_cell(
         })?,
     );
 
-    // Empty payloads are proven by the canonical payload size. Nonempty bytes
-    // have one source: the original transaction in the node's RocksDB.
-    let cell_data = Some(if info.data_size == 0 {
-        Vec::new()
+    if info.data_size < 0 {
+        return Err(ApiError::internal(format!(
+            "negative data size for {outpoint}"
+        )));
+    }
+    let node_tx = if let Some(reader) = state.ckb_store.as_ref() {
+        let hash: [u8; 32] = hash_bytes.as_slice().try_into().expect("validated hash");
+        Some(reader.get_transaction(&hash).ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell transaction for {outpoint} missing from CKB RocksDB"
+            ))
+        })?)
     } else {
-        if info.data_size < 0 {
-            return Err(ApiError::internal(format!(
-                "negative data size for {outpoint}"
-            )));
-        }
-        let reader = state.ckb_store.as_ref().ok_or_else(|| {
-            ApiError::internal(format!(
-                "cell data for {outpoint} requires CKB RocksDB reader"
-            ))
-        })?;
-        let hash: [u8; 32] = hash_bytes
-            .as_slice()
-            .try_into()
-            .expect("validated cell transaction hash");
-        let tx = reader.get_transaction(&hash).ok_or_else(|| {
-            ApiError::internal(format!(
-                "cell data transaction for {outpoint} missing from CKB RocksDB"
-            ))
-        })?;
+        None
+    };
+    if info.data_size > 0 && node_tx.is_none() {
+        return Err(ApiError::internal(format!(
+            "cell data for {outpoint} requires CKB RocksDB reader"
+        )));
+    }
+    let raw_output_bytes = node_tx
+        .as_ref()
+        .map(|tx| {
+            tx.outputs()
+                .get(output_index as usize)
+                .map(|output| output.as_slice().to_vec())
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "cell output for {outpoint} missing from CKB RocksDB"
+                    ))
+                })
+        })
+        .transpose()?;
+    let cell_data = Some(if let Some(tx) = node_tx.as_ref() {
         let data = tx
             .outputs_data()
             .get(output_index as usize)
@@ -3286,6 +3711,8 @@ async fn get_cell(
             )));
         }
         data
+    } else {
+        Vec::new()
     });
 
     let dep_group_result = cell_data
@@ -3308,6 +3735,88 @@ async fn get_cell(
 
     let code_cell_of = if let Some(dh) = data_hash.as_ref() {
         lookup_code_cell_scripts(&state, dh, info.type_script_hash.as_ref())?
+    } else {
+        None
+    };
+    let elf = cell_data
+        .as_ref()
+        .map(|data| cell_elf::parse(data))
+        .transpose()
+        .map_err(|error| {
+            ApiError::internal(format!("ELF parse failed: outpoint={outpoint}: {error:#}"))
+        })?
+        .flatten();
+    let code_cell = if elf.is_some() {
+        let hash = data_hash.as_ref().expect("ELF bytes were hashed");
+        let mut current_references = Vec::new();
+        for (reference_hash, hash_type_num, hash_type_name) in [
+            (hash.as_slice(), 0u8, "data"),
+            (hash.as_slice(), 2u8, "data1"),
+            (hash.as_slice(), 4u8, "data2"),
+        ]
+        .into_iter()
+        .chain(
+            info.type_script_hash
+                .as_ref()
+                .map(|type_hash| (type_hash.as_slice(), 1u8, "type")),
+        ) {
+            if hash_type_num == 1 {
+                let current = state
+                    .store
+                    .get_script_reference_version_hash(1, reference_hash)
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "code cell type resolution read: {outpoint}: {error}"
+                        ))
+                    })?;
+                if current.as_deref() != Some(hash.as_slice()) {
+                    continue;
+                }
+            }
+            if let Some(reference) = state
+                .store
+                .get_script_reference_info(hash_type_num, reference_hash)
+                .map_err(|error| {
+                    ApiError::internal(format!("code cell reference read: {outpoint}: {error}"))
+                })?
+            {
+                current_references.push(CodeCellReference {
+                    reference_hash: format!("0x{}", hex::encode(reference_hash)),
+                    hash_type: hash_type_name.into(),
+                    lock_live_cells_count: reference.lock_live_cells_count,
+                    type_live_cells_count: reference.type_live_cells_count,
+                });
+            }
+        }
+        Some(CodeCellEvidence {
+            version_hash: format!("0x{}", hex::encode(hash)),
+            current_references,
+            upgrade_cohort: code_cell_upgrade_cohort(
+                &state,
+                node_tx
+                    .as_ref()
+                    .expect("ELF data requires original transaction"),
+                &hash_bytes,
+                &outpoint,
+            )?,
+            type_id_lineage: state
+                .store
+                .get_script_version(hash)
+                .map_err(|error| {
+                    ApiError::internal(format!("cell {outpoint} Type ID lineage read: {error}"))
+                })?
+                .map(|version| {
+                    version
+                        .type_id_deployments
+                        .into_iter()
+                        .map(|(type_hash, block)| CodeCellTypeIdLineage {
+                            type_script_hash: format!("0x{}", hex::encode(type_hash)),
+                            observed_at_block: block,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
     } else {
         None
     };
@@ -3342,13 +3851,17 @@ async fn get_cell(
     }
 
     let occupied_capacity_breakdown = estimated_occupied_capacity_breakdown(&info);
-    let occupied_capacity = if info.occupied_capacity > 0 {
-        info.occupied_capacity
-    } else {
-        occupied_capacity_breakdown
-            .total_bytes
-            .saturating_mul(SHANNONS_PER_CKB)
-    };
+    let expected_occupied = occupied_capacity_breakdown
+        .total_bytes
+        .checked_mul(SHANNONS_PER_CKB)
+        .ok_or_else(|| ApiError::internal(format!("cell {outpoint} occupied capacity overflow")))?;
+    if info.occupied_capacity != expected_occupied {
+        return Err(ApiError::internal(format!(
+            "cell {outpoint} indexed occupied capacity {} differs from exact anatomy {}",
+            info.occupied_capacity, expected_occupied
+        )));
+    }
+    let occupied_capacity = info.occupied_capacity;
 
     let is_satoshi = info.created_at_block == 0
         && ckbadger_common::burn_policy::burn_policy(&state.ckb_network)
@@ -3370,8 +3883,173 @@ async fn get_cell(
         (None, None)
     };
 
+    let timestamp_at = |block: i64| -> Result<(i64, String), ApiRouteError> {
+        let header = state
+            .store
+            .get_block_header(block)
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "cell {outpoint} block {block} header read: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cell {outpoint} missing indexed block {block} header"
+                ))
+            })?;
+        let date = chrono::DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell {outpoint} block {block} invalid timestamp {}",
+                header.timestamp
+            ))
+        })?;
+        Ok((header.chain_time_ms, date.to_rfc3339()))
+    };
+    let (created_ms, created_timestamp) = timestamp_at(info.created_at_block)?;
+    let (spent_timestamp, lifetime_ms) = if let Some(block) = consumed_at_block {
+        let (spent_ms, timestamp) = timestamp_at(block)?;
+        let lifetime = spent_ms.checked_sub(created_ms).ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell {outpoint} lifetime overflow: created={created_ms} spent={spent_ms}"
+            ))
+        })?;
+        if lifetime < 0 {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} spent before creation: created={created_ms} spent={spent_ms}"
+            )));
+        }
+        (Some(timestamp), Some(lifetime))
+    } else {
+        (None, None)
+    };
+    let (live_age_ms, live_age_at_block) = if consumed_at_block.is_none() {
+        if let Some((tip_block, tip_header)) =
+            state.store.get_sync_tip_block().map_err(|error| {
+                ApiError::internal(format!("cell {outpoint} sync tip read: {error}"))
+            })?
+        {
+            if tip_block < info.created_at_block {
+                return Err(ApiError::internal(format!(
+                    "cell {outpoint} created at block {} beyond indexed tip {tip_block}",
+                    info.created_at_block
+                )));
+            }
+            (
+                Some(
+                    tip_header
+                        .chain_time_ms
+                        .checked_sub(created_ms)
+                        .ok_or_else(|| {
+                            ApiError::internal(format!(
+                                "cell {outpoint} live age overflow at tip {tip_block}"
+                            ))
+                        })?,
+                ),
+                Some(tip_block),
+            )
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+    let consuming_input_index = if let Some(tx_hash) = consumed_by_tx.as_ref() {
+        use ckb_types::prelude::Unpack;
+        let reader = state.ckb_store.as_ref().ok_or_else(|| {
+            ApiError::internal(format!(
+                "spending transaction for cell {outpoint} requires CKB RocksDB reader"
+            ))
+        })?;
+        let spent_hash: [u8; 32] = hex::decode(tx_hash.trim_start_matches("0x"))
+            .expect("indexed spending transaction hash is hex")
+            .try_into()
+            .map_err(|_| {
+                ApiError::internal(format!(
+                    "cell {outpoint} has invalid consuming tx hash {tx_hash}"
+                ))
+            })?;
+        let tx = reader.get_transaction(&spent_hash).ok_or_else(|| {
+            ApiError::internal(format!(
+                "spending transaction {tx_hash} for cell {outpoint} missing from CKB RocksDB"
+            ))
+        })?;
+        let matches: Vec<usize> = tx
+            .inputs()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, input)| {
+                let prev = input.previous_output();
+                let prev_index: u32 = prev.index().unpack();
+                (prev.tx_hash().as_slice() == hash_bytes.as_slice()
+                    && prev_index == u32::from(output_idx as u16))
+                .then_some(index)
+            })
+            .collect();
+        if matches.len() != 1 {
+            return Err(ApiError::internal(format!("spending transaction {tx_hash} references cell {outpoint} {} times (expected exactly once)", matches.len())));
+        }
+        Some(
+            u32::try_from(matches[0])
+                .map_err(|_| ApiError::internal(format!("cell {outpoint} input index overflow")))?,
+        )
+    } else {
+        None
+    };
+
     let dao_info = lookup_dao_info(&state.store, &hash_bytes, output_idx)
         .map_err(|error| ApiError::internal(error.to_string()))?;
+
+    let cell_output_molecule = cell_anatomy::cell_output(&info).map_err(|error| {
+        ApiError::internal(format!(
+            "CellOutput serialization failed: outpoint={outpoint}: {error:#}"
+        ))
+    })?;
+    if let Some(raw) = raw_output_bytes {
+        let serialized = hex::decode(cell_output_molecule.bytes.trim_start_matches("0x"))
+            .expect("Molecule encoder returned hex");
+        if raw != serialized {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} indexed output differs from original CKB transaction CellOutput"
+            )));
+        }
+    }
+    let indexed_lock_hash = format!("0x{}", hex::encode(&info.lock_script_hash));
+    if cell_output_molecule.lock_script_hash != indexed_lock_hash {
+        return Err(ApiError::internal(format!(
+            "cell {outpoint} lock script hash mismatch: serialized={} indexed={indexed_lock_hash}",
+            cell_output_molecule.lock_script_hash
+        )));
+    }
+    let indexed_type_hash = info
+        .type_script_hash
+        .as_ref()
+        .map(|hash| format!("0x{}", hex::encode(hash)));
+    if cell_output_molecule.type_script_hash != indexed_type_hash {
+        return Err(ApiError::internal(format!("cell {outpoint} type script hash mismatch: serialized={:?} indexed={indexed_type_hash:?}", cell_output_molecule.type_script_hash)));
+    }
+    match (info.data_hash.as_ref(), data_hash.as_ref()) {
+        (Some(indexed), Some(actual)) if indexed != actual => {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} data hash mismatch: indexed=0x{} actual=0x{}",
+                hex::encode(indexed),
+                hex::encode(actual)
+            )));
+        }
+        (None, Some(_)) if info.data_size > 0 => {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} indexed data hash missing for {} bytes",
+                info.data_size
+            )))
+        }
+        (Some(_), None) => {
+            return Err(ApiError::internal(format!(
+                "cell {outpoint} indexed data hash exists but original bytes are unavailable"
+            )))
+        }
+        _ => {}
+    }
+
+    let current_spend_requirements = current_spend_requirements(&state, &info, &outpoint)?;
 
     ok(CellDetailResponse {
         tx_hash: format!("0x{}", hex::encode(&hash_bytes)),
@@ -3389,9 +4067,15 @@ async fn get_cell(
             .map(|h| format!("0x{}", hex::encode(h))),
         data_size: info.data_size,
         created_at_block: info.created_at_block,
+        created_timestamp,
         status: status_str.to_string(),
         consumed_at_block,
         consumed_by_tx,
+        spent_timestamp,
+        consuming_input_index,
+        lifetime_ms,
+        live_age_ms,
+        live_age_at_block,
         lock: ScriptResponse {
             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
             hash_type: lock_hash_type_str.to_string(),
@@ -3404,6 +4088,10 @@ async fn get_cell(
         is_dep_group: dep_group_result.is_dep_group,
         dep_group_items: dep_group_result.items,
         code_cell_of,
+        cell_output_molecule,
+        elf,
+        code_cell,
+        current_spend_requirements,
         dao_info,
     })
 }
@@ -4163,7 +4851,7 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
+            occupied_capacity: 6_100_000_000,
             udt_amount: None,
             data_hash: None,
         }
@@ -4226,12 +4914,46 @@ mod tests {
     fn test_cell_info_to_response_normal() {
         let info = make_info();
         let tx_hash = vec![3u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
+        let resp =
+            cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET).unwrap();
         assert_eq!(resp.output_index, 0);
         assert_eq!(resp.capacity, "10000000000");
         assert!(resp.cell_type.is_none());
         assert!(resp.virtual_used_capacity.is_none());
         assert!(resp.udt_amount.is_none());
+    }
+
+    #[test]
+    fn type_reference_candidates_exclude_other_anchors_and_consumed_copies() {
+        let wanted = vec![0x11; 32];
+        let other = vec![0x22; 32];
+        let version = vec![0x33; 32];
+        let typed = |reference: Vec<u8>| {
+            let mut payload = make_payload();
+            payload.type_script_hash = Some(reference);
+            payload.type_code_hash = Some(vec![0x44; 32]);
+            payload.type_hash_type = Some(1);
+            payload.type_args = Some(vec![]);
+            positioned(payload)
+        };
+        let entries = vec![
+            (vec![1; 32], 0, typed(other), true),
+            (vec![2; 32], 0, typed(wanted.clone()), false),
+            (vec![3; 32], 0, typed(wanted.clone()), true),
+        ];
+        let (live, historical) = eligible_reference_cells(1, &wanted, &version, entries);
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].tx_hash, format!("0x{}", hex::encode([3; 32])));
+        assert_eq!(historical.len(), 1);
+        assert_eq!(historical[0].tx_hash, format!("0x{}", hex::encode([2; 32])));
+        assert_eq!(
+            available_reference_resolution("resolved", std::slice::from_ref(&version), &live),
+            "resolved"
+        );
+        assert_eq!(
+            available_reference_resolution("resolved", &[version], &[]),
+            "unavailable"
+        );
     }
 
     #[test]
@@ -4242,7 +4964,8 @@ mod tests {
         };
         let info = positioned(info);
         let tx_hash = vec![4u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 1, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
+        let resp =
+            cell_info_to_response(&tx_hash, 1, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET).unwrap();
         assert_eq!(resp.udt_amount.as_deref(), Some("12345"));
     }
 
@@ -4259,7 +4982,8 @@ mod tests {
         // created_at_block == 0 -> genesis output
         let info = ckbadger_store::PositionedCellInfo::new(payload, 0);
         let tx_hash = vec![5u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
+        let resp =
+            cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET).unwrap();
         assert_eq!(resp.cell_type.as_deref(), Some("genesis_special_burn"));
         assert_eq!(
             resp.virtual_used_capacity.as_deref(),
@@ -4287,7 +5011,8 @@ mod tests {
             &satoshi_non_genesis,
             "mainnet",
             VIRTUAL_OCCUPIED_MAINNET,
-        );
+        )
+        .unwrap();
         assert!(resp.cell_type.is_none());
         assert!(resp.virtual_used_capacity.is_none());
 
@@ -4299,7 +5024,8 @@ mod tests {
             &genesis_non_satoshi,
             "mainnet",
             VIRTUAL_OCCUPIED_MAINNET,
-        );
+        )
+        .unwrap();
         assert!(resp.cell_type.is_none());
         assert!(resp.virtual_used_capacity.is_none());
     }
@@ -4479,6 +5205,21 @@ mod tests {
         assert!(deterministic.segments.iter().any(|s| {
             s.label == "cluster_id" && s.human_value == format!("0x{}", hex::encode(&cluster_id))
         }));
+        let mut end = 0;
+        for segment in &deterministic.segments {
+            assert_eq!(
+                segment.start, end,
+                "Spore bytes must be completely partitioned"
+            );
+            end = segment.end;
+        }
+        assert_eq!(end as usize, data.len());
+        for label in ["content_type_length", "content_length", "cluster_id_length"] {
+            assert!(deterministic
+                .segments
+                .iter()
+                .any(|segment| segment.label == label));
+        }
     }
 
     #[test]

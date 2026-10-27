@@ -1,72 +1,30 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
-import { formatCapacity } from '@/lib/utils';
+import { api, type Cell } from '@/lib/api';
 
-const mockPush = vi.fn();
-let mockOutpoint = '0xabc123def456789012345678901234567890123456789012345678901234abcd-0';
-
+let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
-  useParams: () => ({
-    outpoint: mockOutpoint,
-  }),
-  useRouter: () => ({ push: mockPush }),
-  usePathname: () => '/cell/0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
+  useParams: () => ({ outpoint }),
+  usePathname: () => '/cell',
+  useRouter: () => ({ push: vi.fn() }),
 }));
-
-vi.mock('@/components/cell-graph', () => ({
-  default: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
-  CellGraph: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
+vi.mock('@/components/cell/cell-transactions', () => ({
+  CellTransactions: ({ cell }: { cell: Cell }) => (
+    <div data-testid="transactions">
+      {cell.status === 'dead' ? 'spent evidence' : 'live evidence'}
+    </div>
+  ),
 }));
-
-const mockCellWithDao = {
-  txHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
-  outputIndex: 0,
-  capacity: '50000000000',
-  commonKnowledgeSize: '8600000000',
-  commonKnowledgeSizeBreakdown: {
-    capacityFieldBytes: 8,
-    lockScriptBytes: 53,
-    typeScriptBytes: 17,
-    dataBytes: 8,
-    totalBytes: 86,
-  },
-  lockScriptHash: '0xlockscripthash123456789012345678901234567890123456789012345678',
-  address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
-  typeScriptHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
-  dataSize: 8,
-  createdAtBlock: 5000000,
-  status: 'live' as const,
-  lock: {
-    codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
-    hashType: 'type',
-    args: '0x1234567890123456789012345678901234567890',
-  },
-  type: {
-    codeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
-    hashType: 'type',
-    args: '0x',
-  },
-  data: '0x0000000000000000',
-  isDepGroup: false,
-  daoInfo: {
-    isDaoCell: true,
-    daoStatus: 'deposited',
-    depositBlockNumber: 5000000,
-    depositTimestamp: '2024-01-15T10:30:00Z',
-    withdrawRequestBlock: null,
-    withdrawRequestTimestamp: null,
-    withdrawBlock: null,
-    withdrawTimestamp: null,
-    compensation: null,
-    compensationCkb: null,
-    estimatedApc: null,
-  },
-};
-
-const mockCellWithoutDao = {
-  txHash: '0xdef456789012345678901234567890123456789012345678901234567890abcd',
+vi.mock('@/lib/api', () => ({
+  api: { getCell: vi.fn() },
+  isNotFoundApiError: (error: unknown) => error instanceof Error && error.message === 'not found',
+}));
+const getCell = vi.mocked(api.getCell);
+const hash = `0x${'ab'.repeat(32)}`;
+const base = {
+  txHash: hash,
   outputIndex: 0,
   capacity: '10000000000',
   commonKnowledgeSize: '6100000000',
@@ -77,672 +35,121 @@ const mockCellWithoutDao = {
     dataBytes: 0,
     totalBytes: 61,
   },
-  lockScriptHash: '0xlockscripthash123456789012345678901234567890123456789012345678',
-  address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
-  typeScriptHash: null,
+  lockScriptHash: `0x${'11'.repeat(32)}`,
+  address: 'ckb1qtest',
+  typeScriptHash: undefined,
   dataSize: 0,
-  createdAtBlock: 5000000,
+  createdAtBlock: 123,
+  createdTimestamp: '2024-01-01T00:00:00Z',
   status: 'live' as const,
-  lock: {
-    codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
-    hashType: 'type',
-    args: '0x1234567890123456789012345678901234567890',
+  liveAgeMs: 60000,
+  liveAgeAtBlock: 125,
+  lock: { codeHash: `0x${'22'.repeat(32)}`, hashType: 'type', args: `0x${'33'.repeat(20)}` },
+  type: undefined,
+  data: '0x',
+  cellOutputMolecule: {
+    bytes: '0x00000000',
+    fields: [{ label: 'framing', start: 0, end: 4, occupied: false }],
+    lockScriptHash: `0x${'11'.repeat(32)}`,
+    typeScriptHash: null,
   },
-  type: null,
-  data: null,
+  currentSpendRequirements: [],
   isDepGroup: false,
-};
-
-const mockWithdrawnDaoCell = {
-  ...mockCellWithDao,
-  status: 'dead' as const,
-  consumedAtBlock: 5100000,
-  consumedByTx: '0xconsumeTx12345678901234567890123456789012345678901234567890abcdef',
-  daoInfo: {
-    isDaoCell: true,
-    daoStatus: 'withdrawn',
-    depositBlockNumber: 5000000,
-    depositTimestamp: '2024-01-15T10:30:00Z',
-    withdrawRequestBlock: 5050000,
-    withdrawRequestTimestamp: '2024-02-15T10:30:00Z',
-    withdrawBlock: 5100000,
-    withdrawTimestamp: '2024-03-15T10:30:00Z',
-    compensation: '123456789',
-    compensationCkb: '1.23456789',
-    estimatedApc: null,
-  },
-};
-
-const mockLargeDataCell = {
-  ...mockCellWithDao,
-  dataSize: 2048,
-  data: `0x${'ab'.repeat(2048)}`,
-};
-
-const mockCellWithDataAnalysis = {
-  ...mockCellWithDao,
-  dataSize: 16,
-  data: '0x2a000000000000000000000000000000',
-  dataAnalysis: {
-    deterministic: {
-      kind: 'udt_amount',
-      summary: 'SUDT cell data starts with amount=42 (u128 LE)',
-      segments: [
-        {
-          label: 'amount',
-          start: 0,
-          end: 16,
-          meaning: 'SUDT amount in little-endian u128',
-          humanValue: '42',
-        },
-      ],
-    },
-    heuristicGuesses: [
-      {
-        kind: 'numeric_pattern',
-        confidence: 'medium',
-        reason: 'Payload length is exactly 16 bytes (common u128 LE encoding)',
-        humanValue: '42',
-      },
-    ],
-  },
-};
-
-const mockCellWithPartialParsedData = {
-  ...mockCellWithDao,
-  dataSize: 16,
-  data: '0x0102030405060708090a0b0c0d0e0f10',
-  dataAnalysis: {
-    deterministic: {
-      kind: 'partial_demo',
-      summary: 'Only first 8 bytes are deterministically parsed',
-      segments: [
-        {
-          label: 'header',
-          start: 0,
-          end: 8,
-          meaning: 'Demo parsed header',
-          humanValue: '0x0102030405060708',
-        },
-      ],
-    },
-    heuristicGuesses: [],
-  },
-};
-
-/** Mainnet `support.cell` (M2_OUT1_DATA) as the cell endpoint decodes it. */
-const mockDotCellNameCell = {
-  ...mockCellWithoutDao,
-  capacity: '24000000000',
-  dataSize: 105,
-  lock: {
-    codeHash: '0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab',
-    hashType: 'type',
-    args: '0x',
-  },
-  type: {
-    codeHash: '0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54',
-    hashType: 'type',
-    args: '0xb4f4302965b7d6421481a520ee7eb5971a5e808c',
-  },
-  typeScriptHash: '0x6161616161616161616161616161616161616161616161616161616161616161',
-  protocolScript: { lock: 'dotcell-account-lock', type: 'dotcell-account' },
-  data: '0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e265b5fe7e7070b506f69bd8cabf9e4272111066455e00926c0057d926a44d83fc13b21ce037b1e31f4223e3c86757d926a44d83fc13b21ce037b1e31f4223e3c867737570706f7274',
-  dataAnalysis: {
-    deterministic: {
-      kind: 'dotcell_name',
-      summary:
-        "support.cell name cell (layout v3); owner 0x57d926a44d83fc13b21ce037b1e31f4223e3c867; expires 2027-09-21T06:21:18+00:00; records are in the creating transaction's witness at this output index",
-      segments: [
-        {
-          label: 'layout_version',
-          start: 0,
-          end: 1,
-          meaning: 'Layout version (u8)',
-          humanValue: '3',
-        },
-        {
-          label: 'expired_at',
-          start: 53,
-          end: 58,
-          meaning: 'Expiry, unix seconds (u40 little-endian)',
-          humanValue: '2027-09-21T06:21:18+00:00 (unix 1821507678)',
-        },
-        {
-          label: 'owner_hash20',
-          start: 58,
-          end: 78,
-          meaning: "Owner: first 20 bytes of the owner's lock script hash",
-          humanValue: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
-        },
-        {
-          label: 'label',
-          start: 98,
-          end: 105,
-          meaning: 'Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]',
-          humanValue: 'support.cell · id 0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
-        },
-      ],
-    },
-    heuristicGuesses: [],
-  },
-};
-
-const UNKNOWN_CODE_HASH = '0x709f3fda1234567890abcdef1234567890abcdef1234567890abcdefcce08649';
-const DEPLOYMENT_TYPE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
-const DEPLOYMENT_DATA_HASH = '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649';
-
-vi.mock('@/lib/api', () => ({
-  api: {
-    getCell: vi.fn(),
-    getCellGraph: vi.fn(() => Promise.resolve({ nodes: [], links: [] })),
-    lookupScripts: vi.fn(() => Promise.resolve({})),
-  },
-  isWarmupPendingError: vi.fn(() => false),
-  isNetworkInitializingError: vi.fn(() => false),
-}));
-
-import { api } from '@/lib/api';
-const mockGetCell = api.getCell as ReturnType<typeof vi.fn>;
-
-function renderWithQueryClient(component: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-
-  return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
+} as Cell;
+function view() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <CellDetailPage />
+    </QueryClientProvider>
+  );
 }
-
 describe('CellDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockOutpoint = '0xabc123def456789012345678901234567890123456789012345678901234abcd-0';
+    outpoint = `${hash}-0`;
   });
-
-  it('rejects a cell route missing its output index instead of reading output zero', () => {
-    mockOutpoint = '0xabc123def456789012345678901234567890123456789012345678901234abcd';
-    renderWithQueryClient(<CellDetailPage />);
-    expect(screen.getByText(/invalid cell outpoint/i)).toBeInTheDocument();
-    expect(mockGetCell).not.toHaveBeenCalled();
+  it('rejects an outpoint without an index before fetching', () => {
+    outpoint = hash;
+    view();
+    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(getCell).not.toHaveBeenCalled();
   });
-
-  it('renders DAO cell with Nervos DAO badge and info panel', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithDao);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      const daoElements = screen.getAllByText('Nervos DAO');
-      expect(daoElements.length).toBeGreaterThanOrEqual(1);
-    });
-
-    expect(screen.getByText('Active')).toBeInTheDocument();
-    expect(screen.getByText('Deposit Block')).toBeInTheDocument();
-    expect(screen.getByText('Deposit Time')).toBeInTheDocument();
-    const blockLinks = screen.getAllByText('#5,000,000');
-    expect(blockLinks.length).toBeGreaterThanOrEqual(1);
+  it('rejects output indices outside the store range before fetching', () => {
+    outpoint = `${hash}-65536`;
+    view();
+    expect(screen.getByText('Invalid cell outpoint')).toBeInTheDocument();
+    expect(getCell).not.toHaveBeenCalled();
   });
-
-  it('derives the genesis special burn copy from the API cell values', async () => {
-    mockGetCell.mockResolvedValue({
-      ...mockCellWithoutDao,
-      cellType: 'genesis_special_burn',
-      capacity: '840000000000000000', // 8.4B CKB burnt at genesis
-      virtualCommonKnowledgeSize: '504000000000000000', // 5.04B CKB virtual common knowledge
-    });
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Genesis Special Burn Cell')).toBeInTheDocument();
-    });
-
-    // Both figures come from the API response (formatCapacity), not hardcoded strings.
-    expect(screen.getByText(formatCapacity('840000000000000000'))).toBeInTheDocument();
-    expect(screen.getByText('Virtual Common Knowledge Size:')).toBeInTheDocument();
-    expect(screen.getByText(formatCapacity('504000000000000000'))).toBeInTheDocument();
-    // The superseded hardcoded copy is gone.
-    expect(screen.queryByText(/25% of 33\.6B/)).not.toBeInTheDocument();
-  });
-
-  it('omits the virtual common knowledge line when the field is absent', async () => {
-    // Base mock carries no virtualCommonKnowledgeSize, so the guarded line must not render.
-    mockGetCell.mockResolvedValue({
-      ...mockCellWithoutDao,
-      cellType: 'genesis_special_burn',
-      capacity: '840000000000000000',
-    });
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Genesis Special Burn Cell')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(formatCapacity('840000000000000000'))).toBeInTheDocument();
-    expect(screen.queryByText('Virtual Common Knowledge Size:')).not.toBeInTheDocument();
-  });
-
-  it('renders regular cell without DAO badge or info panel', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithoutDao);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      const liveBadges = screen.getAllByText('Live');
-      expect(liveBadges.length).toBeGreaterThanOrEqual(1);
-    });
-
-    expect(screen.getByText('Capacity')).toBeInTheDocument();
-    expect(screen.getByText('Owned Capacity')).toBeInTheDocument();
-    expect(screen.getByText(/Common Knowledge:/)).toBeInTheDocument();
-    expect(screen.getByText(/% share/)).toBeInTheDocument();
-    expect(screen.getByText('Byte Composition (61 bytes)')).toBeInTheDocument();
-    expect(screen.getByText('Capacity Field')).toBeInTheDocument();
-    expect(screen.getByText('Cell Data')).toBeInTheDocument();
-    expect(screen.getByText(/^Formula:/)).toBeInTheDocument();
-    expect(screen.getByText(/53B/)).toBeInTheDocument();
-    expect(screen.queryByTestId('byte-composition-guides')).not.toBeInTheDocument();
-    expect(screen.getByTestId('byte-composition-legend')).toBeInTheDocument();
-
-    const lockScriptLegendItem = screen.getByRole('button', { name: /Lock Script/i });
-    fireEvent.mouseEnter(lockScriptLegendItem);
-    fireEvent.mouseLeave(lockScriptLegendItem);
-
-    expect(screen.getByText('Overview')).toBeInTheDocument();
-    expect(screen.getByText('Address')).toBeInTheDocument();
-    expect(screen.queryByText('Cell Relationship')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Lifecycle' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Graph' })).toBeInTheDocument();
-    expect(screen.getByTestId('cell-relationship-lifecycle')).toBeInTheDocument();
-    expect(screen.getByText('Current Status')).toBeInTheDocument();
-    expect(screen.getByText('Upstream Inputs (0)')).toBeInTheDocument();
-  });
-
-  it('shows a graph section fallback before rendering the graph view', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithDao);
-    vi.mocked(api.getCellGraph).mockResolvedValue({
-      nodes: [
-        {
-          id: `cell-${mockCellWithDao.txHash}-0`,
-          nodeType: 'cell',
-          label: 'Current Cell',
-          data: {
-            txHash: mockCellWithDao.txHash,
-            outputIndex: mockCellWithDao.outputIndex,
-            status: mockCellWithDao.status,
-            capacity: mockCellWithDao.capacity,
-          },
-        },
-      ],
-      links: [],
-    });
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    expect((await screen.findAllByText('Nervos DAO')).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Lifecycle' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
-
-    expect(screen.getByText('Loading graph section...')).toBeInTheDocument();
-    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
-  });
-
-  it('shows a cell detail without its common knowledge size as an error, not a 0 share', async () => {
-    const { commonKnowledgeSize: _omitted, ...withoutSize } = mockCellWithoutDao;
-    mockGetCell.mockResolvedValue(withoutSize);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    const alert = await screen.findByTestId('cell-capacity-error');
-    expect(alert).toHaveAttribute('role', 'alert');
-    expect(alert).toHaveTextContent(
-      `Owned capacity unavailable: the detail for cell ${mockCellWithoutDao.txHash}:${mockCellWithoutDao.outputIndex} has no commonKnowledgeSize`
+  it('shows loading and then exact live cell anatomy, chronology and byte map', async () => {
+    let resolve!: (value: Cell) => void;
+    getCell.mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      })
     );
-    expect(screen.queryByText(/Common Knowledge:/)).toBeNull();
+    view();
+    expect(screen.getByText('Loading cell evidence…')).toBeInTheDocument();
+    resolve(base);
+    expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
+    expect(screen.getByText('Age at indexed tip')).toBeInTheDocument();
+    expect(screen.getByText(/block #125/)).toBeInTheDocument();
+    expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
+    expect(screen.getByTestId('transactions')).toHaveTextContent('live evidence');
+    expect(screen.getByText('Free')).toBeInTheDocument();
   });
-
-  it.each([
-    ['1.5', 'invalid commonKnowledgeSize'],
-    ['100000000001', 'exceeds capacity'],
-  ])('reports invalid occupied capacity %s with cell context', async (value, message) => {
-    mockGetCell.mockResolvedValue({ ...mockCellWithoutDao, commonKnowledgeSize: value });
-    renderWithQueryClient(<CellDetailPage />);
-    const alert = await screen.findByTestId('cell-capacity-error');
-    expect(alert).toHaveTextContent(mockCellWithoutDao.txHash);
-    expect(alert).toHaveTextContent(message);
-    expect(screen.queryByTestId('byte-composition-legend')).toBeNull();
-  });
-
-  it('reports an inconsistent byte breakdown instead of inventing bytes', async () => {
-    mockGetCell.mockResolvedValue({
-      ...mockCellWithDao,
-      commonKnowledgeSize: '10200000000',
-      commonKnowledgeSizeBreakdown: {
-        capacityFieldBytes: 8,
-        lockScriptBytes: 53,
-        typeScriptBytes: 17,
-        dataBytes: 8,
-        totalBytes: 86,
-      },
+  it('shows exact spent input, timestamps and chain lifetime', async () => {
+    getCell.mockResolvedValue({
+      ...base,
+      status: 'dead',
+      consumedAtBlock: 125,
+      consumedByTx: `0x${'cd'.repeat(32)}`,
+      consumingInputIndex: 2,
+      spentTimestamp: '2024-01-02T00:00:00Z',
+      lifetimeMs: 30000,
     });
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('cell-capacity-error')).toHaveTextContent(
-        'byte breakdown total 86 differs from occupied capacity 102'
-      );
-    });
-    expect(screen.queryByTestId('byte-composition-legend')).toBeNull();
+    view();
+    expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
+    expect(screen.getByText(/input #2/)).toBeInTheDocument();
+    expect(screen.getByText(/30,000 ms on chain/)).toBeInTheDocument();
+    expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
   });
-
-  it('renders withdrawn DAO cell with compensation info', async () => {
-    mockGetCell.mockResolvedValue(mockWithdrawnDaoCell);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      const daoElements = screen.getAllByText('Nervos DAO');
-      expect(daoElements.length).toBeGreaterThanOrEqual(1);
-    });
-
-    expect(screen.getByText('Withdrawn')).toBeInTheDocument();
-    expect(screen.getByText('Withdraw Request')).toBeInTheDocument();
-    expect(screen.getByText('Withdrawn Block')).toBeInTheDocument();
-    expect(screen.getByText('Compensation Earned')).toBeInTheDocument();
-    const ckbElements = screen.getAllByText(/CKB$/);
-    expect(ckbElements.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('routes unknown script deployment entries to code-hash detail page', async () => {
-    mockGetCell.mockResolvedValue({
-      ...mockCellWithDao,
-      codeCellOf: [
-        {
-          name: 'Unknown',
-          codeHash: UNKNOWN_CODE_HASH,
-          hashType: 'data',
-          deploymentTypeHash: DEPLOYMENT_TYPE_HASH,
-          deploymentDataHash: DEPLOYMENT_DATA_HASH,
-        },
-        {
-          name: 'Default Lock',
-          codeHash: DEPLOYMENT_TYPE_HASH,
-          hashType: 'type',
-          deploymentTypeHash: DEPLOYMENT_TYPE_HASH,
-          deploymentDataHash: DEPLOYMENT_DATA_HASH,
-        },
-      ],
-    });
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    const fallbackLabel = `script: ${UNKNOWN_CODE_HASH.slice(0, 10)}...${UNKNOWN_CODE_HASH.slice(-8)}`;
-    const unknownLink = await screen.findByRole('link', { name: fallbackLabel });
-    expect(unknownLink).toHaveAttribute(
-      'href',
-      `/mainnet/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both`
-    );
-    expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
-
-    expect(screen.getByRole('link', { name: 'Default Lock' })).toHaveAttribute(
-      'href',
-      '/mainnet/scripts/Default%20Lock'
-    );
-    expect(
-      document.querySelector(
-        `a[href="/mainnet/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both"]`
-      )
-    ).toBeTruthy();
-    expect(
-      document.querySelector(
-        `a[href="/mainnet/script/${DEPLOYMENT_DATA_HASH}?hashType=data&kind=both"]`
-      )
-    ).toBeTruthy();
-    expect(screen.queryByText(/Deployment refs are shown as/i)).not.toBeInTheDocument();
-  });
-
-  it('links a .cell name cell to its identity page from the type script panel', async () => {
-    mockGetCell.mockResolvedValue(mockDotCellNameCell);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    const badge = await screen.findByRole('link', { name: 'support.cell' });
-    expect(badge).toHaveAttribute('href', '/mainnet/identities/dotcell/support');
-    expect(screen.getByText('owner 0x57d9...c867 · expires 2027-09-21')).toBeInTheDocument();
-    // No protocol block: the badge and the summary are the whole Layer-1 view.
-    expect(screen.queryByText('Nervos DAO')).not.toBeInTheDocument();
-  });
-
-  it('renders withdrawing DAO cell status correctly', async () => {
-    const withdrawingCell = {
-      ...mockCellWithDao,
+  it('shows DAO lifecycle only for DAO cells', async () => {
+    getCell.mockResolvedValue({
+      ...base,
       daoInfo: {
-        ...mockCellWithDao.daoInfo,
-        daoStatus: 'withdrawing',
-        withdrawRequestBlock: 5050000,
-        withdrawRequestTimestamp: '2024-02-15T10:30:00Z',
+        isDaoCell: true,
+        daoStatus: 'deposited',
+        depositBlockNumber: 123,
+        depositTimestamp: '2024-01-01T00:00:00Z',
       },
-    };
-    mockGetCell.mockResolvedValue(withdrawingCell);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Withdraw Request').length).toBeGreaterThanOrEqual(1);
-    });
+    } as Cell);
+    view();
+    expect(await screen.findByText('Nervos DAO')).toBeInTheDocument();
+    expect(screen.getByText(/deposited/)).toBeInTheDocument();
   });
-
-  it('shows DATA header and truncates displayed bytes to first 1024 bytes', async () => {
-    mockGetCell.mockResolvedValue(mockLargeDataCell);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(
-      () => {
-        expect(screen.getByText('DATA')).toBeInTheDocument();
-        expect(screen.getByText('Preview')).toBeInTheDocument();
-        expect(screen.getByText('2,048 bytes')).toBeInTheDocument();
-        expect(screen.getByText('Truncated at the 1,024-th byte')).toBeInTheDocument();
-        expect(screen.getByText('... 1,024 more bytes')).toBeInTheDocument();
-      },
-      {
-        timeout: 3000,
-      }
-    );
-
-    expect(screen.getByText('... 1,024 more bytes')).toBeInTheDocument();
-  }, 10000);
-
-  it('renders deterministic/heuristic data analysis and supports byte hover highlighting', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('data-deterministic-section')).toBeInTheDocument();
-      expect(screen.getByTestId('data-deterministic-columns')).toBeInTheDocument();
-      expect(screen.getByText('Deterministic Decode')).toBeInTheDocument();
-      expect(screen.getByText('Heuristic Guesses')).toBeInTheDocument();
-      expect(screen.getByText('1 segments')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTestId('data-analysis-panel')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('data-deterministic-panel')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('data-heuristic-panel')).not.toBeInTheDocument();
-
-    fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
-    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
-
-    fireEvent.mouseEnter(screen.getByTestId('data-ascii-byte-2'));
-    expect(screen.getByTestId('data-segment-item-0')).toBeInTheDocument();
+  it('links script code hash with its exact hash type, not the script instance hash', async () => {
+    getCell.mockResolvedValue(base);
+    view();
+    const script = await screen.findByRole('link', { name: base.lock!.codeHash });
+    expect(script).toHaveAttribute('href', `/mainnet/script/${base.lock!.codeHash}?hashType=type`);
+    expect(screen.queryByRole('link', { name: base.lockScriptHash })).not.toBeInTheDocument();
   });
-
-  it('keeps segment detail stable while moving inside byte grid and clears when leaving grid', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('data-byte-0')).toBeInTheDocument();
-      expect(screen.getByTestId('data-bytes-grid')).toBeInTheDocument();
-      expect(screen.getByTestId('data-active-segment')).toBeInTheDocument();
-    });
-
-    const byte0 = screen.getByTestId('data-byte-0');
-    const byte1 = screen.getByTestId('data-byte-1');
-    const byteGrid = screen.getByTestId('data-bytes-grid');
-
-    fireEvent.mouseEnter(byte0);
-    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
-
-    fireEvent.mouseLeave(byte0, { relatedTarget: byte1 });
-    fireEvent.mouseEnter(byte1);
-    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
-
-    fireEvent.mouseLeave(byteGrid);
+  it('fails visibly if exact occupied anatomy disagrees with indexed capacity', async () => {
+    getCell.mockResolvedValue({ ...base, commonKnowledgeSize: '6000000000' });
+    view();
+    expect(await screen.findByTestId('cell-capacity-error')).toHaveTextContent('anatomy differs');
+  });
+  it('distinguishes missing cells from transport failures', async () => {
+    getCell.mockRejectedValue(new Error('not found'));
+    const rendered = view();
+    expect(await screen.findByText('Cell not found')).toBeInTheDocument();
+    rendered.unmount();
+    getCell.mockRejectedValue(new Error('node unavailable'));
+    view();
+    expect(await screen.findByText('Cell data unavailable')).toBeInTheDocument();
     expect(
-      screen.getByText('Hover a segment/byte to preview it, or click a segment to pin it.')
-    ).toBeInTheDocument();
-  });
-
-  it('toggles heuristic detail expansion in compact mode', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('data-heuristics-list')).toBeInTheDocument();
-      expect(screen.getByTestId('data-heuristic-item-0')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
-    expect(screen.getByTestId('data-heuristic-detail-0')).toBeInTheDocument();
-    expect(
-      screen.getByText('Payload length is exactly 16 bytes (common u128 LE encoding)')
-    ).toBeInTheDocument();
-    expect(screen.getByText('42')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
-    expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
-  });
-
-  it('pins deterministic segment on click and keeps details visible after mouse leave', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('data-segment-item-0')).toBeInTheDocument();
-    });
-
-    const segmentItem = screen.getByTestId('data-segment-item-0');
-    fireEvent.click(segmentItem);
-    expect(screen.getByTestId('data-segment-pinned')).toBeInTheDocument();
-
-    fireEvent.mouseLeave(segmentItem);
-    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
-    expect(screen.getByTestId('data-active-segment-hex')).toHaveTextContent(
-      '0x2a000000000000000000000000000000'
-    );
-  });
-
-  it('removes coverage/unparsed/filter controls from data detail section', async () => {
-    mockGetCell.mockResolvedValue(mockCellWithPartialParsedData);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Deterministic Decode')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText('Parsed Coverage (Full Payload)')).not.toBeInTheDocument();
-    expect(screen.queryByText('Parsed Coverage (Preview Window)')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('data-coverage-grid')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('data-unparsed-ranges')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('data-byte-filter')).not.toBeInTheDocument();
-  });
-});
-
-describe('CellDetailPage lock panel', () => {
-  const mockLookupScripts = api.lookupScripts as ReturnType<typeof vi.fn>;
-  const ACCOUNT_LOCK_CODE_HASH = mockDotCellNameCell.lock.codeHash;
-  const SECP_CODE_HASH = mockCellWithoutDao.lock.codeHash;
-  const ACCOUNT_LOCK_DESCRIPTION =
-    'Lock a .cell name sits under. Always-success by design: authority is decided by the Cells Account type script from the owner and manager hashes in the cell.';
-
-  function lookupEntry(codeHash: string, name: string, description: string | null) {
-    return {
-      referenceHash: codeHash,
-      codeHash,
-      name,
-      description,
-      deprecated: false,
-      scriptKind: 'lock',
-      decoderType: null,
-      hashType: 'type',
-      codeCellTxHash: null,
-      codeCellOutputIndex: null,
-      liveCellsCount: 0,
-      ownedCapacitySum: '0',
-      ownedKnowledgeSum: '0',
-      codeCellsLiveCount: 0,
-      codeCellsTotal: 0,
-    };
-  }
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    mockLookupScripts.mockImplementation(() => Promise.resolve({}));
-  });
-
-  it('shows the protocol lock description next to its empty args', async () => {
-    mockLookupScripts.mockImplementation(() =>
-      Promise.resolve({
-        [ACCOUNT_LOCK_CODE_HASH]: lookupEntry(
-          ACCOUNT_LOCK_CODE_HASH,
-          'Cells Account Lock',
-          ACCOUNT_LOCK_DESCRIPTION
-        ),
-      })
-    );
-    mockGetCell.mockResolvedValue(mockDotCellNameCell);
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    const description = await screen.findByTestId('lock-script-description');
-    expect(description).toHaveTextContent(ACCOUNT_LOCK_DESCRIPTION);
-  });
-
-  it('does not show a description for a lock that is not a registry protocol', async () => {
-    mockLookupScripts.mockImplementation(() =>
-      Promise.resolve({
-        [SECP_CODE_HASH]: lookupEntry(SECP_CODE_HASH, 'Default Lock', 'Universal lock'),
-      })
-    );
-    mockGetCell.mockResolvedValue({
-      ...mockCellWithoutDao,
-      protocolScript: { lock: null, type: null },
-    });
-
-    renderWithQueryClient(<CellDetailPage />);
-
-    // The lookup has landed once the lock's script badge renders.
-    await waitFor(() => {
-      expect(screen.getAllByText('Default Lock').length).toBeGreaterThanOrEqual(1);
-    });
-    expect(screen.queryByTestId('lock-script-description')).not.toBeInTheDocument();
-    expect(screen.queryByText('Universal lock')).not.toBeInTheDocument();
+      screen.getAllByRole('alert').some((item) => item.textContent?.includes('node unavailable'))
+    ).toBe(true);
   });
 });
