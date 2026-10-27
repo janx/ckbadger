@@ -293,6 +293,12 @@ calendar, with **zero tolerance** —
   total height. A large anchor alone no longer consumes the request budget.
   The calendar export is bounded to 8,192 nonempty date intervals and shares
   the export's 4 MiB budget; an incomplete calendar cannot yield a pass.
+  Mainnet run `20261027T073216Z-bc0ff6c4` at anchor 20,847,084 completed the
+  default eight entities: 1,379,939 history records and 334,086 RPC requests in
+  188.3 s, with zero differences. Its indexed calendar had 2,538 date intervals;
+  a separate one-entity export probe took 2.23 s and returned 183,343 bytes.
+  This measured the layered contract above, not the former independent full-chain
+  date proof. It was a selected-check run, not a rerun of all 64 checks.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
   fully covered and why. It also saves the indexed calendar and identifies

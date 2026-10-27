@@ -3509,6 +3509,16 @@ fixtures. Clock fixtures also assert append-only payloads remain unchanged by
 rollback/replay. Detailed gate logs are retained in
 `.worktrees/recorded-calendar-results/` and `.worktrees/clock-fixture-results/`.
 
+At implementation commit `625e0476`, 282 relevant tests, workspace check, strict
+all-target Clippy and normal commit hooks passed. Mainnet selected-check run
+`20261027T073216Z-bc0ff6c4` then passed at anchor 20,847,084 with the default
+eight entities, 1,379,939 records, 334,086 RPC requests and zero differences in
+188.3 s. All entity coverage entries are complete; the saved 2,538 calendar
+intervals explicitly remain non-independent. The other 63 checks were not
+selected, so the overall report correctly retains `scopeComplete: false`.
+The temporary API used separate read-only secondary directories and was stopped
+afterward; the existing services and release binary were left in place.
+
 **Re-sync required**: No. This changes read-only verification and tests; there is
 no changed write path in the domain, append-only or network store. API and verifier
 must both use the new build to exchange the required calendar evidence.
