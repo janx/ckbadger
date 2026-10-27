@@ -193,7 +193,7 @@ export function CollectionGenes({ evidence, selected, onSelect }: CollectionGene
                         }}
                       />
                       <span className="relative flex items-baseline justify-between gap-3">
-                        <span className="break-words">{v.value}</span>
+                        <span className="min-w-0 break-words">{v.value}</span>
                         <span className="text-text-dim shrink-0 text-[11px]">
                           {v.count} / {evidence.eligibleItems}
                         </span>

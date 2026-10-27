@@ -14,6 +14,34 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { ObjectGenetics, ItemProtocol } from '@/lib/api';
 describe('Independent DOB evidence', () => {
+  it('wraps a full BTCFS trait value beside its exact count without changing the filter value', () => {
+    const value = 'btcfs://11b6303eb7d887d7ade459ac27959754cd55f9f9e50345ced8e1e8f47f4581fai0';
+    const select = vi.fn();
+    render(
+      <CollectionGenes
+        evidence={{
+          ...collectionInsightsProducer.genetics,
+          liveItems: 2777,
+          eligibleItems: 2777,
+          nonDobItems: 0,
+          decodedItems: 2777,
+          traits: [{ name: 'preview', values: [{ value, count: 199 }] }],
+        }}
+        selected={{}}
+        onSelect={select}
+      />
+    );
+    const button = screen.getByRole('button', { name: `${value} 199 / 2777` });
+    // break-words alone cannot shrink a flex item's automatic minimum width.
+    // Both constraints are needed to keep the full identifier and adjacent count visible.
+    expect(screen.getByText(value)).toHaveClass('min-w-0', 'break-words');
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(button);
+    expect(select).toHaveBeenLastCalledWith('preview', value);
+    fireEvent.focus(button);
+    expect(button.closest('[data-allele]')).not.toHaveClass('opacity-35');
+  });
+
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';
