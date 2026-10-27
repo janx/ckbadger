@@ -120,7 +120,7 @@ it('shows NOBITS as memory only and current references as current evidence', () 
           typeLiveCellsCount: 2,
         },
       ],
-      typeIdLineage: [],
+      typeIdVersions: [],
       upgradeCohort: [],
     },
   } as Cell;
@@ -176,7 +176,18 @@ it('links actual same-transaction Type ID upgrades without treating unchanged by
     codeCell: {
       versionHash: `0x${'66'.repeat(32)}`,
       currentReferences: [],
-      typeIdLineage: [{ typeScriptHash: `0x${'77'.repeat(32)}`, observedAtBlock: 123 }],
+      typeIdVersions: [
+        {
+          typeScriptHash: `0x${'77'.repeat(32)}`,
+          ordinal: 5,
+          versionHash: `0x${'66'.repeat(32)}`,
+          codeCellTxHash: current,
+          codeCellOutputIndex: 1,
+          observedAtBlock: 123,
+          reactivation: false,
+          thisBinary: true,
+        },
+      ],
       upgradeCohort: [
         {
           previousTxHash: previous,
@@ -193,6 +204,7 @@ it('links actual same-transaction Type ID upgrades without treating unchanged by
   } as Cell;
   render(<CodeCellBoard cell={codeCell} />);
   expect(screen.getByText(/same binary/)).toBeInTheDocument();
+  expect(screen.getByText(/Version 5 · these bytes/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: /Input/ })).toHaveAttribute(
     'href',
     `/mainnet/cell/${previous}-3`

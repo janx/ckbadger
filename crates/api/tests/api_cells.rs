@@ -9,6 +9,27 @@ fn fixture_data_hash(data: &[u8]) -> Vec<u8> {
     hash
 }
 
+fn seed_cell_transaction(store: &Arc<CkbadgerStore>, hash: &[u8], block: i64, outputs: i16) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(hash, block, 0);
+    batch.put_tx_index(
+        block,
+        0,
+        &TxIndexEntry {
+            tx_hash: hash.try_into().expect("fixture hash width"),
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: outputs,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+}
+
 fn write_redesign_fixture(name: &str, value: &serde_json::Value) {
     if let Ok(dir) = std::env::var("D5_FIXTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
@@ -43,6 +64,7 @@ fn cell_bytes_config_with_capacity(
         prelude::*,
     };
     let indexed = store.get_cell(hash, index as i16, &store).unwrap().unwrap();
+    seed_cell_transaction(&store, hash, 123, i16::try_from(index + 1).unwrap());
     let script = |code_hash: &[u8], hash_type: i16, args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code_hash).unwrap_or_default())
@@ -258,7 +280,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
         &tx_hash,
         output_index,
         &LiveCellInfo {
-            capacity: 100_00000000,
+            capacity: 200_00000000,
             lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -570,6 +592,7 @@ async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCk
     indexed.data_hash = Some(fixture_data_hash(&data));
     batch.put_cell(&tx_hash, 0, &indexed, 123);
     batch.commit().unwrap();
+    seed_cell_transaction(&store, &tx_hash, 123, 1);
     seed_block_headers_at(&store, &[(123, 1_700_000_000_000)]);
 
     let config = test_config_with_ckb_db_path(
@@ -669,6 +692,8 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     // graph route requires creating tx location to exist
     batch.put_tx_hash_map(&tx_hash, 123, 0);
     batch.commit().unwrap();
+    seed_cell_transaction(&store, &tx_hash, 123, 1);
+    seed_cell_transaction(&store, &consumed_by_tx, 456, 1);
     seed_block_headers_at(
         &store,
         &[(123, 1_700_000_000_000), (456, 1_700_000_060_000)],
@@ -924,6 +949,14 @@ async fn test_cells_by_script_sparse_form_is_isolated_from_dense_sibling() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["txHash"], format!("0x{}", hex::encode([0xd1; 32])));
+    assert!(data[0]["address"].as_str().is_some());
+    assert_eq!(data[0]["commonKnowledgeSize"], "4100000000");
+    assert_eq!(
+        data[0]["commonKnowledgeSizeBreakdown"]["lockScriptBytes"],
+        33
+    );
+    assert!(data[0]["typeHashType"].is_null());
+    assert_eq!(data[0]["createdAtBlock"], 200);
     assert_eq!(json["hasMore"], false);
     assert!(json["nextCursor"].is_null());
 
@@ -938,6 +971,7 @@ async fn test_cells_by_script_sparse_form_is_isolated_from_dense_sibling() {
         for cell in json["data"].as_array().unwrap() {
             seen.push(cell["txHash"].as_str().unwrap().to_string());
             assert_eq!(cell["matchedScriptKind"], "lock");
+            assert_eq!(cell["typeHashType"], serde_json::Value::Null);
         }
         match json["nextCursor"].as_str() {
             Some(next) => cursor = Some(next.to_string()),
@@ -951,6 +985,70 @@ async fn test_cells_by_script_sparse_form_is_isolated_from_dense_sibling() {
         seen, expected,
         "dense form paginates exactly, no duplicates"
     );
+}
+
+#[tokio::test]
+async fn test_cells_by_script_type_reference_does_not_alias_sibling_anchor() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let anchor_a = vec![0xa1; 32];
+    let anchor_b = vec![0xb2; 32];
+    let shared_binary = vec![0xee; 32];
+    for (anchor, count, first) in [(&anchor_a, 3u8, 0x10u8), (&anchor_b, 2, 0x20)] {
+        store
+            .put_script_info_direct(
+                anchor,
+                &ckbadger_store::types::ScriptInfo {
+                    code_hash: anchor.clone(),
+                    hash_type: 1,
+                    dep_data_hash: Some(shared_binary.clone()),
+                    lock_cells_count: i64::from(count),
+                    lock_live_cells_count: i64::from(count),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                anchor,
+                &ScriptReferenceInfo {
+                    reference_hash: anchor.clone(),
+                    hash_type: 1,
+                    lock_cells_count: i64::from(count),
+                    lock_live_cells_count: i64::from(count),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for offset in 0..count {
+            insert_by_script_cell(
+                &store,
+                &[first + offset; 32],
+                100 + i64::from(offset),
+                anchor,
+                1,
+                None,
+                None,
+            );
+        }
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, first) = fetch_by_script(&app, &anchor_b, "type", "lock", 1, None).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["total"], 2);
+    assert_eq!(
+        first["data"][0]["txHash"],
+        format!("0x{}", hex::encode([0x20; 32]))
+    );
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let (status, next) = fetch_by_script(&app, &anchor_b, "type", "lock", 1, Some(cursor)).await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(
+        next["data"][0]["txHash"],
+        format!("0x{}", hex::encode([0x21; 32]))
+    );
+    assert!(next["nextCursor"].is_null());
 }
 
 #[tokio::test]
@@ -1317,7 +1415,7 @@ fn cell_with(lock_hash_type: i16, type_hash_type: Option<i16>) -> LiveCellInfo {
     let type_code_hash = vec![0x55; 32];
     let type_args = vec![0xaa, 0xbb];
     LiveCellInfo {
-        capacity: 100_00000000,
+        capacity: 200_00000000,
         lock_script_hash: if matches!(lock_hash_type, 0 | 1 | 2 | 4) {
             compute_script_hash(&lock_code_hash, lock_hash_type as u8, &lock_args)
         } else {
@@ -1348,6 +1446,91 @@ async fn get_cell_json(tx_hash: &[u8], cell: LiveCellInfo) -> (StatusCode, serde
     let config = cell_bytes_config(store, tx_hash, 1, vec![0; 42]);
     let app = create_router(config).await;
     get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx_hash))).await
+}
+
+#[tokio::test]
+async fn cell_detail_rejects_double_live_and_consumed_markers() {
+    let store = test_store();
+    let tx = vec![0xd4; 32];
+    let consumer = vec![0xd5; 32];
+    let cell = cell_with(1, Some(1));
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(&tx, 0, &cell, 123);
+    batch.put_consumed_cell_with_consumer(&tx, 0, &cell, 123, 456, Some(&consumer));
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("both live and consumed canonical markers"));
+}
+
+#[tokio::test]
+async fn cell_detail_missing_outpoint_is_not_found() {
+    let store = test_store();
+    let app = create_router(test_config(store)).await;
+    let (status, _) = get_json(&app, &format!("/cells/0x{}/0", hex::encode([0xfa; 32]))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cell_detail_rejects_missing_canonical_consumer() {
+    let store = test_store();
+    let tx = vec![0xd6; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_consumed_cell_with_consumer(&tx, 0, &cell_with(1, Some(1)), 123, 456, None);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("consumed marker missing consumer"));
+}
+
+#[tokio::test]
+async fn cell_detail_rejects_same_block_consumer_before_creation() {
+    let store = test_store();
+    let tx = vec![0xd7; 32];
+    let consumer = vec![0xd8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_consumed_cell_with_consumer(
+        &tx,
+        0,
+        &cell_with(1, Some(1)),
+        123,
+        123,
+        Some(&consumer),
+    );
+    for (hash, index) in [(&consumer, 0), (&tx, 1)] {
+        batch.put_tx_hash_map(hash, 123, index);
+        batch.put_tx_index(
+            123,
+            index,
+            &TxIndexEntry {
+                tx_hash: hash.as_slice().try_into().unwrap(),
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body["message"].as_str().unwrap().contains("consumer order"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -2112,7 +2295,7 @@ async fn redesign_cell_data_requires_node_bytes() {
         0,
         &LiveCellInfo {
             capacity: 10000000000,
-            lock_script_hash: vec![0x11; 32],
+            lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
@@ -2128,6 +2311,7 @@ async fn redesign_cell_data_requires_node_bytes() {
         10,
     );
     batch.commit().unwrap();
+    seed_cell_transaction(&store, &tx, 10, 1);
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");

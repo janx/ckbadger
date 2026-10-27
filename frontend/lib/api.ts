@@ -707,7 +707,16 @@ interface Cell {
       lockLiveCellsCount: number;
       typeLiveCellsCount: number;
     }>;
-    typeIdLineage: Array<{ typeScriptHash: string; observedAtBlock: number }>;
+    typeIdVersions: Array<{
+      typeScriptHash: string;
+      ordinal: number;
+      versionHash: string;
+      codeCellTxHash: string;
+      codeCellOutputIndex: number;
+      observedAtBlock: number;
+      reactivation: boolean;
+      thisBinary: boolean;
+    }>;
     upgradeCohort: Array<{
       previousTxHash: string;
       previousOutputIndex: number;

@@ -174,24 +174,31 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         </p>
       </div>
       <div className="border-base-border border-t pt-4">
-        <h3 className="text-text-bright text-sm">Observed Type ID lineage</h3>
-        {cell.codeCell.typeIdLineage.length ? (
-          cell.codeCell.typeIdLineage.map((item) => (
+        <h3 className="text-text-bright text-sm">Observed Type ID versions</h3>
+        {cell.codeCell.typeIdVersions.length ? (
+          cell.codeCell.typeIdVersions.map((item) => (
             <p
-              key={`${item.typeScriptHash}:${item.observedAtBlock}`}
+              key={`${item.typeScriptHash}:${item.codeCellTxHash}:${item.codeCellOutputIndex}`}
               className="mt-2 break-all text-xs"
             >
+              <span className={item.thisBinary ? 'text-text-bright' : 'text-text-dim'}>
+                Version {item.ordinal}
+                {item.thisBinary ? ' · these bytes' : ''}
+                {item.reactivation ? ' · reactivated' : ''}
+              </span>{' '}
               <Link
-                href={`/script/${item.typeScriptHash}?hashType=type`}
+                href={`/cell/${item.codeCellTxHash}-${item.codeCellOutputIndex}`}
                 className="text-[#7aa7d6]"
               >
-                {item.typeScriptHash}
+                {item.codeCellTxHash}:{item.codeCellOutputIndex}
               </Link>{' '}
-              · observed block #{item.observedAtBlock}
+              · observed block #{item.observedAtBlock} · {item.typeScriptHash}
             </p>
           ))
         ) : (
-          <p className="text-text-dim mt-2 text-xs">No indexed Type ID lineage for this binary.</p>
+          <p className="text-text-dim mt-2 text-xs">
+            No registered Type ID version history for this binary.
+          </p>
         )}
       </div>
       <div className="border-base-border border-t pt-4">

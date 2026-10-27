@@ -159,7 +159,7 @@ pub(crate) fn canonical_version_at(
         );
     }
     let lock = script(&cell.lock_code_hash, cell.lock_hash_type, &cell.lock_args)
-        .with_context(|| context.clone())?;
+        .with_context(|| format!("owner address script invalid: {context}"))?;
     ensure!(
         crate::utils::address::compute_script_hash(
             &cell.lock_code_hash,
@@ -183,7 +183,11 @@ pub(crate) fn canonical_version_at(
             Some(response)
         }
         (None, None, None, None) => None,
-        _ => return Err(anyhow!("partial type script: {context}")),
+        _ => {
+            return Err(anyhow!(
+                "partial type script (missing or invalid hash_type): {context}"
+            ))
+        }
     };
     let data_bytes = usize::try_from(cell.data_size)
         .with_context(|| format!("negative data length: {context}"))?;

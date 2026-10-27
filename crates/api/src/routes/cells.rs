@@ -1951,14 +1951,20 @@ pub struct CodeCellEvidence {
     pub version_hash: String,
     pub current_references: Vec<CodeCellReference>,
     pub upgrade_cohort: Vec<CodeCellUpgrade>,
-    pub type_id_lineage: Vec<CodeCellTypeIdLineage>,
+    pub type_id_versions: Vec<CodeCellTypeIdVersion>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodeCellTypeIdLineage {
+pub struct CodeCellTypeIdVersion {
     pub type_script_hash: String,
+    pub ordinal: usize,
+    pub version_hash: String,
+    pub code_cell_tx_hash: String,
+    pub code_cell_output_index: i32,
     pub observed_at_block: i64,
+    pub reactivation: bool,
+    pub this_binary: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2585,6 +2591,71 @@ fn code_cell_upgrade_cohort(
     Ok(upgrades)
 }
 
+fn code_cell_type_id_versions(
+    state: &Arc<AppState>,
+    binary_hash: &[u8],
+    cell_type_hash: Option<&[u8]>,
+    outpoint: &str,
+) -> Result<Vec<CodeCellTypeIdVersion>, ApiRouteError> {
+    let version = state
+        .store
+        .get_script_version(binary_hash)
+        .map_err(|error| {
+            ApiError::internal(format!("cell {outpoint} Type ID version read: {error}"))
+        })?;
+    let mut references: Vec<Vec<u8>> = version
+        .as_ref()
+        .map(|version| {
+            version
+                .type_id_deployments
+                .iter()
+                .map(|(hash, _)| hash.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(hash) = cell_type_hash {
+        references.push(hash.to_vec());
+    }
+    references.sort();
+    references.dedup();
+    let mut result = Vec::new();
+    let this_hash = format!("0x{}", hex::encode(binary_hash));
+    for reference in references {
+        let history = super::scripts::script_type_id_history(state, &reference)?;
+        let mut first_appearance = HashMap::<String, usize>::new();
+        for marker in history.iter().filter(|marker| marker.event == "deployed") {
+            let marker_version = marker.version_hash.as_ref().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cell {outpoint} Type ID deployment 0x{} lacks binary version",
+                    hex::encode(&reference)
+                ))
+            })?;
+            let (ordinal, reactivation) = version_ordinal(&mut first_appearance, marker_version);
+            result.push(CodeCellTypeIdVersion {
+                type_script_hash: format!("0x{}", hex::encode(&reference)),
+                ordinal,
+                version_hash: marker_version.clone(),
+                code_cell_tx_hash: marker.code_cell_tx_hash.clone(),
+                code_cell_output_index: marker.code_cell_output_index,
+                observed_at_block: marker.block_number,
+                reactivation,
+                this_binary: *marker_version == this_hash,
+            });
+        }
+    }
+    Ok(result)
+}
+
+fn version_ordinal(first_appearance: &mut HashMap<String, usize>, version: &str) -> (usize, bool) {
+    if let Some(ordinal) = first_appearance.get(version) {
+        (*ordinal, true)
+    } else {
+        let ordinal = first_appearance.len() + 1;
+        first_appearance.insert(version.to_string(), ordinal);
+        (ordinal, false)
+    }
+}
+
 /// A cell index key: script_hash(32B) + block_num(8B BE) + outpoint(34B).
 /// Mirrors what `keys::encode_cell_index_key` builds.
 const CELL_INDEX_KEY_LEN: usize = 32 + 8 + keys::OUTPOINT_KEY_SIZE;
@@ -3057,36 +3128,9 @@ async fn list_cells_by_script(
         ));
     }
     let is_both = script_kind == "both";
-
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?;
-
-    // "type" references are not universally available. If this deployment has no type reference,
-    // return empty instead of silently mapping to data-family references.
-    if hash_type_num == 1 {
-        if let Some(info) = merge_script_info_for_reference(&all_script_infos, &code_hash_bytes) {
-            let (type_ref, _) = deployment_reference_hashes(&info);
-            if type_ref.is_none() {
-                return if is_both {
-                    ok(CursorPaginatedResponse::without_total(
-                        Vec::new(),
-                        limit as i64,
-                        None,
-                    ))
-                } else {
-                    ok(CursorPaginatedResponse::new(
-                        Vec::new(),
-                        0,
-                        limit as i64,
-                        None,
-                    ))
-                };
-            }
-        }
-    }
-
-    let resolved_code_hash =
-        resolve_code_hash_for_hash_type(&all_script_infos, &code_hash_bytes, &params.hash_type)
-            .unwrap_or_else(|| code_hash_bytes.clone());
+    // The caller selected an exact reference form. A binary can have several
+    // Type ID anchors; metadata aliases cannot change the index prefix.
+    let resolved_code_hash = code_hash_bytes;
 
     let expected_prefix = keys::encode_cell_code_index_prefix(&resolved_code_hash, hash_type_num);
     let cursor = params
@@ -3567,36 +3611,42 @@ async fn get_cell(
     // served output 0's body as the requested outpoint.
     let output_idx = parse_output_index(output_index, "output index")?;
 
-    // Try live cells first, then consumed
-    let store = state.store.clone();
-    let ao_store = state.append_only_store.clone();
-    let hash_c = hash_bytes.clone();
-    let (live_cell, consumed_cell) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let live_cell = store.get_cell(&hash_c, output_idx, &ao_store)?;
-        let consumed_cell = if live_cell.is_none() {
-            store.get_consumed_cell_info(&hash_c, output_idx, &ao_store)?
-        } else {
-            None
-        };
-        Ok((live_cell, consumed_cell))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Absence is a 404; any present marker is then validated by the shared
+    // canonical proof below (including the illegal double-marker case).
+    let has_live = state
+        .store
+        .get_cell(&hash_bytes, output_idx, &state.append_only_store)
+        .map_err(|error| ApiError::internal(format!("cell marker read: {error}")))?
+        .is_some();
+    let has_consumed = state
+        .store
+        .get_consumed_cell_info(&hash_bytes, output_idx, &state.append_only_store)
+        .map_err(|error| ApiError::internal(format!("consumed cell marker read: {error}")))?
+        .is_some();
+    if !has_live && !has_consumed {
+        return Err(ApiError::not_found("Cell not found"));
+    }
 
-    let (info, status_str, consumed_meta): (
-        ckbadger_store::PositionedCellInfo,
-        &str,
-        Option<(i64, Option<Vec<u8>>)>,
-    ) = match (live_cell, consumed_cell) {
-        (Some(cell), _) => (cell, "live", None),
-        (None, Some(cell)) => (
-            cell.to_positioned_cell_info(),
-            "dead",
-            Some((cell.consumed_at_block, cell.consumed_by_tx)),
-        ),
-        (None, None) => return Err(ApiError::not_found("Cell not found")),
+    // Share the NFT history proof boundary: both markers, canonical transaction
+    // locations, output bounds and consumer ordering have one validation path.
+    let canonical =
+        super::asset_history::canonical_version_at(&state, &hash_bytes, &hash_bytes, output_idx)
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "cell 0x{}:{}: {error:#}",
+                    hex::encode(&hash_bytes),
+                    output_idx
+                ))
+            })?;
+    let status_str = if canonical.response.is_live {
+        "live"
+    } else {
+        "dead"
     };
+    let consumed_at_block = canonical.response.consumed_at_block;
+    let consumed_by_tx = canonical.response.consumed_by_tx.clone();
+    let info =
+        ckbadger_store::PositionedCellInfo::new(canonical.cell, canonical.response.block_number);
 
     // Use the cell's own stored hash_type (not from script_info, which is a canonical
     // default and may differ from the actual per-cell hash_type). Only 0/1/2/4 are
@@ -3799,23 +3849,12 @@ async fn get_cell(
                 &hash_bytes,
                 &outpoint,
             )?,
-            type_id_lineage: state
-                .store
-                .get_script_version(hash)
-                .map_err(|error| {
-                    ApiError::internal(format!("cell {outpoint} Type ID lineage read: {error}"))
-                })?
-                .map(|version| {
-                    version
-                        .type_id_deployments
-                        .into_iter()
-                        .map(|(type_hash, block)| CodeCellTypeIdLineage {
-                            type_script_hash: format!("0x{}", hex::encode(type_hash)),
-                            observed_at_block: block,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            type_id_versions: code_cell_type_id_versions(
+                &state,
+                hash,
+                info.type_script_hash.as_deref(),
+                &outpoint,
+            )?,
         })
     } else {
         None
@@ -3872,13 +3911,6 @@ async fn get_cell(
             Some("genesis_special_burn".to_string()),
             Some(virtual_occupied.to_string()),
         )
-    } else {
-        (None, None)
-    };
-
-    let (consumed_at_block, consumed_by_tx) = if let Some((block, tx)) = consumed_meta {
-        let tx_hash = tx.map(|raw| format!("0x{}", hex::encode(raw)));
-        (if block > 0 { Some(block) } else { None }, tx_hash)
     } else {
         (None, None)
     };
@@ -4954,6 +4986,17 @@ mod tests {
             available_reference_resolution("resolved", &[version], &[]),
             "unavailable"
         );
+    }
+
+    #[test]
+    fn type_id_reactivation_keeps_original_binary_version_ordinal() {
+        let mut seen = HashMap::new();
+        let sequence = ["binary-a", "binary-b", "binary-a", "binary-c"];
+        let result: Vec<_> = sequence
+            .iter()
+            .map(|binary| version_ordinal(&mut seen, binary))
+            .collect();
+        assert_eq!(result, vec![(1, false), (2, false), (1, true), (3, false)]);
     }
 
     #[test]

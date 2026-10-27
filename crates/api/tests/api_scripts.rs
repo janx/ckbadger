@@ -1,6 +1,31 @@
 mod common;
 use common::*;
 
+fn put_canonical_script_tx(
+    batch: &mut StoreBatch<'_>,
+    hash: &[u8],
+    block: i64,
+    index: i32,
+    outputs: i16,
+) {
+    batch.put_tx_hash_map(hash, block, index);
+    batch.put_tx_index(
+        block,
+        index,
+        &TxIndexEntry {
+            tx_hash: hash.try_into().expect("fixture tx hash width"),
+            is_cellbase: false,
+            timestamp: 1_704_153_601_000,
+            inputs_count: 1,
+            outputs_count: outputs,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+}
+
 #[tokio::test]
 async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence() {
     use ckbadger_store::types::AddressBalance;
@@ -51,7 +76,7 @@ async fn test_multisig_never_signed_requires_complete_custodian_spend_evidence()
     );
     for (i, reference) in refs.iter().enumerate() {
         let tx = vec![0x20 + i as u8; 32];
-        batch.put_tx_hash_map(&tx, 10, i as i32);
+        put_canonical_script_tx(&mut batch, &tx, 10, i as i32, 1);
         let lock_hash = vec![0x30 + i as u8; 32];
         batch.put_script_reference_info(
             1,
@@ -182,7 +207,7 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
         batch.put_script_reference_to_version(1, &reference, &version);
         for i in 0..2u8 {
             let tx = vec![0x91 + i; 32];
-            batch.put_tx_hash_map(&tx, 10, i32::from(i));
+            put_canonical_script_tx(&mut batch, &tx, 10, i32::from(i), 1);
             batch.put_cell(
                 &tx,
                 0,
@@ -345,7 +370,7 @@ async fn test_script_family_exposes_exact_reference_classes_and_chain_history() 
         10,
     );
     batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
-    batch.put_tx_hash_map(&outpoint, 10, 1);
+    put_canonical_script_tx(&mut batch, &outpoint, 10, 1, 1);
     batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
     batch.commit().unwrap();
 
@@ -1610,7 +1635,7 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
 }
 
 #[tokio::test]
-async fn test_cells_by_script_resolves_reference_hash_type_alias() {
+async fn test_cells_by_script_uses_exact_reference_form_without_alias() {
     let store = test_store();
     // The cells-by-script listing reads the genesis baseline once per request
     // (fail-fast if absent) for burn-cell tagging.
@@ -1680,7 +1705,7 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
+            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -1700,15 +1725,29 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
 
-    assert_eq!(json["total"], 1);
-    assert_eq!(data.len(), 1);
-    assert_eq!(data[0]["txHash"], format!("0x{}", hex::encode(&tx_hash)));
+    assert_eq!(json["total"], 0);
+    assert_eq!(data.len(), 0);
+
+    let (status, exact) = get_json(
+        &app,
+        &format!(
+            "/cells/by-script?code_hash=0x{}&hash_type=type&script_kind=lock&limit=20",
+            hex::encode(&type_hash)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exact}");
+    assert_eq!(exact["total"], 1);
+    assert_eq!(
+        exact["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&tx_hash))
+    );
 }
 
 #[tokio::test]
@@ -1767,7 +1806,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
+            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -1888,7 +1927,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
+            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -1909,7 +1948,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
+            occupied_capacity: 41_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -2167,9 +2206,15 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     );
     batch.put_cell_by_type(&newer_type_hash, newer_block, &newer_tx_hash, 1);
     batch.put_cell_by_data_hash(&newer_version_hash, newer_block, &newer_tx_hash, 1);
-    batch.put_tx_hash_map(&older_tx_hash, older_block, 0);
-    batch.put_tx_hash_map(&newer_earliest_tx_hash, newer_earliest_block, 0);
-    batch.put_tx_hash_map(&newer_tx_hash, newer_block, 0);
+    put_canonical_script_tx(&mut batch, &older_tx_hash, older_block, 0, 3);
+    put_canonical_script_tx(
+        &mut batch,
+        &newer_earliest_tx_hash,
+        newer_earliest_block,
+        0,
+        3,
+    );
+    put_canonical_script_tx(&mut batch, &newer_tx_hash, newer_block, 0, 3);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -4223,7 +4268,7 @@ async fn test_script_versions_order_same_block_by_canonical_tx_index() {
             10,
         );
         batch.put_cell_by_data_hash(&version, 10, &tx, 0);
-        batch.put_tx_hash_map(&tx, 10, tx_index);
+        put_canonical_script_tx(&mut batch, &tx, 10, tx_index, 1);
     }
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
@@ -4248,10 +4293,12 @@ async fn test_script_versions_order_same_block_by_canonical_tx_index() {
     assert_eq!(detail["history"][1]["txIndex"], 1);
 }
 
-async fn chronology_error_body(
+async fn chronology_error_body_with_index(
     creation_location: Option<(i64, i32)>,
     consumption_location: Option<(i64, i32)>,
     consumed_at_block: i64,
+    creation_indexed: bool,
+    outputs_count: i16,
 ) -> (StatusCode, String) {
     let store = test_store();
     seed_block_headers_at(&store, &[(10, 1_704_153_601_000), (11, 1_704_153_602_000)]);
@@ -4315,10 +4362,14 @@ async fn chronology_error_body(
     );
     batch.put_cell_by_data_hash(&version, 10, &tx, 0);
     if let Some((block, index)) = creation_location {
-        batch.put_tx_hash_map(&tx, block, index);
+        if creation_indexed {
+            put_canonical_script_tx(&mut batch, &tx, block, index, outputs_count);
+        } else {
+            batch.put_tx_hash_map(&tx, block, index);
+        }
     }
     if let Some((block, index)) = consumption_location {
-        batch.put_tx_hash_map(&consumer, block, index);
+        put_canonical_script_tx(&mut batch, &consumer, block, index, 1);
     }
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
@@ -4345,6 +4396,21 @@ async fn chronology_error_body(
     (status, body)
 }
 
+async fn chronology_error_body(
+    creation_location: Option<(i64, i32)>,
+    consumption_location: Option<(i64, i32)>,
+    consumed_at_block: i64,
+) -> (StatusCode, String) {
+    chronology_error_body_with_index(
+        creation_location,
+        consumption_location,
+        consumed_at_block,
+        true,
+        1,
+    )
+    .await
+}
+
 #[tokio::test]
 async fn test_script_history_requires_canonical_creation_and_consumption_locations() {
     for (creation, consumption, expected) in [
@@ -4363,4 +4429,15 @@ async fn test_script_history_rejects_consumer_not_after_creator() {
     let (status, body) = chronology_error_body(Some((10, 1)), Some((10, 0)), 10).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(body.contains("does not follow creation"), "{body}");
+}
+
+#[tokio::test]
+async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound() {
+    let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, false, 1).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains("missing tx_index"), "{body}");
+
+    let (status, body) = chronology_error_body_with_index(Some((10, 0)), None, 11, true, 0).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains("outside canonical output count"), "{body}");
 }

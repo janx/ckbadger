@@ -104,6 +104,7 @@
     {
       "candidateCells": [],
       "hashType": "type",
+      "historicalCells": [],
       "kind": "lock",
       "referenceHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
       "resolution": "not_found",
@@ -116,6 +117,7 @@
   "depGroupItems": null,
   "isDepGroup": false,
   "lifetimeMs": 60000,
+  "liveAgeAtBlock": null,
   "liveAgeMs": null,
   "lock": {
     "args": "0x3333333333333333333333333333333333333333",

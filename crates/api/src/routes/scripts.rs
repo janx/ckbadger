@@ -1675,6 +1675,7 @@ fn script_version_to_detail_response(
                     &deployment.code_cell_tx_hash,
                     deployment.created_at_block,
                     "code cell creation",
+                    Some(deployment.code_cell_output_index),
                 )?,
             ))
         })
@@ -1721,15 +1722,16 @@ fn required_script_tx_index(
     tx_hash: &str,
     expected_block: i64,
     event: &str,
+    output_index: Option<i32>,
 ) -> Result<i32, ApiRouteError> {
     let bytes = hex::decode(tx_hash.trim_start_matches("0x")).map_err(|e| {
         ApiError::internal(format!(
             "{event} transaction {tx_hash} has invalid hash: {e}"
         ))
     })?;
-    let (block, index) = state
+    let (block, index, tx) = state
         .store
-        .get_tx_location(&bytes)
+        .get_tx_by_hash(&bytes)
         .map_err(|e| ApiError::internal(format!("{event} transaction {tx_hash}: {e}")))?
         .ok_or_else(|| {
             ApiError::internal(format!(
@@ -1740,6 +1742,14 @@ fn required_script_tx_index(
         return Err(ApiError::internal(format!(
             "{event} transaction {tx_hash} location block {block} differs from code cell block {expected_block}"
         )));
+    }
+    if let Some(output_index) = output_index {
+        if output_index < 0 || output_index >= i32::from(tx.outputs_count) {
+            return Err(ApiError::internal(format!(
+                "{event} transaction {tx_hash} output {output_index} is outside canonical output count {}",
+                tx.outputs_count
+            )));
+        }
     }
     Ok(index)
 }
@@ -1812,6 +1822,7 @@ fn script_history(
                     &deployment.code_cell_tx_hash,
                     deployment.created_at_block,
                     "code cell creation",
+                    Some(deployment.code_cell_output_index),
                 )?;
                 history.push(ScriptHistoryMarkerResponse {
                     reference_hash: reference_hash.clone(),
@@ -1841,6 +1852,7 @@ fn script_history(
                         consuming_tx,
                         block_number,
                         "code cell consumption",
+                        None,
                     )?;
                     if (block_number, consumed_tx_index) <= (deployment.created_at_block, tx_index)
                     {
@@ -1877,16 +1889,11 @@ fn script_history(
     Ok(history)
 }
 
-/// Shared family chronology for code-cell and Script routes. Family membership
-/// and deployment evidence are computed by the same path as the Script detail.
-#[expect(dead_code, reason = "shared by CodeCell route after integration")]
-pub(crate) fn script_family_history(
+fn script_history_for_versions(
     state: &Arc<AppState>,
-    family_id: &str,
+    family_versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
+    references: &mut HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>>,
 ) -> Result<Vec<ScriptHistoryMarkerResponse>, ApiRouteError> {
-    let family_versions = load_family_versions(state, family_id)?;
-    let (mut references, _, _) =
-        observed_references_by_version(state, family_id, &family_versions)?;
     let versions = family_versions
         .iter()
         .map(|(hash, info)| {
@@ -1894,7 +1901,41 @@ pub(crate) fn script_family_history(
             script_version_to_detail_response(state, hash, info, refs)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    script_history(state, &family_versions, &versions)
+    script_history(state, family_versions, &versions)
+}
+
+/// Exact observed Type ID chronology, independent of imported family membership.
+/// Unregistered binaries and family changes remain visible as chain facts.
+pub(crate) fn script_type_id_history(
+    state: &Arc<AppState>,
+    reference_hash: &[u8],
+) -> Result<Vec<ScriptHistoryMarkerResponse>, ApiRouteError> {
+    let versions = state
+        .store
+        .list_script_versions()
+        .map_err(|error| ApiError::internal(format!("Type ID history versions: {error}")))?;
+    let versions = observed_type_id_versions(versions, reference_hash);
+    let mut references = HashMap::new();
+    let history = script_history_for_versions(state, &versions, &mut references)?;
+    let reference = format!("0x{}", hex::encode(reference_hash));
+    Ok(history
+        .into_iter()
+        .filter(|marker| marker.hash_type == "type" && marker.reference_hash == reference)
+        .collect())
+}
+
+fn observed_type_id_versions(
+    versions: Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)>,
+    reference_hash: &[u8],
+) -> Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)> {
+    versions
+        .into_iter()
+        .filter(|(_, info)| {
+            info.type_id_deployments
+                .iter()
+                .any(|(hash, _)| hash == reference_hash)
+        })
+        .collect()
 }
 
 /// Build a ScriptLookupInfo from a resolved script identifier.
@@ -2963,15 +3004,51 @@ async fn get_script_capacity_history_chart_by_code_hash(
 mod tests {
     use super::{
         apply_script_chart_delta, checked_capacity_totals,
-        latest_complete_script_chart_date_from_tip, reference_own_stats, resolve_code_cell,
-        resolve_script_capacity_chart_bounds, verified_multisig_config, CodeCellQuery, ListParams,
+        latest_complete_script_chart_date_from_tip, observed_type_id_versions, reference_own_stats,
+        resolve_code_cell, resolve_script_capacity_chart_bounds, verified_multisig_config,
+        CodeCellQuery, ListParams,
     };
     use axum::extract::Query;
     use axum::http::StatusCode;
     use axum::http::Uri;
     use ckb_types::{packed, prelude::*};
+    use ckbadger_store::types::ScriptVersionInfo;
     use ckbadger_store::ScriptInfo;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn type_id_history_selects_observed_versions_across_families_and_unknown() {
+        let reference = vec![0x42; 32];
+        let version = |byte: u8, family: Option<&str>, observed: bool| {
+            let hash = vec![byte; 32];
+            (
+                hash.clone(),
+                ScriptVersionInfo {
+                    version_hash: hash,
+                    family_id: family.map(str::to_owned),
+                    type_id_deployments: if observed {
+                        vec![(reference.clone(), i64::from(byte))]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+            )
+        };
+        let selected = observed_type_id_versions(
+            vec![
+                version(1, Some("F1"), true),
+                version(2, Some("F2"), true),
+                version(3, None, true),
+                version(4, Some("F1"), false),
+            ],
+            &reference,
+        );
+        assert_eq!(
+            selected.iter().map(|(hash, _)| hash[0]).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+    }
 
     #[test]
     fn multisig_config_is_reported_only_when_witness_matches_lock_args() {
