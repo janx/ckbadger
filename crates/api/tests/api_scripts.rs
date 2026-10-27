@@ -2742,7 +2742,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     batch.put_cell_by_type(&reference, 30, &active_tx, 0);
     batch.put_cell_by_data_hash(&active_binary, 30, &active_tx, 0);
-    batch.put_tx_hash_map(&active_tx, 30, 1);
+    put_canonical_script_tx(&mut batch, &active_tx, 30, 1, 1);
     batch.put_script_family(
         "retired-family",
         &ScriptFamilyInfo {
@@ -4174,7 +4174,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                 11 + previous as i64,
                 Some(&consuming_tx),
             );
-            batch.put_tx_hash_map(&consuming_tx, 11 + previous as i64, 0);
+            put_canonical_script_tx(&mut batch, &consuming_tx, 11 + previous as i64, 0, 1);
         }
         if let Some(index) = active {
             let tx = vec![0x81 + index as u8; 32];
@@ -4202,7 +4202,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
             );
             batch.put_cell_by_type(&reference, 10 + index as i64, &tx, 0);
             batch.put_cell_by_data_hash(&binaries[index], 10 + index as i64, &tx, 0);
-            batch.put_tx_hash_map(&tx, 10 + index as i64, 1);
+            put_canonical_script_tx(&mut batch, &tx, 10 + index as i64, 1, 1);
         }
         for (index, family) in families.iter().enumerate() {
             let owns = active == Some(index);

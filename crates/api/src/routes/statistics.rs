@@ -25,7 +25,7 @@ use crate::utils::stats_bucket::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
-    protocol_circulating, script_to_address,
+    historical_family_member_candidate, protocol_circulating, script_to_address,
 };
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
@@ -1057,8 +1057,15 @@ async fn get_most_utilized_scripts_chart(
             &|hash: &[u8]| family_versions.contains(hash),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
+        let family_candidate = historical_family_member_candidate(
+            &state.store,
+            hash_type,
+            &reference_hash,
+            member_version,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         let family_id = membership
-            .resolve_family(&reference_hash, hash_type, member_version.as_deref())
+            .resolve_family(&reference_hash, hash_type, family_candidate.as_deref())
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
         // Aggregation keys are identities, never display names: a family bucket

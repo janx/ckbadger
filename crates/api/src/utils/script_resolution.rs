@@ -563,6 +563,23 @@ pub fn reference_form_member_version_with_lineage(
     Ok(None)
 }
 
+/// Family charts and usage describe the whole indexed history of a reference.
+/// A generic type reference with no current executable can still have a
+/// persisted chain-observed binding to a family. That historical candidate is
+/// never returned by current executable resolution.
+pub fn historical_family_member_candidate(
+    store: &CkbadgerStore,
+    hash_type: u8,
+    reference_hash: &[u8],
+    current_version_hash: Option<Vec<u8>>,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    if hash_type == 1 && current_version_hash.is_none() {
+        store.get_script_reference_version_hash(hash_type, reference_hash)
+    } else {
+        Ok(current_version_hash)
+    }
+}
+
 /// Resolve ONE observed reference form -- the exact (reference_hash,
 /// hash_type) pair -- to its version.
 ///
@@ -799,6 +816,36 @@ pub fn list_version_code_cells(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_family_candidate_keeps_retired_type_provenance_out_of_current_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = vec![0x34; 32];
+        let version = vec![0x56; 32];
+        store
+            .put_script_reference_to_version_direct(1, &reference, &version)
+            .unwrap();
+        assert_eq!(
+            reference_form_member_version(&store, &store, 1, &reference, &|_| true).unwrap(),
+            None,
+            "a retired generic type reference has no current executable"
+        );
+        assert_eq!(
+            historical_family_member_candidate(&store, 1, &reference, None).unwrap(),
+            Some(version),
+            "historical chart membership retains its indexed binding"
+        );
+        assert_eq!(
+            resolve_script_form_by_hash(&store, &store, 1, &reference).unwrap(),
+            CurrentScriptVersionResolution::NotFound
+        );
+        assert_eq!(
+            historical_family_member_candidate(&store, 0, &reference, None).unwrap(),
+            None,
+            "a junk data form cannot borrow type-form provenance"
+        );
+    }
     use ckbadger_store::{batch::StoreBatch, types::LiveCellInfo, CkbadgerStore};
 
     fn seed_live_generic_code_cell(store: &CkbadgerStore, reference: &[u8], binary: &[u8]) {

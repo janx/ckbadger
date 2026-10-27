@@ -27,9 +27,10 @@ use crate::utils::script_resolution::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
-    hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
-    parse_chart_date_range, parse_hash32, reference_form_member_version, resolve_script_by_hash,
-    resolve_script_form_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
+    hash_type_to_string, hash_type_to_u8, historical_family_member_candidate,
+    list_version_code_cells, merge_script_info_for_reference, parse_chart_date_range, parse_hash32,
+    reference_form_member_version, resolve_script_by_hash, resolve_script_form_by_hash,
+    CurrentScriptVersionResolution, VersionCodeCell,
 };
 use crate::warmup::{CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL};
 use crate::AppState;
@@ -1492,19 +1493,18 @@ fn resolve_member_form(
     // A generic reference may have no current binary (retired or ambiguous),
     // while the indexed binding still identifies the family of its historical
     // usage. Never present that historical binding as the current executable.
-    let family_candidate = if hash_type == 1 && current_version_hash.is_none() {
-        state
-            .store
-            .get_script_reference_version_hash(hash_type, &reference_hash)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "read registered reference binding 0x{}: {e}",
-                    hex::encode(&reference_hash)
-                ))
-            })?
-    } else {
-        current_version_hash.clone()
-    };
+    let family_candidate = historical_family_member_candidate(
+        &state.store,
+        hash_type,
+        &reference_hash,
+        current_version_hash.clone(),
+    )
+    .map_err(|e| {
+        ApiError::internal(format!(
+            "read historical reference binding 0x{}: {e}",
+            hex::encode(&reference_hash)
+        ))
+    })?;
     let family_id = membership
         .resolve_family(&reference_hash, hash_type, family_candidate.as_deref())
         .map_err(|e| {
