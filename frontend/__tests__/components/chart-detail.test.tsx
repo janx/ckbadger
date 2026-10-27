@@ -6,7 +6,12 @@ import { ChartDetail } from '@/components/charts/chart-detail';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
-  api: { getHashRateChart: vi.fn(), getNetworkStats: vi.fn(), getHardforks: vi.fn() },
+  api: {
+    getHashRateChart: vi.fn(),
+    getMinerAddressDistributionChart: vi.fn(),
+    getNetworkStats: vi.fn(),
+    getHardforks: vi.fn(),
+  },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
@@ -91,5 +96,33 @@ describe('shared chart detail', () => {
     );
     expect(screen.getAllByRole('heading', { level: 1, name: 'Hash rate' })).toHaveLength(1);
     expect(screen.getByRole('img', { name: 'Hash rate: 2 points, linear' })).toBeInTheDocument();
+  });
+
+  it('wraps a full miner identity in the fact label while retaining its address link', async () => {
+    const address = `ckb1${'qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj'}`;
+    vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
+      title: 'Miner distribution',
+      data: [
+        {
+          minerLockHash: `0x${'a'.repeat(64)}`,
+          address,
+          minerName: null,
+          blocksMined: 41743,
+          percentage: '62.7931',
+        },
+      ],
+      totalBlocks: 66477,
+      windowDays: 7,
+      fromDate: '2026-10-21',
+      toDate: '2026-10-27',
+    });
+    render(<ChartDetail slug="miner-address-distribution" />);
+    const label = await screen.findByText(`Leading miner: ${address} (62.7931%)`);
+    expect(label).toHaveClass('min-w-0', 'break-words');
+    expect(label.parentElement).toHaveClass('grid-cols-1');
+    expect(screen.getByRole('link', { name: address })).toHaveAttribute(
+      'href',
+      `/mainnet/address/${address}`
+    );
   });
 });

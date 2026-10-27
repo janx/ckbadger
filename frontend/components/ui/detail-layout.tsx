@@ -57,9 +57,9 @@ export function DetailLayout({
             {facts.map(({ label, value }) => (
               <div
                 key={label}
-                className="grid min-w-0 grid-cols-[minmax(80px,1fr)_minmax(0,2fr)] items-baseline gap-3"
+                className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
               >
-                <dt className="text-text-dim text-xs">{label}</dt>
+                <dt className="text-text-dim min-w-0 break-words text-xs">{label}</dt>
                 <dd className="text-text-bright min-w-0 break-words tabular-nums">{value}</dd>
               </div>
             ))}

@@ -35,6 +35,11 @@ describe('ChartSmallMultiple', () => {
       'href',
       '/mainnet/charts/hash-rate'
     );
+    const readout = screen.getByRole('group', { name: 'Hash rate current readout' });
+    expect(readout).toHaveTextContent('900.7199254740993PH/s');
+    expect(readout).toHaveClass('overflow-x-auto');
+    expect(screen.getByText('900.7199254740993')).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('PH/s')).toHaveClass('whitespace-nowrap');
   });
 
   it('distinguishes an empty response from an error and permits retry', async () => {
@@ -81,5 +86,8 @@ describe('ChartSmallMultiple', () => {
     expect(list).toHaveTextContent('Others');
     expect(screen.getByTitle('2024-01-01: 7 CKB')).toBeInTheDocument();
     expect(screen.getByText('Largest script: top0')).toBeInTheDocument();
+    const readout = screen.getByRole('group', { name: 'Scripts current readout' });
+    expect(readout).toHaveTextContent('7.00CKB');
+    expect(screen.getByText('CKB')).toHaveClass('whitespace-nowrap');
   });
 });

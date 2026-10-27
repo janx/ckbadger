@@ -55,7 +55,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   }
   return (
     <article className="min-w-0" aria-label={`${definition.title} chart preview`}>
-      <div className="mb-2 flex min-w-0 items-end justify-between gap-3">
+      <div className="mb-2 min-w-0">
         <div className="min-w-0">
           <Link
             href={`/charts/${definition.slug}`}
@@ -67,7 +67,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         </div>
         {model?.latest && (
           <div
-            className="min-w-0 max-w-[60%] text-right"
+            className="mt-2 min-w-0 text-right"
             title={`${model.latest.label}: ${model.latest.raw} ${model.unit}`}
           >
             <div className="text-text-dim text-[10px]">{model.latest.label}</div>
@@ -76,9 +76,17 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
                 {model.summaryLabel}
               </div>
             )}
-            <div className="text-text-bright break-all text-[17px] tabular-nums">
-              {model.latest.display}
-              <span className="text-text-dim ml-1 text-[10px]">{model.unit}</span>
+            <div
+              role="group"
+              aria-label={`${definition.title} current readout`}
+              className="min-w-0 overflow-x-auto"
+            >
+              <div className="flex w-max min-w-full items-baseline justify-end gap-1">
+                <span className="text-text-bright whitespace-nowrap text-[17px] tabular-nums">
+                  {model.latest.display}
+                </span>
+                <span className="text-text-dim whitespace-nowrap text-[10px]">{model.unit}</span>
+              </div>
             </div>
           </div>
         )}
