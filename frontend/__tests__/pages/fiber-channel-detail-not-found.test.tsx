@@ -19,7 +19,9 @@ describe('Fiber channel entity error routing', () => {
       )
     );
     render(<FiberChannelDetailPage />);
-    expect(await screen.findByText(`/fiber/channels/${id}`)).toBeInTheDocument();
+    expect((await screen.findByText('checked')).nextElementSibling).toHaveTextContent(
+      `/fiber/channels/${id}`
+    );
     expect(
       screen.getByText('This explorer could not open the fiber-channel at this address.')
     ).toBeInTheDocument();

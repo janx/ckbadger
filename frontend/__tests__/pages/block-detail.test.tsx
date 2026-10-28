@@ -128,7 +128,9 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_HASH;
     vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
     render(<BlockDetailPage />);
-    expect(await screen.findByText(`/blocks/${BLOCK_HASH}`)).toBeInTheDocument();
+    expect((await screen.findByText('checked')).nextElementSibling).toHaveTextContent(
+      `/blocks/${BLOCK_HASH}`
+    );
     expect(
       screen.getByText('This explorer could not open the block at this address.')
     ).toBeInTheDocument();

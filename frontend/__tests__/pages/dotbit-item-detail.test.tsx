@@ -138,7 +138,10 @@ it('reports missing identity and unavailable raw evidence without inventing a do
     new ApiRequestError(404, 'not_found', 'Identity not found')
   );
   const { unmount } = render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByRole('alert')).toHaveTextContent('Identity not found');
+  expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
+  expect(screen.getByText('checked').nextElementSibling).toHaveTextContent(
+    `/assets/identities/dotbit/items/${evidence.itemId}`
+  );
   unmount();
   vi.mocked(api.getDotbitItemDetail).mockResolvedValue(identityItem('dotbit'));
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));
@@ -148,4 +151,13 @@ it('reports missing identity and unavailable raw evidence without inventing a do
       a.textContent?.includes('missing local cell bytes')
     )
   ).toBe(true);
+});
+
+it('keeps a failed identity source distinct from an absent identity', async () => {
+  vi.mocked(api.getDotbitItemDetail).mockRejectedValue(
+    new ApiRequestError(500, 'internal_error', 'identity index mismatch')
+  );
+  render(<Page identityId={evidence.itemId} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('identity index mismatch');
+  expect(screen.queryByText('An unanswered name.')).not.toBeInTheDocument();
 });

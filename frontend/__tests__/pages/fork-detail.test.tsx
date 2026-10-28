@@ -67,7 +67,9 @@ describe('ForkDetailPage', () => {
       Object.assign(new Error('absent fork'), { status: 404 })
     );
     render(<ForkDetailPage />);
-    expect(await screen.findByText('/forks/1754000000000')).toBeInTheDocument();
+    expect((await screen.findByText('checked')).nextElementSibling).toHaveTextContent(
+      '/forks/1754000000000'
+    );
     expect(
       screen.getByText('This explorer could not open the fork at this address.')
     ).toBeInTheDocument();
