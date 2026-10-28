@@ -93,9 +93,9 @@ API:
   `resultType`, `matchKind`, `id` and a canonical page `url`. A missing page plus an empty scoped
   search is limited to those checked local sources. A search error is not proof of absence.
 - Error-page cell artwork: `/vessels/snapshot` reads a bounded, anchored sample from at most the
-  last 12 indexed blocks, first 6 transactions and first 4 outputs per block, capped at 64 live
-  cells. Its `tracked` parameter reports previously visible outpoint fates; this is illustrative
-  artwork, not an all-live-cell inventory.
+  last 12 indexed blocks, the first 6 transactions per block and the first 4 outputs per
+  transaction, capped at 64 live cells. Its `tracked` parameter reports previously visible
+  outpoint fates; this is illustrative artwork, not an all-live-cell inventory.
 - Optional local CKB L1 peer evidence uses `/api/{network}/v1/network/summary`,
   `/network/distributions`, `/network/history`, `/network/peers`, and
   `/network/peers/{peerId}` (the last four are relative to the same API base). Summary distinguishes
