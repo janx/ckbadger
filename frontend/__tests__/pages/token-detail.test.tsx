@@ -3,7 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
-import { api, type Token, type TokenHistory, type GlobalActivity } from '@/lib/api';
+import {
+  api,
+  ApiRequestError,
+  type Token,
+  type TokenHistory,
+  type GlobalActivity,
+} from '@/lib/api';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -116,6 +122,28 @@ describe('TokenDetailPage', () => {
     });
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue(empty);
     vi.mocked(api.getTokenTransactions).mockResolvedValue(empty);
+  });
+
+  it('uses entity 404 only for the token read, not a secondary history error', async () => {
+    vi.mocked(api.getToken).mockRejectedValue(
+      new ApiRequestError(404, 'not_found', 'token absent')
+    );
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByText(`/tokens/${hash}`)).toBeInTheDocument();
+    expect(
+      screen.getByText('This explorer could not open the token at this address.')
+    ).toBeInTheDocument();
+  });
+
+  it('shows a token invariant failure as an error', async () => {
+    vi.mocked(api.getToken).mockRejectedValue(
+      new ApiRequestError(500, 'internal_error', 'token index mismatch')
+    );
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('token index mismatch');
+    expect(
+      screen.queryByText('This explorer could not open the token at this address.')
+    ).not.toBeInTheDocument();
   });
   it('consumes unmodified router responses across history, distribution, holders and full transactions', async () => {
     const p = tokenProducer;

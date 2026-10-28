@@ -28,6 +28,7 @@ vi.mock('@/components/layout/header', () => ({
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ name: 'SECP256K1_BLAKE160' }),
+  usePathname: () => '/scripts/SECP256K1_BLAKE160',
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -483,7 +484,7 @@ describe('ScriptDetailPage', () => {
 
   it.each([
     { status: 500, expectedTitle: 'Script data unavailable' },
-    { status: 404, expectedTitle: 'Script not found' },
+    { status: 404, expectedTitle: 'An unanswered name.' },
   ])(
     'distinguishes named script HTTP $status from not found',
     async ({ status, expectedTitle }) => {
@@ -495,7 +496,10 @@ describe('ScriptDetailPage', () => {
       expect(await screen.findByRole('heading', { name: expectedTitle })).toBeInTheDocument();
       if (status !== 404) {
         expect(screen.getByRole('alert')).toHaveTextContent('family endpoint 500');
-        expect(screen.queryByText('No script matched this name or reference.')).toBeNull();
+      } else {
+        expect((await screen.findAllByText('/scripts/SECP256K1_BLAKE160')).length).toBeGreaterThan(
+          0
+        );
       }
     }
   );
@@ -520,11 +524,16 @@ describe('ScriptDetailPage', () => {
     }
   );
 
-  it('shows a raw reference 404 as not found', async () => {
+  it('keeps a resolved raw reference visible as an error when its code-cell query returns 404', async () => {
     vi.mocked(api.getCodeCells).mockRejectedValue({ status: 404, message: 'reference missing' });
     render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
-    expect(await screen.findByRole('heading', { name: 'Script not found' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Script data unavailable' })).toBeNull();
+    expect(
+      await screen.findByRole('heading', { name: 'Script data unavailable' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('reference missing');
+    expect(
+      screen.queryByText('This explorer could not open the script at this address.')
+    ).not.toBeInTheDocument();
   });
 
   it('marks deprecated family and versions without calling them unlabeled', async () => {

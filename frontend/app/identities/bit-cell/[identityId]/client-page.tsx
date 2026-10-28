@@ -9,6 +9,8 @@ import { api } from '@/lib/api';
 const bitCellConfig: IdentityItemDetailConfig = {
   standard: 'bit_cell',
   fetchDetail: (identityId) => api.getBitCellItemDetail(identityId),
+  detailEndpoint: (identityId) =>
+    `/assets/identities/bit-cell/items/${encodeURIComponent(identityId)}`,
   fetchActivities: (identityId, params) => api.getBitCellItemActivities(identityId, params),
   labels: {
     standardDisplay: '.BIT CELL',

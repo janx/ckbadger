@@ -6,6 +6,7 @@ import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { AssetFeed } from '@/components/asset/asset-feed';
@@ -88,14 +89,23 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
     queryFn: () => api.getObjectCollection(detail.data!.class.classId),
     enabled: !!detail.data,
   });
+  if (!detail.data && isNotFoundApiError(detail.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'object',
+          identifier: objectId,
+          checkedEndpoint: `/assets/objects/items/${encodeURIComponent(objectId)}`,
+        }}
+      />
+    );
+  }
   if (!detail.data) {
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto min-w-0 px-4 py-8">
-          <h1 className="text-text-bright text-[26px]">
-            {isNotFoundApiError(detail.error) ? 'mNFT item not found' : 'm-NFT'}
-          </h1>
+          <h1 className="text-text-bright text-[26px]">m-NFT</h1>
           <AssetReadState label="m-NFT" error={detail.error} loading={detail.isLoading} />
         </main>
       </div>

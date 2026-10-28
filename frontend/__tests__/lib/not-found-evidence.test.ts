@@ -63,7 +63,7 @@ describe('not-found identifier evidence', () => {
     expect(evidence.alternative?.href).toBe(`/blocks/${hash}`);
   });
 
-  it('reports search-spent outpoint evidence as a conflict, not as a missing cell diagnosis', async () => {
+  it('quotes search-spent outpoint evidence as a conflict, not as an independent diagnosis', async () => {
     const outpoint = `${hash}-2`;
     const search = vi.fn().mockResolvedValue({
       query: `cell:${outpoint}`,
@@ -81,7 +81,8 @@ describe('not-found identifier evidence', () => {
       { kind: 'cell', identifier: outpoint, checkedEndpoint: `/cells/${hash}/2` },
       search
     );
-    expect(evidence.finding).toMatch(/search.*spent.*404/i);
+    expect(evidence.finding).toContain('“Cell (Dead, 100 CKB)”');
+    expect(evidence.finding).toContain('returned HTTP 404');
     expect(evidence.alternative).toBeUndefined();
   });
 
@@ -150,7 +151,7 @@ describe('not-found identifier evidence', () => {
     expect(search).not.toHaveBeenCalled();
   });
 
-  it('does not misclassify a nonstandard cell label as a live cell', async () => {
+  it('reports the exact search cell label without deriving live or spent from its wording', async () => {
     const outpoint = `${hash}-2`;
     const evidence = await resolveNotFoundEvidence(
       { kind: 'cell', identifier: outpoint, checkedEndpoint: `/cells/${hash}/2` },
@@ -167,8 +168,8 @@ describe('not-found identifier evidence', () => {
         ],
       })
     );
-    expect(evidence.finding).toMatch(/no typed match/);
-    expect(evidence.finding).not.toMatch(/live cell|spent cell/);
+    expect(evidence.finding).toContain('“Cell status unavailable”');
+    expect(evidence.finding).not.toMatch(/reports a live cell|reports a spent cell/);
   });
 
   it('discards in-flight evidence when the entity or active network changes', async () => {

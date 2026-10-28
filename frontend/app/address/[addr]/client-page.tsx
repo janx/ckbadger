@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
@@ -23,7 +24,7 @@ import {
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
 import { ExactCkb } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type AddressCellClass } from '@/lib/api';
+import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
@@ -157,6 +158,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         ? transactions.data?.pool
         : undefined;
   const a = address.data;
+  if (!a && isNotFoundApiError(address.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'address',
+          identifier: addr,
+          checkedEndpoint: `/addresses/${encodeURIComponent(addr)}`,
+        }}
+      />
+    );
+  }
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />

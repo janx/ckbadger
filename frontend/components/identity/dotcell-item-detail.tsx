@@ -2,7 +2,8 @@
 import { useState } from 'react';
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { api, type DotCellItem } from '@/lib/api';
+import { api, isNotFoundApiError, type DotCellItem } from '@/lib/api';
+import { NotFoundPage } from '@/components/not-found-page';
 import { DataField } from '@/components/ui/data-field';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -95,6 +96,17 @@ function ScopedName({ itemRef }: { itemRef: string }) {
     retry: false,
   });
   const item = detail.data;
+  if (!item && isNotFoundApiError(detail.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'identity',
+          identifier: itemRef,
+          checkedEndpoint: `/assets/identities/dotcell/items/${encodeURIComponent(itemRef)}`,
+        }}
+      />
+    );
+  }
   if (!item)
     return (
       <AssetDetailShell

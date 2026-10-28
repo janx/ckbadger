@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
@@ -18,6 +19,7 @@ import { poolStatusLabel } from '@/components/ui/pool-status';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 import {
   api,
+  isNotFoundApiError,
   isServiceUnavailableError,
   type TransactionDetail,
   type TransactionScriptGroup,
@@ -383,11 +385,21 @@ export default function TransactionDetailPage() {
         </div>
       </DetailLayout>
     );
-  if ((error && !awaitingInputs) || !tx) {
+  if (error && !tx && isNotFoundApiError(error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'transaction',
+          identifier: hash,
+          checkedEndpoint: `/transactions/${encodeURIComponent(hash)}/detail`,
+        }}
+      />
+    );
+  }
+  if (!tx) {
     const message = error instanceof Error ? error.message : 'Transaction response is empty';
-    const missing = message.startsWith('API error: 404');
     return shell(
-      <DetailLayout title={missing ? 'Transaction not found' : 'Failed to load transaction'}>
+      <DetailLayout title="Failed to load transaction">
         <p role="alert" className="text-text-dim break-words text-xs">
           {message}
         </p>
@@ -823,6 +835,11 @@ export default function TransactionDetailPage() {
       rawData={raw}
       rawOpen={graphOpen}
     >
+      {error && (
+        <p role="alert">
+          Unable to refresh transaction: {error.message}. Showing previously loaded data.
+        </p>
+      )}
       {isProvisional ? (
         <p className="text-text-dim text-xs">
           Activity and canonical cell structure are available once this transaction is committed and

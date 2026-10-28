@@ -269,7 +269,8 @@ it('renders not found for both absent namespaces or an unrecognized identifier',
     new ApiRequestError(404, 'not_found', 'Collection not found')
   );
   const { rerender } = render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByRole('heading', { name: 'Asset not found' })).toBeInTheDocument();
+  expect(await screen.findByText(`/assets/objects/${id}`)).toBeInTheDocument();
+  expect(screen.getByText(/Both \/spore\/objects\/.* returned HTTP 404/)).toBeInTheDocument();
   rerender(<SporeDetailPage sporeId="not-an-id" />);
-  expect(screen.getByRole('heading', { name: 'Asset not found' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Invalid object identifier' })).toBeInTheDocument();
 });

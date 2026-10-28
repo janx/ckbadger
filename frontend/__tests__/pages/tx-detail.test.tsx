@@ -877,12 +877,28 @@ describe('TransactionDetailPage', () => {
   });
 
   it('shows not found message for 404 transaction errors', async () => {
-    vi.mocked(api.getTransactionDetail).mockRejectedValueOnce(new Error('API error: 404'));
+    vi.mocked(api.getTransactionDetail).mockRejectedValueOnce(
+      new ApiRequestError(404, 'not_found', 'transaction absent')
+    );
 
     render(<TransactionDetailPage />);
 
-    expect(await screen.findByText('Transaction not found')).toBeInTheDocument();
+    expect(await screen.findByText(`/transactions/${TX_HASH}/detail`)).toBeInTheDocument();
+    expect(
+      screen.getByText('This explorer could not open the transaction at this address.')
+    ).toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+  });
+
+  it('does not infer HTTP 404 from a transport error message containing 404', async () => {
+    vi.mocked(api.getTransactionDetail).mockRejectedValueOnce(
+      new Error('upstream request 404 timed out')
+    );
+    render(<TransactionDetailPage />);
+    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
+    expect(
+      screen.queryByText('This explorer could not open the transaction at this address.')
+    ).not.toBeInTheDocument();
   });
 
   it('shows detailed message for non-404 transaction errors', async () => {

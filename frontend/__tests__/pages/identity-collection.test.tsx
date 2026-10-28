@@ -1,9 +1,29 @@
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import Page from '@/app/identities/[collectionId]/client-page';
-import { api } from '@/lib/api';
+import { api, ApiRequestError } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
+it('shows a collection 404 with its exact identity endpoint', async () => {
+  vi.mocked(api.getIdentityCollection).mockRejectedValue(
+    new ApiRequestError(404, 'not_found', 'collection absent')
+  );
+  render(<Page collectionId="dotbit" />);
+  expect(await screen.findByText('/assets/identities/dotbit')).toBeInTheDocument();
+  expect(
+    screen.getByText('This explorer could not open the identity at this address.')
+  ).toBeInTheDocument();
+});
+it('does not turn a collection source failure into 404', async () => {
+  vi.mocked(api.getIdentityCollection).mockRejectedValue(
+    new ApiRequestError(500, 'internal_error', 'collection mismatch')
+  );
+  render(<Page collectionId="dotbit" />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('collection mismatch');
+  expect(
+    screen.queryByText('This explorer could not open the identity at this address.')
+  ).not.toBeInTheDocument();
+});
 it('shows identities, exact created/live counts, capacity history and parallel record layers', async () => {
   render(<Page collectionId="dotbit" />);
   await screen.findByRole('heading', { name: '.bit' });

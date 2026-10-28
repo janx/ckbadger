@@ -45,7 +45,7 @@ const OUTPOINT = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/;
 
 function checkedPath(entity: NotFoundEntity): string {
   const path = entity.checkedEndpoint;
-  if (!/^\/(?!\/)[^?#]*$/.test(path) || path.split('/').includes('..')) {
+  if (!/^\/(?!\/)[^#]*$/.test(path) || path.split('?')[0].split('/').includes('..')) {
     throw new Error(`Invalid entity evidence endpoint: ${path}`);
   }
   return path;
@@ -95,16 +95,10 @@ export async function resolveNotFoundEvidence(
         result.id.toLowerCase() === outpoint &&
         result.url.toLowerCase() === `/cell/${outpoint}`
     );
-    if (hit?.label.startsWith('Cell (Dead,')) {
+    if (hit) {
       return {
         ...base,
-        finding: `The /search cell lookup reports a spent cell at ${outpoint}, while ${checkedEndpoint} returned HTTP 404. These results disagree; the 404 does not prove the cell never existed.`,
-      };
-    }
-    if (hit?.label.startsWith('Cell (Live,')) {
-      return {
-        ...base,
-        finding: `The /search cell lookup reports a live cell at ${outpoint}, while ${checkedEndpoint} returned HTTP 404. These results disagree.`,
+        finding: `The /search cell lookup returned “${hit.label}” for ${outpoint}, while ${checkedEndpoint} returned HTTP 404. These results disagree; the 404 does not prove the cell never existed.`,
       };
     }
   } else {

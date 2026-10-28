@@ -5,11 +5,13 @@ import Link from '@/components/ui/link';
 import { notFound, useParams } from '@/src/navigation';
 import {
   api,
+  isNotFoundApiError,
   type CanonicalBranchBlock,
   type OrphanedBlock,
   type OrphanedTransaction,
 } from '@/lib/api';
 import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
 import { formatObserverTimeUtc8 } from '@/lib/fork-time';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
@@ -66,6 +68,13 @@ export default function ForkDetailPage() {
     enabled: Number.isSafeInteger(id) && id >= 0,
   });
   if (!Number.isSafeInteger(id) || id < 0) notFound();
+  if (!query.data && isNotFoundApiError(query.error)) {
+    return (
+      <NotFoundPage
+        entity={{ kind: 'fork', identifier: String(id), checkedEndpoint: `/forks/${id}` }}
+      />
+    );
+  }
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />

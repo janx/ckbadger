@@ -1,6 +1,7 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, isNotFoundApiError } from '@/lib/api';
+import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AssetFeed } from '@/components/asset/asset-feed';
@@ -29,6 +30,17 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     queryFn: () => api.getTokenDistribution(typeHash),
   });
   const t = token.data;
+  if (!t && isNotFoundApiError(token.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'token',
+          identifier: typeHash,
+          checkedEndpoint: `/tokens/${encodeURIComponent(typeHash)}`,
+        }}
+      />
+    );
+  }
   if (!t)
     return (
       <AssetDetailShell

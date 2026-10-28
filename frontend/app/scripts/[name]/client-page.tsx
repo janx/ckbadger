@@ -4,6 +4,7 @@ import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
 import { CellBar } from '@/components/ui/cell-bar';
@@ -958,7 +959,9 @@ export default function ScriptDetailPage({
     codeHashCodeCellsError ? { source: 'code-cell query', error: codeHashCodeCellsError } : null,
   ].filter((failure): failure is { source: string; error: Error } => failure !== null);
   const failedRequest = isCodeHashMode
-    ? (rawRequestFailures.find((failure) => !isNotFoundApiError(failure.error)) ?? null)
+    ? (rawRequestFailures.find((failure) => !isNotFoundApiError(failure.error)) ??
+      (codeHashLookup ? rawRequestFailures[0] : null) ??
+      null)
     : namedScriptDetailError && !isNotFoundApiError(namedScriptDetailError)
       ? { source: 'script family detail', error: namedScriptDetailError }
       : null;
@@ -1003,19 +1006,48 @@ export default function ScriptDetailPage({
       </div>
     );
   }
+  if (!isCodeHashMode && !namedScriptDetail && isNotFoundApiError(namedScriptDetailError)) {
+    if (!name) throw new Error('Script family request failed without a route name');
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'script-family',
+          identifier: name,
+          checkedEndpoint: `/scripts/${encodeURIComponent(name)}`,
+        }}
+      />
+    );
+  }
+  if (
+    isCodeHashMode &&
+    (!deployments || deployments.length === 0) &&
+    rawRequestFailures.some((failure) => isNotFoundApiError(failure.error))
+  ) {
+    const failedEndpoint = isNotFoundApiError(codeHashCodeCellsError)
+      ? `/scripts/code-cells?${new URLSearchParams({ code_hash: normalizedCodeHash!, hash_type: codeHashDeploymentQueryHashType! })}`
+      : '/scripts/lookup';
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'script',
+          identifier: normalizedCodeHash ?? name,
+          checkedEndpoint: failedEndpoint,
+        }}
+      />
+    );
+  }
   if (
     (!isCodeHashMode && !namedScriptDetail) ||
-    (isCodeHashMode &&
-      (rawRequestFailures.some((failure) => isNotFoundApiError(failure.error)) ||
-        !deployments ||
-        deployments.length === 0))
+    (isCodeHashMode && (!deployments || deployments.length === 0))
   ) {
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <DetailLayout title="Script not found">
-            <p className="text-text-dim py-8 text-xs">No script matched this name or reference.</p>
+          <DetailLayout title="No script deployments">
+            <p className="text-text-dim py-8 text-xs">
+              The script request returned no code-cell deployments.
+            </p>
           </DetailLayout>
         </main>
       </div>

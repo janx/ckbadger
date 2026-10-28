@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { FiberChannelBoard } from '@/components/fiber/fiber-channel-board';
-import { api } from '@/lib/api';
+import { api, isNotFoundApiError } from '@/lib/api';
+import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
 
 export default function FiberChannelDetailPage() {
@@ -19,6 +20,17 @@ export default function FiberChannelDetailPage() {
     queryFn: () => api.getFiberChannelEvidence(channelId),
     enabled: Boolean(channel.data),
   });
+  if (!channel.data && isNotFoundApiError(channel.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'fiber-channel',
+          identifier: channelId,
+          checkedEndpoint: `/fiber/channels/${encodeURIComponent(channelId)}`,
+        }}
+      />
+    );
+  }
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />

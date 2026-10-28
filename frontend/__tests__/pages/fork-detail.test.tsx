@@ -11,9 +11,12 @@ import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail
 vi.mock('@/src/navigation', () => ({
   notFound: vi.fn(),
   useParams: () => ({ id: '1754000000000' }),
+  usePathname: () => '/forks/1754000000000',
 }));
 vi.mock('@/lib/api', () => ({
   api: { getForkDetail: vi.fn() },
+  isNotFoundApiError: (error: unknown) =>
+    typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
@@ -57,6 +60,17 @@ describe('ForkDetailPage', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('missing adopted block 11')
     );
+  });
+
+  it('shows typed fork evidence only for an actual 404', async () => {
+    vi.mocked(api.getForkDetail).mockRejectedValue(
+      Object.assign(new Error('absent fork'), { status: 404 })
+    );
+    render(<ForkDetailPage />);
+    expect(await screen.findByText('/forks/1754000000000')).toBeInTheDocument();
+    expect(
+      screen.getByText('This explorer could not open the fork at this address.')
+    ).toBeInTheDocument();
   });
 
   it('does not link an uncommitted orphan transaction to a nonexistent canonical transaction page', async () => {

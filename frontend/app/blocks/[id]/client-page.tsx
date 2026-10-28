@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -101,16 +102,23 @@ export default function BlockDetailPage() {
         </main>
       </div>
     );
-  if (error)
+  if (error && !block && isNotFoundApiError(error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'block',
+          identifier: String(id),
+          checkedEndpoint: `/blocks/${encodeURIComponent(String(id))}`,
+        }}
+      />
+    );
+  }
+  if (error && !block)
     return (
       <div>
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <p role="alert">
-            {isNotFoundApiError(error)
-              ? 'Block not found'
-              : `Unable to read block: ${error.message}`}
-          </p>
+          <p role="alert">Unable to read block: {error.message}</p>
         </main>
       </div>
     );
@@ -150,6 +158,11 @@ export default function BlockDetailPage() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto min-w-0 px-4 py-8">
+        {error && (
+          <p role="alert">
+            Unable to refresh block: {error.message}. Showing previously loaded data.
+          </p>
+        )}
         <DetailLayout
           title={`Block #${block.number.toLocaleString('en-US')}`}
           identity={<Hash hash={block.hash} truncate={false} />}

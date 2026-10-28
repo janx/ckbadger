@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 const didCkbConfig: IdentityItemDetailConfig = {
   standard: 'did_ckb',
   fetchDetail: (identityId) => api.getDidCkbItemDetail(identityId),
+  detailEndpoint: (identityId) => `/assets/identities/did/items/${encodeURIComponent(identityId)}`,
   fetchActivities: (identityId, params) => api.getDidCkbItemActivities(identityId, params),
   labels: {
     standardDisplay: 'DID:CKB',

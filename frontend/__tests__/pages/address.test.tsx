@@ -7,7 +7,13 @@ import {
   addressProducerHoldings,
 } from '@/__tests__/msw/fixtures/address-producer';
 import AddressDetailPage from '@/app/address/[addr]/client-page';
-import { api, type Activity, type AddressCell, type AddressHoldings } from '@/lib/api';
+import {
+  api,
+  ApiRequestError,
+  type Activity,
+  type AddressCell,
+  type AddressHoldings,
+} from '@/lib/api';
 import {
   addressFixture,
   addressHash,
@@ -46,6 +52,7 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="h
 let route = addressText;
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ addr: route }),
+  usePathname: () => `/address/${route}`,
   useRouter: () => ({ push: vi.fn() }),
 }));
 const daoSummary = {
@@ -136,6 +143,25 @@ beforeEach(() => {
 });
 
 describe('Address v3', () => {
+  it('shows typed 404 evidence only when the address endpoint actually returns 404', async () => {
+    vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
+    render(<AddressDetailPage />);
+    expect(await screen.findByText(`/addresses/${addressText}`)).toBeInTheDocument();
+    expect(
+      screen.getByText('This explorer could not open the address at this address.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps an invalid address 400 as a read error', async () => {
+    vi.mocked(api.getAddress).mockRejectedValue(
+      new ApiRequestError(400, 'bad_request', 'invalid address')
+    );
+    render(<AddressDetailPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('invalid address');
+    expect(
+      screen.queryByText('This explorer could not open the address at this address.')
+    ).not.toBeInTheDocument();
+  });
   it('uses one holdings snapshot for balance and the exact three-way partition', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
       ...addressFixture,

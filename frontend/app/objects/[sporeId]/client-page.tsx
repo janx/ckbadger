@@ -5,6 +5,7 @@ import { api, isNotFoundApiError } from '@/lib/api';
 import { useRouter } from '@/src/navigation';
 import { resolveObjectRouteTarget } from '@/lib/detail-routes';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { NotFoundPage } from '@/components/not-found-page';
 import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
 export interface SporeDetailPageProps {
@@ -43,16 +44,29 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         initial={collection.data}
       />
     );
-  const absent =
-    route.kind === 'unroutable' || (collectionEnabled && isNotFoundApiError(collection.error));
+  const invalidIdentifier = route.kind === 'unroutable';
+  if (collectionEnabled && isNotFoundApiError(collection.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'object',
+          identifier: id,
+          checkedEndpoint: `/assets/objects/${encodeURIComponent(id)}`,
+        }}
+        errMessage={`Both /spore/objects/${encodeURIComponent(id)} and /assets/objects/${encodeURIComponent(id)} returned HTTP 404.`}
+      />
+    );
+  }
   return (
     <AssetDetailShell
-      title={absent ? 'Asset not found' : 'Object'}
+      title={invalidIdentifier ? 'Invalid object identifier' : 'Object'}
       kind="objects"
       breadcrumb={[{ label: 'Inventory', href: '/inventory/objects' }]}
     >
-      {absent ? (
-        <p className="text-text-dim">No object or collection matches this identifier.</p>
+      {invalidIdentifier ? (
+        <p className="text-text-dim">
+          This route identifier is not a supported object or collection ID.
+        </p>
       ) : (
         <AssetReadState
           label="object"

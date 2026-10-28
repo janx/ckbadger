@@ -19,7 +19,8 @@ vi.mock('@/lib/api', () => ({
     getHardforks: vi.fn(),
     getGlobalActivities: vi.fn(),
   },
-  isNotFoundApiError: vi.fn(() => false),
+  isNotFoundApiError: (error: unknown) =>
+    typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
@@ -30,6 +31,7 @@ vi.mock('@/components/layout/header', () => ({
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ id: paramsIdRef.current }),
+  usePathname: () => `/blocks/${paramsIdRef.current}`,
   useRouter: () => ({
     push: pushMock,
     replace: vi.fn(),
@@ -120,6 +122,27 @@ describe('BlockDetailPage', () => {
       tipBlock: 19000000,
       events: [],
     });
+  });
+
+  it('routes only a true block 404 to typed identifier evidence', async () => {
+    paramsIdRef.current = BLOCK_HASH;
+    vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
+    render(<BlockDetailPage />);
+    expect(await screen.findByText(`/blocks/${BLOCK_HASH}`)).toBeInTheDocument();
+    expect(
+      screen.getByText('This explorer could not open the block at this address.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps block invariant failures as errors rather than absence evidence', async () => {
+    vi.mocked(api.getBlock).mockRejectedValue(
+      Object.assign(new Error('missing canonical header'), { status: 500 })
+    );
+    render(<BlockDetailPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('missing canonical header');
+    expect(
+      screen.queryByText('This explorer could not open the block at this address.')
+    ).not.toBeInTheDocument();
   });
 
   it('shows exact decoded DAO fields alongside the raw 32-byte header', async () => {

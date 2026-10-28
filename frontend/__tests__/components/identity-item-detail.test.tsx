@@ -15,6 +15,7 @@ const mockFetchDetail = vi.fn(),
 const dotbitConfig: IdentityItemDetailConfig = {
   standard: 'dotbit',
   fetchDetail: mockFetchDetail,
+  detailEndpoint: (id) => `/assets/identities/dotbit/items/${encodeURIComponent(id)}`,
   fetchActivities: mockFetchActivities,
   labels: {
     standardDisplay: 'DOTBIT',
@@ -32,6 +33,7 @@ const dotbitConfig: IdentityItemDetailConfig = {
 const didCkbConfig: IdentityItemDetailConfig = {
   standard: 'did_ckb',
   fetchDetail: mockFetchDetail,
+  detailEndpoint: (id) => `/assets/identities/did/items/${encodeURIComponent(id)}`,
   fetchActivities: mockFetchActivities,
   labels: {
     standardDisplay: 'DID:CKB',
@@ -72,12 +74,13 @@ it('supports did:ckb document identity without fabricating expiry fields', async
 it('retains configuration-specific not-found semantics', async () => {
   mockFetchDetail.mockRejectedValue(new ApiRequestError(404, 'NOT_FOUND', 'missing'));
   const view = render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
-  expect(await screen.findByRole('heading', { name: '.bit item not found' })).toBeInTheDocument();
+  expect(await screen.findByText('/assets/identities/dotbit/items/0xabc')).toBeInTheDocument();
+  expect(
+    screen.getByText('This explorer could not open the identity at this address.')
+  ).toBeInTheDocument();
   view.unmount();
   render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
-  expect(
-    await screen.findByRole('heading', { name: 'did:ckb item not found' })
-  ).toBeInTheDocument();
+  expect(await screen.findByText('/assets/identities/did/items/0xabc')).toBeInTheDocument();
 });
 it('resets the independent activity cursor when navigating to another identity', async () => {
   const first = identityItem('dotbit'),

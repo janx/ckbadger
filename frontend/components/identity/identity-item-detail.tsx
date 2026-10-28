@@ -5,9 +5,11 @@ import { isNotFoundApiError } from '@/lib/api';
 import { normalizeAssetId } from '@/lib/asset-utils';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { NotFoundPage } from '@/components/not-found-page';
 export interface IdentityItemDetailConfig {
   standard: 'dotbit' | 'did_ckb' | 'bit_cell';
   fetchDetail: (identityId: string) => Promise<CollectionItem>;
+  detailEndpoint: (identityId: string) => string;
   fetchActivities: (
     identityId: string,
     params: { limit: number; cursor?: string }
@@ -41,12 +43,21 @@ function ScopedIdentity({ config, identityId }: Props) {
     retry: false,
   });
   const item = detail.data;
+  if (!item && isNotFoundApiError(detail.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'identity',
+          identifier: identityId,
+          checkedEndpoint: config.detailEndpoint(identityId),
+        }}
+      />
+    );
+  }
   if (!item)
     return (
       <AssetDetailShell
-        title={
-          isNotFoundApiError(detail.error) ? config.labels.notFoundMsg : config.labels.defaultTitle
-        }
+        title={config.labels.defaultTitle}
         kind="identities"
         breadcrumb={[{ label: config.labels.backLabel, href: config.labels.backHref }]}
       >

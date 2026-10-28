@@ -9,6 +9,7 @@ import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellBar } from '@/components/ui/cell-bar';
 import { ExactCkb } from '@/components/activity-event-row';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
+import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
@@ -175,6 +176,17 @@ export default function CellDetailPage() {
     queryFn: () => api.getCell(parts!.hash, parts!.index),
     enabled: parts !== null,
   });
+  if (parts && !query.data && isNotFoundApiError(query.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'cell',
+          identifier: `${parts.hash}-${parts.index}`,
+          checkedEndpoint: `/cells/${parts.hash}/${parts.index}`,
+        }}
+      />
+    );
+  }
   const body = !parts ? (
     <DetailLayout title="Invalid cell outpoint">
       <p role="alert" className="text-rouge break-all text-xs">
@@ -185,10 +197,8 @@ export default function CellDetailPage() {
     <DetailLayout title="Cell">
       <p className="text-text-dim text-xs">Loading cell evidence…</p>
     </DetailLayout>
-  ) : query.error ? (
-    <DetailLayout
-      title={isNotFoundApiError(query.error) ? 'Cell not found' : 'Cell data unavailable'}
-    >
+  ) : query.error && !query.data ? (
+    <DetailLayout title="Cell data unavailable">
       <p role="alert" className="text-rouge break-all text-xs">
         {query.error.message}
       </p>
@@ -213,6 +223,11 @@ export default function CellDetailPage() {
         </span>
       }
     >
+      {query.error && (
+        <p role="alert">
+          Unable to refresh cell: {query.error.message}. Showing previously loaded data.
+        </p>
+      )}
       <CellFacts cell={query.data} />
       <CellIdentity cell={query.data} />
       {query.data.daoInfo && (

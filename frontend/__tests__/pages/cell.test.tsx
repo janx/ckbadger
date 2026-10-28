@@ -19,7 +19,8 @@ vi.mock('@/components/cell/cell-transactions', () => ({
 }));
 vi.mock('@/lib/api', () => ({
   api: { getCell: vi.fn() },
-  isNotFoundApiError: (error: unknown) => error instanceof Error && error.message === 'not found',
+  isNotFoundApiError: (error: unknown) =>
+    typeof error === 'object' && error !== null && 'status' in error && error.status === 404,
 }));
 const getCell = vi.mocked(api.getCell);
 const hash = `0x${'ab'.repeat(32)}`;
@@ -141,9 +142,12 @@ describe('CellDetailPage', () => {
     expect(await screen.findByTestId('cell-capacity-error')).toHaveTextContent('anatomy differs');
   });
   it('distinguishes missing cells from transport failures', async () => {
-    getCell.mockRejectedValue(new Error('not found'));
+    getCell.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const rendered = view();
-    expect(await screen.findByText('Cell not found')).toBeInTheDocument();
+    expect(await screen.findByText(`${hash}-0`)).toBeInTheDocument();
+    expect(
+      screen.getByText('This explorer could not open the cell at this address.')
+    ).toBeInTheDocument();
     rendered.unmount();
     getCell.mockRejectedValue(new Error('node unavailable'));
     view();

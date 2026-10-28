@@ -9,6 +9,8 @@ import { api } from '@/lib/api';
 const dotbitConfig: IdentityItemDetailConfig = {
   standard: 'dotbit',
   fetchDetail: (identityId) => api.getDotbitItemDetail(identityId),
+  detailEndpoint: (identityId) =>
+    `/assets/identities/dotbit/items/${encodeURIComponent(identityId)}`,
   fetchActivities: (identityId, params) => api.getDotbitItemActivities(identityId, params),
   labels: {
     standardDisplay: 'DOTBIT',

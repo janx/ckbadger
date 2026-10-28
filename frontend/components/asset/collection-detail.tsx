@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, type ObjectCollection, type IdentityCollection } from '@/lib/api';
+import { api, isNotFoundApiError, type ObjectCollection, type IdentityCollection } from '@/lib/api';
+import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CollectionGallery, CollectionItems } from '@/components/asset/collection-gallery';
@@ -89,6 +90,18 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       ? (cluster.data?.name ?? 'Unnamed collection')
       : (data?.name ??
         (kind === 'identity' ? formatStandard(data?.standard ?? id) : 'Object collection'));
+  if (!data && isNotFoundApiError(detail.error)) {
+    const path = kind === 'identity' ? 'identities' : 'objects';
+    return (
+      <NotFoundPage
+        entity={{
+          kind: kind === 'identity' ? 'identity' : kind === 'spore' ? 'cluster' : 'class',
+          identifier: id,
+          checkedEndpoint: `/assets/${path}/${encodeURIComponent(id)}`,
+        }}
+      />
+    );
+  }
   if (!data)
     return (
       <AssetDetailShell

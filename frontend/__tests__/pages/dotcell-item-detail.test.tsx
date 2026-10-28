@@ -6,6 +6,18 @@ import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/it
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
+it('routes only an actual name 404 to exact endpoint evidence', async () => {
+  vi.mocked(api.getDotCellItemDetail).mockRejectedValue(
+    new ApiRequestError(404, 'not_found', 'name absent')
+  );
+  render(<Page identityId="alice.cell" />);
+  expect(
+    await screen.findByText('/assets/identities/dotcell/items/alice.cell')
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText('This explorer could not open the identity at this address.')
+  ).toBeInTheDocument();
+});
 it('shows current name state, exact protocol, physical cell history and both feed layers', async () => {
   render(<Page identityId="alice.cell" />);
   expect(await screen.findByRole('heading', { level: 1, name: 'alice.cell' })).toHaveClass(
@@ -210,5 +222,6 @@ it('resets item paging on name navigation and reports an unknown name', async ()
     new ApiRequestError(404, 'not_found', 'Name not found')
   );
   render(<Page identityId="unknown" />);
-  expect(await screen.findByRole('alert')).toHaveTextContent('Name not found');
+  expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
+  expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();
 });
