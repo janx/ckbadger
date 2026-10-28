@@ -1,5 +1,5 @@
 //! Exact in-process CKB script execution for committed transactions.
-use super::{MockTransaction, VmActivationEpochs};
+use super::{MockTransaction, ReplayFailure, VmActivationEpochs};
 use crate::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
 use ckb_chain_spec::consensus::{Consensus, ConsensusBuilder};
 use ckb_script::{ScriptGroupType, TransactionScriptsVerifier, TxVerifyEnv};
@@ -122,15 +122,16 @@ pub(super) fn execute(
     epochs: VmActivationEpochs,
     max_cycles: u64,
     extensions: HashMap<Byte32, packed::Bytes>,
-) -> Result<TransactionCycles, String> {
-    let json_tx: ckb_jsonrpc_types::Transaction = json_into(&mock.tx)?;
+) -> Result<TransactionCycles, ReplayFailure> {
+    let json_tx: ckb_jsonrpc_types::Transaction =
+        json_into(&mock.tx).map_err(ReplayFailure::invalid_data)?;
     let tx: packed::Transaction = json_tx.into();
     let mut loader = Loader {
         extensions,
         ..Default::default()
     };
     for h in &mock.mock_info.header_deps {
-        let view = header(h)?;
+        let view = header(h).map_err(ReplayFailure::invalid_data)?;
         loader.headers.insert(view.hash(), view);
     }
     let mut resolve = |output: &super::Output,
@@ -152,20 +153,26 @@ pub(super) fn execute(
     };
     let mut metas = Vec::new();
     for input in &mock.mock_info.inputs {
-        metas.push(resolve(
-            &input.output,
-            &input.data,
-            &input.input.previous_output,
-            input.transaction_info.clone(),
-        )?);
+        metas.push(
+            resolve(
+                &input.output,
+                &input.data,
+                &input.input.previous_output,
+                input.transaction_info.clone(),
+            )
+            .map_err(ReplayFailure::invalid_data)?,
+        );
     }
     for dep in &mock.mock_info.cell_deps {
-        metas.push(resolve(
-            &dep.output,
-            &dep.data,
-            &dep.cell_dep.out_point,
-            dep.transaction_info.clone(),
-        )?);
+        metas.push(
+            resolve(
+                &dep.output,
+                &dep.data,
+                &dep.cell_dep.out_point,
+                dep.transaction_info.clone(),
+            )
+            .map_err(ReplayFailure::invalid_data)?,
+        );
     }
     loader.metas = metas
         .into_iter()
@@ -177,11 +184,11 @@ pub(super) fn execute(
         &loader,
         &loader,
     )
-    .map_err(|e| format!("cannot resolve exact transaction dependencies: {e}"))?;
+    .map_err(|e| ReplayFailure::DependencyResolution.logged(e))?;
     let verifier = TransactionScriptsVerifier::new(
         Arc::new(resolved),
         loader,
-        Arc::new(consensus(epochs, max_cycles)?),
+        Arc::new(consensus(epochs, max_cycles).map_err(ReplayFailure::invalid_data)?),
         Arc::new(TxVerifyEnv::new_commit(&commit)),
     );
     execute_groups(
@@ -191,7 +198,7 @@ pub(super) fn execute(
             .hash()
             .as_slice()
             .try_into()
-            .map_err(|_| "commit hash length")?,
+            .map_err(|_| ReplayFailure::invalid_data("commit hash length"))?,
     )
 }
 
@@ -199,41 +206,47 @@ fn execute_groups(
     verifier: &TransactionScriptsVerifier<Loader>,
     limit: u64,
     block_hash: [u8; 32],
-) -> Result<TransactionCycles, String> {
+) -> Result<TransactionCycles, ReplayFailure> {
     let mut groups = Vec::new();
     let mut total = 0_u64;
     for (kind, hash, _) in verifier.groups_with_type() {
         let remaining = limit
             .checked_sub(total)
-            .ok_or_else(|| "transaction exceeded cycle budget".to_string())?;
-        let cycles = verifier
-            .verify_single(kind, hash, remaining)
-            .map_err(|e| format!("script group {kind:?} {hash:#x} failed: {e}"))?;
+            .ok_or(ReplayFailure::CyclesOverflow)?;
+        let group_type = match kind {
+            ScriptGroupType::Lock => ScriptGroupKind::Lock,
+            ScriptGroupType::Type => ScriptGroupKind::Type,
+        };
+        let script_hash = hash
+            .as_slice()
+            .try_into()
+            .map_err(|_| ReplayFailure::invalid_data("script hash length"))?;
+        let cycles = verifier.verify_single(kind, hash, remaining).map_err(|e| {
+            ReplayFailure::ScriptGroup {
+                group_type,
+                script_hash,
+            }
+            .logged(e)
+        })?;
         total = total
             .checked_add(cycles)
-            .ok_or_else(|| "transaction cycles overflow".to_string())?;
+            .ok_or(ReplayFailure::CyclesOverflow)?;
         groups.push(ScriptGroupCycles {
-            script_hash: hash
-                .as_slice()
-                .try_into()
-                .map_err(|_| "script hash length")?,
-            group_type: match kind {
-                ScriptGroupType::Lock => ScriptGroupKind::Lock,
-                ScriptGroupType::Type => ScriptGroupKind::Type,
-            },
-            cycles: i64::try_from(cycles).map_err(|_| "group cycles exceed i64")?,
+            script_hash,
+            group_type,
+            cycles: i64::try_from(cycles).map_err(|_| ReplayFailure::CyclesOverflow)?,
         });
     }
     if groups.is_empty() {
-        return Err("committed non-cellbase transaction has no script groups".into());
+        return Err(ReplayFailure::NoScriptGroups);
     }
     groups.sort_by_key(|group| (group.group_type, group.script_hash));
     let result = TransactionCycles {
         block_hash,
-        cycles: i64::try_from(total).map_err(|_| "transaction cycles exceed i64")?,
+        cycles: i64::try_from(total).map_err(|_| ReplayFailure::CyclesOverflow)?,
         groups,
     };
-    result.validate()?;
+    result.validate().map_err(ReplayFailure::invalid_data)?;
     Ok(result)
 }
 
@@ -419,6 +432,7 @@ mod tests {
         assert!(
             execute_groups(&verifier(200, ScriptHashType::Data, 1), 10_000_000, [8; 32])
                 .unwrap_err()
+                .to_string()
                 .contains("failed")
         );
         assert!(execute_groups(&verifier(200, ScriptHashType::Data, 0), 1, [8; 32]).is_err());
@@ -442,6 +456,7 @@ mod tests {
         );
         assert!(execute_groups(&verifier, 10_000_000, [8; 32])
             .unwrap_err()
+            .to_string()
             .contains("no script groups"));
     }
 }

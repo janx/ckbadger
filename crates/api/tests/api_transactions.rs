@@ -2580,6 +2580,44 @@ async fn pool_class_filter_precedes_paging_and_summary_and_excludes_partial() {
 }
 
 #[tokio::test]
+async fn unavailable_cycles_worker_leaves_get_cycles_queued() {
+    let store = test_store();
+    let hash = [0x69; 32];
+    insert_committed_transaction(&store, &hash);
+    let requests = tempfile::tempdir().unwrap();
+    let request = requests.path().join(format!("tx_0x{}", hex::encode(hash)));
+    std::fs::write(&request, b"").unwrap();
+    ckbadger_indexer::cycles_worker::spawn_cycles_worker(
+        store.clone(),
+        "http://127.0.0.1:1".into(),
+        requests.path().to_path_buf(),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while request.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker must finish the unavailable RPC attempt");
+    assert_eq!(store.get_tx_group_cycles_record(&hash).unwrap(), None);
+    assert_eq!(
+        store.get_tx_index(321, 0).unwrap().unwrap().cycles,
+        Some(333)
+    );
+    let mut config = test_config(store.clone());
+    config.cycles_request_dir = Some(requests.path().to_path_buf());
+    let app = create_router(config).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "queued", "{body}");
+    assert_eq!(store.get_tx_group_cycles_record(&hash).unwrap(), None);
+}
+
+#[tokio::test]
 async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
     let store = test_store();
     let hash = [0x66; 32];
@@ -2591,7 +2629,7 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
             &hash,
             TxCyclesWrite::ReplayFailed {
                 block_hash: [0x44; 32],
-                error: "script verification failed",
+                failure: ckbadger_common::cycles::ReplayFailure::DependencyResolution,
             },
         )
         .unwrap();
@@ -2611,7 +2649,11 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["status"], "failed", "{body}");
     assert_eq!(body["cycles"], 333, "{body}");
-    assert_eq!(body["error"], "script verification failed");
+    assert_eq!(
+        body["error"],
+        "Script dependency resolution failed during replay"
+    );
+    assert!(!body.to_string().contains("http"));
     assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
     let request = Request::builder()
         .method("POST")

@@ -9967,7 +9967,7 @@ mod tests {
                 &drop_tx.as_slice().try_into().unwrap(),
                 crate::TxCyclesWrite::ReplayFailed {
                     block_hash: [0x02; 32],
-                    error: "VM failed",
+                    failure: ckbadger_common::cycles::ReplayFailure::DependencyResolution,
                 },
             )
             .unwrap();

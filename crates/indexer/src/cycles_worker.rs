@@ -1,3 +1,4 @@
+use ckbadger_common::cycles::CyclesError;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus, TxGroupCyclesRecord};
 use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 use ckbadger_store::{CkbadgerStore, TxCyclesWrite};
@@ -354,7 +355,7 @@ async fn process_cycles_task(
         }
     };
 
-    match ckbadger_common::cycles::calculate_cycles(ckb_rpc_url, tx_hash).await {
+    match ckbadger_common::cycles::calculate_cycles(ckb_rpc_url, tx_hash, &block_hash).await {
         Ok(cycles) => {
             if let Err(e) = store.persist_tx_cycles(
                 block_num,
@@ -376,27 +377,37 @@ async fn process_cycles_task(
                 updated_at,
             }
         }
-        Err(e) => {
-            let marker_err = store
-                .persist_tx_cycles(
-                    block_num,
-                    tx_idx,
-                    &hash_bytes,
-                    TxCyclesWrite::ReplayFailed {
-                        block_hash,
-                        error: &e,
-                    },
-                )
-                .err()
-                .map(|err| format!(" (failed to persist failure marker: {err})"))
-                .unwrap_or_default();
+        Err(CyclesError::Unavailable(error)) => {
+            tracing::warn!(tx_hash, %error, "Cycles chain data unavailable; retry on next request");
             CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
                 cycles: None,
-                error: Some(format!(
-                    "CKB script verification failed: {}{}",
-                    e, marker_err
-                )),
+                error: Some("Chain data unavailable; retry on next request".into()),
+                updated_at,
+            }
+        }
+        Err(CyclesError::Replay(failure)) => {
+            tracing::warn!(tx_hash, %failure, "Deterministic cycles replay failure");
+            if let Err(error) = store.persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &hash_bytes,
+                TxCyclesWrite::ReplayFailed {
+                    block_hash,
+                    failure,
+                },
+            ) {
+                return CyclesTaskResult {
+                    status: CyclesTaskStatus::Failed,
+                    cycles: None,
+                    error: Some(format!("failed to persist replay failure: {error}")),
+                    updated_at,
+                };
+            }
+            CyclesTaskResult {
+                status: CyclesTaskStatus::Failed,
+                cycles: None,
+                error: Some(failure.to_string()),
                 updated_at,
             }
         }
@@ -406,6 +417,7 @@ async fn process_cycles_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckb_types::prelude::*;
     use ckbadger_store::{CachedBlockHeader, StoreBatch, TxIndexEntry};
 
     #[tokio::test]
@@ -512,23 +524,28 @@ mod tests {
         assert_eq!(store.get_block_header(0).unwrap().unwrap().cycles, Some(0));
         assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(0));
         assert!(store.get_tx_group_cycles_record(&hash).unwrap().is_none());
-        store
-            .persist_tx_cycles(
-                0,
-                1,
-                &hash,
-                TxCyclesWrite::Groups(&TransactionCycles {
-                    block_hash: [0x69; 32],
-                    cycles: 5,
-                    groups: vec![ScriptGroupCycles {
-                        script_hash: [0x72; 32],
-                        group_type: ScriptGroupKind::Lock,
-                        cycles: 5,
-                    }],
-                }),
-            )
-            .unwrap();
+        let groups = TransactionCycles {
+            block_hash: [0x69; 32],
+            cycles: 5,
+            groups: vec![ScriptGroupCycles {
+                script_hash: [0x72; 32],
+                group_type: ScriptGroupKind::Lock,
+                cycles: 5,
+            }],
+        };
+        assert!(store
+            .persist_tx_cycles(0, 1, &hash, TxCyclesWrite::Groups(&groups))
+            .is_err());
+        // Deliberately inject corrupt state: the public writer now rejects it,
+        // and the worker must still fail fast if such bytes are already present.
+        let mut entry = store.get_tx_index(0, 1).unwrap().unwrap();
+        entry.cycles = Some(5);
         let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(0, 1, &entry);
+        batch.put_sync_meta(
+            &ckbadger_store::keys::encode_tx_group_cycles_key(&hash),
+            &bincode::serialize(&TxGroupCyclesRecord::Complete(groups)).unwrap(),
+        );
         batch.put_block_header(0, &header);
         batch.commit().unwrap();
         assert_eq!(
@@ -627,8 +644,184 @@ mod tests {
         batch.commit().unwrap();
     }
 
+    fn program(exit: u8) -> ckb_types::bytes::Bytes {
+        let mut elf = vec![0_u8; 132];
+        elf[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        elf[16..18].copy_from_slice(&2_u16.to_le_bytes());
+        elf[18..20].copy_from_slice(&243_u16.to_le_bytes());
+        elf[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        elf[24..32].copy_from_slice(&0x10078_u64.to_le_bytes());
+        elf[32..40].copy_from_slice(&64_u64.to_le_bytes());
+        elf[52..54].copy_from_slice(&64_u16.to_le_bytes());
+        elf[54..56].copy_from_slice(&56_u16.to_le_bytes());
+        elf[56..58].copy_from_slice(&1_u16.to_le_bytes());
+        elf[64..68].copy_from_slice(&1_u32.to_le_bytes());
+        elf[68..72].copy_from_slice(&5_u32.to_le_bytes());
+        elf[80..88].copy_from_slice(&0x10000_u64.to_le_bytes());
+        elf[96..104].copy_from_slice(&132_u64.to_le_bytes());
+        elf[104..112].copy_from_slice(&132_u64.to_le_bytes());
+        elf[112..120].copy_from_slice(&4096_u64.to_le_bytes());
+        elf[120..124].copy_from_slice(&(0x00000513_u32 | (u32::from(exit) << 20)).to_le_bytes());
+        elf[124..128].copy_from_slice(&0x05d00893_u32.to_le_bytes());
+        elf[128..132].copy_from_slice(&0x00000073_u32.to_le_bytes());
+        elf.into()
+    }
+    async fn replay_rpc(exit: u8) -> (wiremock::MockServer, ckb_types::core::HeaderView, [u8; 32]) {
+        use ckb_types::{
+            core::{EpochNumberWithFraction, HeaderBuilder},
+            packed,
+            prelude::*,
+        };
+        use serde_json::json;
+        use wiremock::{matchers::body_partial_json, Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        let header = HeaderBuilder::default()
+            .number(123_u64.pack())
+            .epoch(EpochNumberWithFraction::new(1, 0, 1).pack())
+            .build();
+        let header_hash = format!("{:#x}", header.hash());
+        let code = program(exit);
+        let script = packed::Script::new_builder()
+            .code_hash(packed::CellOutput::calc_data_hash(&code))
+            .build();
+        let script_hash = script.calc_script_hash().as_slice().try_into().unwrap();
+        let lock: ckb_jsonrpc_types::Script = script.into();
+        let input_hash = format!("0x{}", "22".repeat(32));
+        let dep_hash = format!("0x{}", "33".repeat(32));
+        let output = json!({"capacity":"0x2540be400", "lock":lock, "type":null});
+        let tx = json!({"version":"0x0", "inputs":[{"previous_output":{"tx_hash":input_hash,"index":"0x0"},"since":"0x0"}],
+            "outputs":[output],"outputs_data":["0x"],"witnesses":["0x"],"header_deps":[],
+            "cell_deps":[{"out_point":{"tx_hash":dep_hash,"index":"0x0"},"dep_type":"code"}]});
+        Mock::given(body_partial_json(json!({"method":"get_transaction"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":{
+                "transaction":tx,"tx_status":{"status":"committed","block_hash":header_hash,"tx_index":"0x1"}}})))
+            .mount(&server).await;
+        for (hash, data) in [
+            (input_hash, "0x".to_string()),
+            (dep_hash, format!("0x{}", hex::encode(code))),
+        ] {
+            Mock::given(body_partial_json(json!({"method":"get_live_cell","params":[{"tx_hash":hash,"index":"0x0"},true]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":{"status":"live","cell":{"output":output,"data":{"content":data}}}})))
+                .mount(&server).await;
+        }
+        Mock::given(body_partial_json(json!({"method":"get_header"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"result":ckb_jsonrpc_types::HeaderView::from(header.clone())}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(body_partial_json(json!({"method":"get_consensus"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"result":{"hardfork_features":[],"max_block_cycles":"0x989680"}}),
+            ))
+            .mount(&server)
+            .await;
+        (server, header, script_hash)
+    }
+
     #[tokio::test]
-    async fn failed_group_enrichment_preserves_authoritative_scalar_cycles() {
+    async fn rpc_failure_at_each_fetch_stage_is_retryable_then_recovers() {
+        use serde_json::json;
+        use wiremock::{matchers::body_partial_json, Mock, ResponseTemplate};
+        for method in [
+            "get_transaction",
+            "get_consensus",
+            "get_header",
+            "get_live_cell",
+        ] {
+            let (rpc, header, _) = replay_rpc(0).await;
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+            let hash = [0x56; 32];
+            let hash_hex = format!("0x{}", hex::encode(hash));
+            insert_tx_with_cycles(&store, &hash, None);
+            let mut cached = store.get_block_header(123).unwrap().unwrap();
+            cached.hash = header.hash().as_slice().to_vec();
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(123, &cached);
+            batch.commit().unwrap();
+            Mock::given(body_partial_json(json!({"method":method})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    json!({"error":{"code":-1,"message":"http://private-node unavailable"}}),
+                ))
+                .with_priority(1)
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&rpc)
+                .await;
+            let result = process_cycles_task(&store, &rpc.uri(), &hash_hex).await;
+            assert_eq!(result.status, CyclesTaskStatus::Failed, "{method}");
+            assert_eq!(
+                store.get_tx_group_cycles_record(&hash).unwrap(),
+                None,
+                "{method}"
+            );
+            assert_eq!(
+                store.get_tx_index(123, 0).unwrap().unwrap().cycles,
+                None,
+                "{method}"
+            );
+            let result = process_cycles_task(&store, &rpc.uri(), &hash_hex).await;
+            assert_eq!(
+                result.status,
+                CyclesTaskStatus::Done,
+                "{method}: {result:?}"
+            );
+            assert!(matches!(
+                store.get_tx_group_cycles_record(&hash).unwrap(),
+                Some(TxGroupCyclesRecord::Complete(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn mismatched_commit_block_is_retryable_without_executing_scripts() {
+        let (rpc, _, _) = replay_rpc(1).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let hash = [0x56; 32];
+        insert_tx_with_cycles(&store, &hash, None);
+        let result =
+            process_cycles_task(&store, &rpc.uri(), &format!("0x{}", hex::encode(hash))).await;
+        assert_eq!(result.status, CyclesTaskStatus::Failed);
+        assert_eq!(store.get_tx_group_cycles_record(&hash).unwrap(), None);
+        assert_eq!(rpc.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deterministic_vm_failure_persists_only_public_typed_evidence() {
+        let (rpc, header, script_hash) = replay_rpc(1).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let hash = [0x56; 32];
+        insert_tx_with_cycles(&store, &hash, None);
+        let mut cached = store.get_block_header(123).unwrap().unwrap();
+        cached.hash = header.hash().as_slice().to_vec();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(123, &cached);
+        batch.commit().unwrap();
+        let result =
+            process_cycles_task(&store, &rpc.uri(), &format!("0x{}", hex::encode(hash))).await;
+        assert_eq!(result.status, CyclesTaskStatus::Failed);
+        let record = store.get_tx_group_cycles_record(&hash).unwrap().unwrap();
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(
+            value["Failed"]["failure"]["ScriptGroup"]["group_type"],
+            "lock"
+        );
+        assert_eq!(
+            value["Failed"]["failure"]["ScriptGroup"]["script_hash"],
+            serde_json::json!(script_hash)
+        );
+        assert!(!value.to_string().contains("http"));
+        assert_eq!(
+            store.get_tx_index(123, 0).unwrap().unwrap().cycles,
+            Some(-1)
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_group_enrichment_preserves_pending_and_authoritative_scalar_cycles() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let hash = [0x56; 32];
@@ -641,19 +834,12 @@ mod tests {
         .await;
 
         assert_eq!(result.status, CyclesTaskStatus::Failed);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("CKB script verification failed"));
+        assert!(result.error.is_some());
         assert_eq!(
             store.get_tx_index(123, 0).unwrap().unwrap().cycles,
             Some(42)
         );
-        assert!(matches!(
-            store.get_tx_group_cycles_record(&hash).unwrap(),
-            Some(TxGroupCyclesRecord::Failed { block_hash, .. }) if block_hash == [0x77; 32]
-        ));
+        assert_eq!(store.get_tx_group_cycles_record(&hash).unwrap(), None);
     }
 
     #[tokio::test]
@@ -718,10 +904,12 @@ mod tests {
             .unwrap();
         let retry = process_cycles_task(&store, "http://127.0.0.1:1", &tx_hash).await;
         assert_eq!(retry.status, CyclesTaskStatus::Failed);
-        assert!(retry
-            .error
-            .unwrap()
-            .contains("CKB script verification failed"));
+        assert!(retry.error.unwrap().contains("Chain data unavailable"));
+        assert_eq!(store.get_tx_group_cycles_record(&hash).unwrap(), None);
+        assert_eq!(
+            store.get_tx_index(123, 0).unwrap().unwrap().cycles,
+            Some(12)
+        );
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ pub(crate) type CanonicalTxIdentityBatchEntry = (Vec<u8>, Option<(i64, i32, Vec<
 
 use crate::bytes_to_hex;
 
+use ckbadger_common::cycles::ReplayFailure;
 use ckbadger_common::cycles_task::{TransactionCycles, TxGroupCyclesRecord};
 
 pub enum TxCyclesWrite<'a> {
@@ -19,7 +20,7 @@ pub enum TxCyclesWrite<'a> {
     Groups(&'a TransactionCycles),
     ReplayFailed {
         block_hash: [u8; 32],
-        error: &'a str,
+        failure: ReplayFailure,
     },
 }
 
@@ -259,16 +260,21 @@ impl CkbadgerStore {
                     (0, None)
                 }
                 TxCyclesWrite::Groups(groups) => {
+                    anyhow::ensure!(!entry.is_cellbase && block_num != 0,
+                        "execution-exempt transaction cannot store replay groups: hash=0x{}, block={block_num}, index={tx_idx}", bytes_to_hex(expected_hash));
                     groups.validate().map_err(anyhow::Error::msg)?;
                     anyhow::ensure!(!entry.cycles.is_some_and(|stored| stored > 0 && stored != groups.cycles),
                         "cycles total mismatch: block={block_num}, index={tx_idx}, hash=0x{}, stored={:?}, calculated={}",
                         bytes_to_hex(expected_hash), entry.cycles, groups.cycles);
                     (groups.cycles, Some(TxGroupCyclesRecord::Complete(groups.clone())))
                 }
-                TxCyclesWrite::ReplayFailed { block_hash, error } => {
-                    anyhow::ensure!(!error.is_empty(), "empty cycles replay failure: block={block_num}, index={tx_idx}");
+                TxCyclesWrite::ReplayFailed { block_hash, failure } => {
+                    anyhow::ensure!(!entry.is_cellbase && block_num != 0,
+                        "execution-exempt transaction cannot store replay failure: hash=0x{}, block={block_num}, index={tx_idx}", bytes_to_hex(expected_hash));
+                    anyhow::ensure!(!matches!(self.get_tx_group_cycles_record(expected_hash)?, Some(TxGroupCyclesRecord::Complete(_))),
+                        "complete cycles replay cannot regress to failed: hash=0x{}, block={block_num}, index={tx_idx}", bytes_to_hex(expected_hash));
                     (entry.cycles.filter(|stored| *stored > 0).unwrap_or(-1),
-                        Some(TxGroupCyclesRecord::Failed { block_hash, error: error.into() }))
+                        Some(TxGroupCyclesRecord::Failed { block_hash, failure }))
                 }
             };
             if let Some(record) = &record {
@@ -288,7 +294,7 @@ impl CkbadgerStore {
                 &keys::encode_tx_idx(tx_idx),
             ]);
             let mut batch = rocksdb::WriteBatch::default();
-            batch.put_cf(self.cf_tx_index(), &key, bincode::serialize(&entry)?);
+            batch.put_cf(self.cf_tx_index(), &key, bincode::serialize(&entry).with_context(|| format!("failed to serialize tx index entry {block_num}:{tx_idx}"))?);
             let groups_key = keys::encode_tx_group_cycles_key(expected_hash);
             if let Some(record) = record {
                 batch.put_cf(self.cf_sync_meta(), &groups_key, bincode::serialize(&record)?);
@@ -517,7 +523,7 @@ mod tests {
                 &tx_hash,
                 TxCyclesWrite::ReplayFailed {
                     block_hash: [0x77; 32],
-                    error: "VM failed",
+                    failure: ReplayFailure::DependencyResolution,
                 },
             )
             .unwrap();
@@ -533,7 +539,7 @@ mod tests {
             store.get_tx_group_cycles_record(&tx_hash).unwrap(),
             Some(TxGroupCyclesRecord::Failed {
                 block_hash: [0x77; 32],
-                error: "VM failed".into()
+                failure: ReplayFailure::DependencyResolution
             })
         );
         let mut replacement = StoreBatch::new(&store);
@@ -624,27 +630,26 @@ mod tests {
         );
         let append_dir = tempdir().unwrap();
         let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
-        store
+        let error = store
             .persist_tx_cycles(
                 block_num,
                 tx_idx,
                 &tx_hash,
                 TxCyclesWrite::ReplayFailed {
                     block_hash: [0x77; 32],
-                    error: "retry failed",
+                    failure: ReplayFailure::DependencyResolution,
                 },
             )
-            .unwrap();
+            .expect_err("a complete replay must never regress to failed");
+        assert!(error.to_string().contains(&hex::encode(tx_hash)));
+        assert!(error.to_string().contains("123"));
         assert_eq!(
             store.get_tx_by_hash(&tx_hash).unwrap().unwrap().2.cycles,
             Some(12_345)
         );
         assert_eq!(
             store.get_tx_group_cycles_record(&tx_hash).unwrap(),
-            Some(TxGroupCyclesRecord::Failed {
-                block_hash: [0x77; 32],
-                error: "retry failed".into()
-            })
+            Some(TxGroupCyclesRecord::Complete(result.clone()))
         );
         assert!(append
             .persist_tx_cycles(
@@ -653,7 +658,7 @@ mod tests {
                 &tx_hash,
                 TxCyclesWrite::ReplayFailed {
                     block_hash: [0x77; 32],
-                    error: "retry failed"
+                    failure: ReplayFailure::DependencyResolution
                 }
             )
             .is_err());
@@ -676,22 +681,71 @@ mod tests {
                 &tx_hash,
                 TxCyclesWrite::ReplayFailed {
                     block_hash: [0x88; 32],
-                    error: "old fork",
+                    failure: ReplayFailure::DependencyResolution,
                 },
             )
             .unwrap_err();
-        assert!(stale.to_string().contains("canonical block changed"));
+        assert!(stale.to_string().contains(&hex::encode(tx_hash)));
         assert_eq!(
             store.get_tx_group_cycles_record(&tx_hash).unwrap(),
-            Some(TxGroupCyclesRecord::Failed {
-                block_hash: [0x77; 32],
-                error: "retry failed".into()
-            })
+            Some(TxGroupCyclesRecord::Complete(result.clone()))
         );
         store
             .persist_tx_cycles(block_num, tx_idx, &tx_hash, TxCyclesWrite::Groups(&result))
             .unwrap();
         assert_eq!(store.get_tx_cycles_result(&tx_hash).unwrap(), Some(result));
+    }
+
+    #[test]
+    fn execution_exempt_transactions_reject_group_records_without_mutation() {
+        use ckbadger_common::cycles_task::{ScriptGroupCycles, ScriptGroupKind};
+        for (block, cellbase) in [(123, true), (0, false)] {
+            let dir = tempdir().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+            let hash = [0x11; 32];
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(block, &make_header(0x77));
+            batch.put_tx_hash_map(&hash, block, 0);
+            batch.put_tx_index(
+                block,
+                0,
+                &TxIndexEntry {
+                    tx_hash: hash,
+                    is_cellbase: cellbase,
+                    timestamp: 1,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 1,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            batch.commit().unwrap();
+            let groups = TransactionCycles {
+                block_hash: [0x77; 32],
+                cycles: 42,
+                groups: vec![ScriptGroupCycles {
+                    script_hash: [1; 32],
+                    group_type: ScriptGroupKind::Lock,
+                    cycles: 42,
+                }],
+            };
+            for write in [
+                TxCyclesWrite::Groups(&groups),
+                TxCyclesWrite::ReplayFailed {
+                    block_hash: [0x77; 32],
+                    failure: ReplayFailure::DependencyResolution,
+                },
+            ] {
+                let error = store
+                    .persist_tx_cycles(block, 0, &hash, write)
+                    .expect_err("execution-exempt transaction cannot have a replay record");
+                assert!(error.to_string().contains("execution-exempt"));
+                assert_eq!(store.get_tx_index(block, 0).unwrap().unwrap().cycles, None);
+                assert_eq!(store.get_tx_group_cycles_record(&hash).unwrap(), None);
+            }
+        }
     }
 
     #[test]
@@ -781,7 +835,7 @@ mod tests {
                     &old_hash,
                     TxCyclesWrite::ReplayFailed {
                         block_hash: [0; 32],
-                        error: "failed",
+                        failure: ReplayFailure::DependencyResolution,
                     }
                 )
                 .unwrap_err()
@@ -829,7 +883,7 @@ mod tests {
                             &old_hash,
                             TxCyclesWrite::ReplayFailed {
                                 block_hash: [0; 32],
-                                error: "failed",
+                                failure: ReplayFailure::DependencyResolution,
                             },
                         ))
                         .unwrap();

@@ -1,6 +1,73 @@
 mod vm;
+use crate::cycles_task::ScriptGroupKind;
 use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
+
+/// Only failures after chain data has been obtained are terminal replay results.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum CyclesError {
+    #[error("Chain data unavailable: {0}")]
+    Unavailable(String),
+    #[error("{0}")]
+    Replay(ReplayFailure),
+}
+
+/// Fixed-size, public chain evidence. Detailed diagnostics belong only in logs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReplayFailure {
+    DependencyResolution,
+    InvalidChainData,
+    ScriptGroup {
+        group_type: ScriptGroupKind,
+        script_hash: [u8; 32],
+    },
+    NoScriptGroups,
+    CyclesOverflow,
+}
+
+impl std::fmt::Display for ReplayFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DependencyResolution => {
+                f.write_str("Script dependency resolution failed during replay")
+            }
+            Self::InvalidChainData => f.write_str("Invalid chain data during replay"),
+            Self::ScriptGroup {
+                group_type,
+                script_hash,
+            } => write!(
+                f,
+                "Script group {} 0x{} failed during replay",
+                match group_type {
+                    ScriptGroupKind::Lock => "lock",
+                    ScriptGroupKind::Type => "type",
+                },
+                hex::encode(script_hash)
+            ),
+            Self::NoScriptGroups => f.write_str("Transaction has no script groups during replay"),
+            Self::CyclesOverflow => f.write_str("Cycles overflow during replay"),
+        }
+    }
+}
+
+impl std::error::Error for ReplayFailure {}
+
+impl ReplayFailure {
+    fn logged(self, detail: impl std::fmt::Display) -> Self {
+        tracing::warn!(failure = %self, error = %detail, "Cycles replay failed");
+        self
+    }
+
+    fn invalid_data(detail: impl std::fmt::Display) -> Self {
+        Self::InvalidChainData.logged(detail)
+    }
+}
+
+impl CyclesError {
+    fn invalid_data(detail: impl std::fmt::Display) -> Self {
+        Self::Replay(ReplayFailure::invalid_data(detail))
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct MockTransaction {
@@ -232,34 +299,42 @@ const RFC_VM2: &str = "0049";
 pub async fn calculate_cycles(
     ckb_rpc_url: &str,
     tx_hash: &str,
-) -> Result<crate::cycles_task::TransactionCycles, String> {
+    expected_block_hash: &[u8; 32],
+) -> Result<crate::cycles_task::TransactionCycles, CyclesError> {
     let (tx, status) = fetch_transaction(ckb_rpc_url, tx_hash).await?;
     let block_hash = committed_block_hash(tx_hash, &status)?;
+    if block_hash != format!("0x{}", hex::encode(expected_block_hash)) {
+        return Err(CyclesError::Unavailable(format!("transaction {tx_hash} commit block differs from canonical store: node={block_hash} store=0x{}", hex::encode(expected_block_hash))));
+    }
     let (epochs, max_cycles) = fetch_vm_consensus(ckb_rpc_url).await?;
-    let commit = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)?;
+    let commit = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)
+        .map_err(CyclesError::invalid_data)?;
     if commit.number() == 0 {
-        return Err("genesis transactions have no consensus script execution".into());
+        return Err(CyclesError::invalid_data(
+            "genesis transactions have no consensus script execution",
+        ));
     }
     let mock = build_mock_transaction(ckb_rpc_url, &tx).await?;
     let mut extensions = std::collections::HashMap::new();
     for hash in &tx.header_deps {
         if let Some(extension) = fetch_block_extension(ckb_rpc_url, hash).await? {
             let key = ckb_types::packed::Byte32::from_slice(
-                &hex::decode(hash.trim_start_matches("0x")).map_err(|e| e.to_string())?,
+                &hex::decode(hash.trim_start_matches("0x")).map_err(CyclesError::invalid_data)?,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(CyclesError::invalid_data)?;
             extensions.insert(key, extension.pack());
         }
     }
     tokio::task::spawn_blocking(move || vm::execute(mock, commit, epochs, max_cycles, extensions))
         .await
-        .map_err(|e| format!("cycles VM worker failed: {e}"))?
+        .map_err(|e| CyclesError::invalid_data(format!("cycles VM worker failed: {e}")))?
+        .map_err(CyclesError::Replay)
 }
 
 async fn fetch_block_extension(
     url: &str,
     hash: &str,
-) -> Result<Option<ckb_types::bytes::Bytes>, String> {
+) -> Result<Option<ckb_types::bytes::Bytes>, CyclesError> {
     #[derive(Deserialize)]
     struct BlockExtension {
         extension: Option<String>,
@@ -269,22 +344,25 @@ async fn fetch_block_extension(
         .json(&serde_json::json!({"id":1,"jsonrpc":"2.0","method":"get_block","params":[hash]}))
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| CyclesError::Unavailable(e.to_string()))?
         .json()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| CyclesError::Unavailable(e.to_string()))?;
     if let Some(error) = response.error {
-        return Err(format!("block extension RPC error: {}", error.message));
+        return Err(CyclesError::Unavailable(format!(
+            "block extension RPC error: {}",
+            error.message
+        )));
     }
-    let block = response
-        .result
-        .ok_or_else(|| format!("header dependency block missing: {hash}"))?;
+    let block = response.result.ok_or_else(|| {
+        CyclesError::Unavailable(format!("header dependency block missing: {hash}"))
+    })?;
     block
         .extension
         .map(|value| {
             hex::decode(value.trim_start_matches("0x"))
                 .map(Into::into)
-                .map_err(|e| e.to_string())
+                .map_err(CyclesError::invalid_data)
         })
         .transpose()
 }
@@ -292,7 +370,7 @@ async fn fetch_block_extension(
 async fn fetch_transaction(
     ckb_rpc_url: &str,
     tx_hash: &str,
-) -> Result<(RpcTransaction, TxStatus), String> {
+) -> Result<(RpcTransaction, TxStatus), CyclesError> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -306,24 +384,27 @@ async fn fetch_transaction(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("RPC request failed: {}", e))?
+        .map_err(|e| CyclesError::Unavailable(format!("RPC request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        .map_err(|e| CyclesError::Unavailable(format!("Failed to parse RPC response: {e}")))?;
 
     if let Some(err) = resp.error {
-        return Err(format!("RPC error: {}", err.message));
+        return Err(CyclesError::Unavailable(format!(
+            "RPC error: {}",
+            err.message
+        )));
     }
 
     let with_status = resp
         .result
-        .ok_or_else(|| format!("Transaction {} not found", tx_hash))?;
+        .ok_or_else(|| CyclesError::Unavailable(format!("Transaction {} not found", tx_hash)))?;
     let status = with_status.tx_status.status.clone();
     let tx = with_status.transaction.ok_or_else(|| {
-        format!(
+        CyclesError::Unavailable(format!(
             "Transaction {} has no transaction body (status: '{}')",
             tx_hash, status
-        )
+        ))
     })?;
 
     Ok((tx, with_status.tx_status))
@@ -335,18 +416,18 @@ async fn fetch_transaction(
 /// for consensus VM selection and for every resolved cell's header association.
 /// A transaction that is not committed has no such block, so this fails fast
 /// instead of substituting a placeholder.
-fn committed_block_hash(tx_hash: &str, status: &TxStatus) -> Result<String, String> {
+fn committed_block_hash(tx_hash: &str, status: &TxStatus) -> Result<String, CyclesError> {
     if status.status != "committed" {
-        return Err(format!(
+        return Err(CyclesError::Unavailable(format!(
             "transaction {} has status '{}', not 'committed'",
             tx_hash, status.status
-        ));
+        )));
     }
     status.block_hash.clone().ok_or_else(|| {
-        format!(
+        CyclesError::Unavailable(format!(
             "transaction {} is 'committed' but the node returned no block_hash",
             tx_hash
-        )
+        ))
     })
 }
 
@@ -358,7 +439,7 @@ fn committed_block_hash(tx_hash: &str, status: &TxStatus) -> Result<String, Stri
 async fn fetch_committing_transaction_info(
     ckb_rpc_url: &str,
     tx_hash: &str,
-) -> Result<ckb_types::core::TransactionInfo, String> {
+) -> Result<ckb_types::core::TransactionInfo, CyclesError> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -372,27 +453,29 @@ async fn fetch_committing_transaction_info(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("RPC request failed: {}", e))?
+        .map_err(|e| CyclesError::Unavailable(format!("RPC request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        .map_err(|e| CyclesError::Unavailable(format!("Failed to parse RPC response: {e}")))?;
 
     if let Some(err) = resp.error {
-        return Err(format!("RPC error: {}", err.message));
+        return Err(CyclesError::Unavailable(format!(
+            "RPC error: {}",
+            err.message
+        )));
     }
 
     let with_status = resp
         .result
-        .ok_or_else(|| format!("Transaction {} not found", tx_hash))?;
+        .ok_or_else(|| CyclesError::Unavailable(format!("Transaction {} not found", tx_hash)))?;
 
     let block_hash = committed_block_hash(tx_hash, &with_status.tx_status)?;
-    let index = with_status
-        .tx_status
-        .tx_index
-        .as_deref()
-        .ok_or_else(|| format!("committed transaction lacks tx_index: {tx_hash}"))?;
-    let index = parse_hex_index(index)?;
-    let header = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)?;
+    let index = with_status.tx_status.tx_index.as_deref().ok_or_else(|| {
+        CyclesError::invalid_data(format!("committed transaction lacks tx_index: {tx_hash}"))
+    })?;
+    let index = parse_hex_index(index).map_err(CyclesError::invalid_data)?;
+    let header = vm::header(&fetch_header(ckb_rpc_url, &block_hash).await?)
+        .map_err(CyclesError::invalid_data)?;
     Ok(ckb_types::core::TransactionInfo::new(
         header.number(),
         header.epoch(),
@@ -404,7 +487,7 @@ async fn fetch_committing_transaction_info(
 /// Fetch the VM activation epochs (RFC0032 -> VM1, RFC0049 -> VM2) from the
 /// chain's `get_consensus` response. Chain data is the source of truth — no
 /// per-network hardcoded tables.
-async fn fetch_vm_consensus(ckb_rpc_url: &str) -> Result<(VmActivationEpochs, u64), String> {
+async fn fetch_vm_consensus(ckb_rpc_url: &str) -> Result<(VmActivationEpochs, u64), CyclesError> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -418,24 +501,30 @@ async fn fetch_vm_consensus(ckb_rpc_url: &str) -> Result<(VmActivationEpochs, u6
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("RPC request failed: {}", e))?
+        .map_err(|e| CyclesError::Unavailable(format!("RPC request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        .map_err(|e| CyclesError::Unavailable(format!("Failed to parse RPC response: {e}")))?;
 
     if let Some(err) = resp.error {
-        return Err(format!("RPC error: {}", err.message));
+        return Err(CyclesError::Unavailable(format!(
+            "RPC error: {}",
+            err.message
+        )));
     }
 
     let consensus = resp
         .result
-        .ok_or_else(|| "get_consensus returned no result".to_string())?;
+        .ok_or_else(|| CyclesError::Unavailable("get_consensus returned no result".into()))?;
 
     let max = consensus
         .get("max_block_cycles")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "consensus missing max_block_cycles".to_string())?;
-    Ok((parse_vm_activation_epochs(&consensus)?, parse_hex_u64(max)?))
+        .ok_or_else(|| CyclesError::invalid_data("consensus missing max_block_cycles"))?;
+    Ok((
+        parse_vm_activation_epochs(&consensus).map_err(CyclesError::invalid_data)?,
+        parse_hex_u64(max).map_err(CyclesError::invalid_data)?,
+    ))
 }
 
 /// Extract VM activation epochs from a `get_consensus` result object.
@@ -510,16 +599,13 @@ struct ResolvedCell {
 }
 
 /// Resolve one out point into the cell payload plus its header association.
-async fn fetch_cell(ckb_rpc_url: &str, out_point: &RpcOutPoint) -> Result<ResolvedCell, String> {
+async fn fetch_cell(
+    ckb_rpc_url: &str,
+    out_point: &RpcOutPoint,
+) -> Result<ResolvedCell, CyclesError> {
     let (output, data) = fetch_cell_with_data(ckb_rpc_url, out_point).await?;
-    let transaction_info = fetch_committing_transaction_info(ckb_rpc_url, &out_point.tx_hash)
-        .await
-        .map_err(|e| {
-            format!(
-                "cannot resolve header association for cell {}:{}: {}",
-                out_point.tx_hash, out_point.index, e
-            )
-        })?;
+    let transaction_info =
+        fetch_committing_transaction_info(ckb_rpc_url, &out_point.tx_hash).await?;
     Ok(ResolvedCell {
         output,
         data,
@@ -531,7 +617,7 @@ async fn fetch_cell(ckb_rpc_url: &str, out_point: &RpcOutPoint) -> Result<Resolv
 async fn fetch_cell_with_data(
     ckb_rpc_url: &str,
     out_point: &RpcOutPoint,
-) -> Result<(RpcOutput, String), String> {
+) -> Result<(RpcOutput, String), CyclesError> {
     let client = reqwest::Client::new();
 
     let body = serde_json::json!({
@@ -549,11 +635,17 @@ async fn fetch_cell_with_data(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("RPC request failed: {}", e))?
+        .map_err(|e| CyclesError::Unavailable(format!("RPC request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        .map_err(|e| CyclesError::Unavailable(format!("Failed to parse RPC response: {e}")))?;
 
+    if let Some(error) = resp.error {
+        return Err(CyclesError::Unavailable(format!(
+            "live cell RPC error for {}:{}: {}",
+            out_point.tx_hash, out_point.index, error.message
+        )));
+    }
     if let Some(result) = resp.result {
         if let Some(cell) = result.cell {
             return Ok((cell.output, cell.data.content));
@@ -566,7 +658,7 @@ async fn fetch_cell_with_data(
 async fn fetch_cell_from_transaction(
     ckb_rpc_url: &str,
     out_point: &RpcOutPoint,
-) -> Result<(RpcOutput, String), String> {
+) -> Result<(RpcOutput, String), CyclesError> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -580,42 +672,43 @@ async fn fetch_cell_from_transaction(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("RPC request failed: {}", e))?
+        .map_err(|e| CyclesError::Unavailable(format!("RPC request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        .map_err(|e| CyclesError::Unavailable(format!("Failed to parse RPC response: {e}")))?;
 
     if let Some(err) = resp.error {
-        return Err(format!("RPC error: {}", err.message));
+        return Err(CyclesError::Unavailable(format!(
+            "RPC error: {}",
+            err.message
+        )));
     }
 
-    let tx = resp
-        .result
-        .and_then(|r| r.transaction)
-        .ok_or_else(|| format!("Transaction {} not found", out_point.tx_hash))?;
+    let tx = resp.result.and_then(|r| r.transaction).ok_or_else(|| {
+        CyclesError::Unavailable(format!("Transaction {} not found", out_point.tx_hash))
+    })?;
 
-    let index = parse_hex_index(&out_point.index)?;
-    let output = tx
-        .outputs
-        .get(index)
-        .cloned()
-        .ok_or_else(|| format!("Output index {} out of range", index))?;
+    let index = parse_hex_index(&out_point.index).map_err(CyclesError::invalid_data)?;
+    let output =
+        tx.outputs.get(index).cloned().ok_or_else(|| {
+            CyclesError::invalid_data(format!("Output index {} out of range", index))
+        })?;
     // outputs_data is 1:1 with outputs in the molecule layout; a short vector
     // means the node returned a malformed transaction, not an empty cell.
     let data = tx.outputs_data.get(index).cloned().ok_or_else(|| {
-        format!(
+        CyclesError::invalid_data(format!(
             "transaction {} has {} outputs but only {} outputs_data entries (index {})",
             out_point.tx_hash,
             tx.outputs.len(),
             tx.outputs_data.len(),
             index
-        )
+        ))
     })?;
 
     Ok((output, data))
 }
 
-async fn fetch_header(ckb_rpc_url: &str, block_hash: &str) -> Result<RpcHeader, String> {
+async fn fetch_header(ckb_rpc_url: &str, block_hash: &str) -> Result<RpcHeader, CyclesError> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -629,17 +722,20 @@ async fn fetch_header(ckb_rpc_url: &str, block_hash: &str) -> Result<RpcHeader, 
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("RPC request failed: {}", e))?
+        .map_err(|e| CyclesError::Unavailable(format!("RPC request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+        .map_err(|e| CyclesError::Unavailable(format!("Failed to parse RPC response: {e}")))?;
 
     if let Some(err) = resp.error {
-        return Err(format!("RPC error: {}", err.message));
+        return Err(CyclesError::Unavailable(format!(
+            "RPC error: {}",
+            err.message
+        )));
     }
 
     resp.result
-        .ok_or_else(|| format!("Header {} not found", block_hash))
+        .ok_or_else(|| CyclesError::Unavailable(format!("Header {} not found", block_hash)))
 }
 
 fn parse_hex_index(hex: &str) -> Result<usize, String> {
@@ -739,7 +835,7 @@ fn mock_cell_dep_from(out_point: &RpcOutPoint, dep_type: &str, cell: ResolvedCel
 async fn build_mock_transaction(
     ckb_rpc_url: &str,
     tx: &RpcTransaction,
-) -> Result<MockTransaction, String> {
+) -> Result<MockTransaction, CyclesError> {
     let mut mock_inputs = Vec::new();
     for input in &tx.inputs {
         let cell = fetch_cell(ckb_rpc_url, &input.previous_output).await?;
@@ -758,7 +854,8 @@ async fn build_mock_transaction(
         ));
 
         if cell_dep.dep_type == "dep_group" {
-            let referenced_out_points = parse_dep_group_data(&group_data)?;
+            let referenced_out_points =
+                parse_dep_group_data(&group_data).map_err(CyclesError::invalid_data)?;
             for ref_out_point in referenced_out_points {
                 let already_exists = mock_cell_deps.iter().any(|d| {
                     d.cell_dep.out_point.tx_hash == ref_out_point.tx_hash
@@ -854,6 +951,19 @@ async fn build_mock_transaction(
 mod tests {
     use super::*;
 
+    async fn calculate_for_committed_test(
+        rpc: &str,
+        hash: &str,
+    ) -> Result<crate::cycles_task::TransactionCycles, CyclesError> {
+        let (_, status) = fetch_transaction(rpc, hash).await?;
+        let block = committed_block_hash(hash, &status)?;
+        let bytes: [u8; 32] = hex::decode(block.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        calculate_cycles(rpc, hash, &bytes).await
+    }
+
     const DEPOSIT_BLOCK_HASH: &str =
         "0x41e2ea50e0557f06c6e791f75d466528bc6524d5aaefe07789d36208c0fdea7d";
 
@@ -936,6 +1046,7 @@ mod tests {
         };
         assert!(committed_block_hash("0xf398", &pending)
             .unwrap_err()
+            .to_string()
             .contains("not 'committed'"));
 
         // Committed without a hash is a node invariant violation, not a None.
@@ -946,6 +1057,7 @@ mod tests {
         };
         assert!(committed_block_hash("0xf398", &broken)
             .unwrap_err()
+            .to_string()
             .contains("no block_hash"));
     }
 
@@ -1110,7 +1222,7 @@ mod tests {
         ];
 
         for (tx_hash, expected, era) in cases {
-            let cycles = calculate_cycles(&rpc_url, tx_hash)
+            let cycles = calculate_for_committed_test(&rpc_url, tx_hash)
                 .await
                 .unwrap_or_else(|e| {
                     panic!("calculate_cycles failed for {} ({}): {}", tx_hash, era, e)
@@ -1157,7 +1269,7 @@ mod tests {
         ];
 
         for (tx_hash, expected, phase) in cases {
-            let cycles = calculate_cycles(&rpc_url, tx_hash)
+            let cycles = calculate_for_committed_test(&rpc_url, tx_hash)
                 .await
                 .unwrap_or_else(|e| {
                     panic!("calculate_cycles failed for {} ({}): {}", tx_hash, phase, e)
@@ -1185,7 +1297,7 @@ mod tests {
         let rpc_url = std::env::var("CKBADGER_TEST_RPC")
             .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
 
-        let err = calculate_cycles(
+        let err = calculate_for_committed_test(
             &rpc_url,
             "0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c",
         )
@@ -1193,7 +1305,7 @@ mod tests {
         .expect_err("a failed script replay must not produce a cycle count");
         println!("genesis tx error: {}", err);
         assert!(
-            err.contains("genesis transactions have no consensus script execution"),
+            matches!(err, CyclesError::Replay(ReplayFailure::InvalidChainData)),
             "unexpected error: {}",
             err
         );

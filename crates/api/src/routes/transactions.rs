@@ -2206,10 +2206,10 @@ async fn load_tx_cycles_state(
             Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Complete(result)) => {
                 StoredCycles::Complete(result.cycles)
             }
-            Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Failed { error, .. }) => {
+            Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Failed { failure, .. }) => {
                 StoredCycles::Failed {
                     total: entry.cycles.filter(|cycles| *cycles > 0),
-                    error,
+                    error: failure.to_string(),
                 }
             }
             None if entry.cycles == Some(-1) => anyhow::bail!(

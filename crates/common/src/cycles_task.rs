@@ -44,7 +44,10 @@ pub struct TransactionCycles {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TxGroupCyclesRecord {
     Complete(TransactionCycles),
-    Failed { block_hash: [u8; 32], error: String },
+    Failed {
+        block_hash: [u8; 32],
+        failure: crate::cycles::ReplayFailure,
+    },
 }
 
 impl TransactionCycles {

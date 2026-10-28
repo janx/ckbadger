@@ -283,11 +283,19 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
 - lazy VM results: `tx_group_cycles:<tx_hash_32B>` stores
-  `TransactionCycles { block_hash, cycles, groups: [{ script_hash, group_type, cycles }] }`.
-  Only the indexer's on-demand cycles worker writes it, atomically with `tx_index.cycles`
-  after checking the canonical transaction slot and block hash. Readers validate group sum,
-  uniqueness and canonical identity. Rollback deletes it alongside `tx_hash_map`; bulk emits
-  no such row and adds no fields to transaction records.
+  `TxGroupCyclesRecord::Complete(TransactionCycles { block_hash, cycles, groups })` or
+  `Failed { block_hash, failure: ReplayFailure }`. Failure evidence is fixed-size: dependency
+  resolution, invalid chain data, lock/type group plus script hash, no groups, or cycles overflow.
+  Raw diagnostics are logged, never persisted or exposed by the public API. RPC transport/body
+  errors, RPC errors, uncommitted transactions and commit-block mismatches are retryable: they
+  leave both the group record and scalar cycles untouched. Open transaction pages retry every
+  two seconds while the node is unavailable and recover when it returns.
+  Only the indexer's on-demand cycles worker writes these domain records, atomically with
+  `tx_index.cycles`, after checking canonical identity. Cellbase/genesis transactions reject
+  group records; a Complete record cannot regress to Failed. Failed may become Failed or
+  Complete. Readers validate group sum, uniqueness and canonical identity. Rollback deletes
+  the record alongside `tx_hash_map`; bulk emits no such row. Append-only cell payloads are
+  untouched. The bincode format changed; existing chain stores require a genesis re-sync.
 - fork reconciliation: `reorg_reconcile_pending` names the automatic event waiting for
   canonical replay. Once the winning tip is replayed, the indexer verifies abandoned-tip
   ancestry and atomically adds full event-key `reverted_by_event` / `reverses_events` links.
