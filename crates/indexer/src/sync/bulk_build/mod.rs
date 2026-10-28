@@ -3324,6 +3324,9 @@ pub(crate) fn collect_dotcell_artifacts(domain_store: &CkbadgerStore) -> Result<
 }
 
 #[doc(hidden)]
+pub type ScriptBindingRows = BTreeMap<(&'static str, Vec<u8>), Vec<u8>>;
+
+#[doc(hidden)]
 #[derive(Debug, Default, Clone)]
 pub struct BulkArtifactSnapshot {
     pub report: materialize::MaterializationReport,
@@ -3362,6 +3365,8 @@ pub struct BulkArtifactSnapshot {
     pub latest_dao_statistics: Option<DaoLatestStatistics>,
     pub dao_top_depositors: Option<DaoTopDepositors>,
     pub script_daily_deltas: HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>>,
+    /// Exact script binding rows for cross-path regression tests.
+    pub script_binding_rows: ScriptBindingRows,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
     pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
@@ -3384,14 +3389,31 @@ pub(crate) fn materialize_core_owner_state_for_test(
 pub(crate) fn materialize_bulk_artifacts_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<BulkArtifactSnapshot> {
-    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], false)
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], false, |_| Ok(()))
+}
+
+#[doc(hidden)]
+#[cfg(test)]
+pub(crate) fn materialize_bulk_artifacts_with_script_label_for_test(
+    blocks: &[BlockResponseWithCycles],
+    version_hash: &[u8],
+    version: &ckbadger_store::ScriptVersionInfo,
+    family_id: &str,
+    family: &ckbadger_store::ScriptFamilyInfo,
+) -> Result<BulkArtifactSnapshot> {
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], false, |store| {
+        store.put_script_version(version_hash, version)?;
+        store.put_script_family_direct(family_id, family)?;
+        store.put_script_version_by_family_direct(family_id, version_hash)?;
+        Ok(())
+    })
 }
 
 #[doc(hidden)]
 pub(crate) fn materialize_bulk_artifacts_with_latest_dao_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<BulkArtifactSnapshot> {
-    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], true)
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], true, |_| Ok(()))
 }
 
 #[doc(hidden)]
@@ -3399,7 +3421,7 @@ pub(crate) fn materialize_bulk_artifacts_from_batches_for_test(
     batches: &[Vec<BlockResponseWithCycles>],
 ) -> Result<BulkArtifactSnapshot> {
     let batch_slices = batches.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    materialize_bulk_artifacts_from_block_batches_for_test_impl(&batch_slices, false)
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&batch_slices, false, |_| Ok(()))
 }
 
 #[doc(hidden)]
@@ -3638,6 +3660,7 @@ fn apply_pipeline_sync_status_for_test(
 fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     block_batches: &[&[BlockResponseWithCycles]],
     include_latest_dao: bool,
+    seed: impl FnOnce(&CkbadgerStore) -> Result<()>,
 ) -> Result<BulkArtifactSnapshot> {
     let first = block_batches
         .iter()
@@ -3694,6 +3717,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         seed_test_genesis_baseline(domain_store.as_ref())?;
+        seed(domain_store.as_ref())?;
         if include_latest_dao && first_number > 0 {
             let mut prefix = ckbadger_store::batch::StoreBatch::new(domain_store.as_ref());
             for number in 0..first_number {
@@ -3795,6 +3819,7 @@ fn collect_bulk_artifact_snapshot(
     let (dao_daily_snapshots, latest_dao_statistics, dao_top_depositors) =
         collect_dao_stats_snapshot(domain_store)?;
     let script_daily_deltas = collect_script_daily_deltas_snapshot(domain_store)?;
+    let script_binding_rows = collect_script_binding_rows_for_test(domain_store)?;
     let (hodl_waves, cell_distribution_snapshots, address_cohort_snapshots) =
         collect_hodl_stats_snapshot(domain_store)?;
     let (
@@ -3843,6 +3868,7 @@ fn collect_bulk_artifact_snapshot(
         latest_dao_statistics,
         dao_top_depositors,
         script_daily_deltas,
+        script_binding_rows,
         cell_payloads,
         live_cells,
         consumed_cells,
@@ -3853,6 +3879,24 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
         core,
     })
+}
+
+pub(crate) fn collect_script_binding_rows_for_test(
+    store: &CkbadgerStore,
+) -> Result<ScriptBindingRows> {
+    let mut rows = BTreeMap::new();
+    for cf in [
+        ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
+        ckbadger_store::CF_SCRIPT_VERSIONS,
+        ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+        ckbadger_store::CF_SCRIPT_FAMILIES,
+    ] {
+        for row in store.iterator_cf(store.cf(cf), IteratorMode::Start) {
+            let (key, value) = row?;
+            rows.insert((cf, key.to_vec()), value.to_vec());
+        }
+    }
+    Ok(rows)
 }
 
 /// Read back the chain-level hourly and per-miner daily stats rows for test

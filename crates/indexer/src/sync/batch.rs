@@ -10476,6 +10476,215 @@ mod tests {
         }
     }
 
+    mod script_binding_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, write_live_block,
+            AR_DEPOSIT,
+        };
+        use super::*;
+        use crate::parser::ScriptParser;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        fn typed_script(code_hash: String, arg: u8) -> Script {
+            Script {
+                code_hash,
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode([arg; 32])),
+            }
+        }
+
+        fn input(tx_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([tx_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn output(capacity: u64, lock: Script, type_: Option<Script>) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_,
+            }
+        }
+
+        fn tx(
+            hash_byte: u8,
+            inputs: Vec<CellInput>,
+            outputs: Vec<CellOutput>,
+            data: Vec<String>,
+        ) -> TransactionView {
+            let mut tx = cellbase_tx(hash_byte, 100_00000000);
+            tx.inputs = inputs;
+            tx.outputs = outputs;
+            tx.outputs_data = data;
+            tx.witnesses = vec!["0x".to_string()];
+            tx
+        }
+
+        fn blocks() -> (Vec<BlockResponseWithCycles>, Vec<u8>, Vec<u8>, Vec<u8>) {
+            let type_id_hash = format!("0x{}", crate::parser::script::TYPE_ID_CODE_HASH);
+            let id_a = typed_script(type_id_hash.clone(), 0xa1);
+            let id_a_reference = ScriptParser::compute_script_hash(&id_a);
+            let id_b = typed_script(type_id_hash, 0xb1);
+            let generic = typed_script(format!("0x{}", hex::encode([0x42; 32])), 0xc1);
+            let generic_reference = ScriptParser::compute_script_hash(&generic);
+            let xudt = typed_script(crate::parser::udt::XUDT_CODE_HASH_TYPE.to_string(), 0xd1);
+            let xudt_reference = ScriptParser::compute_script_hash(&xudt);
+            let generic_user_lock = Script {
+                code_hash: format!("0x{}", hex::encode(&generic_reference)),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            };
+            let mut elf_amount = [0u8; 16];
+            elf_amount[..4].copy_from_slice(b"\x7fELF");
+            let create = tx(
+                0xa1,
+                vec![input(0x90, 0)],
+                vec![
+                    output(800_00000000, lock_script(), Some(id_a.clone())),
+                    output(800_00000000, lock_script(), Some(id_b)),
+                    output(800_00000000, lock_script(), Some(generic)),
+                    output(800_00000000, lock_script(), Some(xudt)),
+                    output(1700_00000000, lock_script(), None),
+                ],
+                vec![
+                    "0x7f454c4601".to_string(),
+                    "0x7f454c4602".to_string(),
+                    "0x7f454c4603".to_string(),
+                    format!("0x{}", hex::encode(elf_amount)),
+                    "0x".to_string(),
+                ],
+            );
+            let upgrade = tx(
+                0xa2,
+                vec![input(0xa1, 0), input(0xa1, 2), input(0xa1, 4)],
+                vec![
+                    output(700_00000000, lock_script(), Some(id_a)),
+                    output(700_00000000, generic_user_lock, None),
+                    output(1700_00000000, lock_script(), None),
+                ],
+                vec![
+                    "0x7f454c4604".to_string(),
+                    "0x".to_string(),
+                    "0x".to_string(),
+                ],
+            );
+            let consume = tx(
+                0xa3,
+                vec![input(0xa2, 0)],
+                vec![output(600_00000000, lock_script(), None)],
+                vec!["0x".to_string()],
+            );
+            (
+                vec![
+                    block(100, AR_DEPOSIT, vec![cellbase_tx(0x90, 5000_00000000)]),
+                    block(
+                        101,
+                        AR_DEPOSIT,
+                        vec![cellbase_tx(0x91, 100_00000000), create],
+                    ),
+                    block(
+                        102,
+                        AR_DEPOSIT,
+                        vec![cellbase_tx(0x92, 100_00000000), upgrade],
+                    ),
+                    block(
+                        103,
+                        AR_DEPOSIT,
+                        vec![cellbase_tx(0x93, 100_00000000), consume],
+                    ),
+                ],
+                id_a_reference,
+                generic_reference,
+                xudt_reference,
+            )
+        }
+
+        #[tokio::test]
+        async fn bulk_and_live_script_binding_rows_match_across_five_deployment_cases() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let (blocks, id_a_reference, generic_reference, xudt_reference) = blocks();
+            let family_id = "family/parity-type-id";
+            let old_version_hash = ScriptParser::compute_data_hash(b"\x7fELF\x01");
+            let version = ckbadger_store::ScriptVersionInfo {
+                version_hash: old_version_hash.to_vec(),
+                family_id: Some(family_id.to_string()),
+                name: Some("Parity TYPE_ID".to_string()),
+                registered_references: vec![(id_a_reference.clone(), 1)],
+                ..Default::default()
+            };
+            let family = ckbadger_store::ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: "Parity TYPE_ID".to_string(),
+                ..Default::default()
+            };
+            let bulk =
+                crate::sync::bulk_build::materialize_bulk_artifacts_with_script_label_for_test(
+                    &blocks,
+                    &old_version_hash,
+                    &version,
+                    family_id,
+                    &family,
+                )
+                .unwrap();
+
+            let dir = tempfile::tempdir().unwrap();
+            let live = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            live.set_secondary_epoch_reward(61_369_863_013_698).unwrap();
+            live.put_script_version(&old_version_hash, &version)
+                .unwrap();
+            live.put_script_family_direct(family_id, &family).unwrap();
+            live.put_script_version_by_family_direct(family_id, &old_version_hash)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(live.clone());
+            for block in blocks {
+                write_live_block(&indexer, block).await.unwrap();
+            }
+            let live_rows =
+                crate::sync::bulk_build::collect_script_binding_rows_for_test(live.as_ref())
+                    .unwrap();
+            assert_eq!(live_rows, bulk.script_binding_rows);
+            for cf in [
+                ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
+                ckbadger_store::CF_SCRIPT_VERSIONS,
+                ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+                ckbadger_store::CF_SCRIPT_FAMILIES,
+            ] {
+                assert!(
+                    live_rows.keys().any(|(row_cf, _)| *row_cf == cf),
+                    "{cf} is unexercised"
+                );
+            }
+            let upgraded_hash = ScriptParser::compute_data_hash(b"\x7fELF\x04");
+            assert_eq!(
+                live.get_script_version(&upgraded_hash)
+                    .unwrap()
+                    .unwrap()
+                    .family_id
+                    .as_deref(),
+                Some(family_id),
+                "TYPE_ID upgrade must inherit the registered family"
+            );
+            for reference in [generic_reference, xudt_reference] {
+                assert!(live
+                    .get_script_reference_version_hash(1, &reference)
+                    .unwrap()
+                    .is_none());
+            }
+            assert_eq!(
+                live.iterator_cf(live.cf_cells(), rocksdb::IteratorMode::Start)
+                    .count(),
+                bulk.cell_payloads.len(),
+                "live and bulk append-only cell payload counts must agree"
+            );
+        }
+    }
+
     mod live_token_binding {
         use super::live_dao_fee::{
             block, cellbase_tx, indexer_for_live_write_test, lock_script, write_live_block,

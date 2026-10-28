@@ -21,13 +21,13 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 pub(crate) struct ScriptOwner {
     infos: FxHashMap<Vec<u8>, ScriptInfo>,
     reference_infos: FxHashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
-    type_reference_live_versions: FxHashMap<Vec<u8>, FxHashMap<Vec<u8>, u32>>,
-    type_reference_versions: FxHashMap<Vec<u8>, Option<Vec<u8>>>,
+    type_id_reference_live_versions: FxHashMap<Vec<u8>, FxHashMap<Vec<u8>, u32>>,
+    type_id_reference_versions: FxHashMap<Vec<u8>, Option<Vec<u8>>>,
     type_id_lineage: FxHashMap<(Vec<u8>, Vec<u8>), Vec<i64>>,
     daily_deltas: FxHashMap<(Vec<u8>, u8, bool, u32), ScriptDailyDelta>,
 }
 
-enum TypeReferenceResolution {
+enum TypeIdReferenceResolution {
     Retired,
     Resolved(Vec<u8>),
     Ambiguous,
@@ -51,7 +51,7 @@ impl ScriptOwner {
                     + crate::sync::bulk_build::accounting::serialized_bytes(info)
             },
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(
-            &self.type_reference_live_versions,
+            &self.type_id_reference_live_versions,
             |reference_hash, version_counts| {
                 crate::sync::bulk_build::accounting::bytes_vec_bytes(reference_hash)
                     + crate::sync::bulk_build::accounting::hash_map_bytes(
@@ -63,7 +63,7 @@ impl ScriptOwner {
                     )
             },
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(
-            &self.type_reference_versions,
+            &self.type_id_reference_versions,
             |reference_hash, version_hash| {
                 crate::sync::bulk_build::accounting::bytes_vec_bytes(reference_hash)
                     + version_hash
@@ -75,7 +75,7 @@ impl ScriptOwner {
             + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
     }
 
-    fn apply_type_reference_live_version_delta(
+    fn apply_type_id_reference_live_version_delta(
         &mut self,
         reference_hash: &[u8],
         version_hash: &[u8],
@@ -85,7 +85,7 @@ impl ScriptOwner {
         let reference_key = reference_hash.to_vec();
         let (resolution, should_remove_live_counts) = {
             let version_counts = self
-                .type_reference_live_versions
+                .type_id_reference_live_versions
                 .entry(reference_key.clone())
                 .or_default();
             match delta {
@@ -141,30 +141,30 @@ impl ScriptOwner {
             }
 
             let resolution = match version_counts.len() {
-                0 => TypeReferenceResolution::Retired,
-                1 => TypeReferenceResolution::Resolved(
+                0 => TypeIdReferenceResolution::Retired,
+                1 => TypeIdReferenceResolution::Resolved(
                     version_counts
                         .keys()
                         .next()
                         .expect("single live version count must exist")
                         .clone(),
                 ),
-                _ => TypeReferenceResolution::Ambiguous,
+                _ => TypeIdReferenceResolution::Ambiguous,
             };
             (resolution, version_counts.is_empty())
         };
 
         if should_remove_live_counts {
-            self.type_reference_live_versions.remove(&reference_key);
+            self.type_id_reference_live_versions.remove(&reference_key);
         }
 
         match resolution {
-            TypeReferenceResolution::Resolved(version_hash) => {
-                self.type_reference_versions
+            TypeIdReferenceResolution::Resolved(version_hash) => {
+                self.type_id_reference_versions
                     .insert(reference_key, Some(version_hash));
             }
-            TypeReferenceResolution::Retired | TypeReferenceResolution::Ambiguous => {
-                self.type_reference_versions.insert(reference_key, None);
+            TypeIdReferenceResolution::Retired | TypeIdReferenceResolution::Ambiguous => {
+                self.type_id_reference_versions.insert(reference_key, None);
             }
         }
 
@@ -295,7 +295,7 @@ impl ScriptOwner {
 
         let mut mapping_keys = self.reference_infos.keys().cloned().collect::<Vec<_>>();
         mapping_keys.extend(
-            self.type_reference_versions
+            self.type_id_reference_versions
                 .keys()
                 .cloned()
                 .map(|reference_hash| (reference_hash, 1)),
@@ -306,7 +306,7 @@ impl ScriptOwner {
         for (reference_hash, hash_type) in mapping_keys {
             let version_hash = match hash_type {
                 0 | 2 | 4 => Some(reference_hash.clone()),
-                1 => self.type_reference_versions.get(&reference_hash).cloned().flatten(),
+                1 => self.type_id_reference_versions.get(&reference_hash).cloned().flatten(),
                 _ => bail!(
                     "unsupported script reference hash_type during bulk-build materialization: reference_hash=0x{}, hash_type={}",
                     hex::encode(&reference_hash),
@@ -421,15 +421,25 @@ impl BulkReducer for ScriptOwner {
         for input in &tx.resolved_inputs {
             apply_input_deltas(input, ctx, &mut deltas, tx)?;
             apply_input_reference_deltas(input, ctx, &mut reference_deltas, tx)?;
-            if let (Some(reference), Some(data_hash)) = (input.type_script_hash_id, input.data_hash)
-            {
+            let native_type_id = input
+                .type_code_hash_id
+                .zip(input.type_hash_type)
+                .is_some_and(|(hash, kind)| {
+                    crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
+                });
+            if native_type_id {
+                let (Some(reference), Some(data_hash)) =
+                    (input.type_script_hash_id, input.data_hash)
+                else {
+                    bail!("native TYPE_ID input lacks type hash or data hash: block={} tx=0x{} input=0x{}:{}", tx.block_number, hex::encode(tx.tx_hash), hex::encode(input.outpoint.tx_hash), input.outpoint.index);
+                };
                 let reference = ctx.resolve_identity(reference);
                 if self
-                    .type_reference_live_versions
+                    .type_id_reference_live_versions
                     .get(reference)
                     .is_some_and(|versions| versions.contains_key(data_hash.as_slice()))
                 {
-                    self.apply_type_reference_live_version_delta(reference, &data_hash, -1, tx)?;
+                    self.apply_type_id_reference_live_version_delta(reference, &data_hash, -1, tx)?;
                 }
             }
         }
@@ -448,28 +458,26 @@ impl BulkReducer for ScriptOwner {
                     tx.block_number
                 );
             }
-            if cell.data.starts_with(b"\x7fELF") && cell.type_code_hash_id.is_some() {
+            if native_type_id && cell.data.starts_with(b"\x7fELF") {
                 let reference = cell.type_script_hash_id.ok_or_else(|| {
                     anyhow!(
-                        "typed ELF output lacks type hash at block {}",
+                        "TYPE_ID ELF output lacks type hash at block {}",
                         tx.block_number
                     )
                 })?;
                 let reference = ctx.resolve_identity(reference);
                 let data_hash = cell.data_hash.ok_or_else(|| {
                     anyhow!(
-                        "typed ELF output lacks data hash: block={} tx=0x{}",
+                        "TYPE_ID ELF output lacks data hash: block={} tx=0x{}",
                         tx.block_number,
                         hex::encode(tx.tx_hash)
                     )
                 })?;
-                if native_type_id {
-                    self.type_id_lineage
-                        .entry((reference.to_vec(), data_hash.to_vec()))
-                        .or_default()
-                        .push(tx.block_number);
-                }
-                self.apply_type_reference_live_version_delta(reference, &data_hash, 1, tx)?;
+                self.type_id_lineage
+                    .entry((reference.to_vec(), data_hash.to_vec()))
+                    .or_default()
+                    .push(tx.block_number);
+                self.apply_type_id_reference_live_version_delta(reference, &data_hash, 1, tx)?;
             }
         }
 
@@ -1934,7 +1942,7 @@ mod tests {
             },
         );
         owner
-            .type_reference_versions
+            .type_id_reference_versions
             .insert(reference_hash.clone(), Some(version_hash.clone()));
 
         let mut materializer = Materializer::new(&domain_store, &append_store);
@@ -1964,7 +1972,7 @@ mod tests {
     }
 
     #[test]
-    fn script_owner_persists_unused_elf_type_reference_bindings() {
+    fn script_owner_binds_only_unused_native_type_id_elf_deployments() {
         for native_type_id in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let domain_store = CkbadgerStore::open_domain(dir.path().join("domain")).unwrap();
@@ -1972,6 +1980,11 @@ mod tests {
                 CkbadgerStore::open_append_only(dir.path().join("append-only")).unwrap();
             let reference_hash = vec![if native_type_id { 0x81 } else { 0x82 }; 32];
             let version_hash = vec![0x91; 32];
+            let observed_hash = if native_type_id {
+                [0x91; 32]
+            } else {
+                [0x92; 32]
+            };
             let family_id = "family/unused-deployment";
             domain_store
                 .put_script_version(
@@ -1979,6 +1992,11 @@ mod tests {
                     &ScriptVersionInfo {
                         version_hash: version_hash.clone(),
                         family_id: Some(family_id.to_string()),
+                        registered_references: if native_type_id {
+                            Vec::new()
+                        } else {
+                            vec![(reference_hash.clone(), 1)]
+                        },
                         ..Default::default()
                     },
                 )
@@ -2031,7 +2049,7 @@ mod tests {
                     occupied_capacity: 80_00000000,
                     data_size: 4,
                     data: b"\x7fELF".to_vec(),
-                    data_hash: Some([0x91; 32]),
+                    data_hash: Some(observed_hash),
                     udt_amount: None,
                     semantic_tag: crate::sync::CellSemanticTag::Plain,
                     dao_state: None,
@@ -2054,8 +2072,8 @@ mod tests {
                 domain_store
                     .get_script_reference_version_hash(1, &reference_hash)
                     .unwrap(),
-                Some(version_hash.clone()),
-                "missing binding for native_type_id={native_type_id}"
+                native_type_id.then(|| version_hash.clone()),
+                "unexpected binding for native_type_id={native_type_id}"
             );
             let version = domain_store
                 .get_script_version(&version_hash)
@@ -2080,9 +2098,18 @@ mod tests {
             );
             if !native_type_id {
                 assert!(
+                    domain_store
+                        .get_script_version(&observed_hash)
+                        .unwrap()
+                        .is_none(),
+                    "an unrecognized generic binary must not create a version row"
+                );
+                assert!(
                     owner.type_id_lineage.is_empty(),
                     "generic reference is not native Type ID lineage"
                 );
+                assert!(owner.type_id_reference_versions.is_empty());
+                assert!(owner.type_id_reference_live_versions.is_empty());
 
                 let mut usage_tx = tx.clone();
                 usage_tx.tx_hash = [0x62; 32];
@@ -2120,8 +2147,8 @@ mod tests {
                         .unwrap()
                         .unwrap()
                         .lock_cells_count,
-                    1,
-                    "generic type reference usage must roll into the version"
+                    0,
+                    "generic type reference usage must stay unresolved"
                 );
                 assert_eq!(
                     domain_store
@@ -2129,8 +2156,8 @@ mod tests {
                         .unwrap()
                         .unwrap()
                         .cells_count,
-                    1,
-                    "generic type reference usage must roll into the family"
+                    0,
+                    "generic type reference usage must stay outside the family"
                 );
             }
             assert_eq!(
@@ -2322,7 +2349,7 @@ mod tests {
             state_owner.type_id_lineage.is_empty(),
             "mutable non-ELF state is not code history"
         );
-        assert!(state_owner.type_reference_live_versions.is_empty());
+        assert!(state_owner.type_id_reference_live_versions.is_empty());
         let mut owner = ScriptOwner::default();
         owner.apply_tx(&tx0, &ctx).unwrap();
         owner.apply_tx(&tx1, &ctx).unwrap();
@@ -2380,11 +2407,11 @@ mod tests {
         retired.cells.to_mut()[0].data_hash = Some([0xc3; 32]);
         owner.apply_tx(&retired, &ctx).unwrap();
         assert_eq!(
-            owner.type_reference_versions.get(&reference_hash),
+            owner.type_id_reference_versions.get(&reference_hash),
             Some(&None)
         );
         assert!(!owner
-            .type_reference_live_versions
+            .type_id_reference_live_versions
             .contains_key(&reference_hash));
         let rows = owner.build_final_rows(&domain_store).unwrap().snapshot_rows;
         assert!(!rows.iter().any(|row| row.cf_name
@@ -2450,7 +2477,7 @@ mod tests {
         reactivated.cells.to_mut()[0].data_hash = Some([0xd4; 32]);
         owner.apply_tx(&reactivated, &ctx).unwrap();
         assert_eq!(
-            owner.type_reference_versions.get(&reference_hash),
+            owner.type_id_reference_versions.get(&reference_hash),
             Some(&Some(vec![0xd4; 32]))
         );
         let rows = owner.build_final_rows(&domain_store).unwrap().snapshot_rows;
@@ -2479,7 +2506,7 @@ mod tests {
         burned.cells = Vec::new().into();
         owner.apply_tx(&burned, &ctx).unwrap();
         assert_eq!(
-            owner.type_reference_versions.get(&reference_hash),
+            owner.type_id_reference_versions.get(&reference_hash),
             Some(&None)
         );
         assert_eq!(owner.type_id_lineage.len(), 3);
