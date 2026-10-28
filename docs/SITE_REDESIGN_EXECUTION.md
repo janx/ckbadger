@@ -427,3 +427,36 @@ record provenance, failure corrections, source boundaries and read costs.
 **D1–D8 page implementation is complete.** Next: the user's whole-site review
 and the plan's final verification on their updated instance. This D8 acceptance
 does not claim another full 64-check chain run.
+
+## 2026-10-28 final integration acceptance
+
+Three `gpt-6-sol` lanes implemented and reviewed the final integration fixes:
+the address Fiber endpoint's real array contract, pipeline legend wrapping at
+all widths, and X26's cumulative-versus-current DAO depositor mismatch. Root
+integrated the final implementation at `b0c6bbab` on
+`integration/site-redesign-final`.
+
+The complete Rust workspace passed **4,774 tests in 75 suites** (three existing
+opt-in VM tests unrun), formatting, type checking and strict Clippy. Frontend
+gates passed **1,725 tests in 218 files**, type checking, lint and build. All
+**27** producer/consumer fixtures match. The frozen release passed **78/78**
+real-browser checks through its shipped HTTP/WebSocket proxy.
+
+Full mainnet verification passed **64/64**, `scopeComplete=true`, run
+`20261028T035358Z-c207e907`, in 858.6 seconds. S25 checked the same eight entities
+with 1,379,946 records in 400.571 seconds under the unchanged 600-second budget;
+the indexed calendar dependency remains explicit. X26 passed all 30 days without
+changing its comparison tolerance. The earlier debug failure and cold-start
+cache-warmup browser failures are retained separately.
+
+After acceptance, the original local instance was gracefully updated to the
+same release at `http://127.0.0.1:8100`; the old executable was saved, configuration
+hashes stayed unchanged, all four services started, live sync resumed at the
+chain tip and **7/7** post-update fast checks passed. Task-owned acceptance
+services and browser processes were stopped.
+
+Re-sync required: **no for these corrections**. No schema or production store
+write path changed. The [final acceptance report](SITE_REDESIGN_FINAL_ACCEPTANCE.md)
+records executable provenance, retained failures and the separate D4 replay
+boundary. D1–D8 and final automated acceptance are complete; next is the user's
+visual review of the updated instance.
