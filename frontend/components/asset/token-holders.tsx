@@ -137,6 +137,7 @@ export interface TokenHoldersProps {
   decimals: number | null;
 }
 export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) {
+  const distributionSource = `holder distribution from /tokens/${typeHash}/distribution`;
   const [all, setAll] = useState(false),
     pagination = useCursorPagination();
   const distribution = useQuery({
@@ -248,7 +249,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     >
       {distribution.data ? (
         <>
-          <AssetReadState error={distribution.error} label="holder distribution" retained />
+          <AssetReadState error={distribution.error} label={distributionSource} retained />
           <TokenDistributionView
             distribution={distribution.data}
             symbol={symbol}
@@ -260,7 +261,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           <AssetReadState
             error={distribution.error}
             loading={distribution.isLoading}
-            label="holder distribution"
+            label={distributionSource}
           />
           {holderTable}
         </>

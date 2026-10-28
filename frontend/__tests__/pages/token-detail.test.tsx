@@ -145,6 +145,20 @@ describe('TokenDetailPage', () => {
       screen.queryByText('This explorer could not open the token at this address.')
     ).not.toBeInTheDocument();
   });
+
+  it('keeps the token visible and names the distribution endpoint when that secondary read fails', async () => {
+    vi.mocked(api.getTokenDistribution).mockRejectedValue(
+      new ApiRequestError(404, 'not_found', 'distribution unavailable')
+    );
+    render(<TokenDetailPage typeHash={hash} />);
+    expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `Could not load holder distribution from /tokens/${hash}/distribution: API error: 404 - distribution unavailable`
+    );
+    expect(
+      screen.queryByText('This explorer could not open the token at this address.')
+    ).not.toBeInTheDocument();
+  });
   it('consumes unmodified router responses across history, distribution, holders and full transactions', async () => {
     const p = tokenProducer;
     vi.mocked(api.getToken).mockResolvedValue(p.token);
