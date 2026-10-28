@@ -74,6 +74,28 @@ API:
   mutually exclusive, `dataBearing` is orthogonal, and `tip.block`/`tip.hash` is locally
   verifiable. The endpoint is a fixed-size point read and returns 503 until a canonical snapshot
   is published.
+- Script families and references: `/scripts?role=lock|type` filters before pagination and returns
+  full-filter lock-cell code-class totals. `/scripts/{name}` returns registered references,
+  observed versions, deployment chronology and custody evidence. A family name, exact `code_hash`/`hash_type`
+  reference, binary data hash and outpoint are different identities. `/scripts/lookup` is POST,
+  while `/scripts/code-cells` reads exact-reference deployments. Current cells are separately
+  available at `/cells/by-script?code_hash=0x…&hash_type=data|type|data1|data2&script_kind=lock|type|both`
+  with cursor pagination. Unregistered copies do not acquire registered-family provenance.
+- DAO evidence: `/dao/statistics` is the current indexed view; `/dao/evidence` separates phase-0
+  deposits, phase-1 withdrawal requests, readiness windows, concentration and header/AR proof.
+  `/dao/charts/*` and `/charts/*` are historical chart endpoints; complete-day chart points do not
+  stand in for the current DAO inventory.
+- Chain switches and upgrades: `/forks`, `/forks/overview`, `/forks/{id}` and `/hardforks` expose
+  recorded local reorg events, branch/uncle fate and hardfork chronology. A recorded branch
+  adoption can differ from today's canonical branch; uncles are chain history, not a count of this
+  node's observed switches.
+- Scoped identifier search: `/search?q=block:0x…`, `tx:0x…` or `cell:0x…-index` returns
+  `resultType`, `matchKind`, `id` and a canonical page `url`. A missing page plus an empty scoped
+  search is limited to those checked local sources. A search error is not proof of absence.
+- Error-page cell artwork: `/vessels/snapshot` reads a bounded, anchored sample from at most the
+  last 12 indexed blocks, first 6 transactions and first 4 outputs per block, capped at 64 live
+  cells. Its `tracked` parameter reports previously visible outpoint fates; this is illustrative
+  artwork, not an all-live-cell inventory.
 - Optional local CKB L1 peer evidence uses `/api/{network}/v1/network/summary`,
   `/network/distributions`, `/network/history`, `/network/peers`, and
   `/network/peers/{peerId}` (the last four are relative to the same API base). Summary distinguishes

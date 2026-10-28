@@ -63,6 +63,19 @@ Machine-friendly endpoints:
   name multiple endpoints. Bitcoin-backed media remains a link, not an embedded remote preview.
 - Exact live-cell inventory: `/api/{network}/v1/cells/live-summary` (constant-size JSON; verify
   `tip.block`/`tip.hash` against the local CKB node)
+- Script evidence: `/api/{network}/v1/scripts` supports `role=lock|type` with full filtered
+  lock-cell code-class totals before pagination. `/scripts/{name}` exposes family versions,
+  registered references and custody evidence. A script family, a reference form and a code-cell
+  binary are distinct.
+  `/cells/by-script?code_hash=0x…&hash_type=data|type|data1|data2&script_kind=lock|type|both`
+  lists current matching cells, with cursor pagination.
+- DAO and chain topics: `/api/{network}/v1/dao/evidence` separates phase-0 deposits from phase-1
+  withdrawal requests; `/forks/{id}` distinguishes the branch adopted at a recorded switch from
+  today's canonical branch. The API's `/hardforks` endpoint and network-scoped `/charts/{slug}`
+  pages expose upgrade and chart evidence.
+- Identifier search: `/api/{network}/v1/search?q=block:0x…` (also `tx:` and `cell:`) returns typed
+  result URLs and match kinds. A 404 plus an empty scoped search is limited to those local checks;
+  a failed search is not evidence that an identifier never existed.
 - Optional local peer evidence: `/api/{network}/v1/network/summary`,
   `/api/{network}/v1/network/peers`, and `/api/{network}/v1/network/peers/{peerId}`. Evidence keeps
   Discovery advertisements, configured-local-node direct sessions, session initiation direction,

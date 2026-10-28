@@ -55,9 +55,11 @@ monotone chain-time calendar for complete-day boundaries and blockless-day carry
 independently verify that calendar.
 
 `--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling +
-Explorer). The public `ckbadger verify` command resolves each network's API, RPC, official
-explorer, cache directory, and deterministic sampling settings from its work directory; it does
-not expose per-run URL or check-selection overrides.
+Explorer). By default, `ckbadger verify` resolves each network's API, RPC, official explorer and
+cache directory from its work directory. A run can select checks with `--checks`, adjust
+deterministic sampling with `--sample-count` and `--seed`, and override API/RPC/explorer URLs or
+the cache directory when `-C` names a single-network work directory. Endpoint overrides are
+rejected when `-C` names an orchestrator root with multiple networks.
 
 `address_balance_spot_check` is deliberately bounded. It deterministically
 selects at most 10 recently active addresses across live-cell-count bands, then
@@ -107,8 +109,8 @@ OPTIONS:
 
 `--checks` fails on an unknown name, and on a name whose tier is above `--depth`,
 rather than reporting an all-green run over zero checks. The four endpoint
-overrides describe one network, so they are rejected on an orchestrator root —
-run them against `-C <workdir>/<network>`.
+overrides describe one network, so they are rejected when an orchestrator root
+selects multiple networks — run them against `-C <workdir>/<network>`.
 
 ### Check Statuses and Exit Codes
 
@@ -213,9 +215,9 @@ history (`get_transactions` over `(H, tip]`, each spent cell read from its
 creating transaction). The source is qualified through `verify-source.toml`
 like S25; a reorg below the walk's end is `inconclusive`, never `fail`.
 
-It needs `--rpc-url` and costs one walk of every DAO deposit through the API
-(~920 pages on mainnet), one `get_cells` walk (~25 pages) and a handful of
-transaction reads: about 80 s on mainnet, hence Sampling. It would have caught
+It needs a reachable CKB RPC (from the network work directory or `--rpc-url`). It costs one walk
+of every DAO deposit through the API (~920 pages on mainnet), one `get_cells` walk (~25 pages)
+and a handful of transaction reads: about 80 s on mainnet, hence Sampling. It would have caught
 POSTMORTEM DAO-032 on the first run after the catch-up that caused it; on the
 store that incident left behind it reports exactly the three spent withdraw
 requests and the +3 / +158,705.40 CKB statistics excess. The indexer enforces
