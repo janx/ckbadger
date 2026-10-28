@@ -425,7 +425,7 @@ impl BulkReducer for ScriptOwner {
                 .type_code_hash_id
                 .zip(input.type_hash_type)
                 .is_some_and(|(hash, kind)| {
-                    crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
+                    kind == 1 && crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
                 });
             if native_type_id {
                 let (Some(reference), Some(data_hash)) =

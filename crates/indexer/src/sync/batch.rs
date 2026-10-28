@@ -10561,11 +10561,11 @@ mod tests {
             );
             let upgrade = tx(
                 0xa2,
-                vec![input(0xa1, 0), input(0xa1, 2), input(0xa1, 4)],
+                vec![input(0xa1, 0), input(0xa1, 4)],
                 vec![
                     output(700_00000000, lock_script(), Some(id_a)),
                     output(700_00000000, generic_user_lock, None),
-                    output(1700_00000000, lock_script(), None),
+                    output(900_00000000, lock_script(), None),
                 ],
                 vec![
                     "0x7f454c4604".to_string(),
@@ -10648,6 +10648,27 @@ mod tests {
             let live_rows =
                 crate::sync::bulk_build::collect_script_binding_rows_for_test(live.as_ref())
                     .unwrap();
+            // Case 4 is independent of the TYPE_ID upgrade/retirement and xUDT
+            // cases: the generic deployment remains live throughout the fixture.
+            assert!(live
+                .get_cf(
+                    live.cf_live_cells(),
+                    &ckbadger_store::keys::encode_outpoint(&[0xa1; 32], 2)
+                )
+                .unwrap()
+                .is_some());
+            let generic_key = (
+                ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
+                ckbadger_store::keys::encode_script_reference_key(1, &generic_reference).to_vec(),
+            );
+            assert!(
+                !bulk.script_binding_rows.contains_key(&generic_key),
+                "case 4: a live generic ELF deployment must remain unbound in bulk"
+            );
+            assert!(
+                !live_rows.contains_key(&generic_key),
+                "case 4: a live generic ELF deployment must remain unbound in live sync"
+            );
             assert_eq!(live_rows, bulk.script_binding_rows);
             for cf in [
                 ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
