@@ -396,3 +396,34 @@ or schema changed. The [round-6 scope](SITE_REDESIGN_ROUND6.md) and
 [D7 acceptance report](reports/2026-10-28-site-redesign-round6-acceptance.md) record
 the fixes, immutable binary SHA, failure evidence and additional read costs.
 The requested plan is complete through D7. Next: **D8 not-found/crash pages**.
+
+## 2026-10-28 D8 completion
+
+Three `gpt-6-sol` agents completed entity/route not-found and crash pages on
+`integration/site-redesign-round7`, final implementation `15d92d55`. One EVA
+template provides exact checked-request evidence, verified alternative links,
+full diagnostic copying and provider-safe recovery. Bounded, exact canonical
+cell snapshots replace random artwork and follow actual new-block events.
+
+The complete Rust workspace at `0f752d62` passed **4,769 tests in 75 suites**,
+zero failures, formatting, workspace check and strict all-target Clippy. Three
+existing opt-in native-VM tests remain unrun. The final mobile wrapping fix
+changes no Rust source or manifests; final frontend gates passed **1,721 tests
+in 217 files**, type checking, lint and build. All **26** producer/consumer
+fixture comparisons passed.
+
+The frozen final artifact passed **305 independent mainnet assertions** from
+only its **12-block artwork window**, plus **26 browser cases** at 1440/390 px.
+Real WebSocket events advanced the displayed anchor at both widths. Controlled
+failure cases, long copied diagnostics, spent-cell detail and individual text
+range checks passed. An independently found mobile clipping defect was fixed
+and covered by regression. Temporary API, preview and browser processes stopped;
+the user's services and primary stores were unchanged.
+
+Re-sync required: **no**. No production domain, append-only or network store
+write path or schema changed. The [round-7 scope](SITE_REDESIGN_ROUND7.md) and
+[D8 acceptance report](reports/2026-10-28-site-redesign-round7-acceptance.md)
+record provenance, failure corrections, source boundaries and read costs.
+**D1–D8 page implementation is complete.** Next: the user's whole-site review
+and the plan's final verification on their updated instance. This D8 acceptance
+does not claim another full 64-check chain run.
