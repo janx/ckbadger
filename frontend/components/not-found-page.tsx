@@ -72,8 +72,8 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
         </p>
       )}
       {lookup.status === 'checked' && lookup.evidence && (
-        <div className="text-text-dim mt-4 max-w-xl text-[13px] leading-relaxed">
-          <p>{lookup.evidence.finding}</p>
+        <div className="text-text-dim mt-4 min-w-0 max-w-xl text-[13px] leading-relaxed">
+          <p className="break-all">{lookup.evidence.finding}</p>
           {lookup.evidence.alternative && (
             <Link
               href={lookup.evidence.alternative.href}
@@ -85,7 +85,7 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
         </div>
       )}
       {lookup.status === 'error' && lookup.error && (
-        <p role="status" className="text-text-dim mt-4 max-w-xl break-all text-[12px]">
+        <p role="status" className="text-text-dim mt-4 min-w-0 max-w-xl break-all text-[12px]">
           The separate /search check could not complete: {lookup.error}
         </p>
       )}

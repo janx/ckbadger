@@ -82,6 +82,33 @@ describe('NotFoundPage', () => {
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
   });
 
+  it('preserves and wraps a full endpoint in a verified finding', () => {
+    const hash = '0x4222e86425cf6f48b95cd69a4aab946a91a2598d404411177b3003042f0aca85';
+    const endpoint = `/transactions/${hash}/detail`;
+    const finding = `The ${endpoint} entity request returned HTTP 404; /search identified this exact hash as a block.`;
+    vi.mocked(useNotFoundEvidence).mockReturnValueOnce({
+      status: 'checked',
+      evidence: {
+        checkedEndpoint: endpoint,
+        query: `tx:${hash}`,
+        searchEndpoint: '/search',
+        finding,
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/mainnet/tx/${hash}`]}>
+        <NotFoundPage
+          entity={{ kind: 'transaction', identifier: hash, checkedEndpoint: endpoint }}
+        />
+      </MemoryRouter>
+    );
+
+    const findingText = screen.getByText(finding);
+    expect(findingText).toHaveTextContent(endpoint);
+    expect(findingText).toHaveClass('break-all');
+  });
+
   it('shows lookup failure as uncertainty, not a fabricated absence', () => {
     vi.mocked(useNotFoundEvidence).mockReturnValueOnce({
       status: 'error',
