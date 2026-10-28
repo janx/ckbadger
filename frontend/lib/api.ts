@@ -4438,6 +4438,10 @@ export const api = {
     return fetchApi('/dao/charts/total-deposit');
   },
 
+  getDaoEverDepositorsChart: (): Promise<ChartResponse> => {
+    return fetchApi('/dao/charts/ever-depositors');
+  },
+
   getDaoDailyDepositChart: (): Promise<ChartResponse> => {
     return fetchApi('/dao/charts/daily-deposit');
   },

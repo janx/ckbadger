@@ -855,6 +855,94 @@ async fn total_deposit_chart_uses_current_depositors_not_ever_depositors() {
     assert_eq!(json["y2AxisLabel"], "Current depositors");
 }
 
+/// The Explorer comparison is cumulative, while the total-deposit board's
+/// secondary line is intentionally current owners. They must remain distinct.
+#[tokio::test]
+async fn ever_depositors_chart_uses_cumulative_not_current_depositors() {
+    let store = test_store();
+    let mut first = total_deposit_snapshot("2024-01-15", 123_00000000, 7);
+    first.cumulative_depositors = 70;
+    put_total_deposit_snapshot(&store, &first);
+    let mut second = total_deposit_snapshot("2024-01-16", 100_00000000, 6);
+    second.cumulative_depositors = 71;
+    put_total_deposit_snapshot(&store, &second);
+    let mut partial = total_deposit_snapshot("2024-01-17", 105_00000000, 8);
+    partial.cumulative_depositors = 72;
+    put_total_deposit_snapshot(&store, &partial);
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-17");
+    let app = create_router(test_config(store)).await;
+
+    let (status, ever) = get_json(&app, "/dao/charts/ever-depositors").await;
+    assert_eq!(status, StatusCode::OK, "{ever}");
+    assert_eq!(
+        ever["data"],
+        serde_json::json!([
+            {"date": "2024-01-15", "value": "70", "value2": null},
+            {"date": "2024-01-16", "value": "71", "value2": null}
+        ])
+    );
+    assert_eq!(ever["yAxisLabel"], "Ever-deposited locks");
+    write_dao_fixture("dao-ever-depositors-api-producer", &ever);
+
+    let (status, current) = get_json(&app, "/dao/charts/total-deposit").await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    assert_eq!(current["data"][1]["value2"], "6");
+}
+
+#[tokio::test]
+async fn ever_depositors_chart_rejects_decreasing_persisted_count() {
+    let store = test_store();
+    let mut first = total_deposit_snapshot("2024-01-15", 123_00000000, 7);
+    first.cumulative_depositors = 70;
+    put_total_deposit_snapshot(&store, &first);
+    let mut second = total_deposit_snapshot("2024-01-16", 100_00000000, 6);
+    second.cumulative_depositors = 69;
+    put_total_deposit_snapshot(&store, &second);
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-17");
+    let app = create_router(test_config(store)).await;
+
+    let (status, response) = get_json(&app, "/dao/charts/ever-depositors").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{response}");
+    assert!(response["message"].as_str().unwrap().contains("2024-01-16"));
+}
+
+#[tokio::test]
+async fn ever_depositors_chart_rejects_missing_ever_count_below_current() {
+    let store = test_store();
+    let mut snapshot = total_deposit_snapshot("2024-01-15", 123_00000000, 7);
+    // A legacy/defaulted cumulative field must not become a plausible zero.
+    snapshot.cumulative_depositors = 0;
+    put_total_deposit_snapshot(&store, &snapshot);
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, response) = get_json(&app, "/dao/charts/ever-depositors").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{response}");
+    let message = response["message"].as_str().unwrap();
+    assert!(message.contains("2024-01-15"), "{message}");
+    assert!(message.contains("current=7"), "{message}");
+}
+
+#[tokio::test]
+async fn ever_depositors_chart_carries_only_certified_blockless_days() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status, response) = get_json(&app, "/dao/charts/ever-depositors").await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let expected: Vec<_> = (12..=24)
+        .map(|day| {
+            serde_json::json!({
+                "date": format!("2020-05-{day:02}"),
+                "value": if day < 22 { "7" } else { "8" },
+                "value2": null
+            })
+        })
+        .collect();
+    assert_eq!(response["data"], serde_json::json!(expected));
+}
+
 fn put_total_deposit_snapshot(store: &CkbadgerStore, snapshot: &DaoDailySnapshot) {
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

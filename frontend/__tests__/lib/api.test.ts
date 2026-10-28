@@ -10,6 +10,7 @@ const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5
 import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
+import everDepositorsProducer from '@/__tests__/fixtures/dao-ever-depositors-api-producer.json';
 
 describe('api', () => {
   describe('resolveApiBase', () => {
@@ -66,6 +67,18 @@ describe('api', () => {
         '/api/mainnet/v1/assets/objects/items/0xef/cell-versions',
         '/api/mainnet/v1/assets/identities/did/items/0x12/cell-versions',
       ]);
+    });
+
+    it('reads historical ever-depositors from its distinct completed-day chart', async () => {
+      server.use(
+        http.get('/api/:network/v1/dao/charts/ever-depositors', () =>
+          HttpResponse.json(everDepositorsProducer)
+        )
+      );
+      const chart = await api.getDaoEverDepositorsChart();
+      expect(chart.data).toEqual(everDepositorsProducer.data);
+      expect(chart.data.map((point) => point.value)).toEqual(['70', '71']);
+      expect(chart.yAxisLabel).toBe('Ever-deposited locks');
     });
 
     it('uses canonical item/collection feeds and encodes whole-gallery trait filters', async () => {

@@ -21,8 +21,6 @@ use super::report::{format_number, format_number_i128};
 struct ChartDataPoint {
     date: String,
     value: String,
-    #[serde(default)]
-    value2: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -618,21 +616,6 @@ fn parse_average_deposit_days(s: &str) -> Option<f64> {
     } else {
         s.trim().parse::<f64>().ok()
     }
-}
-
-/// Fetch our chart data and return `value2` as a date→value map (for depositors_count series).
-fn fetch_our_chart_value2(
-    ctx: &CheckContext,
-    chart_path: &str,
-) -> anyhow::Result<HashMap<String, String>> {
-    let wrapper: ChartResponse = api_get(ctx, chart_path)?;
-    let mut map = HashMap::new();
-    for point in wrapper.data {
-        if let Some(v2) = point.value2 {
-            map.insert(normalize_date(&point.date), v2);
-        }
-    }
-    Ok(map)
 }
 
 /// Derive weighted average block time (milliseconds) from distribution buckets.
@@ -2659,7 +2642,8 @@ impl Check for NervosDaoEstimatedApc {
 // NervosDAO daily time-series checks (X26)
 // ============================================
 
-/// X26: Compare /dao/charts/total-deposit value2 vs explorer total_depositors_count.
+/// X26: Compare historical unique DAO depositors with Explorer's cumulative
+/// depositor series. The current-owner count on total-deposit is not comparable.
 pub struct ExplorerTotalDepositorsCount;
 
 impl Check for ExplorerTotalDepositorsCount {
@@ -2681,7 +2665,7 @@ impl Check for ExplorerTotalDepositorsCount {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data =
             fetch_explorer_daily(ctx, "total_depositors_count", "total_depositors_count")?;
-        let our_data = fetch_our_chart_value2(ctx, "dao/charts/total-deposit")?;
+        let our_data = fetch_our_chart(ctx, "dao/charts/ever-depositors")?;
         // Wide tolerance: explorer uses incremental daily_dao_depositors_count
         // which re-counts returning depositors (deposit→withdraw→deposit again),
         // inflating the cumulative total.  Our cumulative_depositors tracks
@@ -2801,6 +2785,67 @@ mod tests {
             .single()
             .unwrap()
             .timestamp()
+    }
+
+    #[test]
+    fn total_depositors_check_reads_ever_depositors_not_current_owners() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let dates = last_30_days();
+        let ever_rows: Vec<_> = dates
+            .iter()
+            .map(|date| json!({"date": date, "value": "70000", "value2": null}))
+            .collect();
+        let current_rows: Vec<_> = dates
+            .iter()
+            .map(|date| json!({"date": date, "value": "1000000", "value2": "16000"}))
+            .collect();
+        let explorer_rows: Vec<_> = dates
+            .iter()
+            .map(|date| {
+                json!({"attributes": {
+                    "created_at_unixtimestamp": explorer_timestamp_for_date(date).to_string(),
+                    "total_depositors_count": "80000"
+                }})
+            })
+            .collect();
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/charts/ever-depositors"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": ever_rows})))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/charts/total-deposit"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"data": current_rows})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/total_depositors_count"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"data": explorer_rows})),
+                )
+                .mount(&server)
+                .await;
+        });
+
+        let result = ExplorerTotalDepositorsCount
+            .run(
+                &explorer_test_context(&server),
+                &ProgressReporter::new(None),
+            )
+            .unwrap();
+        assert!(result.passed(), "{result:?}");
+        assert_eq!(result.items_checked, 30);
+        let requests = runtime.block_on(server.received_requests()).unwrap();
+        assert!(requests
+            .iter()
+            .any(|r| r.url.path() == "/api/v1/dao/charts/ever-depositors"));
+        assert!(!requests
+            .iter()
+            .any(|r| r.url.path() == "/api/v1/dao/charts/total-deposit"));
     }
 
     fn mount_cell_count_projection_gap_fixture(
@@ -3625,12 +3670,10 @@ mod tests {
             ChartDataPoint {
                 date: "10".to_string(),
                 value: "50".to_string(),
-                value2: None,
             },
             ChartDataPoint {
                 date: "14".to_string(),
                 value: "50".to_string(),
-                value2: None,
             },
         ];
         assert_eq!(
@@ -3644,7 +3687,6 @@ mod tests {
         let points = vec![ChartDataPoint {
             date: "10".to_string(),
             value: "0".to_string(),
-            value2: None,
         }];
         assert_eq!(weighted_avg_block_time_ms_from_distribution(&points), None);
     }

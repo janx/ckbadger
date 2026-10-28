@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "date": "2024-01-15",
+      "value": "70",
+      "value2": null
+    },
+    {
+      "date": "2024-01-16",
+      "value": "71",
+      "value2": null
+    }
+  ],
+  "title": "Ever DAO depositors",
+  "y2AxisLabel": null,
+  "yAxisLabel": "Ever-deposited locks"
+}

@@ -44,6 +44,12 @@ daily checks use absolute comparisons. Testnet's daily checks compare normalized
 its Explorer statistics retain historical constant baseline gaps; the NervosDAO point check uses
 the normalized latest completed day. No tolerance is widened. See POSTMORTEM DAO-029 and DAO-031.
 
+Explorer X26 compares its cumulative `total_depositors_count` with the separate completed-day
+`/dao/charts/ever-depositors` series, which reads the indexed count of locks that have ever
+deposited. The `/dao/charts/total-deposit` secondary series remains **current** depositors and
+must not be compared with Explorer's cumulative count. X26 retains its 20% bound for Explorer's
+repeated counting of returning depositors (POSTMORTEM DAO-020).
+
 The secondary-issuance Sampling check verifies exact **completed-day partition conservation**:
 compensation + miner issuance + burnt treasury must equal that day's independent
 `protocolTotalShannons`, and frozen phase-1 compensation cannot exceed the compensation share.

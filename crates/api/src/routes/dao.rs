@@ -44,6 +44,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dao/top-depositors", get(get_top_depositors))
         .route("/dao/calculator", get(calculate_compensation))
         .route("/dao/charts/total-deposit", get(get_total_deposit_chart))
+        .route(
+            "/dao/charts/ever-depositors",
+            get(get_ever_depositors_chart),
+        )
         .route("/dao/charts/daily-deposit", get(get_daily_deposit_chart))
         .route(
             "/dao/charts/daily-depositors",
@@ -1159,6 +1163,65 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         y2_axis_label: Some("Current depositors".to_string()),
     };
 
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+        state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
+    }
+    ok(response)
+}
+
+/// Historical unique depositors, including locks that have since withdrawn.
+/// This is a different metric from the total-deposit chart's current owners.
+async fn get_ever_depositors_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("chart:dao-ever-depositors:v1", chain)?;
+    let cache_key = cache_key.as_str();
+    if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.mem_cache.delete(cache_key);
+    }
+    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        if chart_response_has_data(&cached) {
+            state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
+    }
+
+    let snapshots = load_dao_daily_snapshots(&state).await?;
+    let mut data = Vec::with_capacity(snapshots.len());
+    let mut previous: Option<(&str, i64)> = None;
+    for snapshot in &snapshots {
+        let count = snapshot.cumulative_depositors;
+        if count < 0
+            || snapshot.depositors_count < 0
+            || count < snapshot.depositors_count
+            || previous.is_some_and(|(_, earlier)| count < earlier)
+        {
+            return Err(ApiError::internal(format!(
+                "DAO cumulative depositors invalid at date={}: ever={}, current={}, previous={:?}",
+                snapshot.date, count, snapshot.depositors_count, previous
+            )));
+        }
+        previous = Some((&snapshot.date, count));
+        if !is_complete_iso_day(chain, "DAO daily snapshots", &snapshot.date)? {
+            continue;
+        }
+        data.push(ChartDataPoint {
+            date: snapshot.date.clone(),
+            value: count.to_string(),
+            value2: None,
+        });
+    }
+    let data = consecutive_daily_chart(state.store.clone(), chain, "DAO snapshot", data).await?;
+    let response = ChartResponse {
+        data,
+        title: "Ever DAO depositors".to_string(),
+        y_axis_label: "Ever-deposited locks".to_string(),
+        y2_axis_label: None,
+    };
     if chart_response_has_data(&response) {
         state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
         state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
