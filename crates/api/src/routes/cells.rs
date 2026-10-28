@@ -2341,7 +2341,7 @@ fn cell_info_to_response(
     })
 }
 
-fn estimated_occupied_capacity_breakdown(
+pub(crate) fn estimated_occupied_capacity_breakdown(
     info: &ckbadger_store::PositionedCellInfo,
 ) -> OccupiedCapacityBreakdown {
     let capacity_field_bytes = 8;

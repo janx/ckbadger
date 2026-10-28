@@ -58,6 +58,9 @@ interface RealtimeState {
   socketHeld: boolean;
   latestBlock: Block | null;
   latestTx: Transaction | null;
+  /** Advances for every canonical block signal or reorg, including duplicate heights. */
+  chainRevision: number;
+  reorgRevision: number;
   setConnected: (connected: boolean) => void;
   setLatestBlock: (block: Block) => void;
   setLatestTx: (tx: Transaction) => void;
@@ -69,10 +72,19 @@ export const useRealtimeStore = create<RealtimeState>((set) => ({
   socketHeld: false,
   latestBlock: null,
   latestTx: null,
+  chainRevision: 0,
+  reorgRevision: 0,
   setConnected: (connected) => set({ isConnected: connected }),
   setLatestBlock: (block) => set({ latestBlock: block }),
   setLatestTx: (tx) => set({ latestTx: tx }),
-  reset: () => set({ isConnected: false, latestBlock: null, latestTx: null }),
+  reset: () =>
+    set({
+      isConnected: false,
+      latestBlock: null,
+      latestTx: null,
+      chainRevision: 0,
+      reorgRevision: 0,
+    }),
 }));
 
 let wsInstance: WebSocket | null = null;
@@ -90,7 +102,12 @@ const messageHandlers = new Set<MessageHandler>();
 
 function connectWebSocket(network: string) {
   // Already connected to the right network — nothing to do.
-  if (wsInstance?.readyState === WebSocket.OPEN && wsNetwork === network) return;
+  if (
+    wsInstance &&
+    wsNetwork === network &&
+    (wsInstance.readyState === WebSocket.CONNECTING || wsInstance.readyState === WebSocket.OPEN)
+  )
+    return;
 
   // A socket exists but targets a different network (or is stale): tear it down
   // WITHOUT letting its onclose auto-reconnect to the old network.
@@ -105,6 +122,14 @@ function connectWebSocket(network: string) {
     reconnectTimeout = null;
   }
   reconnectAttempts = 0;
+  if (wsNetwork !== network) {
+    useRealtimeStore.setState({
+      latestBlock: null,
+      latestTx: null,
+      chainRevision: 0,
+      reorgRevision: 0,
+    });
+  }
   wsNetwork = network;
   // A new socket is not live until it opens, whatever an earlier one left behind.
   useRealtimeStore.getState().setConnected(false);
@@ -125,6 +150,13 @@ function connectWebSocket(network: string) {
     wsInstance.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as WebSocketMessage;
+        if (message.type === 'new_block' || message.type === 'reorg') {
+          useRealtimeStore.setState((current) => ({
+            chainRevision: current.chainRevision + 1,
+            reorgRevision: current.reorgRevision + (message.type === 'reorg' ? 1 : 0),
+            latestBlock: message.type === 'reorg' ? null : current.latestBlock,
+          }));
+        }
         messageHandlers.forEach((handler) => handler(message));
       } catch {
         console.error('Failed to parse WebSocket message');
@@ -172,7 +204,7 @@ function disconnectWebSocket() {
   useRealtimeStore.getState().setConnected(false);
 }
 
-export function useRealtimeData() {
+export function useRealtimeData(enabled = true) {
   const queryClient = useQueryClient();
   const network = useActiveNetwork();
   const { isConnected, latestBlock, latestTx, setLatestBlock, setLatestTx } = useRealtimeStore();
@@ -248,6 +280,7 @@ export function useRealtimeData() {
   );
 
   useEffect(() => {
+    if (!enabled) return;
     wsSubscribers++;
     useRealtimeStore.setState({ socketHeld: true });
     handlerRef.current = handleMessage;
@@ -264,7 +297,7 @@ export function useRealtimeData() {
         useRealtimeStore.setState({ socketHeld: false });
       }
     };
-  }, [handleMessage, network]);
+  }, [enabled, handleMessage, network]);
 
   return { isConnected, latestBlock, latestTx };
 }

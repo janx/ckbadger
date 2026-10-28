@@ -406,6 +406,38 @@ interface HardforkTimelineResponse {
   scriptDeployments: HardforkScriptDeployment[];
 }
 
+export interface VesselCell {
+  outpoint: string;
+  capacityShannons: string;
+  occupiedShannons: string;
+  anatomy: {
+    capacityFieldBytes: number;
+    lockScriptBytes: number;
+    typeScriptBytes: number;
+    dataBytes: number;
+    totalBytes: number;
+  };
+  createdAtBlock: number;
+}
+
+export interface VesselSnapshot {
+  anchorBlock: number;
+  anchorHash: string;
+  firstSampledBlock: number;
+  blocksInWindow: number;
+  transactionsPerBlock: number;
+  outputsPerTransaction: number;
+  maxVisible: number;
+  examinedOutputs: number;
+  cells: VesselCell[];
+  tracked: Array<{
+    outpoint: string;
+    status: 'live' | 'consumed' | 'notCanonical';
+    consumedAtBlock: number | null;
+    consumingTxHash: string | null;
+  }>;
+}
+
 export interface HardforkScriptDeployment {
   familyName: string;
   versionName: string;
@@ -3627,6 +3659,12 @@ export const api = {
     if (params.network) query.set('network', params.network);
     const queryString = query.toString();
     return fetchApi(`/hardforks${queryString ? `?${queryString}` : ''}`);
+  },
+
+  getVesselSnapshot: (tracked: string[] = []): Promise<VesselSnapshot> => {
+    const query = new URLSearchParams();
+    if (tracked.length) query.set('tracked', tracked.join(','));
+    return fetchApi(`/vessels/snapshot${tracked.length ? `?${query}` : ''}`);
   },
 
   getBlocks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<Block>> => {

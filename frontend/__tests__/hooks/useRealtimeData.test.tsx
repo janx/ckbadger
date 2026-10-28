@@ -145,6 +145,26 @@ describe('useRealtimeData network scoping', () => {
     expect(instances[0].closed).toBe(true);
   });
 
+  it('shares one connecting socket across simultaneous subscribers and advances revision on reorg', () => {
+    const queryClient = new QueryClient();
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/mainnet/']}>
+          <Harness />
+          <Harness />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    expect(instances).toHaveLength(1);
+    expect(instances[0].closed).toBe(false);
+    act(() => {
+      instances[0].onmessage?.({ data: JSON.stringify({ type: 'reorg', data: { depth: 1 } }) });
+    });
+    expect(useRealtimeStore.getState().chainRevision).toBe(1);
+    view.unmount();
+    expect(instances[0].closed).toBe(true);
+  });
+
   it('never reconnects to the switched-away network when the old socket closes late', async () => {
     vi.useFakeTimers();
     try {
