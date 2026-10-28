@@ -3,7 +3,7 @@ use tracing::{info, warn};
 
 use ckbadger_store::{keys, CkbadgerStore};
 
-use super::{BatchWriter, ContractRequirement};
+use super::{reorg::RollbackCause, BatchWriter, ContractRequirement};
 
 const STARTUP_CONTINUITY_SAMPLE_LIMIT: usize = 5;
 
@@ -233,7 +233,9 @@ impl BatchWriter {
             // so that the subsequent canonical rollback rebuilds aggregates from
             // correct entity state.  This matches the normal reorg path ordering
             // in execute_reorg().
-            self.begin_rollback()?;
+            self.begin_rollback(RollbackCause::Cleanup {
+                target: rollback_target,
+            })?;
             let undo_result = self
                 .store
                 .rollback_via_undo_log(append_store, rollback_target)?;
@@ -357,7 +359,9 @@ impl BatchWriter {
         // used by execute_reorg and init_sync_start. Entity mutations (Spore,
         // mNFT, dotbit) are reverted first so the subsequent domain rollback
         // can rebuild aggregates from correct entity state.
-        self.begin_rollback()?;
+        self.begin_rollback(RollbackCause::Cleanup {
+            target: cleanup_tip,
+        })?;
         let undo_result = self
             .store
             .rollback_via_undo_log(append_store, cleanup_tip)?;
@@ -470,7 +474,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    use super::BatchWriter;
+    use super::{BatchWriter, RollbackCause};
 
     fn setup() -> (TempDir, Arc<CkbadgerStore>, Arc<CkbadgerStore>, BatchWriter) {
         let dir = tempfile::tempdir().unwrap();
@@ -488,7 +492,7 @@ mod tests {
                 virtual_occupied: 504_000_000_000_000_000,
             })
             .unwrap();
-        let writer = BatchWriter::new(store.clone(), store.clone());
+        let writer = BatchWriter::new(store.clone(), append_store.clone());
         (dir, store, append_store, writer)
     }
 
@@ -566,11 +570,29 @@ mod tests {
         let mut batch = StoreBatch::new(store);
         batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
         batch.put_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING, key.as_bytes());
+        if superseded {
+            // A superseded observation can remain pending while an older
+            // abandoned tip is still above the canonical replay height.
+            let prior_key = ckbadger_store::keys::encode_reorg_event_key(500, &[2; 16]).unwrap();
+            let prior = ckbadger_store::ReorgEvent {
+                detected_at: 0,
+                old_tip: 12,
+                old_tip_hash: vec![0xd2; 32],
+                new_tip: 10,
+                new_tip_hash: vec![0xa0; 32],
+                depth: 4,
+                orphaned_blocks: 4,
+                superseded_by_tip_hash: None,
+                ..event
+            };
+            batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
+        }
         let mut parent = vec![0; 32];
         for height in 0..=11 {
             let hash = match height {
                 9 => 0xb9,
                 10 => 0xb0,
+                11 if superseded => 0xb2,
                 11 => 0xb1,
                 _ => height as u8,
             };
@@ -582,6 +604,37 @@ mod tests {
         }
         batch.commit().unwrap();
         store.update_sync_tip(11, &parent, 0).unwrap();
+        // Startup and execute_reorg also refresh DAO singleton statistics.
+        // Retain the earlier day's snapshot, outside this rollback's cutoff.
+        let snapshot = ckbadger_store::DaoDailySnapshot {
+            date: "20231114".to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance: 0,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
+            cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
+            protocol_deposited: None,
+        };
+        store
+            .put_stats_key(
+                &ckbadger_store::keys::encode_stats_key(
+                    ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                    snapshot.date.as_bytes(),
+                ),
+                &bincode::serialize(&snapshot).unwrap(),
+            )
+            .unwrap();
         let histogram_key = ckbadger_store::keys::encode_stats_key(
             ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
             &0_i32.to_be_bytes(),
@@ -598,7 +651,8 @@ mod tests {
 
     #[test]
     fn interrupted_rollback_survives_restart_without_misattributing_supersession() {
-        for target in [7, 8, 9] {
+        for interrupt_pending in [false, true] {
+            let target = 7;
             let (dir, store, append, writer) = setup();
             let key = seed_pending_reorg(&store, false);
             append
@@ -606,7 +660,9 @@ mod tests {
                 .unwrap();
             // Simulate the crash window: old E0 is pending, rollback commits,
             // but no E1 detection event or replacement marker is ever written.
-            writer.begin_rollback().unwrap();
+            if interrupt_pending {
+                writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
+            }
             let undo = store.rollback_via_undo_log(&append, target).unwrap();
             store
                 .rollback_to_block_with_tx_contexts(target, Some(&append), undo.tx_contexts)
@@ -626,20 +682,31 @@ mod tests {
             }
             batch.commit().unwrap();
             store.update_sync_tip(12, &parent, 0).unwrap();
-            writer.reconcile_reorg_events().unwrap();
-            assert!(store
+            assert_ne!(
+                store.get_block_header(8).unwrap().unwrap().hash,
+                vec![8; 32]
+            );
+            let result = writer.reconcile_reorg_events();
+            let marker = store
                 .get_cf(
                     store.cf_sync_meta(),
-                    sync_meta_keys::REORG_RECONCILE_PENDING
+                    sync_meta_keys::REORG_RECONCILE_PENDING,
                 )
-                .unwrap()
-                .is_none());
+                .unwrap();
+            if interrupt_pending {
+                result.unwrap();
+                assert_eq!(marker, None);
+            } else {
+                // Control: the same crash/replay really reaches the retained
+                // fork-point invariant unless the rollback clears E0 first.
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("fork point hash mismatch"), "{error}");
+                assert!(error.contains(&format!("event={key} block=8")), "{error}");
+                assert_eq!(marker, Some(key.as_bytes().to_vec()));
+            }
             let event = store.get_reorg_event(1000).unwrap().unwrap();
             assert_eq!(event.key, key);
-            assert_eq!(
-                serde_json::to_value(&event.event).unwrap()["reconcile_interrupted"],
-                true
-            );
+            assert_eq!(event.event.reconcile_interrupted, interrupt_pending);
             assert_eq!(event.event.superseded_by_tip_hash, None);
             assert_eq!(
                 append.get_cf(append.cf_cells(), &[7; 36]).unwrap().unwrap(),
@@ -654,16 +721,185 @@ mod tests {
         }
     }
 
-    #[test]
-    fn startup_and_partial_batch_cleanup_interrupt_pending_reconciliation() {
-        for startup in [true, false] {
+    #[tokio::test]
+    async fn execute_reorg_interrupts_pending_reconciliation_and_replaces_marker() {
+        for target in [7, 8, 9] {
+            let (_dir, store, append, writer) = setup();
+            let first_key = seed_pending_reorg(&store, false);
+            store
+                .put_entity_stats_undo_contract(&ckbadger_store::EntityStatsUndoContract {
+                    version: ckbadger_store::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+                    coverage_floor_block: 0,
+                    updated_at_block: 11,
+                })
+                .unwrap();
+            append
+                .put_cf(append.cf_cells(), &[7; 36], b"immutable")
+                .unwrap();
+            let fork_hash = store.get_block_header(target).unwrap().unwrap().hash;
+
+            let result = writer
+                .execute_reorg(
+                    &append,
+                    target,
+                    &fork_hash,
+                    11,
+                    &[0xb1; 32],
+                    12,
+                    &[0xc2; 32],
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(i64::from(result.orphaned_blocks), 11 - target);
+            assert!(store.get_block_header(target + 1).unwrap().is_none());
+            assert_eq!(store.get_sync_tip().unwrap(), (target, Some(fork_hash)));
+            let first = store.get_reorg_event(1000).unwrap().unwrap();
+            assert_eq!(first.key, first_key);
+            assert!(
+                first.event.reconcile_interrupted,
+                "rollback target={target}"
+            );
+            assert_eq!(first.event.superseded_by_tip_hash, None);
+            let latest = store.get_latest_reorg_event().unwrap().unwrap();
+            assert_ne!(latest.key, first_key);
+            assert_eq!(latest.event.fork_point, target);
+            assert!(!latest.event.reconcile_interrupted);
+            assert_eq!(
+                store
+                    .get_cf(
+                        store.cf_sync_meta(),
+                        sync_meta_keys::REORG_RECONCILE_PENDING
+                    )
+                    .unwrap(),
+                Some(latest.key.as_bytes().to_vec())
+            );
+            assert_append_payload_unchanged(&append);
+        }
+    }
+
+    fn assert_append_payload_unchanged(append: &CkbadgerStore) {
+        assert_eq!(
+            append.get_cf(append.cf_cells(), &[7; 36]).unwrap().unwrap(),
+            b"immutable"
+        );
+        assert_eq!(
+            append
+                .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
+                .count(),
+            1
+        );
+    }
+
+    fn assert_cleanup_preserves_pending_reconciliation(
+        cleanup: impl Fn(&BatchWriter, &CkbadgerStore, i64),
+    ) {
+        for target in [8, 9] {
+            let (_dir, store, append, writer) = setup();
+            let key = seed_pending_reorg(&store, false);
+            let prior_key = ckbadger_store::keys::encode_reorg_event_key(500, &[2; 16]).unwrap();
+            // The earlier B -> A switch abandoned B10. The pending A -> B
+            // observation must still link it after cleanup and replay of B.
+            let prior = ckbadger_store::ReorgEvent {
+                detected_at: 0,
+                old_tip_hash: vec![0xb0; 32],
+                new_tip: 10,
+                new_tip_hash: vec![0xa0; 32],
+                ..store.get_reorg_event(1000).unwrap().unwrap().event
+            };
+            let mut batch = StoreBatch::new(&store);
+            batch.put_sync_meta(prior_key.as_bytes(), &bincode::serialize(&prior).unwrap());
+            batch.commit().unwrap();
+            let replay_headers: Vec<_> = (target + 1..=11)
+                .map(|height| (height, store.get_block_header(height).unwrap().unwrap()))
+                .collect();
+            append
+                .put_cf(append.cf_cells(), &[7; 36], b"immutable")
+                .unwrap();
+
+            cleanup(&writer, &append, target);
+
+            assert!(store.get_block_header(target + 1).unwrap().is_none());
+            assert_eq!(
+                store.get_block_header(8).unwrap().unwrap().hash,
+                vec![8; 32]
+            );
+            assert_eq!(
+                store
+                    .get_cf(
+                        store.cf_sync_meta(),
+                        sync_meta_keys::REORG_RECONCILE_PENDING
+                    )
+                    .unwrap(),
+                Some(key.as_bytes().to_vec()),
+                "cleanup target={target} must retain the observation"
+            );
+            assert!(
+                !store
+                    .get_reorg_event(1000)
+                    .unwrap()
+                    .unwrap()
+                    .event
+                    .reconcile_interrupted
+            );
+            writer.reconcile_reorg_events().unwrap();
+            assert_eq!(
+                store
+                    .get_reorg_event(500)
+                    .unwrap()
+                    .unwrap()
+                    .event
+                    .reverted_by_event,
+                None
+            );
+
+            let mut batch = StoreBatch::new(&store);
+            for (height, header) in replay_headers {
+                batch.put_block_header(height, &header);
+            }
+            batch.commit().unwrap();
+            store.update_sync_tip(11, &[0xb1; 32], 0).unwrap();
+            writer.reconcile_reorg_events().unwrap();
+
+            assert_eq!(
+                store
+                    .get_cf(
+                        store.cf_sync_meta(),
+                        sync_meta_keys::REORG_RECONCILE_PENDING
+                    )
+                    .unwrap(),
+                None
+            );
+            let event = store.get_reorg_event(1000).unwrap().unwrap().event;
+            assert!(!event.reconcile_interrupted);
+            assert_eq!(event.superseded_by_tip_hash, None);
+            assert_eq!(event.reverses_events, vec![prior_key]);
+            assert_eq!(
+                store
+                    .get_reorg_event(500)
+                    .unwrap()
+                    .unwrap()
+                    .event
+                    .reverted_by_event,
+                Some(key)
+            );
+            assert_append_payload_unchanged(&append);
+        }
+    }
+
+    fn assert_cleanup_interrupts_pending_reconciliation(
+        cleanup: impl Fn(&BatchWriter, &CkbadgerStore, i64),
+    ) {
+        for target in [-1, 7] {
             let (_dir, store, append, writer) = setup();
             seed_pending_reorg(&store, true);
-            if startup {
-                writer.init_sync_start(&append, 0, false).unwrap();
-            } else {
-                writer.cleanup_batch_range(&append, 9, 11).unwrap();
-            }
+            append
+                .put_cf(append.cf_cells(), &[7; 36], b"immutable")
+                .unwrap();
+
+            cleanup(&writer, &append, target);
+
+            assert!(store.get_block_header(target + 1).unwrap().is_none());
             assert!(store
                 .get_cf(
                     store.cf_sync_meta(),
@@ -672,12 +908,38 @@ mod tests {
                 .unwrap()
                 .is_none());
             let event = store.get_reorg_event(1000).unwrap().unwrap().event;
-            assert_eq!(
-                serde_json::to_value(&event).unwrap()["reconcile_interrupted"],
-                true
-            );
+            assert!(event.reconcile_interrupted, "cleanup target={target}");
             assert_eq!(event.superseded_by_tip_hash, Some(vec![0xb2; 32]));
+            assert_append_payload_unchanged(&append);
         }
+    }
+
+    #[test]
+    fn startup_cleanup_preserves_pending_reconciliation_at_or_above_fork_point() {
+        assert_cleanup_preserves_pending_reconciliation(|writer, append, target| {
+            writer.init_sync_start(append, target, false).unwrap();
+        });
+    }
+
+    #[test]
+    fn batch_cleanup_preserves_pending_reconciliation_at_or_above_fork_point() {
+        assert_cleanup_preserves_pending_reconciliation(|writer, append, target| {
+            writer.cleanup_batch_range(append, target + 1, 11).unwrap();
+        });
+    }
+
+    #[test]
+    fn startup_cleanup_interrupts_pending_reconciliation_below_fork_point() {
+        assert_cleanup_interrupts_pending_reconciliation(|writer, append, target| {
+            writer.init_sync_start(append, target, false).unwrap();
+        });
+    }
+
+    #[test]
+    fn batch_cleanup_interrupts_pending_reconciliation_below_fork_point() {
+        assert_cleanup_interrupts_pending_reconciliation(|writer, append, target| {
+            writer.cleanup_batch_range(append, target + 1, 11).unwrap();
+        });
     }
 
     #[test]

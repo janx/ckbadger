@@ -9,6 +9,14 @@ use ckbadger_store::CkbadgerStore;
 
 use super::{BatchWriter, ContractRequirement};
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RollbackCause {
+    /// A new observation will replace the pending reconciliation marker.
+    NewForkEvent,
+    /// Replay cleanup may preserve the pending observation's fork point.
+    Cleanup { target: i64 },
+}
+
 /// Build the history key for an event detected now.
 ///
 /// The millisecond field orders the history and the uuid keeps two events
@@ -21,9 +29,10 @@ fn next_reorg_event_key() -> Result<String> {
 }
 
 impl BatchWriter {
-    /// Persist interruption before any canonical mutation. A surviving pending
-    /// marker therefore proves that no later rollback has even begun.
-    pub(crate) fn begin_rollback(&self) -> Result<()> {
+    /// Persist interruption before replacing the pending observation or
+    /// removing its fork point. Cleanup that retains the fork point leaves
+    /// the marker intact so reconciliation can finish after replay.
+    pub(crate) fn begin_rollback(&self, cause: RollbackCause) -> Result<()> {
         let Some(event_key) = self.store.get_cf(
             self.store.cf_sync_meta(),
             sync_meta_keys::REORG_RECONCILE_PENDING,
@@ -43,6 +52,9 @@ impl BatchWriter {
             event.kind == ReorgEventKind::Automatic,
             "pending reconciliation is not an automatic fork before rollback: key={key}"
         );
+        if matches!(cause, RollbackCause::Cleanup { target } if target >= event.fork_point) {
+            return Ok(());
+        }
         event.reconcile_interrupted = true;
         let mut batch = StoreBatch::new(&self.store);
         batch.put_sync_meta(&event_key, &bincode::serialize(&event)?);
@@ -292,7 +304,7 @@ impl BatchWriter {
         // Extract TxContext entries before the undo log deletes them, so the
         // subsequent cell rollback can use targeted lookups instead of full
         // CF scans.
-        self.begin_rollback()?;
+        self.begin_rollback(RollbackCause::NewForkEvent)?;
         let undo_result = self.store.rollback_via_undo_log(append_store, fork_point)?;
         // Domain rollback for canonical mutable state (cells, blocks, stats,
         // aggregates rebuilt from now-correct entity data).
@@ -409,7 +421,7 @@ mod tests {
 
     use crate::db::writer::BatchWriter;
 
-    use super::next_reorg_event_key;
+    use super::{next_reorg_event_key, RollbackCause};
 
     #[test]
     fn superseded_winning_tip_clears_pending_observation_without_reversal_links() {
@@ -535,16 +547,31 @@ mod tests {
             assert_eq!(second.fork_point, if deeper { 7 } else { 8 });
             let mut batch = StoreBatch::new(&store);
             batch.put_sync_meta(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
+            batch.put_sync_meta(
+                keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+                first_key.as_bytes(),
+            );
+            batch.commit().unwrap();
             if deeper {
                 // A later switch B -> C at height 7 precedes C -> A. Without
                 // this intervening branch, f1 < f0 while restoring 10a would
-                // contradict the ancestry of the two original branches.
+                // contradict the ancestry of the two original branches. Its
+                // rollback interrupts A -> B before replacing the marker.
+                writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
                 let middle_key = keys::encode_reorg_event_key(1500, &[3; 16]).unwrap();
+                let mut batch = StoreBatch::new(&store);
                 batch.put_sync_meta(
                     middle_key.as_bytes(),
                     &bincode::serialize(&observation(&b, &c, 1)).unwrap(),
                 );
+                batch.put_sync_meta(
+                    keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+                    middle_key.as_bytes(),
+                );
+                batch.commit().unwrap();
             }
+            writer.begin_rollback(RollbackCause::NewForkEvent).unwrap();
+            let mut batch = StoreBatch::new(&store);
             batch.put_sync_meta(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
             batch.put_sync_meta(
                 keys::sync_meta_keys::REORG_RECONCILE_PENDING,
@@ -582,6 +609,19 @@ mod tests {
             writer.reconcile_reorg_events().unwrap();
             let first = store.get_reorg_event(1000).unwrap().unwrap().event;
             let second = store.get_reorg_event(2000).unwrap().unwrap().event;
+            // Interruption stops this observation's own reconciliation, not
+            // a later event from proving that its abandoned branch returned.
+            assert!(first.reconcile_interrupted);
+            if deeper {
+                assert!(
+                    store
+                        .get_reorg_event(1500)
+                        .unwrap()
+                        .unwrap()
+                        .event
+                        .reconcile_interrupted
+                );
+            }
             assert_eq!(first.reverted_by_event, Some(second_key));
             assert_eq!(second.reverses_events, vec![first_key]);
             assert_eq!(second.superseded_by_tip_hash, Some(vec![0xd2; 32]));
