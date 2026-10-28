@@ -1805,6 +1805,9 @@ pub struct ReorgEvent {
     /// Chain tip on the winning branch at detection time.
     pub new_tip: i64,
     pub new_tip_hash: Vec<u8>,
+    /// Canonical hash at `new_tip` during reconciliation when it superseded
+    /// the tip observed at detection. None when the observation survived.
+    pub superseded_by_tip_hash: Option<Vec<u8>>,
     pub depth: i32,
     /// Blocks actually removed by the rollback (0 for a paused deep fork,
     /// which rolls nothing back).

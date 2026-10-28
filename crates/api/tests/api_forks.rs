@@ -39,6 +39,7 @@ fn event(store: &CkbadgerStore, id: i64, kind: ReorgEventKind) {
         orphaned_blocks: 1,
         orphaned_txs: 0,
         reverted_by_event: None,
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[id as u8; 16]).unwrap();
@@ -49,6 +50,35 @@ fn event(store: &CkbadgerStore, id: i64, kind: ReorgEventKind) {
             &bincode::serialize(&record).unwrap(),
         )
         .unwrap();
+}
+
+#[tokio::test]
+async fn recent_fork_reports_persisted_superseding_tip_hash() {
+    let store = test_store();
+    let id = 1_700_000_000_000i64;
+    event(&store, id, ReorgEventKind::Automatic);
+    let key = ckbadger_store::keys::encode_reorg_event_key(id, &[id as u8; 16]).unwrap();
+    let bytes = store
+        .get_cf(store.cf_sync_meta(), key.as_bytes())
+        .unwrap()
+        .unwrap();
+    let mut record: ReorgEvent = bincode::deserialize(&bytes).unwrap();
+    record.superseded_by_tip_hash = Some(vec![0xdd; 32]);
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            key.as_bytes(),
+            &bincode::serialize(&record).unwrap(),
+        )
+        .unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/forks/recent").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["reorg"]["supersededByTipHash"],
+        format!("0x{}", "dd".repeat(32))
+    );
 }
 
 #[tokio::test]
@@ -159,6 +189,7 @@ async fn deep_detection_reports_recorded_tips_without_claiming_a_rollback() {
         orphaned_blocks: 0,
         orphaned_txs: 0,
         reverted_by_event: None,
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
@@ -267,6 +298,7 @@ async fn detail_resolves_two_old_blocks_from_one_canonical_uncle_pass() {
         orphaned_blocks: 2,
         orphaned_txs: 0,
         reverted_by_event: None,
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
@@ -401,6 +433,7 @@ async fn detail_proves_uncle_inclusion_competing_gap_and_later_tx_commit() {
         orphaned_blocks: 1,
         orphaned_txs: 2,
         reverted_by_event: None,
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
@@ -501,6 +534,7 @@ async fn detail_keeps_historical_drop_but_marks_reentered_block_canonical_now() 
         reverted_by_event: Some(
             ckbadger_store::keys::encode_reorg_event_key(reversing_id, &[0x22; 16]).unwrap(),
         ),
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
@@ -574,6 +608,7 @@ async fn detail_fails_if_persisted_adopted_tip_is_not_retained_by_the_node() {
         orphaned_blocks: 1,
         orphaned_txs: 0,
         reverted_by_event: None,
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
@@ -687,6 +722,7 @@ async fn detail_reports_epoch_closed_without_uncle_or_tx_commit() {
         orphaned_blocks: 1,
         orphaned_txs: 2,
         reverted_by_event: None,
+        superseded_by_tip_hash: None,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();

@@ -38,7 +38,8 @@
     "resolvedAt": null,
     "resolvedBy": null,
     "reversesEvents": [],
-    "revertedByEvent": 1754000001000
+    "revertedByEvent": 1754000001000,
+    "supersededByTipHash": null
   },
   "orphanedBlocks": [
     {

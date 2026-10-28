@@ -42,6 +42,7 @@ pub struct ReorgEventResponse {
     pub old_tip_hash: String,
     pub new_tip_number: i64,
     pub new_tip_hash: String,
+    pub superseded_by_tip_hash: Option<String>,
     pub depth: i32,
     pub orphaned_blocks_count: i64,
     pub orphaned_txs_count: i64,
@@ -265,6 +266,7 @@ fn reorg_event_response(record: &ReorgEventRecord) -> Result<ReorgEventResponse,
         old_tip_hash: hex0x(&record.event.old_tip_hash),
         new_tip_number: record.event.new_tip,
         new_tip_hash: hex0x(&record.event.new_tip_hash),
+        superseded_by_tip_hash: record.event.superseded_by_tip_hash.as_deref().map(hex0x),
         depth: record.event.depth,
         orphaned_blocks_count: record.event.orphaned_blocks,
         orphaned_txs_count: record.event.orphaned_txs,
@@ -1097,6 +1099,7 @@ mod tests {
                 orphaned_blocks: 3,
                 orphaned_txs: 7,
                 reverted_by_event: None,
+                superseded_by_tip_hash: None,
                 reverses_events: Vec::new(),
             },
         }
@@ -1115,6 +1118,17 @@ mod tests {
         );
         event.event.reverted_by_event = Some("invalid".into());
         assert!(reorg_event_response(&event).is_err());
+    }
+
+    #[test]
+    fn superseded_tip_hash_is_reported_from_persisted_event() {
+        let mut event = record(1_700_000_000_000, ReorgEventKind::Automatic);
+        event.event.superseded_by_tip_hash = Some(vec![0xdd; 32]);
+        let json = serde_json::to_value(reorg_event_response(&event).unwrap()).unwrap();
+        assert_eq!(
+            json["supersededByTipHash"],
+            format!("0x{}", "dd".repeat(32))
+        );
     }
 
     #[test]

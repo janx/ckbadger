@@ -22,7 +22,8 @@
     "resolvedAt": null,
     "resolvedBy": null,
     "reversesEvents": [],
-    "revertedByEvent": null
+    "revertedByEvent": null,
+    "supersededByTipHash": null
   },
   "orphanedBlocks": [],
   "orphanedTransactions": []

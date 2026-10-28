@@ -54,6 +54,19 @@ describe('ForkDetailPage', () => {
     expect(reentryFixture.adoptedBranch[0].hash).not.toBe(reentryFixture.canonicalBranch[0].hash);
   });
 
+  it('explains when the observed adopted tip was superseded before replay', async () => {
+    const supersedingHash = `0x${'dd'.repeat(32)}`;
+    vi.mocked(api.getForkDetail).mockResolvedValue(
+      fixture({
+        ...reentryFixture,
+        event: { ...reentryFixture.event, supersededByTipHash: supersedingHash },
+      })
+    );
+    render(<ForkDetailPage />);
+    expect(await screen.findByText(/superseded before replay/)).toHaveTextContent('#11');
+    expect(screen.getByText(supersedingHash)).toBeInTheDocument();
+  });
+
   it('surfaces an evidence read error', async () => {
     vi.mocked(api.getForkDetail).mockRejectedValue(new Error('missing adopted block 11'));
     render(<ForkDetailPage />);

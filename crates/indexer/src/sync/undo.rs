@@ -5,7 +5,9 @@ use anyhow::{anyhow, bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
 
-use super::types::{TxData, UndoSeqScope, UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT};
+#[cfg(any(test, debug_assertions))]
+use super::types::UNDO_SEQ_SCOPE_SHIFT;
+use super::types::{TxData, UndoSeqScope, UNDO_SEQ_LOCAL_MAX};
 
 /// The block-scoped undo sequence counter for one committed batch.
 ///
@@ -57,6 +59,7 @@ pub(crate) fn next_undo_seq(
 }
 
 /// One `(block, cf, key)` whose pre-image more than one undo scope recorded.
+#[cfg(any(test, debug_assertions))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UndoScopeOverlap {
     pub(crate) block: i64,
@@ -73,8 +76,9 @@ pub(crate) struct UndoScopeOverlap {
 /// block's entries scope-major (highest scope first), not in the order they
 /// were written across scopes. That is exact only while each key a block
 /// mutates is recorded by ONE scope: then its entries all sit in one scope and
-/// replay LIFO within it. This is the check for that invariant; the live write
-/// path runs it on every committed batch in debug builds.
+/// replay LIFO within it. Debug builds check this on each committed batch,
+/// and tests pin the same invariant.
+#[cfg(any(test, debug_assertions))]
 pub(crate) fn undo_scope_overlaps(
     store: &ckbadger_store::CkbadgerStore,
     from_block: i64,

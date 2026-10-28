@@ -4,9 +4,11 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 // ── UndoSeqScope: the store's one table ────────────────────────────────
 
+#[cfg(any(test, debug_assertions))]
+pub(crate) use ckbadger_store::keys::UNDO_SEQ_SCOPE_SHIFT;
 /// Undo sequence scopes are composed here and read back by the store's
 /// retention prune, so both sides use the store's single definition.
-pub(crate) use ckbadger_store::keys::{UndoSeqScope, UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT};
+pub(crate) use ckbadger_store::keys::{UndoSeqScope, UNDO_SEQ_LOCAL_MAX};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub(crate) struct InternId(u32);

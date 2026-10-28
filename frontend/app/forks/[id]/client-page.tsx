@@ -186,6 +186,12 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
                 : 'Branch adopted at detection'}
             </h3>
             <p className="mb-3 text-xs">Tip {fullHash(event.newTipHash)}</p>
+            {event.supersededByTipHash && (
+              <p className="text-text-dim mb-3 text-xs">
+                This observed tip was superseded before replay. Canonical block #
+                {event.newTipNumber} was {fullHash(event.supersededByTipHash)}.
+              </p>
+            )}
             {event.eventType === 'deep' ? (
               <p className="text-text-dim text-xs">
                 Indexer paused before adopting the node branch.
