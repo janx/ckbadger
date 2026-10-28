@@ -32,7 +32,7 @@ it('renders exact canonical protocol, whole cell history and raw bytes for bit-c
     .find(
       (a) =>
         a.getAttribute('href') ===
-        `/mainnet/cell/${evidence.versions[0].cell.txHash}/${evidence.versions[0].cell.outputIndex}`
+        `/mainnet/cell/${evidence.versions[0].cell.txHash}-${evidence.versions[0].cell.outputIndex}`
     );
   expect(link).toBeDefined();
 });

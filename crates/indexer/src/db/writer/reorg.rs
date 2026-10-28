@@ -51,7 +51,20 @@ impl BatchWriter {
         let winning_header = self.store.get_block_header(current.new_tip)?
             .ok_or_else(|| anyhow!("canonical header missing during fork reconciliation: event={event_key_str} block={} tip={tip}", current.new_tip))?;
         if winning_header.hash != current.new_tip_hash {
-            return Err(anyhow!("replayed fork tip differs from observation: event={event_key_str} block={} expected=0x{} actual=0x{}", current.new_tip, hex::encode(&current.new_tip_hash), hex::encode(&winning_header.hash)));
+            // A second node switch may supersede the observed winner after
+            // rollback, before this height is replayed. Keep the immutable
+            // observation, but it cannot prove any reversal links.
+            info!(
+                "Reorg observation superseded before reconciliation: event={} block={} observed=0x{} canonical=0x{}",
+                event_key_str,
+                current.new_tip,
+                hex::encode(&current.new_tip_hash),
+                hex::encode(&winning_header.hash),
+            );
+            let mut batch = StoreBatch::new(&self.store);
+            batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
+            batch.commit()?;
+            return Ok(());
         }
         let mut batch = StoreBatch::new(&self.store);
         let mut complete = true;
@@ -340,6 +353,132 @@ mod tests {
     use crate::db::writer::BatchWriter;
 
     use super::next_reorg_event_key;
+
+    #[test]
+    fn superseded_winning_tip_clears_pending_observation_without_reversal_links() {
+        use ckbadger_store::types::{CachedBlockHeader, ReorgEvent};
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), append);
+        let key = keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
+        let event = ReorgEvent {
+            detected_at: 1,
+            kind: ReorgEventKind::Automatic,
+            fork_point: 9,
+            fork_point_hash: vec![9; 32],
+            old_tip: 10,
+            old_tip_hash: vec![0xaa; 32],
+            new_tip: 11,
+            new_tip_hash: vec![0xbb; 32],
+            depth: 1,
+            orphaned_blocks: 1,
+            orphaned_txs: 3,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_sync_meta(
+            keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+            key.as_bytes(),
+        );
+        batch.put_block_header(
+            11,
+            &CachedBlockHeader {
+                hash: vec![0xcc; 32],
+                parent_hash: vec![9; 32],
+                timestamp: 0,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 100,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 0,
+            },
+        );
+        batch.commit().unwrap();
+        store.update_sync_tip(11, &[0xcc; 32], 0).unwrap();
+
+        writer.reconcile_reorg_events().unwrap();
+
+        assert!(store
+            .get_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::REORG_RECONCILE_PENDING
+            )
+            .unwrap()
+            .is_none());
+        let retained = store.get_reorg_event(1000).unwrap().unwrap().event;
+        assert_eq!(retained.new_tip_hash, event.new_tip_hash);
+        assert!(retained.reverses_events.is_empty());
+        assert!(retained.reverted_by_event.is_none());
+        writer.reconcile_reorg_events().unwrap();
+        assert_eq!(
+            store
+                .get_reorg_event(1000)
+                .unwrap()
+                .unwrap()
+                .event
+                .new_tip_hash,
+            event.new_tip_hash
+        );
+    }
+
+    #[test]
+    fn pending_reorg_still_rejects_missing_canonical_header() {
+        use ckbadger_store::types::ReorgEvent;
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let writer = BatchWriter::new(
+            store.clone(),
+            Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap()),
+        );
+        let key = keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
+        let event = ReorgEvent {
+            detected_at: 1,
+            kind: ReorgEventKind::Automatic,
+            fork_point: 9,
+            fork_point_hash: vec![9; 32],
+            old_tip: 10,
+            old_tip_hash: vec![0xaa; 32],
+            new_tip: 11,
+            new_tip_hash: vec![0xbb; 32],
+            depth: 1,
+            orphaned_blocks: 1,
+            orphaned_txs: 3,
+            reverted_by_event: None,
+            reverses_events: Vec::new(),
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_sync_meta(
+            keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+            key.as_bytes(),
+        );
+        batch.commit().unwrap();
+        store.update_sync_tip(11, &[0xcc; 32], 0).unwrap();
+
+        let error = writer.reconcile_reorg_events().unwrap_err();
+        assert!(
+            error.to_string().contains("canonical header missing"),
+            "{error:#}"
+        );
+        assert!(store
+            .get_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::REORG_RECONCILE_PENDING
+            )
+            .unwrap()
+            .is_some());
+    }
 
     #[test]
     fn switchback_links_reversal_after_canonical_replay_with_extended_tip() {

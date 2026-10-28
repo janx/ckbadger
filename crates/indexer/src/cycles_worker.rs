@@ -61,7 +61,13 @@ async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, reque
         for request in requests {
             match request {
                 CyclesRequest::Tx { hash, path } => {
-                    let _result = process_cycles_task(store.as_ref(), &ckb_rpc_url, &hash).await;
+                    let result = process_cycles_task(store.as_ref(), &ckb_rpc_url, &hash).await;
+                    if result.status == CyclesTaskStatus::Failed {
+                        warn!(
+                            "Cycles worker: tx {hash} group enrichment failed: {:?}",
+                            result.error
+                        );
+                    }
                     let _ = tokio::fs::remove_file(&path).await;
                     processed += 1;
                 }
@@ -327,7 +333,7 @@ async fn process_cycles_task(
         }
         Err(e) => {
             let marker_err = store
-                .update_tx_cycles(block_num, tx_idx, &hash_bytes, -1)
+                .mark_tx_cycles_failed_if_missing(block_num, tx_idx, &hash_bytes)
                 .err()
                 .map(|write_err| format!(" (failed to persist failure marker: {})", write_err))
                 .unwrap_or_default();
@@ -543,6 +549,32 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_group_enrichment_preserves_authoritative_scalar_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let hash = [0x56; 32];
+        insert_tx_with_cycles(&store, &hash, Some(42));
+        let result = process_cycles_task(
+            &store,
+            "http://127.0.0.1:1",
+            &format!("0x{}", hex::encode(hash)),
+        )
+        .await;
+
+        assert_eq!(result.status, CyclesTaskStatus::Failed);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("CKB script verification failed"));
+        assert_eq!(
+            store.get_tx_index(123, 0).unwrap().unwrap().cycles,
+            Some(42)
+        );
+        assert!(store.get_tx_group_cycles(&hash).unwrap().is_none());
     }
 
     #[tokio::test]

@@ -242,7 +242,18 @@ impl CkbadgerStore {
         expected_hash: &[u8; 32],
         cycles: i64,
     ) -> anyhow::Result<()> {
-        self.persist_tx_cycles(block_num, tx_idx, expected_hash, cycles, None)
+        self.persist_tx_cycles(block_num, tx_idx, expected_hash, cycles, None, false)
+    }
+
+    /// Mark replay failure only when no authoritative positive total exists.
+    /// The check and write share the domain write gate with canonical commits.
+    pub fn mark_tx_cycles_failed_if_missing(
+        &self,
+        block_num: i64,
+        tx_idx: i32,
+        expected_hash: &[u8; 32],
+    ) -> anyhow::Result<()> {
+        self.persist_tx_cycles(block_num, tx_idx, expected_hash, -1, None, true)
     }
 
     pub fn get_tx_group_cycles(
@@ -302,6 +313,7 @@ impl CkbadgerStore {
             expected_hash,
             result.cycles,
             Some(result),
+            false,
         )
     }
 
@@ -312,6 +324,7 @@ impl CkbadgerStore {
         expected_hash: &[u8; 32],
         cycles: i64,
         groups: Option<&ckbadger_common::cycles_task::TransactionCycles>,
+        preserve_positive_on_failure: bool,
     ) -> anyhow::Result<()> {
         self.with_domain_write_gate(|db| {
             anyhow::ensure!(cycles >= -1,
@@ -334,6 +347,9 @@ impl CkbadgerStore {
             anyhow::ensure!(entry.cycles.is_none_or(|stored| stored >= -1),
                 "invalid stored cycles: block={block_num}, index={tx_idx}, hash=0x{}, cycles={:?}",
                 bytes_to_hex(expected_hash), entry.cycles);
+            if preserve_positive_on_failure && entry.cycles.is_some_and(|stored| stored > 0) {
+                return Ok(());
+            }
             if let Some(groups) = groups {
                 anyhow::ensure!(!entry.cycles.is_some_and(|stored| stored > 0 && stored != cycles),
                     "cycles total mismatch: block={block_num}, index={tx_idx}, hash=0x{}, stored={:?}, calculated={cycles}",
@@ -594,6 +610,20 @@ mod tests {
         );
         let append_dir = tempdir().unwrap();
         let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        store
+            .mark_tx_cycles_failed_if_missing(block_num, tx_idx, &tx_hash)
+            .unwrap();
+        assert_eq!(
+            store.get_tx_by_hash(&tx_hash).unwrap().unwrap().2.cycles,
+            Some(12_345)
+        );
+        assert_eq!(
+            store.get_tx_cycles_result(&tx_hash).unwrap(),
+            Some(result.clone())
+        );
+        assert!(append
+            .mark_tx_cycles_failed_if_missing(block_num, tx_idx, &tx_hash)
+            .is_err());
         assert!(append
             .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &result)
             .is_err());

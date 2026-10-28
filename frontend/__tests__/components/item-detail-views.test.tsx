@@ -8,6 +8,7 @@ import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
 import {
   sporeDetailProducer,
   clusterDetailProducer,
+  clusterProtocolProducer,
   dotcellProtocolProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
@@ -36,6 +37,15 @@ it('does not identify cluster metadata ownership as a current cell without canon
   expect(await screen.findByText('No current cluster cell')).toBeInTheDocument();
   expect(screen.getByRole('region', { name: 'Cluster cell evidence' })).toHaveTextContent(
     'No current cell carries this cluster type.'
+  );
+});
+it('links a canonically resolved cluster cell through the one-segment outpoint route', async () => {
+  vi.mocked(api.getSporeClusterProtocol).mockResolvedValue(clusterProtocolProducer);
+  render(<CollectionDetail id={clusterDetailProducer.clusterId} kind="spore" />);
+  const link = await screen.findByRole('link', { name: 'Current cluster cell →' });
+  expect(link).toHaveAttribute(
+    'href',
+    `/mainnet/cell/${clusterProtocolProducer.current.cell.txHash}-${clusterProtocolProducer.current.cell.outputIndex}`
   );
 });
 it('retains collection evidence and reports a failed background refresh', async () => {

@@ -35,10 +35,13 @@ describe('Address v3 components', () => {
     const table = screen.getByRole('table', { name: 'Live cells' });
     expect(table).toHaveTextContent('1,000.00000000');
     expect(table.querySelector('a[href*="hashType=data1&kind=type"]')).not.toBeNull();
+    const cell = addressProducerCells.data[0];
     expect(
       within(table)
         .getAllByRole('link')
-        .some((link) => link.getAttribute('href')?.includes('/cell/'))
+        .some(
+          (link) => link.getAttribute('href') === `/mainnet/cell/${cell.txHash}-${cell.outputIndex}`
+        )
     ).toBe(true);
   });
   it('retains null cycles as unavailable and never a zero measurement', () => {

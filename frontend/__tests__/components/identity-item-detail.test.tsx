@@ -61,7 +61,7 @@ it('uses the canonical item outpoint and protocol instead of resolving an owner 
   expect(
     screen
       .getAllByRole('link')
-      .some((a) => a.getAttribute('href') === `/mainnet/cell/${cell.txHash}/${cell.outputIndex}`)
+      .some((a) => a.getAttribute('href') === `/mainnet/cell/${cell.txHash}-${cell.outputIndex}`)
   ).toBe(true);
   expect(api.getItemProtocol).toHaveBeenCalledWith('dotbit', dotbitV4ProtocolProducer.itemId);
 });

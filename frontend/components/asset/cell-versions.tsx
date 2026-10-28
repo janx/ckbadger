@@ -68,7 +68,7 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
               )}
             >
               <div className="min-w-0">
-                <AppLink className="text-text-bright" href={`/cell/${v.txHash}/${v.outputIndex}`}>
+                <AppLink className="text-text-bright" href={`/cell/${v.txHash}-${v.outputIndex}`}>
                   {i === 0 ? 'Minted cell' : `Version ${i + 1}`}
                   {v.isLive ? ' · current' : ''}
                 </AppLink>

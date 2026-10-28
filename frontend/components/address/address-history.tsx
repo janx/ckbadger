@@ -205,7 +205,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
     label: 'Cell',
     minWidth: 200,
     render: (c) => (
-      <Link href={`/cell/${c.txHash}:${c.outputIndex}`}>
+      <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
         <Hash hash={c.txHash} startChars={10} endChars={6} copyable={false} className="text-xs" />:
         {c.outputIndex}
       </Link>
@@ -219,7 +219,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
       c.display ? (
         <TransactionCellContent
           display={c.display}
-          cellHref={`/cell/${c.txHash}:${c.outputIndex}`}
+          cellHref={`/cell/${c.txHash}-${c.outputIndex}`}
         />
       ) : (
         <span className="flex items-center gap-2">

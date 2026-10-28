@@ -774,7 +774,7 @@ describe('Address v3', () => {
     expect(request.dao!.lockScriptHash).not.toBe(request.lockScriptHash);
     expect(screen.getByRole('link', { name: 'withdraw requested' })).toHaveAttribute(
       'href',
-      expect.stringContaining(`/cell/${request.txHash}:${request.outputIndex}`)
+      expect.stringContaining(`/cell/${request.txHash}-${request.outputIndex}`)
     );
     expect(screen.getByRole('link', { name: 'Current mNFT group' })).toHaveAttribute(
       'href',

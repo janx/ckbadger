@@ -104,7 +104,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
     {
       label: 'Current / final cell',
       value: last ? (
-        <AppLink href={`/cell/${last.txHash}/${last.outputIndex}`}>
+        <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
           Block #{last.blockNumber.toLocaleString('en-US')} · output {last.outputIndex}
         </AppLink>
       ) : (

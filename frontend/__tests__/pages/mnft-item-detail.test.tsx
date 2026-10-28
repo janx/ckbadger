@@ -140,7 +140,7 @@ describe('MnftItemDetailPage', () => {
         .some(
           (link) =>
             link.getAttribute('href') ===
-            `/mainnet/cell/${protocol.cell.txHash}/${protocol.cell.outputIndex}`
+            `/mainnet/cell/${protocol.cell.txHash}-${protocol.cell.outputIndex}`
         )
     ).toBe(true);
     expect(screen.getByRole('heading', { name: 'm-NFT token ID' })).toBeInTheDocument();

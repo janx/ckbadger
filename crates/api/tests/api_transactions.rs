@@ -2583,6 +2583,13 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
     let store = test_store();
     let hash = [0x66; 32];
     insert_committed_transaction(&store, &hash);
+    store
+        .mark_tx_cycles_failed_if_missing(321, 0, &hash)
+        .unwrap();
+    assert_eq!(
+        store.get_tx_index(321, 0).unwrap().unwrap().cycles,
+        Some(333)
+    );
     let requests = tempfile::tempdir().unwrap();
     let mut config = test_config(store.clone());
     config.cycles_request_dir = Some(requests.path().to_path_buf());

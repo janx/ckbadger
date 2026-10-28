@@ -211,7 +211,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               {protocol.data?.current ? (
                 <>
                   <AppLink
-                    href={`/cell/${protocol.data.current.cell.txHash}/${protocol.data.current.cell.outputIndex}`}
+                    href={`/cell/${protocol.data.current.cell.txHash}-${protocol.data.current.cell.outputIndex}`}
                   >
                     Current cluster cell →
                   </AppLink>

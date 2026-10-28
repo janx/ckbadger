@@ -104,7 +104,7 @@ export function CanonicalIdentityDetail({
     {
       label: 'Current / final cell',
       value: current ? (
-        <AppLink href={`/cell/${current.txHash}/${current.outputIndex}`}>
+        <AppLink href={`/cell/${current.txHash}-${current.outputIndex}`}>
           Block #{current.blockNumber.toLocaleString('en-US')} · output {current.outputIndex}
         </AppLink>
       ) : (

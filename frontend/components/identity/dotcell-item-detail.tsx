@@ -146,7 +146,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
           </dl>
           {item.sale.offerOutPoint && (
             <AppLink
-              href={`/cell/${item.sale.offerOutPoint.txHash}/${item.sale.offerOutPoint.index}`}
+              href={`/cell/${item.sale.offerOutPoint.txHash}-${item.sale.offerOutPoint.index}`}
             >
               Sale offer cell
             </AppLink>
@@ -173,7 +173,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
           <>
             <AssetReadState label="name ring" error={ring.error} retained />
             <AppLink
-              href={`/cell/${ring.data.rootOutPoint.txHash}/${ring.data.rootOutPoint.index}`}
+              href={`/cell/${ring.data.rootOutPoint.txHash}-${ring.data.rootOutPoint.index}`}
               className="text-[11px]"
             >
               Namespace root cell · {ring.data.liveCount} live names

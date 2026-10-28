@@ -58,7 +58,7 @@ export function TransactionEvidence({
       );
     const deps = dependencies.data.filter((dep) => dep.scriptHashes.includes(group.scriptHash));
     return {
-      id: `${group.kind}:${group.scriptHash}`,
+      id: `${group.kind}:${group.ran ? 'run' : 'attached'}:${group.scriptHash}`,
       kind: group.kind,
       label: `${group.kind} · ${group.script.codeHash.slice(0, 16)}…`,
       href: `/script/${group.script.codeHash}?hashType=${group.script.hashType}&kind=${group.kind}`,

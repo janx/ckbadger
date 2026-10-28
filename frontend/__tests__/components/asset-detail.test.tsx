@@ -72,7 +72,7 @@ describe('Canonical item cell versions', () => {
     expect(versions).toHaveTextContent('JoyID');
     expect(screen.getByRole('link', { name: 'Version 2 · current' })).toHaveAttribute(
       'href',
-      `/mainnet/cell/${second.txHash}/4`
+      `/mainnet/cell/${second.txHash}-4`
     );
     expect(versions.querySelector('a[href*="hashType=data1&kind=lock"]')).not.toBeNull();
     fireEvent.focus(versions.querySelectorAll('article')[1]);

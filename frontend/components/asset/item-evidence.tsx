@@ -39,7 +39,7 @@ export function ItemEvidence({ protocol }: ItemEvidenceProps) {
       </label>
       <div className="break-all text-[11px]">
         Outpoint{' '}
-        <AppLink href={`/cell/${cell.txHash}/${cell.outputIndex}`}>
+        <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
           <Hash hash={cell.txHash} truncate={false} copyable={false} />:{cell.outputIndex}
         </AppLink>
       </div>
@@ -100,7 +100,7 @@ export function ItemTransactionContext({
         <>
           <AppLink
             className="block"
-            href={`/cell/${context.createdCell.txHash}/${context.createdCell.outputIndex}`}
+            href={`/cell/${context.createdCell.txHash}-${context.createdCell.outputIndex}`}
           >
             Output {context.createdCell.outputIndex} · cell after
           </AppLink>

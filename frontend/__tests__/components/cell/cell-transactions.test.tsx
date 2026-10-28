@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
@@ -14,24 +14,16 @@ vi.mock('@/lib/api', () => ({
     getTransactionCellDeps: (...args: unknown[]) => getTransactionCellDeps(...args),
   },
 }));
-vi.mock('@/components/transaction/tx-structure', () => ({
-  TxStructure: ({
-    groups,
-    focusedCellIds,
-  }: {
-    groups: Array<{ dependency: string; witness: string; executed: boolean }>;
-    focusedCellIds: string[];
-  }) => (
-    <div data-testid="structure">
-      <span>{focusedCellIds.join(',')}</span>
-      {groups.map((group, index) => (
-        <p key={index}>
-          {group.executed ? 'executed' : 'not executed'} · {group.witness} · {group.dependency}
-        </p>
-      ))}
-    </div>
-  ),
-}));
+vi.mock('@/components/transaction/tx-structure', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/transaction/tx-structure')>();
+  return {
+    TxStructure: (props: React.ComponentProps<typeof actual.TxStructure>) => (
+      <div data-testid="structure">
+        <actual.TxStructure {...props} />
+      </div>
+    ),
+  };
+});
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
 const lock = { codeHash: `0x${'22'.repeat(32)}`, hashType: 'type', args: '0x' };
@@ -115,7 +107,9 @@ describe('CellTransactions', () => {
       ],
     } as unknown as Cell;
     view(cell);
-    expect(await screen.findByText(/out:1/)).toBeInTheDocument();
+    expect(
+      (await screen.findByTestId('structure')).querySelector('[data-cell-id="out:1"]')
+    ).toHaveAttribute('data-highlighted', 'true');
     expect(screen.getByText(/Ambiguous current code cells/)).toBeInTheDocument();
     expect(screen.getByText(/Candidate cell/)).toBeInTheDocument();
     expect(screen.getByText(/Built-in Type ID/)).toBeInTheDocument();
@@ -129,5 +123,59 @@ describe('CellTransactions', () => {
     expect(screen.getByText(/42 bytes/)).toBeInTheDocument();
     expect(screen.getByText(/Cellbase group: no script execution/)).toBeInTheDocument();
     expect(getTransactionDetail).toHaveBeenCalledWith(cell.consumedByTx);
+  });
+  it('keeps executed and attached lock groups with the same script hash distinct', async () => {
+    const hash = `0x${'77'.repeat(32)}`;
+    getTransactionDetail.mockImplementation(async () => {
+      const detail = tx(hash);
+      const scriptHash = `0x${'33'.repeat(32)}`;
+      detail.scriptGroups = [
+        {
+          scriptHash,
+          kind: 'lock',
+          ran: true,
+          inputIndices: [0],
+          outputIndices: [],
+          witnessIndex: 0,
+          script: lock,
+          cycles: '123',
+        },
+        {
+          scriptHash,
+          kind: 'lock',
+          ran: false,
+          inputIndices: [],
+          outputIndices: [0],
+          witnessIndex: null,
+          script: lock,
+          cycles: null,
+        },
+      ];
+      return detail;
+    });
+    view(liveFixture as unknown as Cell);
+    const structure = await screen.findByTestId('structure');
+    const groups = structure.querySelectorAll<HTMLElement>('[data-group-id]');
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toHaveAttribute('data-group-id', `lock:run:0x${'33'.repeat(32)}`);
+    expect(groups[1]).toHaveAttribute('data-group-id', `lock:attached:0x${'33'.repeat(32)}`);
+    fireEvent.mouseEnter(groups[0]);
+    expect(structure.querySelector('[data-cell-id="in:0"]')).toHaveAttribute(
+      'data-highlighted',
+      'true'
+    );
+    expect(structure.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
+      'data-highlighted',
+      'false'
+    );
+    fireEvent.mouseEnter(groups[1]);
+    expect(structure.querySelector('[data-cell-id="in:0"]')).toHaveAttribute(
+      'data-highlighted',
+      'false'
+    );
+    expect(structure.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
+      'data-highlighted',
+      'true'
+    );
   });
 });

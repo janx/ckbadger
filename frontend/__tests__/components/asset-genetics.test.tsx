@@ -148,7 +148,7 @@ describe('Per-version raw protocol and item context', () => {
     expect(screen.getByRole('heading', { name: /version 1/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: new RegExp(old.cell.txHash) })).toHaveAttribute(
       'href',
-      `/mainnet/cell/${old.cell.txHash}/0`
+      `/mainnet/cell/${old.cell.txHash}-0`
     );
     expect(screen.getByText(/18446744073709551615/)).toBeInTheDocument();
   });
@@ -158,7 +158,7 @@ describe('Per-version raw protocol and item context', () => {
     expect(screen.getByText(tx.itemContext.action)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /cell after/ })).toHaveAttribute(
       'href',
-      `/mainnet/cell/${tx.itemContext.createdCell!.txHash}/${tx.itemContext.createdCell!.outputIndex}`
+      `/mainnet/cell/${tx.itemContext.createdCell!.txHash}-${tx.itemContext.createdCell!.outputIndex}`
     );
     rerender(
       <ItemTransactionContext

@@ -208,7 +208,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         {
           label: 'Latest cell version',
           value: last ? (
-            <AppLink href={`/cell/${last.txHash}/${last.outputIndex}`}>
+            <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
               <span className="block text-[11px]">{formatUtc8Date(last.timestamp)} UTC+8</span>Block{' '}
               <AssetCount value={last.blockNumber} /> · output {last.outputIndex}
             </AppLink>

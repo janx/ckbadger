@@ -507,7 +507,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         className="border-base-elevated flex flex-wrap items-baseline justify-between gap-2 border-t py-2 text-xs"
                       >
                         <span className="text-text-dim">
-                          <Link href={`/cell/${cell.txHash}:${cell.outputIndex}`}>
+                          <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
                             {d.status === 'deposited'
                               ? 'deposited'
                               : d.status === 'withdrawing'

@@ -92,7 +92,7 @@ it('shows exact sale price, named seller, and the current sale offer only when l
   expect(await screen.findByRole('heading', { name: 'For sale' })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Sale offer cell' })).toHaveAttribute(
     'href',
-    `/mainnet/cell/${item.sale.offerOutPoint!.txHash}/4`
+    `/mainnet/cell/${item.sale.offerOutPoint!.txHash}-4`
   );
   expect(screen.getByText('1,000')).toBeInTheDocument();
   expect(screen.getByText('.00000001')).toBeInTheDocument();
@@ -120,7 +120,7 @@ it('links the parent, ring successor and sub-names to canonical name routes', as
   );
   expect(screen.getByRole('link', { name: /Namespace root cell/ })).toHaveAttribute(
     'href',
-    `/mainnet/cell/${'0x' + '99'.repeat(32)}/0`
+    `/mainnet/cell/${'0x' + '99'.repeat(32)}-0`
   );
   expect(screen.getByText('Ring successor').querySelector('a')).toHaveAttribute(
     'href',
