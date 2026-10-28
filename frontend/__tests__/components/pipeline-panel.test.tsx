@@ -1446,9 +1446,8 @@ describe('PipelinePanel interactions', () => {
     expect(screen.queryByTestId('pipeline-selection')).toBeNull();
   });
 
-  it('keeps the footer one fixed-height row whether it shows the legend or the selection', async () => {
-    // jsdom does not lay out, so the contract is the shared row class: one fixed height, no wrap,
-    // no extra margin — pinning a tx must not change the panel height.
+  it('lets either footer wrap on mobile while keeping the desktop row height stable', async () => {
+    // jsdom does not lay out, so check the shared responsive row contract for both states.
     const row = (el: HTMLElement) => el.className.split(/\s+/);
     const svg = await renderPanel(snapshot);
     const legend = row(screen.getByTestId('pipeline-legend'));
@@ -1456,9 +1455,12 @@ describe('PipelinePanel interactions', () => {
     fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
     const selection = row(screen.getByTestId('pipeline-selection'));
     for (const classes of [legend, selection]) {
-      expect(classes).toContain('h-6');
-      expect(classes).not.toContain('flex-wrap');
-      expect(classes.some((c) => /^(m[by]?|min-h)-/.test(c))).toBe(false);
+      expect(classes).toContain('min-h-6');
+      expect(classes).toContain('flex-wrap');
+      expect(classes).toContain('md:h-6');
+      expect(classes).toContain('md:flex-nowrap');
+      expect(classes).toContain('md:overflow-hidden');
+      expect(classes).not.toContain('overflow-hidden');
     }
   });
 
