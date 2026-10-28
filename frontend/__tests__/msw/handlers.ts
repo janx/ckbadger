@@ -1,5 +1,6 @@
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, ws } from 'msw';
 import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
+import vesselSnapshot from '@/__tests__/fixtures/vessels-api-producer/vessels-snapshot.json';
 import {
   activitySummary24h,
   averageBlockTimeChart,
@@ -21,7 +22,14 @@ import {
 // relative path against jsdom's location).
 const API_BASE = '/api/:network/v1';
 
+// Background artwork opens the same realtime socket as regular pages. A local MSW socket
+// accepts it without claiming a live chain feed; lifecycle tests supply their own socket mock.
+const realtimeSocket = ws.link('ws://localhost:3000/ws/:network');
+
 export const handlers = [
+  realtimeSocket.addEventListener('connection', () => {}),
+  // Error-page artwork reads this bounded, Rust-producer-backed sample in page tests.
+  http.get(`${API_BASE}/vessels/snapshot`, () => HttpResponse.json(vesselSnapshot)),
   http.get(`${API_BASE}/pipeline`, () => HttpResponse.json(pipelineSnapshot)),
 
   http.get(`${API_BASE}/blocks`, ({ request }) => {
