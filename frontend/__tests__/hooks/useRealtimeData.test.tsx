@@ -165,6 +165,30 @@ describe('useRealtimeData network scoping', () => {
     expect(instances[0].closed).toBe(true);
   });
 
+  it('stops after ten failed reconnects and restores the budget for a new subscription', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = renderHarness();
+      for (let retry = 0; retry < 10; retry++) {
+        act(() => instances[instances.length - 1].close());
+        await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS));
+        expect(instances).toHaveLength(retry + 2);
+      }
+      act(() => instances[instances.length - 1].close());
+      await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS * 2));
+      expect(instances).toHaveLength(11);
+      first.unmount();
+      const second = renderHarness();
+      expect(instances).toHaveLength(12);
+      act(() => instances[instances.length - 1].close());
+      await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS));
+      expect(instances).toHaveLength(13);
+      second.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never reconnects to the switched-away network when the old socket closes late', async () => {
     vi.useFakeTimers();
     try {

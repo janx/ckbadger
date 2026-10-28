@@ -121,8 +121,8 @@ function connectWebSocket(network: string) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
-  reconnectAttempts = 0;
   if (wsNetwork !== network) {
+    reconnectAttempts = 0;
     useRealtimeStore.setState({
       latestBlock: null,
       latestTx: null,
