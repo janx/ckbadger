@@ -300,6 +300,13 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   canonical replay. Once the winning tip is replayed, the indexer verifies abandoned-tip
   ancestry and atomically adds full event-key `reverted_by_event` / `reverses_events` links.
   Historical detection fields remain unchanged, and these observation links are not undo state.
+  Before reorg, startup cleanup or partial-batch cleanup replays any undo entry, the indexer
+  atomically sets the pending event's `reconcile_interrupted` flag and deletes the marker in
+  domain `CF_SYNC_META`. A surviving marker proves no subsequent rollback began, so the retained
+  fork-point check remains a strict invariant. Interruption and `superseded_by_tip_hash` may
+  coexist; deep events always have interruption false. A crash after rollback but before the
+  new event is written can still lose that new observation; this change does not journal it.
+  The `ReorgEvent` bincode layout changed and requires a genesis re-sync.
 
 #### `entity_stats_undo_contract`
 

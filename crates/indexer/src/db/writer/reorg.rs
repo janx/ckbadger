@@ -1,4 +1,4 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use chrono::Utc;
 use tracing::info;
 
@@ -21,6 +21,36 @@ fn next_reorg_event_key() -> Result<String> {
 }
 
 impl BatchWriter {
+    /// Persist interruption before any canonical mutation. A surviving pending
+    /// marker therefore proves that no later rollback has even begun.
+    pub(crate) fn begin_rollback(&self) -> Result<()> {
+        let Some(event_key) = self.store.get_cf(
+            self.store.cf_sync_meta(),
+            sync_meta_keys::REORG_RECONCILE_PENDING,
+        )?
+        else {
+            return Ok(());
+        };
+        keys::decode_reorg_event_key(&event_key)?;
+        let key = std::str::from_utf8(&event_key)?;
+        let bytes = self
+            .store
+            .get_cf(self.store.cf_sync_meta(), &event_key)?
+            .ok_or_else(|| anyhow!("pending reorg event is missing before rollback: key={key}"))?;
+        let mut event: ReorgEvent = bincode::deserialize(&bytes)
+            .with_context(|| format!("invalid pending reorg event before rollback: key={key}"))?;
+        ensure!(
+            event.kind == ReorgEventKind::Automatic,
+            "pending reconciliation is not an automatic fork before rollback: key={key}"
+        );
+        event.reconcile_interrupted = true;
+        let mut batch = StoreBatch::new(&self.store);
+        batch.put_sync_meta(&event_key, &bincode::serialize(&event)?);
+        batch.delete_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING);
+        batch.commit()?;
+        Ok(())
+    }
+
     /// Reconcile the latest automatic switch after replay reaches its observed
     /// new-tip height and verifies the retained fork point. The observed tip
     /// may have been superseded before replay. A marker makes the normal live
@@ -158,6 +188,7 @@ impl BatchWriter {
             orphaned_txs: 0,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let event_key = next_reorg_event_key()?;
@@ -261,6 +292,7 @@ impl BatchWriter {
         // Extract TxContext entries before the undo log deletes them, so the
         // subsequent cell rollback can use targeted lookups instead of full
         // CF scans.
+        self.begin_rollback()?;
         let undo_result = self.store.rollback_via_undo_log(append_store, fork_point)?;
         // Domain rollback for canonical mutable state (cells, blocks, stats,
         // aggregates rebuilt from now-correct entity data).
@@ -314,6 +346,7 @@ impl BatchWriter {
             orphaned_txs,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let event_key = next_reorg_event_key()?;
@@ -401,6 +434,7 @@ mod tests {
             orphaned_txs: 3,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(&store);
@@ -459,108 +493,112 @@ mod tests {
     #[test]
     fn superseded_observation_still_links_restored_old_tip() {
         use ckbadger_store::types::{CachedBlockHeader, ReorgEvent};
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), append.clone());
-        let first_key = keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
-        let second_key = keys::encode_reorg_event_key(2000, &[2; 16]).unwrap();
-        let first = ReorgEvent {
-            detected_at: 1,
-            kind: ReorgEventKind::Automatic,
-            fork_point: 8,
-            fork_point_hash: vec![8; 32],
-            old_tip: 10,
-            old_tip_hash: vec![0xaa; 32],
-            new_tip: 11,
-            new_tip_hash: vec![0xbb; 32],
-            depth: 2,
-            orphaned_blocks: 2,
-            orphaned_txs: 0,
-            reverted_by_event: None,
-            superseded_by_tip_hash: None,
-            reverses_events: Vec::new(),
-        };
-        let second = ReorgEvent {
-            detected_at: 2,
-            fork_point: 9,
-            fork_point_hash: vec![9; 32],
-            old_tip: 11,
-            old_tip_hash: vec![0xbb; 32],
-            new_tip: 11,
-            new_tip_hash: vec![0xcc; 32],
-            depth: 2,
-            ..first.clone()
-        };
-        let mut batch = StoreBatch::new(&store);
-        batch.put_sync_meta(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
-        batch.put_sync_meta(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
-        batch.put_sync_meta(
-            keys::sync_meta_keys::REORG_RECONCILE_PENDING,
-            second_key.as_bytes(),
-        );
-        for (height, hash) in [(9, vec![9; 32]), (10, vec![0xaa; 32]), (11, vec![0xdd; 32])] {
-            batch.put_block_header(
-                height,
-                &CachedBlockHeader {
-                    hash,
-                    parent_hash: vec![9; 32],
-                    timestamp: 0,
-                    epoch_number: 1,
-                    epoch_index: 0,
-                    epoch_length: 100,
-                    dao: vec![0; 32],
-                    transactions_count: 1,
-                    uncles_count: 0,
-                    proposals_count: 0,
-                    compact_target: 0,
-                    miner_lock_hash: None,
-                    cycles: None,
-                    chain_time_ms: 0,
-                },
+        // Each sequence starts at height 7. Derive fork points from actual
+        // shared ancestry so the fixture cannot claim an impossible switch.
+        fn observation(old: &[u8], new: &[u8], detected_at: i64) -> ReorgEvent {
+            let shared = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+            assert!(shared > 0 && shared < old.len() && shared < new.len());
+            ReorgEvent {
+                detected_at,
+                kind: ReorgEventKind::Automatic,
+                fork_point: 7 + shared as i64 - 1,
+                fork_point_hash: vec![old[shared - 1]; 32],
+                old_tip: 7 + old.len() as i64 - 1,
+                old_tip_hash: vec![*old.last().unwrap(); 32],
+                new_tip: 7 + new.len() as i64 - 1,
+                new_tip_hash: vec![*new.last().unwrap(); 32],
+                depth: (old.len() - shared) as i32,
+                orphaned_blocks: (old.len() - shared) as i64,
+                orphaned_txs: 0,
+                reverted_by_event: None,
+                superseded_by_tip_hash: None,
+                reconcile_interrupted: false,
+                reverses_events: Vec::new(),
+            }
+        }
+        let a = [7, 8, 0xa9, 0xa0];
+        let b = [7, 8, 0xb9, 0xb0, 0xb1];
+        let c = [7, 0xc8, 0xc9, 0xc0, 0xc1];
+        let observed_a = [7, 8, 0xa9, 0xa0, 0xa1, 0xa2];
+        let canonical_a = [7, 8, 0xa9, 0xa0, 0xd1, 0xd2];
+        for deeper in [false, true] {
+            let domain_dir = tempfile::tempdir().unwrap();
+            let append_dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+            let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+            let writer = BatchWriter::new(store.clone(), append.clone());
+            let first_key = keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
+            let second_key = keys::encode_reorg_event_key(2000, &[2; 16]).unwrap();
+            let first = observation(&a, &b, 1);
+            let second = observation(if deeper { &c } else { &b }, &observed_a, 2);
+            assert_eq!(first.fork_point, 8);
+            assert_eq!(second.fork_point, if deeper { 7 } else { 8 });
+            let mut batch = StoreBatch::new(&store);
+            batch.put_sync_meta(first_key.as_bytes(), &bincode::serialize(&first).unwrap());
+            if deeper {
+                // A later switch B -> C at height 7 precedes C -> A. Without
+                // this intervening branch, f1 < f0 while restoring 10a would
+                // contradict the ancestry of the two original branches.
+                let middle_key = keys::encode_reorg_event_key(1500, &[3; 16]).unwrap();
+                batch.put_sync_meta(
+                    middle_key.as_bytes(),
+                    &bincode::serialize(&observation(&b, &c, 1)).unwrap(),
+                );
+            }
+            batch.put_sync_meta(second_key.as_bytes(), &bincode::serialize(&second).unwrap());
+            batch.put_sync_meta(
+                keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+                second_key.as_bytes(),
+            );
+            let mut parent = vec![6; 32];
+            for (index, hash) in canonical_a.iter().enumerate() {
+                batch.put_block_header(
+                    7 + index as i64,
+                    &CachedBlockHeader {
+                        hash: vec![*hash; 32],
+                        parent_hash: parent,
+                        timestamp: 0,
+                        epoch_number: 1,
+                        epoch_index: 0,
+                        epoch_length: 100,
+                        dao: vec![0; 32],
+                        transactions_count: 1,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0,
+                        miner_lock_hash: None,
+                        cycles: None,
+                        chain_time_ms: 0,
+                    },
+                );
+                parent = vec![*hash; 32];
+            }
+            batch.commit().unwrap();
+            store.update_sync_tip(12, &[0xd2; 32], 0).unwrap();
+            let append_key = [7; 36];
+            append
+                .put_cf(append.cf_cells(), &append_key, b"immutable")
+                .unwrap();
+            writer.reconcile_reorg_events().unwrap();
+            let first = store.get_reorg_event(1000).unwrap().unwrap().event;
+            let second = store.get_reorg_event(2000).unwrap().unwrap().event;
+            assert_eq!(first.reverted_by_event, Some(second_key));
+            assert_eq!(second.reverses_events, vec![first_key]);
+            assert_eq!(second.superseded_by_tip_hash, Some(vec![0xd2; 32]));
+            assert_eq!(
+                append
+                    .get_cf(append.cf_cells(), &append_key)
+                    .unwrap()
+                    .unwrap(),
+                b"immutable"
+            );
+            assert_eq!(
+                append
+                    .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
+                    .count(),
+                1
             );
         }
-        batch.commit().unwrap();
-        store.update_sync_tip(11, &[0xdd; 32], 0).unwrap();
-        let append_key = [7; 36];
-        append
-            .put_cf(append.cf_cells(), &append_key, b"immutable")
-            .unwrap();
-
-        writer.reconcile_reorg_events().unwrap();
-        assert_eq!(
-            store
-                .get_reorg_event(1000)
-                .unwrap()
-                .unwrap()
-                .event
-                .reverted_by_event,
-            Some(second_key.clone())
-        );
-        assert_eq!(
-            store
-                .get_reorg_event(2000)
-                .unwrap()
-                .unwrap()
-                .event
-                .reverses_events,
-            vec![first_key]
-        );
-        assert_eq!(
-            append
-                .get_cf(append.cf_cells(), &append_key)
-                .unwrap()
-                .unwrap(),
-            b"immutable"
-        );
-        assert_eq!(
-            append
-                .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
-                .count(),
-            1,
-            "reconciliation must not write the append-only store"
-        );
     }
 
     #[test]
@@ -588,6 +626,7 @@ mod tests {
             orphaned_txs: 0,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let header = |hash| CachedBlockHeader {
@@ -650,6 +689,7 @@ mod tests {
             new_tip: 11,
             new_tip_hash: vec![0xbb; 32],
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             depth: 1,
             orphaned_blocks: 1,
             orphaned_txs: 0,
@@ -757,6 +797,7 @@ mod tests {
             orphaned_txs: 3,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let mut batch = StoreBatch::new(&store);
@@ -827,6 +868,7 @@ mod tests {
             orphaned_txs: 3,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let reversal = ReorgEvent {
@@ -1028,6 +1070,7 @@ mod tests {
             .unwrap()
             .expect("latest reorg event should exist");
         assert_eq!(latest.event.kind, ReorgEventKind::Deep);
+        assert!(!latest.event.reconcile_interrupted);
         assert_eq!(latest.event.fork_point, 100);
         assert_eq!(latest.event.fork_point_hash, vec![0x33; 32]);
         assert_eq!(latest.event.old_tip, 120);

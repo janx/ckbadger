@@ -233,6 +233,7 @@ impl BatchWriter {
             // so that the subsequent canonical rollback rebuilds aggregates from
             // correct entity state.  This matches the normal reorg path ordering
             // in execute_reorg().
+            self.begin_rollback()?;
             let undo_result = self
                 .store
                 .rollback_via_undo_log(append_store, rollback_target)?;
@@ -356,6 +357,7 @@ impl BatchWriter {
         // used by execute_reorg and init_sync_start. Entity mutations (Spore,
         // mNFT, dotbit) are reverted first so the subsequent domain rollback
         // can rebuild aggregates from correct entity state.
+        self.begin_rollback()?;
         let undo_result = self
             .store
             .rollback_via_undo_log(append_store, cleanup_tip)?;
@@ -540,6 +542,142 @@ mod tests {
         store
             .put_cf(store.cf_stats_chain(), &key, &1i32.to_le_bytes())
             .unwrap();
+    }
+
+    fn seed_pending_reorg(store: &CkbadgerStore, superseded: bool) -> String {
+        let key = ckbadger_store::keys::encode_reorg_event_key(1000, &[1; 16]).unwrap();
+        let event = ckbadger_store::ReorgEvent {
+            detected_at: 1,
+            kind: ckbadger_store::ReorgEventKind::Automatic,
+            fork_point: 8,
+            fork_point_hash: vec![8; 32],
+            old_tip: 10,
+            old_tip_hash: vec![0xa0; 32],
+            new_tip: 11,
+            new_tip_hash: vec![0xb1; 32],
+            depth: 2,
+            orphaned_blocks: 2,
+            orphaned_txs: 0,
+            reverted_by_event: None,
+            superseded_by_tip_hash: superseded.then(|| vec![0xb2; 32]),
+            reconcile_interrupted: false,
+            reverses_events: Vec::new(),
+        };
+        let mut batch = StoreBatch::new(store);
+        batch.put_sync_meta(key.as_bytes(), &bincode::serialize(&event).unwrap());
+        batch.put_sync_meta(sync_meta_keys::REORG_RECONCILE_PENDING, key.as_bytes());
+        let mut parent = vec![0; 32];
+        for height in 0..=11 {
+            let hash = match height {
+                9 => 0xb9,
+                10 => 0xb0,
+                11 => 0xb1,
+                _ => height as u8,
+            };
+            let mut header = make_header(hash, 1_700_000_000_000);
+            header.parent_hash = parent;
+            header.transactions_count = 0;
+            parent = header.hash.clone();
+            batch.put_block_header(height, &header);
+        }
+        batch.commit().unwrap();
+        store.update_sync_tip(11, &parent, 0).unwrap();
+        let histogram_key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &0_i32.to_be_bytes(),
+        );
+        store
+            .put_cf(
+                store.cf_stats_chain(),
+                &histogram_key,
+                &11_i32.to_le_bytes(),
+            )
+            .unwrap();
+        key
+    }
+
+    #[test]
+    fn interrupted_rollback_survives_restart_without_misattributing_supersession() {
+        for target in [7, 8, 9] {
+            let (dir, store, append, writer) = setup();
+            let key = seed_pending_reorg(&store, false);
+            append
+                .put_cf(append.cf_cells(), &[7; 36], b"immutable")
+                .unwrap();
+            // Simulate the crash window: old E0 is pending, rollback commits,
+            // but no E1 detection event or replacement marker is ever written.
+            writer.begin_rollback().unwrap();
+            let undo = store.rollback_via_undo_log(&append, target).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(target, Some(&append), undo.tx_contexts)
+                .unwrap();
+            drop(writer);
+            drop(store);
+            let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+            let writer = BatchWriter::new(store.clone(), append.clone());
+            let mut batch = StoreBatch::new(&store);
+            let mut parent = store.get_block_header(target).unwrap().unwrap().hash;
+            for height in target + 1..=12 {
+                let mut header = make_header(0xc0 + height as u8, 1_700_000_000_000);
+                header.parent_hash = parent;
+                header.transactions_count = 0;
+                parent = header.hash.clone();
+                batch.put_block_header(height, &header);
+            }
+            batch.commit().unwrap();
+            store.update_sync_tip(12, &parent, 0).unwrap();
+            writer.reconcile_reorg_events().unwrap();
+            assert!(store
+                .get_cf(
+                    store.cf_sync_meta(),
+                    sync_meta_keys::REORG_RECONCILE_PENDING
+                )
+                .unwrap()
+                .is_none());
+            let event = store.get_reorg_event(1000).unwrap().unwrap();
+            assert_eq!(event.key, key);
+            assert_eq!(
+                serde_json::to_value(&event.event).unwrap()["reconcile_interrupted"],
+                true
+            );
+            assert_eq!(event.event.superseded_by_tip_hash, None);
+            assert_eq!(
+                append.get_cf(append.cf_cells(), &[7; 36]).unwrap().unwrap(),
+                b"immutable"
+            );
+            assert_eq!(
+                append
+                    .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn startup_and_partial_batch_cleanup_interrupt_pending_reconciliation() {
+        for startup in [true, false] {
+            let (_dir, store, append, writer) = setup();
+            seed_pending_reorg(&store, true);
+            if startup {
+                writer.init_sync_start(&append, 0, false).unwrap();
+            } else {
+                writer.cleanup_batch_range(&append, 9, 11).unwrap();
+            }
+            assert!(store
+                .get_cf(
+                    store.cf_sync_meta(),
+                    sync_meta_keys::REORG_RECONCILE_PENDING
+                )
+                .unwrap()
+                .is_none());
+            let event = store.get_reorg_event(1000).unwrap().unwrap().event;
+            assert_eq!(
+                serde_json::to_value(&event).unwrap()["reconcile_interrupted"],
+                true
+            );
+            assert_eq!(event.superseded_by_tip_hash, Some(vec![0xb2; 32]));
+        }
     }
 
     #[test]

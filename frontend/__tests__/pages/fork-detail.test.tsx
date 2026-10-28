@@ -67,6 +67,24 @@ describe('ForkDetailPage', () => {
     expect(screen.getByText(supersedingHash)).toBeInTheDocument();
   });
 
+  it('shows interruption separately from an already superseded observation', async () => {
+    vi.mocked(api.getForkDetail).mockResolvedValue(
+      fixture({
+        ...reentryFixture,
+        event: {
+          ...reentryFixture.event,
+          reconcileInterrupted: true,
+          supersededByTipHash: `0x${'dd'.repeat(32)}`,
+        },
+      })
+    );
+    render(<ForkDetailPage />);
+    expect(
+      await screen.findByText('Reconciliation interrupted by a later rollback')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/superseded before replay/)).toBeInTheDocument();
+  });
+
   it('surfaces an evidence read error', async () => {
     vi.mocked(api.getForkDetail).mockRejectedValue(new Error('missing adopted block 11'));
     render(<ForkDetailPage />);

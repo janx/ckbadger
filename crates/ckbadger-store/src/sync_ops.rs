@@ -1247,6 +1247,7 @@ mod tests {
             orphaned_txs: 6,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let key = keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();

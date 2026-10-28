@@ -1808,6 +1808,9 @@ pub struct ReorgEvent {
     /// Canonical hash at `new_tip` during reconciliation when it superseded
     /// the tip observed at detection. None when the observation survived.
     pub superseded_by_tip_hash: Option<Vec<u8>>,
+    /// A later rollback began before this observation finished reconciliation.
+    /// Independent of supersession; always false for a paused deep fork.
+    pub reconcile_interrupted: bool,
     pub depth: i32,
     /// Blocks actually removed by the rollback (0 for a paused deep fork,
     /// which rolls nothing back).

@@ -186,6 +186,11 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
                 : 'Branch adopted at detection'}
             </h3>
             <p className="mb-3 text-xs">Tip {fullHash(event.newTipHash)}</p>
+            {event.reconcileInterrupted && (
+              <p className="text-text-dim mb-3 text-xs">
+                Reconciliation interrupted by a later rollback
+              </p>
+            )}
             {event.supersededByTipHash && (
               <p className="text-text-dim mb-3 text-xs">
                 This observed tip was superseded before replay. Canonical block #

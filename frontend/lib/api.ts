@@ -289,6 +289,7 @@ interface ReorgEvent {
   newTipNumber: number;
   newTipHash: string;
   supersededByTipHash: string | null;
+  reconcileInterrupted: boolean;
   forkPointNumber: number;
   forkPointHash: string;
   orphanedBlocksCount: number;

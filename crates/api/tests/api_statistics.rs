@@ -3566,6 +3566,7 @@ fn seed_reorg_event_of_kind(
         orphaned_txs: if deep { 0 } else { i64::from(depth) * 2 },
         reverted_by_event: None,
         superseded_by_tip_hash: None,
+        reconcile_interrupted: false,
         reverses_events: Vec::new(),
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
@@ -3645,6 +3646,7 @@ fn seed_retained_reorg_list_history(store: &Arc<CkbadgerStore>) -> TestCkbChain 
             orphaned_txs: 0,
             reverted_by_event: None,
             superseded_by_tip_hash: None,
+            reconcile_interrupted: false,
             reverses_events: Vec::new(),
         };
         let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
@@ -4021,6 +4023,7 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
         orphaned_txs: 1,
         reverted_by_event: None,
         superseded_by_tip_hash: None,
+        reconcile_interrupted: false,
         reverses_events: vec![],
     };
     let key = ckbadger_store::keys::encode_reorg_event_key(id, &[0x11; 16]).unwrap();
