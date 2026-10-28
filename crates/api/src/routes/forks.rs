@@ -12,10 +12,9 @@ use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
 use crate::utils::stats_bucket::ChainTime;
+use crate::utils::sync_status::deep_fork_info_if_consistent;
 use crate::AppState;
-use ckbadger_store::types::{
-    CachedBlockHeader, DeepForkInfo, ReorgEventKind, ReorgEventRecord, SyncStatus,
-};
+use ckbadger_store::types::{CachedBlockHeader, ReorgEventKind, ReorgEventRecord};
 use ckbadger_store::CkbadgerStore;
 
 /// How long after detection a persisted reorg still counts as "recent".
@@ -205,23 +204,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/forks/overview", get(get_forks_overview))
         .route("/forks/recent", get(get_recent_reorg))
         .route("/forks/{id}", get(get_fork_detail))
-}
-
-fn deep_fork_info_if_consistent(
-    status: &SyncStatus,
-) -> Result<Option<&DeepForkInfo>, ApiRouteError> {
-    match (status.deep_fork_detected, status.deep_fork_info.as_ref()) {
-        (false, None) => Ok(None),
-        (true, Some(info)) => Ok(Some(info)),
-        (true, None) => Err(ApiError::internal(format!(
-            "sync_status invariant violated: deep_fork_detected=true but deep_fork_info is missing (tip_block={})",
-            status.tip_block_number
-        ))),
-        (false, Some(_)) => Err(ApiError::internal(format!(
-            "sync_status invariant violated: deep_fork_detected=false but deep_fork_info exists (tip_block={})",
-            status.tip_block_number
-        ))),
-    }
 }
 
 fn hex0x(bytes: &[u8]) -> String {
@@ -1020,7 +1002,8 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let deep_fork_info = deep_fork_info_if_consistent(&sync_status)?;
+    let deep_fork_info = deep_fork_info_if_consistent(&sync_status)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
     let reorg = latest.as_ref().map(reorg_event_response).transpose()?;
 
     let deep_fork = match deep_fork_info {

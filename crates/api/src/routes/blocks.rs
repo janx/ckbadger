@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
+use crate::cycles::cycles_replay_paused_by_deep_fork;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
@@ -445,7 +446,12 @@ async fn build_block_response(
             ),
             None => (None, None, None, None),
         };
-    if metrics.cycles_status == BlockCyclesStatus::Pending && state.cycles_client.is_enabled() {
+    if metrics.cycles_status == BlockCyclesStatus::Pending
+        && state.cycles_client.is_enabled()
+        && cycles_replay_paused_by_deep_fork(state, block_num)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .is_none()
+    {
         let client = state.cycles_client.clone();
         tokio::spawn(async move {
             if let Err(error) = client.enqueue_block(block_num).await {
@@ -1162,7 +1168,12 @@ async fn get_block_fee_stats(
     let cycles_pending = cycles_status == BlockCyclesStatus::Pending;
 
     // Fire-and-forget block cycles request if pending
-    if cycles_pending && state.cycles_client.is_enabled() {
+    if cycles_pending
+        && state.cycles_client.is_enabled()
+        && cycles_replay_paused_by_deep_fork(&state, block_number)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .is_none()
+    {
         let client = state.cycles_client.clone();
         let bn = block_number;
         tokio::spawn(async move {

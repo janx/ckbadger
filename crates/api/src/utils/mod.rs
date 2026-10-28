@@ -12,6 +12,7 @@ pub mod params;
 pub mod script_resolution;
 pub mod stats_bucket;
 pub mod supply;
+pub(crate) mod sync_status;
 
 pub use address::{
     address_to_lock_script_hash, is_ckb_address, parse_address_to_script, script_to_address,

@@ -1043,3 +1043,35 @@ async fn block_response_rejects_index_counts_that_disagree_with_node_evidence() 
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn r3_deep_fork_blocks_do_not_dispatch_cycles_above_fork_point() {
+    for endpoint in ["", "/fee-stats"] {
+        let store = test_store();
+        seed_proposer_header(&store, 101, &[0x51; 32]);
+        let mut header = store.get_block_header(101).unwrap().unwrap();
+        header.transactions_count = 2;
+        header.cycles = None;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(101, &header);
+        batch.commit().unwrap();
+        let requests = tempfile::tempdir().unwrap();
+        let mut config = attach_block_evidence(test_config(store.clone()), &[101]);
+        let mut tx = store.get_tx_index(101, 1).unwrap().unwrap();
+        tx.cycles = None;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(101, 1, &tx);
+        batch.commit().unwrap();
+        seed_deep_fork_pause(&store, 100);
+        config.cycles_request_dir = Some(requests.path().to_path_buf());
+        let app = create_router(config).await;
+        let (status, body) = get_json(&app, &format!("/blocks/101{endpoint}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(
+            std::fs::read_dir(requests.path()).unwrap().count(),
+            0,
+            "{endpoint}"
+        );
+    }
+}

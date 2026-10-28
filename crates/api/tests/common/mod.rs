@@ -1768,3 +1768,20 @@ pub fn rollback_entity_stats(store: &CkbadgerStore, fork_point: i64) {
         .rollback_to_block_with_append_only_store(fork_point, None)
         .unwrap();
 }
+
+/// Deep-fork pause fixture shared by cycles dispatch regression tests.
+pub fn seed_deep_fork_pause(store: &CkbadgerStore, fork_point: i64) {
+    store
+        .update_sync_status(|status| {
+            status.deep_fork_detected = true;
+            status.deep_fork_info = Some(DeepForkInfo {
+                db_tip: 150,
+                db_tip_hash: vec![0x11; 32],
+                chain_tip: 151,
+                chain_tip_hash: vec![0x22; 32],
+                depth: 50,
+                fork_point,
+            });
+        })
+        .unwrap();
+}

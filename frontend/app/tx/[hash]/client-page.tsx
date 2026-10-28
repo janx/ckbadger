@@ -335,7 +335,7 @@ export default function TransactionDetailPage() {
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
-  const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
+  const { cycles, hasCycles, isCalculating, hasFailed, isPaused } = useCyclesCalculation(
     hash,
     tx?.cycles,
     (tx?.isCellbase ?? false) || isProvisional || tx?.blockNumber === 0,
@@ -765,7 +765,7 @@ export default function TransactionDetailPage() {
                 ·{' '}
                 {hasCycles && cycles !== null ? (
                   cycles.toLocaleString('en-US')
-                ) : isCalculating ? (
+                ) : isPaused ? null : isCalculating ? (
                   'Calculating...'
                 ) : hasFailed ? (
                   'Calculation failed'
@@ -775,6 +775,11 @@ export default function TransactionDetailPage() {
                   'Cellbase does not execute scripts'
                 ) : (
                   'Not available'
+                )}
+                {isPaused && (
+                  <span className={hasCycles ? 'text-text-dim mt-1 block' : 'text-text-dim'}>
+                    Paused: indexer is on a deep fork
+                  </span>
                 )}
                 {tx.feeRate !== undefined && (
                   <span className="text-text-dim mt-1 block">

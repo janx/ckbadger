@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::time::Instant;
 
 use crate::consensus::ProposalWindow;
-use crate::cycles::{CyclesStatus, CyclesStatusResponse};
+use crate::cycles::{cycles_replay_paused_by_deep_fork, CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse, ScriptResponse,
@@ -2151,6 +2151,7 @@ async fn trigger_cycles_calculation(
 enum StoredCycles {
     Complete(i64),
     Failed { total: Option<i64>, error: String },
+    Paused { total: Option<i64>, fork_point: u64 },
     Pending,
 }
 
@@ -2166,6 +2167,13 @@ fn stored_cycles_response(state: Option<StoredCycles>) -> Option<CyclesStatusRes
             cycles: total,
             error: Some(error),
         },
+        Some(StoredCycles::Paused { total, fork_point }) => CyclesStatusResponse {
+            status: CyclesStatus::Paused,
+            cycles: total,
+            error: Some(format!(
+                "Indexer paused on a deep fork above block {fork_point}"
+            )),
+        },
         Some(StoredCycles::Pending) => return None,
         None => CyclesStatusResponse {
             status: CyclesStatus::NotFound,
@@ -2179,11 +2187,12 @@ async fn load_tx_cycles_state(
     state: &Arc<AppState>,
     hash_bytes: &[u8],
 ) -> Result<Option<StoredCycles>, ApiRouteError> {
-    let store = state.store.clone();
+    let state = state.clone();
     let hash = hash_bytes.to_vec();
     tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         // Every poll pins only its bounded multi-CF read, never the sleep.
         let _view = ckbadger_store::read_view::acquire_read();
+        let store = &state.store;
         let Some((block, _, entry)) = store.get_tx_by_hash(&hash)? else {
             return Ok(None);
         };
@@ -2216,7 +2225,13 @@ async fn load_tx_cycles_state(
                 "failed cycles sentinel lacks group failure record: tx=0x{}, block={block}",
                 hex::encode(&hash)
             ),
-            None => StoredCycles::Pending,
+            None => match cycles_replay_paused_by_deep_fork(&state, block)? {
+                Some(fork_point) => StoredCycles::Paused {
+                    total: entry.cycles.filter(|cycles| *cycles > 0),
+                    fork_point,
+                },
+                None => StoredCycles::Pending,
+            },
         }))
     })
     .await

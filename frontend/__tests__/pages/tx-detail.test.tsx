@@ -217,6 +217,7 @@ vi.mock('@/hooks/useCyclesCalculation', () => ({
     hasCycles: true,
     isCalculating: false,
     hasFailed: false,
+    isPaused: false,
   })),
 }));
 
@@ -239,6 +240,13 @@ vi.mock('@/src/navigation', () => ({
 describe('TransactionDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useCyclesCalculation).mockReturnValue({
+      cycles: 4446651,
+      hasCycles: true,
+      isCalculating: false,
+      hasFailed: false,
+      isPaused: false,
+    });
     mockSearchParams = new URLSearchParams();
 
     vi.mocked(api.getTransactionDetail).mockResolvedValue(createCommittedTransactionDetail());
@@ -302,6 +310,20 @@ describe('TransactionDetailPage', () => {
     await waitFor(() => {
       expect(useCyclesCalculation).toHaveBeenLastCalledWith(TX_HASH, 1000, false, 'complete', true);
     });
+  });
+
+  it.each([null, 1000])('shows deep-fork replay pause with scalar cycles %s', async (cycles) => {
+    vi.mocked(useCyclesCalculation).mockReturnValue({
+      cycles,
+      hasCycles: cycles !== null,
+      isCalculating: false,
+      hasFailed: false,
+      isPaused: true,
+    });
+    render(<TransactionDetailPage />);
+    expect(await screen.findByText('Paused: indexer is on a deep fork')).toBeInTheDocument();
+    expect(screen.queryByText('Calculation failed')).not.toBeInTheDocument();
+    expect(screen.queryByText('Calculating...')).not.toBeInTheDocument();
   });
   it('marks genesis transactions as outside canonical replay and keeps zero cycles', async () => {
     const tx = createCommittedTransactionDetail();

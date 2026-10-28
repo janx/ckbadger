@@ -12,6 +12,8 @@ pub mod network;
 pub mod proposal;
 pub mod stats_bucket;
 pub mod sync;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod token;
 pub mod types;
 pub mod utxoswap;

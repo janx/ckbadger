@@ -14,6 +14,7 @@ export function useCyclesCalculation(
   const queryClient = useQueryClient();
   const [isCalculating, setIsCalculating] = useState(false);
   const [hasFailed, setHasFailed] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [triggeredForHash, setTriggeredForHash] = useState<string | null>(null);
   const [resolvedCycles, setResolvedCycles] = useState<number | null>(null);
 
@@ -26,7 +27,8 @@ export function useCyclesCalculation(
     !skipCalculation &&
     cyclesStatus !== 'failed' &&
     (cyclesStatus === 'pending' || needsGroupCycles) &&
-    !hasFailed;
+    !hasFailed &&
+    !isPaused;
   const displayCalculating =
     needsCalculation && (needsGroupCycles || !hasCycles) && resolvedCycles === null;
   const invalidateTransactionQuery = useCallback(
@@ -37,6 +39,7 @@ export function useCyclesCalculation(
   useEffect(() => {
     setIsCalculating(false);
     setHasFailed(cyclesStatus === 'failed');
+    setIsPaused(false);
     setTriggeredForHash(null);
     setResolvedCycles(null);
   }, [hash, cyclesStatus, skipCalculation]);
@@ -68,6 +71,12 @@ export function useCyclesCalculation(
         } else if (response.status === 'failed') {
           setIsCalculating(false);
           setHasFailed(true);
+        } else if (response.status === 'paused') {
+          setIsCalculating(false);
+          setIsPaused(true);
+          if (response.cycles !== null && response.cycles > 0) {
+            setResolvedCycles(response.cycles);
+          }
         }
       } catch {
         setIsCalculating(false);
@@ -100,6 +109,12 @@ export function useCyclesCalculation(
         } else if (response.status === 'failed') {
           setIsCalculating(false);
           setHasFailed(true);
+        } else if (response.status === 'paused') {
+          setIsCalculating(false);
+          setIsPaused(true);
+          if (response.cycles !== null && response.cycles > 0) {
+            setResolvedCycles(response.cycles);
+          }
         }
       } catch {
         setIsCalculating(false);
@@ -121,5 +136,6 @@ export function useCyclesCalculation(
     hasCycles,
     isCalculating: displayCalculating,
     hasFailed,
+    isPaused,
   };
 }

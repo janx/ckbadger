@@ -455,6 +455,133 @@ fn specs(entries: Vec<(u64, BlockSpec)>) -> BTreeMap<u64, BlockSpec> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn r3_pipeline_deep_fork_dispatch_stops_above_the_fork_point() {
+    let mut boundary = fixture_tx(101, 0);
+    boundary.cycles = None;
+    let mut above = fixture_tx(102, 0);
+    above.cycles = None;
+    let chain = FixtureChain::build(
+        101,
+        specs(vec![
+            (
+                98,
+                BlockSpec {
+                    proposals: vec![short_id(&boundary)],
+                    ..Default::default()
+                },
+            ),
+            (
+                99,
+                BlockSpec {
+                    proposals: vec![short_id(&above)],
+                    ..Default::default()
+                },
+            ),
+            (
+                100,
+                BlockSpec {
+                    txs: vec![boundary],
+                    ..Default::default()
+                },
+            ),
+            (
+                101,
+                BlockSpec {
+                    txs: vec![above],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    );
+    let requests = tempfile::tempdir().unwrap();
+    let fixture = pipeline_app_configured(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(PoolRpc {
+            tip_number: chain.tip(),
+            tip_hash: chain.hash_hex(chain.tip()),
+            pending: vec![],
+            proposed: vec![],
+        }),
+        |config| {
+            seed_deep_fork_pause(&config.store, 100);
+            config.cycles_request_dir = Some(requests.path().to_path_buf());
+        },
+    )
+    .await;
+    let (status, body) = get_json(&fixture.app, "/pipeline").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(
+        requests.path().join("blk_100").exists(),
+        "the retained fork point can replay"
+    );
+    assert!(
+        !requests.path().join("blk_101").exists(),
+        "deep-fork blocks must not enqueue replay"
+    );
+}
+
+#[tokio::test]
+async fn r3_pipeline_failed_scalar_is_terminal_and_never_enqueues_again() {
+    let mut failed = fixture_tx(103, 0);
+    failed.cycles = Some(-1);
+    let chain = FixtureChain::build(
+        13,
+        specs(vec![
+            (
+                3,
+                BlockSpec {
+                    proposals: vec![short_id(&failed)],
+                    ..Default::default()
+                },
+            ),
+            (
+                5,
+                BlockSpec {
+                    txs: vec![failed.clone()],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    );
+    let requests = tempfile::tempdir().unwrap();
+    let fixture = pipeline_app_configured(
+        &chain,
+        StoreSeed::default(),
+        &chain.blocks,
+        true,
+        Some(PoolRpc {
+            tip_number: chain.tip(),
+            tip_hash: chain.hash_hex(chain.tip()),
+            pending: vec![],
+            proposed: vec![],
+        }),
+        |config| {
+            let mut header = config.store.get_block_header(5).unwrap().unwrap();
+            header.cycles = None;
+            let mut batch = StoreBatch::new(&config.store);
+            batch.put_block_header(5, &header);
+            batch.commit().unwrap();
+            config.cycles_request_dir = Some(requests.path().to_path_buf());
+        },
+    )
+    .await;
+    for _ in 0..2 {
+        let (status, body) = get_json(&fixture.app, "/pipeline").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let block = block_json(&body, 5);
+        assert_eq!(block["cycles"], serde_json::Value::Null);
+        assert_eq!(block["cyclesPending"], false);
+        assert_eq!(tx_json(block, &tx_hash(&failed))["cyclesStatus"], "failed");
+    }
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
 async fn test_pipeline_chain_blocks_and_proposal_states() {
     let committed_close = fixture_tx(1, 40);
     let committed_far = fixture_tx(2, 400);

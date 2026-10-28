@@ -137,6 +137,53 @@ describe('useCyclesCalculation', () => {
     expect(api.getCyclesStatus).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['trigger', 1000],
+    ['poll', 1000],
+    ['trigger', null],
+    ['poll', null],
+  ] as const)(
+    'stops polling after a deep-fork pause from %s with initial scalar %s',
+    async (phase, initialCycles) => {
+      vi.useFakeTimers();
+      const paused = {
+        status: 'paused' as const,
+        cycles: 1000,
+        error: 'Indexer paused on a deep fork above block 100',
+      };
+      vi.mocked(api.triggerCyclesCalculation).mockResolvedValue(
+        phase === 'trigger' ? paused : { status: 'queued', cycles: null, error: null }
+      );
+      vi.mocked(api.getCyclesStatus).mockResolvedValue(paused);
+      const { result } = renderHook(
+        () =>
+          useCyclesCalculation(
+            '0xpaused',
+            initialCycles,
+            false,
+            initialCycles === null ? 'pending' : 'complete',
+            true
+          ),
+        { wrapper: createWrapper() }
+      );
+      await act(async () => {});
+      if (phase === 'poll') {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+      }
+      expect(result.current.isPaused).toBe(true);
+      expect(result.current.hasFailed).toBe(false);
+      expect(result.current.isCalculating).toBe(false);
+      expect(result.current.cycles).toBe(1000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(api.triggerCyclesCalculation).toHaveBeenCalledTimes(1);
+      expect(api.getCyclesStatus).toHaveBeenCalledTimes(phase === 'poll' ? 1 : 0);
+    }
+  );
+
   it('triggers calculation when cycles are missing', async () => {
     vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
       status: 'calculating',

@@ -2927,7 +2927,7 @@ interface PipelineSnapshot {
   next: PipelineNext | null;
 }
 
-type CyclesCalculationStatus = 'done' | 'calculating' | 'queued' | 'failed' | 'notFound';
+type CyclesCalculationStatus = 'done' | 'calculating' | 'queued' | 'failed' | 'paused' | 'notFound';
 
 interface CyclesStatusResponse {
   status: CyclesCalculationStatus;

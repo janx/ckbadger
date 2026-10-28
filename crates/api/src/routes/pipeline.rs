@@ -46,6 +46,7 @@ use tokio::time::Instant;
 
 use crate::cache::{BoundedCache, CacheTtl, InMemoryCache};
 use crate::consensus::{ConsensusParams, ProposalWindow};
+use crate::cycles::cycles_replay_paused_by_deep_fork;
 use crate::pool::{HttpPoolSource, PoolSource, RawTxPool, TxPoolInfo};
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::routes::blocks::{fetch_block_economic_state, BlockEconomicState};
@@ -1442,15 +1443,18 @@ async fn build_snapshot(
             resolve_pays(state, &ckb, window, &chain, block).await?,
         );
     }
-    // Every store read of the snapshot is done.
-    drop(pinned);
-
     let mut blocks = build_chain(window, &chain, &pays).map_err(ApiError::internal)?;
 
     // Same contract as /blocks/{id}/fee-stats: a block whose cycles are not
     // known yet asks the indexer's cycles worker to compute them.
     if state.cycles_client.is_enabled() {
         for block in blocks.iter().filter(|b| b.cycles_pending) {
+            if cycles_replay_paused_by_deep_fork(state, block.number)
+                .map_err(|error| ApiError::internal(error.to_string()))?
+                .is_some()
+            {
+                continue;
+            }
             let client = state.cycles_client.clone();
             let number = block.number;
             tokio::spawn(async move {
@@ -1460,6 +1464,10 @@ async fn build_snapshot(
             });
         }
     }
+
+    // Dispatch decisions use the snapshot's same pinned sync status.
+    // Every store read of the snapshot is now done.
+    drop(pinned);
 
     let tip = BlockRef {
         number: chain.tip,

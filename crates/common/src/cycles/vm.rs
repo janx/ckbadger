@@ -1,5 +1,5 @@
 //! Exact in-process CKB script execution for committed transactions.
-use super::{MockTransaction, ReplayFailure, VmActivationEpochs};
+use super::{CyclesError, MockTransaction, ReplayFailure, VmActivationEpochs};
 use crate::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
 use ckb_chain_spec::consensus::{Consensus, ConsensusBuilder};
 use ckb_script::{ScriptGroupType, TransactionScriptsVerifier, TxVerifyEnv};
@@ -122,16 +122,16 @@ pub(super) fn execute(
     epochs: VmActivationEpochs,
     max_cycles: u64,
     extensions: HashMap<Byte32, packed::Bytes>,
-) -> Result<TransactionCycles, ReplayFailure> {
+) -> Result<TransactionCycles, CyclesError> {
     let json_tx: ckb_jsonrpc_types::Transaction =
-        json_into(&mock.tx).map_err(ReplayFailure::invalid_data)?;
+        json_into(&mock.tx).map_err(CyclesError::unavailable)?;
     let tx: packed::Transaction = json_tx.into();
     let mut loader = Loader {
         extensions,
         ..Default::default()
     };
     for h in &mock.mock_info.header_deps {
-        let view = header(h).map_err(ReplayFailure::invalid_data)?;
+        let view = header(h).map_err(CyclesError::unavailable)?;
         loader.headers.insert(view.hash(), view);
     }
     let mut resolve = |output: &super::Output,
@@ -160,7 +160,7 @@ pub(super) fn execute(
                 &input.input.previous_output,
                 input.transaction_info.clone(),
             )
-            .map_err(ReplayFailure::invalid_data)?,
+            .map_err(CyclesError::unavailable)?,
         );
     }
     for dep in &mock.mock_info.cell_deps {
@@ -171,7 +171,7 @@ pub(super) fn execute(
                 &dep.cell_dep.out_point,
                 dep.transaction_info.clone(),
             )
-            .map_err(ReplayFailure::invalid_data)?,
+            .map_err(CyclesError::unavailable)?,
         );
     }
     loader.metas = metas
@@ -184,11 +184,11 @@ pub(super) fn execute(
         &loader,
         &loader,
     )
-    .map_err(|e| ReplayFailure::DependencyResolution.logged(e))?;
+    .map_err(|e| CyclesError::replay(ReplayFailure::DependencyResolution, e))?;
     let verifier = TransactionScriptsVerifier::new(
         Arc::new(resolved),
         loader,
-        Arc::new(consensus(epochs, max_cycles).map_err(ReplayFailure::invalid_data)?),
+        Arc::new(consensus(epochs, max_cycles).map_err(CyclesError::unavailable)?),
         Arc::new(TxVerifyEnv::new_commit(&commit)),
     );
     execute_groups(
@@ -198,7 +198,7 @@ pub(super) fn execute(
             .hash()
             .as_slice()
             .try_into()
-            .map_err(|_| ReplayFailure::invalid_data("commit hash length"))?,
+            .map_err(|_| CyclesError::invalid_data("commit hash length"))?,
     )
 }
 
@@ -206,13 +206,16 @@ fn execute_groups(
     verifier: &TransactionScriptsVerifier<Loader>,
     limit: u64,
     block_hash: [u8; 32],
-) -> Result<TransactionCycles, ReplayFailure> {
+) -> Result<TransactionCycles, CyclesError> {
     let mut groups = Vec::new();
     let mut total = 0_u64;
     for (kind, hash, _) in verifier.groups_with_type() {
-        let remaining = limit
-            .checked_sub(total)
-            .ok_or(ReplayFailure::CyclesOverflow)?;
+        let remaining = limit.checked_sub(total).ok_or_else(|| {
+            CyclesError::replay(
+                ReplayFailure::CyclesOverflow,
+                "script group cycle budget overflow",
+            )
+        })?;
         let group_type = match kind {
             ScriptGroupType::Lock => ScriptGroupKind::Lock,
             ScriptGroupType::Type => ScriptGroupKind::Type,
@@ -220,33 +223,44 @@ fn execute_groups(
         let script_hash = hash
             .as_slice()
             .try_into()
-            .map_err(|_| ReplayFailure::invalid_data("script hash length"))?;
+            .map_err(|_| CyclesError::invalid_data("script hash length"))?;
         let cycles = verifier.verify_single(kind, hash, remaining).map_err(|e| {
-            ReplayFailure::ScriptGroup {
-                group_type,
-                script_hash,
-            }
-            .logged(e)
+            CyclesError::replay(
+                ReplayFailure::ScriptGroup {
+                    group_type,
+                    script_hash,
+                },
+                e,
+            )
         })?;
-        total = total
-            .checked_add(cycles)
-            .ok_or(ReplayFailure::CyclesOverflow)?;
+        total = total.checked_add(cycles).ok_or_else(|| {
+            CyclesError::replay(
+                ReplayFailure::CyclesOverflow,
+                "script group cycle budget overflow",
+            )
+        })?;
         groups.push(ScriptGroupCycles {
             script_hash,
             group_type,
-            cycles: i64::try_from(cycles).map_err(|_| ReplayFailure::CyclesOverflow)?,
+            cycles: i64::try_from(cycles).map_err(|_| {
+                CyclesError::replay(ReplayFailure::CyclesOverflow, "cycles exceed i64")
+            })?,
         });
     }
     if groups.is_empty() {
-        return Err(ReplayFailure::NoScriptGroups);
+        return Err(CyclesError::replay(
+            ReplayFailure::NoScriptGroups,
+            "no input lock or input/output type scripts to execute",
+        ));
     }
     groups.sort_by_key(|group| (group.group_type, group.script_hash));
     let result = TransactionCycles {
         block_hash,
-        cycles: i64::try_from(total).map_err(|_| ReplayFailure::CyclesOverflow)?,
+        cycles: i64::try_from(total)
+            .map_err(|_| CyclesError::replay(ReplayFailure::CyclesOverflow, "cycles exceed i64"))?,
         groups,
     };
-    result.validate().map_err(ReplayFailure::invalid_data)?;
+    result.validate().map_err(CyclesError::invalid_data)?;
     Ok(result)
 }
 
@@ -290,29 +304,7 @@ mod tests {
         TransactionInfo,
     };
 
-    // A complete RV64 ELF: return the requested exit code via Linux exit(93).
-    fn program(exit: u8) -> Bytes {
-        let mut elf = vec![0_u8; 132];
-        elf[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
-        elf[16..18].copy_from_slice(&2_u16.to_le_bytes());
-        elf[18..20].copy_from_slice(&243_u16.to_le_bytes());
-        elf[20..24].copy_from_slice(&1_u32.to_le_bytes());
-        elf[24..32].copy_from_slice(&0x10078_u64.to_le_bytes());
-        elf[32..40].copy_from_slice(&64_u64.to_le_bytes());
-        elf[52..54].copy_from_slice(&64_u16.to_le_bytes());
-        elf[54..56].copy_from_slice(&56_u16.to_le_bytes());
-        elf[56..58].copy_from_slice(&1_u16.to_le_bytes());
-        elf[64..68].copy_from_slice(&1_u32.to_le_bytes());
-        elf[68..72].copy_from_slice(&5_u32.to_le_bytes());
-        elf[80..88].copy_from_slice(&0x10000_u64.to_le_bytes());
-        elf[96..104].copy_from_slice(&132_u64.to_le_bytes());
-        elf[104..112].copy_from_slice(&132_u64.to_le_bytes());
-        elf[112..120].copy_from_slice(&4096_u64.to_le_bytes());
-        elf[120..124].copy_from_slice(&(0x00000513_u32 | (u32::from(exit) << 20)).to_le_bytes());
-        elf[124..128].copy_from_slice(&0x05d00893_u32.to_le_bytes());
-        elf[128..132].copy_from_slice(&0x00000073_u32.to_le_bytes());
-        elf.into()
-    }
+    use crate::testing::program;
 
     fn verifier(
         epoch: u64,

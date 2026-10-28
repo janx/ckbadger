@@ -1,7 +1,30 @@
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+use crate::utils::sync_status::deep_fork_info_if_consistent;
+use crate::AppState;
+
+/// Replay above a detected deep fork cannot proceed until the indexer resumes.
+/// Call under the same pinned view as the transaction/block being dispatched.
+pub(crate) fn cycles_replay_paused_by_deep_fork(
+    state: &AppState,
+    block_number: i64,
+) -> Result<Option<u64>> {
+    let status = state.store.get_sync_status()?;
+    let Some(info) = deep_fork_info_if_consistent(&status)? else {
+        return Ok(None);
+    };
+    let fork_point = u64::try_from(info.fork_point).with_context(|| {
+        format!(
+            "invalid deep-fork point {} for cycles at block {block_number}",
+            info.fork_point
+        )
+    })?;
+    Ok((block_number > info.fork_point).then_some(fork_point))
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +33,7 @@ pub enum CyclesStatus {
     Calculating,
     Queued,
     Failed,
+    Paused,
     NotFound,
 }
 

@@ -2877,3 +2877,98 @@ async fn genesis_detail_marks_type_groups_as_unexecuted() {
         && group["cycles"].is_null()
         && group["witnessIndex"].is_null()));
 }
+
+#[tokio::test]
+async fn r3_deep_fork_cycles_pause_above_fork_point_without_dispatch() {
+    for endpoint in ["cycles", "calculate-cycles"] {
+        let store = test_store();
+        let hash = [0x76; 32];
+        seed_tx_awaiting_cycles(&store, &hash, None);
+        let entry = store.get_tx_index(321, 1).unwrap().unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&hash, 101, 1);
+        batch.put_tx_index(101, 1, &entry);
+        batch.commit().unwrap();
+        seed_deep_fork_pause(&store, 100);
+        let requests = tempfile::tempdir().unwrap();
+        let mut config = test_config(store.clone());
+        config.cycles_request_dir = Some(requests.path().to_path_buf());
+        let app = create_router(config).await;
+        let request = Request::builder()
+            .method(if endpoint == "cycles" { "GET" } else { "POST" })
+            .uri(format!(
+                "/api/v1/transactions/0x{}/{endpoint}",
+                hex::encode(hash)
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(1), app.oneshot(request))
+                .await
+                .expect("paused cycles must return without entering long-poll")
+                .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["status"], "paused", "{body}");
+        assert_eq!(
+            body["error"],
+            "Indexer paused on a deep fork above block 100"
+        );
+        assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn r3_deep_fork_cycles_at_fork_point_still_enqueue() {
+    let store = test_store();
+    let hash = [0x77; 32];
+    seed_tx_awaiting_cycles(&store, &hash, None);
+    let entry = store.get_tx_index(321, 1).unwrap().unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_tx_hash_map(&hash, 100, 1);
+    batch.put_tx_index(100, 1, &entry);
+    batch.commit().unwrap();
+    seed_deep_fork_pause(&store, 100);
+    let requests = tempfile::tempdir().unwrap();
+    let mut config = test_config(store);
+    config.cycles_request_dir = Some(requests.path().to_path_buf());
+    let app = create_router(config).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "queued", "{body}");
+    assert!(requests
+        .path()
+        .join(format!("tx_0x{}", hex::encode(hash)))
+        .exists());
+}
+
+#[tokio::test]
+async fn r3_cycles_dispatch_rejects_inconsistent_deep_fork_status() {
+    let store = test_store();
+    let hash = [0x78; 32];
+    seed_tx_awaiting_cycles(&store, &hash, None);
+    store
+        .update_sync_status(|status| status.deep_fork_detected = true)
+        .unwrap();
+    let requests = tempfile::tempdir().unwrap();
+    let mut config = test_config(store);
+    config.cycles_request_dir = Some(requests.path().to_path_buf());
+    let app = create_router(config).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("deep_fork_info is missing"));
+    assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
+}
