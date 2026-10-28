@@ -1,4 +1,5 @@
 mod common;
+use ckbadger_store::TxCyclesWrite;
 use common::*;
 
 #[tokio::test]
@@ -976,11 +977,11 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
     batch.put_live_cell_marker_by_outpoint(&hash_bytes, 0, 321);
     batch.commit().unwrap();
     store
-        .update_tx_cycles_with_groups(
+        .persist_tx_cycles(
             321,
             0,
             &hash_bytes.clone().try_into().unwrap(),
-            &ckbadger_common::cycles_task::TransactionCycles {
+            TxCyclesWrite::Groups(&ckbadger_common::cycles_task::TransactionCycles {
                 block_hash: [0x44; 32],
                 cycles: 333,
                 groups: vec![ckbadger_common::cycles_task::ScriptGroupCycles {
@@ -988,7 +989,7 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
                     group_type: ckbadger_common::cycles_task::ScriptGroupKind::Lock,
                     cycles: 333,
                 }],
-            },
+            }),
         )
         .unwrap();
     let block = BlockBuilder::default()
@@ -2156,11 +2157,11 @@ async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
     }
     tokio::time::sleep(std::time::Duration::from_millis(SLOW_MS)).await;
     store
-        .update_tx_cycles_with_groups(
+        .persist_tx_cycles(
             321,
             1,
             &tx_hash,
-            &ckbadger_common::cycles_task::TransactionCycles {
+            TxCyclesWrite::Groups(&ckbadger_common::cycles_task::TransactionCycles {
                 block_hash: [0x44; 32],
                 cycles: 777,
                 groups: vec![ckbadger_common::cycles_task::ScriptGroupCycles {
@@ -2168,7 +2169,7 @@ async fn test_cycles_long_poll_wait_is_not_a_slow_request() {
                     group_type: ckbadger_common::cycles_task::ScriptGroupKind::Lock,
                     cycles: 777,
                 }],
-            },
+            }),
         )
         .unwrap();
 
@@ -2584,7 +2585,15 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
     let hash = [0x66; 32];
     insert_committed_transaction(&store, &hash);
     store
-        .mark_tx_cycles_failed_if_missing(321, 0, &hash)
+        .persist_tx_cycles(
+            321,
+            0,
+            &hash,
+            TxCyclesWrite::ReplayFailed {
+                block_hash: [0x44; 32],
+                error: "script verification failed",
+            },
+        )
         .unwrap();
     assert_eq!(
         store.get_tx_index(321, 0).unwrap().unwrap().cycles,
@@ -2600,21 +2609,31 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body["status"], "queued",
-        "a scalar-only total must request its canonical group result"
-    );
-    assert!(requests
-        .path()
-        .join(format!("tx_0x{}", hex::encode(hash)))
-        .exists());
-    assert!(body["cycles"].is_null(), "{body}");
+    assert_eq!(body["status"], "failed", "{body}");
+    assert_eq!(body["cycles"], 333, "{body}");
+    assert_eq!(body["error"], "script verification failed");
+    assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/v1/transactions/0x{}/calculate-cycles",
+            hex::encode(hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["status"], "failed", "{body}");
+    assert_eq!(body["cycles"], 333);
+    assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
     store
-        .update_tx_cycles_with_groups(
+        .persist_tx_cycles(
             321,
             0,
             &hash,
-            &ckbadger_common::cycles_task::TransactionCycles {
+            TxCyclesWrite::Groups(&ckbadger_common::cycles_task::TransactionCycles {
                 block_hash: [0x44; 32],
                 cycles: 333,
                 groups: vec![ckbadger_common::cycles_task::ScriptGroupCycles {
@@ -2622,7 +2641,7 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
                     group_type: ckbadger_common::cycles_task::ScriptGroupKind::Lock,
                     cycles: 333,
                 }],
-            },
+            }),
         )
         .unwrap();
     let (status, body) = get_json(
@@ -2633,6 +2652,28 @@ async fn scalar_cycles_do_not_complete_the_group_calculation_contract() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["status"], "done");
     assert_eq!(body["cycles"], 333);
+}
+
+#[tokio::test]
+async fn failed_cycles_sentinel_without_record_is_an_invariant_error() {
+    let store = test_store();
+    let hash = [0x68; 32];
+    insert_committed_transaction(&store, &hash);
+    let mut entry = store.get_tx_index(321, 0).unwrap().unwrap();
+    entry.cycles = Some(-1);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_index(321, 0, &entry);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cycles", hex::encode(hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains(&hex::encode(hash)), "{message}");
+    assert!(message.contains("321"), "{message}");
 }
 
 #[tokio::test]
@@ -2667,7 +2708,11 @@ async fn genesis_non_cellbase_cycles_are_zero_without_a_vm_request() {
     assert_eq!(body["status"], "done");
     assert_eq!(body["cycles"], 0);
     assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
-    store.update_tx_cycles(0, 1, &hash, 5).unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut entry = store.get_tx_index(0, 1).unwrap().unwrap();
+    entry.cycles = Some(5);
+    batch.put_tx_index(0, 1, &entry);
+    batch.commit().unwrap();
     let (status, body) = get_json(
         &app,
         &format!("/transactions/0x{}/cycles", hex::encode(hash)),

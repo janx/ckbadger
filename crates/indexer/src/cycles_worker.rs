@@ -1,6 +1,6 @@
-use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
+use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus, TxGroupCyclesRecord};
 use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, TxCyclesWrite};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -184,9 +184,9 @@ async fn process_block_request(store: &CkbadgerStore, ckb_rpc_url: &str, block_n
             continue;
         }
         if block_num != 0 {
-            match store.get_tx_group_cycles(&entry.tx_hash) {
-                Ok(Some(_)) => continue,
-                Ok(None) => {}
+            match store.get_tx_group_cycles_record(&entry.tx_hash) {
+                Ok(Some(TxGroupCyclesRecord::Complete(_))) => continue,
+                Ok(Some(TxGroupCyclesRecord::Failed { .. })) | Ok(None) => {}
                 Err(error) => {
                     warn!("Cycles worker: invalid group result: {error}");
                     all_ok = false;
@@ -276,7 +276,12 @@ async fn process_cycles_task(
                 updated_at,
             };
         }
-        if let Err(e) = store.update_tx_cycles(block_num, tx_idx, &hash_bytes, 0) {
+        if let Err(e) = store.persist_tx_cycles(
+            block_num,
+            tx_idx,
+            &hash_bytes,
+            TxCyclesWrite::ExecutionExempt,
+        ) {
             return CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
                 cycles: None,
@@ -312,11 +317,51 @@ async fn process_cycles_task(
         }
     }
 
+    let block_hash: [u8; 32] = match store.get_block_header(block_num) {
+        Ok(Some(header)) => match header.hash.as_slice().try_into() {
+            Ok(hash) => hash,
+            Err(_) => {
+                return CyclesTaskResult {
+                    status: CyclesTaskStatus::Failed,
+                    cycles: None,
+                    error: Some(format!(
+                        "invalid canonical block hash length at block {block_num}: {}",
+                        header.hash.len()
+                    )),
+                    updated_at,
+                }
+            }
+        },
+        Ok(None) => {
+            return CyclesTaskResult {
+                status: CyclesTaskStatus::Failed,
+                cycles: None,
+                error: Some(format!(
+                    "missing canonical block header at block {block_num}"
+                )),
+                updated_at,
+            }
+        }
+        Err(error) => {
+            return CyclesTaskResult {
+                status: CyclesTaskStatus::Failed,
+                cycles: None,
+                error: Some(format!(
+                    "failed to read canonical block header at block {block_num}: {error}"
+                )),
+                updated_at,
+            }
+        }
+    };
+
     match ckbadger_common::cycles::calculate_cycles(ckb_rpc_url, tx_hash).await {
         Ok(cycles) => {
-            if let Err(e) =
-                store.update_tx_cycles_with_groups(block_num, tx_idx, &hash_bytes, &cycles)
-            {
+            if let Err(e) = store.persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &hash_bytes,
+                TxCyclesWrite::Groups(&cycles),
+            ) {
                 return CyclesTaskResult {
                     status: CyclesTaskStatus::Failed,
                     cycles: None,
@@ -333,9 +378,17 @@ async fn process_cycles_task(
         }
         Err(e) => {
             let marker_err = store
-                .mark_tx_cycles_failed_if_missing(block_num, tx_idx, &hash_bytes)
+                .persist_tx_cycles(
+                    block_num,
+                    tx_idx,
+                    &hash_bytes,
+                    TxCyclesWrite::ReplayFailed {
+                        block_hash,
+                        error: &e,
+                    },
+                )
                 .err()
-                .map(|write_err| format!(" (failed to persist failure marker: {})", write_err))
+                .map(|err| format!(" (failed to persist failure marker: {err})"))
                 .unwrap_or_default();
             CyclesTaskResult {
                 status: CyclesTaskStatus::Failed,
@@ -387,8 +440,12 @@ mod tests {
         assert_eq!(result.status, CyclesTaskStatus::Done, "{result:?}");
         assert_eq!(result.cycles, Some(0));
         assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(0));
-        assert!(store.get_tx_group_cycles(&hash).unwrap().is_none());
-        store.update_tx_cycles(0, 1, &hash, 5).unwrap();
+        assert!(store.get_tx_group_cycles_record(&hash).unwrap().is_none());
+        let mut batch = StoreBatch::new(&store);
+        let mut entry = store.get_tx_index(0, 1).unwrap().unwrap();
+        entry.cycles = Some(5);
+        batch.put_tx_index(0, 1, &entry);
+        batch.commit().unwrap();
         let invalid = process_cycles_task(
             &store,
             "http://127.0.0.1:1",
@@ -454,13 +511,13 @@ mod tests {
         );
         assert_eq!(store.get_block_header(0).unwrap().unwrap().cycles, Some(0));
         assert_eq!(store.get_tx_index(0, 1).unwrap().unwrap().cycles, Some(0));
-        assert!(store.get_tx_group_cycles(&hash).unwrap().is_none());
+        assert!(store.get_tx_group_cycles_record(&hash).unwrap().is_none());
         store
-            .update_tx_cycles_with_groups(
+            .persist_tx_cycles(
                 0,
                 1,
                 &hash,
-                &TransactionCycles {
+                TxCyclesWrite::Groups(&TransactionCycles {
                     block_hash: [0x69; 32],
                     cycles: 5,
                     groups: vec![ScriptGroupCycles {
@@ -468,7 +525,7 @@ mod tests {
                         group_type: ScriptGroupKind::Lock,
                         cycles: 5,
                     }],
-                },
+                }),
             )
             .unwrap();
         let mut batch = StoreBatch::new(&store);
@@ -532,6 +589,25 @@ mod tests {
 
     fn insert_tx_with_cycles(store: &CkbadgerStore, tx_hash: &[u8; 32], cycles: Option<i64>) {
         let mut batch = StoreBatch::new(store);
+        batch.put_block_header(
+            123,
+            &CachedBlockHeader {
+                hash: vec![0x77; 32],
+                parent_hash: vec![0; 32],
+                timestamp: 1,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1,
+            },
+        );
         batch.put_tx_hash_map(tx_hash, 123, 0);
         batch.put_tx_index(
             123,
@@ -574,7 +650,10 @@ mod tests {
             store.get_tx_index(123, 0).unwrap().unwrap().cycles,
             Some(42)
         );
-        assert!(store.get_tx_group_cycles(&hash).unwrap().is_none());
+        assert!(matches!(
+            store.get_tx_group_cycles_record(&hash).unwrap(),
+            Some(TxGroupCyclesRecord::Failed { block_hash, .. }) if block_hash == [0x77; 32]
+        ));
     }
 
     #[tokio::test]
@@ -606,11 +685,11 @@ mod tests {
         );
         batch.commit().unwrap();
         store
-            .update_tx_cycles_with_groups(
+            .persist_tx_cycles(
                 123,
                 0,
                 &hash,
-                &TransactionCycles {
+                TxCyclesWrite::Groups(&TransactionCycles {
                     block_hash: [0x77; 32],
                     cycles: 11,
                     groups: vec![ScriptGroupCycles {
@@ -618,7 +697,7 @@ mod tests {
                         group_type: ScriptGroupKind::Lock,
                         cycles: 11,
                     }],
-                },
+                }),
             )
             .unwrap();
         let tx_hash = format!("0x{}", hex::encode(hash));
@@ -626,7 +705,17 @@ mod tests {
         assert_eq!(cached.status, CyclesTaskStatus::Done);
         assert_eq!(cached.cycles, Some(11));
         // A pre-existing scalar cannot masquerade as a complete group result.
-        store.update_tx_cycles(123, 0, &hash, 12).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        let mut entry = store.get_tx_index(123, 0).unwrap().unwrap();
+        entry.cycles = Some(12);
+        batch.put_tx_index(123, 0, &entry);
+        batch.commit().unwrap();
+        store
+            .delete_cf(
+                store.cf_sync_meta(),
+                &ckbadger_store::keys::encode_tx_group_cycles_key(&hash),
+            )
+            .unwrap();
         let retry = process_cycles_task(&store, "http://127.0.0.1:1", &tx_hash).await;
         assert_eq!(retry.status, CyclesTaskStatus::Failed);
         assert!(retry

@@ -9941,7 +9941,7 @@ mod tests {
         let keep_tx = vec![0x11; 32];
         let drop_tx = vec![0x22; 32];
         let tx_index = TxIndexEntry {
-            tx_hash: [0u8; 32],
+            tx_hash: [0x22; 32],
             is_cellbase: false,
             timestamp: header2.timestamp,
             inputs_count: 1,
@@ -9961,12 +9961,20 @@ mod tests {
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
         store
-            .put_cf(
-                store.cf_sync_meta(),
-                &keys::encode_tx_group_cycles_key(&drop_tx),
-                b"lazy groups",
+            .persist_tx_cycles(
+                2,
+                0,
+                &drop_tx.as_slice().try_into().unwrap(),
+                crate::TxCyclesWrite::ReplayFailed {
+                    block_hash: [0x02; 32],
+                    error: "VM failed",
+                },
             )
             .unwrap();
+        assert!(matches!(
+            store.get_tx_group_cycles_record(&drop_tx).unwrap(),
+            Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Failed { .. })
+        ));
 
         rollback_fixture(&store, 1).unwrap();
 

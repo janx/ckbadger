@@ -2147,10 +2147,10 @@ async fn trigger_cycles_calculation(
     ok(wait_cycles_result(&state, &hash_bytes, &wait).await?)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum StoredCycles {
     Complete(i64),
-    Failed,
+    Failed { total: Option<i64>, error: String },
     Pending,
 }
 
@@ -2161,10 +2161,10 @@ fn stored_cycles_response(state: Option<StoredCycles>) -> Option<CyclesStatusRes
             cycles: Some(cycles),
             error: None,
         },
-        Some(StoredCycles::Failed) => CyclesStatusResponse {
+        Some(StoredCycles::Failed { total, error }) => CyclesStatusResponse {
             status: CyclesStatus::Failed,
-            cycles: None,
-            error: Some("Calculation failed".into()),
+            cycles: total,
+            error: Some(error),
         },
         Some(StoredCycles::Pending) => return None,
         None => CyclesStatusResponse {
@@ -2202,13 +2202,21 @@ async fn load_tx_cycles_state(
             );
             return Ok(Some(StoredCycles::Complete(0)));
         }
-        if let Some(result) = store.get_tx_cycles_result(&hash)? {
-            return Ok(Some(StoredCycles::Complete(result.cycles)));
-        }
-        Ok(Some(if entry.cycles == Some(-1) {
-            StoredCycles::Failed
-        } else {
-            StoredCycles::Pending
+        Ok(Some(match store.get_tx_group_cycles_record(&hash)? {
+            Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Complete(result)) => {
+                StoredCycles::Complete(result.cycles)
+            }
+            Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Failed { error, .. }) => {
+                StoredCycles::Failed {
+                    total: entry.cycles.filter(|cycles| *cycles > 0),
+                    error,
+                }
+            }
+            None if entry.cycles == Some(-1) => anyhow::bail!(
+                "failed cycles sentinel lacks group failure record: tx=0x{}, block={block}",
+                hex::encode(&hash)
+            ),
+            None => StoredCycles::Pending,
         }))
     })
     .await
@@ -2835,10 +2843,16 @@ mod tests {
 
     #[test]
     fn stored_failed_cycles_and_missing_transactions_are_explicit() {
-        let failed = stored_cycles_response(Some(StoredCycles::Failed)).unwrap();
-        assert_eq!(failed.status, CyclesStatus::Failed);
-        assert_eq!(failed.cycles, None);
-        assert_eq!(failed.error.as_deref(), Some("Calculation failed"));
+        for total in [Some(333), None] {
+            let failed = stored_cycles_response(Some(StoredCycles::Failed {
+                total,
+                error: "script verification failed".into(),
+            }))
+            .unwrap();
+            assert_eq!(failed.status, CyclesStatus::Failed);
+            assert_eq!(failed.cycles, total);
+            assert_eq!(failed.error.as_deref(), Some("script verification failed"));
+        }
         let missing = stored_cycles_response(None).unwrap();
         assert_eq!(missing.status, CyclesStatus::NotFound);
         assert_eq!(missing.cycles, None);

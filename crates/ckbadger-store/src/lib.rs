@@ -95,5 +95,6 @@ pub use store::{
     CF_TX_ACTIONS, CF_TX_HASH_MAP, CF_TX_INDEX, DOMAIN_CFS, NETWORK_CFS,
 };
 pub use sync_ops::HeartbeatTick;
+pub use tx_ops::TxCyclesWrite;
 pub use types::*;
 pub use undo_log_ops::UndoRollbackResult;

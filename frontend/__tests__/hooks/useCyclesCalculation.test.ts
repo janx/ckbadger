@@ -115,6 +115,28 @@ describe('useCyclesCalculation', () => {
     expect(result.current.isCalculating).toBe(false);
   });
 
+  it('keeps a known total and stops polling after group replay fails', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
+      status: 'failed',
+      cycles: 1000,
+      error: 'script verification failed',
+    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xfailed-groups', 1000, false, 'pending', true),
+      { wrapper: createWrapper() }
+    );
+    await act(async () => {});
+    expect(api.triggerCyclesCalculation).toHaveBeenCalledTimes(1);
+    expect(result.current.cycles).toBe(1000);
+    expect(result.current.hasFailed).toBe(true);
+    expect(result.current.isCalculating).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(api.getCyclesStatus).not.toHaveBeenCalled();
+  });
+
   it('triggers calculation when cycles are missing', async () => {
     vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
       status: 'calculating',

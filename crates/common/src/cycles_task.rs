@@ -41,6 +41,12 @@ pub struct TransactionCycles {
     pub groups: Vec<ScriptGroupCycles>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TxGroupCyclesRecord {
+    Complete(TransactionCycles),
+    Failed { block_hash: [u8; 32], error: String },
+}
+
 impl TransactionCycles {
     pub fn validate(&self) -> Result<(), String> {
         if self.cycles < 0 {

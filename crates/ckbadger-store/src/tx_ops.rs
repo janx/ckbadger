@@ -12,6 +12,17 @@ pub(crate) type CanonicalTxIdentityBatchEntry = (Vec<u8>, Option<(i64, i32, Vec<
 
 use crate::bytes_to_hex;
 
+use ckbadger_common::cycles_task::{TransactionCycles, TxGroupCyclesRecord};
+
+pub enum TxCyclesWrite<'a> {
+    ExecutionExempt,
+    Groups(&'a TransactionCycles),
+    ReplayFailed {
+        block_hash: [u8; 32],
+        error: &'a str,
+    },
+}
+
 impl CkbadgerStore {
     pub fn get_tx_index(
         &self,
@@ -212,124 +223,16 @@ impl CkbadgerStore {
         Ok(out)
     }
 
-    /// Update cycles for a transaction identified by tx hash.
-    pub fn update_tx_cycles_by_hash(&self, tx_hash: &[u8], cycles: i64) -> anyhow::Result<()> {
-        let expected_hash: [u8; 32] = tx_hash.try_into().map_err(|_| {
-            anyhow!(
-                "invalid canonical tx hash length for cycles update: {}",
-                tx_hash.len()
-            )
-        })?;
-        let (block_num, tx_idx) = self
-            .get_tx_location(tx_hash)?
-            .ok_or_else(|| anyhow!("transaction location not found"))?;
-
-        self.update_tx_cycles(block_num, tx_idx, &expected_hash, cycles)
-            .with_context(|| {
-                format!(
-                    "failed to update tx cycles for block {} tx {}",
-                    block_num, tx_idx
-                )
-            })
-    }
-
     /// Atomically verify canonical identity and persist cycles at a known slot.
     /// The write gate excludes every domain batch commit, including reorg cleanup.
-    pub fn update_tx_cycles(
+    pub fn persist_tx_cycles(
         &self,
         block_num: i64,
         tx_idx: i32,
         expected_hash: &[u8; 32],
-        cycles: i64,
-    ) -> anyhow::Result<()> {
-        self.persist_tx_cycles(block_num, tx_idx, expected_hash, cycles, None, false)
-    }
-
-    /// Mark replay failure only when no authoritative positive total exists.
-    /// The check and write share the domain write gate with canonical commits.
-    pub fn mark_tx_cycles_failed_if_missing(
-        &self,
-        block_num: i64,
-        tx_idx: i32,
-        expected_hash: &[u8; 32],
-    ) -> anyhow::Result<()> {
-        self.persist_tx_cycles(block_num, tx_idx, expected_hash, -1, None, true)
-    }
-
-    pub fn get_tx_group_cycles(
-        &self,
-        tx_hash: &[u8],
-    ) -> anyhow::Result<Option<Vec<ckbadger_common::cycles_task::ScriptGroupCycles>>> {
-        Ok(self
-            .get_tx_cycles_result(tx_hash)?
-            .map(|result| result.groups))
-    }
-
-    pub fn get_tx_cycles_result(
-        &self,
-        tx_hash: &[u8],
-    ) -> anyhow::Result<Option<ckbadger_common::cycles_task::TransactionCycles>> {
-        let Some((block_num, _, tx)) = self.get_tx_by_hash(tx_hash)? else {
-            return Ok(None);
-        };
-        let Some(bytes) = self.get_cf(
-            self.cf_sync_meta(),
-            &keys::encode_tx_group_cycles_key(tx_hash),
-        )?
-        else {
-            return Ok(None);
-        };
-        let result: ckbadger_common::cycles_task::TransactionCycles = bincode::deserialize(&bytes)?;
-        result.validate().map_err(anyhow::Error::msg)?;
-        let header = self
-            .get_block_header(block_num)?
-            .ok_or_else(|| anyhow!("lazy group cycles lack canonical block: {block_num}"))?;
-        anyhow::ensure!(
-            header.hash.as_slice() == result.block_hash,
-            "lazy group cycles belong to another block: tx=0x{}",
-            hex::encode(tx_hash)
-        );
-        anyhow::ensure!(
-            tx.cycles == Some(result.cycles),
-            "lazy group cycles differ from canonical total: tx=0x{} total={:?} groups={}",
-            hex::encode(tx_hash),
-            tx.cycles,
-            result.cycles
-        );
-        Ok(Some(result))
-    }
-
-    pub fn update_tx_cycles_with_groups(
-        &self,
-        block_num: i64,
-        tx_idx: i32,
-        expected_hash: &[u8; 32],
-        result: &ckbadger_common::cycles_task::TransactionCycles,
-    ) -> anyhow::Result<()> {
-        result.validate().map_err(anyhow::Error::msg)?;
-        self.persist_tx_cycles(
-            block_num,
-            tx_idx,
-            expected_hash,
-            result.cycles,
-            Some(result),
-            false,
-        )
-    }
-
-    fn persist_tx_cycles(
-        &self,
-        block_num: i64,
-        tx_idx: i32,
-        expected_hash: &[u8; 32],
-        cycles: i64,
-        groups: Option<&ckbadger_common::cycles_task::TransactionCycles>,
-        preserve_positive_on_failure: bool,
+        write: TxCyclesWrite<'_>,
     ) -> anyhow::Result<()> {
         self.with_domain_write_gate(|db| {
-            anyhow::ensure!(cycles >= -1,
-                "invalid cycles update: block={block_num}, index={tx_idx}, hash=0x{}, cycles={cycles}",
-                bytes_to_hex(expected_hash));
             let mapped = self.get_tx_location(expected_hash)?.ok_or_else(|| anyhow!(
                 "canonical tx identity disappeared: hash=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash)
@@ -347,29 +250,48 @@ impl CkbadgerStore {
             anyhow::ensure!(entry.cycles.is_none_or(|stored| stored >= -1),
                 "invalid stored cycles: block={block_num}, index={tx_idx}, hash=0x{}, cycles={:?}",
                 bytes_to_hex(expected_hash), entry.cycles);
-            if preserve_positive_on_failure && entry.cycles.is_some_and(|stored| stored > 0) {
-                return Ok(());
-            }
-            if let Some(groups) = groups {
-                anyhow::ensure!(!entry.cycles.is_some_and(|stored| stored > 0 && stored != cycles),
-                    "cycles total mismatch: block={block_num}, index={tx_idx}, hash=0x{}, stored={:?}, calculated={cycles}",
-                    bytes_to_hex(expected_hash), entry.cycles);
-                let header = self.get_block_header(block_num)?.ok_or_else(|| anyhow!("canonical block disappeared while persisting cycles: block={block_num}"))?;
-                anyhow::ensure!(header.hash.as_slice() == groups.block_hash, "canonical block changed while persisting cycles: block={block_num}");
+            let (cycles, record) = match write {
+                TxCyclesWrite::ExecutionExempt => {
+                    anyhow::ensure!(entry.is_cellbase || block_num == 0,
+                        "non-exempt transaction cannot skip cycles replay: block={block_num}, index={tx_idx}");
+                    anyhow::ensure!(entry.cycles.is_none_or(|stored| stored == 0),
+                        "execution-exempt transaction has nonzero stored cycles: block={block_num}, index={tx_idx}, cycles={:?}", entry.cycles);
+                    (0, None)
+                }
+                TxCyclesWrite::Groups(groups) => {
+                    groups.validate().map_err(anyhow::Error::msg)?;
+                    anyhow::ensure!(!entry.cycles.is_some_and(|stored| stored > 0 && stored != groups.cycles),
+                        "cycles total mismatch: block={block_num}, index={tx_idx}, hash=0x{}, stored={:?}, calculated={}",
+                        bytes_to_hex(expected_hash), entry.cycles, groups.cycles);
+                    (groups.cycles, Some(TxGroupCyclesRecord::Complete(groups.clone())))
+                }
+                TxCyclesWrite::ReplayFailed { block_hash, error } => {
+                    anyhow::ensure!(!error.is_empty(), "empty cycles replay failure: block={block_num}, index={tx_idx}");
+                    (entry.cycles.filter(|stored| *stored > 0).unwrap_or(-1),
+                        Some(TxGroupCyclesRecord::Failed { block_hash, error: error.into() }))
+                }
+            };
+            if let Some(record) = &record {
+                let header = self.get_block_header(block_num)?.ok_or_else(|| anyhow!(
+                    "canonical block disappeared while persisting cycles: block={block_num}"
+                ))?;
+                let record_hash = match record {
+                    TxGroupCyclesRecord::Complete(groups) => groups.block_hash,
+                    TxGroupCyclesRecord::Failed { block_hash, .. } => *block_hash,
+                };
+                anyhow::ensure!(header.hash.as_slice() == record_hash,
+                    "canonical block changed while persisting cycles: block={block_num}");
             }
             entry.cycles = Some(cycles);
             let key = keys::encode_composite(&[
                 &keys::encode_block_num(block_num),
                 &keys::encode_tx_idx(tx_idx),
             ]);
-            let value = bincode::serialize(&entry).with_context(|| format!(
-                "failed to serialize tx index entry {block_num}:{tx_idx}"
-            ))?;
             let mut batch = rocksdb::WriteBatch::default();
-            batch.put_cf(self.cf_tx_index(), &key, &value);
+            batch.put_cf(self.cf_tx_index(), &key, bincode::serialize(&entry)?);
             let groups_key = keys::encode_tx_group_cycles_key(expected_hash);
-            if let Some(groups) = groups {
-                batch.put_cf(self.cf_sync_meta(), &groups_key, bincode::serialize(groups)?);
+            if let Some(record) = record {
+                batch.put_cf(self.cf_sync_meta(), &groups_key, bincode::serialize(&record)?);
             } else {
                 batch.delete_cf(self.cf_sync_meta(), &groups_key);
             }
@@ -377,6 +299,56 @@ impl CkbadgerStore {
                 "failed to write canonical tx cycles: hash=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash)
             ))
+        })
+    }
+
+    pub fn get_tx_group_cycles_record(
+        &self,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Option<TxGroupCyclesRecord>> {
+        let Some((block_num, _, tx)) = self.get_tx_by_hash(tx_hash)? else {
+            return Ok(None);
+        };
+        let Some(bytes) = self.get_cf(
+            self.cf_sync_meta(),
+            &keys::encode_tx_group_cycles_key(tx_hash),
+        )?
+        else {
+            return Ok(None);
+        };
+        let record: TxGroupCyclesRecord = bincode::deserialize(&bytes)?;
+        let header = self
+            .get_block_header(block_num)?
+            .ok_or_else(|| anyhow!("lazy group cycles lack canonical block: {block_num}"))?;
+        anyhow::ensure!(
+            header.hash.as_slice()
+                == match &record {
+                    TxGroupCyclesRecord::Complete(result) => result.block_hash,
+                    TxGroupCyclesRecord::Failed { block_hash, .. } => *block_hash,
+                },
+            "lazy group cycles belong to another block: tx=0x{}",
+            hex::encode(tx_hash)
+        );
+        if let TxGroupCyclesRecord::Complete(result) = &record {
+            result.validate().map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                tx.cycles == Some(result.cycles),
+                "lazy group cycles differ from canonical total: tx=0x{} total={:?} groups={}",
+                hex::encode(tx_hash),
+                tx.cycles,
+                result.cycles
+            );
+        }
+        Ok(Some(record))
+    }
+
+    pub fn get_tx_cycles_result(
+        &self,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Option<TransactionCycles>> {
+        Ok(match self.get_tx_group_cycles_record(tx_hash)? {
+            Some(TxGroupCyclesRecord::Complete(result)) => Some(result),
+            Some(TxGroupCyclesRecord::Failed { .. }) | None => None,
         })
     }
 
@@ -504,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_tx_cycles_by_hash() {
+    fn failed_group_replay_preserves_scalar_and_can_be_retried() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
@@ -525,13 +497,11 @@ mod tests {
                 outputs_count: 1,
                 fee: 1_000,
                 tx_size: 200,
-                cycles: None,
+                cycles: Some(12_345),
                 semantic_tags: 0,
             },
         );
         batch.commit().unwrap();
-
-        store.update_tx_cycles_by_hash(&tx_hash, 12_345).unwrap();
 
         let (_, _, updated) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
         assert_eq!(updated.cycles, Some(12_345));
@@ -540,6 +510,40 @@ mod tests {
         let mut header_batch = StoreBatch::new(&store);
         header_batch.put_block_header(block_num, &make_header(0x77));
         header_batch.commit().unwrap();
+        store
+            .persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &tx_hash,
+                TxCyclesWrite::ReplayFailed {
+                    block_hash: [0x77; 32],
+                    error: "VM failed",
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .get_tx_index(block_num, tx_idx)
+                .unwrap()
+                .unwrap()
+                .cycles,
+            Some(12_345)
+        );
+        assert_eq!(
+            store.get_tx_group_cycles_record(&tx_hash).unwrap(),
+            Some(TxGroupCyclesRecord::Failed {
+                block_hash: [0x77; 32],
+                error: "VM failed".into()
+            })
+        );
+        let mut replacement = StoreBatch::new(&store);
+        replacement.put_block_header(block_num, &make_header(0x88));
+        replacement.commit().unwrap();
+        let error = store.get_tx_group_cycles_record(&tx_hash).unwrap_err();
+        assert!(error.to_string().contains("another block"), "{error:#}");
+        let mut restore = StoreBatch::new(&store);
+        restore.put_block_header(block_num, &make_header(0x77));
+        restore.commit().unwrap();
         let result = TransactionCycles {
             block_hash: [0x77; 32],
             cycles: 12_345,
@@ -557,30 +561,35 @@ mod tests {
             ],
         };
         store
-            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &result)
+            .persist_tx_cycles(block_num, tx_idx, &tx_hash, TxCyclesWrite::Groups(&result))
             .unwrap();
         assert_eq!(
-            store.get_tx_group_cycles(&tx_hash).unwrap(),
-            Some(result.groups.clone())
+            store.get_tx_group_cycles_record(&tx_hash).unwrap(),
+            Some(TxGroupCyclesRecord::Complete(result.clone()))
         );
         let bad = TransactionCycles {
             cycles: 12_346,
             ..result.clone()
         };
         assert!(store
-            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &bad)
+            .persist_tx_cycles(block_num, tx_idx, &tx_hash, TxCyclesWrite::Groups(&bad))
             .unwrap_err()
             .to_string()
             .contains("differs"));
         assert_eq!(
-            store.get_tx_group_cycles(&tx_hash).unwrap(),
-            Some(result.groups.clone())
+            store.get_tx_group_cycles_record(&tx_hash).unwrap(),
+            Some(TxGroupCyclesRecord::Complete(result.clone()))
         );
         let mut conflicting_total = result.clone();
         conflicting_total.cycles += 1;
         conflicting_total.groups[0].cycles += 1;
         let error = store
-            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &conflicting_total)
+            .persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &tx_hash,
+                TxCyclesWrite::Groups(&conflicting_total),
+            )
             .expect_err("group execution must not replace a different canonical positive total");
         let message = error.to_string();
         assert!(message.contains("cycles total mismatch"), "{message}");
@@ -600,35 +609,59 @@ mod tests {
             ..result.clone()
         };
         assert!(store
-            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &wrong_block)
+            .persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &tx_hash,
+                TxCyclesWrite::Groups(&wrong_block)
+            )
             .unwrap_err()
             .to_string()
             .contains("canonical block changed"));
         assert_eq!(
-            store.get_tx_group_cycles(&tx_hash).unwrap(),
-            Some(result.groups.clone())
+            store.get_tx_group_cycles_record(&tx_hash).unwrap(),
+            Some(TxGroupCyclesRecord::Complete(result.clone()))
         );
         let append_dir = tempdir().unwrap();
         let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
         store
-            .mark_tx_cycles_failed_if_missing(block_num, tx_idx, &tx_hash)
+            .persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &tx_hash,
+                TxCyclesWrite::ReplayFailed {
+                    block_hash: [0x77; 32],
+                    error: "retry failed",
+                },
+            )
             .unwrap();
         assert_eq!(
             store.get_tx_by_hash(&tx_hash).unwrap().unwrap().2.cycles,
             Some(12_345)
         );
         assert_eq!(
-            store.get_tx_cycles_result(&tx_hash).unwrap(),
-            Some(result.clone())
+            store.get_tx_group_cycles_record(&tx_hash).unwrap(),
+            Some(TxGroupCyclesRecord::Failed {
+                block_hash: [0x77; 32],
+                error: "retry failed".into()
+            })
         );
         assert!(append
-            .mark_tx_cycles_failed_if_missing(block_num, tx_idx, &tx_hash)
+            .persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &tx_hash,
+                TxCyclesWrite::ReplayFailed {
+                    block_hash: [0x77; 32],
+                    error: "retry failed"
+                }
+            )
             .is_err());
         assert!(append
-            .update_tx_cycles_with_groups(block_num, tx_idx, &tx_hash, &result)
+            .persist_tx_cycles(block_num, tx_idx, &tx_hash, TxCyclesWrite::Groups(&result))
             .is_err());
         assert!(append
-            .update_tx_cycles(block_num, tx_idx, &tx_hash, -1)
+            .persist_tx_cycles(block_num, tx_idx, &tx_hash, TxCyclesWrite::ExecutionExempt)
             .is_err());
         assert_eq!(
             append
@@ -636,14 +669,33 @@ mod tests {
                 .count(),
             0
         );
+        let stale = store
+            .persist_tx_cycles(
+                block_num,
+                tx_idx,
+                &tx_hash,
+                TxCyclesWrite::ReplayFailed {
+                    block_hash: [0x88; 32],
+                    error: "old fork",
+                },
+            )
+            .unwrap_err();
+        assert!(stale.to_string().contains("canonical block changed"));
+        assert_eq!(
+            store.get_tx_group_cycles_record(&tx_hash).unwrap(),
+            Some(TxGroupCyclesRecord::Failed {
+                block_hash: [0x77; 32],
+                error: "retry failed".into()
+            })
+        );
         store
-            .update_tx_cycles(block_num, tx_idx, &tx_hash, -1)
+            .persist_tx_cycles(block_num, tx_idx, &tx_hash, TxCyclesWrite::Groups(&result))
             .unwrap();
-        assert!(store.get_tx_group_cycles(&tx_hash).unwrap().is_none());
+        assert_eq!(store.get_tx_cycles_result(&tx_hash).unwrap(), Some(result));
     }
 
     #[test]
-    fn invalid_negative_cycles_do_not_change_the_transaction() {
+    fn invalid_stored_cycles_do_not_change_the_transaction() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let tx_hash = [0x11; 32];
@@ -665,30 +717,14 @@ mod tests {
             },
         );
         batch.commit().unwrap();
-        for invalid in [-2, i64::MIN] {
-            let error = store
-                .update_tx_cycles(123, 2, &tx_hash, invalid)
-                .unwrap_err();
-            let message = error.to_string();
-            assert!(message.contains("invalid cycles"), "{message}");
-            assert!(
-                message.contains("block=123") && message.contains("index=2"),
-                "{message}"
-            );
-            assert!(message.contains(&hex::encode(tx_hash)), "{message}");
-            assert_eq!(store.get_tx_index(123, 2).unwrap().unwrap().cycles, None);
-        }
-        store.update_tx_cycles(123, 2, &tx_hash, -1).unwrap();
-        assert_eq!(
-            store.get_tx_index(123, 2).unwrap().unwrap().cycles,
-            Some(-1)
-        );
         let (_, _, mut corrupt) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
         corrupt.cycles = Some(-2);
         let mut batch = StoreBatch::new(&store);
         batch.put_tx_index(123, 2, &corrupt);
         batch.commit().unwrap();
-        let error = store.update_tx_cycles(123, 2, &tx_hash, 10).unwrap_err();
+        let error = store
+            .persist_tx_cycles(123, 2, &tx_hash, TxCyclesWrite::ExecutionExempt)
+            .unwrap_err();
         assert!(
             error.to_string().contains("invalid stored cycles"),
             "{error:#}"
@@ -700,13 +736,15 @@ mod tests {
     }
 
     #[test]
-    fn test_update_tx_cycles_by_hash_not_found() {
+    fn missing_cycles_identity_is_rejected() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let tx_hash = [0x22u8; 32];
-        let err = store.update_tx_cycles_by_hash(&tx_hash, 9_999).unwrap_err();
-        assert!(err.to_string().contains("transaction location not found"));
+        let err = store
+            .persist_tx_cycles(123, 2, &tx_hash, TxCyclesWrite::ExecutionExempt)
+            .unwrap_err();
+        assert!(err.to_string().contains("identity disappeared"));
     }
 
     #[test]
@@ -736,7 +774,17 @@ mod tests {
 
         let error = format!(
             "{:#}",
-            store.update_tx_cycles_by_hash(&old_hash, 99).unwrap_err()
+            store
+                .persist_tx_cycles(
+                    12,
+                    1,
+                    &old_hash,
+                    TxCyclesWrite::ReplayFailed {
+                        block_hash: [0; 32],
+                        error: "failed",
+                    }
+                )
+                .unwrap_err()
         );
         assert!(error.contains("identity"), "{error}");
         assert_eq!(store.get_tx_index(12, 1).unwrap().unwrap().cycles, None);
@@ -775,7 +823,15 @@ mod tests {
                 let worker = std::thread::spawn(move || {
                     started_tx.send(()).unwrap();
                     finished_tx
-                        .send(worker_store.update_tx_cycles(12, 1, &old_hash, 99))
+                        .send(worker_store.persist_tx_cycles(
+                            12,
+                            1,
+                            &old_hash,
+                            TxCyclesWrite::ReplayFailed {
+                                block_hash: [0; 32],
+                                error: "failed",
+                            },
+                        ))
                         .unwrap();
                 });
                 started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
