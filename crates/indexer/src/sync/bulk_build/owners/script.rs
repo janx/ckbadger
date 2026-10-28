@@ -424,9 +424,7 @@ impl BulkReducer for ScriptOwner {
             let native_type_id = input
                 .type_code_hash_id
                 .zip(input.type_hash_type)
-                .is_some_and(|(hash, kind)| {
-                    kind == 1 && crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
-                });
+                .is_some_and(|(hash, kind)| is_native_type_id(ctx, hash, kind));
             if native_type_id {
                 let (Some(reference), Some(data_hash)) =
                     (input.type_script_hash_id, input.data_hash)
@@ -446,12 +444,10 @@ impl BulkReducer for ScriptOwner {
         for cell in tx.cells.iter() {
             apply_output_deltas(cell, ctx, &mut deltas, tx)?;
             apply_output_reference_deltas(cell, ctx, &mut reference_deltas, tx)?;
-            let native_type_id =
-                cell.type_code_hash_id
-                    .zip(cell.type_hash_type)
-                    .is_some_and(|(hash, kind)| {
-                        crate::parser::script::is_type_id(ctx.resolve_identity(hash), kind)
-                    });
+            let native_type_id = cell
+                .type_code_hash_id
+                .zip(cell.type_hash_type)
+                .is_some_and(|(hash, kind)| is_native_type_id(ctx, hash, kind));
             if native_type_id && cell.type_script_hash_id.is_none() {
                 bail!(
                     "type-id output lacks type hash at block {}",
@@ -609,6 +605,15 @@ struct ScriptReferenceDelta {
     type_owned_capacity_delta: i128,
     type_used_capacity_delta: i128,
     type_owned_knowledge_delta: i128,
+}
+
+fn is_native_type_id(
+    ctx: &ReducerContext<'_>,
+    code_hash_id: crate::sync::types::InternId,
+    hash_type: i16,
+) -> bool {
+    hash_type == 1
+        && crate::parser::script::is_type_id(ctx.resolve_identity(code_hash_id), hash_type)
 }
 
 fn parse_hash_type_u8(
