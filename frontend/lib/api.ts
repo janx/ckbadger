@@ -4746,11 +4746,10 @@ export const api = {
 
   getAddressFiberChannels: (
     addr: string,
-    params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<FiberChannel>> => {
+    params: { limit?: number } = {}
+  ): Promise<FiberChannel[]> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
-    if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/addresses/${addr}/fiber/channels?${query}`);
   },
 

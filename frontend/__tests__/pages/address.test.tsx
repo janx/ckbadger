@@ -7,6 +7,7 @@ import {
   addressProducerHoldings,
 } from '@/__tests__/msw/fixtures/address-producer';
 import AddressDetailPage from '@/app/address/[addr]/client-page';
+import fiberOpenDetail from '@/__tests__/fixtures/fiber-open-detail.json';
 import {
   api,
   ApiRequestError,
@@ -139,10 +140,30 @@ beforeEach(() => {
     pageFixture(addressTransactionsFixture, 1021)
   );
   vi.mocked(api.getAddressDotCellNames).mockResolvedValue(pageFixture([]));
-  vi.mocked(api.getAddressFiberChannels).mockResolvedValue(pageFixture([]));
+  vi.mocked(api.getAddressFiberChannels).mockResolvedValue([]);
 });
 
 describe('Address v3', () => {
+  it('renders the real address Fiber endpoint empty array without a page crash', async () => {
+    vi.mocked(api.getAddressFiberChannels).mockResolvedValue([]);
+    render(<AddressDetailPage />);
+    await loaded();
+    expect(screen.queryByRole('heading', { name: 'Fiber channels' })).not.toBeInTheDocument();
+  });
+
+  it('links a producer-backed channel from the real address Fiber array response', async () => {
+    vi.mocked(api.getAddressFiberChannels).mockResolvedValue([fiberOpenDetail] as never);
+    render(<AddressDetailPage />);
+    await loaded();
+    expect(await screen.findByRole('heading', { name: 'Fiber channels' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /0xf0f0f0/i })).toHaveAttribute(
+      'href',
+      `/mainnet/fiber/channels/${fiberOpenDetail.channelId}`
+    );
+    expect(screen.getByText('open')).toBeInTheDocument();
+    expect(api.getAddressFiberChannels).toHaveBeenCalledWith(addressHash, { limit: 100 });
+  });
+
   it('shows typed 404 evidence only when the address endpoint actually returns 404', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);

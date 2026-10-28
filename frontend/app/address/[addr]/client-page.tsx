@@ -96,8 +96,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const activityPage = useCursorPagination(),
     txPage = useCursorPagination(),
     cellPage = useCursorPagination(),
-    namesPage = useCursorPagination(),
-    fiberPage = useCursorPagination();
+    namesPage = useCursorPagination();
   const address = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
@@ -146,10 +145,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     placeholderData: keepPreviousData,
   });
   const fiber = useQuery({
-    queryKey: ['address-fiber-channels', lockHash, fiberPage.cursor],
-    queryFn: () => api.getAddressFiberChannels(lockHash!, { limit: 50, cursor: fiberPage.cursor }),
+    queryKey: ['address-fiber-channels', lockHash],
+    queryFn: () => api.getAddressFiberChannels(lockHash!, { limit: 100 }),
     enabled: !!lockHash,
-    placeholderData: keepPreviousData,
   });
   const pool =
     tab === 'activities' && !activityPage.cursor
@@ -323,9 +321,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <AddressLoadState label="Fiber channels" error={fiber.error} loading={false} />
             ) : (
               fiber.data &&
-              fiber.data.data.length > 0 && (
+              fiber.data.length > 0 && (
                 <DetailSection title="Fiber channels">
-                  {fiber.data.data.map((c) => (
+                  <p className="text-text-dim mb-3 text-xs">
+                    Up to 100 indexed channels associated with this address.
+                  </p>
+                  {fiber.data.map((c) => (
                     <div
                       key={c.channelId}
                       className="border-base-elevated flex flex-wrap justify-between gap-3 border-b py-3 text-xs"
@@ -344,14 +345,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" wrap />
                     </div>
                   ))}
-                  <AddressPagination
-                    pagination={fiberPage}
-                    hasMore={fiber.data.hasMore}
-                    nextCursor={fiber.data.nextCursor}
-                    currentCount={fiber.data.data.length}
-                    total={fiber.data.total}
-                    label="channels"
-                  />
                 </DetailSection>
               )
             )}
