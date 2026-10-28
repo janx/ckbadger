@@ -1446,8 +1446,8 @@ describe('PipelinePanel interactions', () => {
     expect(screen.queryByTestId('pipeline-selection')).toBeNull();
   });
 
-  it('lets either footer wrap on mobile while keeping the desktop row height stable', async () => {
-    // jsdom does not lay out, so check the shared responsive row contract for both states.
+  it('lets either footer wrap to the available panel width', async () => {
+    // jsdom does not lay out, so check that neither state forces clipping at a breakpoint.
     const row = (el: HTMLElement) => el.className.split(/\s+/);
     const svg = await renderPanel(snapshot);
     const legend = row(screen.getByTestId('pipeline-legend'));
@@ -1457,10 +1457,10 @@ describe('PipelinePanel interactions', () => {
     for (const classes of [legend, selection]) {
       expect(classes).toContain('min-h-6');
       expect(classes).toContain('flex-wrap');
-      expect(classes).toContain('md:h-6');
-      expect(classes).toContain('md:flex-nowrap');
-      expect(classes).toContain('md:overflow-hidden');
       expect(classes).not.toContain('overflow-hidden');
+      expect(
+        classes.every((c) => !/^(?:md:|lg:)(?:h-6|flex-nowrap|overflow-hidden)$/.test(c))
+      ).toBe(true);
     }
   });
 

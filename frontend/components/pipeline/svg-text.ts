@@ -6,8 +6,7 @@ export const T10G = 'fill-gold text-[10px]';
 export const T11C = 'fill-text-bright text-[11px]';
 export const T11G = 'fill-gold text-[11px]';
 
-/** The footer row (legend or pinned selection): wrap on narrow screens so every key remains visible. */
-export const FOOTER_ROW =
-  'flex min-h-6 flex-wrap items-center gap-y-1 font-mono md:h-6 md:flex-nowrap md:overflow-hidden md:whitespace-nowrap';
+/** The footer row (legend or pinned selection): let content wrap whenever its panel is narrow. */
+export const FOOTER_ROW = 'flex min-h-6 flex-wrap items-center gap-y-1 font-mono';
 
 export const fmtInt = (n: number | bigint) => n.toLocaleString('en-US');
