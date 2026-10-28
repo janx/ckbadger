@@ -1,6 +1,7 @@
 'use client';
 
 import { Component, ReactNode } from 'react';
+import { CrashPage } from '@/components/crash-page';
 
 interface Props {
   children: ReactNode;
@@ -33,18 +34,10 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div className="border-negative/30 bg-negative/10 flex min-h-[200px] flex-col items-center justify-center rounded-lg border p-6">
-          <div className="text-negative mb-2 text-xl">Something went wrong</div>
-          <div className="text-text-dim mb-4 text-sm">
-            {this.state.error?.message || 'An unexpected error occurred'}
-          </div>
-          <button
-            onClick={() => this.setState({ hasError: false, error: undefined })}
-            className="bg-negative hover:bg-negative-bright rounded px-4 py-2 text-sm text-white transition"
-          >
-            Try again
-          </button>
-        </div>
+        <CrashPage
+          message={this.state.error?.message || 'An unexpected error occurred'}
+          contextSafe
+        />
       );
     }
 

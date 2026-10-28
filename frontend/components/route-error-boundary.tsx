@@ -7,7 +7,7 @@ import { CrashPage } from '@/components/crash-page';
 export function RouteErrorBoundary() {
   const error = useRouteError();
 
-  if (isRouteErrorResponse(error) && error.status === 404) return <NotFoundPage />;
+  if (isRouteErrorResponse(error) && error.status === 404) return <NotFoundPage footer />;
 
   let errMessage: string;
 

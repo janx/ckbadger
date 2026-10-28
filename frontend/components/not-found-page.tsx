@@ -1,234 +1,111 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
-import { NotFoundCellOcean } from '@/components/not-found-cell-ocean';
-import { resolveBuildVersion } from '@/lib/runtime-config';
-import { useRealtimeStore } from '@/hooks/useRealtimeStore';
-
-const GLYPHS = ['\u2588', '\u2592', '\u2593', '\u2591', '\u00d7', '#', '%', '\u2573'];
-const ORIGINAL_CHARS = ['4', '0', '4'];
+import { ErrorPageShell } from '@/components/error-page-shell';
+import { usePathname } from '@/src/navigation';
+import { useNotFoundEvidence, type NotFoundEntity } from '@/lib/not-found-evidence';
 
 interface NotFoundPageProps {
+  entity?: NotFoundEntity;
   errMessage?: string;
+  /** React Router errorElement replaces AppFrame, including its footer. */
+  footer?: boolean;
 }
 
-export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
-  const charRefs = [
-    useRef<HTMLSpanElement>(null),
-    useRef<HTMLSpanElement>(null),
-    useRef<HTMLSpanElement>(null),
-  ];
-
-  const buildVersion = resolveBuildVersion();
-  const latestBlock = useRealtimeStore((state) => state.latestBlock);
-  const blockNumber = latestBlock?.number ?? '---';
-
-  // Lock body scroll on 404 page
-  useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, []);
-
-  useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout>;
-
-    function glitchCycle() {
-      const idx = Math.floor(Math.random() * 3);
-      const el = charRefs[idx].current;
-      if (!el) {
-        timeoutId = setTimeout(glitchCycle, 4000 + Math.random() * 8000);
-        return;
-      }
-
-      // First corruption
-      el.textContent = GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
-      el.style.color = Math.random() < 0.5 ? '#1fb88a' : '#148061';
-      const tx = (Math.random() - 0.5) * 4;
-      const ty = (Math.random() - 0.5) * 4;
-      el.style.transform = `translate(${tx}px, ${ty}px)`;
-
-      // Second corruption after 50ms
-      const t1 = setTimeout(() => {
-        el.textContent = GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
-      }, 50);
-
-      // Restore after 120-200ms
-      const restoreDelay = 120 + Math.random() * 80;
-      const t2 = setTimeout(() => {
-        el.textContent = ORIGINAL_CHARS[idx];
-        el.style.color = '#2edba3';
-        el.style.transform = 'translate(0, 0)';
-      }, restoreDelay);
-
-      // Schedule next glitch — infrequent, mysterious
-      timeoutId = setTimeout(glitchCycle, 4000 + Math.random() * 8000);
-
-      // Store sub-timeouts for cleanup
-      subTimeouts.push(t1, t2);
-    }
-
-    const subTimeouts: ReturnType<typeof setTimeout>[] = [];
-    timeoutId = setTimeout(glitchCycle, 2000 + Math.random() * 5000);
-
-    return () => {
-      clearTimeout(timeoutId);
-      subTimeouts.forEach(clearTimeout);
-    };
-  }, []);
+export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPageProps = {}) {
+  const pathname = usePathname();
+  const lookup = useNotFoundEvidence(entity);
+  const title = entity ? (
+    lookup.evidence?.alternative ? (
+      <>
+        <span className="block text-[clamp(3rem,8vw,7rem)]">A name,</span>{' '}
+        <span className="block text-[clamp(2rem,7vw,4.75rem)]">
+          not a {entity.kind.replace('-', ' ')}.
+        </span>
+      </>
+    ) : (
+      <>
+        <span className="block text-[clamp(2.5rem,7vw,6rem)]">An unanswered</span>{' '}
+        <span className="block text-[clamp(3rem,8vw,7rem)]">name.</span>
+      </>
+    )
+  ) : (
+    <>
+      <span className="block text-[clamp(2.5rem,7vw,6rem)]">The road ends</span>{' '}
+      <span className="block text-[clamp(3rem,8vw,7rem)]">here.</span>
+    </>
+  );
 
   return (
-    <main className="bg-base-bg relative h-screen overflow-hidden">
-      <style>{`
-        @keyframes tearScan {
-          0% { top: -2px; opacity: 0; }
-          2% { opacity: 1; }
-          15% { opacity: 1; }
-          17% { opacity: 0; }
-          100% { top: 100%; opacity: 0; }
-        }
-        @keyframes screenFlash {
-          0%, 100% { background-color: transparent; }
-        }
-        @keyframes blink {
-          50% { opacity: 0; }
-        }
-        @keyframes flickerLine {
-          0%, 90%, 100% { opacity: 1; }
-          91% { opacity: 0.3; }
-          93% { opacity: 1; }
-          94% { opacity: 0.1; }
-          96% { opacity: 1; }
-        }
-      `}</style>
-
-      <NotFoundCellOcean />
-
-      {/* Subtle scan line — single faint sweep */}
-      <div className="pointer-events-none fixed inset-0 z-[12]">
-        <div
-          className="absolute left-0 h-[1px] w-full"
-          style={{
-            background:
-              'linear-gradient(90deg, transparent 0%, rgba(46,219,163,0.05) 30%, rgba(31,184,138,0.04) 70%, transparent 100%)',
-            animation: 'tearScan 12s linear infinite',
-          }}
-        />
-      </div>
-
-      {/* Screen flash overlay */}
-      <div
-        className="pointer-events-none fixed inset-0 z-[13]"
-        style={{ animation: 'screenFlash 7s infinite' }}
-      />
-
-      <Header />
-
-      {/* Content section */}
-      <section className="relative z-20 flex h-full items-center justify-center pb-24">
-        <div className="flex flex-col items-center gap-8">
-          {/* Glitch 404 text */}
-          <div
-            className="font-mono font-bold"
-            style={{
-              fontSize: '120px',
-              lineHeight: 1,
-              color: '#2edba3',
-              textShadow: '0 0 25px rgba(46,219,163,0.35), 0 0 50px rgba(46,219,163,0.15)',
-            }}
-          >
-            <span ref={charRefs[0]} style={{ display: 'inline-block', transition: 'none' }}>
-              4
-            </span>
-            <span ref={charRefs[1]} style={{ display: 'inline-block', transition: 'none' }}>
-              0
-            </span>
-            <span ref={charRefs[2]} style={{ display: 'inline-block', transition: 'none' }}>
-              4
-            </span>
+    <ErrorPageShell status="Not found · 404" path={pathname} title={title} footer={footer}>
+      <p
+        className="text-text-bright max-w-xl text-[clamp(1.25rem,3vw,1.7rem)] leading-snug"
+        style={{ fontFamily: 'var(--font-error-display)' }}
+      >
+        {entity
+          ? `This explorer could not open the ${entity.kind} at this address.`
+          : 'This route does not lead to a page.'}
+      </p>
+      {entity && (
+        <dl className="border-base-border-subtle mt-8 min-w-0 border-t font-mono text-[12px]">
+          <div className="border-base-border-subtle grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
+            <dt className="text-text-dim">requested</dt>
+            <dd className="text-text min-w-0 break-all">{entity.identifier}</dd>
           </div>
-
-          {/* Poetry block */}
-          <div
-            className="text-center font-mono"
-            style={{ fontSize: '16px', letterSpacing: '0.08em', lineHeight: 2.2 }}
-          >
-            <p className="text-text-dim">some common knowledge has dissolved into the void</p>
-            <p
-              style={{
-                color: '#2edba3',
-                textShadow: '0 0 12px rgba(46,219,163,0.25)',
-              }}
+          <div className="border-base-border-subtle grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
+            <dt className="text-text-dim">checked</dt>
+            <dd className="text-text min-w-0 break-all">
+              {lookup.status === 'loading' && 'Checking the local explorer index…'}
+              {lookup.status === 'checked' && lookup.evidence?.checkedEndpoint}
+              {lookup.status === 'error' && 'The local evidence check could not complete.'}
+            </dd>
+          </div>
+        </dl>
+      )}
+      {lookup.status === 'checked' && lookup.evidence && (
+        <div className="text-text-dim mt-4 max-w-xl text-[13px] leading-relaxed">
+          <p>{lookup.evidence.finding}</p>
+          {lookup.evidence.alternative && (
+            <Link
+              href={lookup.evidence.alternative.href}
+              className="text-jade focus-visible:outline-jade mt-3 inline-block break-all underline-offset-4 hover:underline focus-visible:outline"
             >
-              yet more is crystallizing from the chain
-            </p>
-          </div>
+              Open {lookup.evidence.alternative.label} →
+            </Link>
+          )}
         </div>
-      </section>
-
-      {/* Bottom area: error line + footer */}
-      <div className="absolute bottom-0 left-0 z-30 flex w-full flex-col items-center gap-3 pb-4">
-        {/* ERR line */}
-        <div style={{ animation: 'flickerLine 3s infinite' }}>
-          <span className="font-mono text-sm">
-            <span className="text-rouge">ERR</span>
-            <span className="text-text-ghost">
-              {' '}
-              {errMessage || 'cell_not_found: outpoint unreachable'}
-            </span>
-            <span
-              className="ml-0.5 inline-block"
-              style={{
-                width: '8px',
-                height: '16px',
-                backgroundColor: '#2edba3',
-                animation: 'blink 1s step-end infinite',
-                verticalAlign: 'text-bottom',
-              }}
-            />
-          </span>
-        </div>
-
-        {/* Compact footer */}
-        <div className="flex flex-wrap items-center justify-center gap-3 font-mono text-[11px]">
-          <span className="text-text-ghost select-none">&gt;</span>
-          <span className="text-text-ghost">
-            tip: <span className="text-jade/50 tabular-nums">{blockNumber}</span>
-          </span>
-          <span className="text-text-ghost">|</span>
-          <a
-            href="https://github.com/janx/ckbadger"
-            target="_blank"
-            rel="noreferrer"
-            className="text-text hover:text-jade transition-colors"
-          >
-            {buildVersion}
-          </a>
-          <span className="live-dot" />
-          <span className="text-text-ghost">|</span>
-          <Link
-            href="/hardforks"
-            className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
-          >
-            Hardforks
-          </Link>
-          <a
-            href="https://dashboard.fiber.channel/"
-            target="_blank"
-            rel="noreferrer"
-            className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
-          >
-            Fiber Dashboard
-          </a>
-          <span className="text-text-ghost">|</span>
-          <span className="text-text">
-            <span className="text-text-dim">?</span> keys
-          </span>
-        </div>
-      </div>
-    </main>
+      )}
+      {lookup.status === 'error' && lookup.error && (
+        <p role="status" className="text-text-dim mt-4 max-w-xl break-all text-[12px]">
+          {lookup.error}
+        </p>
+      )}
+      {errMessage && (
+        <p className="text-text-dim mt-4 max-w-xl break-all font-mono text-[12px]">{errMessage}</p>
+      )}
+      <nav
+        aria-label="Find another route"
+        className="mt-8 flex flex-wrap gap-3 font-mono text-[12px]"
+      >
+        <Link
+          href="/"
+          className="border-jade text-jade hover:bg-jade/10 focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
+        >
+          Back to the explorer →
+        </Link>
+        <Link
+          href="/blocks"
+          className="border-base-border text-text hover:text-jade focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
+        >
+          Browse blocks
+        </Link>
+        <Link
+          href="/inventory/tokens"
+          className="border-base-border text-text hover:text-jade focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
+        >
+          Inventory
+        </Link>
+      </nav>
+    </ErrorPageShell>
   );
 }
