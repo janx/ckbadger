@@ -1,10 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useContext, useState } from 'react';
+import { UNSAFE_LocationContext } from 'react-router-dom';
 import Link from '@/components/ui/link';
 import { ErrorPageShell } from '@/components/error-page-shell';
+import { ErrorVessels, VesselsCaption } from '@/components/error-vessels';
 import { usePathname } from '@/src/navigation';
 import { resolveBuildVersion } from '@/lib/runtime-config';
+import { isKnownNetwork } from '@/lib/active-network';
 
 interface CrashPageProps {
   message: string;
@@ -15,10 +18,19 @@ interface CrashPageProps {
 /** A failed read/render is not evidence that a chain entity does not exist. */
 export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
   const pathname = usePathname();
+  const locationContext = useContext(UNSAFE_LocationContext);
+  const location = locationContext?.location;
+  const fullRoute = location
+    ? `${location.pathname}${location.search}${location.hash}`
+    : typeof window === 'undefined'
+      ? pathname
+      : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const networkSegment = fullRoute.replace(/^\/+/, '').split('/')[0];
+  const network = isKnownNetwork(networkSegment) ? networkSegment : 'not resolved';
   const build = resolveBuildVersion();
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const recovery = pathname.startsWith('/fiber/')
-    ? { href: '/fiber', label: 'Back to Fiber channels' }
+    ? { href: '/fiber/channels', label: 'Back to Fiber channels' }
     : pathname.startsWith('/tx/')
       ? { href: '/transactions', label: 'Back to transactions' }
       : pathname.startsWith('/blocks/')
@@ -28,7 +40,8 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
   async function copyDetails() {
     const report = [
       `Error: ${message}`,
-      `Page: ${pathname}`,
+      `Page: ${fullRoute}`,
+      `Network: ${network}`,
       `Build: CKBadger ${build}`,
       'Chain tip: not checked in this error view',
     ].join('\n');
@@ -43,15 +56,17 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
   return (
     <ErrorPageShell
       status="Error · not a 404"
-      path={pathname}
+      path={fullRoute}
       title={
         <>
-          <span className="block text-[clamp(2.4rem,7vw,6rem)]">The page fell.</span>{' '}
-          <span className="block text-[clamp(1.9rem,6.4vw,4rem)]">The cause is unclear.</span>
+          <span className="block text-[clamp(2.4rem,7vw,5.75rem)]">The page fell.</span>{' '}
+          <span className="block text-[clamp(1.9rem,6.4vw,3.75rem)]">The cause is unclear.</span>
         </>
       }
       footer
       contextSafe={contextSafe}
+      artwork={contextSafe ? undefined : (avoidRef) => <ErrorVessels avoidRef={avoidRef} />}
+      caption={contextSafe ? undefined : <VesselsCaption />}
     >
       <p
         className="text-text-bright max-w-xl text-[clamp(1.25rem,3vw,1.7rem)] leading-snug"
@@ -71,7 +86,11 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
         </div>
         <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
           <dt className="text-text-dim">page</dt>
-          <dd className="text-text min-w-0 break-all">{pathname}</dd>
+          <dd className="text-text min-w-0 break-all">{fullRoute}</dd>
+        </div>
+        <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
+          <dt className="text-text-dim">network</dt>
+          <dd className="text-text min-w-0 break-all">{network}</dd>
         </div>
         <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
           <dt className="text-text-dim">build</dt>

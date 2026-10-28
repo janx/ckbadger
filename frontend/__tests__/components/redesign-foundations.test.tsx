@@ -17,6 +17,11 @@ import { ActivityRow } from '@/components/activity/activity-row';
 import { CrashPage } from '@/components/crash-page';
 import { CELL_COLORS, CLASS_COLORS } from '@/lib/design-tokens';
 
+vi.mock('@/components/error-vessels', () => ({
+  ErrorVessels: () => <div data-testid="error-vessels" />,
+  VesselsCaption: () => <span>Bounded live cell sample</span>,
+}));
+
 const cell: CellTileData = {
   id: 'in:0',
   href: '/cell/0xabc:0',

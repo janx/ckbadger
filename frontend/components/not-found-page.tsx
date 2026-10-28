@@ -2,6 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { ErrorPageShell } from '@/components/error-page-shell';
+import { ErrorVessels, VesselsCaption } from '@/components/error-vessels';
 import { usePathname } from '@/src/navigation';
 import { useNotFoundEvidence, type NotFoundEntity } from '@/lib/not-found-evidence';
 
@@ -19,25 +20,32 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
     lookup.evidence?.alternative ? (
       <>
         <span className="block text-[clamp(3rem,8vw,7rem)]">A name,</span>{' '}
-        <span className="block text-[clamp(2rem,7vw,4.75rem)]">
+        <span className="block text-[clamp(2rem,7vw,4.25rem)]">
           not a {entity.kind.replace('-', ' ')}.
         </span>
       </>
     ) : (
       <>
-        <span className="block text-[clamp(2.5rem,7vw,6rem)]">An unanswered</span>{' '}
+        <span className="block text-[clamp(2.5rem,7vw,5rem)]">An unanswered</span>{' '}
         <span className="block text-[clamp(3rem,8vw,7rem)]">name.</span>
       </>
     )
   ) : (
     <>
-      <span className="block text-[clamp(2.5rem,7vw,6rem)]">The road ends</span>{' '}
+      <span className="block text-[clamp(2.5rem,7vw,5.5rem)]">The road ends</span>{' '}
       <span className="block text-[clamp(3rem,8vw,7rem)]">here.</span>
     </>
   );
 
   return (
-    <ErrorPageShell status="Not found · 404" path={pathname} title={title} footer={footer}>
+    <ErrorPageShell
+      status="Not found · 404"
+      path={pathname}
+      title={title}
+      footer={footer}
+      artwork={(avoidRef) => <ErrorVessels avoidRef={avoidRef} />}
+      caption={<VesselsCaption />}
+    >
       <p
         className="text-text-bright max-w-xl text-[clamp(1.25rem,3vw,1.7rem)] leading-snug"
         style={{ fontFamily: 'var(--font-error-display)' }}
@@ -54,13 +62,14 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
           </div>
           <div className="border-base-border-subtle grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
             <dt className="text-text-dim">checked</dt>
-            <dd className="text-text min-w-0 break-all">
-              {lookup.status === 'loading' && 'Checking the local explorer index…'}
-              {lookup.status === 'checked' && lookup.evidence?.checkedEndpoint}
-              {lookup.status === 'error' && 'The local evidence check could not complete.'}
-            </dd>
+            <dd className="text-text min-w-0 break-all">{entity.checkedEndpoint}</dd>
           </div>
         </dl>
+      )}
+      {lookup.status === 'loading' && (
+        <p role="status" className="text-text-dim mt-4 max-w-xl text-[12px]">
+          Checking the local /search index for an exact alternative…
+        </p>
       )}
       {lookup.status === 'checked' && lookup.evidence && (
         <div className="text-text-dim mt-4 max-w-xl text-[13px] leading-relaxed">
@@ -77,7 +86,7 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
       )}
       {lookup.status === 'error' && lookup.error && (
         <p role="status" className="text-text-dim mt-4 max-w-xl break-all text-[12px]">
-          {lookup.error}
+          The separate /search check could not complete: {lookup.error}
         </p>
       )}
       {errMessage && (

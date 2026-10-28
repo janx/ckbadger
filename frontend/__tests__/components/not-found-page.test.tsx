@@ -8,6 +8,10 @@ vi.mock('@/lib/not-found-evidence', () => ({
   useNotFoundEvidence: vi.fn(() => ({ status: 'idle' })),
 }));
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
+vi.mock('@/components/error-vessels', () => ({
+  ErrorVessels: () => <div data-testid="error-vessels" />,
+  VesselsCaption: () => <span>Bounded live cell sample</span>,
+}));
 
 describe('NotFoundPage', () => {
   it('keeps an unknown route useful without claiming an entity is missing', () => {
@@ -33,6 +37,10 @@ describe('NotFoundPage', () => {
       '/mainnet/inventory/tokens'
     );
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
+    expect(screen.getByTestId('error-vessels')).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Common knowledge cells artwork source' })
+    ).toHaveTextContent('Bounded live cell sample');
   });
 
   it('reports the exact checked endpoint and links a verified alternative', () => {
@@ -88,8 +96,10 @@ describe('NotFoundPage', () => {
         }}
       />
     );
-    expect(screen.getByText('The local evidence check could not complete.')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('search unavailable');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'The separate /search check could not complete: search unavailable'
+    );
+    expect(screen.getByText('/transactions/0x' + 'f'.repeat(64))).toBeInTheDocument();
     expect(screen.getByText('0x' + 'f'.repeat(64))).toHaveClass('break-all');
   });
 });

@@ -28,6 +28,10 @@ function Harness() {
 
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 vi.mock('@/components/layout/site-footer', () => ({ SiteFooter: () => null }));
+vi.mock('@/components/error-vessels', () => ({
+  ErrorVessels: () => <div data-testid="error-vessels" />,
+  VesselsCaption: () => <span>Bounded live cell sample</span>,
+}));
 vi.mock('@/app/inventory/tokens/page', () => ({ default: () => <p>Token inventory</p> }));
 vi.mock('@/app/inventory/objects/page', () => ({ default: () => <p>Object inventory</p> }));
 vi.mock('@/app/charts/page', () => ({ default: () => <p>Charts index</p> }));

@@ -1,4 +1,5 @@
 import { MemoryRouter } from 'react-router-dom';
+import { render as bareRender } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { CrashPage } from '@/components/crash-page';
@@ -6,6 +7,10 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { ErrorPageShell } from '@/components/error-page-shell';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
+vi.mock('@/components/error-vessels', () => ({
+  ErrorVessels: () => <div data-testid="error-vessels" />,
+  VesselsCaption: () => <span>Bounded live cell sample</span>,
+}));
 
 describe('ErrorPageShell', () => {
   it('renders the self-hosted serif title card and wraps a long path at mobile width', () => {
@@ -33,7 +38,7 @@ describe('ErrorPageShell', () => {
       screen.getByRole('heading', { name: 'The page fell. The cause is unclear.' })
     ).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('TypeError: missing channel output');
-    expect(screen.getAllByText('/fiber/channels/0x01')).toHaveLength(2);
+    expect(screen.getAllByText('/mainnet/fiber/channels/0x01')).toHaveLength(2);
     expect(
       screen.queryByText(/nothing is wrong with the chain|reloading will not mend/i)
     ).toBeNull();
@@ -44,9 +49,10 @@ describe('ErrorPageShell', () => {
     expect(screen.getByText('Not checked in this error view')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Fiber channels →' })).toHaveAttribute(
       'href',
-      '/mainnet/fiber'
+      '/mainnet/fiber/channels'
     );
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
+    expect(screen.getByTestId('error-vessels')).toBeInTheDocument();
   });
 
   it('renders a provider-safe fallback when the app itself throws', () => {
@@ -55,7 +61,7 @@ describe('ErrorPageShell', () => {
       throw new Error('block 12: invalid DAO field');
     }
     try {
-      render(
+      bareRender(
         <ErrorBoundary>
           <ThrowingChild />
         </ErrorBoundary>
@@ -66,6 +72,8 @@ describe('ErrorPageShell', () => {
         '/mainnet'
       );
       expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
+      expect(screen.queryByTestId('error-vessels')).toBeNull();
+      expect(screen.getByRole('link', { name: 'CKBadger Home' })).toHaveAttribute('href', '/');
     } finally {
       consoleError.mockRestore();
     }
@@ -89,7 +97,8 @@ describe('ErrorPageShell', () => {
       expect(writeText).toHaveBeenCalledWith(
         expect.stringContaining('Error: block 12: invalid DAO field')
       );
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('Page: /tx/0xabc'));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('Page: /mainnet/tx/0xabc'));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('Network: mainnet'));
       expect(writeText).toHaveBeenCalledWith(
         expect.stringContaining('Chain tip: not checked in this error view')
       );
