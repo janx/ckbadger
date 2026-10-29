@@ -173,9 +173,9 @@ export function BlockPosition({
             <Link href={`/blocks/${uncle.parentHash}`} className="block break-all">
               Parent {uncle.parentHash}
             </Link>
-            <Link href={`/blocks/${uncle.hash}`} className="block break-all">
+            <p className="text-text-bright block break-all">
               Uncle #{uncle.number.toLocaleString('en-US')} · {uncle.hash}
-            </Link>
+            </p>
             <p className="text-text-dim">
               Included by{' '}
               <Link href={`/blocks/${block.hash}`}>#{block.number.toLocaleString('en-US')}</Link>
@@ -313,10 +313,7 @@ export function BlockPosition({
                     {uncle.parentHash.slice(0, 12)}…{uncle.parentHash.slice(-6)}
                   </text>
                 </Link>
-                <Link
-                  href={`/blocks/${uncle.hash}`}
-                  aria-label={`Included uncle #${uncle.number.toLocaleString('en-US')}`}
-                >
+                <g aria-label={`Included uncle #${uncle.number.toLocaleString('en-US')}`}>
                   <rect
                     x={uncleX}
                     y={top}
@@ -333,7 +330,7 @@ export function BlockPosition({
                   <text x={uncleX + 10} y={top + 41} fill="#7c849c" fontSize="11">
                     {uncle.hash.slice(0, 12)}…{uncle.hash.slice(-6)}
                   </text>
-                </Link>
+                </g>
               </g>
             );
           })}

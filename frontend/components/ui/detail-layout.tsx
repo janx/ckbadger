@@ -104,7 +104,7 @@ export function DetailSection({
   return (
     <section className={cn('min-w-0', className)}>
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-text-bright text-[15px] font-medium">{title}</h2>
+        <h2 className="text-[13px] font-medium text-[#a0a8be]">{title}</h2>
         {actions}
       </div>
       {children}

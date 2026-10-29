@@ -7,6 +7,9 @@ import {
   formatCkbValue,
   formatCompactCkbDelta,
   formatTimeAgo,
+  formatDurationMs,
+  formatUtcClock,
+  formatUnixSecondsUtc,
   hexToBytes,
   bytesToHex,
 } from '@/lib/utils';
@@ -112,6 +115,24 @@ describe('formatTimeAgo', () => {
   it('handles string timestamps', () => {
     const timestamp = new Date(Date.now() - 60 * 1000).toISOString();
     expect(formatTimeAgo(timestamp)).toBe('1m ago');
+  });
+});
+
+describe('formatDurationMs', () => {
+  it('formats chain ages without raw millisecond dumps', () => {
+    expect(formatDurationMs(500)).toBe('500 ms');
+    expect(formatDurationMs(30000)).toBe('30 s');
+    expect(formatDurationMs(60000)).toBe('1 m');
+    expect(formatDurationMs(3661000)).toBe('1 h 1 m');
+    expect(formatDurationMs(90000000)).toBe('1 d 1 h');
+  });
+});
+
+describe('formatUtcClock / formatUnixSecondsUtc', () => {
+  it('drops raw Z suffixes and formats protocol Unix seconds as UTC', () => {
+    expect(formatUtcClock('2026-10-22T14:43:55.651Z')).toBe('2026-10-22 14:43:55 UTC');
+    expect(formatUnixSecondsUtc('1700000000')).toBe('2023-11-14 22:13:20 UTC');
+    expect(() => formatUnixSecondsUtc('not-a-second')).toThrow(/Invalid Unix seconds/);
   });
 });
 

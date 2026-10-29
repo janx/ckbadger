@@ -13,6 +13,7 @@ import {
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { formatObserverTimeUtc8 } from '@/lib/fork-time';
+import { formatCkbAmount } from '@/lib/utils';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 
@@ -375,7 +376,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
                   render: (tx: OrphanedTransaction) =>
                     tx.totalCapacity == null
                       ? 'Unavailable'
-                      : `${BigInt(tx.totalCapacity).toLocaleString()} shannons`,
+                      : `${formatCkbAmount(tx.totalCapacity).full} CKB`,
                 },
               ]}
               mobileRow={(tx: OrphanedTransaction) => (
@@ -398,7 +399,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
                     Output capacity:{' '}
                     {tx.totalCapacity == null
                       ? 'Unavailable'
-                      : `${BigInt(tx.totalCapacity).toLocaleString()} shannons`}
+                      : `${formatCkbAmount(tx.totalCapacity).full} CKB`}
                   </div>
                 </div>
               )}

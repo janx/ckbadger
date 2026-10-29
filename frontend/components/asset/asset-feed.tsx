@@ -1,8 +1,10 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { GlobalActivity, Transaction, CursorPaginatedResponse } from '@/lib/api';
+import type { GlobalActivity, ItemActivity, Transaction, CursorPaginatedResponse } from '@/lib/api';
 import { ActivityRow } from '@/components/activity/activity-row';
+import { capitalizeAction } from '@/components/activity-event-row';
+import { classifyActivity } from '@/lib/activity-classify';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -13,6 +15,22 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
+/** Prefer the item's own action over net item-delta inference on identity/object feeds. */
+export function itemFeedHeadline(activity: GlobalActivity): string | undefined {
+  const context = (activity as ItemActivity).itemContext;
+  if (!context?.action) return undefined;
+  const kind = classifyActivity(activity).displayType;
+  const noun =
+    kind === 'identity'
+      ? 'Identity'
+      : kind === 'object'
+        ? 'Object'
+        : kind === 'token'
+          ? 'Token'
+          : 'Item';
+  return `${noun} ${capitalizeAction(context.action)}`;
+}
+
 export function tokenMoved(transaction: Transaction, typeHash: string): string {
   if (!transaction.activity)
     throw new Error(`${transaction.hash}: token transaction is missing its full activity`);
@@ -210,7 +228,9 @@ export function AssetFeed({
           <AssetReadState error={current.error} label={tab} retained />
           {tab === 'activities' ? (
             acts.data!.data.length ? (
-              acts.data!.data.map((a) => <ActivityRow key={a.txHash} activity={a} />)
+              acts.data!.data.map((a) => (
+                <ActivityRow key={a.txHash} activity={a} headline={itemFeedHeadline(a)} />
+              ))
             ) : (
               <p className="text-text-dim py-6 text-xs">No activities.</p>
             )

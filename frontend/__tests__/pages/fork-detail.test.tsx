@@ -41,7 +41,7 @@ describe('ForkDetailPage', () => {
     expect(screen.getAllByText('+50 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Miner witness unavailable').length).toBeGreaterThan(0);
     expect(screen.getAllByText('committed later').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('1,234 shannons').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('0.00001234 CKB').length).toBeGreaterThan(0);
   });
 
   it('keeps the originally adopted branch distinct from a later reentered canonical block', async () => {

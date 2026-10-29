@@ -112,7 +112,6 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">
                 <ExactCkb shannons={BigInt(v.capacity)} signed={false} tone="plain" wrap />
-                <span className="text-text-dim text-[11px]"> CKB</span>
                 <div className="text-text-dim mt-1 text-[11px]">
                   <ExactCkb shannons={free} signed={false} tone="plain" wrap /> free
                 </div>

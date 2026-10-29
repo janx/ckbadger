@@ -76,7 +76,9 @@ export function formatCompactRatio(numerator: bigint, denominator: bigint): stri
       return `${formatScaledInteger(numerator, denominator * unit, 2)}${suffix}`;
     }
   }
-  return formatScaledInteger(numerator, denominator, 2);
+  // Exact whole counts must not force a ".00" suffix (CH-02: "600.00 addresses").
+  const scaled = formatScaledInteger(numerator, denominator, 2);
+  return scaled.endsWith('.00') ? scaled.slice(0, -3) : scaled;
 }
 
 /** Share of exact decimal values. Zero total has no defined percentage. */

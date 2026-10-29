@@ -319,10 +319,10 @@ export default function BlockDetailPage() {
                       key={uncle.hash}
                       className="border-base-border-subtle space-y-2 border-b py-3 text-xs"
                     >
-                      <Link href={`/blocks/${uncle.hash}`}>
+                      <p className="text-text-bright">
                         #{uncle.number.toLocaleString('en-US')} ·{' '}
-                        <Hash hash={uncle.hash} copyable={false} />
-                      </Link>
+                        <Hash hash={uncle.hash} copyable />
+                      </p>
                       <p className="text-text-dim">
                         {new Date(uncle.timestamp).toUTCString()} · {uncle.proposalIds.length}{' '}
                         proposals

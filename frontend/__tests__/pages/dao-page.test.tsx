@@ -26,6 +26,7 @@ const stats = {
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   daoFreeCapacity: '40000000000',
+  depositorAllocationWeight: '40000000000',
   tipTotalIssuance: '1000000000000000',
   tipProtocolOccupiedCapacity: '100000000',
 };

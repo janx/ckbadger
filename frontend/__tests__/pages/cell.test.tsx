@@ -93,8 +93,10 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Loading cell evidence…')).toBeInTheDocument();
     resolve(base);
     expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
-    expect(screen.getByText('Age at indexed tip')).toBeInTheDocument();
-    expect(screen.getByText(/block #125/)).toBeInTheDocument();
+    expect(screen.getByText('Age at indexed tip').parentElement).toHaveTextContent(
+      /^Age at indexed tip 1 m · block #125$/
+    );
+    expect(screen.queryByText(/ms/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('live evidence');
     expect(screen.getByText('Free')).toBeInTheDocument();
@@ -112,7 +114,7 @@ describe('CellDetailPage', () => {
     view();
     expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
     expect(screen.getByText(/input #2/)).toBeInTheDocument();
-    expect(screen.getByText(/30,000 ms on chain/)).toBeInTheDocument();
+    expect(screen.getByText(/30 s on chain/)).toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
   });
   it('shows DAO lifecycle only for DAO cells', async () => {
@@ -123,11 +125,15 @@ describe('CellDetailPage', () => {
         daoStatus: 'deposited',
         depositBlockNumber: 123,
         depositTimestamp: '2024-01-01T00:00:00Z',
+        compensation: '123456789',
+        compensationCkb: '1.23456789',
       },
     } as Cell);
     view();
     expect(await screen.findByText('Nervos DAO')).toBeInTheDocument();
     expect(screen.getByText(/deposited/)).toBeInTheDocument();
+    expect(screen.getByText(/compensation 1\.23456789 CKB/)).toBeInTheDocument();
+    expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
   });
   it('links script code hash with its exact hash type, not the script instance hash', async () => {
     getCell.mockResolvedValue(base);

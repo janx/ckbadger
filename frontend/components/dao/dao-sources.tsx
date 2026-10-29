@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import type { GlobalActivity, Transaction } from '@/lib/api';
+import { formatActivityTimestamp } from '@/lib/asset-utils';
 
 function actionLabel(actions: GlobalActivity['protocolActions']): string {
   const dao = actions.find((action) => action.protocol === 'dao');
@@ -23,13 +24,13 @@ function ActivityRow({ row }: { row: GlobalActivity }) {
       </td>
       <td>
         <Link
-          href={`/block/${row.blockNumber}`}
+          href={`/blocks/${row.blockNumber}`}
           className="text-text-dim font-mono hover:underline"
         >
           #{row.blockNumber.toLocaleString()}
         </Link>
       </td>
-      <td className="text-text-dim text-right">{row.timestamp}</td>
+      <td className="text-text-dim text-right">{formatActivityTimestamp(row.timestamp)}</td>
     </tr>
   );
 }
@@ -46,13 +47,13 @@ function TransactionRow({ row }: { row: Transaction }) {
       </td>
       <td>
         <Link
-          href={`/block/${row.blockNumber}`}
+          href={`/blocks/${row.blockNumber}`}
           className="text-text-dim font-mono hover:underline"
         >
           #{row.blockNumber.toLocaleString()}
         </Link>
       </td>
-      <td className="text-text-dim text-right">{row.timestamp}</td>
+      <td className="text-text-dim text-right">{formatActivityTimestamp(row.timestamp)}</td>
     </tr>
   );
 }

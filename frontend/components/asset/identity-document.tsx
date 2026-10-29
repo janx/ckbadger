@@ -257,7 +257,9 @@ export function IdentityDocument({ protocol }: IdentityDocumentProps) {
                 key={`${r.key}:${i}`}
                 className="grid gap-2 py-3 sm:grid-cols-[140px_minmax(0,1fr)]"
               >
-                <dt className="text-text-dim break-words text-[11px]">{r.label}</dt>
+                <dt className="text-text-dim break-words text-[11px]">
+                  {r.label || r.key || 'record'}
+                </dt>
                 <dd className="min-w-0 break-all">
                   {r.decodedAddress ? (
                     <AppLink href={`/address/${r.decodedAddress.address}`}>

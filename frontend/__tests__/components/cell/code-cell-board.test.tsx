@@ -127,6 +127,13 @@ describe('CodeCellBoard', () => {
     expect(screen.getByText(/rv64imac/)).toBeInTheDocument();
     expect(screen.getByText(/rustc 1.99/)).toBeInTheDocument();
   });
+  it('labels ELF machine and header kinds by name instead of raw decimals', () => {
+    render(<CodeCellBoard cell={cell} />);
+    expect(screen.getByText(/ELF64 · little endian · RISC-V/)).toBeInTheDocument();
+    expect(screen.getByText('LOAD')).toBeInTheDocument();
+    expect(screen.getByText('NOBITS')).toBeInTheDocument();
+    expect(screen.queryByText('machine 243')).not.toBeInTheDocument();
+  });
   it('shows current reference counts as current evidence, not historical execution', () => {
     render(<CodeCellBoard cell={cell} />);
     expect(screen.getByText(/9 live locks · 2 live types/)).toBeInTheDocument();

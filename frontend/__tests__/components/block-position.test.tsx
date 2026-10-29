@@ -59,10 +59,8 @@ describe('BlockPosition', () => {
       'href',
       `/mainnet/blocks/${parent}`
     );
-    expect(screen.getByRole('link', { name: 'Included uncle #931' })).toHaveAttribute(
-      'href',
-      `/mainnet/blocks/${uncle}`
-    );
+    expect(screen.getByLabelText('Included uncle #931')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Included uncle #931' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Block #934' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/934'
@@ -116,10 +114,8 @@ describe('BlockPosition', () => {
       'href',
       `/mainnet/blocks/${parent}`
     );
-    expect(mobile.getByRole('link', { name: `Uncle #931 · ${uncle}` })).toHaveAttribute(
-      'href',
-      `/mainnet/blocks/${uncle}`
-    );
+    expect(mobile.getByText(`Uncle #931 · ${uncle}`)).toBeInTheDocument();
+    expect(mobile.queryByRole('link', { name: `Uncle #931 · ${uncle}` })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Chain position diagram' })).toHaveClass(
       'hidden',
       'md:block'

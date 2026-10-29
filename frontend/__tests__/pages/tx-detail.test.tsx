@@ -144,11 +144,12 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
 }
 
 function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTransactionDetail>> {
-  return {
+  // Match the API wire shape for pending txs: `skip_serializing_if` omits
+  // blockNumber (undefined), not JSON null — that previously crashed the page.
+  const detail = {
     ...createCommittedTransactionDetail(),
     status: 'pending',
     pendingSince: '2026-03-12T12:00:00Z',
-    blockNumber: null,
     blockHash: null,
     index: null,
     timestamp: null,
@@ -158,6 +159,8 @@ function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTran
     inputsCommonKnowledgeSize: null,
     outputsCommonKnowledgeSize: null,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+  delete (detail as { blockNumber?: number | null }).blockNumber;
+  return detail;
 }
 
 /**
@@ -310,6 +313,16 @@ describe('TransactionDetailPage', () => {
     await waitFor(() => {
       expect(useCyclesCalculation).toHaveBeenLastCalledWith(TX_HASH, 1000, false, 'complete', true);
     });
+  });
+
+  it('shows commit time as UTC with a relative age, not a raw ISO Z string (TX-10)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-02-20T17:46:12Z'));
+    render(<TransactionDetailPage />);
+    const time = await screen.findByRole('time');
+    expect(time).toHaveTextContent('2026-02-20 16:46:12 UTC');
+    expect(time).toHaveTextContent(/· 1h ago/);
+    expect(time.textContent).not.toMatch(/Z/);
   });
 
   it.each([null, 1000])('shows deep-fork replay pause with scalar cycles %s', async (cycles) => {

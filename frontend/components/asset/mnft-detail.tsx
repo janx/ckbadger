@@ -140,7 +140,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         </>
       }
       breadcrumb={[
-        { label: 'Inventory', href: '/inventory' },
+        { label: 'Inventory', href: '/inventory/objects' },
         { label: 'Objects', href: '/inventory/objects' },
         { label: className, href: classHref },
       ]}

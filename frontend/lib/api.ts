@@ -1763,6 +1763,8 @@ interface DaoStatistics {
   pendingWithdrawalCapacityCkb: string;
   daoCapacity: string;
   daoFreeCapacity: string;
+  /** Exact secondary-issuance weight for depositors (phase-0 free + accrued). */
+  depositorAllocationWeight: string;
   tipTotalIssuance: string;
   tipProtocolOccupiedCapacity: string;
   rolling24hBaselineBlockNumber: number | null;
@@ -3101,6 +3103,7 @@ interface FiberCellEvidence {
 interface FiberCommitmentEvidence extends FiberCellEvidence {
   pubkeyHash: string;
   delayEpoch: string;
+  delayEpochDecoded?: { relative: boolean; epochs: number; index: number; length: number } | null;
   version: string;
   settlementHash: string | null;
   settlementFlag: number | null;

@@ -15,6 +15,7 @@ const stats = {
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   daoFreeCapacity: '40000000000',
+  depositorAllocationWeight: '40000000000',
   tipTotalIssuance: '1000000000000000',
   tipProtocolOccupiedCapacity: '100000000',
 };
@@ -76,8 +77,12 @@ describe('DaoBoard', () => {
       />
     );
     fireEvent.click(screen.getByRole('button', { name: '1M' }));
-    expect(screen.getByText(/Deposited: 500 CKB/)).toBeInTheDocument();
-    expect(screen.getByText(/Share of circulating CKB: 1.25%/)).toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) => el?.textContent === 'Deposited: 500.00000000 CKB')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) => el?.textContent === 'Share of circulating CKB: 1.25%')
+    ).toBeInTheDocument();
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -103,7 +108,11 @@ describe('DaoBoard', () => {
         circulationHistory={{ ...ratio, data: shares }}
       />
     );
-    expect(screen.getByText('-0.00000001')).toBeInTheDocument();
+    const net = screen.getAllByText((_, el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      return el.className.includes('tabular-nums') && el.textContent === '−0.00000001';
+    });
+    expect(net.length).toBeGreaterThan(0);
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {

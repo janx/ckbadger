@@ -103,7 +103,7 @@ export function TransactionTable({
       numeric: true,
       render: (tx) => (
         <span>
-          <span>{tx.inputsCount}</span>
+          <span>{tx.isCellbase ? 0 : tx.inputsCount}</span>
           <span className="text-text-dim mx-2">→</span>
           <span>{tx.outputsCount}</span>
         </span>

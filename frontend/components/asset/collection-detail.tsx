@@ -48,9 +48,10 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     retry: false,
   });
   const insights = useQuery({
-    queryKey: ['collection-insights', id],
+    queryKey: ['collection-insights', kind, id],
     queryFn: () => api.getCollectionInsights(id),
-    enabled: kind === 'spore',
+    // Weekly activity is keyed by collection id for Spore clusters and m-NFT classes.
+    enabled: kind === 'spore' || kind === 'object',
     retry: false,
   });
   const chart = useQuery({

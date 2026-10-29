@@ -7,7 +7,7 @@ import {
   type ChartDefinition,
   type ChartPayload,
 } from '@/components/charts/chart-catalogue';
-import { chartModel, chartUnitValue } from '@/components/charts/chart-model';
+import { chartModel, chartUnitValue, formatChartReadout } from '@/components/charts/chart-model';
 import { chartHardforkMarkers, rangePoints } from '@/components/charts/chart-detail';
 import supplyProducer from '@/__tests__/fixtures/chart-api-producer/total-supply.json';
 import secondaryProducer from '@/__tests__/fixtures/chart-api-producer/secondary-issuance.json';
@@ -124,6 +124,13 @@ describe('28 chart variants', () => {
       '900719.9254740993'
     );
     expect(chartUnitValue('0.025', 'fraction-percent', 'uncle fraction')).toBe('2.5');
+  });
+
+  it('compacts chart card/detail readouts without trailing .00 on whole counts', () => {
+    expect(formatChartReadout('600', 'addresses')).toBe('600');
+    expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.01B');
+    expect(formatChartReadout('-1234.5', 'CKB')).toBe('-1.23K');
+    expect(formatChartReadout('12.5', '%')).toBe('12.5');
   });
 
   it('keeps physical units separate and does not fill sparse dates', () => {

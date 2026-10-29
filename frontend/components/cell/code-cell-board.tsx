@@ -1,6 +1,7 @@
 'use client';
 import Link from '@/components/ui/link';
 import type { Cell } from '@/lib/api';
+import { elfMachineLabel, elfProgramTypeLabel, elfSectionTypeLabel } from '@/lib/elf-labels';
 
 function fileExtent(offset: string | null, size: string | null): string {
   return offset === null || size === null
@@ -28,7 +29,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         <div>
           <dt className="text-text-dim">Format</dt>
           <dd>
-            {header.class} · {header.endian} endian · machine {header.machine}
+            {header.class} · {header.endian} endian · {elfMachineLabel(header.machine)}
           </dd>
         </div>
         <div>
@@ -77,7 +78,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               {programHeaders.map((entry) => (
                 <tr key={entry.index} className="border-base-border border-t">
                   <td>{entry.index}</td>
-                  <td>{entry.kind}</td>
+                  <td>{elfProgramTypeLabel(entry.kind)}</td>
                   <td>0x{entry.flags.toString(16)}</td>
                   <td>{fileExtent(entry.fileOffset, entry.fileSize)}</td>
                   <td>{hex64(entry.virtualAddress)}</td>
@@ -108,7 +109,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               {sections.map((entry) => (
                 <tr key={entry.index} className="border-base-border border-t">
                   <td>{entry.name || '(unnamed)'}</td>
-                  <td>{entry.kind}</td>
+                  <td>{elfSectionTypeLabel(entry.kind)}</td>
                   <td>{hex64(entry.flags)}</td>
                   <td>{fileExtent(entry.fileOffset, entry.fileSize)}</td>
                   <td>{hex64(entry.address)}</td>

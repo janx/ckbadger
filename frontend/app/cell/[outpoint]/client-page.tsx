@@ -11,6 +11,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
+import { formatDurationMs } from '@/lib/utils';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -154,13 +155,13 @@ function CellIdentity({ cell }: { cell: Cell }) {
             </>
           )}
           {cell.consumingInputIndex != null && <> · input #{cell.consumingInputIndex}</>}
-          {cell.lifetimeMs != null && <> · {cell.lifetimeMs.toLocaleString()} ms on chain</>}
+          {cell.lifetimeMs != null && <> · {formatDurationMs(cell.lifetimeMs)} on chain</>}
         </p>
       )}
       {cell.status === 'live' && cell.liveAgeMs != null && (
         <p>
           <span className="text-text-dim">Age at indexed tip </span>
-          {cell.liveAgeMs.toLocaleString()} ms
+          {formatDurationMs(cell.liveAgeMs)}
           {cell.liveAgeAtBlock != null && <> · block #{cell.liveAgeAtBlock.toLocaleString()}</>}
         </p>
       )}
@@ -234,8 +235,15 @@ export default function CellDetailPage() {
         <DetailSection title="Nervos DAO">
           <p className="text-text-dim text-xs">
             {query.data.daoInfo.daoStatus} · deposit block #{query.data.daoInfo.depositBlockNumber}
-            {query.data.daoInfo.compensation &&
-              ` · compensation ${query.data.daoInfo.compensation} shannons`}
+            {query.data.daoInfo.compensationCkb != null
+              ? ` · compensation ${query.data.daoInfo.compensationCkb} CKB`
+              : query.data.daoInfo.compensation != null
+                ? (() => {
+                    throw new Error(
+                      `DAO cell ${query.data.txHash}:${query.data.outputIndex} has compensation shannons without compensationCkb`
+                    );
+                  })()
+                : null}
           </p>
         </DetailSection>
       )}

@@ -50,6 +50,8 @@ describe('Independent DOB evidence', () => {
     data.currentPattern.steps[0].bytes[0].truncated = true;
     const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/18446744073709551614/)).toBeInTheDocument();
+    expect(screen.getByText(/decoded 2023-11-14 22:13:20 UTC/)).toBeInTheDocument();
+    expect(screen.queryByText(/Unix second/)).not.toBeInTheDocument();
     expect(screen.getByText(/original decoder binary hash was not recorded/)).toBeInTheDocument();
     expect(screen.getByText(/Clipped to the actual DNA shown/)).toBeInTheDocument();
     fireEvent.focus(container.querySelector('[data-gene]')!);

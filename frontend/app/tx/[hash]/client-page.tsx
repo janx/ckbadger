@@ -30,7 +30,7 @@ import {
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref, getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo, formatUtcClock, truncateHash } from '@/lib/utils';
 import dynamic from '@/lib/dynamic-client';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
@@ -737,21 +737,24 @@ export default function TransactionDetailPage() {
                     →{' '}
                   </>
                 )}
-                {tx.blockNumber !== null ? (
+                {typeof tx.blockNumber === 'number' ? (
                   <Link href={`/blocks/${tx.blockNumber}`}>
                     #{tx.blockNumber.toLocaleString('en-US')}
                   </Link>
                 ) : (
                   <PendingValue />
                 )}
-                {lifecycle?.commitmentDistance !== null &&
-                  lifecycle?.commitmentDistance !== undefined && (
-                    <span className="text-text-dim">
-                      {' '}
-                      · position {lifecycle.commitmentDistance} · window{' '}
-                      {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
-                    </span>
-                  )}
+                {typeof tx.index === 'number' && lifecycle?.commitmentWindow && (
+                  <span className="text-text-dim">
+                    {' '}
+                    · position {tx.index}
+                    {lifecycle.commitmentDistance !== null &&
+                      lifecycle.commitmentDistance !== undefined && (
+                        <> · committed {lifecycle.commitmentDistance} blocks later</>
+                      )}{' '}
+                    · window {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
+                  </span>
+                )}
               </dd>
             </div>
             <div>
@@ -937,10 +940,11 @@ export default function TransactionDetailPage() {
               <PendingValue />
             ) : (
               <time dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}>
-                {new Date(required(tx.timestamp, hash, 'timestamp'))
-                  .toISOString()
-                  .replace('T', ' ')
-                  .replace('.000Z', ' UTC')}
+                {formatUtcClock(required(tx.timestamp, hash, 'timestamp'))}
+                <span className="text-text-dim">
+                  {' '}
+                  · {formatTimeAgo(required(tx.timestamp, hash, 'timestamp'))}
+                </span>
               </time>
             )}
           </dd>
@@ -948,7 +952,7 @@ export default function TransactionDetailPage() {
         <div>
           <dt className="text-text-dim">Block</dt>
           <dd className="text-text-bright mt-1">
-            {tx.blockNumber !== null ? (
+            {typeof tx.blockNumber === 'number' ? (
               <Link href={`/blocks/${tx.blockNumber}`}>
                 #{tx.blockNumber.toLocaleString('en-US')}
               </Link>
@@ -971,7 +975,7 @@ export default function TransactionDetailPage() {
           <div>
             <dt className="text-text-dim">Pending Since</dt>
             <dd className="mt-1">
-              {new Date(tx.pendingSince).toISOString()} · {formatTimeAgo(tx.pendingSince)}
+              {formatUtcClock(tx.pendingSince)} · {formatTimeAgo(tx.pendingSince)}
             </dd>
           </div>
         )}

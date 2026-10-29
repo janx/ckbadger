@@ -4,25 +4,39 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
-import { chartModel, type ChartModel } from '@/components/charts/chart-model';
+import { chartModel, formatChartReadout, type ChartModel } from '@/components/charts/chart-model';
 
+function parseSharePercent(share: string, title: string): number {
+  if (share === '—') return 0;
+  if (!share.endsWith('%')) throw new Error(`${title}: share missing %: ${share}`);
+  const width = Number(share.slice(0, -1));
+  if (!Number.isFinite(width) || width < 0 || width > 100)
+    throw new Error(`${title}: invalid share ${share}`);
+  return width;
+}
+
+/** Top 5 named rows; Others is the remainder so ranks 6+ are not dropped. */
 function RankedPreview({ model }: { model: ChartModel }) {
   const allRows = model.rankedRows ?? [];
-  const rows = [
-    ...allRows.filter((row) => row.label !== 'Others').slice(0, 5),
-    ...allRows.filter((row) => row.label === 'Others'),
-  ];
+  const named = allRows.filter((row) => row.label !== 'Others');
+  const top = named.slice(0, 5);
+  const topShare = top.reduce((sum, row) => sum + parseSharePercent(row.share, model.title), 0);
+  const remainder = Math.round((100 - topShare) * 100) / 100;
+  const rows =
+    remainder > 0
+      ? [...top, { label: 'Others', value: '—', share: `${remainder.toFixed(2)}%` }]
+      : top;
   return (
     <ol className="space-y-2" aria-label={`${model.title} ranked preview`}>
       {rows.map((row) => {
-        const width = Number(row.share.slice(0, -1));
-        if (row.share !== '—' && (!Number.isFinite(width) || width < 0 || width > 100))
-          throw new Error(`${model.title}: invalid share ${row.share}`);
+        const width = parseSharePercent(row.share, model.title);
         return (
           <li key={row.label} className="min-w-0 text-[11px]">
             <div className="flex justify-between gap-2">
               <span className="truncate" title={row.label}>
-                {row.label}
+                {row.href?.startsWith('/address/') && row.label.length > 20
+                  ? `${row.label.slice(0, 10)}…${row.label.slice(-6)}`
+                  : row.label}
               </span>
               <span className="shrink-0 tabular-nums">{row.share}</span>
             </div>
@@ -127,6 +141,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             height={120}
             hideCaption
             hideXAxis
+            formatValue={(value) => formatChartReadout(value, model.unit)}
           />
         ))}
       {model?.delta && (

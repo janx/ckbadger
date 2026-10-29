@@ -83,12 +83,20 @@ function exactDelta(a: string, b: string, context: string): string {
   return `${negative ? '-' : '+'}${whole}${fraction ? `.${fraction}` : ''}`;
 }
 
-function summary(value: string, unit: string): string {
+/** Compact chart card/detail readouts; strip trailing ".00" on exact whole counts (CH-02). */
+export function formatChartReadout(value: string, unit: string): string {
   if (unit === '%' || unit === 'PH/s' || unit === 'P' || unit === 'hours' || unit === 'seconds') {
     return value;
   }
-  const [numerator, denominator] = exactDecimalRatio(value, 'chart summary');
-  return formatCompactRatio(numerator, denominator);
+  const [numerator, denominator] = exactSignedDecimalRatio(value, 'chart summary');
+  const negative = numerator < BigInt(0);
+  const abs = negative ? -numerator : numerator;
+  const compact = formatCompactRatio(abs, denominator);
+  return negative ? `-${compact}` : compact;
+}
+
+function summary(value: string, unit: string): string {
+  return formatChartReadout(value, unit);
 }
 
 function singleChart(
@@ -102,9 +110,10 @@ function singleChart(
 ): ChartModel {
   const primaryField = definition.primaryField ?? 'value';
   const companionField = primaryField === 'value' ? 'value2' : 'value';
-  const hasSecond = payload.data.some(
-    (point) => point.value2 !== undefined && point.value2 !== null
-  );
+  const timelineMarkers = payload.y2AxisLabel === 'nominal-apc-timeline';
+  const hasSecond =
+    !timelineMarkers &&
+    payload.data.some((point) => point.value2 !== undefined && point.value2 !== null);
   if (
     hasSecond &&
     payload.data.some((point) => point.value2 === undefined || point.value2 === null)
@@ -130,6 +139,9 @@ function singleChart(
     }
     return { label: point.date, values };
   });
+  const currentIndex = timelineMarkers
+    ? payload.data.findIndex((point) => point.value2 === 'current')
+    : -1;
   const series: ChartSeries[] = [
     {
       key: 'primary',
@@ -192,7 +204,15 @@ function singleChart(
           : best;
       }, null)
     : null;
-  const summaryPoint = leadingBucket ?? last;
+  const todayPoint = currentIndex >= 0 ? points[currentIndex] : null;
+  const summaryPoint = leadingBucket ?? todayPoint ?? last;
+  const deltaPrevious =
+    todayPoint && currentIndex > 0
+      ? points[currentIndex - 1]
+      : previous && !todayPoint
+        ? previous
+        : null;
+  const deltaCurrent = todayPoint ?? last;
   return {
     title: payload.title,
     points,
@@ -227,10 +247,14 @@ function singleChart(
       : null,
     delta: bucketDistribution
       ? null
-      : last && previous
-        ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
+      : deltaCurrent && deltaPrevious
+        ? exactDelta(deltaPrevious.values.primary, deltaCurrent.values.primary, definition.slug)
         : null,
-    summaryLabel: leadingBucket ? 'Largest bucket' : undefined,
+    summaryLabel: leadingBucket
+      ? 'Largest bucket'
+      : todayPoint
+        ? `Year ${todayPoint.label} (today)`
+        : undefined,
   };
 }
 

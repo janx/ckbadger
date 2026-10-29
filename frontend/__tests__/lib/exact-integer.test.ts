@@ -56,6 +56,7 @@ describe('exact integer display', () => {
     ]);
     expect(() => exactDecimalRatio('-30.00000000', 'unsigned')).toThrow('unsigned');
     expect(formatCompactRatio(BigInt(1005), BigInt(1000))).toBe('1.01');
+    expect(formatCompactRatio(BigInt(600), BigInt(1))).toBe('600');
     expect(formatCompactRatio(BigInt('9007199254740993'), BigInt(1))).toBe('9.01P');
     expect(
       formatExactShare(

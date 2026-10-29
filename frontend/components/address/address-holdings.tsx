@@ -577,9 +577,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         <Hash hash={t.typeScriptHash} copyable={false} className="text-xs" />
                       )}
                     </Link>{' '}
-                    <span className="text-text-dim">
-                      {t.standard === 'xudt' ? 'xUDT' : t.standard === 'sudt' ? 'sUDT' : t.standard}
-                    </span>
+                    <span className="text-text-dim">{formatStandard(t.standard)}</span>
                     {t.name && (
                       <span className="ml-2 text-[11px]">
                         <Hash

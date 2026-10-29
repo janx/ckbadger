@@ -123,8 +123,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                     </div>
                     <div>
                       Observed net input:{' '}
-                      <span className="text-text-bright font-mono">
-                        {flow.observedNetInput} shannons
+                      <span className="text-text-bright">
+                        {formatCkbAmount(flow.observedNetInput).full} CKB
                       </span>
                     </div>
                   </div>
@@ -287,8 +287,12 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                 </span>
                 <span className="text-text-dim">Pubkey hash</span>
                 <span className="text-text-bright break-all font-mono">{tracked.pubkeyHash}</span>
-                <span className="text-text-dim">Delay since · exact u64</span>
-                <span className="text-text-bright break-all font-mono">{tracked.delayEpoch}</span>
+                <span className="text-text-dim">Delay since</span>
+                <span className="text-text-bright break-all font-mono">
+                  {tracked.delayEpochDecoded
+                    ? `${tracked.delayEpochDecoded.relative ? 'relative' : 'absolute'} · ${tracked.delayEpochDecoded.epochs} epochs · index ${tracked.delayEpochDecoded.index}/${tracked.delayEpochDecoded.length}`
+                    : tracked.delayEpoch}
+                </span>
                 <span className="text-text-dim">Version · exact u64</span>
                 <span className="text-text-bright break-all font-mono">{tracked.version}</span>
                 <span className="text-text-dim">Settlement hash / flag</span>

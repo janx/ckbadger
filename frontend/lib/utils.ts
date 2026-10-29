@@ -39,6 +39,48 @@ export function formatTimeAgo(timestamp: string | number | Date): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+/** Wall-clock UTC string without a trailing raw "…Z" (TX-10). */
+export function formatUtcClock(timestamp: string | number | Date): string {
+  const date =
+    typeof timestamp === 'string' && /^\d+$/.test(timestamp)
+      ? new Date(Number(timestamp))
+      : new Date(timestamp);
+  if (Number.isNaN(date.getTime())) throw new Error(`Invalid UTC timestamp ${String(timestamp)}`);
+  return date
+    .toISOString()
+    .replace('T', ' ')
+    .replace(/\.\d{3}Z$/, ' UTC');
+}
+
+/** Protocol/cache Unix-second timestamps as human UTC (OB-1). */
+export function formatUnixSecondsUtc(seconds: string): string {
+  if (!/^(0|[1-9]\d*)$/.test(seconds)) {
+    throw new Error(`Invalid Unix seconds ${JSON.stringify(seconds)}`);
+  }
+  const ms = BigInt(seconds) * BigInt(1000);
+  if (ms > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`Unix seconds ${seconds} exceeds safe Date range`);
+  }
+  return formatUtcClock(Number(ms));
+}
+
+/** Human duration from an exact millisecond count (SC-C1: not raw "… ms"). */
+export function formatDurationMs(ms: number): string {
+  if (!Number.isSafeInteger(ms) || ms < 0) {
+    throw new Error(`invalid duration ms ${ms}`);
+  }
+  if (ms < 1000) return `${ms} ms`;
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return hours > 0 ? `${days} d ${hours} h` : `${days} d`;
+  if (hours > 0) return minutes > 0 ? `${hours} h ${minutes} m` : `${hours} h`;
+  if (minutes > 0) return seconds > 0 ? `${minutes} m ${seconds} s` : `${minutes} m`;
+  return `${seconds} s`;
+}
+
 export function formatCkbAmount(shannons: string | bigint): {
   integer: string;
   decimal: string;

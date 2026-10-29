@@ -74,7 +74,7 @@ describe('FiberChannelBoard', () => {
     expect(screen.getByTestId('stage-Opening')).toHaveTextContent(producerDetail.fundingTxHash);
     expect(screen.getByText('1,000.00000000 CKB')).toBeInTheDocument();
     expect(screen.getByText('699.00000000 CKB')).toBeInTheDocument();
-    expect(screen.getByText('30100000000 shannons')).toBeInTheDocument();
+    expect(screen.getByText('301.00000000 CKB')).toBeInTheDocument();
     expect(screen.getByText(/output-only lock did not necessarily sign/)).toBeInTheDocument();
   });
 

@@ -56,7 +56,7 @@ describe('DaoSources', () => {
     );
     expect(screen.getByRole('link', { name: '#123' })).toHaveAttribute(
       'href',
-      '/mainnet/block/123'
+      '/mainnet/blocks/123'
     );
     fireEvent.click(screen.getByRole('button', { name: 'Older DAO activities →' }));
     await waitFor(() =>

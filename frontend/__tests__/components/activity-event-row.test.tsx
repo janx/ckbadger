@@ -10,6 +10,7 @@ import {
   TypeCallExpr,
   activityHeadline,
   buildGlobalTxEvents,
+  formatStandard,
   globalTxEvents,
 } from '@/components/activity-event-row';
 import { MINUS } from '@/lib/chart-ticks';
@@ -593,6 +594,12 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
 });
 
 describe('protocol display names', () => {
+  it('labels xudt_compatible as xUDT-compatible instead of the raw enum (IV-01)', () => {
+    expect(formatStandard('xudt_compatible')).toBe('xUDT-compatible');
+    expect(formatStandard('xudt')).toBe('xUDT');
+    expect(formatStandard('sudt')).toBe('sUDT');
+  });
+
   it('name the protocol by the protocolName the API sends with the action, not its raw id', () => {
     render(
       <ActivityEventGroup

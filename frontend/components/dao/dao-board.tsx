@@ -29,6 +29,24 @@ function Amount({ value, signed = false }: { value: string; signed?: boolean }) 
   );
 }
 
+/** Chart / summary values arrive as CKB decimal strings, not shannons. */
+function CkbDecimal({ value, signed = false }: { value: string; signed?: boolean }) {
+  const parts = splitCkbAmount(parseCkbDecimal(value));
+  return (
+    <span className="whitespace-nowrap font-mono tabular-nums">
+      {signed ? parts.sign : null}
+      {parts.integer}
+      <span className="text-text-dim">{parts.fraction}</span>
+      <span className="text-text-dim/50">{parts.ghost}</span>
+    </span>
+  );
+}
+
+function formatAr(raw: string): string {
+  if (!/^\d+$/.test(raw)) throw new Error(`DAO AR "${raw}" is not an unsigned integer`);
+  return BigInt(raw).toLocaleString('en-US');
+}
+
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
     <section className="border-base-border border-t pt-5" aria-label={title}>
@@ -120,6 +138,7 @@ function History({
           unit="CKB"
           kind="area"
           height={175}
+          formatValue={(v) => <CkbDecimal value={v} />}
         />
         <Chart
           title="Share of circulating CKB"
@@ -129,6 +148,14 @@ function History({
           unit="%"
           kind="line"
           height={120}
+          formatValue={(v) => {
+            const n = Number(v);
+            if (!Number.isFinite(n)) throw new Error(`DAO ratio "${v}" is not a finite number`);
+            return n.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 4,
+            });
+          }}
         />
         <Chart
           title="Net change per week"
@@ -138,12 +165,26 @@ function History({
           unit="CKB"
           kind="bars"
           height={135}
+          formatValue={(v) => <CkbDecimal value={v} signed />}
         />
       </div>
       <div className="text-text-dim mt-2 flex flex-wrap gap-x-6 gap-y-1 font-mono text-[11px]">
-        <span>Deposited: {latest.value} CKB</span>
-        <span>Current depositors: {latest.value2 ?? '—'}</span>
-        <span>Share of circulating CKB: {ratioByDate.get(latest.date)}%</span>
+        <span>
+          Deposited: <CkbDecimal value={latest.value} /> CKB
+        </span>
+        <span>
+          Current depositors:{' '}
+          {latest.value2 != null ? Number(latest.value2).toLocaleString('en-US') : '—'}
+        </span>
+        <span>
+          Share of circulating CKB:{' '}
+          {ratioByDate.get(latest.date) != null
+            ? `${Number(ratioByDate.get(latest.date)).toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 4,
+              })}%`
+            : '—'}
+        </span>
       </div>
     </div>
   );
@@ -172,9 +213,17 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
     statistics.tipProtocolOccupiedCapacity,
     'DAO U at statistics anchor'
   );
-  const daoFree = parseShannons(statistics.daoFreeCapacity, 'daoFreeCapacity');
-  const other = issued - occupied - daoFree;
-  if (issued <= BigInt(0) || occupied < BigInt(0) || daoFree < BigInt(0) || other < BigInt(0)) {
+  const depositorWeight = parseShannons(
+    statistics.depositorAllocationWeight,
+    'depositorAllocationWeight'
+  );
+  const other = issued - occupied - depositorWeight;
+  if (
+    issued <= BigInt(0) ||
+    occupied < BigInt(0) ||
+    depositorWeight < BigInt(0) ||
+    other < BigInt(0)
+  ) {
     throw new Error(
       `invalid DAO capacity-use partition at statistics block ${statistics.tipBlockNumber}`
     );
@@ -244,7 +293,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         <div className="flex h-3 w-full" aria-label="Current capacity use partition">
           {[
             { key: 'Protocol occupied', value: occupied, color: '#58a5b5' },
-            { key: 'DAO free', value: daoFree, color: '#f2c55c' },
+            { key: 'DAO depositors', value: depositorWeight, color: '#f2c55c' },
             { key: 'Other', value: other, color: '#667080' },
           ].map((part) => (
             <div
@@ -256,7 +305,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         </div>
         <div className="text-text-dim mt-1 flex flex-wrap gap-x-5 text-[11px]">
           <span>Protocol occupied {formatPercent(occupied, issued, 2)}%</span>
-          <span>DAO free {formatPercent(daoFree, issued, 2)}%</span>
+          <span>DAO depositors {formatPercent(depositorWeight, issued, 2)}%</span>
           <span>Other {formatPercent(other, issued, 2)}%</span>
         </div>
         <p className="text-text-dim mt-1 text-[11px]">
@@ -374,14 +423,14 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
         </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-[12px]">
+        <table className="w-full min-w-[640px] text-left text-[12px]">
           <thead className="text-text-dim border-base-border border-b">
             <tr>
               <th className="py-2">#</th>
               <th>Depositor</th>
               <th>Lock reference</th>
-              <th className="text-right">Deposits</th>
-              <th className="text-right">CKB deposited</th>
+              <th className="whitespace-nowrap text-right">Deposits</th>
+              <th className="whitespace-nowrap text-right">CKB deposited</th>
               <th className="text-right">Share</th>
             </tr>
           </thead>
@@ -408,8 +457,8 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
                     {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`} · {owner.lockHashType}
                   </Link>
                 </td>
-                <td className="text-right font-mono">{owner.depositCount}</td>
-                <td className="text-right">
+                <td className="whitespace-nowrap text-right font-mono">{owner.depositCount}</td>
+                <td className="whitespace-nowrap text-right">
                   <Amount value={owner.capacity} />
                 </td>
                 <td className="text-right font-mono">{owner.sharePercent}%</td>
@@ -426,7 +475,12 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
   const fields = [
     { key: 'C', bytes: '0–7', value: evidence.header.c, note: 'total issuance' },
     { key: 'AR', bytes: '8–15', value: evidence.header.ar, note: 'accumulated rate × 10¹⁶' },
-    { key: 'S', bytes: '16–23', value: evidence.header.s, note: 'unissued secondary pool' },
+    {
+      key: 'S',
+      bytes: '16–23',
+      value: evidence.header.s,
+      note: 'compensation still owed to live deposits + the burnt share',
+    },
     { key: 'U', bytes: '24–31', value: evidence.header.u, note: 'protocol occupied capacity' },
   ];
   return (
@@ -522,8 +576,13 @@ export function DaoBoard({
           </Metric>
         </div>
         <div className="text-text-dim mt-3 text-[12px]">
-          24h net deposited: {statistics.depositChange24h ?? '—'} CKB · indexed at block #
-          {statistics.tipBlockNumber.toLocaleString()}
+          24h net deposited:{' '}
+          {statistics.depositChange24h != null ? (
+            <CkbDecimal value={statistics.depositChange24h} signed />
+          ) : (
+            '—'
+          )}{' '}
+          CKB · indexed at block #{statistics.tipBlockNumber.toLocaleString()}
         </div>
       </div>
       <Section title="History" note="complete indexed days · current depositor count">
@@ -532,11 +591,12 @@ export function DaoBoard({
       <Issuance statistics={statistics} />
       <Section title="How a deposit grows" note="header AR · free capacity only">
         <p className="text-text-dim text-[13px]">
-          AR grew from {evidence.ar.genesisAr} at genesis to {evidence.ar.tipAr} at block #
-          {evidence.tipBlockNumber.toLocaleString()}: +{evidence.ar.sinceGenesisGrowthPercent}% on a
-          deposit’s free capacity since genesis. Compensation freezes at the withdrawal request AR.
-          Estimated APC above models current issuance; the observed growth uses the last canonical
-          block at or before the 365-day chain-time cutoff.
+          AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)}{' '}
+          at block #{evidence.tipBlockNumber.toLocaleString()}: +
+          {evidence.ar.sinceGenesisGrowthPercent}% on a deposit’s free capacity since genesis.
+          Compensation freezes at the withdrawal request AR. Estimated APC above models current
+          issuance; the observed growth uses the last canonical block at or before the 365-day
+          chain-time cutoff.
         </p>
         <Chart
           title="Accumulated rate"
