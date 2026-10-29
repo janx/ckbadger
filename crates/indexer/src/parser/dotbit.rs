@@ -126,9 +126,20 @@ impl DotbitParser {
             return None;
         }
 
-        if data_or_resolved_id.len() == ACCOUNT_ID_LEN {
-            return (!data_or_resolved_id.iter().all(|&byte| byte == 0))
-                .then(|| data_or_resolved_id.to_vec());
+        // Already-resolved 20-byte account id from the outpoint index (live
+        // activity inputs often carry this instead of raw cell data).
+        if data_or_resolved_id.len() == ACCOUNT_ID_LEN
+            && !data_or_resolved_id.iter().all(|&byte| byte == 0)
+        {
+            return Some(data_or_resolved_id.to_vec());
+        }
+
+        // Live sync often leaves input `data` empty. The account id still sits
+        // on the type script args; prefer it before requiring full cell bytes.
+        if let Some(args) = type_args {
+            if args.len() == ACCOUNT_ID_LEN && !args.iter().all(|&byte| byte == 0) {
+                return Some(args.to_vec());
+            }
         }
 
         Self::parse_identity_cell_data(
@@ -828,6 +839,18 @@ mod tests {
 
         let parsed = result.unwrap();
         assert_eq!(parsed.account_id, account_id_from_args.to_vec());
+    }
+
+    #[test]
+    fn test_resolve_account_id_uses_type_args_when_input_data_empty() {
+        // ID-C2: live activity inputs often carry empty cell data. The account
+        // id must still resolve from type args so an in-place update cancels
+        // to a net-zero identity delta instead of looking like a mint.
+        let account_id: [u8; 20] = [0x2d; 20];
+        let code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+
+        let resolved = DotbitParser::resolve_account_id(&code_hash, Some(&account_id), &[]);
+        assert_eq!(resolved, Some(account_id.to_vec()));
     }
 
     #[test]

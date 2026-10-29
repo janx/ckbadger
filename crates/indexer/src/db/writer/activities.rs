@@ -2067,6 +2067,57 @@ mod tests {
     }
 
     #[test]
+    fn test_dotbit_in_place_update_with_empty_input_data_nets_zero_identity_delta() {
+        // ID-C2: same-owner account-cell rewrite must cancel input −1 with
+        // output +1. Live sync leaves input.data empty; resolve from type_args.
+        let owner = 0xAA;
+        let dotbit_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let account_id = vec![0x2d; 20];
+
+        let mut input = make_input(owner, 216_00000000, 216_00000000);
+        input.type_code_hash = Some(dotbit_code_hash.clone());
+        input.type_hash_type = Some(1);
+        input.type_args = Some(account_id.clone());
+        input.type_script_hash = Some(vec![0x11; 32]);
+        input.data = vec![];
+
+        let mut output_data = vec![0x00; 32];
+        output_data.extend_from_slice(&account_id);
+        let outputs = vec![make_output(
+            owner,
+            215_99994517,
+            Some(dotbit_code_hash),
+            Some(vec![0x11; 32]),
+            Some(account_id.clone()),
+            output_data,
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x91; 32],
+            block_hash: &[0xA9; 32],
+            tx_index: 0,
+            block_number: 5_867_661,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let owner_p = find_participant(&actions_list[0], owner);
+        let identity_deltas: Vec<_> = owner_p
+            .item_deltas
+            .iter()
+            .filter(|d| d.kind == ItemKind::Identity(IdentityStandard::DotBit))
+            .collect();
+        assert!(
+            identity_deltas.is_empty(),
+            "in-place .bit update must net to no identity item delta, got {identity_deltas:?}"
+        );
+    }
+
+    #[test]
     fn test_bit_cell_changes_are_labeled_as_independent_identity() {
         let owner = 0xBB;
         let bit_cell_code_hash =
