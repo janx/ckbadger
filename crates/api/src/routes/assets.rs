@@ -14,7 +14,7 @@ use ckbadger_store::{
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -260,6 +260,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/assets/objects/{collection_id}/charts/capacity-history",
             get(get_object_collection_capacity_chart),
+        )
+        .route(
+            "/assets/objects/{collection_id}/insights",
+            get(get_object_collection_insights),
         )
 }
 
@@ -1287,6 +1291,109 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     }
 
     Ok(out)
+}
+
+/// Exact completed-week mint/transfer/burn counts from the collection activity CF.
+/// Shared by Spore cluster insights and object-collection insights (OB-K2).
+pub(crate) fn nft_collection_weekly_activity(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    collection_id: &[u8],
+) -> anyhow::Result<(Vec<serde_json::Value>, Option<String>, serde_json::Value)> {
+    use chrono::Datelike;
+    let mut weeks: BTreeMap<String, [u64; 3]> = BTreeMap::new();
+    let mut cursor = None;
+    loop {
+        let rows = list_canonical_nft_collection_activities_page(
+            store,
+            append_only_store,
+            collection_id,
+            1024,
+            cursor,
+            None,
+        )?;
+        if rows.is_empty() {
+            break;
+        }
+        cursor = rows.last().map(|(b, i, _)| (*b, *i));
+        for (block, _, activity) in rows {
+            let header = store
+                .get_block_header(block)?
+                .ok_or_else(|| anyhow::anyhow!("collection activity block {block} missing"))?;
+            let date = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
+            let monday =
+                date - chrono::Duration::days(date.weekday().num_days_from_monday() as i64);
+            let counts = weeks.entry(monday.to_string()).or_default();
+            for (action, slot) in [
+                (ckbadger_store::AssetAction::Mint, 0),
+                (ckbadger_store::AssetAction::Transfer, 1),
+                (ckbadger_store::AssetAction::Burn, 2),
+            ] {
+                if activity.actions.contains(&action) {
+                    counts[slot] += 1;
+                }
+            }
+        }
+    }
+    let (complete_through, calendar_anchor) =
+        if let Some((tip, header)) = store.get_sync_tip_block()? {
+            let tip_hash: [u8; 32] = header
+                .hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("calendar anchor hash width"))?;
+            let chain = crate::utils::stats_bucket::ChainTime::from_header(
+                tip,
+                header.timestamp,
+                header.chain_time_ms,
+                tip_hash,
+            )
+            .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
+            let day = chain
+                .tip_day()
+                .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
+            let current_monday =
+                day - chrono::Duration::days(day.weekday().num_days_from_monday() as i64);
+            let last_sunday = current_monday
+                .pred_opt()
+                .ok_or_else(|| anyhow::anyhow!("weekly cutoff underflow"))?;
+            weeks.retain(|start, _| start.as_str() < current_monday.to_string().as_str());
+            if let Some(first) = weeks.keys().next().cloned() {
+                let mut week = chrono::NaiveDate::parse_from_str(&first, "%Y-%m-%d")?;
+                while week < current_monday {
+                    weeks.entry(week.to_string()).or_default();
+                    week = week
+                        .checked_add_signed(chrono::Duration::weeks(1))
+                        .ok_or_else(|| anyhow::anyhow!("weekly range overflow"))?;
+                }
+            }
+            (
+                Some(last_sunday.to_string()),
+                serde_json::json!({
+                    "blockNumber": tip,
+                    "blockHash": format!("0x{}", hex::encode(header.hash)),
+                    "chainTime": header.chain_time_ms.to_string(),
+                }),
+            )
+        } else {
+            anyhow::ensure!(
+                weeks.is_empty(),
+                "collection activity calendar has no canonical tip"
+            );
+            (None, serde_json::Value::Null)
+        };
+    let weekly = weeks
+        .into_iter()
+        .map(|(week, n)| {
+            serde_json::json!({
+                "weekStart": week,
+                "mintTransactions": n[0],
+                "transferTransactions": n[1],
+                "burnTransactions": n[2],
+            })
+        })
+        .collect();
+    Ok((weekly, complete_through, calendar_anchor))
 }
 
 pub(crate) fn count_canonical_nft_collection_activities(
@@ -3316,6 +3423,58 @@ async fn list_object_collection_activities(
         limit,
         next_cursor,
     ))
+}
+
+/// Weekly transfer calendar for m-NFT / object collections (OB-K2).
+/// Genetics stay Spore-only; this returns an empty non-DOB genetics stub.
+async fn get_object_collection_insights(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    tokio::task::spawn_blocking(move || {
+        let collection_id_bytes = decode_object_collection_id(&collection_id)?;
+        let resolved = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+        let live = resolved.aggregate.live_count;
+        if live < 0 {
+            return Err(ApiError::internal(format!(
+                "invalid object collection live_count: collection_id=0x{}, live_count={live}",
+                hex::encode(&collection_id_bytes)
+            )));
+        }
+        let (weekly, complete_through, calendar_anchor) = nft_collection_weekly_activity(
+            state.store.as_ref(),
+            state.append_only_store.as_ref(),
+            &collection_id_bytes,
+        )
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "object collection 0x{} weekly activity: {e:#}",
+                hex::encode(&collection_id_bytes)
+            ))
+        })?;
+        ok(serde_json::json!({
+            "holderDistribution": [],
+            "weeklyActivity": weekly,
+            "calendarSource": "indexedChainTimeUtc8",
+            "completeThrough": complete_through,
+            "calendarAnchor": calendar_anchor,
+            "genetics": {
+                "liveItems": live,
+                "eligibleItems": 0,
+                "nonDobItems": live,
+                "decodedItems": 0,
+                "pendingItems": 0,
+                "failedItems": 0,
+                "complete": true,
+                "traits": []
+            },
+            "currentPattern": { "status": "notDob", "steps": [] }
+        }))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
 }
 
 async fn get_object_collection_capacity_chart(
