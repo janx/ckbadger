@@ -350,12 +350,6 @@ impl<'a> BoundedRowSink<'a> {
                 row.cf_name
             ));
         }
-        if row.delete && is_append_only_cf_name(row.cf_name) {
-            return Err(anyhow!(
-                "append-only CF rejects deletes during materialize: cf={}",
-                row.cf_name
-            ));
-        }
         let actual_policy = cf_write_policy(row.cf_name);
         if actual_policy != self.expected_policy {
             return Err(anyhow!(

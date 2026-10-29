@@ -1064,6 +1064,11 @@ async fn r3_deep_fork_blocks_do_not_dispatch_cycles_above_fork_point() {
         batch.commit().unwrap();
         seed_deep_fork_pause(&store, 100);
         config.cycles_request_dir = Some(requests.path().to_path_buf());
+        // Hermetic node RPC: the reward lookup must not depend on a live
+        // localhost:8114 node.
+        let server = MockServer::start().await;
+        mount_block_economic_state_not_finalized(&server).await;
+        config.ckb_rpc_url = server.uri();
         let app = create_router(config).await;
         let (status, body) = get_json(&app, &format!("/blocks/101{endpoint}")).await;
         assert_eq!(status, StatusCode::OK, "{body}");

@@ -2011,6 +2011,161 @@ mod tests {
     }
 
     #[test]
+    fn script_owner_lineage_rebind_deletes_old_indexes_in_final_snapshot() {
+        // Label import ran first and filed the binary under a data-hash family;
+        // bulk then observes a registered Type ID deploying it. The final
+        // snapshot must tombstone the old index keys through the production
+        // bounded sink, adopt the Type ID identity, and leave CF_CELLS alone.
+        let dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(dir.path().join("domain")).unwrap();
+        let append_store = CkbadgerStore::open_append_only(dir.path().join("append-only")).unwrap();
+        let binary = vec![0x42; 32];
+        let registered = vec![0x52; 32];
+        domain_store
+            .put_script_version(
+                &binary,
+                &ScriptVersionInfo {
+                    version_hash: binary.clone(),
+                    family_id: Some("metadata-family".into()),
+                    name: Some("From Data Hash".into()),
+                    registered_references: vec![(binary.clone(), 2)],
+                    canonical_reference_hash: Some(binary.clone()),
+                    canonical_hash_type: Some(2),
+                    deprecated: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        domain_store
+            .put_script_version_by_family_direct("metadata-family", &binary)
+            .unwrap();
+        domain_store
+            .insert_script_version_by_label("From Data Hash", &binary)
+            .unwrap();
+        domain_store
+            .put_script_version(
+                &[0x99; 32],
+                &ScriptVersionInfo {
+                    version_hash: vec![0x99; 32],
+                    family_id: Some("template-family".into()),
+                    name: Some("Template Family".into()),
+                    registered_references: vec![(registered.clone(), 1)],
+                    canonical_reference_hash: Some(registered.clone()),
+                    canonical_hash_type: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for (family_id, name) in [
+            ("template-family", "Template Family"),
+            ("metadata-family", "From Data Hash"),
+        ] {
+            domain_store
+                .put_script_family_direct(
+                    family_id,
+                    &ScriptFamilyInfo {
+                        family_id: family_id.into(),
+                        name: name.into(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+
+        let interner = IdentityInterner::default();
+        let lock_script_hash_id = interner.intern_bytes(vec![0x01; 32]);
+        let lock_code_hash_id = interner.intern_bytes(vec![0x02; 32]);
+        let lock_args_id = interner.intern_bytes(vec![0x03; 20]);
+        let type_script_hash_id = interner.intern_bytes(registered.clone());
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x05; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x61; 32],
+            block_number: 400,
+            block_hash: [0x11; 32],
+            timestamp_ms: 1_700_000_300_000,
+            chain_time_ms: 1_700_000_300_000,
+            block_dao_ar: 1,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x61; 32], 0),
+                created_at_block: 400,
+                created_by_block_dao_ar: 1,
+                capacity: 120_00000000,
+                lock_script_hash_id,
+                lock_code_hash_id,
+                lock_hash_type: 1,
+                lock_args_id,
+                type_script_hash_id: Some(type_script_hash_id),
+                type_code_hash_id: Some(type_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(type_args_id),
+                occupied_capacity: 80_00000000,
+                data_size: 4,
+                data: b"\x7fELF".to_vec(),
+                data_hash: Some(binary.as_slice().try_into().unwrap()),
+                udt_amount: None,
+                semantic_tag: crate::sync::CellSemanticTag::Plain,
+                dao_state: None,
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+        let mut owner = ScriptOwner::default();
+        owner.apply_tx(&tx, &ctx).unwrap();
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.materialize_final(&mut materializer).unwrap();
+        let _ = materializer.finish();
+
+        let version = domain_store.get_script_version(&binary).unwrap().unwrap();
+        assert_eq!(version.family_id.as_deref(), Some("template-family"));
+        assert_eq!(version.name.as_deref(), Some("Template Family"));
+        assert!(version.registered_references.is_empty());
+        assert_eq!(
+            (
+                version.canonical_reference_hash.as_deref(),
+                version.canonical_hash_type
+            ),
+            (Some(registered.as_slice()), Some(1))
+        );
+        assert!(!version.deprecated);
+        assert!(
+            !domain_store
+                .list_script_version_hashes_by_family("metadata-family")
+                .unwrap()
+                .contains(&binary),
+            "bulk final snapshot must delete the old by-family key"
+        );
+        assert!(domain_store
+            .list_script_version_hashes_by_family("template-family")
+            .unwrap()
+            .contains(&binary));
+        assert!(
+            !domain_store
+                .list_script_version_hashes_by_label("From Data Hash")
+                .unwrap()
+                .contains(&binary),
+            "bulk final snapshot must delete the old by-label key"
+        );
+        assert!(domain_store
+            .list_script_version_hashes_by_label("Template Family")
+            .unwrap()
+            .contains(&binary));
+        assert!(
+            append_store
+                .iterator_cf(append_store.cf_cells(), rocksdb::IteratorMode::Start)
+                .next()
+                .is_none(),
+            "script finalization must not touch the append-only store"
+        );
+    }
+
+    #[test]
     fn script_owner_binds_only_unused_native_type_id_elf_deployments() {
         for native_type_id in [false, true] {
             let dir = tempfile::tempdir().unwrap();

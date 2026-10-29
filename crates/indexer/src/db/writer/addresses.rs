@@ -269,9 +269,14 @@ fn apply_type_id_lineage(
                 version.category = template.category.clone();
                 version.website = template.website.clone();
                 version.description = template.description.clone();
-                // Drop the conflicting family's imported registrations; they
-                // belong to the old metadata identity, not the Type ID owner.
+                // Drop the conflicting family's imported identity: its
+                // registrations, canonical anchor and deprecation belong to the
+                // old metadata entry, not the Type ID owner. The anchor below
+                // then becomes the observed registered reference.
                 version.registered_references.clear();
+                version.canonical_reference_hash = None;
+                version.canonical_hash_type = None;
+                version.deprecated = false;
             }
         } else {
             version.family_id = template.family_id.clone();
@@ -2425,6 +2430,9 @@ mod tests {
                 family_id: Some("metadata-family".into()),
                 name: Some("from-data-hash".into()),
                 registered_references: vec![(vec![0xaa; 32], 0)],
+                canonical_reference_hash: Some(vec![0xaa; 32]),
+                canonical_hash_type: Some(0),
+                deprecated: true,
                 ..Default::default()
             },
         )]);
@@ -2464,6 +2472,18 @@ mod tests {
         assert!(
             result.registered_references.is_empty(),
             "rebind must drop the conflicting family's imported registrations"
+        );
+        assert_eq!(
+            (
+                result.canonical_reference_hash.as_deref(),
+                result.canonical_hash_type
+            ),
+            (Some(registered.as_slice()), Some(1)),
+            "rebind must replace the conflicting family's canonical data reference"
+        );
+        assert!(
+            !result.deprecated,
+            "rebind must drop the conflicting family's deprecation flag"
         );
         assert_eq!(result.type_id_deployments, vec![(registered, 100)]);
     }

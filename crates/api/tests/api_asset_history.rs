@@ -1729,11 +1729,20 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
             token_id: None,
             owner_lock_hash: Some(payload.lock_script_hash.clone()),
             name: Some("Genes".into()),
-            description: Some(description),
+            description: Some(description.clone()),
             is_live: true,
             created_at_block: 100,
             created_at_tx: hash.clone(),
             extra: ObjectExtra::SporeCluster,
+        },
+    );
+    // Live and bulk writers create the aggregate with the cluster entry.
+    batch.put_cluster_aggregate(
+        &id,
+        &ClusterAggregate {
+            name: Some("Genes".into()),
+            description: Some(description),
+            ..Default::default()
         },
     );
     if mode > 0 {

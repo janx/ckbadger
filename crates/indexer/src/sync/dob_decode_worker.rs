@@ -1994,6 +1994,20 @@ mod tests {
             },
         };
         store.put_spore_direct(&spore_id, &spore).unwrap();
+        // Spore writers aggregate under the spore's cluster id even when no
+        // cluster cell exists for it.
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cluster_aggregate(
+            &[0x99u8; 32],
+            &ckbadger_store::types::ClusterAggregate {
+                total_count: 1,
+                live_count: 1,
+                owner_count: 1,
+                pure_ckb_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
 
         assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
 
@@ -2009,6 +2023,15 @@ mod tests {
         }
         // ... and the spore is no longer re-listed for decode.
         assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 0);
+        // The run loop moves the tier to Unknown in the failure commit.
+        match store.get_spore(&spore_id).unwrap().unwrap().extra {
+            ObjectExtra::Spore { media_profile, .. } => {
+                assert_eq!(media_profile.tier, CompositionTier::Unknown)
+            }
+            other => panic!("expected spore extra, got {other:?}"),
+        }
+        let agg = store.get_cluster_aggregate(&[0x99u8; 32]).unwrap().unwrap();
+        assert_eq!((agg.pure_ckb_count, agg.unknown_count), (0, 1));
     }
 
     #[tokio::test]
