@@ -86,6 +86,15 @@ describe('TransactionTable', () => {
     ).toHaveClass('flex-col');
     expect(table.querySelector('[data-ckb-amount]')).toHaveClass('flex-wrap');
   });
+  it('shows cellbase as 0 → N cells, not 1 → N (BA-11)', () => {
+    render(
+      <TransactionTable
+        transactions={[{ ...tx, isCellbase: true, inputsCount: 1, outputsCount: 1 }]}
+      />
+    );
+    expect(screen.getByRole('table')).toHaveTextContent('0→1');
+  });
+
   it('renders genesis non-cellbase transactions without inventing a proposal origin', () => {
     render(
       <TransactionTable

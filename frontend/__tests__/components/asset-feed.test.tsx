@@ -1,6 +1,11 @@
 import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
-import { AssetFeed, AssetTransactions, tokenMoved } from '@/components/asset/asset-feed';
-import type { Transaction, GlobalActivity } from '@/lib/api';
+import {
+  AssetFeed,
+  AssetTransactions,
+  itemFeedHeadline,
+  tokenMoved,
+} from '@/components/asset/asset-feed';
+import type { Transaction, GlobalActivity, ItemActivity } from '@/lib/api';
 const token = '0x' + 'ab'.repeat(32);
 const activity: GlobalActivity = {
   txHash: '0x' + 'cd'.repeat(32),
@@ -55,6 +60,34 @@ const transaction: Transaction = {
   activity,
 };
 describe('Shared asset feeds', () => {
+  it('prefers itemContext.action over net identity mint inference (ID-C1)', () => {
+    const row = {
+      ...activity,
+      itemContext: {
+        itemId: '0x' + '11'.repeat(20),
+        action: 'update',
+        createdCell: null,
+        consumedCell: null,
+      },
+      tags: 4, // TAG_IDENTITY
+      participants: [
+        {
+          ...activity.participants[0],
+          tags: 4,
+          itemDeltas: [
+            {
+              kind: 'identity',
+              standard: 'dotbit',
+              identityId: '0x' + '11'.repeat(20),
+              delta: 1,
+            },
+          ],
+        },
+      ],
+    } as ItemActivity;
+    expect(itemFeedHeadline(row)).toBe('Identity Update');
+  });
+
   it('counts this token once from positive participant deltas, not CKB value or both sides', () => {
     expect(tokenMoved(transaction, token)).toBe('13');
     expect(() => tokenMoved({ ...transaction, activity: null }, token)).toThrow(

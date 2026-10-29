@@ -54,11 +54,17 @@ export function TokenDistributionView({
             'Under '
           ) : (
             <>
-              <AssetAmount amount={b.lowerBound} decimals={d.decimals} />
+              <span className="whitespace-nowrap">
+                <AssetAmount amount={b.lowerBound} decimals={d.decimals} />
+              </span>
               {b.upperBound === null ? ' and above' : ' – under '}
             </>
           )}
-          {b.upperBound !== null && <AssetAmount amount={b.upperBound} decimals={d.decimals} />}
+          {b.upperBound !== null && (
+            <span className="whitespace-nowrap">
+              <AssetAmount amount={b.upperBound} decimals={d.decimals} />
+            </span>
+          )}
         </>
       ),
     },

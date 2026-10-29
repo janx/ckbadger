@@ -10,6 +10,22 @@ function secondsDate(value: string) {
   if (!/^(0|[1-9]\d*)$/.test(value)) throw new Error(`Invalid protocol Unix seconds ${value}`);
   return formatUtc8Date((BigInt(value) * BigInt(1000)).toString());
 }
+
+/** Prefer human label; fall back to the protocol key (ID-DC1: empty labels). */
+export function recordKeyLabel(label: string, key: string): string {
+  const named = label.trim();
+  if (named) return named;
+  const protocolKey = key.trim();
+  if (protocolKey) return protocolKey;
+  return 'record';
+}
+
+/** Keep binary profile blobs out of tier 1 (ID-DC2). */
+export function truncateRecordHex(hex: string, head = 18, tail = 8): string {
+  if (!hex.startsWith('0x')) throw new Error(`record hex missing 0x: ${hex.slice(0, 16)}`);
+  if (hex.length <= 2 + head + tail) return hex;
+  return `${hex.slice(0, 2 + head)}…${hex.slice(-tail)}`;
+}
 export function NamedParty({ party, label }: { party: DotCellPartyRef; label: string }) {
   return (
     <div className="min-w-0">
@@ -258,15 +274,17 @@ export function IdentityDocument({ protocol }: IdentityDocumentProps) {
                 className="grid gap-2 py-3 sm:grid-cols-[140px_minmax(0,1fr)]"
               >
                 <dt className="text-text-dim break-words text-[11px]">
-                  {r.label || r.key || 'record'}
+                  {recordKeyLabel(r.label, r.key)}
                 </dt>
                 <dd className="min-w-0 break-all">
                   {r.decodedAddress ? (
                     <AppLink href={`/address/${r.decodedAddress.address}`}>
                       {r.decodedAddress.address}
                     </AppLink>
+                  ) : r.valueUtf8 ? (
+                    r.valueUtf8
                   ) : (
-                    (r.valueUtf8 ?? r.valueHex)
+                    truncateRecordHex(r.valueHex)
                   )}
                   <span className="text-text-dim block text-[11px]">TTL {r.ttl}s</span>
                 </dd>

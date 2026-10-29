@@ -122,6 +122,78 @@ export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGene
     </section>
   );
 }
+/** Cap per-trait buttons so one genome cannot push Objects/holders off-screen (OB-C1). */
+const TRAIT_VALUE_PREVIEW = 8;
+
+function TraitValueButtons({
+  trait,
+  eligibleItems,
+  color,
+  selected,
+  onSelect,
+  onFocus,
+  onBlur,
+}: {
+  trait: CollectionInsights['genetics']['traits'][number];
+  eligibleItems: number;
+  color: string;
+  selected: string | undefined;
+  onSelect: (value: string | null) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+}) {
+  const ranked = [...trait.values].sort((a, b) =>
+    b.count === a.count ? a.value.localeCompare(b.value) : b.count - a.count
+  );
+  const selectedExtra =
+    selected && !ranked.slice(0, TRAIT_VALUE_PREVIEW).some((v) => v.value === selected)
+      ? ranked.find((v) => v.value === selected)
+      : undefined;
+  const visible = selectedExtra
+    ? [...ranked.slice(0, TRAIT_VALUE_PREVIEW - 1), selectedExtra]
+    : ranked.slice(0, TRAIT_VALUE_PREVIEW);
+  const hidden = ranked.length - visible.length;
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {visible.map((v) => {
+        if (!Number.isSafeInteger(v.count) || v.count < 0 || v.count > eligibleItems)
+          throw new Error(`Collection trait ${trait.name}: invalid count ${v.count}`);
+        return (
+          <button
+            key={v.value}
+            aria-pressed={selected === v.value}
+            onClick={() => onSelect(selected === v.value ? null : v.value)}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            className="border-base-border relative min-w-0 border-b px-1 py-2 text-left"
+          >
+            <span
+              aria-hidden
+              className="absolute inset-y-0 left-0 opacity-15"
+              style={{
+                background: color,
+                width: `${eligibleItems ? (v.count / eligibleItems) * 100 : 0}%`,
+              }}
+            />
+            <span className="relative flex items-baseline justify-between gap-3">
+              <span className="min-w-0 break-words">{v.value}</span>
+              <span className="text-text-dim shrink-0 text-[11px]">
+                {v.count} / {eligibleItems}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+      {hidden > 0 && (
+        <p className="text-text-dim col-span-full text-[11px]">
+          {hidden} more {trait.name} variant{hidden === 1 ? '' : 's'} not shown · filter from the
+          Objects list when needed
+        </p>
+      )}
+    </div>
+  );
+}
+
 export interface CollectionGenesProps {
   evidence: CollectionInsights['genetics'];
   selected: Readonly<Record<string, string>>;
@@ -166,43 +238,15 @@ export function CollectionGenes({ evidence, selected, onSelect }: CollectionGene
               <h3 className="mb-2 text-[13px]" style={{ color: HUE_RAMP[index % HUE_RAMP.length] }}>
                 {trait.name}
               </h3>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {trait.values.map((v) => {
-                  if (
-                    !Number.isSafeInteger(v.count) ||
-                    v.count < 0 ||
-                    v.count > evidence.eligibleItems
-                  )
-                    throw new Error(`Collection trait ${trait.name}: invalid count ${v.count}`);
-                  return (
-                    <button
-                      key={v.value}
-                      aria-pressed={selected[trait.name] === v.value}
-                      onClick={() =>
-                        onSelect(trait.name, selected[trait.name] === v.value ? null : v.value)
-                      }
-                      onFocus={() => setActive(trait.name)}
-                      onBlur={() => setActive(null)}
-                      className="border-base-border relative min-w-0 border-b px-1 py-2 text-left"
-                    >
-                      <span
-                        aria-hidden
-                        className="absolute inset-y-0 left-0 opacity-15"
-                        style={{
-                          background: HUE_RAMP[index % HUE_RAMP.length],
-                          width: `${evidence.eligibleItems ? (v.count / evidence.eligibleItems) * 100 : 0}%`,
-                        }}
-                      />
-                      <span className="relative flex items-baseline justify-between gap-3">
-                        <span className="min-w-0 break-words">{v.value}</span>
-                        <span className="text-text-dim shrink-0 text-[11px]">
-                          {v.count} / {evidence.eligibleItems}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <TraitValueButtons
+                trait={trait}
+                eligibleItems={evidence.eligibleItems}
+                color={HUE_RAMP[index % HUE_RAMP.length]}
+                selected={selected[trait.name]}
+                onSelect={(value) => onSelect(trait.name, value)}
+                onFocus={() => setActive(trait.name)}
+                onBlur={() => setActive(null)}
+              />
             </div>
           ))}
         </div>

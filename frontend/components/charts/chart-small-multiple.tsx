@@ -33,9 +33,10 @@ function RankedPreview({ model }: { model: ChartModel }) {
         return (
           <li key={row.label} className="min-w-0 text-[11px]">
             <div className="flex justify-between gap-2">
-              <span className="truncate" title={row.label}>
+              <span className="truncate font-mono" title={row.label}>
                 {row.href?.startsWith('/address/') && row.label.length > 20
-                  ? `${row.label.slice(0, 10)}…${row.label.slice(-6)}`
+                  ? // Keep more of the unique suffix so top miners stay distinguishable (CH-04).
+                    `${row.label.slice(0, 6)}…${row.label.slice(-10)}`
                   : row.label}
               </span>
               <span className="shrink-0 tabular-nums">{row.share}</span>

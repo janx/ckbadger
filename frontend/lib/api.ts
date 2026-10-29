@@ -3956,8 +3956,13 @@ export const api = {
     fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
   getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
     fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),
-  getCollectionInsights: (id: string): Promise<CollectionInsights> =>
-    fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`),
+  getCollectionInsights: (
+    id: string,
+    kind: 'spore' | 'object' = 'spore'
+  ): Promise<CollectionInsights> =>
+    kind === 'object'
+      ? fetchApi(`/assets/objects/${encodeURIComponent(id)}/insights`)
+      : fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`),
   getCollectionGallery: (
     id: string,
     params: CursorQueryParams & { traits?: Record<string, string> } = {}

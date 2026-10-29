@@ -315,6 +315,39 @@ describe('TransactionDetailPage', () => {
     });
   });
 
+  it('labels in-block index as position, not commitment distance (TX-07)', async () => {
+    vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
+      hash: TX_HASH,
+      phase: 'committed',
+      proposalId: '0x01',
+      proposedIn: {
+        blockNumber: 99,
+        blockHash: `0x${'11'.repeat(32)}`,
+        timestamp: '2026-02-20T16:40:00Z',
+      },
+      committedIn: {
+        blockNumber: 101,
+        blockHash: `0x${'22'.repeat(32)}`,
+        timestamp: '2026-02-20T16:46:12Z',
+      },
+      commitmentDistance: 2,
+      commitmentWindow: { close: 2, far: 10 },
+      isCellbase: false,
+      confirmations: 4,
+    });
+    const detail = createCommittedTransactionDetail();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...detail,
+      index: 1,
+      blockNumber: 101,
+    });
+    render(<TransactionDetailPage />);
+    const line = await screen.findByText(/position 1/);
+    expect(line).toHaveTextContent(/committed 2 blocks later/);
+    expect(line).toHaveTextContent(/window 2–10/);
+    expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
+  });
+
   it('shows commit time as UTC with a relative age, not a raw ISO Z string (TX-10)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-02-20T17:46:12Z'));

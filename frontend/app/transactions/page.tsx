@@ -159,7 +159,7 @@ export default function TransactionsPage() {
       label: 'Cells',
       minWidth: 64,
       numeric: true,
-      render: (tx) => `${tx.inputsCount} → ${tx.outputsCount}`,
+      render: (tx) => `${tx.activity?.isCellbase ? 0 : tx.inputsCount} → ${tx.outputsCount}`,
     },
     {
       key: 'value',

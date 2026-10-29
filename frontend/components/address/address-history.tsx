@@ -112,7 +112,8 @@ const columns: ListColumn<AddressTransaction>[] = [
     minWidth: 100,
     render: (tx) => (
       <span>
-        {tx.inputsCount} <span className="text-text-dim">→</span> {tx.outputsCount}
+        {tx.isCellbase ? 0 : tx.inputsCount} <span className="text-text-dim">→</span>{' '}
+        {tx.outputsCount}
       </span>
     ),
   },

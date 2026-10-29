@@ -157,9 +157,10 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
             ? 'This deep-fork detection paused indexing before rollback. No branch was orphaned by this event; the recorded tips show the disagreement.'
             : 'These branch paths are traced from the persisted old and adopted tip hashes back to the recorded fork point. Their current fate appears below.'}
         </p>
-        <div className="grid min-w-0 gap-8 xl:grid-cols-2">
+        {/* Stack full-width: side-by-side half-columns crush 930px tables (FF-D1). */}
+        <div className="grid min-w-0 gap-8">
           <div className="min-w-0">
-            <h3 className="text-negative mb-3 text-sm">
+            <h3 className="text-text-bright mb-3 text-sm">
               {event.eventType === 'deep'
                 ? 'Indexed tip · no rollback'
                 : 'Old branch · dropped at detection'}
@@ -181,7 +182,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
             )}
           </div>
           <div className="min-w-0">
-            <h3 className="text-positive mb-3 text-sm">
+            <h3 className="text-text-bright mb-3 text-sm">
               {event.eventType === 'deep'
                 ? 'Node tip · not adopted by indexer'
                 : 'Branch adopted at detection'}
