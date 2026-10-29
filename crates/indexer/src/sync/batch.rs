@@ -3017,7 +3017,6 @@ impl Indexer {
                                 &tx_data.hash,
                                 parsed.number,
                                 stats_time_ms,
-                                das_action.as_deref(),
                                 &mut data_batch,
                                 &mut dotbit_state,
                             )?;

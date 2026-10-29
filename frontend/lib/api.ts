@@ -299,7 +299,12 @@ interface ReorgEvent {
   resolvedBy: string | null;
   resolutionAction: string | null;
   resolutionNotes: string | null;
-  previewStatus: 'available' | 'no_old_branch' | 'node_reader_unavailable' | 'not_loaded';
+  previewStatus:
+    | 'available'
+    | 'no_old_branch'
+    | 'old_branch_unavailable'
+    | 'node_reader_unavailable'
+    | 'not_loaded';
   preview: {
     oldBlockHash: string;
     oldMinerLockHash: string | null;

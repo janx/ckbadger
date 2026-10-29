@@ -15,6 +15,7 @@ pub mod utils;
 pub mod warmup;
 pub mod ws;
 
+use anyhow::Context;
 use arc_swap::{ArcSwap, ArcSwapOption};
 use axum::{routing::get, Router};
 use ckbadger_common::{
@@ -302,7 +303,7 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
         config.metadata_path.as_deref(),
         &config.ckb_network,
     )
-    .map_err(|e| anyhow::anyhow!("failed to read effective script metadata roles: {e}"))?;
+    .context("failed to read effective script metadata roles")?;
     let ws_manager = Arc::new(WsManager::new());
 
     let cache = CacheBackend::new();

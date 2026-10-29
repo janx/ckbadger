@@ -915,7 +915,6 @@ impl ObjectOwner {
             previous.as_ref(),
             &owner_lock,
             None,
-            None,
         )
         .map_err(|error| {
             anyhow!(
@@ -1847,7 +1846,6 @@ impl ObjectOwner {
             previous.as_ref(),
             &owner_lock,
             dotbit.expired_at,
-            tx.dotbit_action.as_deref(),
         )
         .map_err(|error| {
             anyhow!(
@@ -1994,7 +1992,6 @@ impl ObjectOwner {
             previous.as_ref(),
             &owner_lock,
             Some(bit_cell.expired_at),
-            None,
         )
         .map_err(|error| {
             anyhow!(

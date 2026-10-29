@@ -433,7 +433,7 @@ pub fn effective_script_roles(
     collect_script_roles(&scripts, network)
 }
 
-fn import_all(
+pub(crate) fn import_all(
     store: &CkbadgerStore,
     network: &str,
     tokens: &[TokenMetadata],
@@ -653,20 +653,70 @@ fn registered_versions(
     Ok(versions)
 }
 
+/// Binaries already attributed by Type ID lineage to another family. Metadata
+/// that lists the same data hash under a different family must yield — lineage
+/// owns attribution — instead of failing startup or stealing the family_id.
+fn type_id_lineage_owns_binary(
+    store: &CkbadgerStore,
+    version: &ckbadger_store::ScriptVersionInfo,
+    owner_family: &str,
+) -> Result<bool> {
+    if version.type_id_deployments.is_empty() {
+        return Ok(false);
+    }
+    let mut registered_to_owner = std::collections::HashSet::new();
+    for (_, other) in store.list_script_versions()? {
+        if other.family_id.as_deref() != Some(owner_family) {
+            continue;
+        }
+        for (reference, kind) in &other.registered_references {
+            if *kind == 1 {
+                registered_to_owner.insert(reference.clone());
+            }
+        }
+    }
+    Ok(version
+        .type_id_deployments
+        .iter()
+        .any(|(reference, _)| registered_to_owner.contains(reference)))
+}
+
+/// Returns binaries that metadata wants to register but Type ID lineage already
+/// bound to a different family. Callers must skip importing those hashes.
 fn validate_existing_family(
     store: &CkbadgerStore,
     family: &str,
     registrations: &std::collections::BTreeMap<Vec<u8>, ImportedVersionRegistration>,
-) -> Result<()> {
+) -> Result<std::collections::HashSet<Vec<u8>>> {
+    let mut lineage_owned = std::collections::HashSet::new();
     for hash in registrations.keys() {
-        if let Some(existing) = store
-            .get_script_version(hash)?
-            .and_then(|version| version.family_id)
-        {
-            anyhow::ensure!(existing == family, "binary registered in conflicting families: binary=0x{} existing_family={} imported_family={}; correct metadata and rebuild", hex::encode(hash), existing, family);
+        let Some(version) = store.get_script_version(hash)? else {
+            continue;
+        };
+        let Some(existing) = version.family_id.as_deref() else {
+            continue;
+        };
+        if existing == family {
+            continue;
         }
+        if type_id_lineage_owns_binary(store, &version, existing)? {
+            warn!(
+                binary = %format!("0x{}", hex::encode(hash)),
+                existing_family = existing,
+                imported_family = family,
+                "Type ID lineage owns binary; skipping conflicting metadata family registration"
+            );
+            lineage_owned.insert(hash.clone());
+            continue;
+        }
+        anyhow::bail!(
+            "binary registered in conflicting families: binary=0x{} existing_family={} imported_family={}; correct metadata and rebuild",
+            hex::encode(hash),
+            existing,
+            family
+        );
     }
-    Ok(())
+    Ok(lineage_owned)
 }
 
 /// Active metadata is resolved once before any label writes. Excluded entries
@@ -707,13 +757,17 @@ fn validate_script_registrations(
         store.get_script_family(family).with_context(context)?;
         let (active, excluded) = selected_script_deployments(script, network);
         let registrations = registered_versions(&active).with_context(context)?;
-        validate_existing_family(store, family, &registrations).with_context(context)?;
+        let lineage_owned =
+            validate_existing_family(store, family, &registrations).with_context(context)?;
         for deployment in &active {
             active_registrations
                 .label_hashes
                 .insert(decode_hex(deployment_reference(deployment)).with_context(context)?);
         }
         for (hash, registration) in registrations {
+            if lineage_owned.contains(&hash) {
+                continue;
+            }
             if let Some(previous) = active_registrations
                 .binaries
                 .insert(hash.clone(), family.into())
@@ -768,8 +822,17 @@ fn validate_script_registrations(
                         hex::encode(&hash)
                     )
                 })?;
-            anyhow::ensure!(
-                version.family_id.as_deref() == Some(family),
+            if version.family_id.as_deref() == Some(family) {
+                continue;
+            }
+            // Stale by-family row after Type ID lineage rebound the binary.
+            // Preflight stays read-only; upsert drops the row. Do not fail start.
+            if let Some(owner) = version.family_id.as_deref() {
+                if type_id_lineage_owns_binary(store, &version, owner).with_context(context)? {
+                    continue;
+                }
+            }
+            anyhow::bail!(
                 "{} family index contradicts version: binary=0x{} version_family={:?}",
                 context(),
                 hex::encode(&hash),
@@ -908,10 +971,9 @@ fn upsert_script_label_validated(
 
     // Registrations are a complete metadata declaration. Revoking the last
     // imported anchor preserves chain observations, attribution and usage.
+    // Also drop stale by-family index rows left after Type ID lineage rebound
+    // a binary to another family (writer also deletes these; this heals older DBs).
     for version_hash in store.list_script_version_hashes_by_family(family_id)? {
-        if active_registrations.binaries.contains_key(&version_hash) {
-            continue;
-        }
         let mut version = store.get_script_version(&version_hash)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "family version index points to missing version: family={} binary=0x{}",
@@ -919,6 +981,29 @@ fn upsert_script_label_validated(
                 hex::encode(&version_hash)
             )
         })?;
+        if version.family_id.as_deref() != Some(family_id) {
+            if let Some(owner) = version.family_id.as_deref() {
+                if type_id_lineage_owns_binary(store, &version, owner)? {
+                    warn!(
+                        family = family_id,
+                        binary = %format!("0x{}", hex::encode(&version_hash)),
+                        version_family = owner,
+                        "dropping stale by-family index after Type ID lineage rebind"
+                    );
+                    store.delete_script_version_by_family_direct(family_id, &version_hash)?;
+                    continue;
+                }
+            }
+            anyhow::bail!(
+                "family version index contradicts version: family={} binary=0x{} version_family={:?}",
+                family_id,
+                hex::encode(&version_hash),
+                version.family_id
+            );
+        }
+        if active_registrations.binaries.contains_key(&version_hash) {
+            continue;
+        }
         if !version.registered_references.is_empty() {
             revoke_imported_references(&mut version);
             store.put_script_version(&version_hash, &version)?;
@@ -1059,6 +1144,21 @@ fn import_single_deployment(
             ..Default::default()
         }
     });
+    // Type ID lineage priority: do not let a metadata-by-data-hash registration
+    // steal a binary already rebound to another family's Type ID template.
+    if let Some(existing_family) = version_info.family_id.as_deref() {
+        if existing_family != family_id
+            && type_id_lineage_owns_binary(store, &version_info, existing_family)?
+        {
+            warn!(
+                family = family_id,
+                existing_family,
+                binary = %format!("0x{}", hex::encode(&version_hash)),
+                "skipping metadata version write: Type ID lineage owns binary"
+            );
+            return Ok(());
+        }
+    }
     if let Some(existing_name) = version_info.name.as_deref() {
         if existing_name != script.name {
             store.delete_script_version_by_label(existing_name, &version_hash)?;

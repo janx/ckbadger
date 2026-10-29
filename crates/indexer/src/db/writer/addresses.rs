@@ -1503,15 +1503,36 @@ impl BatchWriter {
             }
             batch.put_script_version(&version_hash, &info);
             let previous = rollups.existing_versions.get(&version_hash);
-            if let Some(family) = &info.family_id {
-                if previous.and_then(|info| info.family_id.as_ref()) != Some(family) {
-                    batch.put_script_version_by_family(family, &version_hash);
+            // Type ID lineage (or any family rebind) must drop the old
+            // by-family / by-label index rows; leaving them makes the next
+            // label-import preflight see a contradictory family index.
+            let prev_family = previous.and_then(|info| info.family_id.as_ref());
+            match (prev_family, info.family_id.as_ref()) {
+                (Some(old), Some(new)) if old != new => {
+                    batch.delete_script_version_by_family(old, &version_hash);
+                    batch.put_script_version_by_family(new, &version_hash);
                 }
+                (Some(old), None) => {
+                    batch.delete_script_version_by_family(old, &version_hash);
+                }
+                (None, Some(new)) => {
+                    batch.put_script_version_by_family(new, &version_hash);
+                }
+                _ => {}
             }
-            if let Some(name) = &info.name {
-                if previous.and_then(|info| info.name.as_ref()) != Some(name) {
-                    batch.put_script_version_by_label(name, &version_hash);
+            let prev_name = previous.and_then(|info| info.name.as_ref());
+            match (prev_name, info.name.as_ref()) {
+                (Some(old), Some(new)) if old != new => {
+                    batch.delete_script_version_by_label(old, &version_hash);
+                    batch.put_script_version_by_label(new, &version_hash);
                 }
+                (Some(old), None) => {
+                    batch.delete_script_version_by_label(old, &version_hash);
+                }
+                (None, Some(new)) => {
+                    batch.put_script_version_by_label(new, &version_hash);
+                }
+                _ => {}
             }
         }
         for (family_id, info) in rollups.families {
@@ -2411,6 +2432,185 @@ mod tests {
         assert_eq!(result.website.as_deref(), Some("https://example.invalid"));
         assert_eq!(result.description.as_deref(), Some("registered template"));
         assert_eq!(result.type_id_deployments, vec![(registered, 100)]);
+    }
+
+    #[test]
+    fn type_id_lineage_rebind_drops_old_indexes_and_label_import_survives_restart() {
+        // F1: after lineage rebinds a binary from metadata-family to
+        // template-family, old by-family/by-label rows must be deleted and the
+        // next label-import startup must not fatal on the conflict.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        let binary = vec![0x42; 32];
+        let registered = vec![0x52; 32];
+        let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
+
+        store
+            .put_script_version(
+                &binary,
+                &ScriptVersionInfo {
+                    version_hash: binary.clone(),
+                    family_id: Some("metadata-family".into()),
+                    name: Some("From Data Hash".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version_by_family_direct("metadata-family", &binary)
+            .unwrap();
+        store
+            .insert_script_version_by_label("From Data Hash", &binary)
+            .unwrap();
+        store
+            .put_script_version(
+                &[0x99; 32],
+                &ScriptVersionInfo {
+                    version_hash: vec![0x99; 32],
+                    family_id: Some("template-family".into()),
+                    name: Some("Template Family".into()),
+                    registered_references: vec![(registered.clone(), 1)],
+                    canonical_reference_hash: Some(registered.clone()),
+                    canonical_hash_type: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_family_direct(
+                "template-family",
+                &ScriptFamilyInfo {
+                    family_id: "template-family".into(),
+                    name: "Template Family".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_family_direct(
+                "metadata-family",
+                &ScriptFamilyInfo {
+                    family_id: "metadata-family".into(),
+                    name: "From Data Hash".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let data = b"\x7fELFrebound".to_vec();
+        let data_hash: [u8; 32] = binary.as_slice().try_into().unwrap();
+        let cell = crate::parser::cell::ParsedCell {
+            capacity: 10_000,
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x11; 32],
+            type_code_hash: Some(type_id),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 32]),
+            type_script_hash: Some(registered.clone()),
+            data_hash,
+            data_size: data.len() as i32,
+            data,
+        };
+        let tx = crate::sync::types::TxData {
+            hash: [0x44; 32],
+            block_number: 100,
+            tx_index: 1,
+            inputs_count: 0,
+            outputs_count: 1,
+            is_cellbase: false,
+            inputs: vec![],
+            cells: vec![cell],
+            witnesses: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 10_000,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            semantic_tags: 0,
+        };
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                std::slice::from_ref(&tx),
+                &HashMap::new(),
+                &HashMap::new(),
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let version = store.get_script_version(&binary).unwrap().unwrap();
+        assert_eq!(version.family_id.as_deref(), Some("template-family"));
+        assert!(
+            !store
+                .list_script_version_hashes_by_family("metadata-family")
+                .unwrap()
+                .contains(&binary),
+            "old by-family index must be deleted on lineage rebind"
+        );
+        assert!(store
+            .list_script_version_hashes_by_family("template-family")
+            .unwrap()
+            .contains(&binary));
+        assert!(
+            !store
+                .list_script_version_hashes_by_label("From Data Hash")
+                .unwrap()
+                .contains(&binary),
+            "old by-label index must be deleted on lineage rebind"
+        );
+
+        // Restart path: metadata still lists the binary under the old family.
+        // Label import must accept Type ID lineage priority instead of aborting.
+        let metadata_family = serde_json::from_value(serde_json::json!({
+            "metadata_slug": "metadata-family",
+            "name": "From Data Hash",
+            "mainnet": {"versions": [{
+                "version_hash": format!("0x{}", hex::encode(&binary)),
+                "canonical_ref_hash": format!("0x{}", "aa".repeat(32)),
+                "canonical_hash_type": "data1"
+            }]}
+        }))
+        .unwrap();
+        let template_family = serde_json::from_value(serde_json::json!({
+            "metadata_slug": "template-family",
+            "name": "Template Family",
+            "mainnet": {"versions": [{
+                "version_hash": format!("0x{}", "99".repeat(32)),
+                "canonical_ref_hash": format!("0x{}", hex::encode(&registered)),
+                "canonical_hash_type": "type"
+            }]}
+        }))
+        .unwrap();
+        let result = crate::label_import::import_all(
+            store.as_ref(),
+            "mainnet",
+            &[],
+            &[metadata_family, template_family],
+        )
+        .unwrap();
+        assert!(
+            result.errors.is_empty(),
+            "label import after lineage rebind must not fail: {:?}",
+            result.errors
+        );
+        assert_eq!(
+            store
+                .get_script_version(&binary)
+                .unwrap()
+                .unwrap()
+                .family_id
+                .as_deref(),
+            Some("template-family"),
+            "metadata must not steal lineage-owned binary"
+        );
     }
 
     #[test]

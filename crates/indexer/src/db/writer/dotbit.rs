@@ -181,16 +181,14 @@ impl IdentityActionState {
 }
 
 /// Per-item action, shared by bulk and live. Transaction-wide ActionData
-/// cannot turn an unchanged neighbour into a mint, transfer or recycle.
+/// cannot turn an unchanged neighbour into a mint, transfer or recycle;
+/// classify from owner/expiry chain facts only. Collection activity handles
+/// Unknown DAS ActionData separately (warn + no invented Mint/Recycle).
 pub(crate) fn classify_identity_output_action(
     previous: Option<&IdentityActionState>,
     next_owner: &[u8],
     next_expiry: Option<u64>,
-    _das_action: Option<&str>,
 ) -> Result<AssetAction> {
-    // Unknown DAS ActionData is ignored at the item layer: classify from
-    // owner/expiry chain facts only. Collection activity handles Unknown
-    // separately (warn + no invented Mint/Recycle).
     let Some(previous) = previous else {
         return Ok(AssetAction::Mint);
     };
@@ -712,7 +710,6 @@ impl BatchWriter {
             tx_hash,
             block_number,
             timestamp_ms,
-            None,
             batch,
             state,
         )
@@ -724,7 +721,6 @@ impl BatchWriter {
         tx_hash: &[u8],
         block_number: i64,
         timestamp_ms: i64,
-        das_action: Option<&str>,
         batch: &mut StoreBatch,
         state: &mut DotbitBatchState,
     ) -> Result<()> {
@@ -749,7 +745,6 @@ impl BatchWriter {
             previous.as_ref(),
             &account.owner_lock_hash,
             account.expired_at,
-            das_action,
         )
         .map_err(|error| {
             anyhow!(
@@ -1230,11 +1225,11 @@ mod tests {
         };
         let previous = IdentityActionState::for_output(Some(consumed), Some(&entry)).unwrap();
         assert_eq!(
-            classify_identity_output_action(previous.as_ref(), &[1; 32], Some(150), None).unwrap(),
+            classify_identity_output_action(previous.as_ref(), &[1; 32], Some(150)).unwrap(),
             AssetAction::Renew
         );
         assert_eq!(
-            classify_identity_output_action(previous.as_ref(), &[2; 32], Some(150), None).unwrap(),
+            classify_identity_output_action(previous.as_ref(), &[2; 32], Some(150)).unwrap(),
             AssetAction::Transfer
         );
         assert!(IdentityActionState::for_output(None, Some(&entry))
@@ -1246,7 +1241,7 @@ mod tests {
         // when an output asks for classification.
         let missing_owner = IdentityActionState::from_entry(&entry).unwrap();
         let previous = IdentityActionState::for_output(Some(missing_owner), None).unwrap();
-        let message = classify_identity_output_action(previous.as_ref(), &[1; 32], None, None)
+        let message = classify_identity_output_action(previous.as_ref(), &[1; 32], None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -1257,16 +1252,16 @@ mod tests {
         entry.is_live = true;
         let previous = IdentityActionState::for_output(None, Some(&entry)).unwrap();
         assert_eq!(
-            classify_identity_output_action(previous.as_ref(), &[4; 32], Some(200), None).unwrap(),
+            classify_identity_output_action(previous.as_ref(), &[4; 32], Some(200)).unwrap(),
             AssetAction::Update
         );
         let previous = IdentityActionState::for_output(Some(consumed), Some(&entry)).unwrap();
         assert_eq!(
-            classify_identity_output_action(previous.as_ref(), &[1; 32], Some(100), None).unwrap(),
+            classify_identity_output_action(previous.as_ref(), &[1; 32], Some(100)).unwrap(),
             AssetAction::Update
         );
         assert_eq!(
-            classify_identity_output_action(None, &[1; 32], None, Some("invented_action")).unwrap(),
+            classify_identity_output_action(None, &[1; 32], None).unwrap(),
             AssetAction::Mint
         );
     }
@@ -1288,54 +1283,20 @@ mod tests {
         };
         let previous = IdentityActionState::from_entry(&previous).unwrap();
         assert_eq!(
-            classify_identity_output_action(None, &[1; 32], Some(100), Some("confirm_proposal"))
-                .unwrap(),
+            classify_identity_output_action(None, &[1; 32], Some(100)).unwrap(),
             AssetAction::Mint
         );
-        for action in [
-            "edit_records",
-            "edit_manager",
-            "transfer_account",
-            "recycle_expired_account",
-            "confirm_proposal",
-            "enable_sub_account",
-        ] {
-            assert_eq!(
-                classify_identity_output_action(Some(&previous), &[1; 32], Some(100), Some(action))
-                    .unwrap(),
-                AssetAction::Update,
-                "{action}"
-            );
-        }
         assert_eq!(
-            classify_identity_output_action(
-                Some(&previous),
-                &[2; 32],
-                Some(100),
-                Some("transfer_account")
-            )
-            .unwrap(),
+            classify_identity_output_action(Some(&previous), &[1; 32], Some(100)).unwrap(),
+            AssetAction::Update
+        );
+        assert_eq!(
+            classify_identity_output_action(Some(&previous), &[2; 32], Some(100)).unwrap(),
             AssetAction::Transfer
         );
         assert_eq!(
-            classify_identity_output_action(
-                Some(&previous),
-                &[1; 32],
-                Some(200),
-                Some("renew_account")
-            )
-            .unwrap(),
+            classify_identity_output_action(Some(&previous), &[1; 32], Some(200)).unwrap(),
             AssetAction::Renew
-        );
-        assert_eq!(
-            classify_identity_output_action(
-                Some(&previous),
-                &[1; 32],
-                Some(100),
-                Some("invented_action")
-            )
-            .unwrap(),
-            AssetAction::Update
         );
         for action in [
             AssetAction::Mint,

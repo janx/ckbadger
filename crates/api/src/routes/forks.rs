@@ -452,7 +452,7 @@ async fn list_forks(
                         let (mut blocks, mut transactions) =
                             match read_orphaned_branch(&reader, &record.event) {
                                 Ok(branch) => branch,
-                                Err(e) if e.to_string().contains("CKB RocksDB is missing") => {
+                                Err(e) if is_old_branch_unavailable(&e) => {
                                     return Ok(("old_branch_unavailable".to_string(), None));
                                 }
                                 Err(e) => return Err(e),
@@ -464,7 +464,7 @@ async fn list_forks(
                             &mut blocks,
                             &mut transactions,
                         ) {
-                            if e.to_string().contains("CKB RocksDB is missing") {
+                            if is_old_branch_unavailable(&e) {
                                 return Ok(("old_branch_unavailable".to_string(), None));
                             }
                             return Err(e);
@@ -795,6 +795,16 @@ fn cached_canonical_header(
 /// Read one current canonical view for the whole historical branch. Re-entry
 /// after a later switch is identified by the exact hash at the same height;
 /// the persisted event still records what this node dropped at that moment.
+/// Node RocksDB may lack pruned historical old-branch blocks. Both the
+/// walk-back miss (`CKB RocksDB is missing`) and the enrich miss
+/// (`lost historical old branch`) map to the same client status.
+fn is_old_branch_unavailable(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let msg = cause.to_string();
+        msg.contains("CKB RocksDB is missing") || msg.contains("lost historical old branch")
+    })
+}
+
 fn enrich_branch_fate(
     store: &CkbadgerStore,
     reader: &ckb_store_reader::CkbChainReader,
@@ -1169,5 +1179,24 @@ mod tests {
         assert!(rfc3339_from_unix_seconds(1_700_000_000, "ctx").is_ok());
         let err = rfc3339_from_unix_seconds(i64::MAX, "reorg:key").unwrap_err();
         assert!(err.1 .0.message.contains("invalid reorg detected_at"));
+    }
+
+    #[test]
+    fn is_old_branch_unavailable_matches_walk_and_enrich_messages() {
+        let walk = anyhow::anyhow!(
+            "CKB RocksDB is missing old branch block 17101 0x{}",
+            "ab".repeat(32)
+        );
+        let enrich = anyhow::anyhow!(
+            "CKB RocksDB lost historical old branch block 0x{}",
+            "cd".repeat(32)
+        );
+        let other = anyhow::anyhow!("CKB RocksDB missing canonical uncle-bearing block 1");
+        assert!(is_old_branch_unavailable(&walk));
+        assert!(is_old_branch_unavailable(&enrich));
+        assert!(!is_old_branch_unavailable(&other));
+        // Wrapped display still carries the marker through the cause chain.
+        let wrapped = walk.context("reading orphaned branch");
+        assert!(is_old_branch_unavailable(&wrapped));
     }
 }

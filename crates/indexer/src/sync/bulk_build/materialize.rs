@@ -25,6 +25,8 @@ pub(crate) struct MaterializedRow {
     pub(crate) cf_name: &'static str,
     pub(crate) key: Vec<u8>,
     pub(crate) value: Vec<u8>,
+    /// When true, the flush path deletes `key` instead of putting `value`.
+    pub(crate) delete: bool,
 }
 
 impl MaterializedRow {
@@ -33,6 +35,16 @@ impl MaterializedRow {
             cf_name,
             key,
             value,
+            delete: false,
+        }
+    }
+
+    pub(crate) fn delete(cf_name: &'static str, key: Vec<u8>) -> Self {
+        Self {
+            cf_name,
+            key,
+            value: Vec::new(),
+            delete: true,
         }
     }
 }
@@ -315,32 +327,34 @@ impl<'a> BoundedRowSink<'a> {
     }
 
     pub(crate) fn push(&mut self, row: MaterializedRow) -> Result<()> {
-        self.push_parts(row.cf_name, &row.key, &row.value)
+        self.push_borrowed(&row)
     }
 
     fn push_borrowed(&mut self, row: &MaterializedRow) -> Result<()> {
-        self.push_parts(row.cf_name, &row.key, &row.value)
-    }
-
-    fn push_parts(&mut self, cf_name: &'static str, key: &[u8], value: &[u8]) -> Result<()> {
         self.ensure_not_cancelled()?;
-        if is_append_only_cf_name(cf_name) {
+        if is_append_only_cf_name(row.cf_name) {
             if matches!(self.counter_kind, CounterKind::FinalSnapshot) {
                 return Err(anyhow!(
                     "final snapshot cannot target append-only cf: {}",
-                    cf_name
+                    row.cf_name
                 ));
             }
             return Err(anyhow!(
                 "bounded finalize materialization cannot target append-only cf: {}",
-                cf_name
+                row.cf_name
             ));
         }
-        let actual_policy = cf_write_policy(cf_name);
+        if row.delete && is_append_only_cf_name(row.cf_name) {
+            return Err(anyhow!(
+                "append-only CF rejects deletes during materialize: cf={}",
+                row.cf_name
+            ));
+        }
+        let actual_policy = cf_write_policy(row.cf_name);
         if actual_policy != self.expected_policy {
             return Err(anyhow!(
                 "materializer write-policy mismatch: cf={} expected={:?} actual={:?}",
-                cf_name,
+                row.cf_name,
                 self.expected_policy,
                 actual_policy
             ));
@@ -349,16 +363,17 @@ impl<'a> BoundedRowSink<'a> {
         // Flush before copying the next row when its payload cannot fit. The
         // RocksDB batch may exceed the limit only by one row's encoding
         // overhead (or when one row itself is larger than the configured cap).
-        let next_payload_bytes = key
+        let next_payload_bytes = row
+            .key
             .len()
-            .checked_add(value.len())
-            .and_then(|bytes| bytes.checked_add(cf_name.len()))
+            .checked_add(row.value.len())
+            .and_then(|bytes| bytes.checked_add(row.cf_name.len()))
             .ok_or_else(|| {
                 anyhow!(
                     "bounded materializer row byte size overflow: cf={} key_bytes={} value_bytes={}",
-                    cf_name,
-                    key.len(),
-                    value.len()
+                    row.cf_name,
+                    row.key.len(),
+                    row.value.len()
                 )
             })?;
         if !self.batch.is_empty()
@@ -371,7 +386,12 @@ impl<'a> BoundedRowSink<'a> {
             self.flush()?;
         }
 
-        self.batch.put_raw_cf_by_name(cf_name, key, value)?;
+        if row.delete {
+            self.batch.delete_raw_cf_by_name(row.cf_name, &row.key)?;
+        } else {
+            self.batch
+                .put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+        }
         self.stats.rows += 1;
         self.stats.peak_batch_bytes = self.stats.peak_batch_bytes.max(self.batch.size_in_bytes());
         if self.batch.size_in_bytes() >= self.max_batch_bytes {

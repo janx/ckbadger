@@ -534,7 +534,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     hasMore={deposits.data.hasMore}
                     nextCursor={deposits.data.nextCursor}
                     currentCount={deposits.data.data.length}
-                    total={deposits.data.total}
+                    total={holdings.holdings.dao}
                     label="DAO cells"
                   />
                 </>

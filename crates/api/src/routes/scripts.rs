@@ -29,8 +29,8 @@ use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, hash_type_to_u8, historical_family_member_candidate,
     list_version_code_cells, merge_script_info_for_reference, parse_chart_date_range, parse_hash32,
-    reference_form_member_version, resolve_script_by_hash, resolve_script_form_by_hash,
-    CurrentScriptVersionResolution, VersionCodeCell,
+    resolve_script_by_hash, resolve_script_form_by_hash, CurrentScriptVersionResolution,
+    VersionCodeCell,
 };
 use crate::warmup::{CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL};
 use crate::AppState;
@@ -596,16 +596,23 @@ fn reference_custody(
     state: &AppState,
     reference_hash: &[u8],
     hash_type: u8,
+    observed_type_id: Option<bool>,
 ) -> Result<ScriptCustodyResponse, ApiRouteError> {
     match hash_type {
         0 | 2 | 4 => Ok(custody_without_witness("fixed", None)),
         1 => {
-            let current = reference_form_member_version(
+            let observed_type_id = match observed_type_id {
+                Some(observed) => observed,
+                None => has_observed_type_id_lineage(&state.store, reference_hash)
+                    .map_err(|e| ApiError::internal(e.to_string()))?,
+            };
+            let current = reference_form_member_version_with_lineage(
                 &state.store,
                 &state.append_only_store,
                 hash_type,
                 reference_hash,
                 &|_| true,
+                Some(observed_type_id),
             )
             .map_err(|e| {
                 ApiError::internal(format!(
@@ -647,9 +654,7 @@ fn reference_custody(
                 ));
             };
             if cells.is_empty() {
-                if has_observed_type_id_lineage(&state.store, reference_hash)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                {
+                if observed_type_id {
                     return Err(ApiError::internal(format!("persisted native Type ID binding 0x{} for reference 0x{} has no live code cell", hex::encode(&current), hex::encode(reference_hash))));
                 }
                 return Ok(custody_without_witness("retired", None));
@@ -1147,6 +1152,7 @@ fn reference_totals(info: &ckbadger_store::types::ScriptReferenceInfo) -> (i64, 
 fn reference_info_to_response(
     state: &AppState,
     member: &FamilyMemberForm,
+    observed_type_ids: &HashSet<Vec<u8>>,
 ) -> Result<ScriptObservedReferenceResponse, ApiRouteError> {
     let info = &member.info;
     let (live_cells_count, cells_count, owned_capacity_sum, owned_knowledge_sum) =
@@ -1180,13 +1186,19 @@ fn reference_info_to_response(
             .current_version_hash
             .as_ref()
             .map(|hash| format!("0x{}", hex::encode(hash))),
-        custody: reference_custody(state, &member.reference_hash, member.hash_type)?,
+        custody: reference_custody(
+            state,
+            &member.reference_hash,
+            member.hash_type,
+            Some(observed_type_ids.contains(&member.reference_hash)),
+        )?,
     })
 }
 
 fn class_totals_for_members(
     state: &AppState,
     members: &[FamilyMemberForm],
+    observed_type_ids: &HashSet<Vec<u8>>,
 ) -> Result<Vec<ScriptCodeClassTotalResponse>, ApiRouteError> {
     let mut totals: BTreeMap<String, (i64, i128, i64)> = BTreeMap::new();
     for member in members {
@@ -1198,7 +1210,12 @@ fn class_totals_for_members(
                 member.hash_type
             )));
         }
-        let custody = reference_custody(state, &member.reference_hash, member.hash_type)?;
+        let custody = reference_custody(
+            state,
+            &member.reference_hash,
+            member.hash_type,
+            Some(observed_type_ids.contains(&member.reference_hash)),
+        )?;
         let entry = totals.entry(custody.class).or_default();
         entry.0 = entry
             .0
@@ -1263,7 +1280,12 @@ fn family_classes_for_list(
     }
     members_by_family
         .into_iter()
-        .map(|(family, members)| Ok((family, class_totals_for_members(state, &members)?)))
+        .map(|(family, members)| {
+            Ok((
+                family,
+                class_totals_for_members(state, &members, &observed_type_ids)?,
+            ))
+        })
         .collect()
 }
 
@@ -1614,7 +1636,7 @@ fn family_member_reference_forms(
     family_id: Option<&str>,
     allowed_versions: &HashSet<Vec<u8>>,
     registered_references: &HashSet<(u8, Vec<u8>)>,
-) -> Result<Vec<FamilyMemberForm>, ApiRouteError> {
+) -> Result<(Vec<FamilyMemberForm>, HashSet<Vec<u8>>), ApiRouteError> {
     let versions = state
         .store
         .list_script_versions()
@@ -1668,7 +1690,7 @@ fn family_member_reference_forms(
         }
         members.push(member);
     }
-    Ok(members)
+    Ok((members, observed_type_ids))
 }
 
 fn observed_references_by_version(
@@ -1680,6 +1702,7 @@ fn observed_references_by_version(
         HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>>,
         Vec<ScriptObservedReferenceResponse>,
         Vec<FamilyMemberForm>,
+        HashSet<Vec<u8>>,
     ),
     ApiRouteError,
 > {
@@ -1691,7 +1714,7 @@ fn observed_references_by_version(
         .collect();
     let registered_references = registered_reference_set(versions);
 
-    let members = family_member_reference_forms(
+    let (members, observed_type_ids) = family_member_reference_forms(
         state,
         family_id,
         Some(family_id),
@@ -1699,7 +1722,7 @@ fn observed_references_by_version(
         &registered_references,
     )?;
     for member in &members {
-        let response = reference_info_to_response(state, member)?;
+        let response = reference_info_to_response(state, member, &observed_type_ids)?;
         if let Some(version_hash) = &member.current_version_hash {
             by_version
                 .entry(version_hash.clone())
@@ -1725,7 +1748,7 @@ fn observed_references_by_version(
             .cmp(&b.reference_hash)
             .then_with(|| a.hash_type.cmp(&b.hash_type))
     });
-    Ok((by_version, all_references, members))
+    Ok((by_version, all_references, members, observed_type_ids))
 }
 
 fn load_script_family_by_name(
@@ -2739,9 +2762,9 @@ async fn get_script(
 ) -> ApiResult<ScriptFamilyDetailResponse> {
     let (family_id, family) = load_script_family_by_name(&state, &name)?;
     let family_versions = load_family_versions(&state, &family_id)?;
-    let (mut observed_references, all_references, members) =
+    let (mut observed_references, all_references, members, observed_type_ids) =
         observed_references_by_version(&state, &family_id, &family_versions)?;
-    let code_classes = class_totals_for_members(&state, &members)?;
+    let code_classes = class_totals_for_members(&state, &members, &observed_type_ids)?;
     let mut versions = family_versions
         .iter()
         .map(|(version_hash, version_info)| {
@@ -2797,7 +2820,7 @@ async fn get_script_usage(
     let versions = load_family_versions(&state, &family_id)?;
     let allowed_versions = versions.iter().map(|(hash, _)| hash.clone()).collect();
     let registered_references = registered_reference_set(&versions);
-    let members = family_member_reference_forms(
+    let (members, _observed_type_ids) = family_member_reference_forms(
         &state,
         &family_id,
         Some(&family_id),
@@ -3110,7 +3133,7 @@ async fn get_script_capacity_history_chart(
         .map(|(version_hash, _)| version_hash.clone())
         .collect();
     let registered_references = registered_reference_set(&family_versions);
-    let member_forms = family_member_reference_forms(
+    let (member_forms, _observed_type_ids) = family_member_reference_forms(
         &state,
         &family_id,
         Some(&family_id),
@@ -3200,7 +3223,7 @@ async fn get_script_capacity_history_chart_by_code_hash(
                         format!("version 0x{}", hex::encode(&version_hash)),
                     )
                 };
-            let member_forms = family_member_reference_forms(
+            let (member_forms, _observed_type_ids) = family_member_reference_forms(
                 &state,
                 &membership_context,
                 version_info.family_id.as_deref(),

@@ -368,14 +368,48 @@ impl ScriptOwner {
         )?;
 
         for (version_hash, info) in rollups.versions {
-            if let Some(family) = &info.family_id {
+            let previous = rollups.existing_versions.get(&version_hash);
+            // Same as the live writer: a family/name rebind must tombstone the
+            // previous index key. Final snapshot puts only; deletes are staged
+            // as empty-value rows on a delete CF path via materializer helpers.
+            let prev_family = previous.and_then(|v| v.family_id.as_deref());
+            let new_family = info.family_id.as_deref();
+            if let (Some(old), Some(new)) = (prev_family, new_family) {
+                if old != new {
+                    all_rows.push(MaterializedRow::delete(
+                        ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+                        keys::encode_script_version_by_family_key(old, &version_hash),
+                    ));
+                }
+            } else if let (Some(old), None) = (prev_family, new_family) {
+                all_rows.push(MaterializedRow::delete(
+                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+                    keys::encode_script_version_by_family_key(old, &version_hash),
+                ));
+            }
+            if let Some(family) = new_family {
                 all_rows.push(MaterializedRow::new(
                     ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
                     keys::encode_script_version_by_family_key(family, &version_hash),
                     Vec::new(),
                 ));
             }
-            if let Some(name) = &info.name {
+            let prev_name = previous.and_then(|v| v.name.as_deref());
+            let new_name = info.name.as_deref();
+            if let (Some(old), Some(new)) = (prev_name, new_name) {
+                if old != new {
+                    all_rows.push(MaterializedRow::delete(
+                        ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
+                        keys::encode_script_version_by_label_key(old, &version_hash),
+                    ));
+                }
+            } else if let (Some(old), None) = (prev_name, new_name) {
+                all_rows.push(MaterializedRow::delete(
+                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
+                    keys::encode_script_version_by_label_key(old, &version_hash),
+                ));
+            }
+            if let Some(name) = new_name {
                 all_rows.push(MaterializedRow::new(
                     ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
                     keys::encode_script_version_by_label_key(name, &version_hash),

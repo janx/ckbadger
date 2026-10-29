@@ -644,7 +644,6 @@ impl BatchWriter {
             previous.as_ref(),
             &did.owner_lock_hash,
             None,
-            None,
         )?;
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_owner = if was_live {
@@ -1042,7 +1041,6 @@ impl BatchWriter {
             previous.as_ref(),
             &bit_cell.owner_lock_hash,
             Some(bit_cell.expired_at),
-            None,
         )?;
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {

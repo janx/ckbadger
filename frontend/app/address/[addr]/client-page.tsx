@@ -518,7 +518,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       hasMore={cells.data.hasMore}
                       nextCursor={cells.data.nextCursor}
                       currentCount={cells.data.data.length}
-                      total={cells.data.total}
+                      total={
+                        cellClass && holdings.data
+                          ? holdings.data.classes[cellClass].cellCount
+                          : cells.data.total
+                      }
                       label="live cells"
                     />
                   </>

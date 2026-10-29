@@ -338,6 +338,15 @@ impl<'a> StoreBatch<'a> {
         Ok(())
     }
 
+    pub fn delete_raw_cf_by_name(&mut self, cf_name: &str, key: &[u8]) -> anyhow::Result<()> {
+        if !self.store.has_cf(cf_name) {
+            anyhow::bail!("CF '{}' is not available in this store batch", cf_name);
+        }
+        let cf = self.store.cf(cf_name);
+        self.delete_cf(cf, key);
+        Ok(())
+    }
+
     fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K) {
         let key_ref = key.as_ref();
         if self.store.is_append_only_store() {

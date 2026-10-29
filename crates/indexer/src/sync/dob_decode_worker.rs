@@ -211,35 +211,14 @@ impl DobDecodeWorker {
             // sources OK) so self-contained DOBs clear DecodePending via
             // resolve_tier. A failed profile update skips put_dob_decoded so
             // list_undecoded_dob_spores will retry.
-            let mut batch_committed: u64 = 0;
-            for (spore_id, entry) in &decoded_results {
-                let mut store_batch = StoreBatch::new(&self.store);
-                if let Err(e) = self.update_spore_media_profile(
-                    spore_id,
-                    &entry.media_sources,
-                    &mut store_batch,
-                ) {
-                    warn!(
-                        spore_id = hex::encode(spore_id),
-                        error = %e,
-                        "failed to update spore media profile after DOB decode — \
-                         skipping put_dob_decoded so it will be retried"
-                    );
-                    batch_skipped += 1;
-                    continue;
-                }
-                store_batch.put_dob_decoded(spore_id, entry);
-                store_batch.commit()?;
-                batch_committed += 1;
-            }
+            let (batch_committed, skipped_profile) =
+                self.commit_successful_decodes(&decoded_results)?;
+            batch_skipped += skipped_profile;
 
-            // Persist deterministic failures per-spore so they are not
-            // re-listed for decode. Transient failures were dropped above and
-            // remain in list_undecoded_dob_spores to retry next run.
+            // Persist deterministic failures with tier → Unknown in the same
+            // commit so DecodePending does not stick forever on un-decodable DOBs.
             for (spore_id, failure) in &failed_records {
-                let mut store_batch = StoreBatch::new(&self.store);
-                store_batch.put_dob_decode_failure(spore_id, failure);
-                store_batch.commit()?;
+                self.commit_decode_failure(spore_id, failure)?;
             }
 
             total_decoded += batch_committed;
@@ -289,6 +268,89 @@ impl DobDecodeWorker {
             ));
         });
 
+        Ok(())
+    }
+
+    /// Production commit path for successful decodes. Always updates the media
+    /// profile (including empty sources) before `put_dob_decoded` in one batch —
+    /// this is the loop that previously skipped empty `media_sources` and left
+    /// self-contained DOBs stuck on `DecodePending`.
+    fn commit_successful_decodes(
+        &self,
+        decoded_results: &[(Vec<u8>, DobDecodedEntry)],
+    ) -> Result<(u64, u64)> {
+        let mut committed = 0u64;
+        let mut skipped = 0u64;
+        for (spore_id, entry) in decoded_results {
+            let mut store_batch = StoreBatch::new(&self.store);
+            if let Err(e) =
+                self.update_spore_media_profile(spore_id, &entry.media_sources, &mut store_batch)
+            {
+                warn!(
+                    spore_id = hex::encode(spore_id),
+                    error = %e,
+                    "failed to update spore media profile after DOB decode — \
+                     skipping put_dob_decoded so it will be retried"
+                );
+                skipped += 1;
+                continue;
+            }
+            store_batch.put_dob_decoded(spore_id, entry);
+            store_batch.commit()?;
+            committed += 1;
+        }
+        Ok((committed, skipped))
+    }
+
+    /// Deterministic decode failure: record the failure and move tier off
+    /// `DecodePending` to `Unknown` in the same commit.
+    fn commit_decode_failure(
+        &self,
+        spore_id: &[u8],
+        failure: &ckbadger_store::types::DobDecodeFailure,
+    ) -> Result<()> {
+        let mut batch = StoreBatch::new(&self.store);
+        self.set_spore_media_tier(spore_id, CompositionTier::Unknown, &mut batch)?;
+        batch.put_dob_decode_failure(spore_id, failure);
+        batch.commit()?;
+        Ok(())
+    }
+
+    /// Set the spore media tier (and cluster aggregate counts) without merging sources.
+    fn set_spore_media_tier(
+        &self,
+        spore_id: &[u8],
+        new_tier: CompositionTier,
+        batch: &mut StoreBatch<'_>,
+    ) -> Result<()> {
+        let mut entry = self.store.get_spore(spore_id)?.with_context(|| {
+            format!(
+                "spore entry not found when setting media tier: spore_id=0x{}",
+                hex::encode(spore_id)
+            )
+        })?;
+        let ObjectExtra::Spore {
+            ref mut media_profile,
+            ..
+        } = entry.extra
+        else {
+            warn!(
+                spore_id = hex::encode(spore_id),
+                "expected Spore extra when setting media tier after decode failure"
+            );
+            return Ok(());
+        };
+        let old_tier = media_profile.tier;
+        if old_tier == new_tier {
+            return Ok(());
+        }
+        media_profile.tier = new_tier;
+        if entry.is_live {
+            self.sync_cluster_aggregate_for_media_tier_change(
+                spore_id, &entry, old_tier, new_tier, batch,
+            )?;
+        }
+        batch.put_spore(spore_id, &entry);
         Ok(())
     }
 
@@ -1461,29 +1523,10 @@ mod tests {
         assert_eq!(updated_agg.total_count, 1);
     }
 
-    #[test]
-    fn test_update_spore_media_profile_empty_sources_clears_decode_pending() {
-        // Self-contained DOBs decode with empty media_sources; profile update
-        // must still clear DecodePending so the spore is not stuck forever.
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-        let cache_dir = dir.path().join("decoder-cache");
-        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let worker = DobDecodeWorker::new(
-            store.clone(),
-            store.clone(),
-            decoder_cache,
-            dir.path().join("media"),
-            "http://localhost:9999".to_string(),
-            shutdown,
-        );
-
-        let cluster_id = vec![0xCDu8; 32];
-        let spore_id = [0xABu8; 32];
+    fn seed_decode_pending_spore(store: &CkbadgerStore, spore_id: &[u8; 32], cluster_id: &[u8]) {
         let spore_entry = ckbadger_store::types::ObjectEntry {
             standard: ckbadger_store::types::ObjectStandard::Spore,
-            collection_id: Some(cluster_id.clone()),
+            collection_id: Some(cluster_id.to_vec()),
             token_id: None,
             owner_lock_hash: Some(vec![0x33; 32]),
             name: None,
@@ -1501,10 +1544,10 @@ mod tests {
                 },
             },
         };
-        store.put_spore_direct(&spore_id, &spore_entry).unwrap();
-        let mut batch = StoreBatch::new(store.as_ref());
+        store.put_spore_direct(spore_id, &spore_entry).unwrap();
+        let mut batch = StoreBatch::new(store);
         batch.put_cluster_aggregate(
-            &cluster_id,
+            cluster_id,
             &ckbadger_store::types::ClusterAggregate {
                 total_count: 1,
                 live_count: 1,
@@ -1514,12 +1557,40 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+    }
 
-        let mut batch = StoreBatch::new(store.as_ref());
-        worker
-            .update_spore_media_profile(&spore_id, &[], &mut batch)
-            .unwrap();
-        batch.commit().unwrap();
+    #[test]
+    fn test_commit_successful_decodes_empty_sources_clears_decode_pending() {
+        // Exercises the worker commit path (the former empty-sources guard),
+        // not just update_spore_media_profile in isolation.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cache_dir = dir.path().join("decoder-cache");
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            dir.path().join("media"),
+            "http://localhost:9999".to_string(),
+            shutdown,
+        );
+
+        let cluster_id = vec![0xCDu8; 32];
+        let spore_id = [0xABu8; 32];
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &cluster_id);
+
+        let decoded = vec![(
+            spore_id.to_vec(),
+            DobDecodedEntry {
+                steps: vec![],
+                media_sources: vec![],
+                decoded_at: 1_700_000_000,
+            },
+        )];
+        let (committed, skipped) = worker.commit_successful_decodes(&decoded).unwrap();
+        assert_eq!((committed, skipped), (1, 0));
 
         let updated = store.get_spore(&spore_id).unwrap().unwrap();
         match updated.extra {
@@ -1527,12 +1598,65 @@ mod tests {
                 assert_ne!(
                     media_profile.tier,
                     CompositionTier::DecodePending,
-                    "empty media_sources after decode must clear DecodePending"
+                    "worker commit path must clear DecodePending for empty media_sources"
                 );
                 assert_eq!(media_profile.tier, CompositionTier::PureCkb);
             }
             other => panic!("expected spore extra, got {other:?}"),
         }
+        assert!(
+            matches!(
+                store.get_dob_decode_outcome(&spore_id).unwrap(),
+                Some(ckbadger_store::types::DecodeOutcome::Decoded(_))
+            ),
+            "decoded marker must be written in the same commit"
+        );
+        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(agg.unknown_count, 0);
+        assert_eq!(agg.pure_ckb_count, 1);
+    }
+
+    #[test]
+    fn test_commit_decode_failure_clears_decode_pending_to_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cache_dir = dir.path().join("decoder-cache");
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            dir.path().join("media"),
+            "http://localhost:9999".to_string(),
+            shutdown,
+        );
+
+        let cluster_id = vec![0xCEu8; 32];
+        let spore_id = [0xACu8; 32];
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &cluster_id);
+
+        let failure = ckbadger_store::types::DobDecodeFailure {
+            category: ckbadger_store::types::DobDecodeFailureCategory::ClusterNotFound,
+            message: "cluster missing".into(),
+            failed_at: 1_700_000_001,
+        };
+        worker.commit_decode_failure(&spore_id, &failure).unwrap();
+
+        let updated = store.get_spore(&spore_id).unwrap().unwrap();
+        match updated.extra {
+            ObjectExtra::Spore { media_profile, .. } => {
+                assert_eq!(media_profile.tier, CompositionTier::Unknown);
+            }
+            other => panic!("expected spore extra, got {other:?}"),
+        }
+        assert!(matches!(
+            store.get_dob_decode_outcome(&spore_id).unwrap(),
+            Some(ckbadger_store::types::DecodeOutcome::Failed(_))
+        ));
+        // Unknown and DecodePending share the unknown_count slot — no net change.
+        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(agg.unknown_count, 1);
     }
 
     #[test]

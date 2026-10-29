@@ -505,11 +505,20 @@ pub fn observed_type_id_references_from_versions(
 /// Observed native TypeID deployments retain provenance after retirement or
 /// burn. For these references, only the indexer's canonical mapping identifies
 /// a current executable; a live typed cell may now carry non-executable data.
+///
+/// Early-exits on the first matching deployment. Callers that already listed
+/// versions should use [`observed_type_id_references_from_versions`] +
+/// `.contains()` instead of calling this.
 pub fn has_observed_type_id_lineage(
     store: &CkbadgerStore,
     reference_hash: &[u8],
 ) -> anyhow::Result<bool> {
-    Ok(observed_type_id_references(store)?.contains(reference_hash))
+    Ok(store.list_script_versions()?.iter().any(|(_, version)| {
+        version
+            .type_id_deployments
+            .iter()
+            .any(|(reference, _)| reference.as_slice() == reference_hash)
+    }))
 }
 
 /// Resolve a reference's current binary candidate. Family routes pass this
@@ -631,12 +640,20 @@ pub fn resolve_script_form_by_hash(
     let has_own_code_cell = store
         .find_any_cell_by_data_hash(reference_hash, cells_store)?
         .is_some();
-    let member_version = reference_form_member_version(
+    // Type forms may need lineage twice (member resolution + NotFound gate).
+    // Compute once with early-exit and share; other forms never consult it.
+    let observed_type_id = if hash_type == 1 {
+        Some(has_observed_type_id_lineage(store, reference_hash)?)
+    } else {
+        None
+    };
+    let member_version = reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
         reference_hash,
         &|hash: &[u8]| has_own_code_cell && hash == reference_hash,
+        observed_type_id,
     )?;
     if let Some(version_hash) = member_version {
         let version_info = store.get_script_version(&version_hash)?;
@@ -656,7 +673,7 @@ pub fn resolve_script_form_by_hash(
     if type_matches
         .iter()
         .any(|candidate| candidate.native_type_id)
-        || (type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?)
+        || (type_matches.is_empty() && observed_type_id.unwrap_or(false))
     {
         return Ok(CurrentScriptVersionResolution::NotFound);
     }
