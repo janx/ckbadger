@@ -86,7 +86,10 @@ pub fn script_groups(
         let group = &mut groups[position];
         if let Some(index) = input {
             group.input_indices.push(index);
-            if kind == "lock" && group.witness_index.is_none() {
+            // Lock and type groups both read the witness at the group's first
+            // input index (WitnessArgs). Cobuild / CKBFS content witnesses are
+            // attached afterwards by `attach_content_witnesses`.
+            if group.witness_index.is_none() {
                 group.witness_index = Some(index);
             }
         }
@@ -166,6 +169,74 @@ pub fn apply_group_cycles(
         "canonical cycles result contains groups absent from transaction: {cycles:?}"
     );
     Ok(())
+}
+
+/// Override type-group `witness_index` when a Cobuild or CKBFS content witness
+/// is the payload the script actually reads (beyond WitnessArgs at the first input).
+pub fn attach_content_witnesses(
+    groups: &mut [ScriptGroupResponse],
+    witnesses: &[String],
+) -> anyhow::Result<()> {
+    let mut ckbfs_indices = Vec::new();
+    for (index, raw) in witnesses.iter().enumerate() {
+        let bytes = hex::decode(raw.trim_start_matches("0x"))?;
+        if cobuild_fields(&bytes).is_some() {
+            if let Some(hashes) = cobuild_action_script_hashes(&bytes) {
+                for hash in hashes {
+                    for group in groups.iter_mut() {
+                        if group.kind == "type" && group.script_hash == hash {
+                            group.witness_index = Some(index);
+                        }
+                    }
+                }
+            }
+        } else if ckbfs_fields(&bytes).is_some() {
+            ckbfs_indices.push(index);
+        }
+    }
+    if ckbfs_indices.is_empty() {
+        return Ok(());
+    }
+    let mut ckbfs_groups: Vec<&mut ScriptGroupResponse> = groups
+        .iter_mut()
+        .filter(|group| {
+            group.kind == "type" && cell_type(Some(&group.script)).ok().as_deref() == Some("ckbfs")
+        })
+        .collect();
+    anyhow::ensure!(
+        ckbfs_groups.len() <= ckbfs_indices.len(),
+        "CKBFS type groups ({}) exceed CKBFS witnesses ({})",
+        ckbfs_groups.len(),
+        ckbfs_indices.len()
+    );
+    for (group, &index) in ckbfs_groups.iter_mut().zip(&ckbfs_indices) {
+        group.witness_index = Some(index);
+    }
+    Ok(())
+}
+
+fn cobuild_action_script_hashes(bytes: &[u8]) -> Option<Vec<String>> {
+    let fields = cobuild_fields(bytes)?;
+    let (_, start, end) = fields.iter().find(|(name, _, _)| name == "message")?;
+    let message = bytes.get(*start..*end)?;
+    let message_fields = molecule_fields(message, Some(1))?;
+    let (actions_start, actions_end) = message_fields[0];
+    let actions = message.get(actions_start..actions_end)?;
+    let rows = molecule_fields(actions, None)?;
+    let mut hashes = Vec::with_capacity(rows.len());
+    for &(start, end) in &rows {
+        let action = actions.get(start..end)?;
+        let fields = molecule_fields(action, Some(3))?;
+        let (hash_start, hash_end) = fields[1];
+        if hash_end - hash_start != 32 {
+            return None;
+        }
+        hashes.push(format!(
+            "0x{}",
+            hex::encode(action.get(hash_start..hash_end)?)
+        ));
+    }
+    Some(hashes)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -370,13 +441,14 @@ fn valid_message(bytes: &[u8]) -> Option<usize> {
     Some(rows.len())
 }
 
-/// CoBuild schema: cryptape/ckb-transaction-cobuild-poc/schemas/{basic,top_level}.mol.
-/// SighashAll stores message BEFORE seal. Reserved union ids alone are not a valid decode.
+/// CoBuild WitnessLayout (CCC / Spore on-chain): SighashAll is seal THEN message.
+/// cryptape/ckb-transaction-cobuild-poc `basic.mol` once listed message first; mainnet
+/// Spore witnesses and `@ckb-ccc` encode seal first. Reserved union ids alone are not a valid decode.
 fn cobuild_fields(bytes: &[u8]) -> Option<Vec<(String, usize, usize)>> {
     let id = word(bytes, 0)?;
     let body = bytes.get(4..)?;
     let names: &[&str] = match id {
-        0xff000001 => &["message", "seal"],
+        0xff000001 => &["seal", "message"],
         0xff000002 => &["seal"],
         0xff000003 => &[
             "inputCells",
@@ -578,13 +650,16 @@ mod tests {
     #[test]
     fn cobuild_validates_nested_messages_and_preserves_exact_ranges() {
         let message = table(&[4u32.to_le_bytes().to_vec()]);
-        let body = table(&[message.clone(), vec![0, 0, 0, 0]]);
+        // SighashAll on-chain / CCC order: seal, then message.
+        let body = table(&[vec![0, 0, 0, 0], message.clone()]);
         let mut data = 0xff000001u32.to_le_bytes().to_vec();
         data.extend(body);
         let rows = witness_details(&[format!("0x{}", hex::encode(&data))]).unwrap();
         assert_eq!(rows[0].kind, "cobuild");
-        assert_eq!(rows[0].fields[2].name, "message");
-        assert_eq!(rows[0].fields[2].hex, format!("0x{}", hex::encode(message)));
+        assert_eq!(rows[0].fields[2].name, "seal");
+        assert_eq!(rows[0].fields[2].hex, "0x00000000");
+        assert_eq!(rows[0].fields[3].name, "message");
+        assert_eq!(rows[0].fields[3].hex, format!("0x{}", hex::encode(message)));
         assert_eq!(
             rows[0]
                 .fields
@@ -593,11 +668,101 @@ mod tests {
                 .sum::<usize>(),
             data.len()
         );
-        data[16] = 0xff;
+        // Corrupt the message table (second field) so decode fails.
+        let message_start = rows[0].fields[3].start;
+        data[message_start + 4] = 0xff;
         assert!(
             cobuild_fields(&data).is_none(),
             "malformed message is not labelled CoBuild"
         );
+    }
+
+    #[test]
+    fn cobuild_rejects_message_before_seal_layout() {
+        let message = table(&[4u32.to_le_bytes().to_vec()]);
+        let body = table(&[message, vec![0, 0, 0, 0]]);
+        let mut data = 0xff000001u32.to_le_bytes().to_vec();
+        data.extend(body);
+        assert!(
+            cobuild_fields(&data).is_none(),
+            "message-then-seal is not the on-chain SighashAll layout"
+        );
+    }
+
+    #[test]
+    fn type_groups_receive_the_first_input_witness_index() {
+        let script = ScriptResponse {
+            code_hash: format!("0x{}", "11".repeat(32)),
+            hash_type: "type".into(),
+            args: "0x".into(),
+        };
+        let input = TransactionInputResponse {
+            display: None,
+            previous_output: None,
+            since: "0x0".into(),
+            capacity: Some("100".into()),
+            used_capacity: Some("74".into()),
+            lock: Some(script.clone()),
+            r#type: Some(script),
+            address: None,
+            cell_type: Some("typed".into()),
+        };
+        let groups = script_groups(&[input], &[]).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].kind, "lock");
+        assert_eq!(groups[0].witness_index, Some(0));
+        assert_eq!(groups[1].kind, "type");
+        assert_eq!(groups[1].witness_index, Some(0));
+    }
+
+    #[test]
+    fn cobuild_content_witness_overrides_type_group_first_input_index() {
+        let spore_args = vec![0x55; 32];
+        let spore = ScriptResponse {
+            code_hash: format!("0x{}", "22".repeat(32)),
+            hash_type: "type".into(),
+            args: format!("0x{}", hex::encode(&spore_args)),
+        };
+        let lock = ScriptResponse {
+            code_hash: format!("0x{}", "11".repeat(32)),
+            hash_type: "type".into(),
+            args: "0x".into(),
+        };
+        let input = TransactionInputResponse {
+            display: None,
+            previous_output: None,
+            since: "0x0".into(),
+            capacity: Some("100".into()),
+            used_capacity: Some("74".into()),
+            lock: Some(lock),
+            r#type: Some(spore.clone()),
+            address: None,
+            cell_type: Some("spore".into()),
+        };
+        let mut groups = script_groups(&[input], &[]).unwrap();
+        let spore_hash = script_hash(&spore).unwrap();
+        let action = table(&[
+            vec![0x33; 32],
+            hex::decode(spore_hash.trim_start_matches("0x")).unwrap(),
+            {
+                let mut bytes = 4u32.to_le_bytes().to_vec();
+                bytes.extend(b"xfer");
+                bytes
+            },
+        ]);
+        let message = table(&[table(&[action])]);
+        let body = table(&[vec![0, 0, 0, 0], message]);
+        let mut cobuild = 0xff000001u32.to_le_bytes().to_vec();
+        cobuild.extend(body);
+        let witnesses = vec![
+            "0x10000000100000001000000010000000".into(),
+            format!("0x{}", hex::encode(cobuild)),
+        ];
+        attach_content_witnesses(&mut groups, &witnesses).unwrap();
+        let type_group = groups.iter().find(|g| g.kind == "type").unwrap();
+        assert_eq!(type_group.witness_index, Some(1));
+        let lock_group = groups.iter().find(|g| g.kind == "lock").unwrap();
+        assert_eq!(lock_group.witness_index, Some(0));
     }
     #[test]
     fn ckbfs_head_decodes_version_and_link_bytes_exactly() {
@@ -648,9 +813,11 @@ mod tests {
         assert_eq!(groups[0].input_indices, vec![0, 1]);
         assert_eq!(groups[0].witness_index, Some(0));
         assert_eq!(groups[1].input_indices, vec![0, 1]);
+        assert_eq!(groups[1].witness_index, Some(0));
         assert_eq!(groups[1].output_indices, vec![0]);
         assert!(!groups[2].ran);
         assert_eq!(groups[2].output_indices, vec![0]);
+        assert!(groups[2].witness_index.is_none());
         use ckbadger_common::cycles_task::{ScriptGroupCycles, ScriptGroupKind, TransactionCycles};
         let hash: [u8; 32] = hex::decode(groups[0].script_hash.trim_start_matches("0x"))
             .unwrap()

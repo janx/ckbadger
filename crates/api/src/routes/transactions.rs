@@ -1194,6 +1194,8 @@ async fn get_transaction_detail(
             None,
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
+        super::transaction_structure::attach_content_witnesses(&mut script_groups, &io.witnesses)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         return ok(TransactionDetailResponse {
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
@@ -1364,6 +1366,10 @@ async fn get_transaction_detail(
         group_result.as_ref(),
     )
     .map_err(|e| ApiError::internal(format!("transaction {tx_hash_hex} group cycles: {e}")))?;
+    super::transaction_structure::attach_content_witnesses(&mut script_groups, &witnesses)
+        .map_err(|e| {
+            ApiError::internal(format!("transaction {tx_hash_hex} content witnesses: {e}"))
+        })?;
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
