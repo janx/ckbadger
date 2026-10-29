@@ -3602,6 +3602,31 @@ async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<
     let baseline = state.genesis_baseline()?;
     let genesis_supply_ckb =
         (baseline.total_issuance - baseline.burnt) as f64 / SHANNONS_PER_CKB as f64;
+    let chain = load_chain_time(&state.store).await?;
+    let tip_year = match chain {
+        Some(chain) => {
+            let genesis = state
+                .store
+                .get_block_header(0)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| ApiError::internal("missing genesis header for nominal APC"))?;
+            let elapsed_ms = chain
+                .chain_time_ms()
+                .checked_sub(genesis.chain_time_ms)
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "tip chain time {} precedes genesis {}",
+                        chain.chain_time_ms(),
+                        genesis.chain_time_ms
+                    ))
+                })?;
+            // Mean Gregorian year in ms — the model is continuous in years since genesis.
+            elapsed_ms as f64 / (365.25 * 24.0 * 3_600_000.0)
+        }
+        None => 0.0,
+    };
+    // Closest quarterly sample at or before tip; future quarters stay for the projection.
+    let current_quarter = ((tip_year / 0.25).floor() as i32).clamp(0, 80) as usize;
     let data: Vec<ChartDataPoint> = (0..=80)
         .map(|i| {
             let year = i as f64 * 0.25;
@@ -3609,7 +3634,14 @@ async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<
             ChartDataPoint {
                 date: format!("{}", year),
                 value: format!("{:.4}", apc),
-                value2: None,
+                // Timeline marker for the headline "today" sample (not a Y2 series).
+                value2: Some(if i < current_quarter {
+                    "past".into()
+                } else if i == current_quarter {
+                    "current".into()
+                } else {
+                    "future".into()
+                }),
             }
         })
         .collect();
@@ -3618,7 +3650,8 @@ async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<
         data,
         title: "Nominal DAO Compensation Rate".to_string(),
         y_axis_label: "APC".to_string(),
-        y2_axis_label: None,
+        // Sentinel so clients know value2 is a timeline marker, not a series.
+        y2_axis_label: Some("nominal-apc-timeline".into()),
     })
 }
 
