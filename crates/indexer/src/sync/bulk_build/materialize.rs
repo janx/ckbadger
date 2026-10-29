@@ -165,6 +165,12 @@ impl EncodedHistoryChunk {
     }
 
     pub(crate) fn push_materialized(&mut self, row: MaterializedRow) -> Result<()> {
+        if row.delete {
+            bail!(
+                "EncodedHistoryChunk rejects delete rows (would put empty value): cf={}",
+                row.cf_name
+            );
+        }
         self.push_raw(row.cf_name, &row.key, &row.value)
     }
 
@@ -576,6 +582,12 @@ impl<'a> Materializer<'a> {
             let mut append_batch = StoreBatch::new(self.append_only_store);
             for row in rows {
                 self.ensure_not_cancelled()?;
+                if row.delete {
+                    bail!(
+                        "history materialize path rejects deletes (would put empty value): cf={}",
+                        row.cf_name
+                    );
+                }
                 let actual_policy = cf_write_policy(row.cf_name);
                 if actual_policy != expected_policy {
                     return Err(anyhow!(
@@ -1495,6 +1507,40 @@ mod tests {
             err
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn encoded_history_buffer_rejects_delete_rows() {
+        let mut buf = EncodedHistoryChunk::with_capacity(1, 0);
+        let err = buf
+            .push_materialized(MaterializedRow::delete(CF_BLOCK_HEADERS, b"k".to_vec()))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("EncodedHistoryChunk rejects delete rows"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn stream_history_rows_rejects_delete_rows() {
+        let root = super::super::unique_temp_test_dir("bulk-build-hist-reject-delete");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_store = CkbadgerStore::open_domain(root.join("domain")).unwrap();
+        let append_store = CkbadgerStore::open_append_only(root.join("append-only")).unwrap();
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let err = materializer
+            .stream_history_rows(&[MaterializedRow::delete(
+                CF_BLOCK_HEADERS,
+                keys::encode_block_num(1).to_vec(),
+            )])
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("history materialize path rejects deletes"),
+            "unexpected error: {err}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

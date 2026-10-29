@@ -825,15 +825,10 @@ fn validate_script_registrations(
             if version.family_id.as_deref() == Some(family) {
                 continue;
             }
-            // Stale by-family row after Type ID lineage rebound the binary.
-            // Preflight stays read-only; upsert drops the row. Do not fail start.
-            if let Some(owner) = version.family_id.as_deref() {
-                if type_id_lineage_owns_binary(store, &version, owner).with_context(context)? {
-                    continue;
-                }
-            }
+            // Stale by-family rows are a writer/reorg bug. Do not heal here —
+            // that would mask missing undo pre-images. Purge and rebuild.
             anyhow::bail!(
-                "{} family index contradicts version: binary=0x{} version_family={:?}",
+                "{} family index contradicts version: binary=0x{} version_family={:?}; purge and rebuild from genesis",
                 context(),
                 hex::encode(&hash),
                 version.family_id
@@ -971,8 +966,6 @@ fn upsert_script_label_validated(
 
     // Registrations are a complete metadata declaration. Revoking the last
     // imported anchor preserves chain observations, attribution and usage.
-    // Also drop stale by-family index rows left after Type ID lineage rebound
-    // a binary to another family (writer also deletes these; this heals older DBs).
     for version_hash in store.list_script_version_hashes_by_family(family_id)? {
         let mut version = store.get_script_version(&version_hash)?.ok_or_else(|| {
             anyhow::anyhow!(
@@ -982,20 +975,8 @@ fn upsert_script_label_validated(
             )
         })?;
         if version.family_id.as_deref() != Some(family_id) {
-            if let Some(owner) = version.family_id.as_deref() {
-                if type_id_lineage_owns_binary(store, &version, owner)? {
-                    warn!(
-                        family = family_id,
-                        binary = %format!("0x{}", hex::encode(&version_hash)),
-                        version_family = owner,
-                        "dropping stale by-family index after Type ID lineage rebind"
-                    );
-                    store.delete_script_version_by_family_direct(family_id, &version_hash)?;
-                    continue;
-                }
-            }
             anyhow::bail!(
-                "family version index contradicts version: family={} binary=0x{} version_family={:?}",
+                "family version index contradicts version: family={} binary=0x{} version_family={:?}; purge and rebuild from genesis",
                 family_id,
                 hex::encode(&version_hash),
                 version.family_id

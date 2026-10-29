@@ -269,6 +269,9 @@ fn apply_type_id_lineage(
                 version.category = template.category.clone();
                 version.website = template.website.clone();
                 version.description = template.description.clone();
+                // Drop the conflicting family's imported registrations; they
+                // belong to the old metadata identity, not the Type ID owner.
+                version.registered_references.clear();
             }
         } else {
             version.family_id = template.family_id.clone();
@@ -393,9 +396,24 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         let previous_family = version_map
             .get(version_hash)
             .and_then(|info| info.family_id.clone());
+        let previous_name = version_map
+            .get(version_hash)
+            .and_then(|info| info.name.clone());
         apply_type_id_lineage(&mut version_map, &templates, observation)?;
         let updated = &version_map[version_hash];
+        // Rebind deletes the old by-family / by-label keys. Record those
+        // pre-images so a reorg can restore them; recording only the new keys
+        // leaves the old family permanently under-indexed after rollback.
         if updated.family_id != previous_family {
+            if let Some(old) = &previous_family {
+                let key = keys::encode_script_version_by_family_key(old, version_hash);
+                lineage_undo.push((
+                    observation.block_number,
+                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+                    key.clone(),
+                    store.get_cf(store.cf_script_versions_by_family(), &key)?,
+                ));
+            }
             if let Some(family) = &updated.family_id {
                 let key = keys::encode_script_version_by_family_key(family, version_hash);
                 lineage_undo.push((
@@ -403,6 +421,17 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
                     ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
                     key.clone(),
                     store.get_cf(store.cf_script_versions_by_family(), &key)?,
+                ));
+            }
+        }
+        if updated.name != previous_name {
+            if let Some(old) = &previous_name {
+                let key = keys::encode_script_version_by_label_key(old, version_hash);
+                lineage_undo.push((
+                    observation.block_number,
+                    ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
+                    key.clone(),
+                    store.get_cf(store.cf_script_versions_by_label(), &key)?,
                 ));
             }
             if let Some(name) = &updated.name {
@@ -2395,6 +2424,7 @@ mod tests {
                 version_hash: version_hash.clone(),
                 family_id: Some("metadata-family".into()),
                 name: Some("from-data-hash".into()),
+                registered_references: vec![(vec![0xaa; 32], 0)],
                 ..Default::default()
             },
         )]);
@@ -2431,6 +2461,10 @@ mod tests {
         assert_eq!(result.category.as_deref(), Some("lock"));
         assert_eq!(result.website.as_deref(), Some("https://example.invalid"));
         assert_eq!(result.description.as_deref(), Some("registered template"));
+        assert!(
+            result.registered_references.is_empty(),
+            "rebind must drop the conflicting family's imported registrations"
+        );
         assert_eq!(result.type_id_deployments, vec![(registered, 100)]);
     }
 
@@ -2610,6 +2644,158 @@ mod tests {
                 .as_deref(),
             Some("template-family"),
             "metadata must not steal lineage-owned binary"
+        );
+    }
+
+    #[test]
+    fn type_id_lineage_rebind_undo_restores_old_family_indexes() {
+        // G1: deleting old by-family/by-label rows must record undo pre-images,
+        // otherwise rolling back the rebind block restores the version row but
+        // permanently drops the old family's index membership.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        let binary = vec![0x42; 32];
+        let registered = vec![0x52; 32];
+        let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
+
+        store
+            .put_script_version(
+                &binary,
+                &ScriptVersionInfo {
+                    version_hash: binary.clone(),
+                    family_id: Some("metadata-family".into()),
+                    name: Some("From Data Hash".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version_by_family_direct("metadata-family", &binary)
+            .unwrap();
+        store
+            .insert_script_version_by_label("From Data Hash", &binary)
+            .unwrap();
+        store
+            .put_script_version(
+                &[0x99; 32],
+                &ScriptVersionInfo {
+                    version_hash: vec![0x99; 32],
+                    family_id: Some("template-family".into()),
+                    name: Some("Template Family".into()),
+                    registered_references: vec![(registered.clone(), 1)],
+                    canonical_reference_hash: Some(registered.clone()),
+                    canonical_hash_type: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_family_direct(
+                "template-family",
+                &ScriptFamilyInfo {
+                    family_id: "template-family".into(),
+                    name: "Template Family".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_family_direct(
+                "metadata-family",
+                &ScriptFamilyInfo {
+                    family_id: "metadata-family".into(),
+                    name: "From Data Hash".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let data = b"\x7fELFrebound".to_vec();
+        let data_hash: [u8; 32] = binary.as_slice().try_into().unwrap();
+        let cell = crate::parser::cell::ParsedCell {
+            capacity: 10_000,
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x11; 32],
+            type_code_hash: Some(type_id),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 32]),
+            type_script_hash: Some(registered.clone()),
+            data_hash,
+            data_size: data.len() as i32,
+            data,
+        };
+        let tx = crate::sync::types::TxData {
+            hash: [0x44; 32],
+            block_number: 100,
+            tx_index: 1,
+            inputs_count: 0,
+            outputs_count: 1,
+            is_cellbase: false,
+            inputs: vec![],
+            cells: vec![cell],
+            witnesses: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 10_000,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            semantic_tags: 0,
+        };
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                std::slice::from_ref(&tx),
+                &HashMap::new(),
+                &HashMap::new(),
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store
+                .get_script_version(&binary)
+                .unwrap()
+                .unwrap()
+                .family_id
+                .as_deref(),
+            Some("template-family")
+        );
+        store.rollback_via_undo_log(&append, 99).unwrap();
+
+        let restored = store.get_script_version(&binary).unwrap().unwrap();
+        assert_eq!(
+            restored.family_id.as_deref(),
+            Some("metadata-family"),
+            "version row must roll back to the pre-rebind family"
+        );
+        assert!(
+            store
+                .list_script_version_hashes_by_family("metadata-family")
+                .unwrap()
+                .contains(&binary),
+            "old by-family index must be restored on reorg"
+        );
+        assert!(
+            store
+                .list_script_version_hashes_by_label("From Data Hash")
+                .unwrap()
+                .contains(&binary),
+            "old by-label index must be restored on reorg"
+        );
+        assert!(
+            !store
+                .list_script_version_hashes_by_family("template-family")
+                .unwrap()
+                .contains(&binary),
+            "new by-family index must be removed on reorg"
         );
     }
 

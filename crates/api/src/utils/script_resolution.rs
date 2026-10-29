@@ -478,15 +478,6 @@ pub fn persisted_reference_version_candidate(
     Ok(Some(version_hash))
 }
 
-/// All reference hashes that appear in any version's observed native Type ID
-/// deployment list. Callers that already loaded versions should build this set
-/// once via [`observed_type_id_references_from_versions`] instead of rescanning.
-pub fn observed_type_id_references(store: &CkbadgerStore) -> anyhow::Result<HashSet<Vec<u8>>> {
-    Ok(observed_type_id_references_from_versions(
-        &store.list_script_versions()?,
-    ))
-}
-
 /// Build the observed Type ID reference set from already-listed version rows.
 pub fn observed_type_id_references_from_versions(
     versions: &[(Vec<u8>, ScriptVersionInfo)],
@@ -640,20 +631,16 @@ pub fn resolve_script_form_by_hash(
     let has_own_code_cell = store
         .find_any_cell_by_data_hash(reference_hash, cells_store)?
         .is_some();
-    // Type forms may need lineage twice (member resolution + NotFound gate).
-    // Compute once with early-exit and share; other forms never consult it.
-    let observed_type_id = if hash_type == 1 {
-        Some(has_observed_type_id_lineage(store, reference_hash)?)
-    } else {
-        None
-    };
+    // Defer lineage: `reference_form_member_version_with_lineage` only scans
+    // when live type matches are empty (passing None). The common cell-detail
+    // path has live matches and must not pay a full versions table scan.
     let member_version = reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
         reference_hash,
         &|hash: &[u8]| has_own_code_cell && hash == reference_hash,
-        observed_type_id,
+        None,
     )?;
     if let Some(version_hash) = member_version {
         let version_info = store.get_script_version(&version_hash)?;
@@ -673,7 +660,7 @@ pub fn resolve_script_form_by_hash(
     if type_matches
         .iter()
         .any(|candidate| candidate.native_type_id)
-        || (type_matches.is_empty() && observed_type_id.unwrap_or(false))
+        || (type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?)
     {
         return Ok(CurrentScriptVersionResolution::NotFound);
     }

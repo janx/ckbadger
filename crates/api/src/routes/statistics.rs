@@ -28,7 +28,8 @@ use crate::utils::stats_bucket::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
-    historical_family_member_candidate, protocol_circulating, script_to_address,
+    historical_family_member_candidate, observed_type_id_references_from_versions,
+    protocol_circulating, reference_form_member_version_with_lineage, script_to_address,
 };
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
@@ -1093,6 +1094,7 @@ async fn get_most_utilized_scripts_chart(
         .filter(|(_, info)| info.family_id.is_some())
         .map(|(hash, _)| hash.clone())
         .collect();
+    let observed_type_ids = observed_type_id_references_from_versions(&versions);
     let family_names: HashMap<String, String> = state
         .store
         .list_script_families()
@@ -1110,12 +1112,13 @@ async fn get_most_utilized_scripts_chart(
         .list_script_reference_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
-        let member_version = crate::utils::reference_form_member_version(
+        let member_version = reference_form_member_version_with_lineage(
             &state.store,
             &state.append_only_store,
             hash_type,
             &reference_hash,
             &|hash: &[u8]| family_versions.contains(hash),
+            Some(observed_type_ids.contains(&reference_hash)),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
         let family_candidate = historical_family_member_candidate(

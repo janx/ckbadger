@@ -792,9 +792,6 @@ fn cached_canonical_header(
     Ok(header)
 }
 
-/// Read one current canonical view for the whole historical branch. Re-entry
-/// after a later switch is identified by the exact hash at the same height;
-/// the persisted event still records what this node dropped at that moment.
 /// Node RocksDB may lack pruned historical old-branch blocks. Both the
 /// walk-back miss (`CKB RocksDB is missing`) and the enrich miss
 /// (`lost historical old branch`) map to the same client status.
@@ -805,6 +802,9 @@ fn is_old_branch_unavailable(err: &anyhow::Error) -> bool {
     })
 }
 
+/// Read one current canonical view for the whole historical branch. Re-entry
+/// after a later switch is identified by the exact hash at the same height;
+/// the persisted event still records what this node dropped at that moment.
 fn enrich_branch_fate(
     store: &CkbadgerStore,
     reader: &ckb_store_reader::CkbChainReader,
