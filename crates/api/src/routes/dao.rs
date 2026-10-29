@@ -213,6 +213,9 @@ pub struct DaoStatisticsResponse {
     pub withdrawal_request_cells_count: i32,
     pub dao_capacity: String,
     pub dao_free_capacity: String,
+    /// Exact secondary-issuance weight for depositors:
+    /// phase-0 free + (unclaimed − frozen phase-1 compensation).
+    pub depositor_allocation_weight: String,
     /// Raw DAO C and U copied into the same indexer singleton as dao_free_capacity.
     pub tip_total_issuance: String,
     pub tip_protocol_occupied_capacity: String,
@@ -590,6 +593,7 @@ fn dao_latest_to_response(
         withdrawal_request_cells_count: latest.withdrawal_request_cells_count,
         dao_capacity: latest.dao_capacity.to_string(),
         dao_free_capacity: latest.dao_free_capacity.to_string(),
+        depositor_allocation_weight: latest.depositor_allocation_weight.to_string(),
         tip_total_issuance: latest.tip_total_issuance.to_string(),
         tip_protocol_occupied_capacity: latest.tip_occupied_capacity.to_string(),
         rolling_24h_baseline_block_number: latest
@@ -1417,6 +1421,8 @@ async fn get_circulation_ratio_chart(
         });
     }
 
+    let data =
+        consecutive_daily_chart(state.store.clone(), chain, "DAO circulation ratio", data).await?;
     let response = ChartResponse {
         data,
         title: "Deposit to Circulation Ratio".to_string(),

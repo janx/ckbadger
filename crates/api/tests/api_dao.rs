@@ -464,6 +464,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
         pending_withdrawal_capacity: 5_00000000,
         dao_capacity: 128_00000000,
         dao_free_capacity: 26_00000000,
+        depositor_allocation_weight: 0,
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,
@@ -499,6 +500,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     assert_eq!(json["withdrawalRequestCellsCount"], 0);
     assert_eq!(json["daoCapacity"], "12800000000");
     assert_eq!(json["daoFreeCapacity"], "2600000000");
+    assert_eq!(json["depositorAllocationWeight"], "0");
     assert_eq!(json["tipTotalIssuance"], "0");
     assert_eq!(json["tipProtocolOccupiedCapacity"], "0");
     assert_eq!(json["rolling24hBaselineBlockNumber"], 9);
@@ -596,6 +598,7 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         pending_withdrawal_capacity: 0,
         dao_capacity: 0,
         dao_free_capacity: 0,
+        depositor_allocation_weight: 0,
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,
@@ -713,6 +716,7 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
         pending_withdrawal_capacity: 0,
         dao_capacity: 0,
         dao_free_capacity: 0,
+        depositor_allocation_weight: 0,
         tip_total_issuance: 0,
         tip_secondary_pool: 0,
         tip_occupied_capacity: 0,

@@ -1278,6 +1278,7 @@ impl BatchWriter {
         let mut pending_withdrawal_capacity: i128 = 0;
         let mut dao_capacity: i128 = 0;
         let mut dao_free_capacity: i128 = 0;
+        let mut phase0_dao_free_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
         let mut deposit_cells_count = 0i32;
@@ -1330,6 +1331,9 @@ impl BatchWriter {
                         })?;
                     dao_capacity += i128::from(entry.capacity);
                     dao_free_capacity += i128::from(free);
+                    if entry.status == 0 {
+                        phase0_dao_free_capacity += i128::from(free);
+                    }
 
                     // Status-specific accounting
                     if entry.status == 1 {
@@ -1435,6 +1439,24 @@ impl BatchWriter {
         let total_compensation_paid = exact_tip.breakdown.claimed;
         let unclaimed_compensation = exact_tip.breakdown.unclaimed;
         let deposit_compensation_total = exact_tip.total;
+        // Secondary-issuance depositor weight: Σ_phase0 free_i × AR_tip / AR_dep_i
+        // = phase-0 nominal free + phase-0 accrued compensation
+        // = phase-0 free + (unclaimed − frozen_phase1).
+        let depositor_allocation_weight = phase0_dao_free_capacity
+            .checked_add(unclaimed_compensation)
+            .and_then(|v| v.checked_sub(exact_tip.frozen_phase1))
+            .ok_or_else(|| {
+                anyhow!(
+                    "DAO depositor allocation weight overflow/underflow at tip {tip_block_number}: phase0_free={phase0_dao_free_capacity}, unclaimed={unclaimed_compensation}, frozen_phase1={}",
+                    exact_tip.frozen_phase1
+                )
+            })?;
+        if depositor_allocation_weight < 0 {
+            bail!(
+                "negative DAO depositor allocation weight at tip {tip_block_number}: phase0_free={phase0_dao_free_capacity}, unclaimed={unclaimed_compensation}, frozen_phase1={}, weight={depositor_allocation_weight}",
+                exact_tip.frozen_phase1
+            );
+        }
 
         let latest_snapshot = match self.store.get_latest_dao_daily_snapshot()? {
             Some(snapshot) => snapshot,
@@ -1510,6 +1532,7 @@ impl BatchWriter {
             pending_withdrawal_capacity,
             dao_capacity,
             dao_free_capacity,
+            depositor_allocation_weight,
             tip_total_issuance,
             tip_secondary_pool,
             tip_occupied_capacity,
@@ -2493,6 +2516,12 @@ mod tests {
         assert_eq!(latest.dao_free_capacity, 296_00000000);
         // Every live DAO cell's capacity, both phases.
         assert_eq!(latest.dao_capacity, 500_00000000);
+        // Depositor secondary-issuance weight uses only phase-0 free plus
+        // accrued compensation (fixture unclaimed/frozen leave weight = phase0 free).
+        assert_eq!(
+            latest.depositor_allocation_weight, 98_00000000,
+            "phase-0 free only when unclaimed equals frozen_phase1"
+        );
         // The tip header's C, S and U travel with the row, so a reader can
         // combine them with the DAO figures without the (possibly rolled
         // back) header.

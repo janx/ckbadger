@@ -3799,6 +3799,7 @@ fn seed_dao_latest(
         pending_withdrawal_capacity: 0,
         dao_capacity,
         dao_free_capacity: dao_free,
+        depositor_allocation_weight: 0,
         tip_total_issuance,
         tip_secondary_pool,
         tip_occupied_capacity,
