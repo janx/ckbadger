@@ -224,6 +224,12 @@ A bare work directory containing only `config.toml` (no `ckbadger.toml`) runs as
 
 Priority: **CLI args > config.toml > defaults**. No `.env` files. No environment variables. If you don't know what a config key means, ask Claude Code or Codex.
 
+`ckbadger run` exclusively locks its workdir and every configured network workdir before
+starting services. A second run or a concurrent `purge` fails immediately. Stop the existing
+supervisor with Ctrl+C before restarting or purging. The `.ckbadger.lock` files are persistent
+lock anchors outside `run/`; leave them in place. The OS releases ownership when the process
+exits, and purge preserves the lock files.
+
 ### Multiple networks (mainnet + testnet)
 
 `ckbadger init --with-testnet` runs mainnet and testnet side by side behind **one** explorer at `http://localhost:8100`:

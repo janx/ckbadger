@@ -6,6 +6,7 @@
 //! `run/indexer.sock` for status queries and shutdown requests.
 
 use crate::sequencer::{GateStatus, SpawnOutcome};
+use crate::workdir_lock::WorkdirLocks;
 use anyhow::{Context, Result};
 use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_indexer::entry::EXIT_CODE_UNRECOVERABLE;
@@ -803,6 +804,14 @@ async fn run_supervisor_inner_with_sequencer(
     initial: usize,
     plan: Option<SequencerPlan>,
 ) -> Result<()> {
+    // Claim the root and every network before replacing runtime files or
+    // spawning anything, including networks whose indexers are still deferred.
+    // Keep ownership through child shutdown and PID/socket cleanup.
+    let _workdir_locks = WorkdirLocks::acquire(
+        std::iter::once(root.root.as_path())
+            .chain(specs.iter().map(|spec| Path::new(&spec.workdir))),
+    )?;
+
     // Ensure run + log directories exist
     std::fs::create_dir_all(&root.run_dir)
         .with_context(|| format!("failed to create run directory: {}", root.run_dir.display()))?;
@@ -1428,6 +1437,58 @@ impl IpcHandler for SupervisorIpcHandler {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn startup_ownership_duplicate_supervisor_preserves_pid_and_socket() {
+        let dir = TempDir::new().unwrap();
+        let work = WorkDir::resolve(dir.path());
+        std::fs::create_dir_all(&work.run_dir).unwrap();
+        std::fs::write(&work.supervisor_pid, "existing supervisor").unwrap();
+        std::fs::write(&work.indexer_sock, "existing socket").unwrap();
+        let _owner = crate::workdir_lock::WorkdirLocks::acquire([dir.path()]).unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_supervisor_multi(&work, Vec::new()),
+        )
+        .await
+        .expect("a duplicate supervisor must fail before starting background tasks");
+
+        assert!(result.unwrap_err().to_string().contains("already in use"));
+        assert_eq!(
+            std::fs::read_to_string(&work.supervisor_pid).unwrap(),
+            "existing supervisor"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&work.indexer_sock).unwrap(),
+            "existing socket"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_ownership_supervisor_checks_deferred_networks_before_spawning() {
+        let dir = TempDir::new().unwrap();
+        let work = WorkDir::resolve(dir.path());
+        let network = dir.path().join("mainnet");
+        std::fs::create_dir(&network).unwrap();
+        let _owner = crate::workdir_lock::WorkdirLocks::acquire([network.as_path()]).unwrap();
+        let spec = ChildSpec {
+            label: "mainnet/indexer".into(),
+            service: "indexer".into(),
+            workdir: network.to_string_lossy().into_owned(),
+        };
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_supervisor_inner(&work, vec![spec], 0),
+        )
+        .await
+        .expect("an owned network must block startup even before its indexer is scheduled");
+
+        assert!(result.unwrap_err().to_string().contains("already in use"));
+        assert!(!work.supervisor_pid.exists());
+        assert!(!work.indexer_sock.exists());
+    }
 
     #[test]
     fn crawler_included_only_when_enabled() {

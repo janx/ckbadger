@@ -1,5 +1,6 @@
 mod sequencer;
 mod supervisor;
+mod workdir_lock;
 
 #[cfg(test)]
 mod build_version_format;
@@ -1854,6 +1855,7 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         bail!("purge requires --confirm flag to proceed");
     }
 
+    let _workdir_locks = workdir_lock::WorkdirLocks::acquire([workdir])?;
     let mut deleted = Vec::new();
     purge_workdir(workdir, &mut deleted)?;
 
@@ -1892,6 +1894,7 @@ fn cmd_purge_orchestrator(root: &Path, args: &PurgeArgs) -> Result<()> {
 
     // Validate every child before deleting anything, so a misplaced config is
     // reported atomically rather than leaving a partially purged deployment.
+    let mut workdirs = vec![root.to_path_buf()];
     for entry in &orch.networks {
         let sub = network_workdir(root, entry);
         if !sub.join("config.toml").is_file() {
@@ -1903,7 +1906,13 @@ fn cmd_purge_orchestrator(root: &Path, args: &PurgeArgs) -> Result<()> {
         }
         let config = load_config(&sub)?;
         validate_network_entry(entry, &config.ckb.network)?;
+        workdirs.push(sub);
     }
+
+    // Claim all workdirs before the first deletion. A single-network supervisor
+    // may own a child even when no supervisor owns this orchestrator root.
+    let _workdir_locks =
+        workdir_lock::WorkdirLocks::acquire(workdirs.iter().map(PathBuf::as_path))?;
 
     for entry in &orch.networks {
         let sub = network_workdir(root, entry);
@@ -2910,6 +2919,68 @@ mod tests {
     }
 
     // -- purge command --
+
+    #[test]
+    fn startup_ownership_purge_rejects_active_workdir_without_deleting_data() {
+        let dir = TempDir::new().unwrap();
+        init_single_network(dir.path());
+        let payload = dir.path().join("data/append-only/cell.sst");
+        std::fs::write(&payload, "immutable payload").unwrap();
+        let _owner = crate::workdir_lock::WorkdirLocks::acquire([dir.path()]).unwrap();
+
+        let error = cmd_purge(dir.path(), &PurgeArgs { confirm: true }).unwrap_err();
+
+        assert!(error.to_string().contains("already in use"));
+        assert_eq!(
+            std::fs::read_to_string(payload).unwrap(),
+            "immutable payload"
+        );
+    }
+
+    #[test]
+    fn startup_ownership_orchestrator_purge_checks_all_networks_before_deleting() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        cmd_init(root, &InitArgs { with_testnet: true }).unwrap();
+        let payloads: Vec<_> = ["mainnet", "testnet"]
+            .into_iter()
+            .map(|name| {
+                let payload = root.join(name).join("data/append-only/cell.sst");
+                std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+                std::fs::write(&payload, "immutable payload").unwrap();
+                payload
+            })
+            .collect();
+        let network = root.join("testnet");
+        let _owner = crate::workdir_lock::WorkdirLocks::acquire([network.as_path()]).unwrap();
+
+        let error = cmd_purge(root, &PurgeArgs { confirm: true }).unwrap_err();
+
+        assert!(error.to_string().contains("already in use"));
+        for payload in payloads {
+            assert_eq!(
+                std::fs::read_to_string(payload).unwrap(),
+                "immutable payload"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_ownership_purge_preserves_lock_inode_and_releases_ownership() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = TempDir::new().unwrap();
+        init_single_network(dir.path());
+        let owner = crate::workdir_lock::WorkdirLocks::acquire([dir.path()]).unwrap();
+        let lock = dir.path().join(".ckbadger.lock");
+        let inode = std::fs::metadata(&lock).unwrap().ino();
+        drop(owner);
+
+        cmd_purge(dir.path(), &PurgeArgs { confirm: true }).unwrap();
+
+        assert_eq!(std::fs::metadata(lock).unwrap().ino(), inode);
+        let _next = crate::workdir_lock::WorkdirLocks::acquire([dir.path()]).unwrap();
+    }
 
     #[test]
     fn test_purge_requires_confirm_flag() {
