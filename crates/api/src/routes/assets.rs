@@ -142,9 +142,13 @@ pub(super) fn get_collection_aggregate(
             }));
     }
     if let Some(agg) = store.get_mnft_collection_aggregate(collection_id)? {
+        // Same single path as Spore clusters: count from
+        // CF_OBJECT_COLLECTION_ACTIVITIES. Persisted MnftCollectionAggregate
+        // activities_count stayed 0 after full genesis rebuilds while the
+        // activity CF was correct (IV-08 / OB-K1).
         return Ok(Some(ResolvedCollection {
             source: ObjectCollectionSource::Mnft,
-            activities: CollectionActivityCount::Persisted(agg.activities_count),
+            activities: CollectionActivityCount::CanonicalHistory,
             aggregate: agg.into(),
         }));
     }
@@ -1948,16 +1952,19 @@ pub(super) fn collect_nft_item_lifecycle_actions(
                     );
                 }
             }
+            // Neighbour / ring txs rewrite this cell without naming it in
+            // protocol metadata. Keep them in the lifecycle via created/consumed
+            // classification below instead of dropping the version.
             if item_actions.is_empty() {
-                continue;
-            } // Ring infrastructure has no item action.
-            if item_actions.len() != 1 {
+                None
+            } else if item_actions.len() != 1 {
                 return Err(ApiError::internal(format!(
                     "multiple .cell actions for {item_id} in 0x{}",
                     hex::encode(&tx_hash)
                 )));
+            } else {
+                item_actions.pop()
             }
-            item_actions.pop()
         } else {
             exact_created.get(&tx_hash).copied()
         };
