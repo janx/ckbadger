@@ -182,18 +182,25 @@ fn route_error(error: anyhow::Error) -> ApiRouteError {
 
 /// Stream the existing owner index. The generic store listing omits missing
 /// targets; an exact whole-owner projection instead rejects every orphan row.
-fn scan<F>(state: &AppState, owner: &[u8], mut visit: F) -> Result<()>
+///
+/// `after` seeks past a cursor key (exclusive). `visit` returns `true` to keep
+/// scanning or `false` to stop early once a page is full.
+fn scan<F>(state: &AppState, owner: &[u8], after: Option<&[u8]>, mut visit: F) -> Result<()>
 where
-    F: FnMut(&[u8], &[u8], i16, &PositionedCellInfo, Evidence) -> Result<()>,
+    F: FnMut(&[u8], &[u8], i16, &PositionedCellInfo, Evidence) -> Result<bool>,
 {
+    let start = after.unwrap_or(owner);
     let rows = state.store.iterator_cf(
         state.store.cf_cell_by_lock(),
-        rocksdb::IteratorMode::From(owner, rocksdb::Direction::Forward),
+        rocksdb::IteratorMode::From(start, rocksdb::Direction::Forward),
     );
     for row in rows {
         let (key, value) = row.context("reading owner live-cell index")?;
         if !key.starts_with(owner) {
             break;
+        }
+        if after.is_some_and(|after| key.as_ref() <= after) {
+            continue;
         }
         ensure!(
             key.len() == 74,
@@ -213,7 +220,7 @@ where
             hex::encode(owner),
             hex::encode(&hash)
         );
-        (|| -> Result<()> {
+        let keep_going = (|| -> Result<bool> {
             ensure!(index >= 0, "negative output index");
             let info = state
                 .store
@@ -240,6 +247,9 @@ where
             visit(&key, &hash, index, &info, evidence)
         })()
         .with_context(|| context)?;
+        if !keep_going {
+            break;
+        }
     }
     Ok(())
 }
@@ -542,7 +552,7 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
     let mut withdrawal_request_cells_count = 0;
     let mut unclaimed = 0i128;
     let mut dao_tip = None;
-    scan(state, owner, |_, _, _, info, evidence| {
+    scan(state, owner, None, |_, _, _, info, evidence| {
         let totals = classes
             .get_mut(&evidence.class)
             .expect("all classes initialized");
@@ -614,7 +624,7 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
                 )
                 .context("DAO compensation overflow")?;
         }
-        Ok(())
+        Ok(true)
     })?;
     let mut count = 0i64;
     let mut balance = 0i128;
@@ -694,21 +704,22 @@ async fn cells(
         .map(|s| cursor(s, &owner, params.class))
         .transpose()?;
     let page = tokio::task::spawn_blocking(move || -> Result<_> {
-        let mut total = 0i64;
+        let need = params.limit as usize + 1;
         let mut rows = Vec::new();
-        scan(&state, &owner, |key, hash, index, info, evidence| {
-            if params.class.is_none_or(|c| c == evidence.class) {
-                total = total
-                    .checked_add(1)
-                    .context("filtered cell total overflow")?;
-                if after.as_deref().is_none_or(|after| key > after)
-                    && rows.len() < params.limit as usize + 1
-                {
+        // Seek from the cursor (or owner prefix) and stop once the page is full —
+        // do not scan the whole owner set just to compute a filtered total.
+        scan(
+            &state,
+            &owner,
+            after.as_deref(),
+            |key, hash, index, info, evidence| {
+                if params.class.is_none_or(|c| c == evidence.class) {
                     rows.push((key.to_vec(), hash.to_vec(), index, info.clone(), evidence));
+                    return Ok(rows.len() < need);
                 }
-            }
-            Ok(())
-        })?;
+                Ok(true)
+            },
+        )?;
         let has_more = rows.len() > params.limit as usize;
         rows.truncate(params.limit as usize);
         let next = has_more.then(|| {
@@ -730,6 +741,24 @@ async fn cells(
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        if params.class.is_some() {
+            return Ok(CursorPaginatedResponse::without_total(
+                rows,
+                params.limit,
+                next,
+            ));
+        }
+        let total = match state.store.get_addr_balance(&owner)? {
+            Some(balance) => i64::from(balance.live_cells_count),
+            None => {
+                ensure!(
+                    rows.is_empty(),
+                    "address 0x{} has live cells but no balance aggregate",
+                    hex::encode(&owner)
+                );
+                0
+            }
+        };
         Ok(CursorPaginatedResponse::new(
             rows,
             total,

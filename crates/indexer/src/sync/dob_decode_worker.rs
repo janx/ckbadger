@@ -206,26 +206,28 @@ impl DobDecodeWorker {
                 }
             }
 
-            // Write decoded results per-spore: update media profile first, then
-            // mark as decoded in the same commit. This ensures a failed profile
-            // update does not leave the spore permanently marked decoded with
-            // stale media_profile (list_undecoded_dob_spores would never retry).
+            // Write decoded results per-spore: update media profile and mark
+            // decoded in the SAME commit. Always update the profile (empty
+            // sources OK) so self-contained DOBs clear DecodePending via
+            // resolve_tier. A failed profile update skips put_dob_decoded so
+            // list_undecoded_dob_spores will retry.
             let mut batch_committed: u64 = 0;
             for (spore_id, entry) in &decoded_results {
-                if !entry.media_sources.is_empty() {
-                    if let Err(e) = self.update_spore_media_profile(spore_id, &entry.media_sources)
-                    {
-                        warn!(
-                            spore_id = hex::encode(spore_id),
-                            error = %e,
-                            "failed to update spore media profile after DOB decode — \
-                             skipping put_dob_decoded so it will be retried"
-                        );
-                        batch_skipped += 1;
-                        continue;
-                    }
-                }
                 let mut store_batch = StoreBatch::new(&self.store);
+                if let Err(e) = self.update_spore_media_profile(
+                    spore_id,
+                    &entry.media_sources,
+                    &mut store_batch,
+                ) {
+                    warn!(
+                        spore_id = hex::encode(spore_id),
+                        error = %e,
+                        "failed to update spore media profile after DOB decode — \
+                         skipping put_dob_decoded so it will be retried"
+                    );
+                    batch_skipped += 1;
+                    continue;
+                }
                 store_batch.put_dob_decoded(spore_id, entry);
                 store_batch.commit()?;
                 batch_committed += 1;
@@ -290,12 +292,15 @@ impl DobDecodeWorker {
         Ok(())
     }
 
-    /// After decoding, update the spore's media profile with newly discovered
-    /// media sources from the decoded traits.
+    /// After decoding, stage the spore's media profile update into `batch`.
+    /// Empty `new_sources` is intentional for self-contained DOBs — merge still
+    /// clears `DecodePending` via `resolve_tier`. Caller commits together with
+    /// `put_dob_decoded`.
     fn update_spore_media_profile(
         &self,
         spore_id: &[u8],
         new_sources: &[SporeMediaSource],
+        batch: &mut StoreBatch<'_>,
     ) -> Result<()> {
         let entry = self.store.get_spore(spore_id)?.with_context(|| {
             format!(
@@ -343,7 +348,6 @@ impl DobDecodeWorker {
             *media_profile = new_media_profile;
         }
 
-        let mut batch = StoreBatch::new(&self.store);
         if old_tier != new_tier {
             // Use fresh_entry.is_live for the cluster aggregate decision so we
             // don't incorrectly update aggregates for already-consumed spores.
@@ -352,11 +356,10 @@ impl DobDecodeWorker {
                 &fresh_entry,
                 old_tier,
                 new_tier,
-                &mut batch,
+                batch,
             )?;
         }
         batch.put_spore(spore_id, &fresh_entry);
-        batch.commit()?;
         Ok(())
     }
 
@@ -1434,9 +1437,11 @@ mod tests {
             dependency_tier: ckbadger_store::types::CompositionTier::BtcCkb,
         }];
 
+        let mut batch = StoreBatch::new(store.as_ref());
         worker
-            .update_spore_media_profile(&spore_id, &new_sources)
+            .update_spore_media_profile(&spore_id, &new_sources, &mut batch)
             .unwrap();
+        batch.commit().unwrap();
 
         let updated_spore = store.get_spore(&spore_id).unwrap().unwrap();
         match updated_spore.extra {
@@ -1454,6 +1459,80 @@ mod tests {
         assert_eq!(updated_agg.btc_ckb_count, 1);
         assert_eq!(updated_agg.live_count, 1);
         assert_eq!(updated_agg.total_count, 1);
+    }
+
+    #[test]
+    fn test_update_spore_media_profile_empty_sources_clears_decode_pending() {
+        // Self-contained DOBs decode with empty media_sources; profile update
+        // must still clear DecodePending so the spore is not stuck forever.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cache_dir = dir.path().join("decoder-cache");
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            dir.path().join("media"),
+            "http://localhost:9999".to_string(),
+            shutdown,
+        );
+
+        let cluster_id = vec![0xCDu8; 32];
+        let spore_id = [0xABu8; 32];
+        let spore_entry = ckbadger_store::types::ObjectEntry {
+            standard: ckbadger_store::types::ObjectStandard::Spore,
+            collection_id: Some(cluster_id.clone()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x33; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 1,
+            created_at_tx: vec![0x44; 32],
+            extra: ckbadger_store::types::ObjectExtra::Spore {
+                content_type: "dob/0".to_string(),
+                content_length: 8,
+                media_profile: SporeMediaProfile {
+                    tier: CompositionTier::DecodePending,
+                    sources: vec![],
+                    issues: vec![],
+                },
+            },
+        };
+        store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cluster_aggregate(
+            &cluster_id,
+            &ckbadger_store::types::ClusterAggregate {
+                total_count: 1,
+                live_count: 1,
+                owner_count: 1,
+                unknown_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(store.as_ref());
+        worker
+            .update_spore_media_profile(&spore_id, &[], &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_spore(&spore_id).unwrap().unwrap();
+        match updated.extra {
+            ObjectExtra::Spore { media_profile, .. } => {
+                assert_ne!(
+                    media_profile.tier,
+                    CompositionTier::DecodePending,
+                    "empty media_sources after decode must clear DecodePending"
+                );
+                assert_eq!(media_profile.tier, CompositionTier::PureCkb);
+            }
+            other => panic!("expected spore extra, got {other:?}"),
+        }
     }
 
     #[test]

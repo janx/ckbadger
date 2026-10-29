@@ -15,7 +15,7 @@ use ckbadger_store::{
 };
 
 use crate::embedded_frontend;
-use crate::{create_router, AppConfig};
+use crate::{try_create_router, AppConfig};
 
 /// Configuration for starting the API server.
 /// This is the interface the CLI binary uses to start the API.
@@ -250,7 +250,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         pool_poll_interval_ms: config.pool_poll_interval_ms,
         pool_max_tracked_txs: config.pool_max_tracked_txs,
     };
-    let app = create_router(app_config).await;
+    let app = try_create_router(app_config).await?;
 
     info!("Starting API server on {}", addr);
     let listener = bind_with_retry(&addr).await?;

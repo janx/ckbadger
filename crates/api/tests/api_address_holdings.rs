@@ -208,7 +208,7 @@ async fn fixture_with_cluster(has_cluster: bool) -> Fixture {
     batch.put_spore_outpoint(&hash, 8, &[0x61; 20]);
     batch.put_spore_outpoint(&hash, 9, &[0x62; 32]);
     batch.put_dotbit_account_outpoint(&hash, 10, &[0x63; 20]);
-    batch.put_dotbit_outpoint_by_account_id(&[0x63; 20], &hash, 10);
+    batch.put_dotbit_outpoint_by_account_id(&[0x63; 20], &hash, 10, AssetAction::Mint);
     batch.put_addr_token_by_balance(&owner, token.calc_script_hash().as_slice(), 14);
     batch.put_token_holder(token.calc_script_hash().as_slice(), &owner, 14);
     let deposit = |status| DaoDepositCacheEntry {
@@ -554,7 +554,7 @@ async fn address_dao_rows_use_current_lock_owned_cells_including_transferred_req
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{j}");
-    assert_eq!(j["total"], 2);
+    assert!(j["total"].is_null(), "class-filtered pages omit total: {j}");
     assert_eq!(j["data"][0]["dao"]["status"], "deposited");
     assert_eq!(j["data"][1]["dao"]["status"], "withdrawing");
     assert_eq!(
@@ -691,9 +691,24 @@ async fn sparse_class_page_counts_full_owner_set_without_node_reads_for_summary(
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{j}");
-    assert_eq!(j["total"], 3);
+    assert!(
+        j["total"].is_null(),
+        "class-filtered pages omit total so they need not scan all live cells: {j}"
+    );
     assert_eq!(j["data"].as_array().unwrap().len(), 1);
     assert!(j["nextCursor"].is_string());
+
+    // Unfiltered pages use the address balance aggregate for total and still
+    // page without a full owner scan for the row set.
+    let (s, all) = get(
+        &f.app,
+        &format!("/api/v1/addresses/{}/cells?limit=1", f.owner),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{all}");
+    assert_eq!(all["total"], 2059);
+    assert_eq!(all["data"].as_array().unwrap().len(), 1);
+    assert!(all["nextCursor"].is_string());
 }
 
 #[tokio::test]

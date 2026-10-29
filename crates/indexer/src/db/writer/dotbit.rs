@@ -186,13 +186,11 @@ pub(crate) fn classify_identity_output_action(
     previous: Option<&IdentityActionState>,
     next_owner: &[u8],
     next_expiry: Option<u64>,
-    das_action: Option<&str>,
+    _das_action: Option<&str>,
 ) -> Result<AssetAction> {
-    if let Some(action) = das_action {
-        if matches!(classify_das_action(action), DasActionKind::Unknown) {
-            bail!("unrecognized .bit ActionData while classifying item output: {action}");
-        }
-    }
+    // Unknown DAS ActionData is ignored at the item layer: classify from
+    // owner/expiry chain facts only. Collection activity handles Unknown
+    // separately (warn + no invented Mint/Recycle).
     let Some(previous) = previous else {
         return Ok(AssetAction::Mint);
     };
@@ -270,8 +268,9 @@ pub(crate) fn build_dotbit_tx_activity_entry<S: BuildHasher>(
                 warn!(
                     action = action_str,
                     tx_hash = %format!("0x{}", hex::encode(tx_hash)),
-                    "unknown DAS action, falling back to generic activity detection"
+                    "unknown DAS action; skipping .bit collection activity"
                 );
+                return None;
             }
             resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids)
         }
@@ -927,8 +926,8 @@ impl BatchWriter {
             &account.account_id,
             tx_hash,
             account_output.output_index,
+            action,
         );
-        batch.put_raw_cf_by_name(CF_STATS_MNFT, &rev_key, &[action.compact()])?;
         Ok(())
     }
 
@@ -1266,8 +1265,9 @@ mod tests {
             classify_identity_output_action(previous.as_ref(), &[1; 32], Some(100), None).unwrap(),
             AssetAction::Update
         );
-        assert!(
-            classify_identity_output_action(None, &[1; 32], None, Some("invented_action")).is_err()
+        assert_eq!(
+            classify_identity_output_action(None, &[1; 32], None, Some("invented_action")).unwrap(),
+            AssetAction::Mint
         );
     }
 
@@ -1327,13 +1327,16 @@ mod tests {
             .unwrap(),
             AssetAction::Renew
         );
-        assert!(classify_identity_output_action(
-            Some(&previous),
-            &[1; 32],
-            Some(100),
-            Some("invented_action")
-        )
-        .is_err());
+        assert_eq!(
+            classify_identity_output_action(
+                Some(&previous),
+                &[1; 32],
+                Some(100),
+                Some("invented_action")
+            )
+            .unwrap(),
+            AssetAction::Update
+        );
         for action in [
             AssetAction::Mint,
             AssetAction::Transfer,
@@ -1628,6 +1631,35 @@ mod tests {
             das_action_to_asset_action("sell_account"),
             Some(AssetAction::Transfer)
         ));
+    }
+
+    #[test]
+    fn unknown_das_action_does_not_invent_collection_mint() {
+        let created: HashSet<Vec<u8>> = HashSet::from([vec![0x11; 20]]);
+        let consumed: HashSet<Vec<u8>> = HashSet::new();
+        let entry = build_dotbit_tx_activity_entry(
+            Some("invented_future_action"),
+            &created,
+            &consumed,
+            &[0xAAu8; 32],
+            &[0xBBu8; 32],
+            1_700_000_000_000,
+        );
+        assert!(
+            entry.is_none(),
+            "unknown DAS action must not invent collection Mint via generic fallback"
+        );
+        // No ActionData still uses generic detection (created-only → Mint).
+        let legacy = build_dotbit_tx_activity_entry(
+            None,
+            &created,
+            &consumed,
+            &[0xAAu8; 32],
+            &[0xBBu8; 32],
+            1_700_000_000_000,
+        )
+        .expect("missing ActionData still resolves generically");
+        assert_eq!(legacy.actions, vec![AssetAction::Mint]);
     }
 
     #[test]

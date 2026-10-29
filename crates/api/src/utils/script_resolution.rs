@@ -478,6 +478,30 @@ pub fn persisted_reference_version_candidate(
     Ok(Some(version_hash))
 }
 
+/// All reference hashes that appear in any version's observed native Type ID
+/// deployment list. Callers that already loaded versions should build this set
+/// once via [`observed_type_id_references_from_versions`] instead of rescanning.
+pub fn observed_type_id_references(store: &CkbadgerStore) -> anyhow::Result<HashSet<Vec<u8>>> {
+    Ok(observed_type_id_references_from_versions(
+        &store.list_script_versions()?,
+    ))
+}
+
+/// Build the observed Type ID reference set from already-listed version rows.
+pub fn observed_type_id_references_from_versions(
+    versions: &[(Vec<u8>, ScriptVersionInfo)],
+) -> HashSet<Vec<u8>> {
+    versions
+        .iter()
+        .flat_map(|(_, version)| {
+            version
+                .type_id_deployments
+                .iter()
+                .map(|(reference, _)| reference.clone())
+        })
+        .collect()
+}
+
 /// Observed native TypeID deployments retain provenance after retirement or
 /// burn. For these references, only the indexer's canonical mapping identifies
 /// a current executable; a live typed cell may now carry non-executable data.
@@ -485,12 +509,7 @@ pub fn has_observed_type_id_lineage(
     store: &CkbadgerStore,
     reference_hash: &[u8],
 ) -> anyhow::Result<bool> {
-    Ok(store.list_script_versions()?.iter().any(|(_, version)| {
-        version
-            .type_id_deployments
-            .iter()
-            .any(|(reference, _)| reference == reference_hash)
-    }))
+    Ok(observed_type_id_references(store)?.contains(reference_hash))
 }
 
 /// Resolve a reference's current binary candidate. Family routes pass this

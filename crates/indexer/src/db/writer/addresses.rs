@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use std::collections::{HashMap, HashSet};
+use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
@@ -250,13 +251,26 @@ fn apply_type_id_lineage(
             ..Default::default()
         });
     if let Some(template) = template {
-        if let Some(family) = &version.family_id {
-            if Some(family) != template.family_id.as_ref() {
-                bail!("type-id binary belongs to a different registered family: block={} reference=0x{} binary=0x{} expected={:?} actual={family}",
-                    observed.block_number, hex::encode(&observed.reference_hash), hex::encode(version_hash), template.family_id);
+        // Type ID lineage priority: a registered type-id template owns the
+        // binary's family even when metadata-by-data-hash already bound a
+        // different family_id. Warn and rebind rather than failing the sync.
+        if let Some(actual) = &version.family_id {
+            if Some(actual.as_str()) != template.family_id.as_deref() {
+                warn!(
+                    block = observed.block_number,
+                    reference = %format!("0x{}", hex::encode(&observed.reference_hash)),
+                    binary = %format!("0x{}", hex::encode(version_hash)),
+                    expected = ?template.family_id,
+                    actual = %actual,
+                    "type-id lineage priority: rebinding binary to registered template family"
+                );
+                version.family_id = template.family_id.clone();
+                version.name = template.name.clone();
+                version.category = template.category.clone();
+                version.website = template.website.clone();
+                version.description = template.description.clone();
             }
-        }
-        if version.family_id.is_none() {
+        } else {
             version.family_id = template.family_id.clone();
             version.name = template.name.clone();
             version.category = template.category.clone();
@@ -2345,6 +2359,58 @@ mod tests {
         assert!(!super::type_id_family_templates(&versions)
             .unwrap()
             .contains_key(&copy));
+    }
+
+    #[test]
+    fn type_id_lineage_priority_rebinds_conflicting_metadata_family() {
+        // Binary already tagged by metadata-by-data-hash with family A; a
+        // registered type-id template for family B observes the same binary.
+        // Lineage priority binds to the template family instead of bailing.
+        let version_hash = vec![0x42; 32];
+        let registered = vec![0x52; 32];
+        let mut versions = HashMap::from([(
+            version_hash.clone(),
+            ScriptVersionInfo {
+                version_hash: version_hash.clone(),
+                family_id: Some("metadata-family".into()),
+                name: Some("from-data-hash".into()),
+                ..Default::default()
+            },
+        )]);
+        versions.insert(
+            vec![0x99; 32],
+            ScriptVersionInfo {
+                version_hash: vec![0x99; 32],
+                family_id: Some("template-family".into()),
+                name: Some("Template Name".into()),
+                category: Some("lock".into()),
+                website: Some("https://example.invalid".into()),
+                description: Some("registered template".into()),
+                registered_references: vec![(registered.clone(), 1)],
+                canonical_reference_hash: Some(registered.clone()),
+                canonical_hash_type: Some(1),
+                ..Default::default()
+            },
+        );
+        let templates = super::type_id_family_templates(&versions).unwrap();
+        assert!(templates.contains_key(&registered));
+        super::apply_type_id_lineage(
+            &mut versions,
+            &templates,
+            &super::TypeIdCodeChange {
+                reference_hash: registered.clone(),
+                version_hash: Some(version_hash.clone()),
+                block_number: 100,
+            },
+        )
+        .unwrap();
+        let result = &versions[&version_hash];
+        assert_eq!(result.family_id.as_deref(), Some("template-family"));
+        assert_eq!(result.name.as_deref(), Some("Template Name"));
+        assert_eq!(result.category.as_deref(), Some("lock"));
+        assert_eq!(result.website.as_deref(), Some("https://example.invalid"));
+        assert_eq!(result.description.as_deref(), Some("registered template"));
+        assert_eq!(result.type_id_deployments, vec![(registered, 100)]);
     }
 
     #[test]

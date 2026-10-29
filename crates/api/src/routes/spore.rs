@@ -563,7 +563,7 @@ fn resolve_composition_tier(
 }
 
 fn cluster_composition_from_aggregate(
-    aggregate: Option<&ckbadger_store::types::ClusterAggregate>,
+    aggregate: &ckbadger_store::types::ClusterAggregate,
     spores_count: i64,
 ) -> Result<ClusterCompositionResponse, ApiRouteError> {
     if spores_count < 0 {
@@ -571,13 +571,11 @@ fn cluster_composition_from_aggregate(
             "negative live spore count in cluster composition: {spores_count}"
         )));
     }
-    let btc_ckb_count = aggregate.map(|a| a.btc_ckb_count).unwrap_or(0);
-    let pure_ckb_count = aggregate.map(|a| a.pure_ckb_count).unwrap_or(0);
-    let decentralized_mixture_count = aggregate
-        .map(|a| a.decentralized_mixture_count)
-        .unwrap_or(0);
-    let centralized_mixture_count = aggregate.map(|a| a.centralized_mixture_count).unwrap_or(0);
-    let unknown_count = aggregate.map(|a| a.unknown_count).unwrap_or(spores_count);
+    let btc_ckb_count = aggregate.btc_ckb_count;
+    let pure_ckb_count = aggregate.pure_ckb_count;
+    let decentralized_mixture_count = aggregate.decentralized_mixture_count;
+    let centralized_mixture_count = aggregate.centralized_mixture_count;
+    let unknown_count = aggregate.unknown_count;
     let total_onchain = btc_ckb_count.checked_add(pure_ckb_count).ok_or_else(|| {
         ApiError::internal(format!(
             "cluster composition count overflow: btc_ckb={btc_ckb_count}, pure_ckb={pure_ckb_count}"
@@ -738,13 +736,18 @@ fn build_cluster_responses_from_cached_entries(
         };
 
         let cluster_entry = spore_map.get(&cluster_id);
-        let cluster_aggregate = cluster_agg_map.get(&cluster_id);
+        let cluster_aggregate = cluster_agg_map.get(&cluster_id).ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing ClusterAggregate for cached cluster 0x{}",
+                hex::encode(&cluster_id)
+            ))
+        })?;
         let created_at_block = cluster_entry.map(|e| e.created_at_block);
         let description = cluster_entry.and_then(|e| e.description.clone());
         let owner_lock_hash = cluster_entry.and_then(|e| e.owner_lock_hash.clone());
         // Live count, matching the live-based holders/composition next to it.
         // The ever-minted total lives on the /assets aggregate surface.
-        let spores_count = cluster_aggregate.map(|a| a.live_count).unwrap_or(0);
+        let spores_count = cluster_aggregate.live_count;
 
         let response = ClusterResponse {
             cluster_id: entry.id,
@@ -755,8 +758,8 @@ fn build_cluster_responses_from_cached_entries(
                 .map(|h| format!("0x{}", hex::encode(h))),
             owner_address: None,
             spores_count: spores_count as i32,
-            total_count: cluster_aggregate.map(|a| a.total_count).unwrap_or(0),
-            holders_count: cluster_aggregate.map(|a| a.owner_count).unwrap_or(0),
+            total_count: cluster_aggregate.total_count,
+            holders_count: cluster_aggregate.owner_count,
             activities_count: 0,
             created_at_block,
             owned_capacity: None,
@@ -1103,15 +1106,19 @@ async fn get_cluster(
     // displayed count is the LIVE count: every neighbouring field (items list,
     // holders, composition) is live-based, and presenting the ever-minted
     // total here contradicted them. totalCount separately exposes all minted items.
-    let spores_count = cluster_aggregate
-        .as_ref()
-        .map(|agg| agg.live_count)
-        .unwrap_or(0);
-
-    let holders_count = cluster_aggregate
-        .as_ref()
-        .map(|agg| agg.owner_count)
-        .unwrap_or(0);
+    // Indexer must write ClusterAggregate on create; silent zero defaults hide bugs.
+    let Some(cluster_aggregate) = cluster_aggregate else {
+        if cluster_entry.is_none() {
+            // Sole spores / empty inferred cluster with no entry and no aggregate.
+            return Err(ApiError::not_found("Cluster not found"));
+        }
+        return Err(ApiError::internal(format!(
+            "missing ClusterAggregate for cluster 0x{}",
+            hex::encode(&id)
+        )));
+    };
+    let spores_count = cluster_aggregate.live_count;
+    let holders_count = cluster_aggregate.owner_count;
     let activities_count = count_nft_collection_activities_cached(
         state.store.as_ref(),
         state.store.as_ref(),
@@ -1132,12 +1139,8 @@ async fn get_cluster(
         let created_at_block = cluster_entry.as_ref().map(|e| e.created_at_block);
         (name, description, created_at_block)
     };
-    let owned_capacity = cluster_aggregate
-        .as_ref()
-        .map(|agg| agg.owned_capacity.to_string());
-    let owned_knowledge = cluster_aggregate
-        .as_ref()
-        .map(|agg| agg.owned_knowledge.to_string());
+    let owned_capacity = Some(cluster_aggregate.owned_capacity.to_string());
+    let owned_knowledge = Some(cluster_aggregate.owned_knowledge.to_string());
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),
@@ -1150,16 +1153,13 @@ async fn get_cluster(
             .as_ref()
             .map(|cell| cell.response.owner_address.clone()),
         spores_count: spores_count as i32,
-        total_count: cluster_aggregate
-            .as_ref()
-            .map(|a| a.total_count)
-            .unwrap_or(0),
+        total_count: cluster_aggregate.total_count,
         holders_count,
         activities_count,
         created_at_block,
         owned_capacity,
         owned_knowledge,
-        composition: cluster_composition_from_aggregate(cluster_aggregate.as_ref(), spores_count)?,
+        composition: cluster_composition_from_aggregate(&cluster_aggregate, spores_count)?,
     })
 }
 
@@ -2271,8 +2271,25 @@ mod tests {
             );
         }
 
+        let err = build_cluster_responses_from_cached_entries(
+            cached.clone(),
+            &spore_map,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            err.1 .0.message.contains("missing ClusterAggregate"),
+            "{}",
+            err.1 .0.message
+        );
+
+        let mut cluster_agg_map = HashMap::new();
+        for id in [&cluster_hi, &cluster_lo] {
+            cluster_agg_map.insert(id.clone(), ckbadger_store::ClusterAggregate::default());
+        }
         let clusters =
-            build_cluster_responses_from_cached_entries(cached, &spore_map, &HashMap::new())
+            build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map)
                 .unwrap();
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters[0].0, cluster_lo);

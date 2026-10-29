@@ -252,10 +252,20 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         // Historical outpoint (no live cell now)
         batch.put_dotbit_account_outpoint(&old_tx, old_idx, &account_id);
-        batch.put_dotbit_outpoint_by_account_id(&account_id, &old_tx, old_idx);
+        batch.put_dotbit_outpoint_by_account_id(
+            &account_id,
+            &old_tx,
+            old_idx,
+            crate::types::AssetAction::Mint,
+        );
         // Current outpoint with a live cell
         batch.put_dotbit_account_outpoint(&live_tx, live_idx, &account_id);
-        batch.put_dotbit_outpoint_by_account_id(&account_id, &live_tx, live_idx);
+        batch.put_dotbit_outpoint_by_account_id(
+            &account_id,
+            &live_tx,
+            live_idx,
+            crate::types::AssetAction::Transfer,
+        );
         batch.put_cell(
             &live_tx,
             live_idx,
@@ -296,11 +306,26 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         batch.put_dotbit_account_outpoint(&tx_a, 4, &account_id);
-        batch.put_dotbit_outpoint_by_account_id(&account_id, &tx_a, 4);
+        batch.put_dotbit_outpoint_by_account_id(
+            &account_id,
+            &tx_a,
+            4,
+            crate::types::AssetAction::Mint,
+        );
         batch.put_dotbit_account_outpoint(&tx_b, 5, &account_id);
-        batch.put_dotbit_outpoint_by_account_id(&account_id, &tx_b, 5);
+        batch.put_dotbit_outpoint_by_account_id(
+            &account_id,
+            &tx_b,
+            5,
+            crate::types::AssetAction::Transfer,
+        );
         batch.put_dotbit_account_outpoint(&tx_other, 6, &[0x44u8; 20]);
-        batch.put_dotbit_outpoint_by_account_id(&[0x44u8; 20], &tx_other, 6);
+        batch.put_dotbit_outpoint_by_account_id(
+            &[0x44u8; 20],
+            &tx_other,
+            6,
+            crate::types::AssetAction::Mint,
+        );
         batch.commit().unwrap();
 
         let mut outpoints = store

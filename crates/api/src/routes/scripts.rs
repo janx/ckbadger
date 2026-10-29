@@ -22,8 +22,8 @@ use crate::response::{
     ScriptVersionDetailResponse,
 };
 use crate::utils::script_resolution::{
-    has_observed_type_id_lineage, reference_form_member_version_with_lineage,
-    resolve_dep_cells_for_transaction,
+    has_observed_type_id_lineage, observed_type_id_references_from_versions,
+    reference_form_member_version_with_lineage, resolve_dep_cells_for_transaction,
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
@@ -1236,14 +1236,7 @@ fn family_classes_for_list(
     let allowed_versions: HashSet<Vec<u8>> =
         versions.iter().map(|(hash, _)| hash.clone()).collect();
     let registered = registered_reference_set(&versions);
-    let observed_type_ids: HashSet<Vec<u8>> = versions
-        .iter()
-        .flat_map(|(_, info)| {
-            info.type_id_deployments
-                .iter()
-                .map(|(reference, _)| reference.clone())
-        })
-        .collect();
+    let observed_type_ids = observed_type_id_references_from_versions(&versions);
     let references = state.store.list_script_reference_infos().map_err(|e| {
         ApiError::internal(format!("list script references for class summary: {e}"))
     })?;
@@ -1628,14 +1621,7 @@ fn family_member_reference_forms(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let membership = ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let observed_type_ids: HashSet<Vec<u8>> = versions
-        .iter()
-        .flat_map(|(_, info)| {
-            info.type_id_deployments
-                .iter()
-                .map(|(reference, _)| reference.clone())
-        })
-        .collect();
+    let observed_type_ids = observed_type_id_references_from_versions(&versions);
     let mut members = Vec::new();
     for ((reference_hash, hash_type), info) in state
         .store

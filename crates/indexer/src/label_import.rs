@@ -362,6 +362,10 @@ pub fn run_label_import(
         overlay_from_dir(Path::new(metadata_path), &mut tokens, &mut scripts)?;
     }
 
+    // Same role/slug validation the API applies at router build — fail import
+    // before writing so overlay mistakes cannot diverge API vs indexer.
+    let _ = collect_script_roles(&scripts, &config.network)?;
+
     import_all(store, &config.network, &tokens, &scripts)
 }
 
@@ -374,7 +378,44 @@ pub fn run_label_import_bundled(store: &CkbadgerStore, network: &str) -> Result<
     );
     let tokens = bundled::udt_labels();
     let scripts = bundled::script_labels();
+    let _ = collect_script_roles(&scripts, network)?;
     import_all(store, network, &tokens, &scripts)
+}
+
+/// Collect declared script roles from already-loaded metadata (bundled and/or
+/// workdir overlay). Invalid role strings or a role without a slug fail fast.
+fn collect_script_roles(
+    scripts: &[ScriptMetadata],
+    network: &str,
+) -> Result<std::collections::HashMap<String, (String, String)>> {
+    let mut roles = std::collections::HashMap::new();
+    for script in scripts {
+        if script.disabled {
+            continue;
+        }
+        let active = match network {
+            "mainnet" => script.mainnet.is_some(),
+            "testnet" => script.testnet.is_some(),
+            _ => script.mainnet.is_some() || script.testnet.is_some(),
+        };
+        if !active {
+            continue;
+        }
+        let Some(role) = script.role.clone() else {
+            continue;
+        };
+        anyhow::ensure!(
+            matches!(role.as_str(), "lock" | "type" | "lock+type"),
+            "invalid script metadata role {role}: {}",
+            script.name
+        );
+        let slug = script
+            .metadata_slug
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("script metadata missing slug: {}", script.name))?;
+        roles.insert(slug, (script.name.clone(), role));
+    }
+    Ok(roles)
 }
 
 /// Read-only counterpart of label import's bundled-plus-workdir metadata
@@ -389,33 +430,7 @@ pub fn effective_script_roles(
     if let Some(path) = metadata_path {
         overlay_from_dir(path, &mut tokens, &mut scripts)?;
     }
-    let mut roles = std::collections::HashMap::new();
-    for script in scripts {
-        if script.disabled {
-            continue;
-        }
-        let active = match network {
-            "mainnet" => script.mainnet.is_some(),
-            "testnet" => script.testnet.is_some(),
-            _ => script.mainnet.is_some() || script.testnet.is_some(),
-        };
-        if !active {
-            continue;
-        }
-        let Some(role) = script.role else {
-            continue;
-        };
-        anyhow::ensure!(
-            matches!(role.as_str(), "lock" | "type" | "lock+type"),
-            "invalid script metadata role {role}: {}",
-            script.name
-        );
-        let slug = script
-            .metadata_slug
-            .ok_or_else(|| anyhow::anyhow!("script metadata missing slug: {}", script.name))?;
-        roles.insert(slug, (script.name, role));
-    }
-    Ok(roles)
+    collect_script_roles(&scripts, network)
 }
 
 fn import_all(
@@ -1153,6 +1168,29 @@ mod tests {
         assert_eq!(
             effective.get("timelock").map(|(_, role)| role.as_str()),
             Some("type")
+        );
+    }
+
+    #[test]
+    fn run_label_import_rejects_invalid_overlay_role() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().join("store")).unwrap();
+        let metadata = dir.path().join("metadata");
+        std::fs::create_dir_all(metadata.join("scripts")).unwrap();
+        let override_toml = include_str!("../../../docs/metadata/scripts/timelock.toml")
+            .replace("role = \"lock\"", "role = \"not-a-role\"");
+        std::fs::write(metadata.join("scripts/timelock.toml"), override_toml).unwrap();
+        let err = run_label_import(
+            &store,
+            &LabelImportConfig {
+                network: "mainnet".to_string(),
+                metadata_path: Some(metadata.to_string_lossy().into_owned()),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid script metadata role"),
+            "{err:#}"
         );
     }
 

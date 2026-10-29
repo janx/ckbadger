@@ -50,6 +50,10 @@ async fn test_cluster_detail_without_minted_spores_has_explicit_empty_ratio() {
     store
         .put_spore_direct(&cluster_id, &live_cluster_entry(100, [0xAA; 32]))
         .unwrap();
+    // Indexer writes ClusterAggregate on cluster create even when empty.
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(&cluster_id, &ClusterAggregate::default());
+    batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(
         &app,
@@ -59,6 +63,29 @@ async fn test_cluster_detail_without_minted_spores_has_explicit_empty_ratio() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["sporesCount"], 0);
     assert!(json["composition"]["onchainRatio"].is_null());
+}
+
+#[tokio::test]
+async fn test_cluster_detail_rejects_missing_aggregate_for_empty_cluster_with_entry() {
+    let store = test_store();
+    let cluster_id = [0xC8_u8; 32];
+    store
+        .put_spore_direct(&cluster_id, &live_cluster_entry(100, [0xAA; 32]))
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}", hex::encode(cluster_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing ClusterAggregate"),
+        "{json}"
+    );
 }
 
 #[tokio::test]

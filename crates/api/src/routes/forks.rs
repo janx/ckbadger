@@ -450,14 +450,25 @@ async fn list_forks(
                             return Ok(("no_old_branch".to_string(), None));
                         }
                         let (mut blocks, mut transactions) =
-                            read_orphaned_branch(&reader, &record.event)?;
-                        enrich_branch_fate(
+                            match read_orphaned_branch(&reader, &record.event) {
+                                Ok(branch) => branch,
+                                Err(e) if e.to_string().contains("CKB RocksDB is missing") => {
+                                    return Ok(("old_branch_unavailable".to_string(), None));
+                                }
+                                Err(e) => return Err(e),
+                            };
+                        if let Err(e) = enrich_branch_fate(
                             &store,
                             &reader,
                             &record.event,
                             &mut blocks,
                             &mut transactions,
-                        )?;
+                        ) {
+                            if e.to_string().contains("CKB RocksDB is missing") {
+                                return Ok(("old_branch_unavailable".to_string(), None));
+                            }
+                            return Err(e);
+                        }
                         let first = blocks.first().ok_or_else(|| {
                             anyhow::anyhow!(
                                 "fork {} recorded old blocks but node branch is empty",

@@ -296,12 +296,13 @@ pub async fn dispatch_initial_warmup(state: Arc<AppState>, defer: bool) {
     }
 }
 
-pub async fn create_router(config: AppConfig) -> Router {
+/// Build the API router, failing fast on invalid metadata roles/slugs.
+pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
     let script_roles = ckbadger_indexer::label_import::effective_script_roles(
         config.metadata_path.as_deref(),
         &config.ckb_network,
     )
-    .expect("failed to read effective script metadata roles");
+    .map_err(|e| anyhow::anyhow!("failed to read effective script metadata roles: {e}"))?;
     let ws_manager = Arc::new(WsManager::new());
 
     let cache = CacheBackend::new();
@@ -489,7 +490,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         .on_response(())
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
-    Router::new()
+    let router = Router::new()
         .nest("/api/v1", routes::api_routes())
         .route("/ws", get(ws::ws_handler))
         // Innermost layer: pin the read view around handler execution only,
@@ -503,7 +504,15 @@ pub async fn create_router(config: AppConfig) -> Router {
             request_log::log_request,
         ))
         .layer(trace_layer)
-        .with_state(state)
+        .with_state(state);
+    Ok(router)
+}
+
+/// Unwrap wrapper for tests and callers that already assume valid metadata.
+pub async fn create_router(config: AppConfig) -> Router {
+    try_create_router(config)
+        .await
+        .expect("failed to create API router")
 }
 
 /// This request's pin on the process-wide read view.

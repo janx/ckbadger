@@ -1857,7 +1857,12 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
         100,
     );
     batch.put_dotbit_account_outpoint(&nft_a_tx_hash, nft_a_output_index, &nft_a);
-    batch.put_dotbit_outpoint_by_account_id(&nft_a, &nft_a_tx_hash, nft_a_output_index);
+    batch.put_dotbit_outpoint_by_account_id(
+        &nft_a,
+        &nft_a_tx_hash,
+        nft_a_output_index,
+        AssetAction::Mint,
+    );
     batch.put_cell_by_type(&nft_a_type_hash, 100, &nft_a_tx_hash, nft_a_output_index);
     batch.commit().unwrap();
 
@@ -2654,31 +2659,14 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     );
     core_batch.put_identity_by_collection(&collection_id, &account_id);
     core_batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
-    core_batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
-    core_batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &mint_tx,
-                0,
-            ),
-            &[0],
-        )
-        .unwrap();
+    core_batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0, AssetAction::Mint);
     core_batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
-    core_batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0);
-    core_batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &transfer_tx,
-                0,
-            ),
-            &[1],
-        )
-        .unwrap();
+    core_batch.put_dotbit_outpoint_by_account_id(
+        &account_id,
+        &transfer_tx,
+        0,
+        AssetAction::Transfer,
+    );
     core_batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -3221,44 +3209,11 @@ async fn test_assets_nft_item_activities_dotbit() {
         },
     );
     batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
-    batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
-    batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &mint_tx,
-                0,
-            ),
-            &[0],
-        )
-        .unwrap();
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0, AssetAction::Mint);
     batch.put_dotbit_account_outpoint(&transfer_tx_1, 0, &account_id);
-    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_1, 0);
-    batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &transfer_tx_1,
-                0,
-            ),
-            &[1],
-        )
-        .unwrap();
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_1, 0, AssetAction::Transfer);
     batch.put_dotbit_account_outpoint(&transfer_tx_2, 0, &account_id);
-    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_2, 0);
-    batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &transfer_tx_2,
-                0,
-            ),
-            &[1],
-        )
-        .unwrap();
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_2, 0, AssetAction::Transfer);
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -3452,31 +3407,9 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         },
     );
     batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
-    batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
-    batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &mint_tx,
-                0,
-            ),
-            &[0],
-        )
-        .unwrap();
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0, AssetAction::Mint);
     batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
-    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0);
-    batch
-        .put_raw_cf_by_name(
-            "stats_mnft",
-            &ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-                &account_id,
-                &transfer_tx,
-                0,
-            ),
-            &[1],
-        )
-        .unwrap();
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0, AssetAction::Transfer);
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
