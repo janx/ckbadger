@@ -565,6 +565,10 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         clear_script_family_usage(family);
     }
 
+    // Family deprecation follows labeled (imported) versions only. Unregistered
+    // on-chain observations default to deprecated=false and must not revive a
+    // family whose registered versions are all deprecated (PW Lock, COTA, …).
+    let mut family_label_state: HashMap<String, (bool, bool)> = HashMap::new();
     for version in version_map.values() {
         let Some(family_id) = version.family_id.as_deref() else {
             continue;
@@ -573,15 +577,27 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
             .entry(family_id.to_string())
             .or_insert_with(|| ScriptFamilyInfo {
                 family_id: family_id.to_string(),
-                deprecated: true,
+                deprecated: false,
                 ..Default::default()
             });
         family.family_id = family_id.to_string();
-        if !version.deprecated {
-            family.deprecated = false;
+        if version.name.is_some() {
+            let state = family_label_state
+                .entry(family_id.to_string())
+                .or_insert((false, false));
+            state.0 = true;
+            if !version.deprecated {
+                state.1 = true;
+            }
         }
         family.versions_count =
             checked_add_family_i64(family_id, "versions_count", family.versions_count, 1)?;
+    }
+    for (family_id, family) in family_map.iter_mut() {
+        family.deprecated = match family_label_state.get(family_id) {
+            Some((true, any_active)) => !any_active,
+            _ => false,
+        };
     }
 
     // Family membership is stable provenance; a current binary mapping may be
@@ -3572,6 +3588,111 @@ mod tests {
         assert_eq!(family.live_cells_count, 7);
         assert_eq!(family.owned_capacity_sum, 640);
         assert_eq!(family.owned_knowledge_sum, 392);
+    }
+
+    #[test]
+    fn family_deprecation_follows_labeled_versions_not_unregistered_observations() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let family_id = "pw-lock";
+        let labeled = vec![0xa1; 32];
+        let unlabeled = vec![0xa2; 32];
+        let labeled_ref = vec![0xb1; 32];
+        let unlabeled_ref = vec![0xb2; 32];
+
+        store
+            .put_script_family_direct(
+                family_id,
+                &ckbadger_store::ScriptFamilyInfo {
+                    family_id: family_id.to_string(),
+                    name: "PW Lock".to_string(),
+                    deprecated: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version(
+                &labeled,
+                &ckbadger_store::ScriptVersionInfo {
+                    version_hash: labeled.clone(),
+                    family_id: Some(family_id.to_string()),
+                    name: Some("PW Lock".to_string()),
+                    deprecated: true,
+                    registered_references: vec![(labeled_ref.clone(), 1)],
+                    canonical_reference_hash: Some(labeled_ref.clone()),
+                    canonical_hash_type: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version(
+                &unlabeled,
+                &ckbadger_store::ScriptVersionInfo {
+                    version_hash: unlabeled.clone(),
+                    family_id: Some(family_id.to_string()),
+                    // Chain observation without label import: default deprecated=false.
+                    deprecated: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(1, &labeled_ref, &labeled)
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(1, &unlabeled_ref, &unlabeled)
+            .unwrap();
+        store
+            .put_script_info_direct(
+                &labeled_ref,
+                &ScriptInfo {
+                    code_hash: labeled_ref.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    lock_capacity_sum: 100,
+                    lock_owned_capacity_sum: 100,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_info_direct(
+                &unlabeled_ref,
+                &ScriptInfo {
+                    code_hash: unlabeled_ref.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    lock_capacity_sum: 50,
+                    lock_owned_capacity_sum: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .materialize_script_versions_and_families_with_chain(
+                &HashMap::new(),
+                &[],
+                &HashMap::new(),
+                &HashMap::new(),
+                &crate::sync::undo::SharedUndoSeq::default(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let family = store.get_script_family(family_id).unwrap().unwrap();
+        assert!(
+            family.deprecated,
+            "unregistered observations must not clear a labeled-deprecated family"
+        );
+        assert_eq!(family.versions_count, 2);
     }
 
     /// P3.4: the rollup is recomputed every batch, but only rows whose bytes
