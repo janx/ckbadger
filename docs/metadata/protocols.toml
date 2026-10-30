@@ -30,3 +30,7 @@ scripts = ["utxoswap-intent-lock"]
 [dotcell]
 name = ".cell"
 scripts = ["dotcell-account", "dotcell-account-lock", "dotcell-sale-lock", "dotcell-price"]
+
+[dotbit]
+name = ".bit"
+scripts = ["bit-account"]

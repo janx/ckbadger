@@ -1154,6 +1154,7 @@ mod tests {
             block_number,
             timestamp: timestamp_ms,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: live_inputs,
             outputs: live_outputs,
         };
@@ -1392,6 +1393,7 @@ mod tests {
             block_number: 15676252,
             timestamp: 1_742_364_647_196,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![
                 secp_input_view(
                     &secp_code_hash,
@@ -1444,6 +1446,7 @@ mod tests {
             block_number: 15676315,
             timestamp: 1_742_365_295_267,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![InputCellView {
                 previous_tx_hash: &open_tx,
                 previous_output_index: 0,

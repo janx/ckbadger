@@ -1278,6 +1278,7 @@ fn canonical_transaction_actions(
         block_number: block,
         timestamp: entry.timestamp,
         is_cellbase: true,
+        dotbit_action: None,
         inputs: vec![],
         outputs,
     };

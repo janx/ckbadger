@@ -475,6 +475,8 @@ struct ActivityInputIndexes<'a> {
     /// The `.cell` name each consumed name cell carried, captured by the
     /// consume path. An input reaches the activity builder without its data.
     dotcell_inputs: &'a HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData>,
+    /// The DAS ActionData action of each transaction that carries one.
+    das_actions: &'a HashMap<[u8; 32], String>,
 }
 
 /// One transaction as the live activity builder sees it: inputs resolved
@@ -486,6 +488,7 @@ fn build_live_activity_tx_view<'a>(
     timestamp_ms: i64,
     indexes: ActivityInputIndexes<'a>,
 ) -> Result<crate::db::writer::activities::TxView<'a>> {
+    let dotbit_action = indexes.das_actions.get(&tx_data.hash).map(String::as_str);
     let inputs = build_activity_input_views(tx_data, block_number, indexes)?;
     let outputs = tx_data
         .cells
@@ -512,6 +515,7 @@ fn build_live_activity_tx_view<'a>(
         block_number,
         timestamp: timestamp_ms,
         is_cellbase: tx_data.is_cellbase,
+        dotbit_action,
         inputs,
         outputs,
     })
@@ -2449,6 +2453,10 @@ impl Indexer {
         let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
             HashMap::new();
 
+        // DAS ActionData actions of every non-cellbase tx in the batch, parsed
+        // once from its witnesses: the `.bit` collection feed below and the
+        // activity builder's `dotbit:*` actions both read them from here.
+        let mut das_action_cache: HashMap<[u8; 32], String> = HashMap::new();
         // Dotbit account IDs resolved during consume, needed later by activity builder.
         let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
         // Consumed AccountCells whose creation recorded them as never an account.
@@ -2490,9 +2498,6 @@ impl Indexer {
             let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
                 HashMap::new();
-            // Cache DAS actions for all non-cellbase txs so consumption-only
-            // txs can look up their action (not just txs with .bit outputs).
-            let mut das_action_cache: HashMap<[u8; 32], String> = HashMap::new();
 
             // --- Pre-pass: collect all input outpoints for batch DB lookup ---
             let bulk_sync_active = self.is_bulk_sync_active();
@@ -3279,6 +3284,7 @@ impl Indexer {
                                 dotbit_unindexed: &resolved_dotbit_unindexed,
                                 bit_cell_identity_ids: &resolved_bit_cell_ids,
                                 dotcell_inputs: &resolved_dotcell_inputs,
+                                das_actions: &das_action_cache,
                             },
                         )
                     })
@@ -4562,6 +4568,10 @@ impl Indexer {
 mod tests {
     use super::*;
 
+    /// No transaction of a hand-built activity view carries a DAS action.
+    static NO_DAS_ACTIONS: std::sync::LazyLock<HashMap<[u8; 32], String>> =
+        std::sync::LazyLock::new(HashMap::new);
+
     #[test]
     fn bulk_completion_rate_has_no_fabricated_zero_without_duration() {
         assert_eq!(Indexer::bulk_completion_blocks_per_second(100, None), None);
@@ -4951,6 +4961,7 @@ mod tests {
                 dotbit_unindexed: &HashSet::new(),
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
@@ -5007,6 +5018,7 @@ mod tests {
                 dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )
         .expect("input lookup should fall back to same-batch cell cache");
@@ -5065,6 +5077,7 @@ mod tests {
                 dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )
         .unwrap();
@@ -5116,6 +5129,7 @@ mod tests {
                 dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &bit_cell_ids,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )
         .unwrap();
@@ -5218,6 +5232,7 @@ mod tests {
                 dotbit_unindexed: &dotbit_unindexed,
                 bit_cell_identity_ids: &empty_bit_cell,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )?;
         crate::db::writer::activities::build_tx_actions_for_block_with_io(&[view], &[])
@@ -5568,6 +5583,7 @@ mod tests {
                 dotbit_unindexed: &HashSet::new(),
                 bit_cell_identity_ids: &empty_ids,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         ) {
             Ok(_) => panic!("an unclassified consumed AccountCell must fail fast"),
@@ -11067,6 +11083,242 @@ mod tests {
                 *snapshot.addr_prefix_stats.get(&NAMED_PREFIX).unwrap(),
                 "prefix counters must match"
             );
+        }
+    }
+
+    /// W2: `.bit` ActionData names persisted as `dotbit:*` protocol actions,
+    /// identically by live sync and bulk build, through the real write paths.
+    mod dotbit_protocol_actions_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            write_live_block, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::dotbit::fixtures::{account_cell_data, das_action_witness};
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+        use crate::sync::materialize_bulk_artifacts_for_test;
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const ACCOUNT_CAPACITY: u64 = 1000_00000000;
+        /// valar.bit (`0x2d2ed79a…90e9`) and the neighbour recycled beside it.
+        const VALAR: [u8; 20] = [
+            0x2d, 0x2e, 0xd7, 0x9a, 0x32, 0xf0, 0x78, 0xc5, 0x11, 0x10, 0x87, 0x65, 0xa3, 0x84,
+            0xa1, 0x83, 0xe1, 0x49, 0x90, 0xe9,
+        ];
+        const NEIGHBOUR: [u8; 20] = [
+            0x2d, 0x30, 0x36, 0x4d, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+        ];
+
+        fn account_type() -> Script {
+            Script {
+                code_hash: crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }
+        }
+
+        fn account_output(lock: Script) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{ACCOUNT_CAPACITY:x}"),
+                lock,
+                type_: Some(account_type()),
+            }
+        }
+
+        fn input(tx_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([tx_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn das_tx(
+            hash_byte: u8,
+            action: &str,
+            inputs: Vec<CellInput>,
+            outputs: Vec<(CellOutput, [u8; 20], u64)>,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs,
+                outputs_data: outputs
+                    .iter()
+                    .map(|(_, id, expiry)| account_cell_data(*id, [0xFF; 20], *expiry))
+                    .collect(),
+                outputs: outputs.into_iter().map(|(output, _, _)| output).collect(),
+                witnesses: vec![das_action_witness(action)],
+            }
+        }
+
+        /// valar.bit's history in five DAS transactions: registered beside a
+        /// neighbour, renewed, its records edited, transferred, then its
+        /// neighbour recycled — which rewrites valar's cell without being
+        /// about valar.
+        fn dotbit_blocks() -> Vec<BlockResponseWithCycles> {
+            vec![
+                block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        das_tx(
+                            0xb1,
+                            "confirm_proposal",
+                            vec![input(0xc0, 0)],
+                            vec![
+                                (account_output(lock_script()), VALAR, 1_000),
+                                (account_output(lock_script_b()), NEIGHBOUR, 1_000),
+                            ],
+                        ),
+                    ],
+                ),
+                block(
+                    102,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        das_tx(
+                            0xb2,
+                            "renew_account",
+                            vec![input(0xb1, 0)],
+                            vec![(account_output(lock_script()), VALAR, 2_000)],
+                        ),
+                        das_tx(
+                            0xb3,
+                            "edit_records",
+                            vec![input(0xb2, 0)],
+                            vec![(account_output(lock_script()), VALAR, 2_000)],
+                        ),
+                    ],
+                ),
+                block(
+                    103,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc3, 100_000_000),
+                        das_tx(
+                            0xb4,
+                            "transfer_account",
+                            vec![input(0xb3, 0)],
+                            vec![(account_output(lock_script_b()), VALAR, 2_000)],
+                        ),
+                        das_tx(
+                            0xb5,
+                            "recycle_expired_account",
+                            vec![input(0xb4, 0), input(0xb1, 1)],
+                            vec![(account_output(lock_script_b()), VALAR, 2_000)],
+                        ),
+                    ],
+                ),
+            ]
+        }
+
+        /// `(protocol, action, metadata)` of every protocol action, per tx.
+        type ActionRows = BTreeMap<Vec<u8>, Vec<(String, String, serde_json::Value)>>;
+
+        fn rows_of(
+            actions: &ckbadger_store::types::TxActions,
+        ) -> Vec<(String, String, serde_json::Value)> {
+            actions
+                .protocol_actions
+                .iter()
+                .map(|a| {
+                    (
+                        a.protocol.clone(),
+                        a.action.clone(),
+                        a.metadata_value().unwrap(),
+                    )
+                })
+                .collect()
+        }
+
+        fn expected() -> ActionRows {
+            let id =
+                |id: [u8; 20]| serde_json::json!({ "accountId": format!("0x{}", hex::encode(id)) });
+            let row = |action: &str, account: [u8; 20]| {
+                ("dotbit".to_string(), action.to_string(), id(account))
+            };
+            BTreeMap::from([
+                (
+                    vec![0xb1; 32],
+                    vec![
+                        row("confirm_proposal", VALAR),
+                        row("confirm_proposal", NEIGHBOUR),
+                    ],
+                ),
+                (vec![0xb2; 32], vec![row("renew_account", VALAR)]),
+                (vec![0xb3; 32], vec![row("edit_records", VALAR)]),
+                (vec![0xb4; 32], vec![row("transfer_account", VALAR)]),
+                (
+                    vec![0xb5; 32],
+                    vec![row("recycle_expired_account", NEIGHBOUR)],
+                ),
+            ])
+        }
+
+        #[tokio::test]
+        async fn live_and_bulk_persist_identical_dotbit_protocol_actions() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotbit_blocks();
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+            let mut live: ActionRows = BTreeMap::new();
+            for (tx_hash, _) in expected() {
+                let (block_num, tx_idx) = store.get_tx_location(&tx_hash).unwrap().unwrap();
+                let actions = store
+                    .get_tx_actions(block_num, tx_idx, &tx_hash)
+                    .unwrap()
+                    .expect("live TxActions row");
+                live.insert(tx_hash, rows_of(&actions));
+            }
+
+            let snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            // `tx_actions_map` is keyed by the raw CF_TX_ACTIONS key.
+            let bulk_by_hash: HashMap<Vec<u8>, &ckbadger_store::types::TxActions> = snapshot
+                .tx_actions_map
+                .values()
+                .map(|actions| (actions.tx_hash.clone(), actions))
+                .collect();
+            let bulk: ActionRows = expected()
+                .into_keys()
+                .map(|tx_hash| {
+                    let actions = bulk_by_hash.get(&tx_hash).expect("bulk TxActions row");
+                    (tx_hash, rows_of(actions))
+                })
+                .collect();
+
+            assert_eq!(live, expected(), "live dotbit protocol actions");
+            assert_eq!(
+                bulk, live,
+                "bulk and live must persist identical protocol actions"
+            );
+            // Every `.bit` transaction now carries an Identity bucket row.
+            for tx_hash in expected().into_keys() {
+                let actions = bulk_by_hash[&tx_hash];
+                assert_eq!(
+                    ckbadger_store::classify_global_bucket(actions),
+                    Some(ckbadger_store::GlobalBucket::Identity),
+                    "tx 0x{}",
+                    hex::encode(&tx_hash)
+                );
+            }
         }
     }
 

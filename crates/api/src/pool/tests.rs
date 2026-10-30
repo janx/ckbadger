@@ -69,6 +69,7 @@ struct TxBuilder {
     hash: [u8; 32],
     inputs: Vec<((String, u32), String)>,
     outputs: Vec<(u64, RpcScript, Option<RpcScript>, String)>,
+    witnesses: Vec<String>,
 }
 
 impl TxBuilder {
@@ -77,7 +78,34 @@ impl TxBuilder {
             hash: [hash_byte; 32],
             inputs: Vec::new(),
             outputs: Vec::new(),
+            witnesses: vec!["0x".to_string()],
         }
+    }
+
+    fn witnesses(mut self, witnesses: Vec<String>) -> Self {
+        self.witnesses = witnesses;
+        self
+    }
+
+    /// A mainnet `.bit` AccountCell naming `account_id` (empty type args, the
+    /// id at `data[32..52]`).
+    fn dotbit_output(mut self, capacity: u64, lock_args: u8, account_id: [u8; 20]) -> Self {
+        let mut data = vec![0u8; 32];
+        data.extend_from_slice(&account_id);
+        data.extend_from_slice(&[0xFF; 20]);
+        data.extend_from_slice(&1_000u64.to_le_bytes());
+        self.outputs.push((
+            capacity,
+            script(SECP_LOCK_CODE_HASH, lock_args),
+            Some(RpcScript {
+                code_hash: ckbadger_indexer::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID
+                    .to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }),
+            format!("0x{}", hex::encode(data)),
+        ));
+        self
     }
 
     fn input(mut self, prev_tx: &str, index: u32) -> Self {
@@ -157,9 +185,32 @@ impl TxBuilder {
                 .iter()
                 .map(|(_, _, _, data)| data.clone())
                 .collect(),
-            witnesses: vec!["0x".to_string()],
+            witnesses: self.witnesses.clone(),
         }
     }
+}
+
+/// A DAS `ActionData` witness: `"das"` + type 0 + `{ action: Bytes, params: Bytes }`.
+fn das_action_witness(action: &str) -> String {
+    let bytes = |payload: &[u8]| {
+        let mut out = (payload.len() as u32).to_le_bytes().to_vec();
+        out.extend_from_slice(payload);
+        out
+    };
+    let fields = [bytes(action.as_bytes()), bytes(&[])];
+    let header = 4 + 4 * fields.len();
+    let total = header + fields.iter().map(Vec::len).sum::<usize>();
+    let mut witness = b"das\0\0\0\0".to_vec();
+    witness.extend_from_slice(&(total as u32).to_le_bytes());
+    let mut offset = header as u32;
+    for field in &fields {
+        witness.extend_from_slice(&offset.to_le_bytes());
+        offset += field.len() as u32;
+    }
+    for field in &fields {
+        witness.extend_from_slice(field);
+    }
+    format!("0x{}", hex::encode(witness))
 }
 
 fn entry(time_added_to_pool_ms: u64) -> PoolEntryMeta {
@@ -290,6 +341,51 @@ async fn test_new_pool_tx_is_indexed_by_participant_lock() {
         .expect("sender participant");
     assert_eq!(sender_participant.addr_tx.tx_type_str(), "sent");
     assert_eq!(sender_participant.addr_tx.capacity_change, -10_000_000_000);
+}
+
+/// A pending `.bit` registration is interpreted exactly as it will be once
+/// committed: the DAS ActionData action becomes a `dotbit:*` protocol action
+/// naming the registered account.
+#[tokio::test]
+async fn pending_dotbit_registration_carries_its_das_action() {
+    let (source, mirror, mut refresher) = setup(100);
+    let account_id = [0x2d; 20];
+    let tx = TxBuilder::new(0x02)
+        .input(&hex32(0xF1), 0)
+        .dotbit_output(9_900_000_000, 0xBB, account_id)
+        .witnesses(vec![das_action_witness("confirm_proposal")])
+        .build();
+
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x02; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    source.set_transaction([0xF1; 32], committed_parent(0xF1, 10_000_000_000, 0xAA));
+    source.set_transaction([0x02; 32], lookup(tx, NodeTxStatus::Pending));
+    let outcome = refresher.refresh_once().await;
+    assert_eq!(outcome.error, None);
+
+    let snapshot = mirror.load();
+    let rows = snapshot.records_for_lock(&lock_hash(SECP_LOCK_CODE_HASH, 0xBB));
+    assert_eq!(rows.len(), 1);
+    let actions = rows[0]
+        .actions
+        .as_ref()
+        .expect("complete record has actions");
+    let dotbit: Vec<(String, serde_json::Value)> = actions
+        .protocol_actions
+        .iter()
+        .filter(|a| a.protocol == "dotbit")
+        .map(|a| (a.action.clone(), a.metadata_value().unwrap()))
+        .collect();
+    assert_eq!(
+        dotbit,
+        vec![(
+            "confirm_proposal".to_string(),
+            serde_json::json!({ "accountId": format!("0x{}", hex::encode(account_id)) })
+        )]
+    );
 }
 
 #[tokio::test]
@@ -1249,6 +1345,7 @@ async fn test_interpretation_parity_between_live_sync_and_pool_resolution() {
         block_number: 0,
         timestamp: 1_700_000_000_000,
         is_cellbase: false,
+        dotbit_action: None,
         inputs: vec![InputCellView {
             previous_tx_hash: &[0xF0; 32],
             previous_output_index: 0,
@@ -1363,6 +1460,7 @@ async fn test_dotcell_transfer_reads_the_same_in_the_pool_as_committed() {
         block_number: 0,
         timestamp: 1_700_000_000_000,
         is_cellbase: false,
+        dotbit_action: None,
         inputs: vec![
             InputCellView {
                 previous_tx_hash: &[0xF0; 32],

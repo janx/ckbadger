@@ -4286,16 +4286,20 @@ pub(in crate::sync) fn build_tx_actions_list_for_bulk(
 
     let tx_views = block_txs
         .iter()
+        .zip(block_resolved)
         .zip(block_inputs)
         .zip(block_outputs)
         .map(
-            |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
+            |(((tx, resolved_tx), inputs), outputs)| crate::db::writer::activities::TxView {
                 tx_hash: &tx.hash,
                 block_hash: &tx.block_hash,
                 tx_index: tx.tx_index,
                 block_number: tx.block_number,
                 timestamp: tx.timestamp_ms,
                 is_cellbase: tx.is_cellbase,
+                // Parsed once from the witnesses into the tx's facts, the same
+                // value the bulk `.bit` collection feed reads.
+                dotbit_action: resolved_tx.dotbit_action.as_deref(),
                 inputs,
                 outputs,
             },

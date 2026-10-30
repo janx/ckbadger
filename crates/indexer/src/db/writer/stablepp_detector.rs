@@ -524,6 +524,7 @@ mod tests {
             block_number: 14_000_000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: inputs.iter().map(|i| i.view()).collect(),
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };

@@ -593,6 +593,55 @@ pub(crate) mod fixtures {
     /// Mainnet DAS root AccountCell (tx `0x00a660fd…a87c`, output 0): all-zero
     /// account id, `next` = 0xff…ff, empty type args. It names no account.
     pub(crate) const MAINNET_ROOT_ACCOUNT_CELL_DATA: &str = "0xd58e4b5c3c1a2e5687de0bc1ed0bc2039fd8a5918092640793b765cecea083100000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff1efc6340e3f0520d03a4af6f0dd9e152453482558358e5c79b92812654136d08b8b4ab3f45492a8942ba065938d5f065e29597aeb28941efe66e2c0d420d1a421748a38ee6f920076ba87f235f7c97137e4cf45be0af58b5f55355bc0996e7d0";
+
+    /// AccountCell data in the mainnet layout: witness hash (32, zeros here) +
+    /// account id (20) + next id (20) + expired_at (u64 LE). Hex, `0x`-prefixed.
+    pub(crate) fn account_cell_data(
+        account_id: [u8; 20],
+        next: [u8; 20],
+        expired_at: u64,
+    ) -> String {
+        let mut data = vec![0u8; 32];
+        data.extend_from_slice(&account_id);
+        data.extend_from_slice(&next);
+        data.extend_from_slice(&expired_at.to_le_bytes());
+        format!("0x{}", hex::encode(data))
+    }
+
+    /// A DAS `ActionData` witness: `"das"` + type `0x00000000` + the molecule
+    /// table `{ action: Bytes, params: Bytes }` with empty params.
+    pub(crate) fn das_action_witness(action: &str) -> String {
+        let bytes = |payload: &[u8]| {
+            let mut out = (payload.len() as u32).to_le_bytes().to_vec();
+            out.extend_from_slice(payload);
+            out
+        };
+        let fields = [bytes(action.as_bytes()), bytes(&[])];
+        let header = 4 + 4 * fields.len();
+        let total = header + fields.iter().map(Vec::len).sum::<usize>();
+        let mut table = (total as u32).to_le_bytes().to_vec();
+        let mut offset = header as u32;
+        for field in &fields {
+            table.extend_from_slice(&offset.to_le_bytes());
+            offset += field.len() as u32;
+        }
+        for field in &fields {
+            table.extend_from_slice(field);
+        }
+        let mut witness = b"das".to_vec();
+        witness.extend_from_slice(&[0, 0, 0, 0]);
+        witness.extend_from_slice(&table);
+        format!("0x{}", hex::encode(witness))
+    }
+
+    #[test]
+    fn das_action_witness_fixture_parses_back_to_its_action() {
+        assert_eq!(
+            super::DotbitParser::parse_das_action(&[das_action_witness("renew_account")])
+                .as_deref(),
+            Some("renew_account")
+        );
+    }
 }
 
 #[cfg(test)]
