@@ -1524,32 +1524,50 @@ pub struct TokenDailyDelta {
     /// How many burn transfer records that day (`0` exactly when `burned`
     /// is zero).
     pub burn_count: u64,
+    /// Canonical transactions that day with at least one transfer record of
+    /// this token (`token_transfers`): the token's Activities / Transactions
+    /// tabs list exactly these, and their `total` is the sum of this field.
+    /// A subset of `tx_count`, which also counts transactions that only
+    /// rewrite cells without moving an amount between locks.
+    pub transfer_tx_count: u64,
 }
 
+/// One token transfer record's supply facts: `(is_mint, is_burn, amount)`.
+pub type TokenTransferFact = (bool, bool, u128);
+
 impl TokenDailyDelta {
-    /// Fold one mint or burn transfer record
-    /// (`UdtParser::build_transfers_from_cells`, the record the Transactions
-    /// tab shows) into this day. A record that is neither is a caller bug.
-    pub fn add_supply_transfer(
-        &mut self,
-        is_mint: bool,
-        is_burn: bool,
-        amount: u128,
-    ) -> anyhow::Result<()> {
-        let amount = ckbadger_common::TokenBalance::from(amount);
-        let (sum, count) = match (is_mint, is_burn) {
-            (true, false) => (&mut self.minted, &mut self.mint_count),
-            (false, true) => (&mut self.burned, &mut self.burn_count),
-            _ => anyhow::bail!(
-                "token supply transfer must be exactly one of mint/burn: is_mint={is_mint} is_burn={is_burn}"
-            ),
-        };
-        *sum = sum
-            .checked_add(&amount)
-            .ok_or_else(|| anyhow::anyhow!("token daily supply sum overflow: {sum} + {amount}"))?;
-        *count = count
+    /// Fold one transaction's transfer records of this token
+    /// (`UdtParser::build_transfers_from_cells`, the records `token_transfers`
+    /// holds and the Transactions tab shows), given as `(is_mint, is_burn,
+    /// amount)`: the transaction counts once in `transfer_tx_count`, and each
+    /// mint / burn record adds to the day's supply sums and counts. Both sync
+    /// paths call this once per (transaction, token).
+    pub fn add_transfer_tx(&mut self, records: &[TokenTransferFact]) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !records.is_empty(),
+            "a transfer transaction without transfer records"
+        );
+        self.transfer_tx_count = self
+            .transfer_tx_count
             .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("token daily supply record count overflow"))?;
+            .ok_or_else(|| anyhow::anyhow!("token daily transfer_tx_count overflow"))?;
+        for &(is_mint, is_burn, amount) in records {
+            let amount = ckbadger_common::TokenBalance::from(amount);
+            let (sum, count) = match (is_mint, is_burn) {
+                (true, false) => (&mut self.minted, &mut self.mint_count),
+                (false, true) => (&mut self.burned, &mut self.burn_count),
+                (false, false) => continue,
+                (true, true) => {
+                    anyhow::bail!("a token transfer record cannot be both a mint and a burn")
+                }
+            };
+            *sum = sum.checked_add(&amount).ok_or_else(|| {
+                anyhow::anyhow!("token daily supply sum overflow: {sum} + {amount}")
+            })?;
+            *count = count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("token daily supply record count overflow"))?;
+        }
         Ok(())
     }
 
@@ -1584,6 +1602,10 @@ impl TokenDailyDelta {
             .burn_count
             .checked_add(other.burn_count)
             .ok_or_else(|| overflow("burn_count"))?;
+        self.transfer_tx_count = self
+            .transfer_tx_count
+            .checked_add(other.transfer_tx_count)
+            .ok_or_else(|| overflow("transfer_tx_count"))?;
         Ok(())
     }
 

@@ -147,6 +147,7 @@ fn fixture() -> Arc<CkbadgerStore> {
                 owned_capacity_delta: 1000,
                 owned_knowledge_delta: 600,
                 tx_count: 1,
+                transfer_tx_count: 1,
                 minted: 100u128.into(),
                 mint_count: 1,
                 ..Default::default()
@@ -156,6 +157,7 @@ fn fixture() -> Arc<CkbadgerStore> {
             20261002,
             TokenDailyDelta {
                 tx_count: 1,
+                transfer_tx_count: 1,
                 ..Default::default()
             },
         ),
@@ -163,6 +165,7 @@ fn fixture() -> Arc<CkbadgerStore> {
             20261008,
             TokenDailyDelta {
                 tx_count: 1,
+                transfer_tx_count: 1,
                 burned: 10u128.into(),
                 burn_count: 1,
                 ..Default::default()
@@ -956,4 +959,138 @@ async fn token_transactions_rows_read_outputs_in_one_batch() {
         reads[0].1 .0, reads[1].1 .0,
         "get_cf point reads grew with outputs per transaction: {reads:?}"
     );
+}
+
+// ── I5: the token tabs page at the transfer index ───────────────────────
+
+/// `n` transfer transactions of [`TOKEN`], one per block from block 1 at
+/// tx index 1 (one leg each, the last block's tx has two legs), with the
+/// daily rows the indexer writes for them (`transfer_tx_count` per day).
+fn tab_fixture(n: i64) -> Arc<CkbadgerStore> {
+    let store = test_store();
+    let info = fixture().get_token(&TOKEN).unwrap().unwrap();
+    store.put_token_direct(&TOKEN, &info).unwrap();
+    let start = utc_ms("2026-09-30T16:00:00Z");
+    let headers: Vec<(i64, i64)> = (0..=n).map(|b| (b, start + b * 60_000)).collect();
+    seed_block_headers_at(&store, &headers);
+    let mut batch = StoreBatch::new(&store);
+    let mut days: std::collections::BTreeMap<u32, TokenDailyDelta> = Default::default();
+    for block in 1..=n {
+        let header = store.get_block_header(block).unwrap().unwrap();
+        let hash = long_history_tx(block);
+        batch.put_tx_hash_map(&hash, block, 1);
+        batch.put_tx_index(
+            block,
+            1,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp: header.timestamp,
+                inputs_count: 1,
+                outputs_count: 0,
+                fee: 10,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_tx_actions(&make_test_tx_actions(
+            &[0x32; 32],
+            &hash,
+            &header.hash,
+            block,
+            1,
+            0,
+            0,
+        ));
+        for sequence in 0..if block == n { 2 } else { 1 } {
+            batch.put_token_transfer(
+                &TOKEN,
+                block,
+                sequence,
+                &TokenTransferRecord {
+                    tx_hash: hash.to_vec(),
+                    block_number: block,
+                    from_lock_hash: Some(vec![0x32; 32]),
+                    to_lock_hash: vec![0x33; 32],
+                    amount: 1,
+                    is_mint: false,
+                    is_burn: false,
+                    timestamp: header.timestamp,
+                },
+            );
+        }
+        let day = ckbadger_store::keys::timestamp_ms_to_date(header.chain_time_ms);
+        let row = days.entry(day).or_default();
+        row.tx_count += 1;
+        row.transfer_tx_count += 1;
+    }
+    batch.commit().unwrap();
+    for (day, row) in days {
+        store.put_token_daily_delta(&TOKEN, day, &row).unwrap();
+    }
+    store
+}
+
+/// I5 (the ID-COL-1 pattern for tokens): the Activities / Transactions tabs
+/// built the token's whole transaction scope for every page (a full transfer
+/// walk). A page now reads the transfer index at its cursor, so its reads do
+/// not grow with the token's history, and `total` is the persisted count.
+#[tokio::test]
+async fn token_tab_page_reads_do_not_grow_with_history() {
+    for route in ["activity-feed", "transactions"] {
+        let mut reads = Vec::new();
+        for n in [30, 2_100] {
+            let store = tab_fixture(n);
+            let app = router_from_state(test_app_state(test_config(store.clone())));
+            store.reset_read_call_counters();
+            let (status, page) = response_json(
+                &app,
+                &format!("/tokens/0x{}/{route}?limit=10", hex::encode(TOKEN)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{page}");
+            assert_eq!(page["total"], n, "{route}: total is the persisted count");
+            assert_eq!(page["data"].as_array().unwrap().len(), 10);
+            reads.push((n, store.read_call_counts()));
+        }
+        assert_eq!(
+            reads[0].1, reads[1].1,
+            "{route}: page-1 reads grew with history: {reads:?}"
+        );
+    }
+}
+
+/// Walking the cursor visits every transfer transaction once, newest first,
+/// with no gap across pages (the two-leg transaction included once).
+#[tokio::test]
+async fn token_tab_cursor_walks_every_transaction_once() {
+    let store = tab_fixture(30);
+    let app = router_from_state(test_app_state(test_config(store)));
+    for (route, key) in [("activity-feed", "txHash"), ("transactions", "hash")] {
+        let mut uri = format!("/tokens/0x{}/{route}?limit=7", hex::encode(TOKEN));
+        let mut seen = Vec::new();
+        loop {
+            let (status, page) = response_json(&app, &uri).await;
+            assert_eq!(status, StatusCode::OK, "{page}");
+            assert_eq!(page["total"], 30, "{page}");
+            for row in page["data"].as_array().unwrap() {
+                seen.push(row[key].as_str().unwrap().to_string());
+            }
+            match page["nextCursor"].as_str() {
+                Some(cursor) => {
+                    uri = format!(
+                        "/tokens/0x{}/{route}?limit=7&cursor={cursor}",
+                        hex::encode(TOKEN)
+                    )
+                }
+                None => break,
+            }
+        }
+        let expected: Vec<String> = (1..=30)
+            .rev()
+            .map(|block| format!("0x{}", hex::encode(long_history_tx(block))))
+            .collect();
+        assert_eq!(seen, expected, "{route}");
+    }
 }

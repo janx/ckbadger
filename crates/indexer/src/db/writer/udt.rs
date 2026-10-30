@@ -686,7 +686,7 @@ mod tests {
         // still names the family and the entity.
         assert!(
             err.to_string()
-                .contains("entity daily delta has 31 bytes, expected 120")
+                .contains("entity daily delta has 31 bytes, expected 128")
                 && err.to_string().contains("token_daily type_hash="),
             "got: {err}"
         );

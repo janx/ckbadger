@@ -367,6 +367,8 @@ impl CkbadgerStore {
                 || supply_after.is_none()
                 || (delta.mint_count == 0) != delta.minted.is_zero()
                 || (delta.burn_count == 0) != delta.burned.is_zero()
+                || delta.transfer_tx_count > delta.tx_count
+                || (delta.transfer_tx_count == 0 && (delta.mint_count > 0 || delta.burn_count > 0))
             {
                 return Ok(Some(TokenDailyValidationError {
                     type_hash,
@@ -1217,6 +1219,7 @@ mod tests {
             burned: burned.into(),
             mint_count,
             burn_count,
+            transfer_tx_count: tx_count,
         }
     }
 
@@ -1266,6 +1269,43 @@ mod tests {
                 .unwrap()
                 .unwrap_or_else(|| panic!("{what} is invalid"));
             assert_eq!(invalid.date_yyyymmdd, 20240115, "{what}");
+        }
+    }
+
+    /// I5: transfer transactions are a subset of the day's transactions, and
+    /// a mint or burn record always belongs to one.
+    #[test]
+    fn test_find_first_invalid_token_daily_delta_flags_transfer_transactions_out_of_range() {
+        for (row, what) in [
+            (
+                TokenDailyDelta {
+                    tx_count: 1,
+                    transfer_tx_count: 2,
+                    ..Default::default()
+                },
+                "more transfer transactions than transactions",
+            ),
+            (
+                TokenDailyDelta {
+                    tx_count: 1,
+                    minted: 5u128.into(),
+                    mint_count: 1,
+                    ..Default::default()
+                },
+                "a mint outside any transfer transaction",
+            ),
+        ] {
+            let (_dir, store) = test_store();
+            store
+                .put_token_daily_delta(&[0x0d; 32], 20240115, &row)
+                .unwrap();
+            assert!(
+                store
+                    .find_first_invalid_token_daily_delta()
+                    .unwrap()
+                    .is_some(),
+                "{what} is invalid"
+            );
         }
     }
 

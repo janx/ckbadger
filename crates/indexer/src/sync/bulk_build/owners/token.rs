@@ -358,6 +358,10 @@ impl BulkReducer for TokenOwner {
         // Same-tx issuance co-occurrence binding (no extension flags)
         self.resolve_unique_info_by_issuance_cooccurrence(tx, ctx);
 
+        // This transaction's transfer records per token, in record order: the
+        // day's transfer-transaction count and supply facts are these same
+        // records (the live writer folds the records it persists the same way).
+        let mut tx_records: Vec<(Vec<u8>, Vec<ckbadger_store::TokenTransferFact>)> = Vec::new();
         for transfer in UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs) {
             let token = self
                 .tokens
@@ -372,29 +376,35 @@ impl BulkReducer for TokenOwner {
                     )
                 })?;
             token.record_transfer(hour_bucket, &transfer.type_script_hash, tx)?;
-            // The day's supply facts are these same records (the live writer
-            // folds the records it persists the same way).
-            if transfer.is_mint || transfer.is_burn {
-                self.daily_deltas
-                    .get_mut(&transfer.type_script_hash)
-                    .and_then(|days| days.get_mut(&date))
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "token supply transfer without its counted token day: type_hash=0x{} date={} tx=0x{}",
-                            hex::encode(&transfer.type_script_hash),
-                            date,
-                            hex::encode(tx.tx_hash)
-                        )
-                    })?
-                    .add_supply_transfer(transfer.is_mint, transfer.is_burn, transfer.amount)
-                    .with_context(|| {
-                        format!(
-                            "token daily supply: type_hash=0x{} tx=0x{}",
-                            hex::encode(&transfer.type_script_hash),
-                            hex::encode(tx.tx_hash)
-                        )
-                    })?;
+            let record = (transfer.is_mint, transfer.is_burn, transfer.amount);
+            match tx_records
+                .iter_mut()
+                .find(|(type_hash, _)| *type_hash == transfer.type_script_hash)
+            {
+                Some((_, records)) => records.push(record),
+                None => tx_records.push((transfer.type_script_hash, vec![record])),
             }
+        }
+        for (type_hash, records) in tx_records {
+            self.daily_deltas
+                .get_mut(&type_hash)
+                .and_then(|days| days.get_mut(&date))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "token transfer transaction without its counted token day: type_hash=0x{} date={} tx=0x{}",
+                        hex::encode(&type_hash),
+                        date,
+                        hex::encode(tx.tx_hash)
+                    )
+                })?
+                .add_transfer_tx(&records)
+                .with_context(|| {
+                    format!(
+                        "token daily transfers: type_hash=0x{} tx=0x{}",
+                        hex::encode(&type_hash),
+                        hex::encode(tx.tx_hash)
+                    )
+                })?;
         }
 
         Ok(())

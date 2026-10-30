@@ -3258,6 +3258,7 @@ pub struct DotCellArtifacts {
 pub struct TokenRawRows {
     pub tokens: BTreeMap<Vec<u8>, Vec<u8>>,
     pub stats_token: BTreeMap<Vec<u8>, Vec<u8>>,
+    pub token_transfers: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 pub(crate) fn collect_token_raw_rows(domain_store: &CkbadgerStore) -> Result<TokenRawRows> {
@@ -3272,6 +3273,7 @@ pub(crate) fn collect_token_raw_rows(domain_store: &CkbadgerStore) -> Result<Tok
     Ok(TokenRawRows {
         tokens: scan(domain_store.cf_tokens())?,
         stats_token: scan(domain_store.cf_stats_token())?,
+        token_transfers: scan(domain_store.cf_token_transfers())?,
     })
 }
 

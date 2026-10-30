@@ -442,19 +442,21 @@ inline as Class C sealed aggregates:
   `TOKEN_HOURLY` and the token row — need an amount. Bulk (via `CellSemanticTag::{Sudt, Xudt}`)
   and live (`pipeline::token_daily_member`) apply the same rule (POSTMORTEM STATS-011).
   `TokenDailyDelta` (`owned_capacity_delta`, `owned_knowledge_delta`, `tx_count`, `minted`,
-  `burned`, `mint_count`, `burn_count`; 120 bytes): `tx_count` is the number of transactions that day that
+  `burned`, `mint_count`, `burn_count`, `transfer_tx_count`; 128 bytes): `tx_count` is the number of transactions that day that
   created or consumed at least one such cell, one per transaction however many of its cells moved
   (live: `pipeline::add_token_daily_tx` → `TokenDailyChanges::add_tx`; bulk: `TokenOwner::apply_tx`).
-  `minted` / `burned` (`TokenBalance`, 32-byte big-endian each, exact past `i128`) and `mint_count`
-  / `burn_count` sum that day's mint / burn token transfer records
-  (`UdtParser::build_transfers_from_cells`, the records the Transactions tab shows), folded by
-  `TokenDailyDelta::add_supply_transfer` on both paths (live: the writer folds the records it
-  persists into the parser's contributions before `update_token_daily_deltas_batch`; bulk:
+  `transfer_tx_count` is the number of those transactions with at least one `token_transfers`
+  record of the token (the token tabs' scope; their `total` is its sum), and `minted` / `burned`
+  (`TokenBalance`, 32-byte big-endian each, exact past `i128`) and `mint_count` / `burn_count` sum
+  that day's mint / burn transfer records (`UdtParser::build_transfers_from_cells`, the records the
+  Transactions tab shows). Both are folded once per (transaction, token) by
+  `TokenDailyDelta::add_transfer_tx` on both paths (live: the writer folds the records it persists
+  into the parser's contributions before `update_token_daily_deltas_batch`; bulk:
   `TokenOwner::apply_tx`'s transfer loop); the day's signed supply change is `minted - burned`
   (`TokenDailyDelta::apply_supply`). A day with a transaction keeps its row even when its capacity
   nets to zero, and `find_first_invalid_token_daily_delta` rejects a row with `tx_count == 0`, a
-  running supply that a day's burns would take below zero, and a record count without its amount
-  (or the reverse). Live rollback restores the whole row from its undo pre-image. The script,
+  running supply that a day's burns would take below zero, a record count without its amount (or the
+  reverse), and a `transfer_tx_count` above `tx_count` or zero beside mint / burn records. Live rollback restores the whole row from its undo pre-image. The script,
   cluster, spore and object daily rows keep the 32-byte pair codec (`apply_daily_pair`); each codec
   rejects the other's width.
 

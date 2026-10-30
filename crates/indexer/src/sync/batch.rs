@@ -2409,27 +2409,46 @@ impl Indexer {
                         all_transfers.push((transfer, ctx.tx_hash.clone(), ctx.block_number));
                     }
                 }
+                // The token days' transfer-transaction counts and supply
+                // facts are the records persisted below, one fold per
+                // (transaction, token) in transaction order.
+                let mut tx_records: Vec<(
+                    (Vec<u8>, Vec<u8>, i64),
+                    Vec<ckbadger_store::TokenTransferFact>,
+                )> = Vec::new();
+                let mut tx_record_index: HashMap<(Vec<u8>, Vec<u8>), usize> = HashMap::new();
                 for (transfer, tx_hash, block_number) in &all_transfers {
-                    if transfer.is_mint || transfer.is_burn {
-                        token_daily_changes
-                            .add_supply_transfer(
-                                *block_number,
-                                &(
+                    let record = (transfer.is_mint, transfer.is_burn, transfer.amount);
+                    let id = (tx_hash.clone(), transfer.type_script_hash.clone());
+                    match tx_record_index.get(&id) {
+                        Some(&index) => tx_records[index].1.push(record),
+                        None => {
+                            tx_record_index.insert(id, tx_records.len());
+                            tx_records.push((
+                                (
+                                    tx_hash.clone(),
                                     transfer.type_script_hash.clone(),
-                                    chain_day_key(*block_number)?,
+                                    *block_number,
                                 ),
-                                transfer.is_mint,
-                                transfer.is_burn,
-                                transfer.amount,
-                            )
-                            .with_context(|| {
-                                format!(
-                                    "token daily supply: type_hash=0x{} tx=0x{}",
-                                    hex::encode(&transfer.type_script_hash),
-                                    hex::encode(tx_hash)
-                                )
-                            })?;
+                                vec![record],
+                            ));
+                        }
                     }
+                }
+                for ((tx_hash, type_hash, block_number), records) in &tx_records {
+                    token_daily_changes
+                        .add_transfer_tx(
+                            *block_number,
+                            &(type_hash.clone(), chain_day_key(*block_number)?),
+                            records,
+                        )
+                        .with_context(|| {
+                            format!(
+                                "token daily transfers: type_hash=0x{} tx=0x{}",
+                                hex::encode(type_hash),
+                                hex::encode(tx_hash)
+                            )
+                        })?;
                 }
 
                 if !all_transfers.is_empty() {
@@ -10652,6 +10671,23 @@ mod tests {
                 .is_none());
         }
 
+        /// Distinct transactions among `type_hash`'s `token_transfers` rows.
+        fn distinct_transfer_txs(
+            rows: &crate::sync::bulk_build::TokenRawRows,
+            type_hash: &[u8],
+        ) -> u64 {
+            rows.token_transfers
+                .iter()
+                .filter(|(key, _)| key.starts_with(type_hash))
+                .map(|(_, value)| {
+                    bincode::deserialize::<ckbadger_store::TokenTransferRecord>(value)
+                        .unwrap()
+                        .tx_hash
+                })
+                .collect::<std::collections::HashSet<_>>()
+                .len() as u64
+        }
+
         /// [`blocks`] plus 103: B burns 400 of its 1000 units.
         fn supply_blocks() -> Vec<BlockResponseWithCycles> {
             let burn = TransactionView {
@@ -10700,6 +10736,14 @@ mod tests {
                 (1000u128.into(), 1, 400u128.into(), 1, 3),
                 "bulk: the mint, the transfer and the burn"
             );
+            // I5: each of the three moved an amount, so each has transfer
+            // records — the count the token tabs' `total` sums — and it is the
+            // number of distinct transactions in the transfer index.
+            assert_eq!(
+                bulk_rows[0].transfer_tx_count, 3,
+                "bulk transfer transactions"
+            );
+            assert_eq!(distinct_transfer_txs(&bulk.token_rows, &type_hash), 3);
 
             let dir = tempfile::tempdir().unwrap();
             let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
@@ -10722,10 +10766,14 @@ mod tests {
             write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[3].clone()])
                 .await
                 .unwrap();
-            let live_rows = token_daily_rows(
-                &crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap(),
-            );
+            let live_raw = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap();
+            let live_rows = token_daily_rows(&live_raw);
             assert_eq!(live_rows, bulk_rows, "live and bulk TOKEN_DAILY rows");
+            assert_eq!(distinct_transfer_txs(&live_raw, &type_hash), 3);
+            assert_eq!(
+                live_raw.token_transfers, bulk.token_rows.token_transfers,
+                "live and bulk token_transfers rows"
+            );
 
             indexer
                 .writer

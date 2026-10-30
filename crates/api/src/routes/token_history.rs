@@ -17,7 +17,7 @@ use ckbadger_common::{stats_bucket::stats_day, TokenBalance};
 use ckbadger_store::{keys, CkbadgerStore, TokenTransferRecord};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     sync::Arc,
 };
 
@@ -28,22 +28,6 @@ pub(super) struct FeedParams {
     cursor: Option<String>,
 }
 
-/// Visit every transfer row, validating key, payload and canonical transaction.
-/// Buffer at most 1024 transfer rows. The last transaction survives a batch
-/// boundary so a transaction with many transfer legs is still located once.
-fn visit_transfers(
-    store: &CkbadgerStore,
-    hash: &[u8],
-    visit: impl FnMut(
-        i64,
-        i32,
-        &asset_feed::AssetTransaction,
-        TokenTransferRecord,
-    ) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    visit_transfers_in(store, hash, BlockRange::ALL, visit)
-}
-
 /// A block range `[from, before)` of a token's transfers.
 #[derive(Debug, Clone, Copy)]
 struct BlockRange {
@@ -51,11 +35,53 @@ struct BlockRange {
     before: Option<i64>,
 }
 
-impl BlockRange {
-    const ALL: Self = Self {
-        from: 0,
-        before: None,
-    };
+/// One `token_transfers` row of token `hash`, its key and payload checked.
+/// The one decode every transfer reader here uses.
+fn decode_transfer_row(
+    hash: &[u8],
+    key: &[u8],
+    value: &[u8],
+) -> anyhow::Result<(i64, i32, TokenTransferRecord)> {
+    ensure!(
+        key.len() == 44,
+        "token transfer malformed key token=0x{} key=0x{}",
+        hex::encode(hash),
+        hex::encode(key)
+    );
+    let (block, sequence) = keys::decode_token_transfer_key(key);
+    let row: TokenTransferRecord = bincode::deserialize(value)
+        .with_context(|| format!("token transfer decode key=0x{}", hex::encode(key)))?;
+    ensure!(
+        block >= 0
+            && sequence >= 0
+            && row.block_number == block
+            && row.tx_hash.len() == 32
+            && !(row.is_mint && row.is_burn),
+        "token transfer invalid identity/flags key=0x{} tx=0x{}",
+        hex::encode(key),
+        hex::encode(&row.tx_hash)
+    );
+    Ok((block, sequence, row))
+}
+
+/// A transfer leg agrees with the canonical transaction it names.
+fn check_leg(
+    tx: &asset_feed::AssetTransaction,
+    block: i64,
+    row: &TokenTransferRecord,
+) -> anyhow::Result<()> {
+    ensure!(
+        tx.entry.timestamp == row.timestamp,
+        "token transfer timestamp mismatch tx=0x{} block={block}",
+        hex::encode(&row.tx_hash)
+    );
+    ensure!(
+        tx.block_number == block,
+        "token transfer canonical block mismatch tx=0x{} transfer={block} canonical={}",
+        hex::encode(&row.tx_hash),
+        tx.block_number
+    );
+    Ok(())
 }
 
 /// [`visit_transfers`] restricted to the transfers of `range`, newest first.
@@ -88,28 +114,10 @@ fn visit_transfers_in(
         if !key.starts_with(hash) {
             break;
         }
-        ensure!(
-            key.len() == 44,
-            "token transfer malformed key token=0x{} key=0x{}",
-            hex::encode(hash),
-            hex::encode(&key)
-        );
-        let (block, sequence) = keys::decode_token_transfer_key(&key);
-        if block < range.from {
+        if key.len() == 44 && keys::decode_token_transfer_key(&key).0 < range.from {
             break;
         }
-        let row: TokenTransferRecord = bincode::deserialize(&value)
-            .with_context(|| format!("token transfer decode key=0x{}", hex::encode(&key)))?;
-        ensure!(
-            block >= 0
-                && sequence >= 0
-                && row.block_number == block
-                && row.tx_hash.len() == 32
-                && !(row.is_mint && row.is_burn),
-            "token transfer invalid identity/flags key=0x{} tx=0x{}",
-            hex::encode(&key),
-            hex::encode(&row.tx_hash)
-        );
+        let (block, sequence, row) = decode_transfer_row(hash, &key, &value)?;
         batch.push((block, sequence, row));
         if batch.len() == asset_feed::TRANSACTION_BATCH_SIZE {
             visit_transfer_batch(store, &mut batch, &mut previous, &mut visit)?;
@@ -160,17 +168,7 @@ fn visit_transfer_batch(
                 hex::encode(&row.tx_hash)
             )
         })?;
-        ensure!(
-            tx.entry.timestamp == row.timestamp,
-            "token transfer timestamp mismatch tx=0x{} block={block}",
-            hex::encode(&row.tx_hash)
-        );
-        ensure!(
-            tx.block_number == block,
-            "token transfer canonical block mismatch tx=0x{} transfer={block} canonical={}",
-            hex::encode(&row.tx_hash),
-            tx.block_number
-        );
+        check_leg(tx, block, &row)?;
         visit(block, sequence, tx, row)?;
     }
     *previous = Some(transactions.remove(&last_hash).with_context(|| {
@@ -182,20 +180,130 @@ fn visit_transfer_batch(
     Ok(())
 }
 
-fn token_scope(
+/// One page of the token's transfer transactions — the transactions with at
+/// least one `token_transfers` row, the scope of its Activities /
+/// Transactions tabs — newest first, read from the transfer index at
+/// `cursor`. Only the legs of the transactions up to the page's `limit + 1`
+/// (plus the cursor block's newer ones) are read, and they are resolved in
+/// bounded batches; `total` is the persisted count (`Σ transfer_tx_count`).
+/// A cursor that names no transaction of this token is a 400.
+fn token_feed_page(
     store: &CkbadgerStore,
     hash: &[u8],
-) -> anyhow::Result<Vec<asset_feed::AssetTransaction>> {
-    let mut seen = HashSet::new();
-    let mut scope = Vec::new();
-    visit_transfers(store, hash, |_, _, tx, _| {
-        if seen.insert(tx.entry.tx_hash) {
-            scope.push(tx.clone());
+    limit: i64,
+    cursor: Option<&str>,
+) -> Result<
+    (Vec<asset_feed::AssetTransaction>, i64, i64, Option<String>),
+    crate::response::ApiRouteError,
+> {
+    let limit = asset_feed::feed_limit(limit);
+    let cursor = crate::utils::parse_optional_block_tx_cursor(cursor, "asset transaction cursor")?;
+    let need = usize::try_from(limit).map_err(internal)? + 1;
+    let total = TokenDays::load(store, hash)
+        .and_then(|days| {
+            days.days.iter().try_fold(0i64, |sum, (_, delta, ..)| {
+                sum.checked_add(i64::try_from(delta.transfer_tx_count)?)
+                    .context("token transfer transaction count overflow")
+            })
+        })
+        .map_err(internal)?;
+    let start = match cursor {
+        // The first row of the cursor's block (sequences are keyed descending).
+        Some((block, _)) => keys::encode_token_transfer_key(hash, block, i32::MAX),
+        None => hash.to_vec(),
+    };
+    let mut rows: Vec<asset_feed::AssetTransaction> = Vec::with_capacity(need);
+    let mut cursor_seen = false;
+    // Complete transaction groups not yet resolved, and the open one.
+    let mut groups: Vec<Vec<(i64, i32, TokenTransferRecord)>> = Vec::new();
+    let mut open: Vec<(i64, i32, TokenTransferRecord)> = Vec::new();
+    let mut resolve = |groups: &mut Vec<Vec<(i64, i32, TokenTransferRecord)>>,
+                       rows: &mut Vec<asset_feed::AssetTransaction>|
+     -> anyhow::Result<()> {
+        let hashes: Vec<Vec<u8>> = groups
+            .iter()
+            .map(|legs| legs[0].2.tx_hash.clone())
+            .collect();
+        let resolved = asset_feed::canonical_transactions(store, &hashes)?;
+        for (legs, tx) in groups.drain(..).zip(resolved) {
+            ensure!(
+                tx.entry.tx_hash.as_slice() == legs[0].2.tx_hash.as_slice(),
+                "token feed resolved tx=0x{} for 0x{}",
+                hex::encode(tx.entry.tx_hash),
+                hex::encode(&legs[0].2.tx_hash)
+            );
+            for (block, _, row) in &legs {
+                check_leg(&tx, *block, row)?;
+            }
+            let location = (tx.block_number, tx.tx_index);
+            if let Some(last) = rows.last() {
+                ensure!(
+                    location < (last.block_number, last.tx_index),
+                    "token transfer index out of transaction order: tx=0x{} at {location:?} after {:?}",
+                    hex::encode(tx.entry.tx_hash),
+                    (last.block_number, last.tx_index)
+                );
+            }
+            match cursor {
+                Some(key) if location > key => {}
+                Some(key) if location == key => cursor_seen = true,
+                _ => rows.push(tx),
+            }
         }
         Ok(())
-    })?;
-    asset_feed::sort_scope(&mut scope);
-    Ok(scope)
+    };
+    (|| -> anyhow::Result<()> {
+        for item in store.iterator_cf(
+            store.cf_token_transfers(),
+            rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+        ) {
+            let (key, value) = item?;
+            if !key.starts_with(hash) {
+                break;
+            }
+            let leg = decode_transfer_row(hash, &key, &value)?;
+            if open
+                .first()
+                .is_some_and(|first| first.2.tx_hash != leg.2.tx_hash)
+            {
+                groups.push(std::mem::take(&mut open));
+                if groups.len() + rows.len() >= need {
+                    resolve(&mut groups, &mut rows)?;
+                    if rows.len() >= need {
+                        return Ok(());
+                    }
+                }
+            }
+            open.push(leg);
+        }
+        if !open.is_empty() {
+            groups.push(std::mem::take(&mut open));
+        }
+        if !groups.is_empty() {
+            resolve(&mut groups, &mut rows)?;
+        }
+        Ok(())
+    })()
+    .map_err(internal)?;
+    if cursor.is_some() && !cursor_seen {
+        return Err(ApiError::bad_request(
+            "asset transaction cursor does not belong to this scope",
+        ));
+    }
+    if !rows.is_empty() && total == 0 {
+        return Err(internal(format!(
+            "token 0x{} has transfer transactions but no persisted transfer_tx_count",
+            hex::encode(hash)
+        )));
+    }
+    let more = rows.len() > usize::try_from(limit).map_err(internal)?;
+    rows.truncate(usize::try_from(limit).map_err(internal)?);
+    let next = if more {
+        rows.last().map(asset_feed::feed_cursor)
+    } else {
+        None
+    };
+    Ok((rows, total, limit, next))
 }
 
 pub(super) async fn activity_feed(
@@ -206,8 +314,14 @@ pub(super) async fn activity_feed(
     let hash = parse_hash32(&hash, "type_hash")?;
     require_token(&state.store, &hash)?;
     tokio::task::spawn_blocking(move || {
-        let scope = token_scope(&state.store, &hash).map_err(internal)?;
-        asset_feed::activities(&state, scope, params.limit, params.cursor.as_deref())
+        let (rows, total, limit, next) =
+            token_feed_page(&state.store, &hash, params.limit, params.cursor.as_deref())?;
+        ok(CursorPaginatedResponse::new(
+            asset_feed::project_activities(&state, rows)?,
+            total,
+            limit,
+            next,
+        ))
     })
     .await
     .map_err(internal)?
@@ -220,8 +334,14 @@ pub(super) async fn transactions(
     let hash = parse_hash32(&hash, "type_hash")?;
     require_token(&state.store, &hash)?;
     tokio::task::spawn_blocking(move || {
-        let scope = token_scope(&state.store, &hash).map_err(internal)?;
-        asset_feed::transactions(&state, scope, params.limit, params.cursor.as_deref())
+        let (rows, total, limit, next) =
+            token_feed_page(&state.store, &hash, params.limit, params.cursor.as_deref())?;
+        ok(CursorPaginatedResponse::new(
+            asset_feed::project_transactions(&state, rows)?,
+            total,
+            limit,
+            next,
+        ))
     })
     .await
     .map_err(internal)?
@@ -846,7 +966,7 @@ mod batch_tests {
         hash
     }
 
-    // Descending scan: the two legs at height 2 straddle the 1024-row boundary.
+    // 1026 transfer transactions; the one at height 2 has two legs.
     fn fixture() -> (tempfile::TempDir, CkbadgerStore) {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -888,22 +1008,59 @@ mod batch_tests {
             }
         }
         batch.commit().unwrap();
+        // The day row the indexer writes for these 1026 transfer transactions.
+        store
+            .put_token_daily_delta(
+                &TOKEN,
+                19700101,
+                &ckbadger_store::TokenDailyDelta {
+                    tx_count: 1026,
+                    transfer_tx_count: 1026,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         (dir, store)
     }
 
+    /// Every page of the token's transactions, walked by cursor.
+    fn walk(
+        store: &CkbadgerStore,
+        limit: i64,
+    ) -> anyhow::Result<Vec<asset_feed::AssetTransaction>> {
+        let mut all = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let (rows, total, _, next) = token_feed_page(store, &TOKEN, limit, cursor.as_deref())
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            assert_eq!(total, 1026);
+            all.extend(rows);
+            match next {
+                Some(next) => cursor = Some(next),
+                None => return Ok(all),
+            }
+        }
+    }
+
     #[test]
-    fn token_scope_reuses_validated_transactions_in_bounded_batches() {
+    fn token_feed_page_resolves_one_page_in_one_bounded_batch() {
         let (_dir, store) = fixture();
         store.reset_read_call_counters();
-        let scope = token_scope(&store, &TOKEN).unwrap();
-        assert_eq!(scope.len(), 1026);
-        for (row, block) in scope.iter().zip((0..1026).rev()) {
+        let (rows, total, limit, next) = token_feed_page(&store, &TOKEN, 100, None).unwrap();
+        assert_eq!((total, limit, rows.len()), (1026, 100, 100));
+        for (row, block) in rows.iter().zip((0..1026).rev()) {
             assert_eq!((row.block_number, row.tx_index), (block, 3));
             assert_eq!(row.entry.tx_hash, tx_hash(block));
             assert_eq!(row.entry.cycles, Some(42));
         }
-        assert_eq!(store.read_call_counts(), (0, 4),
-            "two bounded batches, each with one location and one index multi-get; no second localization");
+        assert_eq!(next.as_deref(), Some("926:3"));
+        assert_eq!(
+            store.read_call_counts(),
+            (0, 2),
+            "one bounded batch: one location and one index multi-get"
+        );
+        let all = walk(&store, 100).unwrap();
+        assert_eq!(all.len(), 1026, "the two-leg transaction is listed once");
     }
 
     #[test]
@@ -926,7 +1083,7 @@ mod batch_tests {
     }
 
     #[test]
-    fn token_scope_rejects_missing_and_mismatched_canonical_rows_in_later_batch() {
+    fn token_feed_rejects_missing_and_mismatched_canonical_rows_in_a_later_page() {
         for corrupt_hash in [false, true] {
             let (_dir, store) = fixture();
             if corrupt_hash {
@@ -940,7 +1097,7 @@ mod batch_tests {
                     .delete_cf(store.cf_tx_hash_map(), &tx_hash(0))
                     .unwrap();
             }
-            let error = token_scope(&store, &TOKEN).err().unwrap().to_string();
+            let error = walk(&store, 100).err().unwrap().to_string();
             assert!(error.contains(&hex::encode(tx_hash(0))), "{error}");
             assert!(
                 error.contains(if corrupt_hash {
@@ -971,7 +1128,7 @@ mod batch_tests {
     }
 
     #[test]
-    fn token_scope_validates_every_transfer_leg_across_batch_boundary() {
+    fn token_feed_validates_every_transfer_leg() {
         let (_dir, store) = fixture();
         let key = keys::encode_token_transfer_key(&TOKEN, 2, 0);
         let mut row: TokenTransferRecord = bincode::deserialize(
@@ -989,7 +1146,7 @@ mod batch_tests {
                 &bincode::serialize(&row).unwrap(),
             )
             .unwrap();
-        let error = token_scope(&store, &TOKEN).err().unwrap().to_string();
+        let error = walk(&store, 100).err().unwrap().to_string();
         assert!(error.contains("timestamp mismatch"), "{error}");
         assert!(error.contains(&hex::encode(tx_hash(2))), "{error}");
     }

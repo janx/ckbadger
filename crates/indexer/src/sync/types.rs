@@ -444,33 +444,32 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
             .map_err(|e| anyhow::anyhow!("token daily changes in block {block}: {e}"))
     }
 
-    /// Fold one mint or burn transfer record of `block` into the token day
-    /// `key` whose transaction this block already counted ([`Self::add_tx`]):
-    /// a supply change always moves a member cell of the token, so a record
-    /// without its counted transaction is an error, never a new row.
-    pub fn add_supply_transfer(
+    /// Fold one transaction's transfer records of `block` into the token day
+    /// `key` whose transaction this block already counted ([`Self::add_tx`])
+    /// (`TokenDailyDelta::add_transfer_tx`): a transfer always moves a member
+    /// cell of the token, so records without their counted transaction are an
+    /// error, never a new row.
+    pub fn add_transfer_tx(
         &mut self,
         block: i64,
         key: &K,
-        is_mint: bool,
-        is_burn: bool,
-        amount: u128,
+        records: &[ckbadger_store::TokenTransferFact],
     ) -> anyhow::Result<()> {
         let position = self
             .by_block
             .binary_search_by_key(&block, |(b, _)| *b)
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "token supply transfer in block {block} has no token daily contribution in that block"
+                    "token transfer transaction in block {block} has no token daily contribution in that block"
                 )
             })?;
         let entry = self.by_block[position].1.get_mut(key).ok_or_else(|| {
             anyhow::anyhow!(
-                "token supply transfer in block {block} names a token day no transaction of that block counted"
+                "token transfer transaction in block {block} names a token day no transaction of that block counted"
             )
         })?;
         entry
-            .add_supply_transfer(is_mint, is_burn, amount)
+            .add_transfer_tx(records)
             .map_err(|e| anyhow::anyhow!("block {block}: {e}"))
     }
 
