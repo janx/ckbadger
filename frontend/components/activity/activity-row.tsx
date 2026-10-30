@@ -195,9 +195,11 @@ const PARTICIPANT_GRID_LOCK =
 function FoldedItemDeltas({
   items,
   focusItemId,
+  itemTone,
 }: {
   items: ParticipantInfo['itemDeltas'];
   focusItemId?: string;
+  itemTone: 'plain' | 'sign';
 }) {
   const [open, setOpen] = useState(false);
   const objects = items.filter((i) => i.kind === 'object');
@@ -205,7 +207,7 @@ function FoldedItemDeltas({
     return (
       <DotJoined
         parts={items.map((item, i) => (
-          <ItemDeltaFact key={i} item={item} />
+          <ItemDeltaFact key={i} item={item} tone={itemTone} />
         ))}
       />
     );
@@ -215,7 +217,7 @@ function FoldedItemDeltas({
     <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-0.5">
       <DotJoined
         parts={shown.map((item, i) => (
-          <ItemDeltaFact key={i} item={item} />
+          <ItemDeltaFact key={i} item={item} tone={itemTone} />
         ))}
       />
       <button
@@ -235,11 +237,13 @@ function Participants({
   lockColumn = false,
   foldObjects = false,
   focusItemId,
+  itemTone,
 }: {
   participants: ActivityParticipant[];
   lockColumn?: boolean;
   foldObjects?: boolean;
   focusItemId?: string;
+  itemTone: 'plain' | 'sign';
 }) {
   const [expanded, setExpanded] = useState(false);
   const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
@@ -287,11 +291,15 @@ function Participants({
               )}
             >
               {foldObjects ? (
-                <FoldedItemDeltas items={p.itemDeltas} focusItemId={focusItemId} />
+                <FoldedItemDeltas
+                  items={p.itemDeltas}
+                  focusItemId={focusItemId}
+                  itemTone={itemTone}
+                />
               ) : (
                 <DotJoined
                   parts={p.itemDeltas.map((item, i) => (
-                    <ItemDeltaFact key={i} item={item} />
+                    <ItemDeltaFact key={i} item={item} tone={itemTone} />
                   ))}
                 />
               )}
@@ -338,6 +346,8 @@ export type ActivityRowProps = {
   /** F2 objects: fold a batch of objects behind "+N more objects", leading with `focusItemId` (OB-M3). */
   foldObjects?: boolean;
   focusItemId?: string;
+  /** Token amounts by sign (jade +, rouge −): only the Address board draws them so (BA-35). */
+  itemTone?: 'plain' | 'sign';
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -358,6 +368,7 @@ export function ActivityRow({
   lockColumn = false,
   foldObjects = false,
   focusItemId,
+  itemTone = 'plain',
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -390,6 +401,7 @@ export function ActivityRow({
           lockColumn={lockColumn}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
+          itemTone={itemTone}
         />
       )}
     </article>

@@ -83,4 +83,25 @@ describe('Address v3 components', () => {
     expect(screen.queryByText('Token burn')).not.toBeInTheDocument();
     expect(screen.getByText(/0.00000001/)).toBeInTheDocument();
   });
+  it('colours its token amounts by sign, jade received and rouge sent (Address board, BA-35)', () => {
+    const tokenRow = (delta: string) => ({
+      ...addressActivitiesFixture[0],
+      tags: 1,
+      itemDeltas: [
+        {
+          kind: 'token' as const,
+          typeScriptHash: '0x' + 'ab'.repeat(32),
+          delta,
+          symbol: 'iCKB',
+          decimals: 8,
+        },
+      ],
+    });
+    const { rerender } = render(
+      <AddressActivity address={addressFixture} activity={tokenRow('100000000')} />
+    );
+    expect(screen.getByRole('link', { name: /iCKB/ })).toHaveClass('text-positive');
+    rerender(<AddressActivity address={addressFixture} activity={tokenRow('-100000000')} />);
+    expect(screen.getByRole('link', { name: /iCKB/ })).toHaveClass('text-negative');
+  });
 });

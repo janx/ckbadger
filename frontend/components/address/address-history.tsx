@@ -55,6 +55,7 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
         activity={row}
         mode="participant"
         participant={participant}
+        itemTone="sign"
         evidence={
           activity.blockNumber === null || activity.timestamp === null ? undefined : (
             // F2 blocks (BA-35): the Address board dates a row; "ago" drifts as the page is read.
