@@ -302,13 +302,6 @@ fn spore_cluster_name(
 /// A collection named by an item delta.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by activities.rs convert_item_delta once lane W wires ItemDeltaResponse::Object to it (R12)"
-    )
-)]
 pub struct DeltaCollection {
     pub id: String,
     pub name: Option<String>,
@@ -321,13 +314,6 @@ pub struct DeltaCollection {
 /// only its class id (the class row's name and tier can change).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by activities.rs convert_item_delta once lane W wires ItemDeltaResponse::Object to it (R12)"
-    )
-)]
 pub struct ObjectDeltaContext {
     pub collection: Option<DeltaCollection>,
     /// The site's asset class (`dao | token | object | identity`): always
@@ -339,15 +325,20 @@ pub struct ObjectDeltaContext {
 }
 
 /// [`ObjectDeltaContext`] of the object `object_id` (a spore or an m-NFT
-/// token), read from its indexed row. An id that is neither is an error.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by activities.rs convert_item_delta once lane W wires ItemDeltaResponse::Object to it (R12)"
-    )
-)]
-pub fn object_delta_context(store: &CkbadgerStore, object_id: &[u8]) -> Result<ObjectDeltaContext> {
+/// token), read from its indexed row.
+///
+/// `indexed` says whether the delta comes from a committed transaction. A
+/// committed delta's object row is written in the same batch, so an id that
+/// names no spore or m-NFT token is an error. A pool (pending) delta may
+/// name an object whose creating transaction is the pending one: no row
+/// exists yet, so nothing is known about its collection or composition and
+/// both are `None` — the same rule as a pending tile ([`from_parts`] with
+/// `indexed == false`).
+pub fn object_delta_context(
+    store: &CkbadgerStore,
+    object_id: &[u8],
+    indexed: bool,
+) -> Result<ObjectDeltaContext> {
     let id = format!("0x{}", hex::encode(object_id));
     if let Some(entry) = store.get_spore(object_id)? {
         ensure!(
@@ -394,7 +385,15 @@ pub fn object_delta_context(store: &CkbadgerStore, object_id: &[u8]) -> Result<O
             composition: None,
         });
     }
-    anyhow::bail!("object item delta {id} names no indexed spore or m-NFT token")
+    ensure!(
+        !indexed,
+        "object item delta {id} names no indexed spore or m-NFT token"
+    );
+    Ok(ObjectDeltaContext {
+        collection: None,
+        class: "object",
+        composition: None,
+    })
 }
 
 /// The common Molecule prefix in CKBFS RFC.md / RFC.v3.md is index,
@@ -710,7 +709,7 @@ mod tests {
         batch.commit().unwrap();
 
         assert_eq!(
-            serde_json::to_value(object_delta_context(&store, &spore).unwrap()).unwrap(),
+            serde_json::to_value(object_delta_context(&store, &spore, true).unwrap()).unwrap(),
             serde_json::json!({
                 "collection": {"id": format!("0x{}", "86".repeat(32)), "name": "Nervape"},
                 "class": "object",
@@ -720,7 +719,7 @@ mod tests {
         // An m-NFT token names its class; the class's mutable current name and
         // tier are not evidence about this item (the tile's rule).
         assert_eq!(
-            serde_json::to_value(object_delta_context(&store, &token).unwrap()).unwrap(),
+            serde_json::to_value(object_delta_context(&store, &token, true).unwrap()).unwrap(),
             serde_json::json!({
                 "collection": {"id": format!("0x{}", "3c".repeat(24)), "name": null},
                 "class": "object",
@@ -728,10 +727,22 @@ mod tests {
             })
         );
         // An object delta naming no indexed object is an error, not a blank.
-        let error = object_delta_context(&store, &[0x99; 32])
+        let error = object_delta_context(&store, &[0x99; 32], true)
             .unwrap_err()
             .to_string();
         assert!(error.contains("0x9999"), "{error}");
+        // A pending delta's object may not be indexed yet: nothing is known
+        // about it beyond its class.
+        assert_eq!(
+            serde_json::to_value(object_delta_context(&store, &[0x99; 32], false).unwrap())
+                .unwrap(),
+            serde_json::json!({"collection": null, "class": "object", "composition": null})
+        );
+        // An indexed object reads the same from a pending row.
+        assert_eq!(
+            object_delta_context(&store, &spore, false).unwrap(),
+            object_delta_context(&store, &spore, true).unwrap()
+        );
     }
 
     #[test]

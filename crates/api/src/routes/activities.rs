@@ -215,7 +215,21 @@ pub enum ItemDeltaResponse {
         decimals: Option<u8>,
     },
     #[serde(rename = "object", rename_all = "camelCase")]
-    Object { object_id: String, delta: i8 },
+    Object {
+        object_id: String,
+        delta: i8,
+        /// The object's collection (`transaction_cells::object_delta_context`):
+        /// a spore's cluster (id + immutable name; the Sole Spores sentinel
+        /// with `name: null` for a clusterless spore), an m-NFT token's class
+        /// id (`name: null`). `null` only on a pool row whose object is not
+        /// indexed yet.
+        collection: Option<super::transaction_cells::DeltaCollection>,
+        /// The site's asset class vocabulary: always `object`.
+        class: &'static str,
+        /// `CompositionTier::as_str` for a spore; `null` for an m-NFT token
+        /// and for a pool row whose object is not indexed yet.
+        composition: Option<&'static str>,
+    },
     #[serde(rename = "identity", rename_all = "camelCase")]
     Identity {
         identity_id: String,
@@ -306,16 +320,33 @@ fn default_latest_limit() -> usize {
     8
 }
 
-/// Convert an `ItemDelta` to `ItemDeltaResponse`, enriching tokens with symbol/decimals.
-#[allow(clippy::type_complexity)]
+/// A token's `(symbol, decimals)`, `None` when no token row exists.
+type TokenDisplay = Option<(Option<String>, Option<u8>)>;
+
+/// What one response has already read for its item deltas: token symbol /
+/// decimals, and object delta contexts keyed by `(object id, indexed)` — a
+/// pool row's lookup (which may legitimately find no row yet) never answers
+/// for a committed row's.
+#[derive(Default)]
+pub(crate) struct ItemDeltaCache {
+    tokens: HashMap<Vec<u8>, TokenDisplay>,
+    objects: HashMap<(Vec<u8>, bool), super::transaction_cells::ObjectDeltaContext>,
+}
+
+/// Convert an `ItemDelta` to `ItemDeltaResponse`: tokens gain their
+/// symbol/decimals, objects their collection, class and composition. The one
+/// seam every producer of item deltas (address / global / transaction
+/// activity, asset feeds, the pool mirror) goes through. `indexed` is false
+/// only for a pool (pending) row.
 fn convert_item_delta(
     item: &ItemDelta,
-    token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    cache: &mut ItemDeltaCache,
     store: &CkbadgerStore,
+    indexed: bool,
 ) -> anyhow::Result<ItemDeltaResponse> {
     match item.kind {
         ItemKind::Token => {
-            let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id)?;
+            let (symbol, decimals) = lookup_token_info(store, &mut cache.tokens, &item.item_id)?;
             Ok(ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
                 delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
@@ -323,10 +354,29 @@ fn convert_item_delta(
                 decimals,
             })
         }
-        ItemKind::Object => Ok(ItemDeltaResponse::Object {
-            object_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: discrete_item_delta(item)?,
-        }),
+        ItemKind::Object => {
+            let delta = discrete_item_delta(item)?;
+            let key = (item.item_id.clone(), indexed);
+            let context = match cache.objects.get(&key) {
+                Some(context) => context.clone(),
+                None => {
+                    let context = super::transaction_cells::object_delta_context(
+                        store,
+                        &item.item_id,
+                        indexed,
+                    )?;
+                    cache.objects.insert(key, context.clone());
+                    context
+                }
+            };
+            Ok(ItemDeltaResponse::Object {
+                object_id: format!("0x{}", hex::encode(&item.item_id)),
+                delta,
+                collection: context.collection,
+                class: context.class,
+                composition: context.composition,
+            })
+        }
         ItemKind::Identity(standard) => Ok(ItemDeltaResponse::Identity {
             identity_id: format!("0x{}", hex::encode(&item.item_id)),
             delta: discrete_item_delta(item)?,
@@ -348,10 +398,9 @@ fn discrete_item_delta(item: &ItemDelta) -> anyhow::Result<i8> {
 }
 
 /// Look up token symbol and decimals from CF_TOKENS, caching results.
-#[allow(clippy::type_complexity)]
 fn lookup_token_info(
     store: &CkbadgerStore,
-    cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    cache: &mut HashMap<Vec<u8>, TokenDisplay>,
     type_script_hash: &[u8],
 ) -> anyhow::Result<(Option<String>, Option<u8>)> {
     if let Some(cached) = cache.get(type_script_hash) {
@@ -673,14 +722,14 @@ pub(crate) fn build_activity_response(
     actions: &TxActions,
     participant: &ParticipantDelta,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    item_cache: &mut ItemDeltaCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
     pool: Option<PoolRowMeta<'_>>,
 ) -> anyhow::Result<ActivityResponse> {
     let item_deltas = participant
         .item_deltas
         .iter()
-        .map(|item| convert_item_delta(item, token_cache, store))
+        .map(|item| convert_item_delta(item, item_cache, store, pool.is_none()))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let participants = actions
@@ -754,7 +803,7 @@ pub(crate) fn build_global_activity_response_with_pool(
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
     pool_record: Option<&PoolTxRecord>,
 ) -> anyhow::Result<GlobalActivityResponse> {
-    let mut token_cache = HashMap::new();
+    let mut item_cache = ItemDeltaCache::default();
 
     let participants = actions
         .participants
@@ -764,7 +813,7 @@ pub(crate) fn build_global_activity_response_with_pool(
             let item_deltas = p
                 .item_deltas
                 .iter()
-                .map(|item| convert_item_delta(item, &mut token_cache, store))
+                .map(|item| convert_item_delta(item, &mut item_cache, store, pool_record.is_none()))
                 .collect::<anyhow::Result<Vec<_>>>()?;
             Ok(ParticipantResponse {
                 address: reference.address,
@@ -1002,7 +1051,7 @@ pub(crate) fn build_pool_activity_rows(
     lock_hash: &[u8; 32],
     filter: Option<&str>,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    item_cache: &mut ItemDeltaCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<(Vec<ActivityResponse>, crate::pool::PoolSummaryResponse)> {
     let segment = address_pool::page_one_segment(store, snapshot, lock_hash)?;
@@ -1043,7 +1092,7 @@ pub(crate) fn build_pool_activity_rows(
             actions,
             participant,
             script_info_cache,
-            token_cache,
+            item_cache,
             address_cache,
             Some(PoolRowMeta {
                 status: record.pool_status.as_str().to_string(),
@@ -1120,7 +1169,7 @@ async fn get_address_activities(
             };
 
             let mut script_info_cache = HashMap::new();
-            let mut token_cache = HashMap::new();
+            let mut item_cache = ItemDeltaCache::default();
             let mut address_cache = HashMap::new();
 
             let (mut activities, pool) = match pool_snapshot.as_deref() {
@@ -1132,7 +1181,7 @@ async fn get_address_activities(
                         &lock32,
                         filter.as_deref(),
                         &mut script_info_cache,
-                        &mut token_cache,
+                        &mut item_cache,
                         &mut address_cache,
                     )?;
                     (rows, Some(summary))
@@ -1151,7 +1200,7 @@ async fn get_address_activities(
                     actions,
                     participant,
                     &mut script_info_cache,
-                    &mut token_cache,
+                    &mut item_cache,
                     &mut address_cache,
                     None,
                 )?);
@@ -1823,6 +1872,9 @@ mod tests {
         let object = ItemDeltaResponse::Object {
             object_id: "0xabcdef".to_string(),
             delta: 1,
+            collection: None,
+            class: "object",
+            composition: None,
         };
         let json = serde_json::to_string(&object).unwrap();
         assert!(json.contains("\"objectId\""), "missing objectId: {}", json);

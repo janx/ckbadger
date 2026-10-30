@@ -2220,6 +2220,268 @@ async fn pending_dotcell_registration_item_delta_carries_its_standard() {
     assert_eq!(row["itemDeltas"][0]["standard"], "dotcell", "{json}");
 }
 
+// ── R12: object item deltas carry collection / class / composition ───────
+
+/// Seed a "Nervape" Spore cluster, one of its spores (BTC+CKB media) and an
+/// m-NFT token of class `0x3c…`; returns `(cluster, spore, mnft_token)`.
+fn seed_named_cluster_spore_and_mnft(store: &Arc<CkbadgerStore>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use ckbadger_store::types::{
+        CompositionTier, ObjectEntry, ObjectExtra, ObjectStandard, SporeMediaProfile,
+    };
+    let cluster = vec![0x86; 32];
+    let spore = vec![0x51; 32];
+    let token = [vec![0x3c; 24], vec![0, 0, 0, 7]].concat();
+    let entry = |standard, collection_id: Option<Vec<u8>>, name: Option<&str>, extra| ObjectEntry {
+        standard,
+        collection_id,
+        token_id: None,
+        owner_lock_hash: None,
+        name: name.map(str::to_string),
+        description: None,
+        is_live: true,
+        created_at_block: 1,
+        created_at_tx: vec![0; 32],
+        extra,
+    };
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore(
+        &cluster,
+        &entry(
+            ObjectStandard::SporeCluster,
+            None,
+            Some("Nervape"),
+            ObjectExtra::SporeCluster,
+        ),
+    );
+    batch.put_spore(
+        &spore,
+        &entry(
+            ObjectStandard::Spore,
+            Some(cluster.clone()),
+            None,
+            ObjectExtra::Spore {
+                content_type: "application/vnd.cell.dob@v1".into(),
+                content_length: 10,
+                media_profile: SporeMediaProfile {
+                    tier: CompositionTier::BtcCkb,
+                    ..Default::default()
+                },
+            },
+        ),
+    );
+    batch.put_mnft(
+        &token,
+        &entry(
+            ObjectStandard::MnftToken,
+            Some(token[..24].to_vec()),
+            None,
+            ObjectExtra::MnftToken {
+                token_index: 7,
+                characteristic: vec![0; 8],
+                configure: 0,
+                state: 0,
+            },
+        ),
+    );
+    batch.commit().unwrap();
+    (cluster, spore, token)
+}
+
+fn object_delta(id: &[u8], negative: bool) -> ckbadger_store::types::ItemDelta {
+    ckbadger_store::types::ItemDelta {
+        item_id: id.to_vec(),
+        kind: ckbadger_store::types::ItemKind::Object,
+        magnitude: 1,
+        negative,
+    }
+}
+
+/// R12 (TX-12, TX-29): every object item delta names its collection, asset
+/// class and composition tier — on the address feed, the global feed and a
+/// transaction's activity alike (one seam, `convert_item_delta`). A spore of a
+/// named cluster carries the cluster's id and immutable name and its media
+/// tier; an m-NFT token carries only its class id (the class row's name and
+/// tier are mutable, not evidence about this item).
+#[tokio::test]
+async fn object_item_deltas_name_collection_class_and_composition() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_OBJECT};
+
+    let store = test_store();
+    let (cluster, spore, token) = seed_named_cluster_spore_and_mnft(&store);
+    let lock_hash = [0x42u8; 32];
+    let tx_hash = vec![0xac; 32];
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbb; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            id: ParticipantId::Lock(lock_hash),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![object_delta(&spore, false), object_delta(&token, true)],
+            tags: TAG_OBJECT,
+            roles: 0,
+        }],
+    };
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, true, true, TAG_OBJECT),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let expected = serde_json::json!([
+        {
+            "kind": "object",
+            "objectId": format!("0x{}", hex::encode(&spore)),
+            "delta": 1,
+            "collection": {"id": format!("0x{}", hex::encode(&cluster)), "name": "Nervape"},
+            "class": "object",
+            "composition": "btc_ckb",
+        },
+        {
+            "kind": "object",
+            "objectId": format!("0x{}", hex::encode(&token)),
+            "delta": -1,
+            "collection": {"id": format!("0x{}", "3c".repeat(24)), "name": null},
+            "class": "object",
+            "composition": null,
+        },
+    ]);
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["itemDeltas"], expected, "address feed");
+
+    let (status, global) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{global}");
+    assert_eq!(
+        global["data"][0]["participants"][0]["itemDeltas"], expected,
+        "global feed"
+    );
+}
+
+/// A committed object delta naming no indexed spore or m-NFT token is store
+/// corruption (the indexer writes the object row in the delta's batch): a 500
+/// naming the object, never a delta without its collection.
+#[tokio::test]
+async fn committed_object_delta_naming_no_indexed_object_is_a_500() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_OBJECT};
+
+    let store = test_store();
+    let lock_hash = [0x43u8; 32];
+    let tx_hash = vec![0xad; 32];
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbc; 32],
+        block_number: 11,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            id: ParticipantId::Lock(lock_hash),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![object_delta(&[0x99; 32], false)],
+            tags: TAG_OBJECT,
+            roles: 0,
+        }],
+    };
+    seed_named_tx(&store, 11, &tx_hash, &actions);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("0x{}", "99".repeat(32))),
+        "{json}"
+    );
+}
+
+/// A pending spore mint: the pool row's object delta names a spore no store
+/// row has yet (its creating transaction is the pending one). Its collection
+/// and composition are not known until the indexer writes the spore row, so
+/// they are `null` — while a pending transfer of an indexed spore names them.
+#[tokio::test]
+async fn pending_object_delta_names_what_the_store_knows() {
+    use ckbadger_store::types::TAG_OBJECT;
+
+    let store = test_store();
+    let (cluster, spore, _) = seed_named_cluster_spore_and_mnft(&store);
+    let pending_spore = vec![0x77; 32];
+    let mut record = make_test_pool_record_with(
+        &[0xf7; 32],
+        &POOL_LOCK_HASH,
+        -24_000_000_000,
+        1_700_000_500_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+        TAG_OBJECT,
+        ckbadger_api::pool::Interpretation::Complete,
+    );
+    record.actions.as_mut().unwrap().participants[0].item_deltas = vec![
+        object_delta(&pending_spore, false),
+        object_delta(&spore, true),
+    ];
+
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(POOL_LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    assert_eq!(row["poolStatus"], "pending", "{json}");
+    assert_eq!(
+        row["itemDeltas"],
+        serde_json::json!([
+            {
+                "kind": "object",
+                "objectId": format!("0x{}", hex::encode(&pending_spore)),
+                "delta": 1,
+                "collection": null,
+                "class": "object",
+                "composition": null,
+            },
+            {
+                "kind": "object",
+                "objectId": format!("0x{}", hex::encode(&spore)),
+                "delta": -1,
+                "collection": {"id": format!("0x{}", hex::encode(&cluster)), "name": "Nervape"},
+                "class": "object",
+                "composition": "btc_ckb",
+            },
+        ]),
+        "{json}"
+    );
+}
+
 // ── integration: a spent never-seen lock is encoded from the record ──────
 
 /// A pending transaction may spend a cell whose lock exists so far only as the

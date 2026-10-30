@@ -429,6 +429,44 @@ async fn collection_feed_rows_carry_their_own_collection_context() {
     }
 }
 
+/// R12 on the asset feeds: the participants' object deltas of a collection
+/// feed row name each spore's own cluster (the same seam as `/activities`), so
+/// the Nervape row shows the other cluster's mint under "Other", not Nervape.
+#[tokio::test]
+async fn collection_feed_object_deltas_name_their_own_cluster() {
+    let store = test_store();
+    seed_two_cluster_transaction(&store);
+    let app = quiet_router(store);
+    let (status, page) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}/activity-feed", hex::encode(NERVAPE)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let row = row_of(&page, "txHash", &MIXED_TX);
+    let deltas: Vec<_> = row["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["itemDeltas"].as_array().unwrap().iter().cloned())
+        .collect();
+    assert_eq!(deltas.len(), 13 + 12 + 1, "{row}");
+    for delta in &deltas {
+        let (cluster, name) = if delta["objectId"] == format!("0x{}", hex::encode(OTHER_SPORE)) {
+            (OTHER_CLUSTER, "Other")
+        } else {
+            (NERVAPE, "Nervape")
+        };
+        assert_eq!(
+            delta["collection"],
+            serde_json::json!({"id": format!("0x{}", hex::encode(cluster)), "name": name}),
+            "{delta}"
+        );
+        assert_eq!(delta["class"], "object", "{delta}");
+        assert_eq!(delta["composition"], "unknown", "{delta}");
+    }
+}
+
 /// A `.bit` renewal keeps the account with its owner (no item delta); from
 /// the collection's side the account was updated.
 #[tokio::test]
