@@ -12,6 +12,7 @@ import {
   type OrphanedBlock,
   type OrphanedTransaction,
   type ReorgDetail,
+  type ReorgEvent,
 } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -79,17 +80,7 @@ export default function ForkDetailPage() {
       />
     );
   }
-  let mismatch: string | null = null;
-  if (query.data) {
-    const { event, orphanedBlocks } = query.data;
-    const first = orphanedBlocks[0];
-    if (!first)
-      mismatch = `API answered ${address} with a ${event.eventType === 'deep' ? 'deep detection' : 'switch'} at ${formatBlockNumber(event.forkPointNumber)} with no orphaned block`;
-    else if (event.forkPointNumber !== route.height || first.hash.slice(2, 10) !== route.orphan)
-      mismatch = `API answered ${address} with the fork at ${formatBlockNumber(event.forkPointNumber)} whose first orphan is ${first.hash.slice(0, 10)}`;
-    else if (event.firstOrphanHash !== first.hash)
-      mismatch = `API answered ${address} with first dropped block ${first.hash.slice(0, 10)}, but its event names first orphan ${event.firstOrphanHash?.slice(0, 14) ?? 'none'}`;
-  }
+  const mismatch = query.data ? answerMismatch(address, route, query.data) : null;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -105,8 +96,112 @@ export default function ForkDetailPage() {
             {mismatch}
           </p>
         )}
-        {query.data && !mismatch && <ForkEvidence data={query.data} />}
+        {query.data &&
+          !mismatch &&
+          (query.data.evidenceStatus === 'available' ? (
+            <ForkEvidence data={query.data} />
+          ) : (
+            <StoredFork event={query.data.event} />
+          ))}
       </main>
+    </div>
+  );
+}
+
+/**
+ * Why an answer is not the fork its address names (contracts W5-2): the event must be the
+ * recorded switch at that fork point and first orphan; branch evidence, when the node store is
+ * open, must start at that first orphan, and without the node store there is none.
+ */
+function answerMismatch(
+  address: string,
+  route: { height: number; orphan: string },
+  data: ReorgDetail
+): string | null {
+  const { event, evidenceStatus, orphanedBlocks } = data;
+  const at = formatBlockNumber(event.forkPointNumber);
+  if (event.firstOrphanStatus !== 'recorded' || event.firstOrphanHash === null)
+    return `API answered ${address} with ${event.eventType === 'deep' ? 'a deep detection' : 'a switch'} at ${at}, which has no first orphan to be addressed by`;
+  if (event.forkPointNumber !== route.height || event.firstOrphanHash.slice(2, 10) !== route.orphan)
+    return `API answered ${address} with the fork at ${at} whose first orphan is ${event.firstOrphanHash.slice(0, 10)}`;
+  if (evidenceStatus === 'node_reader_unavailable') {
+    const lists = [
+      orphanedBlocks,
+      data.orphanedTransactions,
+      data.adoptedBranch,
+      data.canonicalBranch,
+    ];
+    return lists.some((list) => list.length > 0) || data.canonicalTipNumber !== null
+      ? `API answered ${address} with node_reader_unavailable but with branch evidence`
+      : null;
+  }
+  if (evidenceStatus !== 'available')
+    return `API answered ${address} with unknown evidence status ${String(evidenceStatus)}`;
+  const first = orphanedBlocks[0];
+  if (!first) return `API answered ${address} with branch evidence but no orphaned block`;
+  if (first.hash !== event.firstOrphanHash)
+    return `API answered ${address} with first dropped block ${first.hash.slice(0, 10)}, but its event names first orphan ${event.firstOrphanHash.slice(0, 14)}`;
+  return null;
+}
+
+/** The recorded first dropped block of an addressable switch (checked by `answerMismatch`). */
+function firstOrphanOf(event: ReorgEvent): string {
+  if (event.firstOrphanHash === null)
+    throw new Error(
+      `Fork ${formatBlockNumber(event.forkPointNumber)} has no recorded first orphan (${event.firstOrphanStatus})`
+    );
+  return event.firstOrphanHash;
+}
+
+function ForkHeading({ event }: { event: ReorgEvent }) {
+  return (
+    <>
+      <nav aria-label="Breadcrumb" className="text-text-dim text-[12px]">
+        <Link href="/forks" className="hover:text-text">
+          Forks
+        </Link>
+      </nav>
+      <div className="mt-2.5 flex flex-wrap items-baseline gap-3">
+        <h1 className="text-text-bright text-[26px] font-medium">
+          Fork at {formatBlockNumber(event.forkPointNumber)}
+        </h1>
+        <span className="text-text-dim text-[13px]">
+          {formatCount(event.depth, 'block')} deep · detected {formatUtc8DateTime(event.detectedAt)}{' '}
+          · this node switched once
+        </span>
+      </div>
+    </>
+  );
+}
+
+/**
+ * contracts W5-2: the API runs without the node reader, so the address resolved from this node's
+ * stored event alone and there is no branch evidence. Say so, and tell what the event records.
+ */
+function StoredFork({ event }: { event: ReorgEvent }) {
+  const story =
+    `This node switched from ${formatBlockNumber(event.oldTipNumber)} ${hashShort(event.oldTipHash)} to ${formatBlockNumber(event.newTipNumber)} ${hashShort(event.newTipHash)}` +
+    ` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.` +
+    (event.revertedByEvent ? ' A later switch on this node reversed it.' : '');
+  return (
+    <div className="min-w-0">
+      <ForkHeading event={event} />
+      <p
+        data-testid="fork-narrative"
+        className="text-text mt-3 max-w-[900px] text-[15px] leading-relaxed"
+      >
+        {story}
+      </p>
+      <p role="status" className="text-text-dim mt-3 max-w-[900px] text-[13px] leading-relaxed">
+        Branch evidence needs the node store: this API runs without the node reader, so the blocks
+        of both branches, their miners and what became of them are not shown. Below is what this
+        node recorded when it switched.
+      </p>
+      <DetailTier2>
+        <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
+          <StoredEvent event={event} />
+        </div>
+      </DetailTier2>
     </div>
   );
 }
@@ -270,6 +365,69 @@ function EventRef({ target, text }: { target: ForkEventRef; text: string }) {
   );
 }
 
+/** Tier 2: this node's fork event exactly as the store keeps it. */
+function StoredEvent({ event }: { event: ReorgEvent }) {
+  return (
+    <DetailSection title="This node’s fork event, as stored">
+      <div className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12px] sm:grid-cols-[110px_minmax(0,1fr)]">
+        <span className="text-text-dim">fork point</span>
+        <span className="break-all">
+          {blockAt(event.forkPointNumber)} {event.forkPointHash}
+        </span>
+        <span className="text-text-dim">first dropped</span>
+        <span className="break-all">
+          {formatBlockNumber(event.forkPointNumber + 1)}′ {firstOrphanOf(event)}
+        </span>
+        <span className="text-text-dim">detected</span>
+        <span>{formatUtc8DateTime(event.detectedAt)}</span>
+        <span className="text-text-dim">depth</span>
+        <span>{formatCount(event.depth, 'block')}</span>
+        <span className="text-text-dim">old tip</span>
+        <span className="break-all">
+          {formatBlockNumber(event.oldTipNumber)} {event.oldTipHash}
+        </span>
+        <span className="text-text-dim">new tip</span>
+        <span className="break-all">
+          {formatBlockNumber(event.newTipNumber)} {event.newTipHash}
+        </span>
+        {event.supersededByTipHash && (
+          <>
+            <span className="text-text-dim">superseded</span>
+            <span className="break-all">
+              before replay; the canonical {formatBlockNumber(event.newTipNumber)} was{' '}
+              {event.supersededByTipHash}
+            </span>
+          </>
+        )}
+        {event.reconcileInterrupted && (
+          <>
+            <span className="text-text-dim">reconcile</span>
+            <span>interrupted by a later rollback</span>
+          </>
+        )}
+        {event.revertedByEvent && (
+          <>
+            <span className="text-text-dim">later</span>
+            <EventRef
+              target={event.revertedByEvent}
+              text="a later switch on this node reversed it"
+            />
+          </>
+        )}
+        {event.reversesEvents.map((ref, index) => (
+          <span key={index} className="contents">
+            <span className="text-text-dim">earlier</span>
+            <EventRef
+              target={ref}
+              text={`it reversed an earlier switch at ${formatBlockNumber(ref.forkPointNumber)}`}
+            />
+          </span>
+        ))}
+      </div>
+    </DetailSection>
+  );
+}
+
 function ForkEvidence({ data }: { data: ReorgDetail }) {
   const { event, orphanedBlocks, orphanedTransactions } = data;
   const model = forkTreeModel(data);
@@ -286,20 +444,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
   const nonCellbase = orphanedTransactions.filter((tx) => tx.txIndex > 0);
   return (
     <div className="min-w-0">
-      <nav aria-label="Breadcrumb" className="text-text-dim text-[12px]">
-        <Link href="/forks" className="hover:text-text">
-          Forks
-        </Link>
-      </nav>
-      <div className="mt-2.5 flex flex-wrap items-baseline gap-3">
-        <h1 className="text-text-bright text-[26px] font-medium">
-          Fork at {formatBlockNumber(event.forkPointNumber)}
-        </h1>
-        <span className="text-text-dim text-[13px]">
-          {formatCount(event.depth, 'block')} deep · detected {formatUtc8DateTime(event.detectedAt)}{' '}
-          · this node switched once
-        </span>
-      </div>
+      <ForkHeading event={event} />
       <p
         data-testid="fork-narrative"
         className="text-text mt-3 max-w-[900px] text-[15px] leading-relaxed"
@@ -456,55 +601,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
 
       <DetailTier2>
         <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
-          <DetailSection title="This node’s fork event, as stored">
-            <div className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12px] sm:grid-cols-[110px_minmax(0,1fr)]">
-              <span className="text-text-dim">detected</span>
-              <span>{formatUtc8DateTime(event.detectedAt)}</span>
-              <span className="text-text-dim">depth</span>
-              <span>{formatCount(event.depth, 'block')}</span>
-              <span className="text-text-dim">old tip</span>
-              <span className="break-all">
-                {formatBlockNumber(event.oldTipNumber)} {event.oldTipHash}
-              </span>
-              <span className="text-text-dim">new tip</span>
-              <span className="break-all">
-                {formatBlockNumber(event.newTipNumber)} {event.newTipHash}
-              </span>
-              {event.supersededByTipHash && (
-                <>
-                  <span className="text-text-dim">superseded</span>
-                  <span className="break-all">
-                    before replay; the canonical {formatBlockNumber(event.newTipNumber)} was{' '}
-                    {event.supersededByTipHash}
-                  </span>
-                </>
-              )}
-              {event.reconcileInterrupted && (
-                <>
-                  <span className="text-text-dim">reconcile</span>
-                  <span>interrupted by a later rollback</span>
-                </>
-              )}
-              {event.revertedByEvent && (
-                <>
-                  <span className="text-text-dim">later</span>
-                  <EventRef
-                    target={event.revertedByEvent}
-                    text="a later switch on this node reversed it"
-                  />
-                </>
-              )}
-              {event.reversesEvents.map((ref, index) => (
-                <span key={index} className="contents">
-                  <span className="text-text-dim">earlier</span>
-                  <EventRef
-                    target={ref}
-                    text={`it reversed an earlier switch at ${formatBlockNumber(ref.forkPointNumber)}`}
-                  />
-                </span>
-              ))}
-            </div>
-          </DetailSection>
+          <StoredEvent event={event} />
           {inclusions.map((number) => {
             const uncles = orphanedBlocks.filter((block) => block.uncleIn?.blockNumber === number);
             const includer = data.canonicalBranch.find((block) => block.number === number);

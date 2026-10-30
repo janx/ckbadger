@@ -224,10 +224,81 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
   });
 
-  it('refuses a deep detection: it has no orphaned block to be addressed by', async () => {
+  it('refuses a deep detection: it has no first orphan to be addressed by', async () => {
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(deepFixture));
     render(<ForkDetailPage />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('with no orphaned block');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'API answered /forks/10/17404795 with a deep detection at #10, which has no first orphan to be addressed by'
+    );
+  });
+
+  it('refuses branch evidence that does not start at the recorded first orphan', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(
+      fixture({ ...uncleFixture, orphanedBlocks: [], orphanedTransactions: [] })
+    );
+    render(<ForkDetailPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'API answered /forks/10/17404795 with branch evidence but no orphaned block'
+    );
+  });
+
+  // contracts W5-2: without the node reader the route still answers 200 with the stored event.
+  describe('without the node reader (evidenceStatus node_reader_unavailable)', () => {
+    const storedOnly = {
+      event: uncleFixture.event,
+      evidenceStatus: 'node_reader_unavailable',
+      orphanedBlocks: [],
+      orphanedTransactions: [],
+      adoptedBranch: [],
+      canonicalBranch: [],
+      canonicalTipNumber: null,
+    };
+
+    it('shows the stored event and says the branch evidence needs the node store', async () => {
+      vi.mocked(api.getForkAt).mockResolvedValue(fixture(storedOnly));
+      const { container } = render(<ForkDetailPage />);
+      expect(
+        await screen.findByRole('heading', { level: 1, name: 'Fork at #10' })
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Branch evidence needs the node store: this API runs without the node reader, so the blocks of both branches, their miners and what became of them are not shown. Below is what this node recorded when it switched.'
+      );
+      expect(screen.getByTestId('fork-narrative')).toHaveTextContent(
+        'This node switched from #11 0x17404795…a3e72a to #12 0xb057fd60…9a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
+      );
+      expect(container.querySelector('svg[data-fork-tree]')).toBeNull();
+      expect(screen.queryByRole('table', { name: 'Blocks' })).toBeNull();
+      const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+      expect(
+        within(tier2).getByRole('heading', { name: 'This node’s fork event, as stored' })
+      ).toBeInTheDocument();
+      expect(tier2).toHaveTextContent(`first dropped#11′ ${uncleFixture.event.firstOrphanHash}`);
+      expect(tier2).toHaveTextContent(`old tip#11 ${uncleFixture.event.oldTipHash}`);
+      expect(within(tier2).getByRole('link', { name: '#10' })).toHaveAttribute(
+        'href',
+        '/mainnet/blocks/10'
+      );
+    });
+
+    it('still refuses an event that is not the fork the address names', async () => {
+      at('10', 'deadbeef');
+      vi.mocked(api.getForkAt).mockResolvedValue(fixture(storedOnly));
+      render(<ForkDetailPage />);
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'API answered /forks/10/deadbeef with the fork at #10 whose first orphan is 0x17404795'
+      );
+    });
+
+    it('refuses branch evidence served beside node_reader_unavailable', async () => {
+      vi.mocked(api.getForkAt).mockResolvedValue(
+        fixture({ ...storedOnly, orphanedBlocks: uncleFixture.orphanedBlocks })
+      );
+      render(<ForkDetailPage />);
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'API answered /forks/10/17404795 with node_reader_unavailable but with branch evidence'
+      );
+    });
   });
 
   it('shows typed fork evidence only for an actual 404', async () => {

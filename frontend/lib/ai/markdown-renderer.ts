@@ -453,6 +453,7 @@ function renderForkDetail(detail: ReorgDetail): string {
       [
         ['firstOrphanHash', detail.event.firstOrphanHash ?? '-'],
         ['firstOrphanStatus', detail.event.firstOrphanStatus],
+        ['evidenceStatus', detail.evidenceStatus],
         ['eventType', detail.event.eventType],
         ['depth', detail.event.depth],
         ['forkPointNumber', detail.event.forkPointNumber],

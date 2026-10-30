@@ -52,6 +52,7 @@
     }
   ],
   "canonicalTipNumber": 13,
+  "evidenceStatus": "available",
   "event": {
     "depth": 2,
     "detectedAt": "2025-07-31T22:13:20+00:00",
@@ -76,7 +77,7 @@
     "supersededByTipHash": null,
     "reconcileInterrupted": false,
     "firstOrphanHash": "0x950980498e706d2ffec6862067c057901cedba4e0b4f40de8ce1887d3caf49a9",
-    "firstOrphanStatus": "traced"
+    "firstOrphanStatus": "recorded"
   },
   "orphanedBlocks": [
     {

@@ -440,6 +440,11 @@ interface OrphanedTransaction {
 
 interface ReorgDetail {
   event: ReorgEvent;
+  /**
+   * contracts W5-2: `node_reader_unavailable` — the event resolved from the store alone and every
+   * evidence list below is empty, `canonicalTipNumber` null.
+   */
+  evidenceStatus: ForkEvidenceStatus;
   orphanedBlocks: OrphanedBlock[];
   orphanedTransactions: OrphanedTransaction[];
   adoptedBranch: CanonicalBranchBlock[];
@@ -5272,12 +5277,13 @@ export const api = {
 };
 
 // ---- F2 group `fiber`: lane R2b-b fork contracts ----
-export type ForkFirstOrphanStatus =
-  | 'recorded'
-  | 'traced'
-  | 'not_observed'
-  | 'needs_node_reader'
-  | 'old_branch_unavailable';
+/**
+ * contracts W5-2: every automatic switch persists its first orphan (`recorded`, hash present);
+ * a deep detection rolls nothing back (`not_observed`, hash null, no D7 address).
+ */
+export type ForkFirstOrphanStatus = 'recorded' | 'not_observed';
+/** Whether the API read branch evidence from the node store (`node_reader_unavailable`: not open). */
+export type ForkEvidenceStatus = 'available' | 'node_reader_unavailable';
 /** Another fork event by its D7 address; a null hash means that event has no address. */
 export interface ForkEventRef {
   forkPointNumber: number;
@@ -5292,7 +5298,7 @@ export interface ForkNodeRecord {
   deepDetections: number;
   orphanedBlocks: number;
   orphanedTransactions: number;
-  evidenceStatus: 'available' | 'node_reader_unavailable';
+  evidenceStatus: ForkEvidenceStatus;
   orphanFates: {
     eventsWithEvidence: number;
     eventsOldBranchUnavailable: number;

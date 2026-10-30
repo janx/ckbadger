@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   forkDetailHref,
   forkEventHref,
@@ -10,7 +10,7 @@ import {
   uncleRateFigure,
 } from '@/lib/fork-format';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
-import type { ReorgEvent } from '@/lib/api';
+import type { ForkFirstOrphanStatus, ReorgEvent } from '@/lib/api';
 
 const event = listFixture.data[0] as unknown as ReorgEvent;
 
@@ -48,12 +48,25 @@ describe('fork routes (D7)', () => {
 
   it('says why a switch has no detail page', () => {
     expect(missingAddressWords('not_observed')).toBe('nothing was rolled back, so no detail page');
-    expect(missingAddressWords('needs_node_reader')).toBe(
-      'its first dropped block needs the node reader'
+    expect(() => missingAddressWords('recorded')).toThrow(
+      'fork first orphan status recorded has an address'
     );
-    expect(missingAddressWords('old_branch_unavailable')).toBe(
-      'the node no longer has the dropped branch'
-    );
+  });
+
+  // contracts W5-2: every automatic switch persists its first orphan; the node walk is gone.
+  it('knows only recorded and not_observed first orphans', () => {
+    expectTypeOf<ForkFirstOrphanStatus>().toEqualTypeOf<'recorded' | 'not_observed'>();
+    for (const gone of ['traced', 'needs_node_reader', 'old_branch_unavailable'])
+      expect(() => missingAddressWords(gone as ForkFirstOrphanStatus)).toThrow(
+        `Fork: unknown first orphan status ${gone}`
+      );
+    expect(() =>
+      forkRefHref({
+        forkPointNumber: 7,
+        firstOrphanHash: null,
+        firstOrphanStatus: 'traced' as ForkFirstOrphanStatus,
+      })
+    ).toThrow('Fork: unknown first orphan status traced');
   });
 
   it('parses only a canonical height and a lowercase 8-hex prefix', () => {
