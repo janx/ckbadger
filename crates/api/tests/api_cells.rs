@@ -2316,3 +2316,51 @@ async fn redesign_cell_data_requires_node_bytes() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
     assert!(json["message"].as_str().unwrap().contains("CKB RocksDB"));
 }
+
+/// SC-S7: an "Its cells" row named its type reference only from the protocol
+/// registry, so a COTA cell showed a raw code hash. Rows carry the script
+/// registry's name for both references — the name the Scripts page shows.
+#[tokio::test]
+async fn test_cells_by_script_rows_name_registered_type_and_lock_references() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    let joyid =
+        hex::decode("d00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323").unwrap();
+    let cota =
+        hex::decode("1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df").unwrap();
+    let unregistered = vec![0x9c; 32];
+    insert_by_script_cell(&store, &[0x41; 32], 10, &joyid, 1, Some(&cota), Some(1));
+    insert_by_script_cell(
+        &store,
+        &[0x42; 32],
+        11,
+        &joyid,
+        1,
+        Some(&unregistered),
+        Some(1),
+    );
+    let mut joyid_form = store
+        .get_script_reference_info(1, &joyid)
+        .unwrap()
+        .unwrap_or_default();
+    joyid_form.reference_hash = joyid.clone();
+    joyid_form.hash_type = 1;
+    joyid_form.lock_cells_count = 2;
+    joyid_form.lock_live_cells_count = 2;
+    store
+        .put_script_reference_info_direct(1, &joyid, &joyid_form)
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = fetch_by_script(&app, &joyid, "type", "lock", 10, None).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    let row = |tx: u8| {
+        rows.iter()
+            .find(|row| row["txHash"] == format!("0x{}", hex::encode([tx; 32])))
+            .unwrap_or_else(|| panic!("row 0x{tx:02x} missing: {json}"))
+    };
+    assert_eq!(row(0x41)["typeScriptName"], "COTA", "{json}");
+    assert_eq!(row(0x41)["lockScriptName"], "JoyID", "{json}");
+    assert!(row(0x42)["typeScriptName"].is_null(), "{json}");
+}

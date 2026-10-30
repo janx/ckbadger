@@ -28,7 +28,7 @@ use crate::utils::script_resolution::{list_version_code_cells, CurrentScriptVers
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
     is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
-    parse_hash32, parse_optional_block_tx_cursor, parse_output_index,
+    parse_hash32, parse_optional_block_tx_cursor, parse_output_index, registered_script_name,
     resolve_code_hash_for_hash_type, resolve_script_form_by_hash, script_to_address,
     shannon_to_ckb,
 };
@@ -1898,6 +1898,14 @@ pub struct CellResponse {
     pub type_hash_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_protocol_name: Option<String>,
+    /// The script registry's name for the lock reference (`lock_code_hash`),
+    /// `null` when unregistered. Set only on list rows ([`named_cell_response`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_script_name: Option<Option<String>>,
+    /// The script registry's name for the type reference, `null` when the
+    /// cell has no type or the reference is unregistered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_script_name: Option<Option<String>>,
     pub data_size: i32,
     pub created_at_block: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2338,7 +2346,38 @@ fn cell_info_to_response(
         },
         udt_amount: info.udt_amount.map(|amount| amount.to_string()),
         matched_script_kind: None,
+        lock_script_name: None,
+        type_script_name: None,
     })
+}
+
+/// A cell list row: [`cell_info_to_response`] plus the script registry's
+/// names of its lock and type references (SC-S7), the names the Scripts page
+/// shows.
+fn named_cell_response(
+    store: &CkbadgerStore,
+    tx_hash: &[u8],
+    output_index: i16,
+    info: &ckbadger_store::PositionedCellInfo,
+    network: &str,
+    virtual_occupied: i128,
+) -> Result<CellResponse, ApiRouteError> {
+    let mut cell = cell_info_to_response(tx_hash, output_index, info, network, virtual_occupied)?;
+    let name = |code_hash: &[u8]| {
+        registered_script_name(store, code_hash).map_err(|e| {
+            ApiError::internal(format!(
+                "cell {}:{output_index} script name of 0x{}: {e:#}",
+                hex::encode(tx_hash),
+                hex::encode(code_hash)
+            ))
+        })
+    };
+    cell.lock_script_name = Some(name(&info.lock_code_hash)?);
+    cell.type_script_name = Some(match info.type_code_hash.as_deref() {
+        Some(code_hash) => name(code_hash)?,
+        None => None,
+    });
+    Ok(cell)
 }
 
 pub(crate) fn estimated_occupied_capacity_breakdown(
@@ -2892,7 +2931,8 @@ async fn list_live_cells(
     let cells: Vec<CellResponse> = raw_cells
         .iter()
         .map(|(tx_hash, output_index, info)| {
-            cell_info_to_response(
+            named_cell_response(
+                &state.store,
                 tx_hash,
                 *output_index,
                 info,
@@ -3224,7 +3264,8 @@ async fn list_cells_by_script(
     let cells: Vec<CellResponse> = rows
         .iter()
         .map(|(phase, tx_hash, output_index, info)| {
-            let mut cell = cell_info_to_response(
+            let mut cell = named_cell_response(
+                &state.store,
                 tx_hash,
                 *output_index,
                 info,

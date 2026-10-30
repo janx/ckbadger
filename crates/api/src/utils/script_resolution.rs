@@ -15,6 +15,21 @@ pub fn is_known_script_name(name: Option<&str>) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
 }
 
+/// The script registry's name for a reference (`code_hash`): the name label
+/// import recorded for it — the registry's and Scripts page's name, so a COTA
+/// or JoyID reference is named even though no protocol parser covers it.
+/// `None` when the reference is not registered or carries no known name.
+pub fn registered_script_name(
+    store: &CkbadgerStore,
+    code_hash: &[u8],
+) -> anyhow::Result<Option<String>> {
+    Ok(store
+        .get_script_info(code_hash)?
+        .and_then(|info| info.name)
+        .map(|name| name.trim().to_string())
+        .filter(|name| is_known_script_name(Some(name))))
+}
+
 pub fn hash_type_to_u8(hash_type: &str) -> Option<u8> {
     ckbadger_common::hash_type_from_label(hash_type)
 }
