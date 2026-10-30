@@ -44,7 +44,11 @@ describe('ForkDetailPage', () => {
     expect(screen.getAllByText('+50 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Miner witness unavailable').length).toBeGreaterThan(0);
     expect(screen.getAllByText('committed later').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('0.00001234 CKB').length).toBeGreaterThan(0);
+    expect(
+      Array.from(document.querySelectorAll('[data-ckb-amount]')).some(
+        (el) => el.textContent === '0.00001234 CKB'
+      )
+    ).toBe(true);
     expect(screen.getAllByText('2023-11-14 22:13:21 UTC').length).toBeGreaterThan(0);
     expect(screen.queryByText('2023-11-14T22:13:21+00:00')).not.toBeInTheDocument();
   });

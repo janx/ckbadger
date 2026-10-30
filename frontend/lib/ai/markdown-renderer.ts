@@ -539,12 +539,12 @@ function renderTxSummary(tx: TransactionDetail, lifecycle: TransactionLifecycle 
     [
       ['hash', tx.hash],
       ['status', tx.poolStatus ?? tx.status],
-      // Absent keys are a transaction this explorer has not indexed yet, said as such.
-      ['blockNumber', tx.blockNumber ?? 'not indexed'],
-      ['index', tx.index ?? 'not indexed'],
-      ['timestamp', tx.timestamp ?? 'not indexed'],
+      // The API omits these keys for a transaction that is still pending; say so.
+      ['blockNumber', tx.blockNumber ?? 'pending'],
+      ['index', tx.index ?? 'pending'],
+      ['timestamp', tx.timestamp ?? 'pending'],
       ['isCellbase', tx.isCellbase],
-      ['confirmations', tx.confirmations ?? 'not indexed'],
+      ['confirmations', tx.confirmations ?? 'pending'],
       ['inputsCount', tx.inputsCount],
       ['outputsCount', tx.outputsCount],
       ['fee', tx.fee],

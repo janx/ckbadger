@@ -9,7 +9,7 @@ import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@
 import { DaoSources } from '@/components/dao/dao-sources';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
-import { formatCapacity } from '@/lib/utils';
+import { formatCapacity, formatDurationMs, formatUtcClock } from '@/lib/utils';
 
 interface Props {
   statistics: DaoStatistics;
@@ -174,6 +174,14 @@ function History({
       </div>
     </div>
   );
+}
+
+/** An exact millisecond string from the API as a safe integer for duration display. */
+function exactSafeMs(value: string, context: string): number {
+  const ms = exactUnsignedInteger(value, context);
+  if (ms > BigInt(Number.MAX_SAFE_INTEGER))
+    throw new Error(`${context}: ${value} ms is out of range`);
+  return Number(ms);
 }
 
 /** The circulation ratio exactly as the API states it (a decimal percentage). */
@@ -614,8 +622,11 @@ export function DaoBoard({
         {evidence.ar.year365 && (
           <div className="text-text-dim mt-2 font-mono text-[11px]">
             365-day anchor: block #{evidence.ar.year365.anchorBlockNumber.toLocaleString()} · chain
-            time {evidence.ar.year365.anchorChainTimeMs} ms · AR {evidence.ar.year365.anchorAr} ·
-            observed span {evidence.ar.year365.elapsedChainTimeMs} ms
+            time {formatUtcClock(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+            {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
+            {formatDurationMs(
+              exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
+            )}
           </div>
         )}
       </Section>

@@ -10,7 +10,8 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannelState } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
+import { formatTimeAgo } from '@/lib/utils';
+import { ExactCkb } from '@/components/activity-event-row';
 
 type StateFilter = 'all' | FiberChannelState;
 const filters: { value: StateFilter; label: string }[] = [
@@ -82,7 +83,12 @@ export default function FiberChannelsPage() {
                 {stats.openChannels.toLocaleString()}
               </div>
               <div className="text-text-dim text-[11px]">
-                {formatCkbAmount(stats.totalCapacityLocked).full} CKB locked
+                <ExactCkb
+                  shannons={BigInt(stats.totalCapacityLocked)}
+                  signed={false}
+                  tone="plain"
+                />{' '}
+                locked
               </div>
             </div>
             <div>
@@ -209,7 +215,7 @@ export default function FiberChannelsPage() {
                     {stateLabel[channel.state]}
                   </span>
                   <span className="text-text-bright font-mono md:text-right">
-                    {formatCkbAmount(channel.capacity).full} CKB
+                    <ExactCkb shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
                   </span>
                   <span className="text-text-dim md:text-right">
                     {formatTimeAgo(channel.openTimestamp)}

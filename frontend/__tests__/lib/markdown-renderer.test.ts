@@ -1114,7 +1114,7 @@ describe('renderMarkdownPage', () => {
     expect(unavailable.body).toContain('| witnessesAvailable | false |');
   });
 
-  it('says a pending tx is not indexed instead of printing undefined (TX-06)', async () => {
+  it('says a pending tx is pending instead of printing undefined (TX-06, #11)', async () => {
     const hash = `0x${'3'.repeat(64)}`;
     // The API omits every unindexed key; it never sends null for them.
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
@@ -1154,8 +1154,9 @@ describe('renderMarkdownPage', () => {
       origin: 'http://localhost:3000',
     });
     expect(result.body).toContain('| status | pending |');
-    expect(result.body).toContain('| blockNumber | not indexed |');
-    expect(result.body).toContain('| confirmations | not indexed |');
+    expect(result.body).toContain('| blockNumber | pending |');
+    expect(result.body).toContain('| confirmations | pending |');
+    expect(result.body).not.toContain('not indexed');
     expect(result.body).not.toContain('undefined');
   });
 
