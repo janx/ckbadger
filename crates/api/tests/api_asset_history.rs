@@ -686,6 +686,249 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
 }
 
+/// Every `.cell` item feed row says what the transaction meant for this name,
+/// computed once by the API's lifecycle classification: the name's own
+/// `dotcell` action (`protocolAction`), or — when the tx only rewrote its ring
+/// `next` pointer — which action relinked it (`ringRelink`), including a
+/// rewrite the indexer recorded as an unattributed `ring_relink`. Exactly one
+/// of the two is set; the frontend derives nothing.
+#[tokio::test]
+async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
+    let store = test_store();
+    let id = [0x4Cu8; 20];
+    let item = format!("0x{}", hex::encode(id));
+    let registered = "0x1111111111111111111111111111111111111111";
+    let subname = "0x2222222222222222222222222222222222222222";
+    let recycled = "0x3333333333333333333333333333333333333333";
+    seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
+    let header = store.get_block_header(100).unwrap().unwrap();
+    let dotcell = |action: &str, metadata: serde_json::Value| {
+        ckbadger_store::ProtocolAction::new("dotcell", action, metadata)
+    };
+    let txs: Vec<([u8; 32], Vec<ckbadger_store::ProtocolAction>)> = vec![
+        (
+            [0x61; 32],
+            vec![dotcell(
+                "register",
+                serde_json::json!({"id": item, "label": "ringy", "changes": ["created"]}),
+            )],
+        ),
+        (
+            [0x62; 32],
+            vec![dotcell(
+                "register",
+                serde_json::json!({"id": registered, "relinked": item}),
+            )],
+        ),
+        (
+            [0x63; 32],
+            vec![dotcell(
+                "register_subname",
+                serde_json::json!({"id": subname, "relinked": item}),
+            )],
+        ),
+        (
+            [0x64; 32],
+            vec![dotcell(
+                "recycle",
+                serde_json::json!({"id": recycled, "relinked": item}),
+            )],
+        ),
+        (
+            [0x65; 32],
+            vec![dotcell(
+                ckbadger_indexer::db::DOTCELL_RING_RELINK_ACTION,
+                serde_json::json!({"id": item, "changes": ["next"]}),
+            )],
+        ),
+        (
+            [0x66; 32],
+            vec![dotcell(
+                "edit_records",
+                serde_json::json!({"id": item, "changes": ["records"]}),
+            )],
+        ),
+    ];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some("ringy.cell".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: txs[0].0.to_vec(),
+            extra: IdentityExtra::DotCell {
+                label: "ringy".to_string(),
+                namespace_args: [0x45; 20],
+                layout_version: 3,
+                expired_at: 1_900_000_000,
+                owner_hash20: [0x46; 20],
+                manager_hash20: [0x46; 20],
+                next_id: [0; 20],
+                records_hash: [0; 32],
+                records: Vec::new(),
+                parent_id: None,
+            },
+        },
+    );
+    for (position, (hash, actions)) in txs.iter().enumerate() {
+        let index = i32::try_from(position).unwrap() + 1;
+        let version = cell(&id, 320_00000000, 1);
+        seed_tx(&mut batch, hash, 100, index);
+        let mut tx_actions = make_test_tx_actions(
+            &version.lock_script_hash,
+            hash,
+            &header.hash,
+            100,
+            index,
+            0,
+            0,
+        );
+        tx_actions.protocol_actions = actions.clone();
+        batch.put_tx_actions(&tx_actions);
+        batch.put_spore_outpoint(hash, 0, &id);
+        match txs.get(position + 1) {
+            Some((consumer, _)) => batch.put_consumed_cell_with_consumer(
+                hash,
+                0,
+                &version,
+                100,
+                100,
+                Some(consumer),
+            ),
+            None => batch.put_cell(hash, 0, &version, 100),
+        }
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let (status, feed) = get_json(
+        &app,
+        &format!("/assets/identities/dotcell/items/{item}/activity-feed?limit=20"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    capture_producer("dotcell-item-activity-feed", &feed);
+    let context_of = |feed: &serde_json::Value, hash: [u8; 32]| {
+        let hash = format!("0x{}", hex::encode(hash));
+        feed["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["txHash"] == hash || row["hash"] == hash)
+            .unwrap_or_else(|| panic!("no row for {hash}: {feed}"))["itemContext"]
+            .clone()
+    };
+    let expected = [
+        ([0x61; 32], "mint", serde_json::json!("register"), serde_json::Value::Null),
+        (
+            [0x62; 32],
+            "update",
+            serde_json::Value::Null,
+            serde_json::json!({"by": "register", "byId": registered}),
+        ),
+        (
+            [0x63; 32],
+            "update",
+            serde_json::Value::Null,
+            serde_json::json!({"by": "register_subname", "byId": subname}),
+        ),
+        (
+            [0x64; 32],
+            "update",
+            serde_json::Value::Null,
+            serde_json::json!({"by": "recycle", "byId": recycled}),
+        ),
+        (
+            [0x65; 32],
+            "update",
+            serde_json::Value::Null,
+            serde_json::json!({"by": "unattributed", "byId": null}),
+        ),
+        (
+            [0x66; 32],
+            "update",
+            serde_json::json!("edit_records"),
+            serde_json::Value::Null,
+        ),
+    ];
+    assert_eq!(feed["data"].as_array().unwrap().len(), expected.len(), "{feed}");
+    for (hash, action, protocol_action, ring_relink) in &expected {
+        let context = context_of(&feed, *hash);
+        assert_eq!(context["itemId"], item.as_str());
+        assert_eq!(context["action"], *action, "{context}");
+        assert_eq!(context["protocolAction"], *protocol_action, "{context}");
+        assert_eq!(context["ringRelink"], *ring_relink, "{context}");
+        assert!(
+            context["protocolAction"].is_null() != context["ringRelink"].is_null(),
+            "exactly one of protocolAction / ringRelink: {context}"
+        );
+    }
+
+    // The transactions view carries the same per-item meaning.
+    let (status, transactions) = get_json(
+        &app,
+        &format!("/assets/identities/dotcell/items/{item}/transactions?limit=20"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{transactions}");
+    assert_eq!(
+        context_of(&transactions, [0x65; 32])["ringRelink"],
+        serde_json::json!({"by": "unattributed", "byId": null})
+    );
+    assert_eq!(
+        context_of(&transactions, [0x66; 32])["protocolAction"],
+        "edit_records"
+    );
+}
+
+/// Items of the other standards have no item-naming protocol actions: both
+/// new fields are present and null.
+#[tokio::test]
+async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() {
+    let (store, id) = history_fixture();
+    seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
+    let header = store.get_block_header(100).unwrap().unwrap();
+    let mut batch = StoreBatch::new(&store);
+    for (index, hash, action) in [
+        (1, [0x51; 32], AssetAction::Mint),
+        (2, [0x52; 32], AssetAction::Transfer),
+    ] {
+        batch.put_tx_actions(&make_test_tx_actions(
+            &cell(&id, 320_00000000, 2).lock_script_hash,
+            &hash,
+            &header.hash,
+            100,
+            index,
+            100,
+            0,
+        ));
+        batch
+            .put_raw_cf_by_name(
+                ckbadger_store::CF_STATS_SPORE,
+                &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
+                &[action.compact()],
+            )
+            .unwrap();
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, feed) = get_json(
+        &app,
+        &format!("/assets/identities/did/items/0x{}/activity-feed", hex::encode(&id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    for row in feed["data"].as_array().unwrap() {
+        let context = row["itemContext"].as_object().unwrap();
+        assert!(context.contains_key("protocolAction"), "{row}");
+        assert!(context.contains_key("ringRelink"), "{row}");
+        assert!(context["protocolAction"].is_null() && context["ringRelink"].is_null());
+    }
+}
+
 async fn protocol_fixture(
     id: Vec<u8>,
     code: &str,
