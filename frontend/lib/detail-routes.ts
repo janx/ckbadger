@@ -17,6 +17,14 @@ function normalizeHashType(value: string | null | undefined): string | null {
   return normalized;
 }
 
+/** An uncle has no canonical page of its own: it is read through the block that included it. */
+export function getUncleDetailHref(includingBlockNumber: number, index: number): string {
+  if (!Number.isSafeInteger(includingBlockNumber) || includingBlockNumber < 0)
+    throw new Error(`invalid including block number ${includingBlockNumber}`);
+  if (!Number.isSafeInteger(index) || index < 0) throw new Error(`invalid uncle index ${index}`);
+  return `/blocks/${includingBlockNumber}/uncles/${index}`;
+}
+
 export function getTokenDetailHref(typeHash: string): string {
   return `/tokens/${encodeURIComponent(typeHash)}`;
 }

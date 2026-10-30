@@ -4,6 +4,7 @@ import { resolveActiveNetwork } from '@/lib/active-network';
 
 export type EntityKind =
   | 'block'
+  | 'uncle'
   | 'transaction'
   | 'cell'
   | 'address'

@@ -1,6 +1,6 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
@@ -283,9 +283,23 @@ describe('BlockDetailPage', () => {
     });
   });
 
+  // The fixture block includes the uncle that carried the proposal, as a real block would.
+  const carrier = {
+    number: 8_775_637,
+    hash: `0x${'ee'.repeat(32)}`,
+    parentHash: `0x${'dd'.repeat(32)}`,
+    timestamp: '2026-02-21T23:59:40Z',
+    proposalIds: ['0xaabbccddeeff00112233'],
+  };
+
   it('tags proposals carried by an uncle with the uncle height', async () => {
-    const uncleHash = `0x${'ee'.repeat(32)}`;
-    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 2 });
+    const uncleHash = carrier.hash;
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      proposalsCount: 2,
+      unclesCount: 1,
+      uncles: [carrier],
+    });
     vi.mocked(api.getBlockProposals).mockResolvedValue([
       {
         proposalIndex: 0,
@@ -310,6 +324,10 @@ describe('BlockDetailPage', () => {
       '[data-testid="block-proposal-row"]'
     ) as HTMLElement;
     expect(uncleRow).toHaveTextContent('uncle #8,775,637');
+    expect(within(uncleRow).getByRole('link', { name: 'uncle #8,775,637' })).toHaveAttribute(
+      'href',
+      `/mainnet/blocks/${mockBlock.number}/uncles/0`
+    );
     const ownRow = screen
       .getByText('0x00112233445566778899')
       .closest('[data-testid="block-proposal-row"]') as HTMLElement;
@@ -317,7 +335,12 @@ describe('BlockDetailPage', () => {
   });
 
   it('lists uncle-carried proposals of a block with no proposals of its own', async () => {
-    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 0, unclesCount: 1 });
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      proposalsCount: 0,
+      unclesCount: 1,
+      uncles: [carrier],
+    });
     vi.mocked(api.getBlockProposals).mockResolvedValue([
       {
         proposalIndex: 0,
@@ -336,6 +359,17 @@ describe('BlockDetailPage', () => {
     ) as HTMLElement;
     expect(row).toHaveTextContent('uncle #8,775,637');
     expect(screen.queryByText('No proposals in this block')).not.toBeInTheDocument();
+  });
+
+  it('links every included uncle to its uncle page by position (BA-10)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, unclesCount: 1, uncles: [carrier] });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([]);
+    render(<BlockDetailPage />);
+    const uncles = (await screen.findByText('Uncles (1)')).closest('section') as HTMLElement;
+    expect(within(uncles).getByRole('link', { name: /#8,775,637/ })).toHaveAttribute(
+      'href',
+      `/mainnet/blocks/${mockBlock.number}/uncles/0`
+    );
   });
 
   it('says there are no proposals when the block and its uncles proposed nothing', async () => {

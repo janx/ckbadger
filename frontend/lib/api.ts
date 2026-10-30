@@ -192,6 +192,30 @@ interface Block {
   version: number;
 }
 
+/**
+ * `/blocks/{id}/uncles/{index}`: one uncle as its including block recorded it. `index` is its
+ * position in that block's uncles list; the canonical block at the uncle's height is named
+ * beside it. The DAO field carries the raw 32 bytes and the four decoded u64 fields.
+ */
+interface BlockUncle {
+  number: number;
+  hash: string;
+  parentHash: string;
+  timestamp: string;
+  epoch: { number: number; index: number; length: number; display: string };
+  compactTarget: string;
+  difficulty: string;
+  nonce: string;
+  version: number;
+  transactionsRoot: string;
+  proposalsHash: string;
+  extraHash: string;
+  dao: { raw: string; c: string; ar: string; s: string; u: string };
+  proposalIds: string[];
+  includedBy: { number: number; hash: string; index: number };
+  canonicalAtHeight: { number: number; hash: string };
+}
+
 interface HardforkActivation {
   id: string;
   name: string;
@@ -3176,6 +3200,7 @@ export type {
   PoolTransaction,
   PoolTransactionsResponse,
   Block,
+  BlockUncle,
   NetworkStats,
   SyncStatus,
   Address,
@@ -3694,6 +3719,10 @@ export const api = {
 
   getBlockProposals: (id: string | number): Promise<BlockProposal[]> => {
     return fetchApi(`/blocks/${id}/proposals`);
+  },
+
+  getBlockUncle: (id: string | number, index: number): Promise<BlockUncle> => {
+    return fetchApi(`/blocks/${id}/uncles/${index}`);
   },
 
   getTransactions: (

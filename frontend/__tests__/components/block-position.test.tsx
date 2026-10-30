@@ -59,8 +59,11 @@ describe('BlockPosition', () => {
       'href',
       `/mainnet/blocks/${parent}`
     );
-    expect(screen.getByLabelText('Included uncle #931')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Included uncle #931' })).not.toBeInTheDocument();
+    // An uncle is read through the block that included it, at its position there (BA-10).
+    expect(screen.getByRole('link', { name: 'Included uncle #931' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/932/uncles/0'
+    );
     expect(screen.getByRole('link', { name: 'Block #934' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/934'
@@ -114,8 +117,10 @@ describe('BlockPosition', () => {
       'href',
       `/mainnet/blocks/${parent}`
     );
-    expect(mobile.getByText(`Uncle #931 · ${uncle}`)).toBeInTheDocument();
-    expect(mobile.queryByRole('link', { name: `Uncle #931 · ${uncle}` })).not.toBeInTheDocument();
+    expect(mobile.getByRole('link', { name: `Uncle #931 · ${uncle}` })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/932/uncles/0'
+    );
     expect(screen.getByRole('region', { name: 'Chain position diagram' })).toHaveClass(
       'hidden',
       'md:block'

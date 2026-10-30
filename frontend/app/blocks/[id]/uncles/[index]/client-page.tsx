@@ -1,0 +1,188 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import Link from '@/components/ui/link';
+import { notFound, useParams } from '@/src/navigation';
+import { Header } from '@/components/layout/header';
+import { NotFoundPage } from '@/components/not-found-page';
+import { Hash } from '@/components/ui/hash';
+import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
+import { api, isNotFoundApiError, type BlockUncle } from '@/lib/api';
+import { decodeDaoHeader } from '@/lib/dao-header';
+import { formatTimeAgo, formatUtcClock } from '@/lib/utils';
+
+const INDEX = /^(0|[1-9]\d*)$/;
+
+export default function UncleDetailPage() {
+  const params = useParams();
+  const id = String(params.id);
+  const rawIndex = String(params.index);
+  const valid = INDEX.test(rawIndex) && Number.isSafeInteger(Number(rawIndex));
+  const index = Number(rawIndex);
+  const query = useQuery({
+    queryKey: ['block-uncle', id, index],
+    queryFn: () => api.getBlockUncle(id, index),
+    enabled: valid,
+  });
+  if (!valid) notFound();
+  if (!query.data && isNotFoundApiError(query.error)) {
+    return (
+      <NotFoundPage
+        entity={{
+          kind: 'uncle',
+          identifier: `${id} · uncle ${index}`,
+          checkedEndpoint: `/blocks/${encodeURIComponent(id)}/uncles/${index}`,
+        }}
+      />
+    );
+  }
+  return (
+    <div className="bg-base-bg min-h-screen">
+      <Header />
+      <main className="container mx-auto min-w-0 px-4 py-8">
+        {query.isLoading && <p role="status">Loading uncle…</p>}
+        {query.error && (
+          <p role="alert">
+            Unable to {query.data ? 'refresh' : 'read'} uncle: {query.error.message}
+            {query.data ? '. Showing previously loaded data.' : ''}
+          </p>
+        )}
+        {query.data && <UncleEvidence uncle={query.data} id={id} index={index} />}
+      </main>
+    </div>
+  );
+}
+
+const blockLink = (number: number) => (
+  <Link href={`/blocks/${number}`}>#{number.toLocaleString('en-US')}</Link>
+);
+
+function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; index: number }) {
+  const context = `Uncle ${index} of block #${uncle.includedBy.number}`;
+  const requested = /^\d+$/.test(id)
+    ? uncle.includedBy.number === Number(id)
+    : uncle.includedBy.hash.toLowerCase() === id.toLowerCase();
+  if (!requested) throw new Error(`${context}: the API answered for another including block`);
+  if (uncle.includedBy.index !== index)
+    throw new Error(`${context}: the API answered for uncle ${uncle.includedBy.index}`);
+  if (uncle.canonicalAtHeight.number !== uncle.number)
+    throw new Error(
+      `${context}: canonical block #${uncle.canonicalAtHeight.number} is not at its height`
+    );
+  if (uncle.canonicalAtHeight.hash.toLowerCase() === uncle.hash.toLowerCase())
+    throw new Error(`${context}: the uncle hash is the canonical block at its height`);
+  const dao = decodeDaoHeader(uncle.dao.raw, context);
+  const decoded = { c: dao.C, ar: dao.AR, s: dao.S, u: dao.U };
+  for (const [field, value] of Object.entries(decoded))
+    if (uncle.dao[field as keyof typeof decoded] !== value.toString())
+      throw new Error(`${context}: DAO ${field.toUpperCase()} disagrees with the raw header bytes`);
+  const header: [string, string][] = [
+    ['parentHash', uncle.parentHash],
+    ['compactTarget', uncle.compactTarget],
+    ['nonce', uncle.nonce],
+    ['transactionsRoot', uncle.transactionsRoot],
+    ['proposalsHash', uncle.proposalsHash],
+    ['extraHash', uncle.extraHash],
+  ];
+  return (
+    <DetailLayout
+      title={`Uncle #${uncle.number.toLocaleString('en-US')}`}
+      identity={<Hash hash={uncle.hash} truncate={false} />}
+      facts={[
+        {
+          label: 'Included by',
+          value: (
+            <>
+              {blockLink(uncle.includedBy.number)}
+              <span className="text-text-dim"> · uncle {index}</span>
+            </>
+          ),
+        },
+        {
+          label: `Canonical #${uncle.number.toLocaleString('en-US')}`,
+          value: (
+            <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+              <Hash hash={uncle.canonicalAtHeight.hash} copyable={false} />
+            </Link>
+          ),
+        },
+        {
+          label: 'Time',
+          value: (
+            <>
+              {formatUtcClock(uncle.timestamp)}
+              <span className="text-text-dim block text-[11px]">
+                {formatTimeAgo(uncle.timestamp)}
+              </span>
+            </>
+          ),
+        },
+        {
+          label: 'Epoch',
+          value: `${uncle.epoch.number.toLocaleString('en-US')} · ${uncle.epoch.index.toLocaleString('en-US')} / ${uncle.epoch.length.toLocaleString('en-US')}`,
+        },
+      ]}
+      tier2={
+        <>
+          <DetailSection title={`Proposals it carried (${uncle.proposalIds.length})`}>
+            {uncle.proposalIds.length ? (
+              <ul className="space-y-1 font-mono text-xs">
+                {uncle.proposalIds.map((proposal) => (
+                  <li key={proposal} className="break-all">
+                    {proposal}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-text-dim text-xs">This uncle proposed nothing.</p>
+            )}
+          </DetailSection>
+          <DetailSection title="Header">
+            <dl className="grid min-w-0 gap-3 text-xs">
+              <div className="text-text-dim">Header version {uncle.version}</div>
+              <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
+                <dt className="text-text-dim">difficulty</dt>
+                <dd className="break-all">{BigInt(uncle.difficulty).toLocaleString('en-US')}</dd>
+              </div>
+              <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
+                <dt className="text-text-dim">epoch</dt>
+                <dd className="break-all">{uncle.epoch.display}</dd>
+              </div>
+              {header.map(([key, value]) => (
+                <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
+                  <dt className="text-text-dim">{key}</dt>
+                  <dd className="break-all">
+                    {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
+                  </dd>
+                </div>
+              ))}
+              <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
+                <dt className="text-text-dim">dao</dt>
+                <dd className="break-all">
+                  {uncle.dao.raw}
+                  <DaoHeaderFields dao={dao} />
+                </dd>
+              </div>
+            </dl>
+          </DetailSection>
+        </>
+      }
+    >
+      <p className="text-[13px] leading-relaxed">
+        Uncle at height #{uncle.number.toLocaleString('en-US')}, included by{' '}
+        {blockLink(uncle.includedBy.number)}; #{uncle.number.toLocaleString('en-US')} on the
+        canonical chain is{' '}
+        <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+          <Hash hash={uncle.canonicalAtHeight.hash} copyable={false} />
+        </Link>
+        . It was mined on parent{' '}
+        <Link href={`/blocks/${uncle.parentHash}`}>
+          <Hash hash={uncle.parentHash} copyable={false} />
+        </Link>{' '}
+        at {formatUtcClock(uncle.timestamp)} and is not part of the canonical chain: its
+        transactions never ran, but the proposals it carried count toward the proposal window.
+      </p>
+    </DetailLayout>
+  );
+}
