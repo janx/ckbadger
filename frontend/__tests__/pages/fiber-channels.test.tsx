@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '../utils/test-utils';
+import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
 import FiberChannelsPage from '@/app/fiber/channels/client-page';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
@@ -11,56 +11,98 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+const page = (rows: unknown[]) => ({ data: rows, limit: 50, hasMore: false, nextCursor: null });
+
 describe('FiberChannelsPage', () => {
-  it('does not show an All-channel row beneath a newly selected Open filter while loading', async () => {
-    let releaseOpen: (() => void) | undefined;
+  it('does not show a stale Open row beneath a newly selected filter while it loads', async () => {
+    let releaseAll: (() => void) | undefined;
     server.use(
       http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
       http.get('/api/:network/v1/fiber/channels', async ({ request }) => {
         const filter = new URL(request.url).searchParams.get('state');
-        if (filter === 'open')
+        if (filter === null)
           await new Promise<void>((resolve) => {
-            releaseOpen = resolve;
+            releaseAll = resolve;
           });
-        return HttpResponse.json({
-          data: [filter === 'open' ? channel : closedChannel],
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        });
+        return HttpResponse.json(page([filter === 'open' ? channel : closedChannel]));
       })
     );
     render(<FiberChannelsPage />);
-    expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
-    await waitFor(() => expect(releaseOpen).toBeTypeOf('function'));
-    expect(screen.queryByTitle(closedChannel.channelId)).not.toBeInTheDocument();
-    releaseOpen?.();
     expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }));
+    await waitFor(() => expect(releaseAll).toBeTypeOf('function'));
+    expect(screen.queryByTitle(channel.channelId)).not.toBeInTheDocument();
+    releaseAll?.();
+    expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
   });
 
-  it('uses API-produced on-chain network and channel contracts', async () => {
+  it('leads with the board hero: open now, channels ever, parties, typical lifetime (FF-F5, FF-F9)', async () => {
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
+    );
+    render(<FiberChannelsPage />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Fiber channels' })).toHaveClass(
+      'text-[26px]'
+    );
+    expect(
+      screen.getByText(/Only opening and closing a channel touch the chain/)
+    ).toBeInTheDocument();
+    // no jade uppercase eyebrow in tier 1 (FF-F6)
+    expect(screen.queryByText(/Payment channels · on-chain view/)).toBeNull();
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(4));
+    expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
+      'Open now',
+      'Channels ever',
+      'Parties',
+      'Typical lifetime',
+    ]);
+    const hero = screen.getAllByRole('term')[0].closest('dl')!;
+    expect(within(hero).getByText(/^since 2023-11-15$/)).toBeInTheDocument();
+    expect(within(hero).getByText('in 1 pair')).toBeInTheDocument();
+    expect(within(hero).getByText('1 m 40 s')).toBeInTheDocument();
+    expect(within(hero).getByText('2 of 2 closed within an hour')).toBeInTheDocument();
+    expect(
+      Array.from(hero.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
+    ).toEqual(['3,000.00000000 CKB']);
+    expect(screen.queryByText(/0 d 0 h/)).toBeNull();
+  });
+
+  it('defaults the table to Open with state counts and the board columns (FF-F4, FF-F6)', async () => {
     const requested: string[] = [];
     server.use(
       http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
       http.get('/api/:network/v1/fiber/channels', ({ request }) => {
         requested.push(new URL(request.url).searchParams.get('state') ?? 'all');
-        return HttpResponse.json({ data: [channel], limit: 50, hasMore: false, nextCursor: null });
+        return HttpResponse.json(page([channel]));
       })
     );
     render(<FiberChannelsPage />);
-    expect(screen.getByRole('heading', { name: 'Fiber channels' })).toBeInTheDocument();
-    expect(screen.getByText(/cannot reveal off-chain payments/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('On-chain party pairs')).toBeInTheDocument());
-    expect(
-      Array.from(document.querySelectorAll('[data-ckb-amount]')).some(
-        (el) => el.textContent === '3,000.00000000 CKB'
-      )
-    ).toBe(true);
-    expect(screen.getByText('Unknown address · 0xaaaaaaaa…aaaaaaaa')).toBeInTheDocument();
-    const open = screen.getByRole('button', { name: 'Open' });
-    fireEvent.click(open);
-    await waitFor(() => expect(requested).toContain('open'));
+    expect(await screen.findByRole('heading', { name: 'Channels' })).toHaveClass('text-[15px]');
+    await waitFor(() => expect(requested[0]).toBe('open'));
+    const open = await screen.findByRole('button', { name: 'Open 1' });
     expect(open).toHaveAttribute('aria-pressed', 'true');
+    for (const name of [
+      'Closed together 1',
+      'Force-closed, settled 0',
+      'Force-closed, not settled 1',
+      'All 3',
+    ])
+      expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
+    const table = await screen.findByRole('table', { name: 'Open channels' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toEqual(['Channel', 'Parties', 'Capacity', 'Opened', 'Open for']);
+    expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
+    expect(within(table).getByText('3 m 20 s')).toBeInTheDocument();
+    expect(within(table).getByText('0xaaaaaaaa…aaaaaa')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Closed together 1' }));
+    await waitFor(() => expect(requested).toContain('cooperativelyClosed'));
+    expect(
+      await screen.findByRole('table', { name: 'Closed together channels' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Lifetime' })).toBeInTheDocument();
   });
 });

@@ -1,0 +1,651 @@
+{
+  "summary": {
+    "totalChannels": 345,
+    "openChannels": 38,
+    "totalCapacityLocked": "4388900000000",
+    "cooperativelyClosedChannels": 299,
+    "forceClosedWaitingChannels": 4,
+    "forceClosedSettledChannels": 4,
+    "observedParties": 25,
+    "observedPairs": 35,
+    "firstOpenTimestamp": "1740748105975",
+    "typicalClosedLifetimeMs": "201578",
+    "closedWithinHour": 290,
+    "tipBlockNumber": 20835636,
+    "tipChainTimeMs": "1792983690852"
+  },
+  "parties": [
+    {
+      "lockScriptHash": "0x020484cd3e4933233835a209841729d1ff898f9eb0c35a635835281be3550374",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgvt5dyt7vlcyl0ewwt5y3kulayysndwes3meewy",
+      "channels": 4,
+      "openChannels": 3,
+      "openCapacity": "119700000000"
+    },
+    {
+      "lockScriptHash": "0x0d5f0165c76e9537e9b6dd925eb497eb315652e56fc3bb1221c0ca157dc28ba5",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdcw6z4px2juzp8rs7vjdhx5yjlpjcxfcgqh5m0j",
+      "channels": 9,
+      "openChannels": 9,
+      "openCapacity": "465100000000"
+    },
+    {
+      "lockScriptHash": "0x402b59b4fd7374c25d9c0048eb1245ec84fe85de1f74027f46bd7a6759dc663e",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0u4830mhgenf4emsn29w5gz6mnxhrl0fqypz3n8",
+      "channels": 13,
+      "openChannels": 10,
+      "openCapacity": "575000000000"
+    },
+    {
+      "lockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqv47n6dc9ay34npwktvlpp5huzjvd07t4qhspqyz",
+      "channels": 145,
+      "openChannels": 12,
+      "openCapacity": "2749900000000"
+    },
+    {
+      "lockScriptHash": "0x4553dfbfc363d340eca87f4bb841c674d75076c4cb766de6434db46d8577c42b",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdeawh5elszrlvsp3lp4yudefvqfpycz7cjx97rv",
+      "channels": 1,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x49a0cc59e2ce5299ddc7ce8cc1dc0b8f17083b1b2263e42dd5de38b0112f188b",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvwy7mljqldg5fpukmrwqfl2d7cnngytvc298juj",
+      "channels": 2,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+      "channels": 3,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y",
+      "channels": 3,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x731f749be7dd87cf0c1d901d7a20cab696f89c06efd72208a4f8a580cb79aaa9",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgvnfsz9pxgmqktf3cvvd0mwjwdyq80zespgpr97",
+      "channels": 2,
+      "openChannels": 2,
+      "openCapacity": "149800000000"
+    },
+    {
+      "lockScriptHash": "0x779048d1157e919214cff1983252eb75ece255549bd773648dbd11ac47ddc72c",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvsmlwn8pajct5a7lmz6ttngtk44l6k5ngze3p20",
+      "channels": 2,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x78a795feddecfff470d723c30b1f00012418b892b525dfc87a1f8d1950696c28",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0luazk84m0y08lawz0u8586mwv8lt3yhcaq6mwh",
+      "channels": 4,
+      "openChannels": 3,
+      "openCapacity": "89700000000"
+    },
+    {
+      "lockScriptHash": "0x873714b3bd2fff952afa451aeff1f3df52d96da704e661777fd4b43fb8b89c4b",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd20u2djg6p64ts745qujddww8qexgtmws0plr37",
+      "channels": 2,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x87bd4cfbfdf9ca6b0c9533e108c30a73d0350a2d66ce0c530f5b50790e27be6e",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvepqc3qjtux4rptcg20c2culvjvhhga8cv5mlpl",
+      "channels": 4,
+      "openChannels": 4,
+      "openCapacity": "419800000000"
+    },
+    {
+      "lockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdjsydf39sklhfvtfnk57vvd7d2vn4kxwqpr3prn",
+      "channels": 139,
+      "openChannels": 12,
+      "openCapacity": "2749900000000"
+    },
+    {
+      "lockScriptHash": "0x91429acd9a56f5c91fc87a449d4155b764b6b6c37147981eac2f06601cd56bdf",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtssq3h6xsfft6qp5y39hq6t3ma9lrcd9qyut5sg",
+      "channels": 5,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0x9a040b1fa0257fb0abe427dcec79441e4dc277a6eed602a290b75acaa2d059e2",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtlpgc29k57ufndd7gpm2jjvpwc2hqygjgtf54lg",
+      "channels": 161,
+      "openChannels": 6,
+      "openCapacity": "439800000000"
+    },
+    {
+      "lockScriptHash": "0xa9eab1e5ff53bd03e409dab26f28d400d509ceba87caaf806b15573494a5b479",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgu7p5z42vne56g0hddzvsycy9emwzcj0q62nhrj",
+      "channels": 7,
+      "openChannels": 3,
+      "openCapacity": "209900000000"
+    },
+    {
+      "lockScriptHash": "0xc281bed43192de71ffdc38397919cfc4623463bb3e75e3a6a10aa96e90d1502a",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0z6h6nlju0mcdp0ny0sx77tmu6j2700lqkdeakp",
+      "channels": 165,
+      "openChannels": 6,
+      "openCapacity": "439800000000"
+    },
+    {
+      "lockScriptHash": "0xc6ef886de38dd007d7a4a406af275a3c156eab27face93e26d4880d7b240f800",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvx92zu7mhxzd87ruamc2tse0rlyzvcajsch8a7y",
+      "channels": 1,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq05cppwnzh50sa5mkdruajkl42cp8wzklszllj2j",
+      "channels": 7,
+      "openChannels": 2,
+      "openCapacity": "59800000000"
+    },
+    {
+      "lockScriptHash": "0xce99cdcedee09220b179a0c56c38dbc1b0b5d1b608ba9b6e253bc16f912973a2",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqg0dg5q5dpt0ww2exefvx4f68vffqa670gnhk9ej",
+      "channels": 1,
+      "openChannels": 1,
+      "openCapacity": "109900000000"
+    },
+    {
+      "lockScriptHash": "0xd3aedf3dd0dc4fe921fe759bf9fcfa6194e986a369e6bd5a59f188598a639884",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw5eu5zxupazu8eyd2fmrh7kdpxplq08ws0e6x4c",
+      "channels": 3,
+      "openChannels": 0,
+      "openCapacity": "0"
+    },
+    {
+      "lockScriptHash": "0xe04dfbd92e9925de9e1621ec58f66fc6d9df55e98b60a4c3804d77bf2b0bbdbd",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf4whwlp68h42h65myzm5gxxfrczjla0vggznz8u",
+      "channels": 3,
+      "openChannels": 2,
+      "openCapacity": "89800000000"
+    },
+    {
+      "lockScriptHash": "0xe52680aa9742d30dc6ea2751b77a1b4e6300b2f86a5d66235cee49ffd7ed8519",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtj5ses5f88ggyeggrz7f9zh0kch40ctxsas20ze",
+      "channels": 1,
+      "openChannels": 1,
+      "openCapacity": "109900000000"
+    },
+    {
+      "lockScriptHash": "0xf05286101c6037ebc83ec3d04db11248ecd09f0b826adce9cefd432e6c5a5f3e",
+      "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8a386xhjapx0cfmfr0094phczasz2ymqa7zte2",
+      "channels": 3,
+      "openChannels": 0,
+      "openCapacity": "0"
+    }
+  ],
+  "pairs": [
+    {
+      "firstLockScriptHash": "0x020484cd3e4933233835a209841729d1ff898f9eb0c35a635835281be3550374",
+      "secondLockScriptHash": "0x78a795feddecfff470d723c30b1f00012418b892b525dfc87a1f8d1950696c28",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "29900000000",
+      "firstOpenBlock": 18745685,
+      "lastOpenBlock": 18745685,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x020484cd3e4933233835a209841729d1ff898f9eb0c35a635835281be3550374",
+      "secondLockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "29900000000",
+      "firstOpenBlock": 18745834,
+      "lastOpenBlock": 18745834,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x020484cd3e4933233835a209841729d1ff898f9eb0c35a635835281be3550374",
+      "secondLockScriptHash": "0xe04dfbd92e9925de9e1621ec58f66fc6d9df55e98b60a4c3804d77bf2b0bbdbd",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "59900000000",
+      "firstOpenBlock": 18672440,
+      "lastOpenBlock": 18672440,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x020484cd3e4933233835a209841729d1ff898f9eb0c35a635835281be3550374",
+      "secondLockScriptHash": "0xf05286101c6037ebc83ec3d04db11248ecd09f0b826adce9cefd432e6c5a5f3e",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18673425,
+      "lastOpenBlock": 18673425,
+      "typicalClosedLifetimeMs": "16736126724"
+    },
+    {
+      "firstLockScriptHash": "0x0d5f0165c76e9537e9b6dd925eb497eb315652e56fc3bb1221c0ca157dc28ba5",
+      "secondLockScriptHash": "0x402b59b4fd7374c25d9c0048eb1245ec84fe85de1f74027f46bd7a6759dc663e",
+      "channels": 8,
+      "openChannels": 8,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "405200000000",
+      "firstOpenBlock": 18414728,
+      "lastOpenBlock": 18414780,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x0d5f0165c76e9537e9b6dd925eb497eb315652e56fc3bb1221c0ca157dc28ba5",
+      "secondLockScriptHash": "0x87bd4cfbfdf9ca6b0c9533e108c30a73d0350a2d66ce0c530f5b50790e27be6e",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "59900000000",
+      "firstOpenBlock": 20620314,
+      "lastOpenBlock": 20620314,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x402b59b4fd7374c25d9c0048eb1245ec84fe85de1f74027f46bd7a6759dc663e",
+      "secondLockScriptHash": "0x87bd4cfbfdf9ca6b0c9533e108c30a73d0350a2d66ce0c530f5b50790e27be6e",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "109900000000",
+      "firstOpenBlock": 20613004,
+      "lastOpenBlock": 20613004,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x402b59b4fd7374c25d9c0048eb1245ec84fe85de1f74027f46bd7a6759dc663e",
+      "secondLockScriptHash": "0x91429acd9a56f5c91fc87a449d4155b764b6b6c37147981eac2f06601cd56bdf",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18821175,
+      "lastOpenBlock": 18821175,
+      "typicalClosedLifetimeMs": "2654140"
+    },
+    {
+      "firstLockScriptHash": "0x402b59b4fd7374c25d9c0048eb1245ec84fe85de1f74027f46bd7a6759dc663e",
+      "secondLockScriptHash": "0xa9eab1e5ff53bd03e409dab26f28d400d509ceba87caaf806b15573494a5b479",
+      "channels": 3,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "59900000000",
+      "firstOpenBlock": 19064773,
+      "lastOpenBlock": 19154113,
+      "typicalClosedLifetimeMs": "32312823"
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0x731f749be7dd87cf0c1d901d7a20cab696f89c06efd72208a4f8a580cb79aaa9",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "74900000000",
+      "firstOpenBlock": 20344226,
+      "lastOpenBlock": 20344226,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0x779048d1157e919214cff1983252eb75ece255549bd773648dbd11ac47ddc72c",
+      "channels": 2,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095035,
+      "lastOpenBlock": 19095261,
+      "typicalClosedLifetimeMs": "615907"
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0x873714b3bd2fff952afa451aeff1f3df52d96da704e661777fd4b43fb8b89c4b",
+      "channels": 2,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18746356,
+      "lastOpenBlock": 19041842,
+      "typicalClosedLifetimeMs": "1256830"
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0x87bd4cfbfdf9ca6b0c9533e108c30a73d0350a2d66ce0c530f5b50790e27be6e",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "125000000000",
+      "firstOpenBlock": 20613036,
+      "lastOpenBlock": 20613036,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "channels": 5,
+      "openChannels": 5,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "2175000000000",
+      "firstOpenBlock": 18709846,
+      "lastOpenBlock": 18716989,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0xa9eab1e5ff53bd03e409dab26f28d400d509ceba87caaf806b15573494a5b479",
+      "channels": 2,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "75000000000",
+      "firstOpenBlock": 19144968,
+      "lastOpenBlock": 19153812,
+      "typicalClosedLifetimeMs": "96127008"
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0xc281bed43192de71ffdc38397919cfc4623463bb3e75e3a6a10aa96e90d1502a",
+      "channels": 130,
+      "openChannels": 4,
+      "cooperativelyClosedChannels": 125,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "300000000000",
+      "firstOpenBlock": 18719447,
+      "lastOpenBlock": 20824379,
+      "typicalClosedLifetimeMs": "249572"
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0xc6ef886de38dd007d7a4a406af275a3c156eab27face93e26d4880d7b240f800",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095454,
+      "lastOpenBlock": 19095454,
+      "typicalClosedLifetimeMs": "59531875"
+    },
+    {
+      "firstLockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
+      "secondLockScriptHash": "0xd3aedf3dd0dc4fe921fe759bf9fcfa6194e986a369e6bd5a59f188598a639884",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18746330,
+      "lastOpenBlock": 18746330,
+      "typicalClosedLifetimeMs": "225599"
+    },
+    {
+      "firstLockScriptHash": "0x4553dfbfc363d340eca87f4bb841c674d75076c4cb766de6434db46d8577c42b",
+      "secondLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095482,
+      "lastOpenBlock": 19095482,
+      "typicalClosedLifetimeMs": "58292979"
+    },
+    {
+      "firstLockScriptHash": "0x49a0cc59e2ce5299ddc7ce8cc1dc0b8f17083b1b2263e42dd5de38b0112f188b",
+      "secondLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "channels": 2,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095018,
+      "lastOpenBlock": 19095231,
+      "typicalClosedLifetimeMs": "854364"
+    },
+    {
+      "firstLockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+      "secondLockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+      "channels": 3,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 3,
+      "openCapacity": "0",
+      "firstOpenBlock": 15564812,
+      "lastOpenBlock": 15907029,
+      "typicalClosedLifetimeMs": "648071"
+    },
+    {
+      "firstLockScriptHash": "0x731f749be7dd87cf0c1d901d7a20cab696f89c06efd72208a4f8a580cb79aaa9",
+      "secondLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "74900000000",
+      "firstOpenBlock": 20344190,
+      "lastOpenBlock": 20344190,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x78a795feddecfff470d723c30b1f00012418b892b525dfc87a1f8d1950696c28",
+      "secondLockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "29900000000",
+      "firstOpenBlock": 18745774,
+      "lastOpenBlock": 18745774,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x78a795feddecfff470d723c30b1f00012418b892b525dfc87a1f8d1950696c28",
+      "secondLockScriptHash": "0xe04dfbd92e9925de9e1621ec58f66fc6d9df55e98b60a4c3804d77bf2b0bbdbd",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "29900000000",
+      "firstOpenBlock": 18745730,
+      "lastOpenBlock": 18745730,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x78a795feddecfff470d723c30b1f00012418b892b525dfc87a1f8d1950696c28",
+      "secondLockScriptHash": "0xf05286101c6037ebc83ec3d04db11248ecd09f0b826adce9cefd432e6c5a5f3e",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18745721,
+      "lastOpenBlock": 18745721,
+      "typicalClosedLifetimeMs": "15956928656"
+    },
+    {
+      "firstLockScriptHash": "0x87bd4cfbfdf9ca6b0c9533e108c30a73d0350a2d66ce0c530f5b50790e27be6e",
+      "secondLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "125000000000",
+      "firstOpenBlock": 20613051,
+      "lastOpenBlock": 20613051,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "secondLockScriptHash": "0x9a040b1fa0257fb0abe427dcec79441e4dc277a6eed602a290b75acaa2d059e2",
+      "channels": 126,
+      "openChannels": 4,
+      "cooperativelyClosedChannels": 121,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "300000000000",
+      "firstOpenBlock": 18719448,
+      "lastOpenBlock": 20824379,
+      "typicalClosedLifetimeMs": "157848"
+    },
+    {
+      "firstLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "secondLockScriptHash": "0xa9eab1e5ff53bd03e409dab26f28d400d509ceba87caaf806b15573494a5b479",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "75000000000",
+      "firstOpenBlock": 19154208,
+      "lastOpenBlock": 19154208,
+      "typicalClosedLifetimeMs": null
+    },
+    {
+      "firstLockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
+      "secondLockScriptHash": "0xd3aedf3dd0dc4fe921fe759bf9fcfa6194e986a369e6bd5a59f188598a639884",
+      "channels": 2,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18745654,
+      "lastOpenBlock": 19041800,
+      "typicalClosedLifetimeMs": "1743882"
+    },
+    {
+      "firstLockScriptHash": "0x91429acd9a56f5c91fc87a449d4155b764b6b6c37147981eac2f06601cd56bdf",
+      "secondLockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
+      "channels": 3,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 3,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18821238,
+      "lastOpenBlock": 19027834,
+      "typicalClosedLifetimeMs": "1906656"
+    },
+    {
+      "firstLockScriptHash": "0x91429acd9a56f5c91fc87a449d4155b764b6b6c37147981eac2f06601cd56bdf",
+      "secondLockScriptHash": "0xe04dfbd92e9925de9e1621ec58f66fc6d9df55e98b60a4c3804d77bf2b0bbdbd",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18821166,
+      "lastOpenBlock": 18821166,
+      "typicalClosedLifetimeMs": "2891254"
+    },
+    {
+      "firstLockScriptHash": "0x9a040b1fa0257fb0abe427dcec79441e4dc277a6eed602a290b75acaa2d059e2",
+      "secondLockScriptHash": "0xc281bed43192de71ffdc38397919cfc4623463bb3e75e3a6a10aa96e90d1502a",
+      "channels": 35,
+      "openChannels": 2,
+      "cooperativelyClosedChannels": 32,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 1,
+      "openCapacity": "139800000000",
+      "firstOpenBlock": 15514817,
+      "lastOpenBlock": 19042093,
+      "typicalClosedLifetimeMs": "84617"
+    },
+    {
+      "firstLockScriptHash": "0xa9eab1e5ff53bd03e409dab26f28d400d509ceba87caaf806b15573494a5b479",
+      "secondLockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19067846,
+      "lastOpenBlock": 19067846,
+      "typicalClosedLifetimeMs": "945951632"
+    },
+    {
+      "firstLockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
+      "secondLockScriptHash": "0xf05286101c6037ebc83ec3d04db11248ecd09f0b826adce9cefd432e6c5a5f3e",
+      "channels": 1,
+      "openChannels": 0,
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18673242,
+      "lastOpenBlock": 18673242,
+      "typicalClosedLifetimeMs": "16729037292"
+    },
+    {
+      "firstLockScriptHash": "0xce99cdcedee09220b179a0c56c38dbc1b0b5d1b608ba9b6e253bc16f912973a2",
+      "secondLockScriptHash": "0xe52680aa9742d30dc6ea2751b77a1b4e6300b2f86a5d66235cee49ffd7ed8519",
+      "channels": 1,
+      "openChannels": 1,
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "109900000000",
+      "firstOpenBlock": 18744715,
+      "lastOpenBlock": 18744715,
+      "typicalClosedLifetimeMs": null
+    }
+  ]
+}
