@@ -7,6 +7,7 @@ import { Chart } from '@/components/ui/chart';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
 import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { DaoSources } from '@/components/dao/dao-sources';
+import { DaoHistory } from '@/components/dao/dao-history';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
@@ -201,89 +202,24 @@ function History({
   ratio?: ChartResponse;
   error?: boolean;
 }) {
-  const [range, setRange] = useState<'1M' | '1Y' | 'All'>('All');
-  if (error)
-    return (
-      <div role="alert" className="text-rouge text-xs">
-        DAO daily history could not be loaded from indexed snapshots.
-      </div>
-    );
-  if (!deposited || !ratio)
-    return <div className="text-text-dim text-xs">Loading canonical daily history…</div>;
-  const count = range === '1M' ? 30 : range === '1Y' ? 365 : deposited.data.length;
-  const rows = deposited.data.slice(-count);
-  if (rows.length === 0)
-    return <div className="text-text-dim text-xs">No complete daily history yet.</div>;
-  const latest = rows[rows.length - 1];
-  const ratioByDate = new Map(ratio.data.map((point) => [point.date, point.value]));
-  const alignedRatio = rows.map((row) => {
-    const value = ratioByDate.get(row.date);
-    if (value === undefined) throw new Error(`missing DAO circulation-ratio day ${row.date}`);
-    return { label: row.date, values: { ratio: value } };
-  });
-  const weekly = [];
-  for (let end = rows.length - 1; end >= 7; end -= 7) {
-    const net = parseCkbDecimal(rows[end].value) - parseCkbDecimal(rows[end - 7].value);
-    weekly.push({ label: rows[end].date, values: { net: exactCkbDecimal(net) } });
-  }
-  weekly.reverse();
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <div className="text-text-dim text-xs">Complete indexed days · through {latest.date}</div>
-        <div className="flex gap-1" aria-label="History range">
-          {(['1M', '1Y', 'All'] as const).map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              onClick={() => setRange(choice)}
-              className={`px-2 py-1 font-mono text-[11px] ${range === choice ? 'bg-[#f2c55c]/15 text-[#f2c55c]' : 'text-text-dim hover:text-text-bright'}`}
-            >
-              {choice}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="grid gap-4">
-        <Chart
-          title="CKB deposited"
-          subtitle="Phase-0 capacity by complete indexed day"
-          data={rows.map((row) => ({ label: row.date, values: { deposited: row.value } }))}
-          series={[{ key: 'deposited', label: 'Deposited', color: '#f2c55c' }]}
-          unit="CKB"
-          kind="area"
-          height={175}
-          formatValue={(v) => <CkbDecimal value={v} />}
-        />
-        <Chart
-          title="Share of circulating CKB"
-          subtitle="Deposited capacity ÷ protocol circulating supply"
-          data={alignedRatio}
-          series={[{ key: 'ratio', label: 'Share', color: '#a0a8be' }]}
-          unit="%"
-          kind="line"
-          height={120}
-          formatValue={ratioText}
-        />
-        <Chart
-          title="Net change per week"
-          subtitle="Exact seven-day difference between complete daily snapshots"
-          data={weekly}
-          series={[{ key: 'net', label: 'Net change', color: '#2edba3' }]}
-          unit="CKB"
-          kind="bars"
-          height={135}
-          formatValue={(v) => <CkbDecimal value={v} signed />}
-        />
-      </div>
-      <div className="text-text-dim mt-2 flex flex-wrap gap-x-6 gap-y-1 font-mono text-[11px]">
-        <span>
-          Deposited: <CkbDecimal value={latest.value} /> CKB
-        </span>
-        <span>Current depositors: {depositorCount(latest)}</span>
-        <span>Share of circulating CKB: {ratioText(alignedRatio.at(-1)!.values.ratio)}%</span>
-      </div>
-    </div>
+    <section aria-label="History" className="min-w-0">
+      {error ? (
+        <>
+          <h2 className="text-text-bright mb-3 text-[15px] font-medium">History</h2>
+          <div role="alert" className="text-rouge text-xs">
+            DAO daily history could not be loaded from indexed snapshots.
+          </div>
+        </>
+      ) : !deposited || !ratio ? (
+        <>
+          <h2 className="text-text-bright mb-3 text-[15px] font-medium">History</h2>
+          <div className="text-text-dim text-xs">Loading canonical daily history…</div>
+        </>
+      ) : (
+        <DaoHistory deposited={deposited} ratio={ratio} />
+      )}
+    </section>
   );
 }
 
@@ -298,21 +234,6 @@ function exactSafeMs(value: string, context: string): number {
 /** The circulation ratio exactly as the API states it (a decimal percentage). */
 function ratioText(value: string): string {
   return formatExactDecimal(value, 'DAO circulation ratio');
-}
-
-/** Every complete total-deposit day carries its current depositor count in `value2`. */
-function depositorCount(row: ChartResponse['data'][number]): string {
-  if (row.value2 === undefined || row.value2 === null)
-    throw new Error(`DAO total-deposit day ${row.date} has no current depositor count`);
-  return exactUnsignedInteger(row.value2, `DAO depositors on ${row.date}`).toLocaleString('en-US');
-}
-
-function exactCkbDecimal(shannons: bigint): string {
-  const negative = shannons < BigInt(0);
-  const abs = negative ? -shannons : shannons;
-  const whole = abs / BigInt(100_000_000);
-  const fraction = (abs % BigInt(100_000_000)).toString().padStart(8, '0').replace(/0+$/, '');
-  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
 }
 
 function Issuance({ statistics }: Pick<Props, 'statistics'>) {
@@ -680,9 +601,7 @@ export function DaoBoard({
           deposited={depositedHistory}
           ratio={circulationHistory}
         />
-        <Section title="History" note="complete indexed days · current depositor count">
-          <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
-        </Section>
+        <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
         <Issuance statistics={statistics} />
         <Section title="How a deposit grows" note="header AR · free capacity only">
           <p className="text-text-dim text-[13px]">

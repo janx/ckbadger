@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoBoard } from '@/components/dao/dao-board';
@@ -82,12 +83,10 @@ describe('DaoBoard', () => {
       />
     );
     fireEvent.click(screen.getByRole('button', { name: '1M' }));
-    expect(
-      screen.getByText((_, el) => el?.textContent === 'Deposited: 500.00000000 CKB')
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText((_, el) => el?.textContent === 'Share of circulating CKB: 1.25%')
-    ).toBeInTheDocument();
+    // One History reading (DAO-11) carries the exact amounts of the last complete day.
+    const reading = screen.getByLabelText('History reading');
+    expect(reading).toHaveTextContent('deposited500.00000000');
+    expect(reading).toHaveTextContent('share of circulation1.25%');
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -285,5 +284,23 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
         />
       )
     ).toThrow('/dao/charts/total-deposit has no peak');
+  });
+});
+
+describe('DaoBoard History (DAO-11)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it('draws History as one figure with one reading, not three charts', () => {
+    stubChartWidth(1200);
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const region = screen.getByRole('region', { name: 'History' });
+    expect(region.querySelectorAll('svg')).toHaveLength(1);
+    expect(within(region).getAllByLabelText('History reading')).toHaveLength(1);
   });
 });

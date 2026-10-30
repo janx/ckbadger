@@ -71,7 +71,7 @@ describe('DaoPage', () => {
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       'DAO epoch lock met: 400.00000000 CKB in 1 withdrawal-request cells'
     );
-    expect(screen.getByText(/Current depositors: 2/)).toBeInTheDocument();
+    expect(screen.getByLabelText('History reading')).toHaveTextContent('depositors2');
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
