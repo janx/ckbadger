@@ -148,7 +148,11 @@ interface Block {
     secondary: string;
     committed: string;
     proposal: string;
+    // F2 blocks (R2b-a 2, BA-13): the block's WHOLE secondary issuance; `secondary` is the miners' share.
+    secondaryIssuance: string;
   } | null;
+  // F2 blocks (R2b-a 1, BA-12): the block whose reward this block's cellbase pays; null for 0 ..= farthest + 1.
+  cellbasePays: { number: number; hash: string } | null;
   rewardPaidAtBlock: number | null;
   rewardFinalizesAt: number | null;
   confirmations: number;
@@ -215,6 +219,28 @@ interface BlockUncle {
   sameParentAs: number | null;
   /** Uncle timestamp minus its sibling's, in ms (negative if older); null exactly when `sameParentAs` is. */
   msAfterSibling: number | null;
+  // F2 blocks (R2b-a 6, BA-41): the header's packed epoch as hex, as `Block.rawHeader.epoch`.
+  rawEpoch: string;
+}
+
+// F2 blocks (R2b-a 2, BA-13): `/blocks/{id}/proposal-fees` — the fees the block's 40% proposal reward
+// is paid from (transactions it proposed first, committed inside its window).
+interface BlockProposalFees {
+  number: number;
+  hash: string;
+  commitWindow: { from: number; to: number };
+  /** True once block `number + farthest` is indexed; before that, the rows committed so far. */
+  complete: boolean;
+  fees: string;
+  transactionsCount: number;
+  committedIn: number[];
+  transactions: {
+    proposalId: string;
+    txHash: string;
+    committedIn: number;
+    fee: string;
+    uncle: { number: number; hash: string } | null;
+  }[];
 }
 
 interface HardforkActivation {
@@ -3454,6 +3480,7 @@ export type {
   PoolTransactionsResponse,
   Block,
   BlockUncle,
+  BlockProposalFees,
   NetworkStats,
   SyncStatus,
   Address,
@@ -3975,6 +4002,11 @@ export const api = {
     return fetchApi(`/blocks/${id}/uncles/${index}`);
   },
 
+  // F2 blocks (R2b-a 2, BA-13)
+  getBlockProposalFees: (id: string | number): Promise<BlockProposalFees> => {
+    return fetchApi(`/blocks/${id}/proposal-fees`);
+  },
+
   getTransactions: (
     params: CursorQueryParams & {
       blockNumber?: number;
@@ -4032,12 +4064,17 @@ export const api = {
 
   getAddressCells: (
     addr: string,
-    params: CursorQueryParams & { class?: AddressCellClass } = {}
+    params: CursorQueryParams & {
+      class?: AddressCellClass;
+      /** F2 blocks (R2b-a 9, BA-34): `capacity` pages DAO cells largest first (needs `class: 'dao'`). */
+      order?: 'capacity';
+    } = {}
   ): Promise<CursorPaginatedResponse<AddressCell>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.class) query.set('class', params.class);
+    if (params.order) query.set('order', params.order);
     return fetchApi(`/addresses/${encodeURIComponent(addr)}/cells?${query}`);
   },
 
@@ -4102,12 +4139,18 @@ export const api = {
   },
 
   getGlobalActivities: (
-    params: CursorQueryParams & { filter?: GlobalActivityFilter; blockNumber?: number } = {}
+    params: CursorQueryParams & {
+      filter?: GlobalActivityFilter;
+      blockNumber?: number;
+      /** F2 blocks (R2b-a 3, BA-14): `asc` lists one block's activities in tx order (needs `blockNumber`). */
+      order?: 'asc' | 'desc';
+    } = {}
   ): Promise<CursorPaginatedResponse<GlobalActivity>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.blockNumber !== undefined) query.set('blockNumber', String(params.blockNumber));
+    if (params.order) query.set('order', params.order);
     if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
     return fetchApi(`/activities?${query}`);
   },

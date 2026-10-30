@@ -15,6 +15,7 @@ vi.mock('@/lib/api', () => ({
     getBlock: vi.fn(),
     getBlocks: vi.fn(),
     getBlockUncle: vi.fn(),
+    getBlockProposalFees: vi.fn(),
     getTransactions: vi.fn(),
     getBlockFeeStats: vi.fn(),
     getBlockProposals: vi.fn(),
@@ -83,6 +84,16 @@ describe('BlockDetailPage', () => {
       nextCursor: null,
     });
     vi.mocked(api.getBlockUncle).mockRejectedValue(new Error('no uncle detail in this fixture'));
+    vi.mocked(api.getBlockProposalFees).mockResolvedValue({
+      number: mockBlock.number,
+      hash: mockBlock.hash,
+      commitWindow: { from: mockBlock.number + 2, to: mockBlock.number + 10 },
+      complete: true,
+      fees: '0',
+      transactionsCount: 0,
+      committedIn: [],
+      transactions: [],
+    });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],
       limit: 100,
@@ -457,6 +468,7 @@ describe('BlockDetailPage', () => {
       blockNumber: 8775638,
       limit: 100,
       cursor: undefined,
+      order: 'asc', // R2b-a 3: the block in tx order (BA-14)
     });
     expect(screen.getByText(/0.20% of 597,000/)).toBeInTheDocument();
     expect(screen.getByText('ckb 0.210.0')).toBeInTheDocument();

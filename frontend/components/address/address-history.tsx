@@ -142,7 +142,7 @@ const columns: ListColumn<AddressTransaction>[] = [
     minWidth: 180,
     numeric: true,
     className: 'whitespace-normal',
-    render: (tx) => <ExactCkb shannons={BigInt(tx.capacityChange)} wrap />,
+    render: (tx) => <ExactCkb shannons={BigInt(tx.capacityChange)} wrap unit={false} />,
   },
   {
     key: 'fee',
@@ -150,7 +150,9 @@ const columns: ListColumn<AddressTransaction>[] = [
     minWidth: 136,
     numeric: true,
     className: 'whitespace-normal',
-    render: (tx) => <ExactCkb shannons={BigInt(tx.fee)} signed={false} tone="plain" wrap />,
+    render: (tx) => (
+      <ExactCkb shannons={BigInt(tx.fee)} signed={false} tone="plain" wrap unit={false} />
+    ),
   },
   {
     key: 'size',

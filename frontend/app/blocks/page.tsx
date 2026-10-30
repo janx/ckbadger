@@ -43,33 +43,20 @@ export default function BlocksPage() {
     {
       key: 'block',
       label: 'Block',
-      minWidth: 175,
-      render: (block) => (
-        <div className="space-y-1">
-          <Link href={`/blocks/${block.number}`} className="text-text-bright hover:text-jade">
-            {formatBlockNumber(block.number)}
-          </Link>
-          <span className="text-text-dim block text-[11px]">
-            <Hash hash={block.hash} copyable={false} className="text-xs" />
-          </span>
-          {block.hardforkActivation && (
-            <Link href="/hardforks" className="text-text-dim block text-[11px]">
-              HF · {block.hardforkActivation.shortName.toUpperCase()}
-            </Link>
-          )}
-        </div>
-      ),
+      minWidth: 200,
+      render: (block) => <BlockIdentity block={block} />,
     },
     {
       key: 'age',
       label: 'Age',
-      minWidth: 78,
+      minWidth: 70,
+      className: 'whitespace-nowrap',
       render: (block) => <span className="text-text-dim">{formatTimeAgo(block.timestamp)}</span>,
     },
     {
       key: 'contents',
       label: 'Contents',
-      minWidth: 160,
+      minWidth: 170,
       render: (block) => (
         <BlockContents
           transactionSizes={block.transactionSizes}
@@ -81,7 +68,7 @@ export default function BlocksPage() {
     {
       key: 'miner',
       label: 'Miner',
-      minWidth: 168,
+      minWidth: 160,
       className: 'whitespace-nowrap',
       render: (block) =>
         block.minerAddress ? (
@@ -93,7 +80,7 @@ export default function BlocksPage() {
     {
       key: 'reward',
       label: 'Reward, CKB',
-      minWidth: 150,
+      minWidth: 140,
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
@@ -121,7 +108,7 @@ export default function BlocksPage() {
     {
       key: 'fees',
       label: 'Fees, CKB',
-      minWidth: 130,
+      minWidth: 112,
       numeric: true,
       render: (block) => (
         <ExactCkb
@@ -136,7 +123,7 @@ export default function BlocksPage() {
       key: 'size',
       label: 'Size, bytes',
       header: <ScaleHeader label="Size, bytes" scale={sizeScale} />,
-      minWidth: 190,
+      minWidth: 182,
       className: 'whitespace-nowrap',
       render: (block) => (
         <ResourceBar
@@ -151,7 +138,7 @@ export default function BlocksPage() {
       key: 'cycles',
       label: 'Cycles',
       header: <ScaleHeader label="Cycles" scale={cyclesScale} />,
-      minWidth: 215,
+      minWidth: 196,
       className: 'whitespace-nowrap',
       render: (block) =>
         block.cycles === null ? (
@@ -186,10 +173,13 @@ export default function BlocksPage() {
                 rows={data.data}
                 rowKey={(block) => block.hash}
                 empty="No blocks indexed."
+                mobileRow={(block) => <BlockCard block={block} columns={columns} />}
               />
               <BlocksLimitsFootnote blocks={data.data} />
               <CursorPagination
-                summary={blocksRange(data.data, data.total, page)}
+                summary={
+                  <span className="text-xs">{blocksRange(data.data, data.total, page)}</span>
+                }
                 hasMore={data.hasMore}
                 hasPrevious={hasPrevious}
                 onNext={() => goToNext(data.nextCursor)}
@@ -246,6 +236,63 @@ function BlocksLegend() {
         </span>
         block overhead · user transactions
       </span>
+    </div>
+  );
+}
+
+/** "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. */
+function BlockIdentity({ block }: { block: Block }) {
+  return (
+    <div className="space-y-1">
+      <div className="whitespace-nowrap">
+        <Link href={`/blocks/${block.number}`} className="text-text-bright hover:text-jade">
+          {formatBlockNumber(block.number)}
+        </Link>{' '}
+        <Hash
+          hash={block.hash}
+          startChars={6}
+          endChars={4}
+          copyable={false}
+          className="text-text-dim text-[11.5px]"
+        />
+      </div>
+      {block.hardforkActivation && (
+        <Link href="/hardforks" className="text-text-dim block text-[11px]">
+          HF · {block.hardforkActivation.shortName.toUpperCase()}
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/** At 390 px one compact card per block, the same cells in the board's reading order. */
+function BlockCard({ block, columns }: { block: Block; columns: ListColumn<Block>[] }) {
+  const cell = (key: string) => columns.find((c) => c.key === key)!.render(block);
+  return (
+    <div data-testid="block-row-mobile" className="space-y-2 text-xs">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <BlockIdentity block={block} />
+        {cell('age')}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        {cell('contents')}
+        {cell('miner')}
+      </div>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+        {(
+          [
+            ['reward', 'Reward, CKB'],
+            ['fees', 'Fees, CKB'],
+            ['size', 'Size, bytes'],
+            ['cycles', 'Cycles'],
+          ] as const
+        ).map(([key, label]) => (
+          <div key={key} className="contents">
+            <dt className="text-text-dim">{label}</dt>
+            <dd className="flex justify-end">{cell(key)}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

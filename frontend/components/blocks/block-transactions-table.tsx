@@ -10,6 +10,9 @@ import type { Transaction } from '@/lib/api';
 
 const TRACK = 96;
 
+/** The column budget fits the block page's main column (≈ 968 px at 1440) without scrolling. */
+export const BLOCK_TXS_MIN_WIDTH = 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172;
+
 /**
  * The BlockTxs board: one raw row per transaction of a block, cellbase first and set back
  * ("cellbase", 0 → 1, a grey size bar), size and cycles on the block's own round scales.
@@ -41,23 +44,23 @@ export function BlockTransactionsTable({
     {
       key: 'index',
       label: '#',
-      minWidth: 40,
+      minWidth: 32,
       render: (tx) => <span className="text-text-dim">{tx.index}</span>,
     },
     {
       key: 'transaction',
       label: 'Transaction',
-      minWidth: 176,
+      minWidth: 140,
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash hash={tx.hash} startChars={10} endChars={6} copyable={false} className="text-xs" />
+          <Hash hash={tx.hash} startChars={8} endChars={6} copyable={false} className="text-xs" />
         </Link>
       ),
     },
     {
       key: 'proposal',
       label: 'Proposed in',
-      minWidth: 140,
+      minWidth: 120,
       render: (tx) =>
         blockNumber === 0 ? (
           <span className="text-text-dim">genesis</span>
@@ -79,7 +82,7 @@ export function BlockTransactionsTable({
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 92,
+      minWidth: 70,
       render: (tx) => (
         <span className="whitespace-nowrap">
           <span className={tx.isCellbase ? 'text-text-dim' : undefined}>
@@ -95,7 +98,7 @@ export function BlockTransactionsTable({
     {
       key: 'capacity',
       label: 'Output capacity',
-      minWidth: 164,
+      minWidth: 140,
       numeric: true,
       render: (tx) => (
         <ExactCkb
@@ -109,7 +112,7 @@ export function BlockTransactionsTable({
     {
       key: 'fee',
       label: 'Fee',
-      minWidth: 120,
+      minWidth: 104,
       numeric: true,
       render: (tx) => (
         <ExactCkb
@@ -124,7 +127,7 @@ export function BlockTransactionsTable({
       key: 'size',
       label: 'Size, bytes',
       header: <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={TRACK} />,
-      minWidth: 170,
+      minWidth: 160,
       className: 'whitespace-nowrap',
       render: (tx) => (
         <AlignedBar
@@ -146,7 +149,7 @@ export function BlockTransactionsTable({
       key: 'cycles',
       label: 'Cycles',
       header: <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={TRACK} />,
-      minWidth: 190,
+      minWidth: 172,
       className: 'whitespace-nowrap',
       render: (tx) =>
         tx.cycles === null ? (

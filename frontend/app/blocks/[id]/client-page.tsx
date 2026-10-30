@@ -74,6 +74,8 @@ export default function BlockDetailPage() {
         blockNumber: block!.number,
         limit: 100,
         cursor: activityPagination.cursor,
+        // R2b-a 3 (BA-14): the block in tx order, cellbase first, paged forward by the API.
+        order: 'asc',
       }),
     enabled: !!block,
   });
@@ -87,6 +89,11 @@ export default function BlockDetailPage() {
     queryKey: ['block-neighbours', block?.number],
     queryFn: () => api.getBlocks({ cursor: String(block!.number + 3), limit: 50 }),
     enabled: !!block,
+  });
+  const proposalFees = useQuery({
+    queryKey: ['block-proposal-fees', block?.number],
+    queryFn: () => api.getBlockProposalFees(block!.number),
+    enabled: !!block && block.rewardBreakdown !== null,
   });
   const uncleDetails = useQueries({
     queries: (block?.uncles ?? []).map((uncle, index) => ({
@@ -195,11 +202,7 @@ export default function BlockDetailPage() {
   // Block and proposals are two reads (a reorg may fall between them, #6): the summary counts
   // the proposals read itself.
   const ownProposals = proposals?.filter((p) => p.uncle === null);
-  const activityRows = activities.data
-    ? !activities.data.hasMore && !activityPagination.hasPrevious
-      ? [...activities.data.data].sort((a, b) => a.txIndex - b.txIndex)
-      : activities.data.data
-    : undefined;
+  const activityRows = activities.data?.data;
   const parentElapsedMs =
     block.parentTimestamp === null
       ? null
@@ -237,7 +240,7 @@ export default function BlockDetailPage() {
           }
           identity={
             <span className="flex min-w-0 items-baseline gap-2.5">
-              <span>Block</span>
+              <span className="shrink-0">Block</span>
               <Hash hash={block.hash} truncate={false} />
             </span>
           }
@@ -352,7 +355,11 @@ export default function BlockDetailPage() {
                 />
               </DetailSection>
               <DetailSection title="Reward breakdown" actions={<RewardPaidBy block={block} />}>
-                <RewardBreakdown block={block} />
+                <RewardBreakdown
+                  block={block}
+                  proposalFees={proposalFees.data}
+                  proposalFeesError={proposalFees.error}
+                />
               </DetailSection>
               <div className="grid gap-8 md:grid-cols-2">
                 <DetailSection
@@ -404,9 +411,9 @@ export default function BlockDetailPage() {
                       <article
                         key={`${proposal.uncle?.hash}:${proposal.proposalIndex}`}
                         data-testid="block-proposal-row"
-                        className="border-base-border-subtle space-y-2 border-b py-3 text-xs"
+                        className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5 text-xs"
                       >
-                        <p className="flex flex-wrap gap-2">
+                        <p className="flex flex-wrap items-baseline gap-2">
                           <span className="text-gold">●</span>
                           {proposal.proposalId}
                           {proposal.uncle &&
@@ -427,9 +434,14 @@ export default function BlockDetailPage() {
                             ))}
                         </p>
                         {proposal.committedTxHash ? (
-                          <p>
+                          <p className="text-text-dim">
+                            →{' '}
                             <Link href={`/tx/${proposal.committedTxHash}`}>
-                              <Hash hash={proposal.committedTxHash} copyable={false} />
+                              <Hash
+                                hash={proposal.committedTxHash}
+                                copyable={false}
+                                className="text-xs"
+                              />
                             </Link>{' '}
                             in{' '}
                             <Link href={`/blocks/${proposal.committedBlockNumber}`}>
@@ -503,6 +515,11 @@ export default function BlockDetailPage() {
                   </dd>
                 </div>
               ))}
+              <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
+                <dt className="text-text-dim">Block bytes</dt>
+                {/* R2b-a 5: `size` is the molecule-serialized block. */}
+                <dd>{block.size.toLocaleString('en-US')} bytes, molecule-serialized</dd>
+              </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">Cellbase message bytes</dt>
                 <dd className="break-all">
@@ -590,6 +607,9 @@ export default function BlockDetailPage() {
                         <ActivityRow
                           key={activity.txHash}
                           activity={activity}
+                          headline={
+                            activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
+                          }
                           evidence={
                             <>
                               #{activity.txIndex} ·{' '}
@@ -606,14 +626,16 @@ export default function BlockDetailPage() {
                       {activityRows.length === 0 && (
                         <p className="text-text-dim text-xs">No activities in this block.</p>
                       )}
-                      <CursorPagination
-                        pageSize={100}
-                        page={activityPagination.page}
-                        hasMore={activities.data.hasMore}
-                        hasPrevious={activityPagination.hasPrevious}
-                        onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
-                        onPrevious={activityPagination.goToPrevious}
-                      />
+                      {(activities.data.hasMore || activityPagination.hasPrevious) && (
+                        <CursorPagination
+                          pageSize={100}
+                          page={activityPagination.page}
+                          hasMore={activities.data.hasMore}
+                          hasPrevious={activityPagination.hasPrevious}
+                          onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
+                          onPrevious={activityPagination.goToPrevious}
+                        />
+                      )}
                     </>
                   )}
                 </>
@@ -629,15 +651,17 @@ export default function BlockDetailPage() {
                         transactions={transactions.data.data}
                         blockNumber={block.number}
                       />
-                      <CursorPagination
-                        total={block.transactionsCount}
-                        pageSize={100}
-                        page={pagination.page}
-                        hasMore={transactions.data.hasMore}
-                        hasPrevious={pagination.hasPrevious}
-                        onNext={() => pagination.goToNext(transactions.data.nextCursor)}
-                        onPrevious={pagination.goToPrevious}
-                      />
+                      {(transactions.data.hasMore || pagination.hasPrevious) && (
+                        <CursorPagination
+                          total={block.transactionsCount}
+                          pageSize={100}
+                          page={pagination.page}
+                          hasMore={transactions.data.hasMore}
+                          hasPrevious={pagination.hasPrevious}
+                          onNext={() => pagination.goToNext(transactions.data.nextCursor)}
+                          onPrevious={pagination.goToPrevious}
+                        />
+                      )}
                     </>
                   )}
                 </>
@@ -812,16 +836,16 @@ function UncleRow({
       `Uncle ${index} of block ${formatBlockNumber(blockNumber)}: sibling facts disagree`
     );
   return (
-    <article className="border-base-border-subtle grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-b py-2.5 text-xs">
-      <span>
+    <article className="border-base-border-subtle flex flex-col gap-0.5 border-b py-2.5 text-xs">
+      <span className="flex flex-wrap items-baseline gap-x-2">
         <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
           {formatBlockNumber(uncle.number)}
-        </Link>{' '}
+        </Link>
         <span className="text-text-dim">uncle</span>
+        <Link href={getUncleDetailHref(blockNumber, index)}>
+          <Hash hash={uncle.hash} copyable={false} className="text-xs" />
+        </Link>
       </span>
-      <Link href={getUncleDetailHref(blockNumber, index)}>
-        <Hash hash={uncle.hash} copyable={false} />
-      </Link>
       <span className="text-text-dim">
         {error ? (
           `sibling facts unavailable: ${error.message}`
@@ -833,7 +857,13 @@ function UncleRow({
           <>
             sibling of {formatBlockNumber(detail.sameParentAs)}{' '}
             <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-              <Hash hash={detail.canonicalAtHeight.hash} copyable={false} />
+              <Hash
+                hash={detail.canonicalAtHeight.hash}
+                startChars={6}
+                endChars={4}
+                copyable={false}
+                className="text-xs"
+              />
             </Link>
             , same parent{' '}
             <Link href={`/blocks/${uncle.parentHash}`}>{formatBlockNumber(uncle.number - 1)}</Link>
@@ -847,5 +877,23 @@ function UncleRow({
         · {formatCount(uncle.proposalIds.length, 'proposal')}
       </span>
     </article>
+  );
+}
+
+/** "Cellbase  pays the reward of #N" (R2b-a 1, BA-12): the block whose reward this cellbase pays. */
+function CellbaseHeadline({ block }: { block: Pick<Block, 'cellbasePays'> }) {
+  return (
+    <>
+      Cellbase
+      {block.cellbasePays && (
+        <span className="text-text-dim font-normal">
+          {' '}
+          pays the reward of{' '}
+          <Link href={`/blocks/${block.cellbasePays.hash}`}>
+            {formatBlockNumber(block.cellbasePays.number)}
+          </Link>
+        </span>
+      )}
+    </>
   );
 }

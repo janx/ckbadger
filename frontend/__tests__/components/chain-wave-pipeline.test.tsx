@@ -36,6 +36,7 @@ function mockBlock(number: number): Block {
     cyclesStatus: 'pending',
     transactionSizes: [400, 600],
     rewardBreakdown: null,
+    cellbasePays: null, // F2 blocks (R2b-a 1)
     rewardPaidAtBlock: null,
     rewardFinalizesAt: 112,
     confirmations: 1,

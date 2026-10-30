@@ -12,6 +12,8 @@ interface BlockContentsProps {
   transactionSizes: readonly number[];
   proposalsCount: number;
   unclesCount: number;
+  /** False in a chain-strip tile: the glyph alone, counts stay in its accessible name. */
+  showCount?: boolean;
 }
 
 /** The same square/diamond/dot grammar as the transaction pipeline. */
@@ -19,6 +21,7 @@ export function BlockContents({
   transactionSizes,
   proposalsCount,
   unclesCount,
+  showCount = true,
 }: BlockContentsProps) {
   if (
     !transactionSizes.length ||
@@ -37,47 +40,61 @@ export function BlockContents({
   const dots = Math.min(proposalsCount, Math.max(dotRoom, 0));
   const label = `Cellbase, ${userSizes.length} user transactions, ${proposalsCount} proposals, ${unclesCount} uncles`;
   return (
-    <span className="inline-flex flex-wrap items-center gap-2" title={label}>
-      <svg
-        role="img"
-        aria-label={label}
-        viewBox={`0 0 ${GLYPH_WIDTH} 18`}
-        width={GLYPH_WIDTH}
-        height="18"
-        className="shrink-0"
-      >
-        <path d="M5 4.5 9.5 9 5 13.5.5 9z" fill={DATA_COLOR} />
-        {shown.map((size, index) => {
-          const side = Math.sqrt(size / largest) * 10;
-          return (
-            <rect
-              key={index}
-              data-transaction-size={size}
-              x={14 + index * 13}
-              y={(18 - side) / 2}
-              width={side}
-              height={side}
-              fill={DATA_COLOR}
-              opacity="0.8"
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5" title={label}>
+      <span data-contents-line className="inline-flex items-center gap-2 whitespace-nowrap">
+        <svg
+          role="img"
+          aria-label={label}
+          viewBox={`0 0 ${GLYPH_WIDTH} 18`}
+          width={GLYPH_WIDTH}
+          height="18"
+          className="shrink-0"
+        >
+          <path d="M5 4.5 9.5 9 5 13.5.5 9z" fill={DATA_COLOR} />
+          {shown.map((size, index) => {
+            const side = Math.sqrt(size / largest) * 10;
+            return (
+              <rect
+                key={index}
+                data-transaction-size={size}
+                x={14 + index * 13}
+                y={(18 - side) / 2}
+                width={side}
+                height={side}
+                fill={DATA_COLOR}
+                opacity="0.8"
+              />
+            );
+          })}
+          {Array.from({ length: dots }, (_, i) => (
+            <circle
+              key={`p${i}`}
+              data-proposal-dot
+              cx={dotsFrom + DOT_R + i * DOT_STEP}
+              cy="9"
+              r={DOT_R}
+              fill={PROPOSAL_COLOR}
             />
-          );
-        })}
-        {Array.from({ length: dots }, (_, i) => (
-          <circle
-            key={`p${i}`}
-            data-proposal-dot
-            cx={dotsFrom + DOT_R + i * DOT_STEP}
-            cy="9"
-            r={DOT_R}
-            fill={PROPOSAL_COLOR}
-          />
-        ))}
-      </svg>
-      <span className="text-text-dim text-[11px]">
-        {transactionSizes.length.toLocaleString('en-US')} tx
-        {userSizes.length > shown.length ? ` · +${userSizes.length - shown.length} tiles` : ''}
-        {proposalsCount > dots ? ` · ${proposalsCount.toLocaleString('en-US')} proposed` : ''}
+          ))}
+        </svg>
+        {showCount && (
+          <span className="text-text-dim text-[11px]">
+            {transactionSizes.length.toLocaleString('en-US')} tx
+          </span>
+        )}
       </span>
+      {showCount && (userSizes.length > shown.length || proposalsCount > dots) && (
+        <span className="text-text-dim text-[11px]">
+          {[
+            ...(userSizes.length > shown.length
+              ? [`+${userSizes.length - shown.length} tiles`]
+              : []),
+            ...(proposalsCount > dots
+              ? [`${proposalsCount.toLocaleString('en-US')} proposed`]
+              : []),
+          ].join(' · ')}
+        </span>
+      )}
     </span>
   );
 }
@@ -223,12 +240,19 @@ export function BlocksLimitsFootnote({ blocks }: { blocks: readonly LimitRow[] }
   return (
     <p className="text-text-dim text-xs">
       Size and cycles · Fullest of these {blocks.length.toLocaleString('en-US')}:{' '}
-      {fullest.size.toLocaleString('en-US')} bytes,{' '}
+      <span className="text-text-bright">{fullest.size.toLocaleString('en-US')}</span> bytes,{' '}
       {formatPercent(BigInt(fullest.size), bytesLimit)}% of the{' '}
       {maxBlockBytes.toLocaleString('en-US')}-byte limit ·{' '}
-      {most
-        ? `most work: ${BigInt(most.cycles!).toLocaleString('en-US')} cycles, ${formatPercent(BigInt(most.cycles!), cyclesLimit)}% of the ${cyclesLimit.toLocaleString('en-US')}-cycle limit`
-        : `cycles not run yet for these blocks; the limit is ${cyclesLimit.toLocaleString('en-US')}`}
+      {most ? (
+        <>
+          most work:{' '}
+          <span className="text-text-bright">{BigInt(most.cycles!).toLocaleString('en-US')}</span>{' '}
+          cycles, {formatPercent(BigInt(most.cycles!), cyclesLimit)}% of the{' '}
+          {cyclesLimit.toLocaleString('en-US')}-cycle limit
+        </>
+      ) : (
+        `cycles not run yet for these blocks; the limit is ${cyclesLimit.toLocaleString('en-US')}`
+      )}
     </p>
   );
 }

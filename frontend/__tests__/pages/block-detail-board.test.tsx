@@ -13,6 +13,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getBlock: vi.fn(),
     getBlocks: vi.fn(),
     getBlockUncle: vi.fn(),
+    getBlockProposalFees: vi.fn(),
     getTransactions: vi.fn(),
     getBlockProposals: vi.fn(),
     getHardforks: vi.fn(),
@@ -69,7 +70,9 @@ const block = {
     secondary: '3286129910',
     committed: '3036000',
     proposal: '12658',
+    secondaryIssuance: '41691483025',
   },
+  cellbasePays: { number: N - 11, hash: h('ec') },
   rewardPaidAtBlock: N + 11,
   rewardFinalizesAt: N + 11,
   totalFees: '5060000',
@@ -147,6 +150,16 @@ const tx = (index: number): Transaction =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getBlock).mockResolvedValue(block);
+  vi.mocked(api.getBlockProposalFees).mockResolvedValue({
+    number: N,
+    hash: block.hash,
+    commitWindow: { from: N + 2, to: N + 10 },
+    complete: true,
+    fees: '31647',
+    transactionsCount: 2,
+    committedIn: [N + 2],
+    transactions: [],
+  });
   vi.mocked(api.getBlocks).mockResolvedValue(neighbours);
   vi.mocked(api.getBlockUncle).mockResolvedValue({
     number: N - 1,
@@ -170,9 +183,11 @@ beforeEach(() => {
     canonicalAtHeight: { number: N - 1, hash: h('95') },
     sameParentAs: N - 1,
     msAfterSibling: 92,
+    rawEpoch: '0x5c003e9003b45',
   });
+  // R2b-a 3: `order=asc` answers the block in tx order, cellbase first.
   vi.mocked(api.getGlobalActivities).mockResolvedValue({
-    data: [3, 2, 1, 0].map(activity),
+    data: [0, 1, 2, 3].map(activity),
     limit: 100,
     hasMore: false,
     nextCursor: null,
@@ -326,6 +341,8 @@ describe('Block board · second tier', () => {
     expect(diagram.querySelector(`[data-uncle-fork-from="${N - 2}"]`)).not.toBeNull();
     expect(within(diagram).queryByLabelText('Parent of uncle #20,827,931')).not.toBeInTheDocument();
     expect(diagram.querySelectorAll('[data-tile-time]').length).toBe(5);
+    // Visual pass: a 148 px tile has room for the glyph only (the board's tiles carry no count).
+    expect(diagram.querySelector('[data-contents-line]')).not.toHaveTextContent('tx');
   });
 });
 
@@ -347,5 +364,107 @@ describe('BlockTxs board', () => {
     expect((cellbase.querySelector('[data-segment]') as HTMLElement).style.backgroundColor).toBe(
       'rgb(58, 66, 88)'
     );
+  });
+});
+
+// F2 blocks visual pass + R2b-a wiring (BA-12, BA-13, BA-14, BA-19).
+describe('Block board · R2b-a fields', () => {
+  it('says which block the cellbase pays (BA-12)', async () => {
+    render(<BlockDetailPage />);
+    const row = (await screen.findByText('Cellbase')).closest('[data-feed-row]') as HTMLElement;
+    expect(row.querySelector('[data-role="headline"]')).toHaveTextContent(
+      'Cellbase pays the reward of #20,827,921'
+    );
+    expect(within(row).getByRole('link', { name: '#20,827,921' }).getAttribute('href')).toMatch(
+      new RegExp(`/blocks/${h('ec')}$`)
+    );
+  });
+
+  it('names the whole secondary issuance and the proposal-fee basis (BA-13)', async () => {
+    render(<BlockDetailPage />);
+    const section = (await screen.findByRole('heading', { name: 'Reward breakdown' })).closest(
+      'section'
+    )!;
+    expect(section).toHaveTextContent(
+      "the miners' share of this block's 416.91483025 secondary issuance; the rest goes to DAO depositors or is burnt"
+    );
+    await waitFor(() =>
+      expect(section).toHaveTextContent(
+        'of 0.00031647 in fees of the 2 transactions it proposed, committed in #20,827,934'
+      )
+    );
+    expect(api.getBlockProposalFees).toHaveBeenCalledWith(N);
+  });
+
+  it('says the proposal-fee basis is partial while the commit window is still open', async () => {
+    vi.mocked(api.getBlockProposalFees).mockResolvedValue({
+      number: N,
+      hash: block.hash,
+      commitWindow: { from: N + 2, to: N + 10 },
+      complete: false,
+      fees: '30000',
+      transactionsCount: 1,
+      committedIn: [N + 2],
+      transactions: [],
+    });
+    render(<BlockDetailPage />);
+    const section = (await screen.findByRole('heading', { name: 'Reward breakdown' })).closest(
+      'section'
+    )!;
+    await waitFor(() =>
+      expect(section).toHaveTextContent(
+        'of 0.0003 in fees of the 1 transaction it proposed, committed in #20,827,934 so far; its window runs to #20,827,942'
+      )
+    );
+  });
+
+  it('asks the API for the block in tx order and keeps that order (BA-14)', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [0, 1, 2, 3].map(activity),
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<BlockDetailPage />);
+    await screen.findByText('Cellbase');
+    expect(api.getGlobalActivities).toHaveBeenCalledWith({
+      blockNumber: N,
+      limit: 100,
+      cursor: undefined,
+      order: 'asc',
+    });
+    expect(
+      Array.from(document.querySelectorAll('[data-feed-row]')).map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual([0, 1, 2, 3].map((i) => activity(i).txHash));
+  });
+
+  it('shows no pager for a block that fits one page, in either view', async () => {
+    render(<BlockDetailPage />);
+    await screen.findByText('Cellbase');
+    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    await screen.findByRole('table', { name: 'Transactions in this block' });
+    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+  });
+
+  it('stacks an uncle row so it reads at 390 px, with short hashes', async () => {
+    render(<BlockDetailPage />);
+    const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
+    const row = uncles.querySelector('article')!;
+    expect(row).toHaveClass('flex-col');
+    await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x9595\.\.\.9595,/));
+  });
+
+  it('lists the block bytes in the raw data (BA-19)', async () => {
+    render(<BlockDetailPage />);
+    const raw = (await screen.findByText('Raw data')).closest('details')!;
+    expect(raw).toHaveTextContent('Block bytes3,205 bytes, molecule-serialized');
+  });
+
+  it('keeps the "Block" label whole beside the hash', async () => {
+    render(<BlockDetailPage />);
+    expect(await screen.findByText('Block', { selector: 'span' })).toHaveClass('shrink-0');
   });
 });
