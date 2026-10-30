@@ -47,11 +47,19 @@ export interface ItemFeedSubject {
 const sentence = (labels: string[]) =>
   labels.map((label, i) => (i === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1)));
 
-function dotbitHeadline(actions: string[], prefix: string): Pick<ItemFeedHeadline, 'text' | 'raw'> {
+function dotbitHeadline(
+  actions: string[],
+  prefix: string,
+  sameOwner = false
+): Pick<ItemFeedHeadline, 'text' | 'raw'> {
   const known: string[] = [];
   const raw: string[] = [];
   for (const action of actions) {
-    const label = DOTBIT_ACTION_HEADLINES[action];
+    // F2 identities (round 2): the API's versionDiff says the owner did not change (R2b-b-19).
+    const label =
+      action === 'transfer_account' && sameOwner
+        ? 'Transferred to the same owner'
+        : DOTBIT_ACTION_HEADLINES[action];
     if (label) known.push(label);
     else raw.push(`dotbit:${action}`);
   }
@@ -100,7 +108,10 @@ export function itemFeedHeadline(
           throw new Error(`${txHash}: .bit row carries a non-.bit action ${JSON.stringify(entry)}`);
         return entry.slice('dotbit:'.length);
       });
-      return { ...dotbitHeadline(actions, ''), neighbour };
+      return {
+        ...dotbitHeadline(actions, '', context.versionDiff?.ownerChanged === false),
+        neighbour,
+      };
     }
   }
   if (item.protocolName && context.protocolActions.length)
@@ -108,7 +119,10 @@ export function itemFeedHeadline(
       text: `${item.protocolName} · ${context.protocolActions.map((action) => dotcellActionLabel(action)).join(', ')}`,
       neighbour,
     };
-  const worded = item.actionWords?.[context.action];
+  const worded =
+    (context.versionDiff?.ownerChanged === false
+      ? item.actionWords?.[`${context.action}.sameOwner`]
+      : undefined) ?? item.actionWords?.[context.action];
   if (worded) return { text: worded, neighbour };
   return {
     text: `${item.kind === 'identity' ? 'Identity' : 'Object'} ${context.action.toLowerCase()}`,
@@ -127,6 +141,8 @@ export const IDENTITY_ACTION_WORDS = {
   bit_cell: {
     mint: 'Minted as a .bit Cell',
     update: 'Updated',
+    // The cell's lock is unchanged (R2b-b-19 versionDiff.ownerChanged === false): its owner did it.
+    'update.sameOwner': 'Updated by its owner',
     transfer: 'Transferred',
     burn: 'Burned',
   },

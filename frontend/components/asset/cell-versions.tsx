@@ -25,6 +25,11 @@ export interface CellVersionsProps {
   life?: boolean;
   /** The first cell's label in `life` mode ("At minting"; "Issued" for an m-NFT token). */
   firstLabel?: string;
+  /**
+   * F2 identities (round 2): what the cell's lock address is to this item. A `.cell` name is held
+   * under a lock every name shares; its owner is in the data, so the line says "Lock" there.
+   */
+  lockAddressLabel?: string;
 }
 export function CellVersions({
   history,
@@ -34,6 +39,7 @@ export function CellVersions({
   intro,
   life = false,
   firstLabel = 'At minting',
+  lockAddressLabel = 'Owner',
 }: CellVersionsProps) {
   const [active, setActive] = useState<string | null>(null);
   if (history.total !== history.data.length)
@@ -146,7 +152,7 @@ export function CellVersions({
                 )}
                 <div className="text-text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
                   <span>
-                    Owner{' '}
+                    {lockAddressLabel}{' '}
                     <AppLink href={`/address/${v.ownerAddress}`}>
                       <Hash
                         hash={v.ownerAddress}

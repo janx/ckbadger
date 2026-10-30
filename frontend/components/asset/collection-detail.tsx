@@ -570,7 +570,10 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 {pds.data.groups.map((g) => (
                   <div key={g.endpoint} className="flex flex-wrap justify-between gap-3">
                     <dt className="min-w-0 break-all">{g.endpoint}</dt>
-                    <dd>{g.count} identities</dd>
+                    {/* F2 identities (round 2): one identity, many identities. */}
+                    <dd>
+                      {g.count.toLocaleString('en-US')} {g.count === 1 ? 'identity' : 'identities'}
+                    </dd>
                   </div>
                 ))}
               </dl>

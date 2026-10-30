@@ -55,6 +55,29 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     expect(section).toHaveTextContent('records1 entry');
   });
 
+  it('lists the witness timing and sub-account fields, "never" for a zero time (ID-B1)', () => {
+    const p = structuredClone(dotbitV4ProtocolProducer) as Extract<
+      ItemProtocol,
+      { kind: 'dotbit' }
+    >;
+    Object.assign(p.versions[0].decoded, {
+      updatedAt: null,
+      lastTransferAccountAt: '1721010954',
+      lastEditManagerAt: '0',
+      lastEditRecordsAt: '1717492502',
+      enableSubAccount: 1,
+      renewSubAccountPrice: '100000000',
+    });
+    render(<DotbitAccountData protocol={p} />);
+    const section = screen.getByRole('region', { name: 'Account data, from the witness' });
+    expect(section).toHaveTextContent('last_transfer_account_at2024-07-15');
+    expect(section).toHaveTextContent('last_edit_manager_atnever');
+    expect(section).toHaveTextContent('last_edit_records_at2024-06-04');
+    expect(section).toHaveTextContent('enable_sub_account1');
+    expect(section).toHaveTextContent('renew_sub_account_price100,000,000 · raw');
+    expect(section).not.toHaveTextContent('updated_at');
+  });
+
   it('names the .bit account a .bit Cell points to as it is now, not as at minting', () => {
     const p = structuredClone(bitCellProtocolProducer) as Extract<
       ItemProtocol,

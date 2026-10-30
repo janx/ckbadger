@@ -1,5 +1,5 @@
 import type { ItemProtocol, DotCellPartyRef } from '@/lib/api';
-import { NamedParty } from '@/components/asset/identity-document';
+import { PartyLine } from '@/components/identity/identity-overview';
 import { ownerRun, ownerRuns } from '@/lib/identity-term';
 import { formatUtc8Date, truncateHash } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -46,17 +46,21 @@ export function DotcellRoles({ protocol }: { protocol: DotcellProtocol }) {
       </div>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
         {cards.map((c) => (
-          <dl
+          <div
             key={c.label}
+            role="group"
             aria-label={c.label}
             className={cn(
-              'min-w-0 rounded-lg border px-4 py-3.5',
+              'flex min-w-0 flex-col gap-1 rounded-lg border px-4 py-3.5 [overflow-wrap:anywhere]',
               c.accent ? 'border-identity/50' : 'border-base-border'
             )}
           >
-            <NamedParty party={c.party} label={c.label} />
-            <dd className="text-text-dim mt-1 text-[12px]">since {formatUtc8Date(c.since)}</dd>
-          </dl>
+            <span className="text-text-dim text-[12px]">{c.label}</span>
+            <span>
+              <PartyLine party={c.party} size={14} />
+            </span>
+            <span className="text-text-dim text-[12px]">since {formatUtc8Date(c.since)}</span>
+          </div>
         ))}
       </div>
       <h3 className="text-text-dim pt-1 text-[12px] font-normal">Owners so far</h3>

@@ -123,7 +123,8 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
               >
                 <div className="min-w-0">
                   <AppLink href={href(item)} className="text-text-bright break-words">
-                    {item.name ?? (
+                    {/* F2 identities (round 2): a did:ckb row has no name but its DID (R2b-b-22). */}
+                    {item.name ?? item.did ?? (
                       <Hash hash={item.nftId} copyable={false} className="text-[11px]" />
                     )}
                   </AppLink>
