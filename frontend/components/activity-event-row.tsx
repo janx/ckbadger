@@ -47,7 +47,7 @@ export function formatStandard(standard: string): string {
   if (standard === 'xudt_compatible') return 'xUDT-compatible';
   if (standard === 'sudt') return 'sUDT';
   if (standard === 'spore') return 'Spore';
-  if (standard === 'm-nft') return 'M-NFT';
+  if (standard === 'm-nft') return 'm-NFT'; // F2 objects (IV-11): the protocol's own spelling
   if (standard === 'dotbit') return '.bit';
   if (standard === 'bit_cell') return '.bit Cell';
   if (standard === 'dotcell') return '.cell';

@@ -10,8 +10,9 @@ interface HMulHelpPopoverProps {
   className?: string;
 }
 
+// F2 objects (IV-07): the boards' words — CKB held ÷ occupied.
 const HMUL_EXPLANATION =
-  'HMul = Owned Capacity / Common Knowledge. It measures how strongly a script or asset amplifies CKB hodl: for each unit of common knowledge it anchors, how much CKB is held in total. Higher HMul means stronger CKB hodl amplification.';
+  'H-multiplier = CKB held in its cells ÷ occupied. Occupied is the CKB that pays for the bytes of its cells, the state it keeps on CKB; for each of those CKB, this many are held in the same cells. Higher means more CKB parked alongside its state.';
 
 export function formatHMulValue(value: string | null | undefined): string | null {
   return value == null ? null : `×${value}`;

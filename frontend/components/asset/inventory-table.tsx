@@ -14,6 +14,9 @@ import {
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { CompositionBadge } from '@/components/ui/composition-mark';
+import type { CSSProperties } from 'react';
+import { CLASS_COLORS, COMPOSITION_BADGES } from '@/lib/design-tokens';
+import { cn } from '@/lib/utils';
 
 export interface AssetAmountProps {
   amount: string;
@@ -59,35 +62,89 @@ export interface InventoryRowsProps {
   rows: readonly Asset[];
   assetType: Asset['assetType'];
 }
+// ── F2 objects (round 2): the Inventory board's rows ──
+/** Width of a value as a share of the largest, rounded to 1/1000 %, from exact integers. */
+function shareOfLargest(value: bigint, largest: bigint): string {
+  if (largest === BigInt(0)) return '0%';
+  return `${Number(((value * BigInt(200000)) / largest + BigInt(1)) / BigInt(2)) / 1000}%`;
+}
+const SHANNONS = BigInt(100000000);
+/** Occupied capacity is bytes, so whole CKB; an amount with a fraction is shown exactly (IV-06). */
+function OccupiedCkb({ shannons }: { shannons: bigint }) {
+  if (shannons % SHANNONS === BigInt(0))
+    return <>{(shannons / SHANNONS).toLocaleString('en-US')}</>;
+  return <ExactCkb shannons={shannons} signed={false} tone="plain" wrap />;
+}
+/** The thumbnail frame of a collection row: crystal / copper for the fully on-chain tiers (IV-10). */
+function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
+  if (tier !== 'pure_ckb' && tier !== 'btc_ckb') return undefined;
+  return {
+    backgroundImage: COMPOSITION_BADGES[tier].frame,
+    backgroundClip: 'padding-box, border-box',
+    backgroundOrigin: 'padding-box, border-box',
+    border: '1px solid transparent',
+  };
+}
 export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
   const mark = assetType === 'token' ? 'tokens' : assetType === 'object' ? 'objects' : 'identities';
+  const largestHeld = rows.reduce((max, a) => {
+    if (a.ownedCapacity === null) return max;
+    const held = exactUnsignedInteger(a.ownedCapacity, `${a.id} capacity`);
+    return held > max ? held : max;
+  }, BigInt(0));
   const columns: ListColumn<Asset>[] = [
     {
       key: 'identity',
       label: assetType === 'token' ? 'Token' : assetType === 'object' ? 'Collection' : 'System',
       minWidth: 220,
       width: '22%',
-      render: (a) => (
-        <div className="flex min-w-0 items-center gap-3">
-          <span
-            className={
-              assetType === 'object'
-                ? 'border-base-border flex h-11 w-11 shrink-0 items-center justify-center rounded border'
-                : ''
-            }
-          >
-            <ClassMark kind={mark} size={16} />
-          </span>
-          <div className="min-w-0">
-            <AppLink href={assetHref(a)} className="text-text-bright block break-words">
-              {a.symbol || a.name || <Hash hash={a.id} copyable={false} className="text-xs" />}
-            </AppLink>
-            <span className="text-text-dim text-[11px]">
-              {formatStandard(a.standard)}
+      render: (a) => {
+        const standard = formatStandard(a.standard);
+        const title = assetType === 'token' ? (a.name ?? a.symbol) : a.name;
+        const sub =
+          assetType === 'token'
+            ? a.name && a.symbol
+              ? `${a.symbol} · ${standard}`
+              : standard
+            : assetType === 'identity'
+              ? title === standard
+                ? null
+                : standard
+              : null;
+        return (
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              data-thumb-frame={
+                assetType === 'object' && thumbFrame(a.compositionTier)
+                  ? (a.compositionTier ?? undefined)
+                  : undefined
+              }
+              className={
+                assetType === 'object'
+                  ? cn(
+                      'flex h-11 w-11 shrink-0 items-center justify-center rounded',
+                      !thumbFrame(a.compositionTier) && 'border-base-border border'
+                    )
+                  : ''
+              }
+              style={assetType === 'object' ? thumbFrame(a.compositionTier) : undefined}
+            >
+              <ClassMark kind={mark} size={16} />
+            </span>
+            <div className="min-w-0">
+              <AppLink
+                href={assetHref(a)}
+                className={cn(
+                  'text-text-bright block break-words',
+                  assetType === 'identity' && 'text-[15px]'
+                )}
+              >
+                {title || <Hash hash={a.id} copyable={false} className="text-xs" />}
+              </AppLink>
+              {sub && <span className="text-text-dim text-[11px]">{sub}</span>}
               {a.assetType === 'object' && (
-                <>
-                  {' '}
-                  ·{' '}
+                <span className="text-text-dim text-[11px]">
+                  {standard} ·{' '}
                   <Hash
                     hash={a.id}
                     startChars={6}
@@ -95,12 +152,12 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
                     copyable={false}
                     className="text-[11px]"
                   />
-                </>
+                </span>
               )}
-            </span>
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
   ];
   if (assetType === 'object')
@@ -197,42 +254,32 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         return (
           <div className="space-y-1">
             <ExactCkb shannons={held} signed={false} tone="plain" wrap />
-            {occupied !== null && (
-              <div
-                aria-label="Occupied share of held capacity"
-                className="bg-base-elevated flex h-1 overflow-hidden rounded"
-              >
-                <span
-                  className="bg-jade"
-                  style={{
-                    width:
-                      held === BigInt(0)
-                        ? '0%'
-                        : `${Number((occupied * BigInt(10000)) / held) / 100}%`,
-                  }}
-                />
-              </div>
-            )}
+            {/* F2 objects (IV-02): CKB held as a bar in the class colour, against the largest
+                on this page, so rows compare at a glance. */}
+            <div className="bg-base-elevated flex h-1 overflow-hidden rounded">
+              <span
+                data-held-bar
+                style={{
+                  width: shareOfLargest(held, largestHeld),
+                  backgroundColor: CLASS_COLORS[mark],
+                }}
+              />
+            </div>
           </div>
         );
       },
     },
     {
       key: 'occupied',
-      label: 'Occupied CKB',
-      minWidth: 150,
+      label: 'Occupied',
+      minWidth: 110,
       numeric: true,
-      className: '!whitespace-normal',
+      className: '!whitespace-normal text-text-dim',
       render: (a) =>
         a.ownedKnowledge === null ? (
           'Unavailable'
         ) : (
-          <ExactCkb
-            shannons={exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
+          <OccupiedCkb shannons={exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`)} />
         ),
     }
   );

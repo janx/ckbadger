@@ -328,7 +328,10 @@ describe('Tokens Inventory Page', () => {
       anchor: null,
       counts: { token: 500, object: 200, identity: 4 },
       objectStandards: [],
-      objectComposition: [],
+      objectComposition: [
+        { tier: 'pure_ckb', collectionsCount: 20, liveCount: 100 },
+        { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
+      ],
       fullyOnchainObjectsCount: 1000,
       pendingItemsCount: 3,
     });
@@ -345,8 +348,9 @@ describe('Tokens Inventory Page', () => {
       expect(screen.getByTestId('header')).toBeInTheDocument();
       expect(screen.getByText('Tokens')).toBeInTheDocument();
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
-      expect(screen.getAllByText('TEST').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('xUDT').length).toBeGreaterThan(0);
+      // F2 objects (IV-04): the full name leads, symbol and standard below it.
+      expect(screen.getAllByText('Test Token').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('TEST · xUDT').length).toBeGreaterThan(0);
     });
   });
 
@@ -486,11 +490,9 @@ describe('Tokens Inventory Page', () => {
 
     render(<TokensPage />);
 
+    // F2 objects (IV-07): the board's search box filters as you type; there is no button.
     const searchInput = screen.getByPlaceholderText('Search by name...');
     fireEvent.change(searchInput, { target: { value: 'test' } });
-
-    const searchButton = screen.getByRole('button', { name: 'Search' });
-    fireEvent.click(searchButton);
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ search: 'test' }));
@@ -508,9 +510,7 @@ describe('Tokens Inventory Page', () => {
       );
     });
 
-    fireEvent.change(screen.getByLabelText('Filter by standard'), {
-      target: { value: 'xudt' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'xUDT' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -547,7 +547,10 @@ describe('Objects Inventory Page', () => {
       anchor: null,
       counts: { token: 500, object: 200, identity: 4 },
       objectStandards: [],
-      objectComposition: [],
+      objectComposition: [
+        { tier: 'pure_ckb', collectionsCount: 20, liveCount: 100 },
+        { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
+      ],
       fullyOnchainObjectsCount: 1000,
       pendingItemsCount: 3,
     });
@@ -564,7 +567,8 @@ describe('Objects Inventory Page', () => {
       expect(screen.getByText('Objects')).toBeInTheDocument();
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByRole('columnheader', { name: 'Composition' })).toBeInTheDocument();
-      expect(screen.getAllByText('Spore').length).toBeGreaterThan(0);
+      // F2 objects: no standard chips on Objects (board); the row names its standard.
+      expect(screen.getAllByText(/^Spore ·/).length).toBeGreaterThan(0);
       const tierLabels = screen.getAllByText('BTC+CKB');
       expect(tierLabels.length).toBeGreaterThanOrEqual(1);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
@@ -611,9 +615,8 @@ describe('Objects Inventory Page', () => {
       );
     });
 
-    fireEvent.change(screen.getByLabelText('Filter by composition tier'), {
-      target: { value: 'pure_ckb' },
-    });
+    // F2 objects (IV-09): composition chips with their counts are the filter.
+    fireEvent.click(await screen.findByRole('button', { name: /Pure CKB 20/ }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -653,7 +656,10 @@ describe('Identities Inventory Page', () => {
       anchor: null,
       counts: { token: 500, object: 200, identity: 4 },
       objectStandards: [],
-      objectComposition: [],
+      objectComposition: [
+        { tier: 'pure_ckb', collectionsCount: 20, liveCount: 100 },
+        { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
+      ],
       fullyOnchainObjectsCount: 1000,
       pendingItemsCount: 3,
     });
@@ -664,36 +670,20 @@ describe('Identities Inventory Page', () => {
   /// The four identity standards the indexer writes, filtered by the wire
   /// value each one has in `IdentityStandard::as_str()`. A display label may
   /// read however it likes; the value that travels to the API may not.
-  it('offers every identity standard and filters by its wire value', async () => {
+  // F2 objects (IV-12): the Identities board lists the four systems without standard chips; a
+  // standard in the URL still travels to the API as its wire value.
+  it('offers no standard chips and filters a URL standard by its wire value', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockDidCkbIdentityAssets);
-
-    render(<IdentitiesPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Identities')).toBeInTheDocument();
-      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'identity' }));
-    });
-
-    const select = screen.getByLabelText('Filter by standard') as HTMLSelectElement;
-    const values = Array.from(select.options).map((option) => option.value);
-    expect(values).toEqual(['', 'dotbit', 'bit_cell', 'did_ckb', 'dotcell']);
-
-    expect(screen.getByRole('option', { name: '.bit' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '.bit Cell' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'did:ckb' })).toBeInTheDocument();
-    // The protocol's own name for itself, not its wire value shouted.
-    expect(screen.getByRole('option', { name: '.cell' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'DOTCELL' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'D-ID' })).not.toBeInTheDocument();
-
     for (const wire of ['dotbit', 'bit_cell', 'did_ckb', 'dotcell']) {
-      fireEvent.change(select, { target: { value: wire } });
-      await waitFor(() => {
+      window.history.replaceState(null, '', `/inventory/identities?standard=${wire}`);
+      const view = render(<IdentitiesPage />);
+      await waitFor(() =>
         expect(api.getAssets).toHaveBeenLastCalledWith(
           expect.objectContaining({ type: 'identity', standard: wire })
-        );
-        expect(window.location.search).toContain(`standard=${wire}`);
-      });
+        )
+      );
+      expect(screen.queryByRole('group', { name: 'Standard filters' })).not.toBeInTheDocument();
+      view.unmount();
     }
   });
 
@@ -749,7 +739,10 @@ describe('Inventory approved board regressions', () => {
       anchor: null,
       counts: { token: 500, object: 200, identity: 4 },
       objectStandards: [],
-      objectComposition: [],
+      objectComposition: [
+        { tier: 'pure_ckb', collectionsCount: 20, liveCount: 100 },
+        { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
+      ],
       fullyOnchainObjectsCount: 1000,
       pendingItemsCount: 3,
     });
@@ -785,7 +778,10 @@ describe('Inventory snapshot and pagination lifecycle', () => {
       anchor: { blockNumber: 99, blockHash: '0xaa' },
       counts: { token: 500, object: 200, identity: 4 },
       objectStandards: [],
-      objectComposition: [],
+      objectComposition: [
+        { tier: 'pure_ckb', collectionsCount: 20, liveCount: 100 },
+        { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
+      ],
       fullyOnchainObjectsCount: 1000,
       pendingItemsCount: 3,
     });
@@ -808,7 +804,7 @@ describe('Inventory snapshot and pagination lifecycle', () => {
       nextCursor: 'older',
     });
     render(<TokensPage />);
-    await screen.findAllByText('TEST');
+    await screen.findAllByText('Test Token');
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older' }))
@@ -828,10 +824,10 @@ describe('Inventory snapshot and pagination lifecycle', () => {
         <TokensPage />
       </QueryClientProvider>
     );
-    await screen.findAllByText('TEST');
+    await screen.findAllByText('Test Token');
     vi.mocked(api.getAssets).mockRejectedValue(new Error('Cache read failed'));
     await client.invalidateQueries({ queryKey: ['assets'] });
     expect(await screen.findByRole('alert')).toHaveTextContent('Showing previously loaded');
-    expect(screen.getAllByText('TEST').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Test Token').length).toBeGreaterThan(0);
   });
 });

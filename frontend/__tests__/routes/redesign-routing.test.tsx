@@ -51,6 +51,8 @@ describe('redesign routes', () => {
     ['tokens', 'inventory/tokens'],
     ['objects', 'inventory/objects'],
     ['dao/charts', 'charts'],
+    // F2 objects (IV-25): the bare Inventory path opens its first view.
+    ['inventory', 'inventory/tokens'],
   ])('redirects legacy %s preserving network, query and fragment', async (legacy, target) => {
     render(
       <MemoryRouter initialEntries={[`/testnet/${legacy}?range=30d#history`]}>

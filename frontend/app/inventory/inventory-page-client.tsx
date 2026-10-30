@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
@@ -8,30 +8,24 @@ import { DetailLayout } from '@/components/ui/detail-layout';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
-import { InventorySummaryNotice } from '@/components/asset/inventory-summary';
+import { InventorySummaryNotice, ObjectComposition } from '@/components/asset/inventory-summary';
 import { InventoryRows, AssetCount } from '@/components/asset/inventory-table';
 import { AddressLoadState, AddressStaleNotice } from '@/components/address/address-holdings';
 import { formatStandard } from '@/components/activity-event-row';
-import { formatCompositionTier } from '@/lib/asset-utils';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type Asset } from '@/lib/api';
+import type { CompositionTier } from '@/lib/asset-utils';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 
 export type AssetType = Asset['assetType'];
 type AssetSortKey = NonNullable<Parameters<typeof api.getAssets>[0]>['sortKey'];
-const standards = {
-  token: ['xudt', 'sudt'],
-  object: ['spore', 'm-nft'],
-  identity: ['dotbit', 'bit_cell', 'did_ckb', 'dotcell'],
+// F2 objects (IV-03, IV-12): the board offers standard chips on Tokens only (xUDT-compatible
+// included); Objects filter by composition, Identities list their four systems plainly.
+const standards: Record<AssetType, string[]> = {
+  token: ['xudt', 'sudt', 'xudt_compatible'],
+  object: [],
+  identity: [],
 };
-const tiers = [
-  'pure_ckb',
-  'btc_ckb',
-  'decentralized_mixture',
-  'centralized_mixture',
-  'unknown',
-  'decode_pending',
-] as const;
 interface InventoryPageClientProps {
   assetType: AssetType;
   title?: string;
@@ -43,8 +37,19 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     pathname = usePathname(),
     params = useSearchParams();
   const pagination = useCursorPagination();
+  const resetPage = pagination.reset;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string>();
+  // F2 objects (IV-07): the board's search box filters as you type (debounced), no button.
+  useEffect(() => {
+    const next = searchInput.trim() || undefined;
+    if (next === search) return;
+    const timer = setTimeout(() => {
+      setSearch(next);
+      resetPage();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchInput, search, resetPage]);
   const [standard, setStandard] = useState<string | undefined>(
     params.get('standard')?.trim().toLowerCase() || undefined
   );
@@ -78,7 +83,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
         search,
         standard,
         compositionTier:
-          assetType === 'object' ? (compositionTier as (typeof tiers)[number]) : undefined,
+          assetType === 'object' ? (compositionTier as CompositionTier | undefined) : undefined,
         sortKey,
         sortDirection,
       }),
@@ -94,7 +99,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
   };
   const sortOptions: [AssetSortKey, string][] = [
-    ['capacity', 'CKB held'],
+    ['capacity', 'CKB held in their cells'],
     ['name', 'Name'],
     ['type', 'Standard'],
     ['holders', 'Holders'],
@@ -112,26 +117,19 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
           title="Inventory"
           identity="Everything people hold on CKB besides plain CKB"
           actions={
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                setSearch(searchInput.trim() || undefined);
-                pagination.reset();
-              }}
-              className="flex max-w-full flex-wrap gap-2"
-            >
+            <div className="flex max-w-full flex-wrap gap-2">
               <label className="sr-only" htmlFor="inventory-search">
                 Search the inventory
               </label>
               <input
                 id="inventory-search"
+                type="search"
                 className="border-base-border bg-base-surface min-w-0 rounded border px-3 py-2 text-xs"
                 placeholder="Search by name..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
               />
-              <button className="border-base-border rounded border px-3 text-xs">Search</button>
-            </form>
+            </div>
           }
         >
           <nav
@@ -160,6 +158,71 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
             })}
           </nav>
           <AddressStaleNotice error={summary.error} label="inventory totals" />
+          {assetType === 'object' && summary.data && (
+            <ObjectComposition
+              summary={summary.data}
+              selected={compositionTier}
+              onSelect={(tier) => filter('compositionTier', tier)}
+            />
+          )}
+          {standards[assetType].length > 0 && (
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Standard filters">
+              {['', ...standards[assetType]].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  aria-pressed={(standard ?? '') === s}
+                  className={`rounded border px-3 py-1.5 text-xs ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
+                  onClick={() => filter('standard', s)}
+                >
+                  {s ? (
+                    formatStandard(s)
+                  ) : (
+                    <>
+                      All
+                      {summary.data && (
+                        <>
+                          {' '}
+                          <AssetCount value={summary.data.counts[assetType]} />
+                        </>
+                      )}
+                    </>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* F2 objects (IV-07): the board's quiet "sorted by" line carries the sort controls. */}
+          <div className="text-text-dim flex flex-wrap items-center gap-2 text-[12px]">
+            <span>sorted by</span>
+            <select
+              aria-label="Sort inventory"
+              value={sortKey}
+              onChange={(e) => {
+                setSortKey(e.target.value as AssetSortKey);
+                pagination.reset();
+              }}
+              className="text-text bg-transparent py-1"
+            >
+              {sortOptions.map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-label="Reverse sort direction"
+              className="text-text hover:text-text-bright"
+              onClick={() => {
+                setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
+                pagination.reset();
+              }}
+            >
+              {sortDirection === 'desc' ? '↓ largest first' : '↑ smallest first'}
+            </button>
+            {assetType !== 'identity' && <HMulHelpPopover />}
+          </div>
           {summary.data ? (
             <InventorySummaryNotice summary={summary.data} assetType={assetType} />
           ) : (
@@ -169,109 +232,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               label="inventory totals"
             />
           )}
-          <div
-            className="hidden flex-wrap gap-2 sm:flex"
-            role="group"
-            aria-label="Standard filters"
-          >
-            {['', ...standards[assetType]].map((s) => (
-              <button
-                key={s}
-                type="button"
-                aria-pressed={(standard ?? '') === s}
-                className={`rounded border px-3 py-1.5 text-xs ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
-                onClick={() => filter('standard', s)}
-              >
-                {s ? formatStandard(s) : 'All standards'}
-              </button>
-            ))}
-          </div>
-          {assetType === 'object' && (
-            <div
-              className="hidden flex-wrap gap-2 sm:flex"
-              role="group"
-              aria-label="Composition filters"
-            >
-              {['', ...tiers].map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  aria-pressed={(compositionTier ?? '') === t}
-                  className={`rounded border px-3 py-1.5 text-xs ${compositionTier === t || (!compositionTier && !t) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
-                  onClick={() => filter('compositionTier', t)}
-                >
-                  {t ? formatCompositionTier(t) : 'All compositions'}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            <label className="text-text-dim sm:hidden">
-              Standard{' '}
-              <select
-                aria-label="Filter by standard"
-                value={standard ?? ''}
-                onChange={(e) => filter('standard', e.target.value)}
-                className="border-base-border bg-base-surface ml-2 rounded border p-2"
-              >
-                <option value="">All standards</option>
-                {[...new Set([...standards[assetType], ...(standard ? [standard] : [])])].map(
-                  (s) => (
-                    <option key={s} value={s}>
-                      {formatStandard(s)}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
-            {assetType === 'object' && (
-              <label className="text-text-dim sm:hidden">
-                Composition{' '}
-                <select
-                  aria-label="Filter by composition tier"
-                  value={compositionTier ?? ''}
-                  onChange={(e) => filter('compositionTier', e.target.value)}
-                  className="border-base-border bg-base-surface ml-2 max-w-full rounded border p-2"
-                >
-                  <option value="">All compositions</option>
-                  {tiers.map((t) => (
-                    <option key={t} value={t}>
-                      {formatCompositionTier(t)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="text-text-dim sm:ml-auto">
-              Sort by{' '}
-              <select
-                aria-label="Sort inventory"
-                value={sortKey}
-                onChange={(e) => {
-                  setSortKey(e.target.value as AssetSortKey);
-                  pagination.reset();
-                }}
-                className="border-base-border bg-base-surface ml-2 rounded border p-2"
-              >
-                {sortOptions.map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              aria-label="Reverse sort direction"
-              className="border-base-border rounded border p-2"
-              onClick={() => {
-                setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
-                pagination.reset();
-              }}
-            >
-              {sortDirection === 'desc' ? 'Descending' : 'Ascending'}
-            </button>
-            <HMulHelpPopover />
-          </div>
           {assets.data ? (
             <>
               <AddressStaleNotice error={assets.error} label="inventory" />
