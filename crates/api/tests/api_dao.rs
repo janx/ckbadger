@@ -1840,3 +1840,254 @@ async fn test_daily_deposit_chart_includes_first_snapshot_day() {
     assert_eq!(data[1]["value"], "1000000");
     assert_eq!(data[1]["value2"], "44");
 }
+
+// ---------------------------------------------------------------------------
+// Lane R2b-a · DAO page read-path additions (DAO-8, DAO-10, DAO-12, DAO-16).
+// ---------------------------------------------------------------------------
+
+/// A DAO statistics singleton at `tip` whose rolling-24h baseline is
+/// `baseline`, with S = unclaimed + burnt exactly.
+fn r2b_dao_latest(tip: i64, baseline: Option<i64>) -> ckbadger_store::DaoLatestStatistics {
+    ckbadger_store::DaoLatestStatistics {
+        tip_block_number: tip,
+        total_deposited: 200_00000000,
+        total_depositors: 1,
+        active_deposits: 1,
+        deposit_cells_count: 1,
+        withdrawal_request_cells_count: 0,
+        total_compensation_paid: 0,
+        unclaimed_compensation: 13_00000000,
+        average_deposit_days: Some("1 days".to_string()),
+        estimated_apc: "2.00".to_string(),
+        mining_reward: 0,
+        deposit_compensation: 0,
+        burnt: 29_00000000,
+        pending_withdrawal_capacity: 0,
+        dao_capacity: 0,
+        dao_free_capacity: 0,
+        depositor_allocation_weight: 0,
+        tip_total_issuance: 0,
+        tip_secondary_pool: 42_00000000,
+        tip_occupied_capacity: 0,
+        rolling_24h: baseline.map(
+            |baseline_block_number| ckbadger_store::types::DaoRolling24h {
+                baseline_block_number,
+                cutoff_chain_time_ms: 1_699_913_600_000,
+                deposited_change: 0,
+                depositors_change: 0,
+                claimed_compensation_change: 0,
+                unclaimed_compensation_change: 0,
+            },
+        ),
+    }
+}
+
+fn r2b_put_dao_latest(store: &Arc<CkbadgerStore>, latest: &ckbadger_store::DaoLatestStatistics) {
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+        b"latest",
+    );
+    store
+        .put_stats_key(&key, &bincode::serialize(latest).unwrap())
+        .unwrap();
+}
+
+/// A DAO transaction at `block:index` carrying `actions` (`"deposit"` /
+/// `"withdraw_request"` / `"withdraw_complete"`), indexed in the DAO bucket.
+fn r2b_put_dao_tx(store: &Arc<CkbadgerStore>, block: i64, index: i32, actions: &[&str]) {
+    let tx_hash = {
+        let mut hash = [0xd0u8; 32];
+        hash[..8].copy_from_slice(&block.to_be_bytes());
+        hash[8..12].copy_from_slice(&index.to_be_bytes());
+        hash
+    };
+    let mut tx = make_test_tx_actions(&[0x51; 32], &tx_hash, &[0xbb; 32], block, index, -1, 0);
+    tx.protocol_actions = actions
+        .iter()
+        .map(|action| {
+            ckbadger_store::types::ProtocolAction::new(
+                "dao",
+                *action,
+                serde_json::json!({"capacity": 10_000_000_000i64, "lockHash": "51".repeat(32)}),
+            )
+        })
+        .collect();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_actions(&tx);
+    batch.commit().unwrap();
+}
+
+/// DAO-10 / DAO-16: the statistics say how many deposits went in and how
+/// many withdrawal requests came out over the same rolling 24 h their
+/// deltas cover — blocks `(baseline, tip]` of the singleton — and carry the
+/// singleton's own S, so "S = still owed + burnt" is stated from one row at
+/// one block.
+#[tokio::test]
+async fn dao_statistics_count_24h_deposits_and_requests_and_carry_their_own_s() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_tip_header(&store, 21);
+    r2b_put_dao_latest(&store, &r2b_dao_latest(20, Some(17)));
+    r2b_put_dao_tx(&store, 17, 1, &["deposit"]); // the baseline block: before the window
+    r2b_put_dao_tx(&store, 18, 1, &["deposit", "deposit"]);
+    r2b_put_dao_tx(&store, 19, 2, &["withdraw_request", "deposit"]);
+    r2b_put_dao_tx(&store, 19, 3, &["withdraw_complete"]);
+    r2b_put_dao_tx(&store, 21, 1, &["deposit"]); // past the singleton's block
+    let app = create_router(test_config(store.clone())).await;
+    let (status, json) = get_json(&app, "/dao/statistics").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["deposits24h"], 3, "{json}");
+    assert_eq!(json["withdrawalRequests24h"], 1, "{json}");
+    assert_eq!(json["tipSecondaryPool"], "4200000000", "{json}");
+    assert_eq!(
+        json["tipSecondaryPool"]
+            .as_str()
+            .unwrap()
+            .parse::<i128>()
+            .unwrap(),
+        json["unclaimedCompensation"]
+            .as_str()
+            .unwrap()
+            .parse::<i128>()
+            .unwrap()
+            + json["burnt"].as_str().unwrap().parse::<i128>().unwrap()
+    );
+
+    // No complete 24 h baseline yet: no window, no counts.
+    r2b_put_dao_latest(&store, &r2b_dao_latest(20, None));
+    let (status, json) = get_json(&app, "/dao/statistics").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["deposits24h"].is_null(), "{json}");
+    assert!(json["withdrawalRequests24h"].is_null(), "{json}");
+}
+
+/// DAO-12: every current depositor, ranked by phase-0 capacity, paged — the
+/// same ranking `/dao/evidence`'s concentration is built from, at the same
+/// tip, with the tip as its anchor.
+#[tokio::test]
+async fn dao_depositors_page_the_whole_ranking_at_the_evidence_tip() {
+    let app = create_router(test_config(dao_evidence_fixture())).await;
+    let (status, first) = get_json(&app, "/dao/depositors?limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(
+        first["anchor"],
+        serde_json::json!({"blockNumber": 5, "blockHash": format!("0x{}", "05".repeat(32))}),
+        "{first}"
+    );
+    assert_eq!(first["total"], 2, "{first}");
+    let row = &first["data"][0];
+    assert_eq!(row["rank"], 1, "{first}");
+    assert_eq!(row["capacity"], "30000000000");
+    assert_eq!(row["depositCount"], 1);
+    assert_eq!(row["sharePercent"], "60.00");
+    assert!(
+        row["address"].as_str().unwrap().starts_with("ckb1"),
+        "{first}"
+    );
+    let cursor = first["nextCursor"]
+        .as_str()
+        .expect("second page")
+        .to_string();
+    let (status, second) =
+        get_json(&app, &format!("/dao/depositors?limit=1&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["data"][0]["rank"], 2, "{second}");
+    assert_eq!(second["data"][0]["capacity"], "20000000000");
+    assert!(second["nextCursor"].is_null(), "{second}");
+    // The evidence's concentration is the same ranking.
+    let (_, evidence) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(
+        evidence["concentration"]["owners"][0]["lockScriptHash"],
+        row["lockScriptHash"]
+    );
+    // A cursor from another tip's ranking does not page this one.
+    let (status, json) = get_json(&app, "/dao/depositors?limit=1&cursor=4:1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+}
+
+/// DAO-8: the accumulated rate at the end of every complete UTC+8 day — the
+/// last block at or before the day's end, exactly as its header holds it —
+/// from genesis through the last complete day.
+#[tokio::test]
+async fn dao_ar_history_is_the_header_ar_at_each_complete_day_end() {
+    let store = test_store();
+    let hour = 3_600_000i64;
+    let day = 24 * hour;
+    let start = 1_700_000_000_000i64; // 2023-11-15 06:13:20 UTC+8
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, at, ar) in [
+        (0u8, start, 10_000_000_000_000_000u64),
+        (1, start + hour, 10_001_000_000_000_000),
+        (2, start + day, 10_002_000_000_000_000),
+        (3, start + 3 * day, 10_003_000_000_000_000),
+        (4, start + 4 * day, 10_004_000_000_000_000),
+    ] {
+        batch.put_block_header(
+            i64::from(number),
+            &dao_evidence_header(number, (0, i32::from(number), 1800), at, at, ar),
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/ar-history").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    // The series' anchor is the block the newest complete day closes at.
+    assert_eq!(
+        json["anchor"],
+        serde_json::json!({"blockNumber": 3, "blockHash": format!("0x{}", "03".repeat(32))})
+    );
+    let days: Vec<(String, i64, String)> = json["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["date"].as_str().unwrap().to_string(),
+                d["blockNumber"].as_i64().unwrap(),
+                d["arIndex"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        days,
+        vec![
+            ("2023-11-15".into(), 1, "1.0001000000000000".into()),
+            ("2023-11-16".into(), 2, "1.0002000000000000".into()),
+            // No block that day: the rate at its end is block 2's.
+            ("2023-11-17".into(), 2, "1.0002000000000000".into()),
+            ("2023-11-18".into(), 3, "1.0003000000000000".into()),
+        ],
+        "{json}"
+    );
+    assert_eq!(json["days"][0]["ar"], "10001000000000000");
+}
+
+/// DAO-8: the calculator states the occupied capacity it assumed (a
+/// standard 102-byte secp256k1 DAO cell) and the free capacity compensation
+/// accrues on.
+#[tokio::test]
+async fn dao_calculator_states_the_free_capacity_it_assumed() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, ar) in [
+        (10u8, 10_000_000_000_000_000u64),
+        (20, 10_100_000_000_000_000),
+    ] {
+        batch.put_block_header(
+            i64::from(number),
+            &dao_evidence_header(number, (0, 0, 1), 1_700_000_000_000, 1_700_000_000_000, ar),
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        "/dao/calculator?capacity=1000000000000&deposit_block=10&withdraw_block=20",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["occupiedCapacity"], "10200000000", "{json}");
+    assert_eq!(json["freeCapacity"], "989800000000", "{json}");
+    // compensation = free × (AR_w / AR_d − 1) = 989_800_000_000 × 1%.
+    assert_eq!(json["estimatedCompensation"], "9898000000", "{json}");
+}
