@@ -191,11 +191,9 @@ function CellFacts({
               </time>
             )}
             {cell.createdEpoch ? (
-              <>
-                {cell.createdTimestamp && ' · '}epoch{' '}
-                {cell.createdEpoch.number.toLocaleString('en-US')} · {cell.createdEpoch.index}/
-                {cell.createdEpoch.length}
-              </>
+              <span className="block">
+                {`epoch ${cell.createdEpoch.number.toLocaleString('en-US')} · ${cell.createdEpoch.index}/${cell.createdEpoch.length}`}
+              </span>
             ) : (
               <span role="alert" className="text-rouge block">
                 Cell {cell.txHash}:{cell.outputIndex} has no createdEpoch

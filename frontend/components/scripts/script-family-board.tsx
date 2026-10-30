@@ -378,14 +378,17 @@ export function ScriptHistory({
                 })}
               </div>
             </div>
-            <div className="relative mt-1 h-12 pl-[88px] pr-[10px]">
+            <div
+              className="relative mt-1 pl-[88px] pr-[10px]"
+              style={{ height: 16 + holders.length * 14 }}
+            >
               <div className="relative h-full">
                 {holders.map((holder, i) => {
                   const start = position(holder.from.indexedDay);
                   if (start === null) return null;
                   const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
                   // Past the middle a label hangs from its band's end, so it never runs off the
-                  // page; neighbouring labels sit on alternate rows, so they never overlap.
+                  // page; each holder's label has its own row, so labels never overlap.
                   const anchor = start > 50 ? { right: `${100 - end}%` } : { left: `${start}%` };
                   return (
                     <div key={holder.lockArgs}>
@@ -403,9 +406,9 @@ export function ScriptHistory({
                       />
                       <span
                         data-custodian-label={holder.lockArgs}
-                        data-row={i % 2}
+                        data-row={i}
                         className="absolute whitespace-nowrap text-[#a0a8be]"
-                        style={{ ...anchor, top: i % 2 ? 26 : 12 }}
+                        style={{ ...anchor, top: 12 + i * 14 }}
                       >
                         {holderName(holder.custody)}
                         {signingText(holder) ? ` · ${signingText(holder)}` : ''}

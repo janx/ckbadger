@@ -250,7 +250,8 @@ describe('JoyID script page · visual pass', () => {
       [...track.querySelectorAll<HTMLElement>('[data-upgrade-day]')].map((n) => n.dataset.row)
     ).toEqual(['0', '1', '0']);
     const custodians = [...track.querySelectorAll<HTMLElement>('[data-custodian-label]')];
-    expect(custodians.map((n) => n.dataset.row)).toEqual(['0', '1', '0']);
+    // one row per holder: at 390 px the first and last labels would otherwise collide
+    expect(custodians.map((n) => n.dataset.row)).toEqual(['0', '1', '2']);
     // a label that starts past the middle hangs from the right edge instead of running off it
     expect(custodians[2].style.right).toBe('0%');
     expect(custodians[0].style.left).toBe('0%');

@@ -89,6 +89,9 @@ describe('Cell page against the Cell board', () => {
     expect(
       [...index.querySelectorAll('[data-index-group]')].map((node) => node.textContent)
     ).toEqual(['capacity', 'lock', 'type', 'data']);
+    // at 390 px the group name sits above its pills instead of eating an 80 px column
+    for (const label of index.querySelectorAll('[data-index-group]'))
+      expect(label).toHaveClass('w-full', 'sm:absolute', 'sm:w-[74px]');
     // every field is one pill: 21 CellOutput fields + 10 SporeData fields
     expect(index.querySelectorAll('[data-pill]')).toHaveLength(31);
     const box = screen.getByLabelText('Cell bytes');
@@ -185,7 +188,9 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
   it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' }, { timeout: 5000 });
-    expect(facts).toHaveTextContent('2026-10-22 22:43:55 UTC+8 · epoch 15,157 · 112/1800');
+    // the epoch takes its own line under the time, so the seven facts fit one row at 1440
+    expect(facts).toHaveTextContent('2026-10-22 22:43:55 UTC+8epoch 15,157 · 112/1800');
+    expect(within(facts).getByText(/^epoch 15,157/)).toHaveClass('block');
     expect(facts).toHaveTextContent('Occupied320 B · 0 free');
     expect(within(facts).queryByText('Owner')).toBeNull();
   });

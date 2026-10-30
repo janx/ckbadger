@@ -570,10 +570,10 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             onMouseLeave={() => setActive(null)}
           >
             {indexGroups.map(({ group, parts: own }) => (
-              <div key={group} className="relative flex flex-wrap items-center gap-[5px] pl-20">
+              <div key={group} className="relative flex flex-wrap items-center gap-[5px] sm:pl-20">
                 <span
                   data-index-group={group}
-                  className="absolute left-0 top-1 w-[74px] text-[11px]"
+                  className="w-full text-[11px] sm:absolute sm:left-0 sm:top-1 sm:w-[74px]"
                   style={{ color: CELL_COLORS[group] }}
                 >
                   {group === 'data' && cell.elf ? 'data · ELF' : group}
@@ -608,7 +608,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </div>
             ))}
             {hidden > 0 && (
-              <div className="text-text-dim pl-20 text-[11px]">
+              <div className="text-text-dim text-[11px] sm:pl-20">
                 + {hidden} more ELF header fields and program headers: hover their bytes
               </div>
             )}
