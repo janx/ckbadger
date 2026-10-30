@@ -77,7 +77,8 @@ describe('DaoBoard', () => {
         circulationHistory={ratio}
       />
     );
-    expect(screen.getAllByRole('listitem')).toHaveLength(30);
+    const cycles = screen.getByRole('list', { name: 'Phase-0 cycle boundaries' });
+    expect(within(cycles).getAllByRole('listitem')).toHaveLength(30);
     expect(
       screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1 deposits, 30000000000 shannons/)
     ).toBeInTheDocument();
@@ -117,9 +118,13 @@ describe('DaoBoard', () => {
   it('keeps the owner link bound to the source address', () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const owner = evidence.concentration.owners[0];
-    expect(
-      screen.getByRole('link', { name: `${owner.address.slice(0, 12)}…${owner.address.slice(-7)}` })
-    ).toHaveAttribute('href', `/mainnet/address/${owner.address}`);
+    // The desktop row and the compact card (DAO-22) both link the same address.
+    const links = screen.getAllByRole('link', {
+      name: `${owner.address.slice(0, 12)}…${owner.address.slice(-7)}`,
+    });
+    expect(links).toHaveLength(2);
+    for (const link of links)
+      expect(link).toHaveAttribute('href', `/mainnet/address/${owner.address}`);
   });
 
   it('prints an exact seven-day net change including a one-shannon loss', () => {
@@ -172,11 +177,16 @@ describe('DaoBoard', () => {
   it('keeps the depositor table at a scrollable width so counts and amounts never fuse (DAO-3)', () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const table = screen.getByRole('region', { name: 'Who deposits' }).querySelector('table')!;
-    expect(table).toHaveClass('min-w-[640px]');
+    // ListTable: an explicit width budget per column, scrolled inside its own box on desktop …
+    expect(parseInt(table.style.minWidth, 10)).toBeGreaterThanOrEqual(640);
     expect(table.parentElement).toHaveClass('overflow-x-auto');
     const [, , , deposits, amount] = Array.from(table.querySelectorAll('tbody tr')[0].children);
     expect(deposits).toHaveClass('whitespace-nowrap');
     expect(amount).toHaveClass('whitespace-nowrap');
+    // … and compact cards below md, so no column hides off-screen at 390 px (DAO-22).
+    expect(
+      screen.getByRole('list', { name: 'Largest depositors, compact' }).parentElement
+    ).not.toHaveClass('overflow-x-auto');
   });
 
   it('reads the 365-day AR anchor as a rate, a UTC+8 time and a span, not raw integers (#11)', () => {
@@ -454,5 +464,47 @@ describe('DaoBoard when deposits can leave (DAO-14)', () => {
     expect(bars).toHaveLength(30);
     expect(bars[0]).toHaveClass('opacity-90');
     expect(bars[1]).toHaveClass('opacity-50');
+  });
+});
+
+describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
+  const who = () => screen.getByRole('region', { name: 'Who deposits' });
+
+  it('draws the concentration bar: largest, next 9, next 90, everyone else', () => {
+    stubCalculator();
+    const many = {
+      ...evidence,
+      phase0: { capacity: '10000', count: 20000 },
+      concentration: {
+        ...evidence.concentration,
+        currentDepositors: 16641,
+        top1Capacity: '827',
+        top10Capacity: '2620',
+        top100Capacity: '5727',
+      },
+    };
+    render(<DaoBoard statistics={{ ...stats, totalDeposited: '10000' }} evidence={many} />);
+    expect(within(who()).getByRole('img', { name: /^Share of deposits/ })).toHaveAccessibleName(
+      'Share of deposits: largest 8.27%, next 9 17.93%, next 90 31.07%, the other 16,541 42.73%'
+    );
+  });
+
+  it('names only the groups that exist when there are few depositors', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(within(who()).getByRole('img', { name: /^Share of deposits/ })).toHaveAccessibleName(
+      'Share of deposits: largest 60.00%, next 1 40.00%'
+    );
+  });
+
+  it('lists the largest depositors as rows on desktop and as compact cards at phone width', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(within(who()).getByRole('table', { name: 'Largest depositors' })).toBeInTheDocument();
+    expect(
+      within(who()).getByRole('list', { name: 'Largest depositors, compact' })
+    ).toHaveTextContent('300.00000000');
+    // No "All N depositors" link: the API has no ranked list of every depositor (needs backend).
+    expect(within(who()).queryByRole('link', { name: /depositors →/ })).toBeNull();
   });
 });

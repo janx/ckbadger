@@ -15,6 +15,8 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
+import { ConcentrationBar } from '@/components/ui/concentration-bar';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
@@ -630,69 +632,142 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
   );
 }
 
-function Owners({ evidence }: { evidence: DaoEvidence }) {
+type Owner = DaoEvidence['concentration']['owners'][number];
+
+/**
+ * The ranked groups of the concentration bar from the evidence's exact top-1 / 10 / 100 sums:
+ * largest · next 9 · next 90 · the rest, naming only groups that have members.
+ */
+function concentrationGroups(evidence: DaoEvidence) {
   const c = evidence.concentration;
+  const n = c.currentDepositors;
+  const total = parseShannons(evidence.phase0.capacity, 'phase-0 capacity');
+  const top = [
+    parseShannons(c.top1Capacity, 'top1Capacity'),
+    parseShannons(c.top10Capacity, 'top10Capacity'),
+    parseShannons(c.top100Capacity, 'top100Capacity'),
+    total,
+  ];
+  const bounds = [1, 10, 100, n];
+  const groups: { label: string; value: bigint }[] = [];
+  let before = 0;
+  let previous = BigInt(0);
+  bounds.forEach((bound, i) => {
+    const members = Math.min(bound, n) - before;
+    const value = top[i] - previous;
+    if (members > 0) {
+      const label =
+        i === 0
+          ? 'largest'
+          : i === 3
+            ? `the other ${members.toLocaleString('en-US')}`
+            : `next ${members.toLocaleString('en-US')}`;
+      groups.push({ label, value });
+    } else if (value !== BigInt(0)) {
+      throw new Error(
+        `DAO concentration at #${evidence.tipBlockNumber}: ${value} shannons in an empty rank group`
+      );
+    }
+    before = Math.max(before, Math.min(bound, n));
+    previous = top[i];
+  });
+  return { total, groups };
+}
+
+function ownerLink(owner: Owner) {
+  return (
+    <Link href={`/address/${owner.address}`} className="text-text-bright hover:underline">
+      {owner.address.slice(0, 12)}…{owner.address.slice(-7)}
+    </Link>
+  );
+}
+
+function lockLink(owner: Owner) {
+  return (
+    <Link
+      href={`/script/${owner.lockCodeHash}?hashType=${owner.lockHashType}&kind=lock`}
+      className="text-text-dim hover:text-text-bright font-mono hover:underline"
+      title={`${owner.lockCodeHash} (${owner.lockHashType})`}
+    >
+      {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`} · {owner.lockHashType}
+    </Link>
+  );
+}
+
+const OWNER_COLUMNS: ListColumn<Owner>[] = [
+  {
+    key: 'rank',
+    label: '#',
+    minWidth: 40,
+    render: (o) => <span className="text-text-dim">{o.rank}</span>,
+  },
+  { key: 'depositor', label: 'Depositor', minWidth: 190, render: ownerLink },
+  { key: 'lock', label: 'Lock', minWidth: 170, render: lockLink },
+  {
+    key: 'deposits',
+    label: 'Deposits',
+    minWidth: 80,
+    numeric: true,
+    render: (o) => o.depositCount.toLocaleString('en-US'),
+  },
+  {
+    key: 'capacity',
+    label: 'CKB deposited',
+    minWidth: 210,
+    numeric: true,
+    render: (o) => <Amount value={o.capacity} />,
+  },
+  {
+    key: 'share',
+    label: 'Share',
+    minWidth: 70,
+    numeric: true,
+    render: (o) => <span className="text-text-dim">{o.sharePercent}%</span>,
+  },
+];
+
+function Owners({ evidence }: { evidence: DaoEvidence }) {
+  const { total, groups } = concentrationGroups(evidence);
   return (
     <Section
       title="Who deposits"
-      note={`all ${c.currentDepositors.toLocaleString()} current phase-0 owners`}
+      note={`${evidence.concentration.currentDepositors.toLocaleString('en-US')} current phase-0 owners`}
     >
-      <div className="mb-4 grid gap-2 text-[13px] sm:grid-cols-3">
-        <div>
-          Largest: <strong className="text-[#f2c55c]">{c.top1SharePercent ?? '—'}%</strong>
+      {total > BigInt(0) && (
+        <div className="mb-4">
+          <ConcentrationBar
+            label="Share of deposits"
+            assetClass="dao"
+            total={total}
+            groups={groups}
+          />
         </div>
-        <div>
-          Top 10: <strong className="text-[#f2c55c]">{c.top10SharePercent ?? '—'}%</strong>
-        </div>
-        <div>
-          Top 100: <strong className="text-[#f2c55c]">{c.top100SharePercent ?? '—'}%</strong>
-        </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-left text-[12px]">
-          <thead className="text-text-dim border-base-border border-b">
-            <tr>
-              <th className="py-2">#</th>
-              <th>Depositor</th>
-              <th>Lock reference</th>
-              <th className="whitespace-nowrap text-right">Deposits</th>
-              <th className="whitespace-nowrap text-right">CKB deposited</th>
-              <th className="text-right">Share</th>
-            </tr>
-          </thead>
-          <tbody>
-            {c.owners.map((owner) => (
-              <tr key={owner.lockScriptHash} className="border-base-border/50 border-b">
-                <td className="text-text-dim py-2">{owner.rank}</td>
-                <td>
-                  <Link
-                    href={`/address/${owner.address}`}
-                    className="text-text-bright hover:underline"
-                  >
-                    {owner.address.slice(0, 12)}…{owner.address.slice(-7)}
-                  </Link>
-                </td>
-                <td
-                  className="text-text-dim font-mono"
-                  title={`${owner.lockCodeHash} (${owner.lockHashType})`}
-                >
-                  <Link
-                    href={`/script/${owner.lockCodeHash}?hashType=${owner.lockHashType}&kind=lock`}
-                    className="hover:text-text-bright hover:underline"
-                  >
-                    {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`} · {owner.lockHashType}
-                  </Link>
-                </td>
-                <td className="whitespace-nowrap text-right font-mono">{owner.depositCount}</td>
-                <td className="whitespace-nowrap text-right">
-                  <Amount value={owner.capacity} />
-                </td>
-                <td className="text-right font-mono">{owner.sharePercent}%</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      )}
+      <ListTable
+        label="Largest depositors"
+        rows={evidence.concentration.owners}
+        columns={OWNER_COLUMNS}
+        rowKey={(o) => o.lockScriptHash}
+        empty="No live deposits at this indexed tip."
+        mobileRow={(o) => (
+          <div className="space-y-1 text-[12px]">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0">
+                <span className="text-text-dim mr-2">{o.rank}</span>
+                {ownerLink(o)}
+              </span>
+              <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
+            </div>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              {lockLink(o)}
+              <span className="text-text-bright">
+                <Amount value={o.capacity} /> CKB
+                <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
+              </span>
+            </div>
+          </div>
+        )}
+      />
     </Section>
   );
 }
