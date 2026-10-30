@@ -74,8 +74,8 @@ export function CursorPagination({
         </button>
         {page !== undefined && (
           <span className="text-text-dim font-mono text-sm">
-            Page {page}
-            {totalPages !== undefined ? ` of ${totalPages}` : ''}
+            Page {page.toLocaleString('en-US')}
+            {totalPages !== undefined ? ` of ${totalPages.toLocaleString('en-US')}` : ''}
           </span>
         )}
         <button

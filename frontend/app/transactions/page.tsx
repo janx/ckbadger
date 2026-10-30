@@ -9,8 +9,9 @@ import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
-import { TransactionTable } from '@/components/transaction/transaction-table';
+import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
+import type { PoolStatus } from '@/lib/api';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
@@ -40,12 +41,26 @@ const KINDS: { value: TransactionKind; label: string; mark?: AssetClass; color: 
   { value: 'ckb', label: 'CKB transfers', color: '#2edba3' },
   { value: 'script', label: 'Script calls', color: CLASS_COLORS.ckb },
   { value: 'cellbase', label: 'Cellbase', color: CLASS_COLORS.other },
-  { value: 'dao', label: 'DAO', mark: 'dao', color: CLASS_COLORS.dao },
+  { value: 'dao', label: 'Nervos DAO', mark: 'dao', color: CLASS_COLORS.dao },
   { value: 'token', label: 'Tokens', mark: 'tokens', color: CLASS_COLORS.tokens },
   { value: 'object', label: 'Objects', mark: 'objects', color: CLASS_COLORS.objects },
   { value: 'identity', label: 'Identities', mark: 'identities', color: CLASS_COLORS.identities },
 ];
 type PoolRow = Awaited<ReturnType<typeof api.getPoolTransactions>>['data'][number];
+/**
+ * Pool squares (TX-38): pending cyan, proposed gold (gold's "proposed" meaning), and a committed
+ * transaction this store has not indexed yet as a hollow grey outline — it is no longer waiting.
+ */
+const POOL_SQUARE: Record<PoolStatus, string> = {
+  pending: 'bg-info',
+  proposed: 'bg-gold',
+  committed_awaiting_index: 'border border-text-dim',
+};
+function PoolDot({ status }: { status: PoolStatus }) {
+  return (
+    <span aria-hidden="true" className={cn('h-[7px] w-[7px] rounded-full', POOL_SQUARE[status])} />
+  );
+}
 
 export default function TransactionsPage() {
   const [kind, setKind] = useState<TransactionKind>('all');
@@ -140,19 +155,17 @@ export default function TransactionsPage() {
     },
     {
       key: 'status',
-      label: 'State',
-      minWidth: 90,
+      label: 'Status · waiting',
+      minWidth: 150,
       render: (tx) => (
-        <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text-dim'}>
-          {poolStatusLabel(tx.status)}
+        <span className="flex items-center gap-1.5 text-xs">
+          <PoolDot status={tx.status} />
+          <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
+            {poolStatusLabel(tx.status)}
+          </span>
+          <span className="text-text-dim">· {formatTimeAgo(new Date(Number(tx.timestamp)))}</span>
         </span>
       ),
-    },
-    {
-      key: 'time',
-      label: 'Seen',
-      minWidth: 80,
-      render: (tx) => formatTimeAgo(new Date(Number(tx.timestamp))),
     },
     {
       key: 'cells',
@@ -298,7 +311,6 @@ export default function TransactionsPage() {
                   {counts[option.value] !== undefined && (
                     <span className="text-text-dim text-[11px]">
                       {counts[option.value]!.toLocaleString('en-US')}
-                      {option.value === 'dao' ? ' actions' : ''}
                     </span>
                   )}
                 </button>
@@ -351,11 +363,11 @@ export default function TransactionsPage() {
                       key={tx.hash}
                       href={`/tx/${tx.hash}`}
                       title={`${tx.hash}: ${tx.txSize} bytes, ${tx.feeRate} shannon/KB`}
+                      data-pool-status={tx.status}
+                      className={cn('block', POOL_SQUARE[tx.status])}
                       style={{
-                        display: 'block',
                         width: 18 * Math.sqrt(tx.txSize / largestPoolSize!),
                         height: 18 * Math.sqrt(tx.txSize / largestPoolSize!),
-                        background: tx.status === 'proposed' ? '#f2c55c' : '#68ccf0',
                       }}
                       aria-label={`Pool transaction ${tx.hash}`}
                     />
@@ -386,22 +398,37 @@ export default function TransactionsPage() {
               <p className="text-text-dim text-xs">Reading the pool…</p>
             )}
           </section>
-          <div
-            role="group"
-            aria-label="Transaction views"
-            className="border-base-border-subtle flex flex-wrap gap-6 border-b"
-          >
-            {(['committed', 'pool'] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={tab === value}
-                onClick={() => setTab(value)}
-                className={`min-h-11 border-b-2 text-[13px] ${tab === value ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
-              >
-                {value === 'committed' ? 'Committed' : 'In the pool'}
-              </button>
-            ))}
+          <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
+            <div role="group" aria-label="Transaction views" className="flex flex-wrap gap-6">
+              {(['committed', 'pool'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={tab === value}
+                  onClick={() => setTab(value)}
+                  className={cn(
+                    '-mb-px flex min-h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
+                    tab === value
+                      ? 'border-jade text-text-bright'
+                      : 'text-text-dim border-transparent'
+                  )}
+                >
+                  {value === 'committed' ? 'Committed' : 'In the pool'}
+                  {value === 'pool' && poolHead.data && (
+                    <span className="text-text-dim text-xs font-normal">
+                      {(
+                        poolHead.data.totals.pending + poolHead.data.totals.proposed
+                      ).toLocaleString('en-US')}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <span className="text-text-dim text-xs">
+              {tab === 'committed'
+                ? 'newest first · cellbase rows set back'
+                : 'not yet in a block · newest first'}
+            </span>
           </div>
           {active.isLoading && (
             <p role="status" className="text-text-dim">
@@ -415,9 +442,10 @@ export default function TransactionsPage() {
           )}
           {tab === 'committed' && committed.data && (
             <>
-              <TransactionTable transactions={committed.data.data} />
+              <TransactionListTable transactions={committed.data.data} />
               <p className="text-text-dim text-xs">
-                Value is the sum of positive participant CKB changes. Cellbase issuance is excluded.
+                Value is what the participants received. A cellbase row shows, grey, the reward it
+                pays; no total counts it.
               </p>
               <CursorPagination
                 className="flex-col items-start gap-3 sm:flex-row sm:items-center"
@@ -429,34 +457,39 @@ export default function TransactionsPage() {
                 hasPrevious={committedPage.hasPrevious}
                 onNext={() => committedPage.goToNext(committed.data.nextCursor)}
                 onPrevious={committedPage.goToPrevious}
+                previousLabel="Newer"
+                nextLabel="Older →"
               />
             </>
           )}
           {tab === 'pool' && pool.data && (
             <>
-              <dl className="flex flex-wrap gap-x-8 gap-y-3 text-xs" aria-label="Pool summary">
+              <dl className="flex flex-wrap gap-x-9 gap-y-2.5 text-xs" aria-label="Pool summary">
                 <div>
-                  <dt className="text-text-dim">Size</dt>
-                  <dd>{BigInt(pool.data.summary.size).toLocaleString('en-US')} bytes</dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim">Cycles</dt>
-                  <dd>{BigInt(pool.data.summary.cycles).toLocaleString('en-US')}</dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim">Fee rate range</dt>
-                  <dd>
-                    {pool.data.summary.minFeeRate === null || pool.data.summary.maxFeeRate === null
-                      ? 'No fee rates'
-                      : `${BigInt(pool.data.summary.minFeeRate).toLocaleString('en-US')}–${BigInt(pool.data.summary.maxFeeRate).toLocaleString('en-US')} shannon/KB`}
+                  <dt className="text-text-dim">Pending · proposed</dt>
+                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                    {pool.data.totals.pending.toLocaleString('en-US')} ·{' '}
+                    {pool.data.totals.proposed.toLocaleString('en-US')}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-text-dim">Newest seen</dt>
-                  <dd>
-                    {pool.data.summary.newestSeenAt === null
-                      ? 'No transactions'
-                      : formatTimeAgo(pool.data.summary.newestSeenAt)}
+                  <dt className="text-text-dim">Total size</dt>
+                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                    {BigInt(pool.data.summary.size).toLocaleString('en-US')} B
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-text-dim">Total cycles</dt>
+                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                    {BigInt(pool.data.summary.cycles).toLocaleString('en-US')}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-text-dim">Fee rate, shannon/KB</dt>
+                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                    {pool.data.summary.minFeeRate === null || pool.data.summary.maxFeeRate === null
+                      ? 'No fee rates'
+                      : `${BigInt(pool.data.summary.minFeeRate).toLocaleString('en-US')} – ${BigInt(pool.data.summary.maxFeeRate).toLocaleString('en-US')}`}
                   </dd>
                 </div>
               </dl>
@@ -467,6 +500,10 @@ export default function TransactionsPage() {
                 rowKey={(tx) => tx.hash}
                 empty="The node's pool is empty."
               />
+              <p className="text-text-dim text-xs">
+                Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
+                after its proposal.
+              </p>
               {pool.data.truncated && (
                 <p className="text-text-dim text-xs">
                   This node's tracked pool is truncated; more transactions may be present.
@@ -482,6 +519,8 @@ export default function TransactionsPage() {
                 hasPrevious={poolPage.hasPrevious}
                 onNext={() => poolPage.goToNext(pool.data.nextCursor)}
                 onPrevious={poolPage.goToPrevious}
+                previousLabel="Newer"
+                nextLabel="Older →"
               />
             </>
           )}

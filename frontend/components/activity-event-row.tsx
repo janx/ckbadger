@@ -63,9 +63,13 @@ export function capitalizeAction(action: string): string {
 export const TYPE_SCRIPT_CALL_LABEL = 'Script Call (type)';
 export const LOCK_SCRIPT_CALL_LABEL = 'Script Call (lock)';
 
-export function formatScriptRef(sc: { scriptHash: string; scriptName?: string }): string {
+/**
+ * A call's script as a reader names it: the registry name, else its code hash (what kind of
+ * script it is), never the script hash, which reads as `code(args)` (F2-tx, TX-31).
+ */
+export function formatScriptRef(sc: { codeHash: string; scriptName?: string }): string {
   if (sc.scriptName?.trim()) return sc.scriptName!.trim();
-  return sc.scriptHash.slice(0, 10);
+  return truncateHash(sc.codeHash, 8, 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +110,8 @@ function CallExpr({
 }: {
   name: string;
   href: string;
-  args: string;
+  /** Null when the script has empty args: the boards print the name alone (F2-tx). */
+  args: string | null;
   quiet: boolean;
 }) {
   return (
@@ -121,9 +126,13 @@ function CallExpr({
       >
         {name}
       </Link>
-      <span className="text-text-dim">(</span>
-      <span className={quiet ? 'text-text-dim' : 'text-aqua/70'}>{args}</span>
-      <span className="text-text-dim">)</span>
+      {args !== null && (
+        <>
+          <span className="text-text-dim">(</span>
+          <span className={quiet ? 'text-text-dim' : 'text-aqua/70'}>{args}</span>
+          <span className="text-text-dim">)</span>
+        </>
+      )}
     </>
   );
 }
@@ -131,14 +140,14 @@ function CallExpr({
 export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quiet?: boolean }) {
   return (
     <CallExpr
-      name={formatScriptRef(sc)}
+      name={formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })}
       href={getScriptDetailHref({
         name: sc.scriptName,
         codeHash: sc.typeCodeHash,
         hashType: sc.typeHashType,
         scriptKind: 'type',
       })}
-      args={truncateHash(sc.typeArgs, 6, 4)}
+      args={sc.typeArgs === '0x' ? null : truncateHash(sc.typeArgs, 6, 4)}
       quiet={quiet}
     />
   );
@@ -151,14 +160,14 @@ export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quie
 export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quiet?: boolean }) {
   return (
     <CallExpr
-      name={formatScriptRef({ scriptHash: lc.scriptHash, scriptName: lc.scriptName })}
+      name={formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName })}
       href={getScriptDetailHref({
         name: lc.scriptName,
         codeHash: lc.lockCodeHash,
         hashType: lc.lockHashType,
         scriptKind: 'lock',
       })}
-      args={truncateHash(lc.lockArgs, 6, 4)}
+      args={lc.lockArgs === '0x' ? null : truncateHash(lc.lockArgs, 6, 4)}
       quiet={quiet}
     />
   );
@@ -457,14 +466,14 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
   };
 }
 
-/** `Coinbase` for a cellbase, `CKB Transfer` when CKB is all the tx moves, else `CKB`. */
+/** `Cellbase` for a cellbase (the site's word), `CKB Transfer` when CKB is all the tx moves, else `CKB`. */
 export function ckbEventLabel(isCellbase: boolean, isPrimaryAction: boolean): string {
-  return isCellbase ? 'Coinbase' : isPrimaryAction ? 'CKB Transfer' : 'CKB';
+  return isCellbase ? 'Cellbase' : isPrimaryAction ? 'CKB Transfer' : 'CKB';
 }
 
 /**
  * CKB event parts.
- * - "Coinbase" for cellbase transactions
+ * - "Cellbase" for cellbase transactions
  * - "CKB Transfer" when this is the primary action (no L2/L3 events)
  * - "CKB" when the CKB change is just a position side-effect of L2/L3 (fee + capacity)
  */
@@ -879,8 +888,18 @@ export function ExactCkb({
   );
 }
 
-/** A participant's Layer-2 change as a fact: `±amount SYMBOL`, or `<id> arrived / departed`. */
-export function ItemDeltaFact({ item }: { item: ItemDelta }) {
+/**
+ * A participant's Layer-2 change as a fact: `±amount SYMBOL`, or `<id> arrived / departed`.
+ * `tone="sign"` (F2-tx, for the Address board) colours a token amount by its sign; the default
+ * draws it bright, as the Activities, Token and Transaction boards do.
+ */
+export function ItemDeltaFact({
+  item,
+  tone = 'plain',
+}: {
+  item: ItemDelta;
+  tone?: 'plain' | 'sign';
+}) {
   switch (item.kind) {
     case 'token': {
       const delta = BigInt(item.delta);
@@ -892,7 +911,16 @@ export function ItemDeltaFact({ item }: { item: ItemDelta }) {
           <ClassMark kind="tokens" size={12} className="self-center" />
           <Link
             href={getTokenDetailHref(item.typeScriptHash)}
-            className="text-text-bright hover:text-jade tabular-nums transition-colors"
+            className={cn(
+              'hover:text-jade tabular-nums transition-colors',
+              tone === 'plain'
+                ? 'text-text-bright'
+                : delta > BigInt(0)
+                  ? 'text-positive'
+                  : delta < BigInt(0)
+                    ? 'text-negative'
+                    : 'text-text-bright'
+            )}
             onClick={(e) => e.stopPropagation()}
           >
             {sign}
@@ -915,8 +943,8 @@ export function ItemDeltaFact({ item }: { item: ItemDelta }) {
             >
               {truncateHash(item.objectId, 8, 4)}
             </Link>
-          </span>
-          {item.delta > 0 ? ' arrived' : ' departed'}
+          </span>{' '}
+          <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
           {item.composition && (
             <CompositionBadge tier={item.composition} size="sm" className="ml-1.5 align-middle" />
           )}
@@ -936,8 +964,8 @@ export function ItemDeltaFact({ item }: { item: ItemDelta }) {
             >
               {truncateHash(item.identityId, 8, 4)}
             </Link>
-          </span>
-          {item.delta > 0 ? ' arrived' : ' departed'}
+          </span>{' '}
+          <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
         </span>
       );
   }

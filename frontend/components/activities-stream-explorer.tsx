@@ -3,8 +3,8 @@
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ClassMark } from '@/components/ui/class-mark';
-import { CLASS_COLORS } from '@/lib/design-tokens';
-import { totalActivities, activityFilterCounts } from '@/lib/activity-stats';
+import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
+import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -14,22 +14,28 @@ import {
   type GlobalActivityFilter,
 } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const POLL_INTERVAL_MS = 10_000;
 const NEAR_TOP_THRESHOLD_PX = 120;
 const ROW_HIGHLIGHT_DURATION_MS = 2_000;
 
-const FILTER_OPTIONS: Array<{ label: string; value: GlobalActivityFilter }> = [
+/** The Activities board's chips, in its order and words (TX-30), shared with Transactions. */
+const FILTER_OPTIONS: Array<{
+  label: string;
+  value: GlobalActivityFilter;
+  swatch?: string;
+  mark?: AssetClass;
+}> = [
   { label: 'All', value: 'all' },
-  { label: 'CKB', value: 'ckb' },
-  { label: 'Token', value: 'token' },
-  { label: 'Object', value: 'object' },
-  { label: 'Identity', value: 'identity' },
-  { label: 'DAO', value: 'dao' },
-  { label: 'Script', value: 'script' },
-  { label: 'Protocol', value: 'protocol' },
+  { label: 'CKB transfers', value: 'ckb', swatch: DATA_COLOR },
+  { label: 'Script calls', value: 'script', swatch: CLASS_COLORS.ckb },
+  { label: 'Nervos DAO', value: 'dao', mark: 'dao' },
+  { label: 'Tokens', value: 'token', mark: 'tokens' },
+  { label: 'Objects', value: 'object', mark: 'objects' },
+  { label: 'Identities', value: 'identity', mark: 'identities' },
+  { label: 'Protocols', value: 'protocol' },
 ];
 
 const STREAM_KEYFRAMES = `
@@ -96,27 +102,17 @@ function toActivityDate(timestamp: string): Date {
   return new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric);
 }
 
+/** The divider a row falls under, on the site's one UTC+8 clock (D2), never the browser's zone. */
 function getActivityDayLabel(timestamp: string): string {
-  const target = toActivityDate(timestamp);
-  const targetKey = `${target.getFullYear()}-${target.getMonth()}-${target.getDate()}`;
-  const now = new Date();
-  const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
-
-  if (targetKey === todayKey) {
-    return 'Today';
-  }
-
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  const yesterdayKey = `${yesterday.getFullYear()}-${yesterday.getMonth()}-${yesterday.getDate()}`;
-  if (targetKey === yesterdayKey) {
-    return 'Yesterday';
-  }
-
+  const now = Date.now();
+  const day = formatUtc8Date(toActivityDate(timestamp).getTime());
+  if (day === formatUtc8Date(now)) return 'Today';
+  if (day === previousChainDay(now)) return 'Yesterday';
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
-  }).format(target);
+    timeZone: 'UTC',
+  }).format(new Date(`${day}T00:00:00Z`));
 }
 
 function mergeUniqueActivities(
@@ -182,27 +178,17 @@ function getDayDividerTestId(label: string): string {
 
 function ActivityStreamToolbar({
   selectedFilter,
-  visibleItemsCount,
-  statusLabel,
   onFilterChange,
   summary,
   totalCount,
 }: {
   selectedFilter: GlobalActivityFilter;
-  visibleItemsCount: number;
-  statusLabel: 'active' | 'inactive';
   onFilterChange: (value: string | number | undefined) => void;
   summary?: DailyActivityStats;
   totalCount?: number;
 }) {
   const counts = summary ? activityFilterCounts(summary, totalCount) : null;
   const occurrences = summary ? totalActivities(summary) : 0;
-  const classes = {
-    token: 'tokens',
-    object: 'objects',
-    identity: 'identities',
-    dao: 'dao',
-  } as const;
   return (
     <div
       data-testid="activities-stream-toolbar"
@@ -223,23 +209,23 @@ function ActivityStreamToolbar({
                 : 'text-text-dim hover:text-text border-transparent'
             )}
           >
-            {option.value in classes && (
-              <ClassMark kind={classes[option.value as keyof typeof classes]} />
+            {option.mark && <ClassMark kind={option.mark} />}
+            {option.swatch && (
+              <span
+                aria-hidden="true"
+                data-swatch
+                className="h-[9px] w-[9px] rounded-sm"
+                style={{ backgroundColor: option.swatch }}
+              />
             )}
             {option.label}
             {counts && counts[option.value] !== undefined && (
               <span className="text-text-dim text-[11px] tabular-nums">
                 {counts[option.value]!.toLocaleString('en-US')}
-                {option.value === 'dao' ? ' actions' : ''}
               </span>
             )}
           </button>
         ))}
-        <span className="text-text-dim ml-auto text-[11px]" aria-live="polite">
-          {statusLabel === 'active'
-            ? 'Refreshing'
-            : `${visibleItemsCount.toLocaleString('en-US')} loaded`}
-        </span>
       </div>
       {summary && (
         <p className="text-text-dim mt-2 text-[11px]">
@@ -260,12 +246,7 @@ function ActivityStreamToolbar({
               title={`${o.label}: ${counts[o.value]}`}
               style={{
                 width: `${(counts[o.value]! / occurrences) * 100}%`,
-                backgroundColor:
-                  o.value in classes
-                    ? CLASS_COLORS[classes[o.value as keyof typeof classes]]
-                    : o.value === 'ckb'
-                      ? '#2edba3'
-                      : CLASS_COLORS.other,
+                backgroundColor: o.mark ? CLASS_COLORS[o.mark] : (o.swatch ?? CLASS_COLORS.other),
               }}
             />
           ))}
@@ -287,6 +268,17 @@ function ActivityDayDivider({ label }: { label: string }) {
 }
 
 function LoadingRows() {
+  return (
+    <>
+      <p role="status" className="text-text-dim py-3 text-xs">
+        Reading activities…
+      </p>
+      <SkeletonRows />
+    </>
+  );
+}
+
+function SkeletonRows() {
   return Array.from({ length: 8 }).map((_, index) => (
     <div
       key={index}
@@ -465,7 +457,6 @@ export function ActivitiesStreamExplorer({
     safeScrollIntoView(topAnchorRef.current, { behavior: 'smooth', block: 'start' });
   };
 
-  const statusLabel = isFetchingNextPage || headQuery.isFetching ? 'active' : 'inactive';
   const initialError = !isLoading && !!error && visibleItems.length === 0;
   const emptyState = !isLoading && !error && visibleItems.length === 0;
   const hasPending = pendingNewItems.length > 0;
@@ -512,8 +503,6 @@ export function ActivitiesStreamExplorer({
 
           <ActivityStreamToolbar
             selectedFilter={selectedFilter}
-            visibleItemsCount={visibleItems.length}
-            statusLabel={statusLabel}
             summary={summary}
             totalCount={totalCount}
             onFilterChange={handleFilterChange}
@@ -522,17 +511,14 @@ export function ActivitiesStreamExplorer({
         {isLoading ? (
           <LoadingRows />
         ) : initialError ? (
-          <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-            <div className="text-text font-mono text-sm uppercase">Failed to load activities</div>
-            <div className="text-text-dim max-w-lg text-sm">
-              {error instanceof Error ? error.message : 'Unknown error'}
-            </div>
+          <div role="alert" className="flex flex-col gap-1 py-4 text-xs">
+            <p className="text-text">Could not read activities</p>
+            <p className="text-text-dim break-words">
+              {error instanceof Error ? error.message : String(error)}
+            </p>
           </div>
         ) : emptyState ? (
-          <div className="flex min-h-[20rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-            <div className="text-text font-mono text-sm uppercase">No activities yet</div>
-            <div className="text-text-dim text-sm">No activity matches this filter.</div>
-          </div>
+          <p className="text-text-dim py-4">Nothing of this kind in the latest activities.</p>
         ) : (
           <div>
             {visibleItems.map((activity, index) => {
@@ -564,19 +550,17 @@ export function ActivitiesStreamExplorer({
             )}
 
             {isFetchingNextPage && (
-              <div className="text-text-dim border-base-border/50 border-t px-3 py-3 text-center font-mono text-xs uppercase">
-                Loading older activities
-              </div>
+              <p role="status" className="text-text-dim py-3 text-center text-xs">
+                Reading older activities…
+              </p>
             )}
 
             {isFetchNextPageError && (
               <div className="border-base-border/50 border-t px-3 py-3 text-center">
-                <div className="text-negative font-mono text-xs uppercase">
-                  Failed to load older activities
-                </div>
+                <p className="text-text text-xs">Could not read older activities</p>
                 <button
                   type="button"
-                  className="text-jade hover:text-jade/80 mt-1 cursor-pointer font-mono text-xs uppercase underline transition-colors"
+                  className="text-jade hover:text-jade/80 mt-1 cursor-pointer text-xs underline transition-colors"
                   onClick={() => void fetchNextPage()}
                 >
                   Retry

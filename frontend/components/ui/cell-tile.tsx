@@ -4,6 +4,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { CellBar, type CellAnatomy } from '@/components/ui/cell-bar';
 import { ExactCkb } from '@/components/activity-event-row';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 
@@ -80,11 +81,17 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         </div>
       )}
       <div className="text-text-dim mt-2 flex flex-wrap justify-between gap-2 text-[11px]">
-        <span>
-          occupied <ExactCkb shannons={occupied} signed={false} tone="plain" />
-        </span>
+        {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195". */}
+        <span>occupied {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}</span>
         <span>{cell.state}</span>
       </div>
     </article>
   );
+}
+
+// F2-tx (TX-19): one byte of state occupies exactly one CKB.
+function occupiedBytes(id: string, shannons: bigint): bigint {
+  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
+    throw new Error(`${id}: occupied ${shannons} shannons is not whole bytes`);
+  return shannons / SHANNONS_PER_CKB;
 }

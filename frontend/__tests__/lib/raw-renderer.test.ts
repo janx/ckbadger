@@ -68,6 +68,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa'],
       witnessesAvailable: true,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
 
     const result = await renderRawPage({
@@ -111,6 +113,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: [],
       witnessesAvailable: false,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
     const result = await renderRawPage({
       page: parseRawSourcePath(`/tx/0x${'a'.repeat(64)}`),
@@ -164,6 +168,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
       witnessesAvailable: true,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
     vi.mocked(api.getTransactionCellDeps).mockResolvedValue([
       {
@@ -739,6 +745,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: [],
       witnessesAvailable: true,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
     vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
     vi.mocked(api.getTransactionLifecycle).mockResolvedValue({

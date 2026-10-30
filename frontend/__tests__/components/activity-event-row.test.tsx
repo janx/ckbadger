@@ -62,14 +62,15 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
   });
 
-  it('renders Coinbase for cellbase activities', () => {
+  it('renders Cellbase for cellbase activities', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({ isCellbase: true, ckbDelta: '100000000' })}
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    expect(screen.getAllByText(/Coinbase/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Cellbase/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Coinbase/)).not.toBeInTheDocument();
   });
 
   it('renders DAO Deposit sub-row plus CKB sub-row', () => {
@@ -195,8 +196,9 @@ describe('ActivityEventGroup', () => {
       />
     );
     expect(screen.getAllByText(/Script Call \(type\)/).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole('link', { name: '0x12345678' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('data1:0x12345678')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: '0xcode' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/0x12345678/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/data1:/)).not.toBeInTheDocument();
   });
 
   it('renders multiple event types in one activity', () => {
@@ -419,8 +421,9 @@ describe('ActivityEventGroup', () => {
       />
     );
     expect(screen.getAllByText(/Script Call \(lock\)/).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole('link', { name: '0x87654321' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('type:0x87654321')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: '0xunknown' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/0x87654321/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/type:0x/)).not.toBeInTheDocument();
   });
 });
 
@@ -589,7 +592,7 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
     expect(activityHeadline(makeGlobal({ participants: [party] }))).toBe('Object mint');
     expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
     expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');
-    expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Coinbase');
+    expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Cellbase');
   });
 });
 
@@ -861,5 +864,82 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       />
     );
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// F2-tx: the shared row parts (report A TX-31, and the blocks group's relay).
+describe('row parts (F2-tx)', () => {
+  it('names an unregistered script by its code hash, not its script hash (TX-31)', () => {
+    render(
+      <LockCallExpr
+        lc={{
+          lockCodeHash: `0x43b292${'00'.repeat(25)}895d`,
+          lockHashType: 'type',
+          lockArgs: `0x031a9d${'00'.repeat(14)}93d4`,
+          scriptHash: `0xba0e5590${'00'.repeat(26)}aaaa`,
+        }}
+      />
+    );
+    expect(screen.getByRole('link', { name: '0x43b292...895d' })).toBeInTheDocument();
+    expect(screen.queryByText(/0xba0e5590/)).not.toBeInTheDocument();
+  });
+
+  it('prints no parentheses for a call with empty args (boards show none)', () => {
+    const { container } = render(
+      <TypeCallExpr
+        sc={{
+          typeCodeHash: '0xtime',
+          typeHashType: 'type',
+          typeArgs: '0x',
+          scriptHash: '0xs1',
+          scriptName: '.bit Time Info',
+        }}
+      />
+    );
+    expect(container).toHaveTextContent(/^\.bit Time Info$/);
+  });
+
+  it('draws arrived / departed quiet, the item itself bright (AssetClasses, Main boards)', () => {
+    render(
+      <ItemDeltaFact
+        item={{ kind: 'object', objectId: `0x51c7${'00'.repeat(28)}96f2`, delta: 1 }}
+      />
+    );
+    expect(screen.getByText('arrived')).toHaveClass('text-text-dim');
+  });
+
+  it('colours a token amount by its sign when a page asks for it (Address board)', () => {
+    const { rerender } = render(
+      <ItemDeltaFact
+        item={{
+          kind: 'token',
+          typeScriptHash: '0xickb',
+          delta: '8465187699473',
+          symbol: 'iCKB',
+          decimals: 8,
+        }}
+      />
+    );
+    expect(screen.getByRole('link')).toHaveClass('text-text-bright');
+    rerender(
+      <ItemDeltaFact
+        tone="sign"
+        item={{
+          kind: 'token',
+          typeScriptHash: '0xickb',
+          delta: '8465187699473',
+          symbol: 'iCKB',
+          decimals: 8,
+        }}
+      />
+    );
+    expect(screen.getByRole('link')).toHaveClass('text-positive');
+    rerender(
+      <ItemDeltaFact
+        tone="sign"
+        item={{ kind: 'token', typeScriptHash: '0xickb', delta: '-1', symbol: 'iCKB', decimals: 8 }}
+      />
+    );
+    expect(screen.getByRole('link')).toHaveClass('text-negative');
   });
 });
