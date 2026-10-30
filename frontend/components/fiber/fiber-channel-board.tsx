@@ -5,6 +5,7 @@ import { TransactionEvidence } from '@/components/cell/cell-transactions';
 import type { FiberChannelDetail, FiberChannelEvidence, FiberEpochDelay } from '@/lib/api';
 import { ExactCkb } from '@/components/activity-event-row';
 import { formatBlockNumber } from '@/lib/format-block';
+import { u64Hex } from '@/lib/hex-bytes';
 
 interface Props {
   channel: FiberChannelDetail;
@@ -57,6 +58,9 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
   if (updatedCommitment && (!tracked || updatedCommitment.txHash !== tracked.txHash)) {
     throw new Error('Fiber current commitment stage differs from tracked commitment cell');
   }
+  const delayBytes = tracked
+    ? u64Hex(tracked.delayEpoch, `Fiber commitment ${tracked.txHash} delay`)
+    : null;
   return (
     <div className="space-y-8">
       <div className="border-base-border grid min-h-[72px] gap-4 border-y py-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -321,12 +325,13 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                 </span>
                 <span className="text-text-dim">Pubkey hash</span>
                 <span className="text-text-bright break-all font-mono">{tracked.pubkeyHash}</span>
-                <span className="text-text-dim">Delay</span>
-                <span className="text-text-bright break-all">
-                  {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
+                <span className="text-text-dim">Delay · 8 bytes, LE</span>
+                <span className="text-text-bright min-w-0">
+                  <span className="break-all font-mono">
+                    {delayBytes!.littleEndian} = {delayBytes!.value}
+                  </span>{' '}
+                  · {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
                 </span>
-                <span className="text-text-dim">Delay since · exact u64</span>
-                <span className="text-text-bright break-all font-mono">{tracked.delayEpoch}</span>
                 <span className="text-text-dim">Version · exact u64</span>
                 <span className="text-text-bright break-all font-mono">{tracked.version}</span>
                 <span className="text-text-dim">Settlement hash / flag</span>

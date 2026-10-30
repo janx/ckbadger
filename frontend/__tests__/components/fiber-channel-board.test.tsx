@@ -107,14 +107,13 @@ describe('FiberChannelBoard', () => {
     expect(screen.getByText(/not a proven channel balance or payment/)).toBeInTheDocument();
   });
 
-  it('reads the commitment delay decoded, keeping the exact u64 as labelled evidence (FF-C1)', () => {
+  it('reads the commitment delay as its bytes plus the decoded meaning, no decimal u64 (FF-C1)', () => {
     render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={evidence} />);
-    expect(screen.getByText('Delay').nextElementSibling).toHaveTextContent(
-      'relative · 1 + 0/1 epoch'
+    expect(screen.getByText('Delay · 8 bytes, LE').nextElementSibling).toHaveTextContent(
+      '0x01000000000100a0 = 0xa000010000000001 · relative · 1 + 0/1 epoch'
     );
-    expect(screen.getByText('Delay since · exact u64').nextElementSibling).toHaveTextContent(
-      '11529216145580097537'
-    );
+    expect(screen.queryByText('Delay since · exact u64')).toBeNull();
+    expect(screen.queryByText('11529216145580097537')).toBeNull();
     expect(formatEpochDelay({ relative: false, epochs: 180, index: 3, length: 10 }, 'x')).toBe(
       'absolute · 180 + 3/10 epochs'
     );
