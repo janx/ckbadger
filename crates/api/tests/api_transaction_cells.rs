@@ -143,6 +143,9 @@ async fn display_fixture(
                 .map(|v| Bytes::copy_from_slice(v).pack())
                 .collect::<Vec<_>>(),
         )
+        // The CKBFS output's data names witness 0: the contract only accepts
+        // a transaction whose named witness is the file's CKBFS witness.
+        .witness(Bytes::from_static(b"CKBFS\x00ownership-proof").pack())
         .build();
     let tx_hash: [u8; 32] = tx.hash().unpack();
     let block = BlockBuilder::default()

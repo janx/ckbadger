@@ -1194,8 +1194,21 @@ async fn get_transaction_detail(
             None,
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        super::transaction_structure::attach_content_witnesses(&mut script_groups, &io.witnesses)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let outputs_data: Vec<&[u8]> = resolved
+            .outputs
+            .iter()
+            .map(|cell| cell.data.as_slice())
+            .collect();
+        super::transaction_structure::attach_content_witnesses(
+            &mut script_groups,
+            &io.witnesses,
+            &outputs_data,
+        )
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "uncommitted transaction {hash} content witnesses: {e:#}"
+            ))
+        })?;
         return ok(TransactionDetailResponse {
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
@@ -1280,6 +1293,7 @@ async fn get_transaction_detail(
         witnesses,
         witnesses_available,
         dotcell_names,
+        outputs_data,
     ) = {
         let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
             ApiError::internal(format!(
@@ -1293,7 +1307,17 @@ async fn get_transaction_detail(
         let tx_view = ckb_store.get_transaction(&tx_hash_arr).ok_or_else(|| ApiError::internal(format!(
             "canonical transaction {tx_hash_hex} at block {block_number}:{tx_idx} is missing from CKB RocksDB"
         )))?;
-        build_inputs_outputs_from_ckb(
+        let (
+            inputs,
+            outputs,
+            inputs_capacity,
+            outputs_capacity,
+            inputs_occupied_capacity,
+            outputs_occupied_capacity,
+            witnesses,
+            witnesses_available,
+            dotcell_names,
+        ) = build_inputs_outputs_from_ckb(
             &tx_view,
             ckb_store,
             &state.store,
@@ -1301,7 +1325,24 @@ async fn get_transaction_detail(
             &state.ckb_network,
             block_number,
             state.genesis_baseline()?.virtual_occupied,
-        )?
+        )?;
+        let outputs_data: Vec<ckb_types::bytes::Bytes> = tx_view
+            .outputs_data()
+            .into_iter()
+            .map(|data| data.raw_data())
+            .collect();
+        (
+            inputs,
+            outputs,
+            inputs_capacity,
+            outputs_capacity,
+            inputs_occupied_capacity,
+            outputs_occupied_capacity,
+            witnesses,
+            witnesses_available,
+            dotcell_names,
+            outputs_data,
+        )
     };
 
     for (index, output) in outputs.iter_mut().enumerate() {
@@ -1366,10 +1407,16 @@ async fn get_transaction_detail(
         group_result.as_ref(),
     )
     .map_err(|e| ApiError::internal(format!("transaction {tx_hash_hex} group cycles: {e}")))?;
-    super::transaction_structure::attach_content_witnesses(&mut script_groups, &witnesses)
-        .map_err(|e| {
-            ApiError::internal(format!("transaction {tx_hash_hex} content witnesses: {e}"))
-        })?;
+    super::transaction_structure::attach_content_witnesses(
+        &mut script_groups,
+        &witnesses,
+        &outputs_data,
+    )
+    .map_err(|e| {
+        ApiError::internal(format!(
+            "transaction {tx_hash_hex} content witnesses: {e:#}"
+        ))
+    })?;
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,

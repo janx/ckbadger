@@ -477,3 +477,225 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
     export_fiber_fixture("fiber-evidence-open", &body);
     export_fiber_fixture("fiber-open-detail", &detail);
 }
+
+/// FF-C1: the commitment evidence carries the decoded `since` delay itself —
+/// the frontend reads `currentCommitment.delayEpochDecoded`, not the channel's.
+#[tokio::test]
+async fn fiber_force_close_evidence_serializes_decoded_commitment_delay() {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{
+            BlockBuilder, Capacity, EpochNumberWithFraction, ScriptHashType, TransactionBuilder,
+        },
+        packed,
+        prelude::*,
+    };
+    let script = |code: &[u8], args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code).unwrap())
+            .hash_type(ScriptHashType::Type.into())
+            .args(Bytes::from(args.to_vec()).pack())
+            .build()
+    };
+    let out_point = |hash: [u8; 32], index: u32| {
+        packed::CellInput::new_builder()
+            .previous_output(
+                packed::OutPoint::new_builder()
+                    .tx_hash(packed::Byte32::new(hash))
+                    .index(index.pack())
+                    .build(),
+            )
+            .build()
+    };
+    let output = |capacity: u64, lock: &packed::Script| {
+        packed::CellOutput::new_builder()
+            .capacity(Capacity::shannons(capacity).pack())
+            .lock(lock.clone())
+            .build()
+    };
+    let owner_code = vec![0x11; 32];
+    let owner_args = vec![0xaa; 20];
+    let funding_code = hex::decode(
+        ckbadger_indexer::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET.trim_start_matches("0x"),
+    )
+    .unwrap();
+    let commitment_code = hex::decode(
+        ckbadger_indexer::parser::fiber::COMMITMENT_LOCK_CODE_HASH_MAINNET.trim_start_matches("0x"),
+    )
+    .unwrap();
+    let funding_args = vec![0x44; 20];
+    // The delay real force-close commitments carry: relative, 6 + 0/256 epochs.
+    let delay: u64 = 0xa001_0000_0000_0006;
+    let mut commitment_args = vec![0x55; 20];
+    commitment_args.extend(delay.to_le_bytes());
+    commitment_args.extend(1u64.to_be_bytes());
+    commitment_args.extend([0x66; 20]);
+    commitment_args.push(0);
+    assert_eq!(commitment_args.len(), 57);
+    let owner = script(&owner_code, &owner_args);
+    let funding_lock = script(&funding_code, &funding_args);
+    let commitment_lock = script(&commitment_code, &commitment_args);
+
+    let previous_tx = TransactionBuilder::default()
+        .output(output(100_000_000_000, &owner))
+        .output_data(Bytes::new().pack())
+        .build();
+    let previous_hash: [u8; 32] = previous_tx.hash().unpack();
+    let opening_tx = TransactionBuilder::default()
+        .input(out_point(previous_hash, 0))
+        .output(output(30_000_000_000, &funding_lock))
+        .output_data(Bytes::new().pack())
+        .output(output(69_900_000_000, &owner))
+        .output_data(Bytes::new().pack())
+        .build();
+    let opening_hash: [u8; 32] = opening_tx.hash().unpack();
+    let close_tx = TransactionBuilder::default()
+        .input(out_point(opening_hash, 0))
+        .output(output(29_900_000_000, &commitment_lock))
+        .output_data(Bytes::new().pack())
+        .build();
+    let close_hash: [u8; 32] = close_tx.hash().unpack();
+    let epoch = EpochNumberWithFraction::new(1, 0, 1800).pack();
+    let blocks: Vec<_> = [(9u64, previous_tx), (10, opening_tx), (11, close_tx)]
+        .into_iter()
+        .map(|(number, tx)| {
+            BlockBuilder::default()
+                .number(number.pack())
+                .epoch(epoch.clone())
+                .transaction(tx)
+                .build()
+        })
+        .collect();
+    let chain = seed_ckb_chain(&blocks);
+
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (9, 1_700_000_000_000),
+            (10, 1_700_000_001_000),
+            (11, 1_700_000_002_000),
+        ],
+    );
+    store
+        .update_sync_status(|status| status.tip_block_number = 11)
+        .unwrap();
+    let empty_data_hash =
+        ckbadger_indexer::parser::script::ScriptParser::compute_data_hash(&[]).to_vec();
+    let cell = |code: &[u8], args: &[u8], capacity: i64| LiveCellInfo {
+        capacity,
+        occupied_capacity: i64::try_from(8 + 33 + args.len()).unwrap() * 100_000_000,
+        lock_script_hash: compute_script_hash(code, 1, args),
+        lock_code_hash: code.to_vec(),
+        lock_hash_type: 1,
+        lock_args: args.to_vec(),
+        type_script_hash: None,
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size: 0,
+        udt_amount: None,
+        data_hash: Some(empty_data_hash.clone()),
+    };
+    let owner_hash = compute_script_hash(&owner_code, 1, &owner_args);
+    let channel_id = [0xf1; 32];
+    let channel = FiberChannel {
+        funding_tx_hash: opening_hash.to_vec(),
+        funding_output_index: 0,
+        state: FiberChannelState::ForceClosed,
+        capacity: 30_000_000_000,
+        udt_type_hash: None,
+        udt_amount: None,
+        open_block: 10,
+        open_timestamp: 1_700_000_001_000,
+        close_tx_hash: Some(close_hash.to_vec()),
+        close_block: Some(11),
+        close_timestamp: Some(1_700_000_002_000),
+        commitment_tx_hash: Some(close_hash.to_vec()),
+        commitment_output_index: Some(0),
+        delay_epoch: Some(delay),
+        settlement_tx_hash: None,
+        settlement_block: None,
+        settlement_timestamp: None,
+        participants: vec![owner_hash.clone()],
+        funding_lock_args: funding_args.clone(),
+    };
+    let mut batch = StoreBatch::new(&store);
+    for (hash, block, inputs, outputs) in [
+        (previous_hash, 9, 0, 1),
+        (opening_hash, 10, 1, 2),
+        (close_hash, 11, 1, 1),
+    ] {
+        batch.put_tx_hash_map(&hash, block, 0);
+        batch.put_tx_index(
+            block,
+            0,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: inputs,
+                outputs_count: outputs,
+                fee: 100_000_000,
+                tx_size: 200,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+    }
+    batch.put_consumed_cell_with_consumer(
+        &previous_hash,
+        0,
+        &cell(&owner_code, &owner_args, 100_000_000_000),
+        9,
+        10,
+        Some(&opening_hash),
+    );
+    batch.put_consumed_cell_with_consumer(
+        &opening_hash,
+        0,
+        &cell(&funding_code, &funding_args, 30_000_000_000),
+        10,
+        11,
+        Some(&close_hash),
+    );
+    batch.put_cell(
+        &close_hash,
+        0,
+        &cell(&commitment_code, &commitment_args, 29_900_000_000),
+        11,
+    );
+    batch.put_fiber_channel(&channel_id, &channel);
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, body) = get_json(
+        &app,
+        &format!("/fiber/channels/0x{}/evidence", hex::encode(channel_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let commitment = &body["currentCommitment"];
+    assert_eq!(commitment["delayEpoch"], delay.to_string());
+    assert_eq!(
+        commitment["delayEpochDecoded"],
+        serde_json::json!({"relative": true, "epochs": 6, "index": 0, "length": 256})
+    );
+    // The same decoder serves the channel detail: one decoded value.
+    let (status, detail) = get_json(
+        &app,
+        &format!("/fiber/channels/0x{}", hex::encode(channel_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["delayEpochDecoded"], commitment["delayEpochDecoded"]);
+    assert_eq!(commitment["epochLock"], "firstSettlementDelay");
+    assert_eq!(commitment["readyEpoch"], "7+0/1");
+    assert_eq!(commitment["epochLockMetAtTip"], false);
+    export_fiber_fixture("fiber-evidence-force-closed", &body);
+}

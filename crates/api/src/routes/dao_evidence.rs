@@ -213,17 +213,23 @@ fn header_point_at(
 }
 
 fn dao_fields(header: &CachedBlockHeader, block: i64) -> anyhow::Result<[u64; 4]> {
+    dao_header_fields(&header.dao, &format!("block {block}"))
+}
+
+/// A header's DAO field as its four little-endian u64 words `[C, AR, S, U]`
+/// (RFC-0023) — the API's one decoder of header DAO bytes.
+pub(crate) fn dao_header_fields(dao: &[u8], context: &str) -> anyhow::Result<[u64; 4]> {
     anyhow::ensure!(
-        header.dao.len() == 32,
-        "invalid DAO field length at block {block}: {}",
-        header.dao.len()
+        dao.len() == 32,
+        "invalid DAO field length at {context}: {}",
+        dao.len()
     );
     let mut fields = [0u64; 4];
     for (index, field) in fields.iter_mut().enumerate() {
         let start = index * 8;
-        *field = u64::from_le_bytes(header.dao[start..start + 8].try_into()?);
+        *field = u64::from_le_bytes(dao[start..start + 8].try_into()?);
     }
-    anyhow::ensure!(fields[1] > 0, "zero accumulated rate at DAO block {block}");
+    anyhow::ensure!(fields[1] > 0, "zero accumulated rate at DAO {context}");
     Ok(fields)
 }
 

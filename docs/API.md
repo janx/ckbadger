@@ -226,23 +226,33 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 ### blocks (crates/api/src/routes/blocks.rs)
 
-| Method | Path                            | Handler               | Purpose                                                              |
-| ------ | ------------------------------- | --------------------- | -------------------------------------------------------------------- |
-| GET    | `/api/v1/blocks`                | `list_blocks`         | List blocks (cursor-paginated, DESC)                                 |
-| GET    | `/api/v1/blocks/{id}`           | `get_block`           | Get block by number or 0x-prefixed hash (with miner/reward/hardfork) |
-| GET    | `/api/v1/blocks/{id}/fee-stats` | `get_block_fee_stats` | Per-block fee-rate stats (avg/min/max) and cycles                    |
-| GET    | `/api/v1/blocks/{id}/proposals` | `get_block_proposals` | List block proposals with linkage to committed transactions          |
+| Method | Path                                  | Handler               | Purpose                                                              |
+| ------ | ------------------------------------- | --------------------- | -------------------------------------------------------------------- |
+| GET    | `/api/v1/blocks`                      | `list_blocks`         | List blocks (cursor-paginated, DESC)                                 |
+| GET    | `/api/v1/blocks/{id}`                 | `get_block`           | Get block by number or 0x-prefixed hash (with miner/reward/hardfork) |
+| GET    | `/api/v1/blocks/{id}/fee-stats`       | `get_block_fee_stats` | Per-block fee-rate stats (avg/min/max) and cycles                    |
+| GET    | `/api/v1/blocks/{id}/proposals`       | `get_block_proposals` | List block proposals with linkage to committed transactions          |
+| GET    | `/api/v1/blocks/{id}/uncles/{index}`  | `get_block_uncle`     | Full header of the uncle at `index` in canonical block `{id}`        |
 
 **Params**
 
 - `ListParams` — `limit`, `cursor` (i64 block-number cursor)
 - `Path(id): Path<String>` — block number string or hex hash
+- `Path((id, index))` — the including canonical block (as above) and the uncle's position in its
+  uncle list
 
 **Responses**
 
 - `CursorPaginatedResponse<BlockResponse>` — block metadata + miner/hardfork activation
 - `BlockResponse` — single block
 - `BlockFeeStatsResponse` — total_size, total_cycles, fee-rate stats, `cycles_pending`
+- `UncleDetailResponse` — the uncle's header as the including block embeds it (`number`, `hash`,
+  `parentHash`, `timestamp`, `epoch`/`epochNumber`/`epochIndex`/`epochLength`, `compactTarget`,
+  `difficulty`, `nonce`, `version`, `transactionsRoot`, `proposalsHash`, `extraHash`,
+  `dao: {raw, c, ar, s, u}`, `proposalIds`) plus `includedBy: {number, hash, index}` and
+  `canonicalAtHeight: {number, hash}` (the canonical block that won the uncle's height). Uncles are
+  not canonical blocks, so `/blocks/{uncle hash}` stays 404; an unknown index or a non-canonical
+  including block is 404
 - `Vec<BlockProposal>` — `proposalIndex`, `proposalId`, `committedTxHash`, `committedBlockNumber`.
   Commitments are resolved through the shared NC-Max commit-window scan (`+2..=+10`, first matching
   tx in chain order wins — the same `resolve_committed_txs` path `/graph/proposals` uses). A

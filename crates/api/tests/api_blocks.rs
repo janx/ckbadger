@@ -1080,3 +1080,191 @@ async fn r3_deep_fork_blocks_do_not_dispatch_cycles_above_fork_point() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// /blocks/{id}/uncles/{index}: an uncle's full header as its including block
+// embeds it — uncles have no `/blocks/{hash}` page.
+// ---------------------------------------------------------------------------
+
+struct UncleFixture {
+    app: axum::Router,
+    including_hash: [u8; 32],
+    uncle_hash: [u8; 32],
+    uncle_parent: [u8; 32],
+    canonical_439: [u8; 32],
+    proposal: ckb_types::packed::ProposalShortId,
+}
+
+async fn uncle_fixture(seed_canonical_height: bool) -> UncleFixture {
+    use ckb_types::{core, packed, prelude::*};
+    let mut dao = Vec::new();
+    for word in [
+        3_360_000_000_123_456_789u64,
+        10_000_000_000_000_001,
+        12_345,
+        (1u64 << 60) + 7,
+    ] {
+        dao.extend(word.to_le_bytes());
+    }
+    let proposal = packed::ProposalShortId::new([0x6c; 10]);
+    let uncle_parent = [0x37; 32];
+    let uncle = core::BlockBuilder::default()
+        .number(439u64.pack())
+        .parent_hash(packed::Byte32::new(uncle_parent))
+        .timestamp(1_700_000_000_500u64.pack())
+        .epoch(core::EpochNumberWithFraction::new(1, 5, 1800).pack())
+        .compact_target(0x1a08a97eu32.pack())
+        .nonce(0x0123_4567_89ab_cdef_0011_2233_4455_6677u128.pack())
+        .dao(packed::Byte32::from_slice(&dao).unwrap())
+        .proposal(proposal.clone())
+        .build()
+        .as_uncle();
+    let uncle_hash: [u8; 32] = uncle.hash().unpack();
+    let including = core::BlockBuilder::default()
+        .number(440u64.pack())
+        .epoch(core::EpochNumberWithFraction::new(1, 6, 1800).pack())
+        .uncle(uncle)
+        .build();
+    let including_hash: [u8; 32] = including.hash().unpack();
+    let canonical_439 = [0x39; 32];
+    let store = test_store();
+    let header = |hash: &[u8], uncles_count: i32| CachedBlockHeader {
+        hash: hash.to_vec(),
+        parent_hash: vec![0u8; 32],
+        timestamp: 1_700_000_000_000,
+        epoch_number: 1,
+        epoch_index: 0,
+        epoch_length: 1800,
+        dao: vec![0; 32],
+        transactions_count: 0,
+        uncles_count,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
+        cycles: None,
+        chain_time_ms: 1_700_000_000_000,
+    };
+    let mut batch = StoreBatch::new(store.as_ref());
+    if seed_canonical_height {
+        batch.put_block_header(439, &header(&canonical_439, 0));
+    }
+    batch.put_block_header(440, &header(&including_hash, 1));
+    batch.commit().unwrap();
+    let chain = seed_ckb_chain(&[including]);
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    UncleFixture {
+        app: create_router(config).await,
+        including_hash,
+        uncle_hash,
+        uncle_parent,
+        canonical_439,
+        proposal,
+    }
+}
+
+#[tokio::test]
+async fn block_uncle_detail_serves_the_embedded_header_and_its_canonical_rival() {
+    use ckb_types::prelude::*;
+    let fixture = uncle_fixture(true).await;
+    let hex = |bytes: &[u8]| format!("0x{}", hex::encode(bytes));
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["number"], 439);
+    assert_eq!(json["hash"], hex(&fixture.uncle_hash));
+    assert_eq!(json["parentHash"], hex(&fixture.uncle_parent));
+    assert_eq!(
+        json["timestamp"],
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_500)
+            .unwrap()
+            .to_rfc3339()
+    );
+    assert_eq!(json["epoch"], "5/1800");
+    assert_eq!(json["epochNumber"], 1);
+    assert_eq!(json["epochIndex"], 5);
+    assert_eq!(json["epochLength"], 1800);
+    assert_eq!(json["compactTarget"], "0x1a08a97e");
+    assert_eq!(
+        json["difficulty"],
+        ckb_types::utilities::compact_to_difficulty(0x1a08a97e).to_string()
+    );
+    assert_eq!(json["nonce"], "0x123456789abcdef0011223344556677");
+    assert_eq!(json["version"], 0);
+    assert_eq!(
+        json["dao"],
+        serde_json::json!({
+            "raw": json["dao"]["raw"].clone(),
+            "c": "3360000000123456789",
+            "ar": "10000000000000001",
+            "s": "12345",
+            "u": ((1u64 << 60) + 7).to_string(),
+        })
+    );
+    assert_eq!(json["dao"]["raw"].as_str().unwrap().len(), 66);
+    assert_eq!(
+        json["proposalIds"],
+        serde_json::json!([hex(fixture.proposal.as_slice())])
+    );
+    for field in ["transactionsRoot", "proposalsHash", "extraHash"] {
+        assert_eq!(json[field].as_str().unwrap().len(), 66, "{field}: {json}");
+    }
+    assert_eq!(
+        json["includedBy"],
+        serde_json::json!({"number": 440, "hash": hex(&fixture.including_hash), "index": 0})
+    );
+    assert_eq!(
+        json["canonicalAtHeight"],
+        serde_json::json!({"number": 439, "hash": hex(&fixture.canonical_439)})
+    );
+
+    // The including block by hash resolves the same uncle.
+    let (status, by_hash) = get_json(
+        &fixture.app,
+        &format!("/blocks/{}/uncles/0", hex(&fixture.including_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_hash}");
+    assert_eq!(by_hash, json);
+}
+
+#[tokio::test]
+async fn block_uncle_detail_rejects_unknown_uncles_and_non_canonical_blocks() {
+    let fixture = uncle_fixture(true).await;
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("no uncle at index 1"),
+        "{json}"
+    );
+    // An uncle is not a canonical block, and is not an including block either.
+    let uncle = format!("0x{}", hex::encode(fixture.uncle_hash));
+    let (status, json) = get_json(&fixture.app, &format!("/blocks/{uncle}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    let (status, json) = get_json(&fixture.app, &format!("/blocks/{uncle}/uncles/0")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    let (status, json) = get_json(&fixture.app, "/blocks/441/uncles/0").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/-1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+}
+
+#[tokio::test]
+async fn block_uncle_detail_requires_the_canonical_block_at_its_height() {
+    let fixture = uncle_fixture(false).await;
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/0").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("block 440")
+            && message.contains("uncle 0")
+            && message.contains("no canonical block indexed at uncle height 439"),
+        "{message}"
+    );
+}

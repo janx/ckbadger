@@ -1289,8 +1289,43 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     Ok(out)
 }
 
+/// Holder buckets of a collection's live items: how many holders own 1, 2,
+/// 3–5 and 6+ live items, and how many items those holders own. The one
+/// distribution of Spore cluster insights and object-collection insights:
+/// both handlers call this function with one count per current holder.
+pub(crate) fn collection_holder_distribution(
+    item_counts: impl IntoIterator<Item = u64>,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    const RANGES: [&str; 4] = ["1", "2", "3–5", "6+"];
+    let mut buckets = [(0u64, 0u64); 4];
+    for count in item_counts {
+        let bucket = match count {
+            0 => anyhow::bail!("collection holder with zero live items"),
+            1 => 0,
+            2 => 1,
+            3..=5 => 2,
+            _ => 3,
+        };
+        let (holders, items) = &mut buckets[bucket];
+        *holders = holders
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("holder distribution holder count overflow"))?;
+        *items = items
+            .checked_add(count)
+            .ok_or_else(|| anyhow::anyhow!("holder distribution item count overflow"))?;
+    }
+    Ok(RANGES
+        .iter()
+        .zip(buckets)
+        .map(|(range, (holders, items))| {
+            serde_json::json!({"range": range, "holders": holders, "items": items})
+        })
+        .collect())
+}
+
 /// Exact completed-week mint/transfer/burn counts from the collection activity CF.
-/// Shared by Spore cluster insights and object-collection insights (OB-K2).
+/// The one weekly calendar of Spore cluster insights and object-collection
+/// insights (OB-K2): both handlers call this function.
 pub(crate) fn nft_collection_weekly_activity(
     store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
@@ -1298,6 +1333,9 @@ pub(crate) fn nft_collection_weekly_activity(
 ) -> anyhow::Result<(Vec<serde_json::Value>, Option<String>, serde_json::Value)> {
     use chrono::Datelike;
     let mut weeks: BTreeMap<String, [u64; 3]> = BTreeMap::new();
+    // Rows arrive grouped by block, and one block often carries several
+    // collection transactions: read each block header once per request.
+    let mut week_of_block: HashMap<i64, chrono::NaiveDate> = HashMap::new();
     let mut cursor = None;
     loop {
         let rows = list_canonical_nft_collection_activities_page(
@@ -1313,12 +1351,18 @@ pub(crate) fn nft_collection_weekly_activity(
         }
         cursor = rows.last().map(|(b, i, _)| (*b, *i));
         for (block, _, activity) in rows {
-            let header = store
-                .get_block_header(block)?
-                .ok_or_else(|| anyhow::anyhow!("collection activity block {block} missing"))?;
-            let date = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
-            let monday =
-                date - chrono::Duration::days(date.weekday().num_days_from_monday() as i64);
+            let monday = match week_of_block.entry(block) {
+                std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let header = store.get_block_header(block)?.ok_or_else(|| {
+                        anyhow::anyhow!("collection activity block {block} missing")
+                    })?;
+                    let date = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
+                    *entry.insert(
+                        date - chrono::Duration::days(date.weekday().num_days_from_monday() as i64),
+                    )
+                }
+            };
             let counts = weeks.entry(monday.to_string()).or_default();
             for (action, slot) in [
                 (ckbadger_store::AssetAction::Mint, 0),
@@ -3421,8 +3465,14 @@ async fn list_object_collection_activities(
     ))
 }
 
-/// Weekly transfer calendar for m-NFT / object collections (OB-K2).
-/// Genetics stay Spore-only; this returns an empty non-DOB genetics stub.
+/// Collection insights for `/assets/objects/{id}` (OB-K2).
+///
+/// A Spore cluster has one insights producer, DOB genetics included
+/// ([`super::asset_genetics::cluster_insights`]). m-NFT classes and identity
+/// collections hold no DOB items, so their genetics block reports every live
+/// item as non-DOB: zero eligible, zero decoded/pending/failed, an empty trait
+/// list, `complete = true` (there is nothing to decode) — the same values
+/// Spore insights give a cluster with no DOB items.
 async fn get_object_collection_insights(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
@@ -3432,45 +3482,85 @@ async fn get_object_collection_insights(
         let resolved = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
-        let live = resolved.aggregate.live_count;
-        if live < 0 {
-            return Err(ApiError::internal(format!(
-                "invalid object collection live_count: collection_id=0x{}, live_count={live}",
-                hex::encode(&collection_id_bytes)
-            )));
+        if resolved.source == ObjectCollectionSource::SporeCluster {
+            return ok(super::asset_genetics::cluster_insights(
+                &state,
+                &collection_id_bytes,
+            )?);
         }
-        let (weekly, complete_through, calendar_anchor) = nft_collection_weekly_activity(
-            state.store.as_ref(),
-            state.append_only_store.as_ref(),
-            &collection_id_bytes,
+        ok(
+            non_dob_collection_insights(&state, &collection_id_bytes, &resolved.aggregate)
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "object collection 0x{} insights: {e:#}",
+                        hex::encode(&collection_id_bytes)
+                    ))
+                })?,
         )
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "object collection 0x{} weekly activity: {e:#}",
-                hex::encode(&collection_id_bytes)
-            ))
-        })?;
-        ok(serde_json::json!({
-            "holderDistribution": [],
-            "weeklyActivity": weekly,
-            "calendarSource": "indexedChainTimeUtc8",
-            "completeThrough": complete_through,
-            "calendarAnchor": calendar_anchor,
-            "genetics": {
-                "liveItems": live,
-                "eligibleItems": 0,
-                "nonDobItems": live,
-                "decodedItems": 0,
-                "pendingItems": 0,
-                "failedItems": 0,
-                "complete": true,
-                "traits": []
-            },
-            "currentPattern": { "status": "notDob", "steps": [] }
-        }))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
+}
+
+/// Insights of an m-NFT class or identity collection. The holder buckets read
+/// the same per-owner live counts as `/assets/objects/{id}/holders`, and both
+/// must agree with the collection aggregate the detail page shows.
+fn non_dob_collection_insights(
+    state: &AppState,
+    collection_id: &[u8],
+    aggregate: &CollectionAggregate,
+) -> anyhow::Result<serde_json::Value> {
+    let holder_counts = collect_nft_collection_holder_counts(state.store.as_ref(), collection_id)
+        .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
+    let mut live_items = 0u64;
+    let mut item_counts = Vec::with_capacity(holder_counts.len());
+    for (lock_hash, count) in &holder_counts {
+        let count = u64::try_from(*count).map_err(|_| {
+            anyhow::anyhow!(
+                "negative owner live count {count} for lock_hash=0x{}",
+                hex::encode(lock_hash)
+            )
+        })?;
+        live_items = live_items
+            .checked_add(count)
+            .ok_or_else(|| anyhow::anyhow!("owner live count sum overflow"))?;
+        item_counts.push(count);
+    }
+    anyhow::ensure!(
+        i64::try_from(holder_counts.len()).ok() == Some(aggregate.holders_count),
+        "owner rows hold {} holders, aggregate holders_count={}",
+        holder_counts.len(),
+        aggregate.holders_count
+    );
+    anyhow::ensure!(
+        i64::try_from(live_items).ok() == Some(aggregate.live_count),
+        "owner rows hold {live_items} live items, aggregate live_count={}",
+        aggregate.live_count
+    );
+    let holders = collection_holder_distribution(item_counts)?;
+    let (weekly, complete_through, calendar_anchor) = nft_collection_weekly_activity(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        collection_id,
+    )?;
+    Ok(serde_json::json!({
+        "holderDistribution": holders,
+        "weeklyActivity": weekly,
+        "calendarSource": "indexedChainTimeUtc8",
+        "completeThrough": complete_through,
+        "calendarAnchor": calendar_anchor,
+        "genetics": {
+            "liveItems": live_items,
+            "eligibleItems": 0,
+            "nonDobItems": live_items,
+            "decodedItems": 0,
+            "pendingItems": 0,
+            "failedItems": 0,
+            "complete": true,
+            "traits": []
+        },
+        "currentPattern": { "status": "notDob", "steps": [] }
+    }))
 }
 
 async fn get_object_collection_capacity_chart(
@@ -3997,5 +4087,23 @@ mod tests {
                 .1,
             2
         );
+    }
+
+    #[test]
+    fn holder_distribution_buckets_each_holder_once_and_rejects_empty_holders() {
+        let buckets = collection_holder_distribution([1, 1, 2, 3, 5, 6, 40]).unwrap();
+        assert_eq!(
+            serde_json::Value::Array(buckets),
+            serde_json::json!([
+                {"range": "1", "holders": 2, "items": 2},
+                {"range": "2", "holders": 1, "items": 2},
+                {"range": "3–5", "holders": 2, "items": 8},
+                {"range": "6+", "holders": 2, "items": 46},
+            ])
+        );
+        assert!(collection_holder_distribution([2, 0])
+            .unwrap_err()
+            .to_string()
+            .contains("zero live items"));
     }
 }

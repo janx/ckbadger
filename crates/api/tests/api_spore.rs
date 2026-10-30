@@ -576,8 +576,15 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
         .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_spore_outpoint(&[0xbb; 32], 0, &spore_id);
-    batch.put_live_cell_marker_by_outpoint(&[0xbb; 32], 0, 321);
+    seed_spore_cell(
+        &mut batch,
+        &spore_id,
+        Some(SPORE_CODE_HASH),
+        [0xbb; 32],
+        0,
+        321,
+        None,
+    );
     batch.commit().unwrap();
     let config = test_config(store);
     let app = create_router(config).await;
@@ -1346,6 +1353,79 @@ async fn test_get_spore_returns_not_found_for_cluster_entry() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// Mainnet Spore deployment `0x4a4dce1d…` (data1).
+const SPORE_CODE_HASH: [u8; 32] = [
+    0x4a, 0x4d, 0xce, 0x1d, 0xf3, 0xdf, 0xff, 0xf7, 0xf8, 0xb2, 0xcd, 0x7d, 0xff, 0x73, 0x03, 0xdf,
+    0x3b, 0x61, 0x50, 0xc9, 0x78, 0x8c, 0xb7, 0x5d, 0xcf, 0x67, 0x47, 0x24, 0x71, 0x32, 0xb9, 0xf5,
+];
+
+/// One canonical spore cell: output `index` of `tx` at `block`, typed by
+/// (`type_code`, data1, `spore_id`) — or untyped with `type_code = None` —
+/// live, or consumed by `consumer` = (tx, block) which the tx index also holds.
+#[allow(clippy::too_many_arguments)]
+fn seed_spore_cell(
+    batch: &mut StoreBatch<'_>,
+    spore_id: &[u8; 32],
+    type_code: Option<[u8; 32]>,
+    tx: [u8; 32],
+    index: i16,
+    block: i64,
+    consumer: Option<([u8; 32], i64)>,
+) {
+    let lock_code = vec![0x41; 32];
+    let lock_args = vec![0x02; 20];
+    let type_bytes = if type_code.is_some() { 33 + 32 } else { 0 };
+    let cell = LiveCellInfo {
+        capacity: 300_00000000,
+        occupied_capacity: (8 + 33 + 20 + type_bytes) as i64 * 100_000_000,
+        lock_script_hash: compute_script_hash(&lock_code, 1, &lock_args),
+        lock_code_hash: lock_code,
+        lock_hash_type: 1,
+        lock_args,
+        type_script_hash: type_code.map(|code| compute_script_hash(&code, 2, spore_id)),
+        type_code_hash: type_code.map(|code| code.to_vec()),
+        type_hash_type: type_code.map(|_| 2),
+        type_args: type_code.map(|_| spore_id.to_vec()),
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    };
+    let index_tx = |batch: &mut StoreBatch<'_>, hash: [u8; 32], block: i64| {
+        batch.put_tx_hash_map(&hash, block, 1);
+        batch.put_tx_index(
+            block,
+            1,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000 + block,
+                inputs_count: 1,
+                outputs_count: 4,
+                fee: 0,
+                tx_size: 200,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+    };
+    index_tx(batch, tx, block);
+    batch.put_spore_outpoint(&tx, index, spore_id);
+    match consumer {
+        None => batch.put_cell(&tx, index, &cell, block),
+        Some((consumer, consumed_at)) => {
+            index_tx(batch, consumer, consumed_at);
+            batch.put_consumed_cell_with_consumer(
+                &tx,
+                index,
+                &cell,
+                block,
+                consumed_at,
+                Some(&consumer),
+            );
+        }
+    }
+}
+
 fn plain_spore_entry(is_live: bool) -> ObjectEntry {
     ObjectEntry {
         standard: ObjectStandard::Spore,
@@ -1387,8 +1467,15 @@ async fn test_spore_lists_omit_owned_capacity_and_the_detail_requires_it() {
         )
         .unwrap();
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_spore_outpoint(&[0xbb; 32], 0, &spore_id);
-    batch.put_live_cell_marker_by_outpoint(&[0xbb; 32], 0, 321);
+    seed_spore_cell(
+        &mut batch,
+        &spore_id,
+        Some(SPORE_CODE_HASH),
+        [0xbb; 32],
+        0,
+        321,
+        None,
+    );
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
 
@@ -1438,6 +1525,17 @@ async fn test_melted_spore_without_capacity_history_owns_zero() {
     store
         .put_spore_direct(&spore_id, &plain_spore_entry(false))
         .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    seed_spore_cell(
+        &mut batch,
+        &spore_id,
+        Some(SPORE_CODE_HASH),
+        [0xbb; 32],
+        0,
+        321,
+        Some(([0xcc; 32], 330)),
+    );
+    batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
 
     let (status, json) =
@@ -1499,9 +1597,24 @@ async fn redesign_spore_detail_returns_live_outpoint_and_separate_mint() {
         )
         .unwrap();
     let mut batch = StoreBatch::new(&store);
-    batch.put_spore_outpoint(&[0xbb; 32], 0, &id);
-    batch.put_spore_outpoint(&live_tx, 1, &id);
-    batch.put_live_cell_marker_by_outpoint(&live_tx, 1, 400);
+    seed_spore_cell(
+        &mut batch,
+        &id,
+        Some(SPORE_CODE_HASH),
+        [0xbb; 32],
+        0,
+        321,
+        Some((live_tx, 400)),
+    );
+    seed_spore_cell(
+        &mut batch,
+        &id,
+        Some(SPORE_CODE_HASH),
+        live_tx,
+        1,
+        400,
+        None,
+    );
     batch.commit().unwrap();
     let app = create_router(test_config(store)).await;
     let (status, body) = get_json(&app, &format!("/spore/objects/0x{}", hex::encode(id))).await;
@@ -1509,4 +1622,118 @@ async fn redesign_spore_detail_returns_live_outpoint_and_separate_mint() {
     assert_eq!(body["createdAtTx"], format!("0x{}", "bb".repeat(32)));
     assert_eq!(body["txHash"], format!("0x{}", hex::encode(live_tx)));
     assert_eq!(body["outputIndex"], 1);
+}
+
+/// OB-2: the detail carries the spore cell's own type script hash (the key
+/// Omiga's item page uses). Mainnet Nervape 3x spore 0x51c75ad6… under the
+/// `0x4a4dce1d…` data1 deployment hashes to 0x303e7b5e….
+#[tokio::test]
+async fn spore_detail_serves_its_cell_type_script_hash() {
+    let store = test_store();
+    let id: [u8; 32] =
+        hex::decode("51c75ad6c509e05ec5933e32093a5b32eeab7fe59dbe9ecc05546306002796f2")
+            .unwrap()
+            .try_into()
+            .unwrap();
+    store
+        .put_spore_direct(&id, &plain_spore_entry(true))
+        .unwrap();
+    store
+        .put_spore_daily_delta(
+            &id,
+            20240115,
+            &SporeDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 61,
+            },
+        )
+        .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    seed_spore_cell(
+        &mut batch,
+        &id,
+        Some(SPORE_CODE_HASH),
+        [0xbb; 32],
+        0,
+        321,
+        None,
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/spore/objects/0x{}", hex::encode(id))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["typeScriptHash"],
+        "0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998"
+    );
+}
+
+/// A melted spore names its last cell's type script — not its first, and not
+/// one rebuilt from a known deployment.
+#[tokio::test]
+async fn melted_spore_detail_uses_its_last_cells_type_script() {
+    let store = test_store();
+    let id = [0x7cu8; 32];
+    store
+        .put_spore_direct(&id, &plain_spore_entry(false))
+        .unwrap();
+    let later_deployment = [0x5d; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    seed_spore_cell(
+        &mut batch,
+        &id,
+        Some(SPORE_CODE_HASH),
+        [0xbb; 32],
+        0,
+        321,
+        Some(([0xcc; 32], 330)),
+    );
+    seed_spore_cell(
+        &mut batch,
+        &id,
+        Some(later_deployment),
+        [0xcc; 32],
+        2,
+        330,
+        Some(([0xdd; 32], 340)),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/spore/objects/0x{}", hex::encode(id))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["typeScriptHash"],
+        format!(
+            "0x{}",
+            hex::encode(compute_script_hash(&later_deployment, 2, &id))
+        )
+    );
+}
+
+#[tokio::test]
+async fn spore_detail_without_cell_type_script_is_an_error() {
+    let store = test_store();
+    let id = [0x7du8; 32];
+    store
+        .put_spore_direct(&id, &plain_spore_entry(false))
+        .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    seed_spore_cell(
+        &mut batch,
+        &id,
+        None,
+        [0xbb; 32],
+        0,
+        321,
+        Some(([0xcc; 32], 330)),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = get_json(&app, &format!("/spore/objects/0x{}", hex::encode(id))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains(&hex::encode(id)) && message.contains("has no type script"),
+        "{message}"
+    );
 }
