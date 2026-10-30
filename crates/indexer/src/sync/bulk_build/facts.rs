@@ -279,6 +279,14 @@ pub(crate) struct ResolvedTxFacts<'a> {
     pub(crate) cells: Cow<'a, [CellFacts]>,
 }
 
+impl ResolvedTxFacts<'_> {
+    /// Whether this is its block's cellbase: tx position 0, the same rule the
+    /// binary facts builder sets `TxFacts::is_cellbase` from.
+    pub(crate) fn is_cellbase(&self) -> bool {
+        self.tx_index == 0
+    }
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FactsArenaSnapshot {

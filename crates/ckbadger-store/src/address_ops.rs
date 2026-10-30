@@ -325,6 +325,42 @@ impl CkbadgerStore {
         })
     }
 
+    /// How many activities an address has: the rows `list_activities` pages
+    /// through for it, unfiltered.
+    ///
+    /// Those rows are its `addr_txs` and `addr_txs_by_prefix` rows
+    /// ([`Self::address_tx_count`]) except the cellbase ones, which have no
+    /// `CF_TX_ACTIONS` row. Cellbase rows are only ever cell participations
+    /// (a cellbase names no protocol party), and `AddressBalance` counts them
+    /// in `cellbase_txs_count` — so this is one subtraction, never a scan.
+    /// The ONE definition of the address activity total; the API serves it.
+    pub fn address_activity_count(&self, lock_hash: &[u8; 32]) -> anyhow::Result<i64> {
+        let transactions = self.address_tx_count(lock_hash)?;
+        let Some(balance) = self.get_addr_balance(lock_hash)? else {
+            // No cell participation at all: every transaction this address
+            // took part in was protocol-named, and none of those is a cellbase.
+            return Ok(transactions);
+        };
+        if balance.cellbase_txs_count < 0 || balance.cellbase_txs_count > balance.txs_count {
+            anyhow::bail!(
+                "addr_balance cellbase_txs_count outside 0..=txs_count: lock_hash=0x{}, cellbase_txs_count={}, txs_count={}",
+                bytes_to_hex(lock_hash),
+                balance.cellbase_txs_count,
+                balance.txs_count
+            );
+        }
+        transactions
+            .checked_sub(balance.cellbase_txs_count)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "address_activity_count underflow: lock_hash=0x{}, transactions={}, cellbase_txs_count={}",
+                    bytes_to_hex(lock_hash),
+                    transactions,
+                    balance.cellbase_txs_count
+                )
+            })
+    }
+
     /// Resolve a 20-byte lock-hash prefix to the full lock hash and its script.
     ///
     /// `CF_LOCK_SCRIPTS` holds every lock ever seen and is never deleted, so a
@@ -665,6 +701,47 @@ mod prefix_participation_tests {
         b.commit().unwrap();
         assert_eq!(store.address_tx_count(&lock).unwrap(), 5);
         assert_eq!(store.address_tx_count(&[0x43u8; 32]).unwrap(), 0);
+    }
+
+    #[test]
+    fn address_activity_count_is_transactions_minus_cellbase_rows() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let miner = [0x42u8; 32];
+        let named_only = [0x44u8; 32];
+        let corrupt = [0x45u8; 32];
+        let mut b = StoreBatch::new(&store);
+        // 3 cell participations, 2 of them cellbases, plus 2 protocol-named ones.
+        b.put_addr_balance(
+            &miner,
+            &AddressBalance {
+                txs_count: 3,
+                cellbase_txs_count: 2,
+                ..Default::default()
+            },
+        );
+        b.put_addr_prefix_stats(&miner[..20], &AddrPrefixStats { txs_count: 2 });
+        b.put_addr_prefix_stats(&named_only[..20], &AddrPrefixStats { txs_count: 4 });
+        b.put_addr_balance(
+            &corrupt,
+            &AddressBalance {
+                txs_count: 1,
+                cellbase_txs_count: 2,
+                ..Default::default()
+            },
+        );
+        b.commit().unwrap();
+        assert_eq!(store.address_activity_count(&miner).unwrap(), 3);
+        assert_eq!(store.address_activity_count(&named_only).unwrap(), 4);
+        assert_eq!(store.address_activity_count(&[0x43u8; 32]).unwrap(), 0);
+        let err = store
+            .address_activity_count(&corrupt)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cellbase_txs_count outside 0..=txs_count"),
+            "{err}"
+        );
     }
 
     #[test]

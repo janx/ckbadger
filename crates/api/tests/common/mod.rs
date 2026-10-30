@@ -1115,8 +1115,9 @@ pub fn make_test_tx_actions(
 }
 
 /// Seed one committed transaction for `lock_hash`: the block header, the tx
-/// location/index, its `TxActions` and its `addr_txs` row — everything the
-/// address activity feed and transaction list read.
+/// location/index, its `TxActions`, its `addr_txs` row and the address's
+/// transaction counters — everything the address activity feed and
+/// transaction list read.
 #[allow(clippy::too_many_arguments)]
 pub fn seed_committed_activity(
     store: &Arc<CkbadgerStore>,
@@ -1184,11 +1185,60 @@ pub fn seed_committed_activity(
         &AddrTxValue::new(capacity_change, false, true, tags),
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(store, lock_hash);
     store
         .update_sync_status(|status| {
             status.tip_block_number = status.tip_block_number.max(block_number);
         })
         .unwrap();
+}
+
+/// Write the transaction counters the forward writers keep for `lock_hash`,
+/// from the rows a fixture seeded: `AddressBalance.txs_count` = its `addr_txs`
+/// rows, `cellbase_txs_count` = those whose `tx_index` entry is a cellbase, and
+/// the prefix `AddrPrefixStats.txs_count` = its `addr_txs_by_prefix` rows. The
+/// other balance fields are kept. Call it after committing the rows, so the
+/// address activity `total` agrees with them exactly as it does after sync.
+pub fn sync_address_tx_counters(store: &CkbadgerStore, lock_hash: &[u8]) {
+    let (mut txs, mut cellbase_txs) = (0i64, 0i64);
+    for item in store.prefix_iterator_cf(store.cf_addr_txs(), lock_hash) {
+        let (key, _) = item.unwrap();
+        if !key.starts_with(lock_hash) {
+            break;
+        }
+        let (_, block, tx_idx, _) = ckbadger_store::keys::decode_addr_tx_key(&key);
+        txs += 1;
+        let entry = store
+            .get_tx_index(block, tx_idx)
+            .unwrap()
+            .unwrap_or_else(|| panic!("fixture addr_txs row {block}:{tx_idx} has no tx_index"));
+        if entry.is_cellbase {
+            cellbase_txs += 1;
+        }
+    }
+    if txs > 0 {
+        let mut balance = store
+            .get_addr_balance(lock_hash)
+            .unwrap()
+            .unwrap_or_default();
+        balance.txs_count = txs;
+        balance.cellbase_txs_count = cellbase_txs;
+        store.put_addr_balance_direct(lock_hash, &balance).unwrap();
+    }
+    let named = store
+        .list_addr_txs_by_prefix_recent(&lock_hash[..20], 10_000, None)
+        .unwrap()
+        .len();
+    if named > 0 {
+        let mut batch = StoreBatch::new(store);
+        batch.put_addr_prefix_stats(
+            &lock_hash[..20],
+            &ckbadger_store::types::AddrPrefixStats {
+                txs_count: i64::try_from(named).unwrap(),
+            },
+        );
+        batch.commit().unwrap();
+    }
 }
 
 /// One mirrored pool transaction for this lock, interpreted and attributed.

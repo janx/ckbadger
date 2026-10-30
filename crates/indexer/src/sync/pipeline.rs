@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Bounded channel capacity for the live sync pipeline (Fetcher → Parser → Writer).
 const PIPELINE_CHANNEL_CAPACITY: usize = 16;
@@ -45,8 +45,8 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction, TokenDailyChanges,
-    TxData, UndatedEntityKey, UndatedScriptKey,
+    fold_tx_address_deltas, AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction,
+    TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -2259,42 +2259,18 @@ impl Indexer {
                             .entry(cell.lock_script_hash.clone())
                             .or_default() += cell_occupied;
                     }
-                    let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
-                        .keys()
-                        .chain(tx_cells_created.keys())
-                        .chain(tx_cells_consumed.keys())
-                        .chain(tx_occupied_changes.keys())
-                        .cloned()
-                        .collect();
-                    for lock_hash in all_addresses {
-                        let balance_change =
-                            tx_balance_changes.get(&lock_hash).copied().unwrap_or(0);
-                        let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
-                        let cells_consumed =
-                            tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
-                        let occupied_change =
-                            tx_occupied_changes.get(&lock_hash).copied().unwrap_or(0);
-                        let entry = address_balance_changes.entry(lock_hash.clone()).or_insert(
-                            AddressBalanceDelta {
-                                balance_delta: 0,
-                                live_delta: 0,
-                                total_delta: 0,
-                                tx_delta: 0,
-                                used_delta: 0,
-                                first_seen_block: tx_data.block_number,
-                                first_seen_tx: tx_data.hash.to_vec(),
-                                last_activity_block: tx_data.block_number,
-                                last_activity_tx: tx_data.hash.to_vec(),
-                            },
-                        );
-                        entry.balance_delta += balance_change;
-                        entry.live_delta += cells_created - cells_consumed;
-                        entry.total_delta += cells_created;
-                        entry.tx_delta += 1;
-                        entry.last_activity_block = tx_data.block_number;
-                        entry.last_activity_tx = tx_data.hash.to_vec();
-                        entry.used_delta += occupied_change;
-                    }
+                    fold_tx_address_deltas(
+                        &mut address_balance_changes,
+                        tx_data.block_number,
+                        &tx_data.hash,
+                        tx_data.is_cellbase,
+                        TxAddressEffects {
+                            balance: &tx_balance_changes,
+                            cells_created: &tx_cells_created,
+                            cells_consumed: &tx_cells_consumed,
+                            occupied: &tx_occupied_changes,
+                        },
+                    );
                 }
                 // NOTE: Do NOT clear cell_cache here. In pipeline mode, parser
                 // runs ahead of writer. We only evict entries guaranteed to be

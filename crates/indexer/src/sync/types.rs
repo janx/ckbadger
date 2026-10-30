@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -116,6 +116,8 @@ pub struct AddressBalanceDelta {
     pub live_delta: i32,
     pub total_delta: i32,
     pub tx_delta: i64,
+    /// Of `tx_delta`, the cellbase transactions (`AddressBalance::cellbase_txs_count`).
+    pub cellbase_tx_delta: i64,
     pub used_delta: i128,
     /// Block number of the first transaction touching this address in the batch.
     pub first_seen_block: i64,
@@ -125,6 +127,67 @@ pub struct AddressBalanceDelta {
     pub last_activity_block: i64,
     /// Tx hash of the last transaction touching this address in the batch.
     pub last_activity_tx: Vec<u8>,
+}
+
+/// One transaction's per-lock effects, as the parser stage accumulates them
+/// over the transaction's resolved inputs and its outputs.
+pub(crate) struct TxAddressEffects<'a> {
+    pub(crate) balance: &'a HashMap<Vec<u8>, i128>,
+    pub(crate) cells_created: &'a HashMap<Vec<u8>, i32>,
+    pub(crate) cells_consumed: &'a HashMap<Vec<u8>, i32>,
+    pub(crate) occupied: &'a HashMap<Vec<u8>, i128>,
+}
+
+/// Fold ONE transaction into the batch's per-address deltas: every lock it
+/// touches gets one `tx_delta` (the `addr_txs` row the writer emits for it),
+/// and a cellbase one `cellbase_tx_delta` through
+/// `AddressBalance::cellbase_tx_increment` — the rule the bulk address reducer
+/// applies too. The parser stage and its test mirror both call this, so the
+/// two cannot drift.
+pub(crate) fn fold_tx_address_deltas(
+    changes: &mut HashMap<Vec<u8>, AddressBalanceDelta>,
+    block_number: i64,
+    tx_hash: &[u8],
+    is_cellbase: bool,
+    effects: TxAddressEffects<'_>,
+) {
+    let cellbase_increment = ckbadger_store::AddressBalance::cellbase_tx_increment(is_cellbase);
+    let locks: HashSet<&Vec<u8>> = effects
+        .balance
+        .keys()
+        .chain(effects.cells_created.keys())
+        .chain(effects.cells_consumed.keys())
+        .chain(effects.occupied.keys())
+        .collect();
+    for lock_hash in locks {
+        // A lock missing from one map had no effect of that kind in this tx.
+        let balance_change = effects.balance.get(lock_hash).copied().unwrap_or(0);
+        let cells_created = effects.cells_created.get(lock_hash).copied().unwrap_or(0);
+        let cells_consumed = effects.cells_consumed.get(lock_hash).copied().unwrap_or(0);
+        let occupied_change = effects.occupied.get(lock_hash).copied().unwrap_or(0);
+        let entry = changes
+            .entry(lock_hash.clone())
+            .or_insert_with(|| AddressBalanceDelta {
+                balance_delta: 0,
+                live_delta: 0,
+                total_delta: 0,
+                tx_delta: 0,
+                cellbase_tx_delta: 0,
+                used_delta: 0,
+                first_seen_block: block_number,
+                first_seen_tx: tx_hash.to_vec(),
+                last_activity_block: block_number,
+                last_activity_tx: tx_hash.to_vec(),
+            });
+        entry.balance_delta += balance_change;
+        entry.live_delta += cells_created - cells_consumed;
+        entry.total_delta += cells_created;
+        entry.tx_delta += 1;
+        entry.cellbase_tx_delta += cellbase_increment;
+        entry.last_activity_block = block_number;
+        entry.last_activity_tx = tx_hash.to_vec();
+        entry.used_delta += occupied_change;
+    }
 }
 
 // ── Batch write metrics ────────────────────────────────────────────────

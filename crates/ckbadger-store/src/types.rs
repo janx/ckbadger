@@ -320,11 +320,34 @@ pub struct AddressBalance {
     pub used_capacity: i128,
     pub live_cells_count: i32,
     pub total_cells_count: i64,
+    /// Transactions with a `CF_ADDR_TXS` row for this lock (cell participations).
     pub txs_count: i64,
+    /// Of `txs_count`, the cellbase transactions (tx position 0 of their block).
+    /// A cellbase has no `CF_TX_ACTIONS` row, so it is the one cell
+    /// participation that is not an activity: the address's activity count is
+    /// `address_tx_count - cellbase_txs_count`
+    /// (`CkbadgerStore::address_activity_count`). Incremented by both forward
+    /// paths through [`AddressBalance::cellbase_tx_increment`] and reversed by
+    /// rollback from the deleted `addr_txs` rows at tx position 0.
+    pub cellbase_txs_count: i64,
     pub first_seen_block: i64,
     pub first_seen_tx: Vec<u8>,
     pub last_activity_block: i64,
     pub last_activity_tx: Vec<u8>,
+}
+
+impl AddressBalance {
+    /// What ONE transaction that writes an `addr_txs` row for a lock (one that
+    /// `txs_count` counts) adds to that lock's `cellbase_txs_count`: 1 for its
+    /// block's cellbase, else 0. The single rule the bulk address reducer, the
+    /// live parser's address delta and the rollback's reversal all apply.
+    pub const fn cellbase_tx_increment(is_cellbase: bool) -> i64 {
+        if is_cellbase {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 // ============================================
@@ -3468,6 +3491,7 @@ mod tests {
             live_cells_count: 3,
             total_cells_count: 10,
             txs_count: 7,
+            cellbase_txs_count: 4,
             first_seen_block: 100,
             first_seen_tx: vec![0x01; 32],
             last_activity_block: 500,
@@ -3480,6 +3504,7 @@ mod tests {
         assert_eq!(decoded.live_cells_count, 3);
         assert_eq!(decoded.total_cells_count, 10);
         assert_eq!(decoded.txs_count, 7);
+        assert_eq!(decoded.cellbase_txs_count, 4);
         assert_eq!(decoded.first_seen_block, 100);
         assert_eq!(decoded.last_activity_block, 500);
     }

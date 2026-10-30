@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 65 checks, minutes
+ckbadger verify --depth sampling          # 66 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| --------------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                                                                |
-| **Sampling** (S1-S32) | 32     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                         |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Sampling** (S1-S33) | 33     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                             |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -85,7 +85,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 65 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 66 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
@@ -204,10 +204,10 @@ against the classification it encodes. It takes the blocks of the
 `--sample-count` most recent activities (at most 20 distinct blocks) and, for
 each block and each of the seven buckets, compares two API reads:
 
-| Read                                                       | Source                                                                                   |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `activities?blockNumber=B&filter=<bucket>`                 | every canonical transaction of block `B`, classified from its own `TxActions` row        |
-| `activities?filter=<bucket>&cursor=<B+1>:0`, until below B | the bucket index rows of block `B`, each loaded back with its `TxActions` row            |
+| Read                                                       | Source                                                                            |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `activities?blockNumber=B&filter=<bucket>`                 | every canonical transaction of block `B`, classified from its own `TxActions` row |
+| `activities?filter=<bucket>&cursor=<B+1>:0`, until below B | the bucket index rows of block `B`, each loaded back with its `TxActions` row     |
 
 A transaction only in the first has no bucket row; one only in the second is a
 bucket row for a transaction that does not classify there. Both are findings
@@ -215,6 +215,24 @@ naming the block, bucket, transaction index and hash. A bucket row whose
 `TxActions` row is missing, or that disagrees with its row's classification,
 makes the bucket listing itself fail with that position, which the check
 reports as an error. It needs no RPC.
+
+### Address Cellbase Counts (S33)
+
+`address_cellbase_count_consistency` proves `AddressBalance.cellbase_txs_count`
+— what the unfiltered `/addresses/{addr}/activities` `total` subtracts from the
+address's `transactionsCount` — against the block headers. It samples up to 20
+blocks (`--sample-count`, deterministic with `--seed`) from `1..=tip`; a block
+whose reward is not yet paid is skipped. For each other block:
+
+| Assertion                                                                                                                                         | Applies to                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| the miner (`minerAddress`) holds the paying cellbase (`miningRewardTxHash` at `rewardPaidAtBlock`) as a cellbase row of its own transaction index | every sampled miner                                     |
+| `1 <= transactionsCount - total <= transactionsCount`                                                                                             | every sampled miner                                     |
+| committed transaction rows == `transactionsCount`, and `transactionsCount - total` == cellbase rows                                               | miners with at most 10,000 transactions (paged in full) |
+
+A miner above the bound is never paged in full. A failing sample is re-read
+once; if it still fails and the tip moved meanwhile, it is reported as skipped
+rather than as a finding. It needs no RPC.
 
 ### DAO Lifecycle vs Live DAO Cells (S31)
 

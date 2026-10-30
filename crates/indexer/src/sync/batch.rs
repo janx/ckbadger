@@ -6865,7 +6865,7 @@ mod tests {
 
         /// Mirror of the parser Pass 3 address-delta accumulation for the
         /// fixture: balances, live/total cell counts, and occupied deltas per
-        /// lock hash. `write_parsed_batch` persists AddressBalance rows from
+        /// lock hash, folded by the parser's own `fold_tx_address_deltas`. `write_parsed_batch` persists AddressBalance rows from
         /// this map, and the HODL/cell-distribution trackers baseline their
         /// per-lock live counts on those rows.
         fn accumulate_fixture_address_deltas(
@@ -6916,36 +6916,18 @@ mod tests {
                             cell.data_size,
                         ));
                 }
-                let all_addresses: HashSet<Vec<u8>> = balance
-                    .keys()
-                    .chain(created.keys())
-                    .chain(consumed.keys())
-                    .chain(used.keys())
-                    .cloned()
-                    .collect();
-                for lock_hash in all_addresses {
-                    let entry = changes
-                        .entry(lock_hash.clone())
-                        .or_insert(AddressBalanceDelta {
-                            balance_delta: 0,
-                            live_delta: 0,
-                            total_delta: 0,
-                            tx_delta: 0,
-                            used_delta: 0,
-                            first_seen_block: tx_data.block_number,
-                            first_seen_tx: tx_data.hash.to_vec(),
-                            last_activity_block: tx_data.block_number,
-                            last_activity_tx: tx_data.hash.to_vec(),
-                        });
-                    entry.balance_delta += balance.get(&lock_hash).copied().unwrap_or(0);
-                    entry.live_delta += created.get(&lock_hash).copied().unwrap_or(0)
-                        - consumed.get(&lock_hash).copied().unwrap_or(0);
-                    entry.total_delta += created.get(&lock_hash).copied().unwrap_or(0);
-                    entry.tx_delta += 1;
-                    entry.used_delta += used.get(&lock_hash).copied().unwrap_or(0);
-                    entry.last_activity_block = tx_data.block_number;
-                    entry.last_activity_tx = tx_data.hash.to_vec();
-                }
+                crate::sync::types::fold_tx_address_deltas(
+                    &mut changes,
+                    tx_data.block_number,
+                    &tx_data.hash,
+                    tx_data.is_cellbase,
+                    crate::sync::types::TxAddressEffects {
+                        balance: &balance,
+                        cells_created: &created,
+                        cells_consumed: &consumed,
+                        occupied: &used,
+                    },
+                );
             }
             Ok(changes)
         }
@@ -12342,6 +12324,7 @@ mod tests {
     }
     mod all_stats_dao_parity {
         use super::*;
+        use ckbadger_store::AddressBalance;
 
         fn continuous_chain_with_dao_token_and_name() -> Vec<BlockResponseWithCycles> {
             let mut blocks = super::live_dao_fee::phase_setup_blocks();
@@ -12680,6 +12663,158 @@ mod tests {
             .await
             .expect("live replay after shallow fork");
             assert_eq!(bucket_rows(&multi), expected, "bulk vs rollback/replay");
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+        }
+
+        fn addr_balance_rows(store: &CkbadgerStore) -> BTreeMap<Vec<u8>, Vec<u8>> {
+            store
+                .iterator_cf(store.cf_addr_balance(), rocksdb::IteratorMode::Start)
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        }
+
+        /// Per lock: (`addr_txs` rows, of them the rows at tx position 0 —
+        /// the block's cellbase).
+        fn addr_tx_counts<'a>(
+            rows: impl Iterator<Item = (&'a [u8], i32)>,
+        ) -> BTreeMap<Vec<u8>, (i64, i64)> {
+            let mut counts = BTreeMap::<Vec<u8>, (i64, i64)>::new();
+            for (lock, tx_idx) in rows {
+                let entry = counts.entry(lock.to_vec()).or_default();
+                entry.0 += 1;
+                entry.1 += AddressBalance::cellbase_tx_increment(tx_idx == 0);
+            }
+            counts
+        }
+
+        fn live_addr_tx_counts(store: &CkbadgerStore) -> BTreeMap<Vec<u8>, (i64, i64)> {
+            let keys: Vec<(Vec<u8>, i32)> = store
+                .iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start)
+                .map(|row| {
+                    let (key, _) = row.unwrap();
+                    let (lock, _, tx_idx, _) = keys::decode_addr_tx_key(&key);
+                    (lock, tx_idx)
+                })
+                .collect();
+            addr_tx_counts(keys.iter().map(|(lock, idx)| (lock.as_slice(), *idx)))
+        }
+
+        /// Every persisted `AddressBalance` counts exactly its own `addr_txs`
+        /// rows in `txs_count`, and exactly the cellbase ones among them in
+        /// `cellbase_txs_count`.
+        fn assert_tx_counts_match_rows(
+            balances: &BTreeMap<Vec<u8>, Vec<u8>>,
+            rows: &BTreeMap<Vec<u8>, (i64, i64)>,
+            phase: &str,
+        ) {
+            for (lock, bytes) in balances {
+                let balance: AddressBalance = bincode::deserialize(bytes).unwrap();
+                let (txs, cellbase_txs) = rows.get(lock).copied().unwrap_or_default();
+                assert_eq!(
+                    (balance.txs_count, balance.cellbase_txs_count),
+                    (txs, cellbase_txs),
+                    "{phase}: (txs_count, cellbase_txs_count) of lock 0x{} vs its addr_txs rows",
+                    hex::encode(lock)
+                );
+            }
+        }
+
+        /// `AddressBalance.cellbase_txs_count` (W5): bulk materialization, a
+        /// block-at-a-time live sync, a multi-block live batch, and a rollback
+        /// + replay of the last two blocks all hold byte-identical
+        /// `addr_balance` rows, each counting exactly its lock's cellbase
+        /// `addr_txs` rows — while the append-only store is never touched.
+        #[tokio::test]
+        async fn bulk_live_batch_shapes_and_replay_count_cellbase_txs_identically() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_dao_token_and_name();
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+            let expected: BTreeMap<Vec<u8>, Vec<u8>> = bulk
+                .core
+                .address_balances
+                .iter()
+                .map(|(lock, balance)| (lock.clone(), bincode::serialize(balance).unwrap()))
+                .collect();
+            let bulk_rows = addr_tx_counts(
+                bulk.addr_txs
+                    .keys()
+                    .map(|(lock, _, tx_idx, _)| (lock.as_slice(), *tx_idx)),
+            );
+            assert_tx_counts_match_rows(&expected, &bulk_rows, "bulk");
+            // Every block of the fixture opens with a cellbase paying the
+            // fixture miner, so the miner holds four cellbase rows.
+            let miner_cellbases = bulk_rows.values().map(|(_, cb)| *cb).max().unwrap();
+            assert_eq!(miner_cellbases, 4, "fixture miner: {bulk_rows:?}");
+
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+            assert_eq!(addr_balance_rows(&single), expected, "bulk vs single live");
+            assert_eq!(addr_balance_rows(&multi), expected, "bulk vs multi live");
+
+            let immutable_before = cell_payload_rows(&multi);
+            multi_indexer
+                .writer
+                .cleanup_batch_range(multi.as_ref(), 2, 3)
+                .unwrap();
+            let surviving_rows = live_addr_tx_counts(&multi);
+            let surviving_cellbases: i64 = surviving_rows.values().map(|(_, cb)| *cb).sum();
+            let all_cellbases: i64 = bulk_rows.values().map(|(_, cb)| *cb).sum();
+            assert!(
+                surviving_cellbases < all_cellbases,
+                "the rollback removes the cellbases of blocks 2 and 3"
+            );
+            assert_tx_counts_match_rows(
+                &addr_balance_rows(&multi),
+                &surviving_rows,
+                "after rollback to block 1",
+            );
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+            multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(1)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[2..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_eq!(
+                addr_balance_rows(&multi),
+                expected,
+                "bulk vs rollback/replay"
+            );
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 

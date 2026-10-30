@@ -828,6 +828,7 @@ mod status_model_tests {
             "object_asset_collection_consistency",
             "participant_rows_consistency",
             "global_activity_bucket_index_consistency",
+            "address_cellbase_count_consistency",
             "dotcell_records_hash_parity",
         ];
         let mut declared = declared;

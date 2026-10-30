@@ -37,7 +37,7 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 | `cell_by_data_hash`              | blake2b(cell_data) + outpoint                                                 | empty                                                                          | Cell index by data hash (code cell resolution)                                                                                                                                                                                                             |
 | `tx_index`                       | block_number + tx_index                                                       | TxIndexEntry { tx_hash: [u8; 32], fee, size, counts, cycles, tags, timestamp } | Domain transaction order and canonical hash pointer; written by the indexer in live and bulk paths                                                                                                                                                         |
 | `tx_hash_map`                    | tx_hash (32B)                                                                 | block_number + tx_index                                                        | Reverse lookup: tx_hash -> position                                                                                                                                                                                                                        |
-| `addr_balance`                   | lock_script_hash (32B)                                                        | AddressBalance                                                                 | Address balance and cell counts                                                                                                                                                                                                                            |
+| `addr_balance`                   | lock_script_hash (32B)                                                        | AddressBalance                                                                 | Address balance, cell counts, `txs_count` and `cellbase_txs_count` (the cellbase txs among them; activity total = `address_tx_count - cellbase_txs_count`)                                                                                                 |
 | `addr_txs`                       | lock_hash + block + tx_index + tx_hash                                        | AddrTxValue                                                                    | Address transaction thin index with capacity change, tx flags, and participant activity tags                                                                                                                                                               |
 | `addr_txs_by_prefix`             | lock_hash_prefix(20) + block_num_desc(8) + tx_idx_desc(4) + tx_hash(32) = 64B | AddrTxValue                                                                    | Same thin index for a party a protocol NAMED by its 20-byte lock-hash prefix and that holds no cell in the transaction                                                                                                                                     |
 | `addr_prefix_stats`              | lock_hash_prefix(20)                                                          | AddrPrefixStats                                                                | How many transactions named this prefix without it holding a cell; added to `addr_balance.txs_count` by `address_tx_count`                                                                                                                                 |
@@ -251,6 +251,16 @@ committing nothing (`docs/prompts/REORG_HANDLING.md`).
 pre-image cannot do this: a live batch spans many blocks, the pre-image is recorded on one of them,
 and a fork point on a later block of the same batch would never replay it while still deleting the
 rows written after it.
+
+**`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
+Both forward paths increment it through `AddressBalance::cellbase_tx_increment` — bulk inside the
+address reducer's existing row update, live in the parser's `fold_tx_address_deltas` — and
+rollback reverses it like `txs_count`, by the deleted `addr_txs` rows at tx position 0 (a block's
+cellbase), failing if it would leave `0..=txs_count`. Cellbase rows are the only `addr_txs` rows
+without a `CF_TX_ACTIONS` row, so `CkbadgerStore::address_activity_count`
+(`address_tx_count - cellbase_txs_count`) is the one definition of an address's activity count,
+served as `total` on the unfiltered `/addresses/{addr}/activities`. The `AddressBalance` bincode
+layout changed and requires a genesis re-sync.
 
 **Bounded window.** Only the `EntityStats` scope is pruned during normal sync. Every live commit
 advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
