@@ -168,8 +168,13 @@ export function formatChartReadout(value: string, unit: string): string {
   const sign = negative ? '-' : plus ? '+' : '';
   if (RATE_UNITS.has(unit))
     return `${sign}${formatExactDecimal(formatScaledInteger(abs, denominator, 2), `chart ${unit} readout`)}`;
-  if (COUNT_UNITS.has(unit) && abs % denominator === BigInt(0) && abs < denominator * BigInt(1000))
-    return `${sign}${abs / denominator}`;
+  // A whole count under 100,000 reads exactly, grouped, as the Charts board shows it ("16,826").
+  if (
+    COUNT_UNITS.has(unit) &&
+    abs % denominator === BigInt(0) &&
+    abs < denominator * BigInt(100000)
+  )
+    return `${sign}${formatExactDecimal((abs / denominator).toString(), `chart ${unit} readout`)}`;
   return `${sign}${formatCompactRatio(abs, denominator)}`;
 }
 
@@ -197,6 +202,7 @@ function singleChart(
     today?: { blockNumber: number; date: string; year: string; value: string };
     peak?: { date: string; value: string } | null;
     peak2?: { date: string; value: string } | null;
+    target?: { seconds: number; hours: string };
   }
 ): ChartModel {
   const primaryField = definition.primaryField ?? 'value';
@@ -390,6 +396,13 @@ function singleChart(
       display: summary(last.values.primary, definition.unit),
       unit: definition.unit,
     };
+  // The consensus epoch-duration target, from the API (CH-12, R2b-b).
+  if (payload.target) {
+    const hours = Number(payload.target.hours);
+    if (!Number.isFinite(hours) || hours <= 0)
+      throw new Error(`${definition.slug}: invalid epoch duration target ${payload.target.hours}`);
+    model.referenceLines = [{ value: hours, label: `target ${payload.target.hours} h` }];
+  }
   // The weekly share alone on the card; the daily share stays on the detail (CH-12).
   if (definition.slug === 'capacity-turnover-ratio')
     model.card = { points, series: series.filter((entry) => entry.key === 'primary'), legend: [] };
@@ -742,11 +755,11 @@ function shareRows(
   payload: {
     usedShare: {
       data: { date: string; values: Record<string, string> }[];
-      series: { key: string; label: string; color: string }[];
+      series: { key: string; label: string; color: string; id?: string }[];
     };
     capacityShare: {
       data: { date: string; values: Record<string, string> }[];
-      series: { key: string; label: string; color: string }[];
+      series: { key: string; label: string; color: string; id?: string }[];
     };
   }
 ): ChartModel {
@@ -808,6 +821,7 @@ function shareRows(
     if (raw === undefined)
       throw new Error(`${definition.slug}: missing ${series.key} at ${last.date}`);
     return {
+      id: series.id,
       label: series.label,
       shannons: exactUnsignedInteger(raw, `${definition.slug} ${series.key}`),
       value: chartUnitValue(raw, 'shannons', `${definition.slug} ${series.key}`),
@@ -825,14 +839,35 @@ function shareRows(
   const others = sorted.filter((entry) => entry.label === othersKey);
   // The API's own bucket holds the ranks beyond its named list; say so, the card's "Others" differs.
   // It is a remainder, not a rank: it closes the list instead of leading it (CH-29).
-  const rankedRows = [...named, ...others].map((entry) => ({
-    label: entry.label === othersKey ? `Others beyond the top ${named.length}` : entry.label,
-    value: entry.value,
-    share: share(entry.shannons),
-    ...(definition.source === 'assets' && entry.label !== othersKey ? assetLabel(entry.label) : {}),
-  }));
+  // Two entities can share a name (two "MEMES" tokens): the id tells them apart (CH-29).
+  const shownName = (entry: (typeof entries)[number]) =>
+    definition.source === 'assets' ? assetLabel(entry.label).label : entry.label;
+  const nameCount = new Map<string, number>();
+  for (const entry of named)
+    nameCount.set(shownName(entry), (nameCount.get(shownName(entry)) ?? 0) + 1);
+  const distinctLabel = (entry: (typeof entries)[number]) =>
+    (nameCount.get(shownName(entry)) ?? 0) > 1 && entry.id
+      ? `${shownName(entry)} · ${shortSeriesId(entry.id)}`
+      : shownName(entry);
+  const rankedRows = [...named, ...others].map((entry) =>
+    entry.label === othersKey
+      ? {
+          label: `Others beyond the top ${named.length}`,
+          value: entry.value,
+          share: share(entry.shannons),
+        }
+      : {
+          label: distinctLabel(entry),
+          value: entry.value,
+          share: share(entry.shannons),
+          ...(entry.id ? { href: rankedSeriesHref(entry.id, entry.label) } : {}),
+          ...(definition.source === 'assets'
+            ? { assetClass: assetLabel(entry.label).assetClass }
+            : {}),
+        }
+  );
   const leader = named[0] ?? sorted[0];
-  const summaryLabel = `Largest ${definition.source === 'scripts' ? 'script' : 'asset'}: ${leader.label}`;
+  const summaryLabel = `Largest ${definition.source === 'scripts' ? 'script' : 'asset'}: ${distinctLabel(leader)}`;
   return {
     title: definition.title,
     points: [],
@@ -846,7 +881,7 @@ function shareRows(
       rows: rankedPreviewRows(
         named.map((entry) => ({
           label: entry.label,
-          shortLabel: entry.label,
+          shortLabel: distinctLabel(entry),
           amount: entry.shannons,
           share: share(entry.shannons),
         })),
@@ -854,8 +889,8 @@ function shareRows(
         share,
         definition.slug
       ).map((row) =>
-        definition.source === 'assets' && row.label !== 'Others'
-          ? { ...row, ...assetLabel(row.label) }
+        definition.source === 'assets' && row.title !== 'Others'
+          ? { ...row, assetClass: assetLabel(row.title).assetClass }
           : row
       ),
       summaryLabel,
@@ -872,6 +907,30 @@ function shareRows(
             unit: '%',
           },
   };
+}
+
+/** The route of a ranked entity, from its R2b-b series id (CH-29); an unknown kind fails. */
+function rankedSeriesHref(id: string, label: string): string {
+  const [kind, ...rest] = id.split(':');
+  const ref = rest.join(':');
+  if (kind === 'family') return `/scripts/${encodeURIComponent(label)}`;
+  if (kind === 'ref') return `/script/${encodeURIComponent(ref.split(':')[0])}`;
+  if (kind === 'token') return `/tokens/${encodeURIComponent(ref)}`;
+  if (kind === 'dob') return `/clusters/${encodeURIComponent(ref)}`;
+  if (kind === 'object') return `/classes/${encodeURIComponent(ref)}`;
+  if (kind === 'identity') return `/identities/${encodeURIComponent(ref)}`;
+  throw new Error(`unknown ranked series id ${id}`);
+}
+
+/** The hash part of a series id, head…tail: "0x5cb3…b4fa". */
+function shortSeriesId(id: string): string {
+  const hash = id.split(':')[1] ?? id;
+  return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
+}
+
+/** A bucket label without the unit word its subtitle already names: "100-1k CKB" → "100-1k". */
+export function shortBucketLabel(label: string): string {
+  return label.replace(/ CKB$/, '');
 }
 
 /**

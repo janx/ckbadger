@@ -409,6 +409,18 @@ export function Chart({
                           fill={color(si)}
                         />
                       ))}
+                      {/* F2 charts group: a bar's hovered top, like a line's hovered point. */}
+                      {pointDots && activeIndex !== null && (
+                        <circle
+                          data-hover-dot={s.key}
+                          cx={x(activeIndex)}
+                          cy={y(upper[activeIndex])}
+                          r="4"
+                          fill="#0c0e15"
+                          stroke={color(si)}
+                          strokeWidth="2"
+                        />
+                      )}
                     </g>
                   );
                 return (
@@ -596,26 +608,43 @@ export function Chart({
                     </g>
                   );
                 })()}
-              {xTicks?.map((tick) => (
-                <text
-                  key={`${tick.index}:${tick.label}`}
-                  data-x-tick
-                  visibility={hideXAxis ? 'hidden' : undefined}
-                  x={x(tick.index)}
-                  y={height - 5}
-                  textAnchor={
-                    x(tick.index) - left < 20
-                      ? 'start'
-                      : right - x(tick.index) < 20
-                        ? 'end'
-                        : 'middle'
-                  }
-                  fill="#7c849c"
-                  fontSize="10"
-                >
-                  {tick.label}
-                </text>
-              ))}
+              {xTicks &&
+                // F2 charts group: a tick whose label would touch the one before it is dropped.
+                xTicks
+                  .map((tick) => {
+                    const at = x(tick.index);
+                    const anchor: 'start' | 'end' | 'middle' =
+                      at - left < 20 ? 'start' : right - at < 20 ? 'end' : 'middle';
+                    const w = tick.label.length * 6.2;
+                    const from = anchor === 'start' ? at : anchor === 'end' ? at - w : at - w / 2;
+                    return { tick, at, anchor, from, to: from + w };
+                  })
+                  .reduce<
+                    {
+                      tick: { index: number; label: string };
+                      at: number;
+                      anchor: 'start' | 'end' | 'middle';
+                      to: number;
+                      from: number;
+                    }[]
+                  >((kept, entry) => {
+                    const previous = kept[kept.length - 1];
+                    return !previous || entry.from >= previous.to + 6 ? [...kept, entry] : kept;
+                  }, [])
+                  .map(({ tick, at, anchor }) => (
+                    <text
+                      key={`${tick.index}:${tick.label}`}
+                      data-x-tick
+                      visibility={hideXAxis ? 'hidden' : undefined}
+                      x={at}
+                      y={height - 5}
+                      textAnchor={anchor}
+                      fill="#7c849c"
+                      fontSize="10"
+                    >
+                      {tick.label}
+                    </text>
+                  ))}
               <text
                 visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                 x={left}

@@ -491,6 +491,8 @@ export interface HardforkScriptDeployment {
   blockNumber: number;
   timestampMs: number;
   epochNumber: number;
+  /** F2 charts group (R2b-b contract, CH-40/42): the hash types the version is registered under. */
+  hashTypes?: Array<'type' | 'data1' | 'data2' | 'data'>;
 }
 
 interface CursorQueryParams {
@@ -2343,6 +2345,8 @@ interface ChartResponse {
   // --- F2 charts group (R8 contract, CH-21): the API's peak of `value` / `value2` ---
   peak?: ChartPeakF2 | null;
   peak2?: ChartPeakF2 | null;
+  /** F2 charts group (R2b-b contract, CH-12): `/charts/epoch-time-length` only, from get_consensus. */
+  target?: { seconds: number; hours: string };
 }
 
 // --- F2 charts group (R8 contract) ---
@@ -2444,6 +2448,12 @@ interface StackedAreaSeries {
   key: string;
   label: string;
   color: string;
+  /**
+   * F2 charts group (R2b-b contract, CH-29): the ranked entity on `/charts/most-utilized-*` series —
+   * `family:<id>`, `ref:0x<code hash>:<hash type>`, `token:0x<type hash>`, `dob:<cluster id>`,
+   * `<asset type>:<collection id>`; absent on "Others" and every other stacked chart.
+   */
+  id?: string;
 }
 
 interface StackedAreaChartResponse {

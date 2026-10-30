@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CHART_BY_SLUG } from '@/components/charts/chart-catalogue';
-import { axisTicks, chartModel } from '@/components/charts/chart-model';
+import {
+  axisTicks,
+  chartModel,
+  formatChartReadout,
+  shortBucketLabel,
+} from '@/components/charts/chart-model';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 
 // F2 charts group: the Charts index board's encodings, computed once in the chart model.
@@ -360,5 +365,128 @@ describe('axis ticks (CH-24, CH-09, CH-35)', () => {
       'year 10',
       'year 20',
     ]);
+  });
+});
+
+describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
+  it('reads counts under 100,000 whole and grouped, like the board (16,826)', () => {
+    expect(formatChartReadout('16826', 'transactions')).toBe('16,826');
+    expect(formatChartReadout('563', 'addresses')).toBe('563');
+    expect(formatChartReadout('1462472', 'cells')).toBe('1.46M');
+  });
+
+  it('draws the consensus epoch-duration target from the API (CH-12, R2b-b)', () => {
+    const model = chartModel(def('epoch-time-length'), {
+      title: 'Epoch length',
+      yAxisLabel: 'Hours',
+      y2AxisLabel: 'Blocks',
+      data: [{ date: '15204', value: '4.15', value2: '1800' }],
+      target: { seconds: 14400, hours: '4.00' },
+    });
+    expect(model.referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
+  });
+
+  it('links every ranked entity by its series id and tells same names apart (CH-29, R2b-b)', () => {
+    const series = (entries: [string, string, string | undefined][]) => ({
+      title: 'Used',
+      series: entries.map(([key, label, id]) => ({
+        key,
+        label,
+        color: '#000',
+        ...(id ? { id } : {}),
+      })),
+      data: [
+        {
+          date: '2026-10-29',
+          values: Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
+        },
+      ],
+    });
+    const scripts = series([
+      ['top0', 'Default Lock', 'family:default-lock'],
+      [
+        'top1',
+        'Type ID (type)',
+        'ref:0x00000000000000000000000000000000000000000000000000545950455f4944:type',
+      ],
+      ['others', 'Others', undefined],
+    ]);
+    const s = chartModel(def('most-utilized-scripts'), {
+      title: 'Scripts',
+      usedShare: scripts,
+      capacityShare: scripts,
+    });
+    expect(s.rankedRows?.map((row) => row.href)).toEqual([
+      '/scripts/Default%20Lock',
+      '/script/0x00000000000000000000000000000000000000000000000000545950455f4944',
+      undefined,
+    ]);
+    const assets = series([
+      [
+        'top0',
+        'RGB++ (token)',
+        'token:0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d',
+      ],
+      [
+        'top1',
+        'MEMES (token)',
+        'token:0x5cb3322a541873340aab6ea96396a728465cebd1cc5cc62b080f6215d76ab4fa',
+      ],
+      [
+        'top2',
+        'Nervape (object)',
+        'dob:0xd5852c19fa4fa394d64915cafe026cdeb702ce53cf2b839c6ace501e8dead41c',
+      ],
+      [
+        'top3',
+        'MEMES (token)',
+        'token:0x68c01bf9159fac7f328b11f88085d8f6c1096fcd63f9d0d63899ccfd98169b4b',
+      ],
+      [
+        'top4',
+        '.bit (identity)',
+        'identity:0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
+      ],
+      ['top5', 'Santa (object)', 'object:0x8f67efedd50c61c9dd332defd4051f08a02d797700000014'],
+    ]);
+    const a = chartModel(def('most-utilized-assets'), {
+      title: 'Assets',
+      usedShare: assets,
+      capacityShare: assets,
+    });
+    expect(a.rankedRows?.map((row) => [row.label, row.href])).toEqual([
+      ['RGB++', '/tokens/0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d'],
+      [
+        'MEMES · 0x5cb3…b4fa',
+        '/tokens/0x5cb3322a541873340aab6ea96396a728465cebd1cc5cc62b080f6215d76ab4fa',
+      ],
+      ['Nervape', '/clusters/0xd5852c19fa4fa394d64915cafe026cdeb702ce53cf2b839c6ace501e8dead41c'],
+      [
+        'MEMES · 0x68c0…9b4b',
+        '/tokens/0x68c01bf9159fac7f328b11f88085d8f6c1096fcd63f9d0d63899ccfd98169b4b',
+      ],
+      ['.bit', '/identities/0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f'],
+      ['Santa', '/classes/0x8f67efedd50c61c9dd332defd4051f08a02d797700000014'],
+    ]);
+    expect(a.rankedPreview?.rows[1].label).toBe('MEMES · 0x5cb3…b4fa');
+    // The fact names the leader like the rows do, its class as the mark (detail shot: "RGB++ (token)").
+    expect(a.summaryLabel).toBe('Largest asset: RGB++');
+    const unknown = series([
+      ['top0', 'X', 'nft:0x01'],
+      ['top1', 'Y', 'family:y'],
+    ]);
+    expect(() =>
+      chartModel(def('most-utilized-scripts'), {
+        title: 'Scripts',
+        usedShare: unknown,
+        capacityShare: unknown,
+      })
+    ).toThrow(/unknown ranked series id nft:0x01/);
+  });
+
+  it('shortens a bucket label to its range where the subtitle names the unit', () => {
+    expect(shortBucketLabel('100-1k CKB')).toBe('100-1k');
+    expect(shortBucketLabel('>=1m CKB')).toBe('>=1m');
+    expect(shortBucketLabel('4.02')).toBe('4.02');
   });
 });

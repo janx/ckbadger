@@ -148,7 +148,9 @@ describe('28 chart variants', () => {
   it('rounds card readouts the way the design shows them, never faking an exact value (CH-02)', () => {
     expect(formatChartReadout('600', 'addresses')).toBe('600');
     expect(formatChartReadout('622', 'epochs')).toBe('622');
-    expect(formatChartReadout('1234', 'transactions')).toBe('1.23K');
+    // A whole count under 100,000 reads exactly, grouped, as charts.json does ("16,826"; F2 charts).
+    expect(formatChartReadout('1234', 'transactions')).toBe('1,234');
+    expect(formatChartReadout('123456', 'transactions')).toBe('123.46K');
     expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.01B');
     expect(formatChartReadout('-1234.5', 'CKB')).toBe('-1.23K');
     // Rates and durations at two decimals, as charts.json shows them (91.34 PH/s, 1.34%).

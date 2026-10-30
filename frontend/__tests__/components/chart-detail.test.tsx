@@ -340,4 +340,29 @@ describe('shared chart detail', () => {
     const props = lastChart('Epoch length') as { formatLabel: (label: string) => string };
     expect(props.formatLabel('15202')).toBe('epoch #15,202');
   });
+
+  it('draws the main chart without repeating the title, counts its points grouped, formats epoch peaks (visual pass)', async () => {
+    vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      title: 'Epoch length',
+      yAxisLabel: 'Hours',
+      y2AxisLabel: 'Blocks',
+      data: Array.from({ length: 1201 }, (_, i) => ({
+        date: String(14004 + i),
+        value: i === 0 ? '50.48' : '4.15',
+        value2: '1800',
+      })),
+      peak: { date: '14004', value: '50.48' },
+      peak2: { date: '14004', value: '1800' },
+      target: { seconds: 14400, hours: '4.00' },
+    });
+    render(<ChartDetail slug="epoch-time-length" />);
+    const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
+    expect(readings).toHaveTextContent('peak, #14,004');
+    expect(screen.getByText('1,201 epochs')).toBeInTheDocument();
+    const main = lastChart('Epoch length');
+    expect(main.hideCaption).toBe(true);
+    expect(main.referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
+    // The separate blocks chart says what it counts, not the hours subtitle.
+    expect(lastChart('Epoch blocks').subtitle).toBe('Epoch blocks · 1,201 epochs');
+  });
 });
