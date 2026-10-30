@@ -28,6 +28,60 @@ fn next_reorg_event_key() -> Result<String> {
     )
 }
 
+/// The first block a switch drops — height `fork_point + 1` of the branch the
+/// store holds — after proving that branch: the first orphan's parent is
+/// `fork_hash`, every later header's parent is the header below it, and the
+/// header at `old_tip` is `old_tip_hash`. Read before the rollback deletes
+/// these headers; it is the event's D7 address (`ReorgEvent::first_orphan_hash`).
+fn first_orphan_of_stored_branch(
+    store: &CkbadgerStore,
+    fork_point: i64,
+    fork_hash: &[u8],
+    old_tip: i64,
+    old_tip_hash: &[u8],
+) -> Result<[u8; 32]> {
+    ensure!(
+        old_tip > fork_point,
+        "first orphan: old tip {old_tip} is not above fork point {fork_point}"
+    );
+    let mut parent = fork_hash.to_vec();
+    let mut first: Option<Vec<u8>> = None;
+    for height in fork_point + 1..=old_tip {
+        let header = store.get_block_header(height)?.ok_or_else(|| {
+            anyhow!(
+                "first orphan: the stored old branch has no header at {height} (fork point {fork_point}, old tip {old_tip})"
+            )
+        })?;
+        ensure!(
+            header.parent_hash == parent,
+            "first orphan: stored header {height} 0x{} has parent 0x{}, not 0x{} (fork point {fork_point}, old tip {old_tip})",
+            hex::encode(&header.hash),
+            hex::encode(&header.parent_hash),
+            hex::encode(&parent),
+        );
+        if first.is_none() {
+            first = Some(header.hash.clone());
+        }
+        parent = header.hash;
+    }
+    ensure!(
+        parent.as_slice() == old_tip_hash,
+        "first orphan: the stored old branch ends at 0x{}, not the recorded old tip 0x{} (fork point {fork_point}, old tip {old_tip})",
+        hex::encode(&parent),
+        hex::encode(old_tip_hash),
+    );
+    let first = first.ok_or_else(|| {
+        anyhow!("first orphan: empty old branch (fork point {fork_point}, old tip {old_tip})")
+    })?;
+    first.as_slice().try_into().map_err(|_| {
+        anyhow!(
+            "first orphan: stored header {} hash has {} bytes (fork point {fork_point}, old tip {old_tip})",
+            fork_point + 1,
+            first.len()
+        )
+    })
+}
+
 impl BatchWriter {
     /// Persist interruption before replacing the pending observation or
     /// removing its fork point. Cleanup that retains the fork point leaves
@@ -191,6 +245,8 @@ impl BatchWriter {
             fork_point_hash: fork_hash.to_vec(),
             old_tip: db_tip,
             old_tip_hash: db_tip_hash.to_vec(),
+            // A deep fork rolls nothing back: no block was dropped yet.
+            first_orphan_hash: None,
             new_tip: chain_tip,
             new_tip_hash: chain_tip_hash.to_vec(),
             depth: depth_i32,
@@ -297,6 +353,15 @@ impl BatchWriter {
             ContractRequirement::Required,
             "reorg fork point",
         )?;
+        // The event's D7 address: the first block this switch drops, read and
+        // proved from the store's own headers before the rollback deletes them.
+        let first_orphan_hash = first_orphan_of_stored_branch(
+            &self.store,
+            fork_point,
+            fork_hash,
+            old_tip,
+            old_tip_hash,
+        )?;
 
         // Revert domain mutations from undo-log first so that entity data
         // (Spore, mNFT, dotbit) is restored to pre-fork state before the
@@ -351,6 +416,7 @@ impl BatchWriter {
             fork_point_hash: fork_hash.to_vec(),
             old_tip,
             old_tip_hash: old_tip_hash.to_vec(),
+            first_orphan_hash: Some(first_orphan_hash),
             new_tip,
             new_tip_hash: new_tip_hash.to_vec(),
             depth,
@@ -439,6 +505,7 @@ mod tests {
             fork_point_hash: vec![9; 32],
             old_tip: 10,
             old_tip_hash: vec![0xaa; 32],
+            first_orphan_hash: None,
             new_tip: 11,
             new_tip_hash: vec![0xbb; 32],
             depth: 1,
@@ -517,6 +584,7 @@ mod tests {
                 fork_point_hash: vec![old[shared - 1]; 32],
                 old_tip: 7 + old.len() as i64 - 1,
                 old_tip_hash: vec![*old.last().unwrap(); 32],
+                first_orphan_hash: None,
                 new_tip: 7 + new.len() as i64 - 1,
                 new_tip_hash: vec![*new.last().unwrap(); 32],
                 depth: (old.len() - shared) as i32,
@@ -659,6 +727,7 @@ mod tests {
             fork_point_hash: vec![9; 32],
             old_tip: 10,
             old_tip_hash: vec![0xaa; 32],
+            first_orphan_hash: None,
             new_tip: 11,
             new_tip_hash: vec![0xcc; 32],
             depth: 1,
@@ -726,6 +795,7 @@ mod tests {
             fork_point_hash: vec![9; 32],
             old_tip: 10,
             old_tip_hash: vec![0xaa; 32],
+            first_orphan_hash: None,
             new_tip: 11,
             new_tip_hash: vec![0xbb; 32],
             superseded_by_tip_hash: None,
@@ -830,6 +900,7 @@ mod tests {
             fork_point_hash: vec![9; 32],
             old_tip: 10,
             old_tip_hash: vec![0xaa; 32],
+            first_orphan_hash: None,
             new_tip: 11,
             new_tip_hash: vec![0xbb; 32],
             depth: 1,
@@ -901,6 +972,7 @@ mod tests {
             fork_point_hash: vec![9; 32],
             old_tip: 10,
             old_tip_hash: vec![0xaa; 32],
+            first_orphan_hash: None,
             new_tip: 11,
             new_tip_hash: vec![0xbb; 32],
             depth: 1,
@@ -1115,6 +1187,10 @@ mod tests {
         assert_eq!(latest.event.fork_point_hash, vec![0x33; 32]);
         assert_eq!(latest.event.old_tip, 120);
         assert_eq!(latest.event.old_tip_hash, vec![0x11; 32]);
+        assert_eq!(
+            latest.event.first_orphan_hash, None,
+            "a deep detection rolls nothing back, so it drops no first orphan"
+        );
         assert_eq!(latest.event.new_tip, 130);
         assert_eq!(latest.event.new_tip_hash, vec![0x22; 32]);
         assert_eq!(latest.event.depth, 20);

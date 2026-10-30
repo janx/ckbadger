@@ -557,6 +557,7 @@ mod tests {
             fork_point_hash: vec![8; 32],
             old_tip: 10,
             old_tip_hash: vec![0xa0; 32],
+            first_orphan_hash: None,
             new_tip: 11,
             new_tip_hash: vec![0xb1; 32],
             depth: 2,
@@ -718,6 +719,101 @@ mod tests {
                     .count(),
                 1
             );
+        }
+    }
+
+    fn seed_full_entity_stats_coverage(store: &CkbadgerStore) {
+        store
+            .put_entity_stats_undo_contract(&ckbadger_store::EntityStatsUndoContract {
+                version: ckbadger_store::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+                coverage_floor_block: 0,
+                updated_at_block: 11,
+            })
+            .unwrap();
+    }
+
+    /// W5: an automatic switch records the first block it dropped — height
+    /// `fork_point + 1` of the abandoned branch — read from the store's own
+    /// headers before the rollback deletes them. A one-block switch's first
+    /// orphan is its old tip; a three-block switch's is two blocks below it.
+    #[tokio::test]
+    async fn execute_reorg_records_the_first_orphan_of_the_dropped_branch() {
+        for (fork_point, depth) in [(10, 1), (8, 3)] {
+            let (_dir, store, append, writer) = setup();
+            seed_pending_reorg(&store, false);
+            seed_full_entity_stats_coverage(&store);
+            let fork_hash = store.get_block_header(fork_point).unwrap().unwrap().hash;
+            let first_orphan: [u8; 32] = store
+                .get_block_header(fork_point + 1)
+                .unwrap()
+                .unwrap()
+                .hash
+                .try_into()
+                .unwrap();
+
+            let result = writer
+                .execute_reorg(
+                    &append,
+                    fork_point,
+                    &fork_hash,
+                    11,
+                    &[0xb1; 32],
+                    12,
+                    &[0xc2; 32],
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.depth, depth);
+            let latest = store.get_latest_reorg_event().unwrap().unwrap();
+            assert_eq!(latest.event.fork_point, fork_point);
+            assert_eq!(
+                latest.event.first_orphan_hash,
+                Some(first_orphan),
+                "{depth}-block switch at fork point {fork_point}"
+            );
+            assert_eq!(
+                first_orphan.as_slice() == latest.event.old_tip_hash.as_slice(),
+                depth == 1,
+                "only a one-block switch's first orphan is its old tip"
+            );
+            assert!(store.get_block_header(fork_point + 1).unwrap().is_none());
+        }
+    }
+
+    /// The recorded branch must link: the first orphan's parent is the fork
+    /// point and the walk up its children reaches the recorded old tip. A
+    /// mismatch is an error before anything is rolled back or recorded.
+    #[tokio::test]
+    async fn execute_reorg_refuses_an_old_branch_that_does_not_link() {
+        for (fork_hash, old_tip_hash, expected) in [
+            (vec![0xee; 32], vec![0xb1; 32], "parent"),
+            (vec![8; 32], vec![0xee; 32], "old tip"),
+        ] {
+            let (_dir, store, append, writer) = setup();
+            let pending = seed_pending_reorg(&store, false);
+            seed_full_entity_stats_coverage(&store);
+
+            let err = writer
+                .execute_reorg(&append, 8, &fork_hash, 11, &old_tip_hash, 12, &[0xc2; 32])
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("an unlinked {expected} must be refused"))
+                .to_string();
+
+            assert!(
+                err.contains("first orphan")
+                    && err.contains("fork point 8")
+                    && err.contains(expected),
+                "{err}"
+            );
+            assert!(
+                store.get_block_header(9).unwrap().is_some(),
+                "nothing rolled back"
+            );
+            let latest = store.get_latest_reorg_event().unwrap().unwrap();
+            assert_eq!(latest.key, pending, "no event recorded");
+            assert!(!latest.event.reconcile_interrupted);
         }
     }
 

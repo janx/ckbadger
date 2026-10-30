@@ -32,6 +32,7 @@ fn event(store: &CkbadgerStore, id: i64, kind: ReorgEventKind) {
         fork_point_hash: vec![1; 32],
         old_tip: 2,
         old_tip_hash: vec![2; 32],
+        first_orphan_hash: Some([2; 32]),
         new_tip: 3,
         new_tip_hash: vec![3; 32],
         depth: 1,
@@ -185,6 +186,7 @@ async fn deep_detection_reports_recorded_tips_without_claiming_a_rollback() {
         fork_point_hash: vec![0x11; 32],
         old_tip: 12,
         old_tip_hash: vec![0x22; 32],
+        first_orphan_hash: None,
         new_tip: 13,
         new_tip_hash: vec![0x33; 32],
         depth: 3,
@@ -303,6 +305,7 @@ async fn detail_resolves_two_old_blocks_from_one_canonical_uncle_pass() {
         fork_point_hash: fork_hash.to_vec(),
         old_tip: 12,
         old_tip_hash: old12.hash().as_slice().to_vec(),
+        first_orphan_hash: Some(old11.hash().unpack()),
         new_tip: 13,
         new_tip_hash: canonical13.hash().as_slice().to_vec(),
         depth: 2,
@@ -331,7 +334,8 @@ async fn detail_resolves_two_old_blocks_from_one_canonical_uncle_pass() {
     let (status, detail) = get_json(&app, &d7(10, old11.hash().as_slice())).await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["event"]["id"], id);
-    assert_eq!(detail["event"]["firstOrphanStatus"], "traced");
+    assert_eq!(detail["event"]["firstOrphanStatus"], "recorded");
+    assert_eq!(detail["evidenceStatus"], "available");
     assert_eq!(detail["orphanedBlocks"].as_array().unwrap().len(), 2);
     assert_eq!(detail["orphanedBlocks"][0]["number"], 11);
     assert_eq!(detail["orphanedBlocks"][1]["number"], 12);
@@ -441,6 +445,7 @@ async fn detail_proves_uncle_inclusion_competing_gap_and_later_tx_commit() {
         fork_point_hash: fork_hash.to_vec(),
         old_tip: 11,
         old_tip_hash: orphan.hash().as_slice().to_vec(),
+        first_orphan_hash: Some(orphan.hash().unpack()),
         new_tip: 12,
         new_tip_hash: canonical12.hash().as_slice().to_vec(),
         depth: 1,
@@ -542,6 +547,7 @@ async fn detail_keeps_historical_drop_but_marks_reentered_block_canonical_now() 
         fork_point_hash: fork_hash.to_vec(),
         old_tip: 11,
         old_tip_hash: block.hash().as_slice().to_vec(),
+        first_orphan_hash: Some(block.hash().unpack()),
         new_tip: 11,
         new_tip_hash: adopted.hash().as_slice().to_vec(),
         depth: 1,
@@ -566,6 +572,7 @@ async fn detail_keeps_historical_drop_but_marks_reentered_block_canonical_now() 
     let mut reversing = record.clone();
     reversing.detected_at = reversing_id / 1000;
     reversing.old_tip_hash = adopted.hash().as_slice().to_vec();
+    reversing.first_orphan_hash = Some(adopted.hash().unpack());
     reversing.new_tip_hash = block.hash().as_slice().to_vec();
     reversing.reverted_by_event = None;
     reversing.reverses_events = vec![key.clone()];
@@ -632,6 +639,7 @@ async fn detail_fails_if_persisted_adopted_tip_is_not_retained_by_the_node() {
         fork_point_hash: fork_hash.to_vec(),
         old_tip: 11,
         old_tip_hash: old.hash().as_slice().to_vec(),
+        first_orphan_hash: Some(old.hash().unpack()),
         new_tip: 11,
         new_tip_hash: vec![0x44; 32],
         depth: 1,
@@ -747,6 +755,7 @@ async fn detail_reports_epoch_closed_without_uncle_or_tx_commit() {
         fork_point_hash: fork_hash.to_vec(),
         old_tip: 11,
         old_tip_hash: orphan.hash().as_slice().to_vec(),
+        first_orphan_hash: Some(orphan.hash().unpack()),
         new_tip: 12,
         new_tip_hash: canonical12.hash().as_slice().to_vec(),
         depth: 1,
@@ -806,6 +815,9 @@ fn automatic(fork_point: i64, old_tip: i64, old_tip_hash: [u8; 32]) -> ReorgEven
         fork_point_hash: vec![0x33; 32],
         old_tip,
         old_tip_hash: old_tip_hash.to_vec(),
+        // A one-block switch's first orphan is its old tip; a deeper fixture
+        // states its own.
+        first_orphan_hash: (old_tip - fork_point == 1).then_some(old_tip_hash),
         new_tip: old_tip + 1,
         new_tip_hash: vec![0x44; 32],
         depth: (old_tip - fork_point) as i32,
@@ -1034,48 +1046,102 @@ async fn d7_route_names_one_event_by_fork_point_and_first_orphan() {
     assert_eq!(record["orphanFates"]["competing"]["gapMedianMs"], "50");
 }
 
+/// W5: every switch that rolled blocks back carries its persisted first
+/// orphan, so its list row and its D7 route resolve without the node reader —
+/// a one-block switch (first orphan = old tip) and a three-block switch (first
+/// orphan two blocks below the old tip) alike, even when they share a fork
+/// point. Without the node, the detail is the event with no branch evidence.
 #[tokio::test]
-async fn first_orphan_is_recorded_for_one_block_switches_without_the_node_reader() {
+async fn first_orphans_are_recorded_and_addressable_without_the_node_reader() {
     let store = test_store();
-    let one = put_event(
+    put_event(
         &store,
         1_754_000_000_000,
         0x11,
         &automatic(10, 11, [0xa1; 32]),
     );
-    let two = put_event(
+    let mut three = automatic(20, 23, [0xa3; 32]);
+    three.first_orphan_hash = Some([0xf1; 32]);
+    put_event(&store, 1_754_000_001_000, 0x12, &three);
+    put_event(
         &store,
-        1_754_000_001_000,
-        0x12,
-        &automatic(20, 22, [0xa2; 32]),
+        1_754_000_001_500,
+        0x14,
+        &automatic(20, 21, [0xb1; 32]),
     );
     let mut deep = automatic(30, 33, [0xa3; 32]);
     deep.kind = ReorgEventKind::Deep;
     deep.orphaned_blocks = 0;
     deep.orphaned_txs = 0;
+    deep.first_orphan_hash = None;
     put_event(&store, 1_754_000_002_000, 0x13, &deep);
     let app = create_router(config_without_node_reader(store)).await;
+
     let (status, list) = get_json(&app, "/forks?limit=10").await;
     assert_eq!(status, StatusCode::OK, "{list}");
     let rows = list["data"].as_array().unwrap();
-    // Newest first: deep, two-block, one-block.
+    // Newest first: deep, one-block at #20, three-block at #20, one-block at #10.
     assert_eq!(rows[0]["firstOrphanStatus"], "not_observed");
     assert_eq!(rows[0]["firstOrphanHash"], serde_json::Value::Null);
-    assert_eq!(rows[1]["firstOrphanStatus"], "needs_node_reader");
-    assert_eq!(rows[1]["firstOrphanHash"], serde_json::Value::Null);
-    assert_eq!(rows[2]["firstOrphanStatus"], "recorded");
-    assert_eq!(rows[2]["firstOrphanHash"], format!("0x{}", "a1".repeat(32)));
-    let _ = (one, two);
+    for (row, hash) in [(1, "b1"), (2, "f1"), (3, "a1")] {
+        assert_eq!(
+            rows[row]["firstOrphanStatus"], "recorded",
+            "row {row}: {list}"
+        );
+        assert_eq!(
+            rows[row]["firstOrphanHash"],
+            format!("0x{}", hash.repeat(32))
+        );
+    }
+
+    for (fork_point, hash) in [(10, [0xa1u8; 32]), (20, [0xf1; 32]), (20, [0xb1; 32])] {
+        let (status, json) = get_json(&app, &d7(fork_point, &hash)).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["event"]["forkPointNumber"], fork_point);
+        assert_eq!(
+            json["event"]["firstOrphanHash"],
+            format!("0x{}", hex::encode(hash))
+        );
+        assert_eq!(json["evidenceStatus"], "node_reader_unavailable");
+        assert_eq!(json["orphanedBlocks"], serde_json::json!([]));
+        assert_eq!(json["canonicalTipNumber"], serde_json::Value::Null);
+    }
+    // The three-block switch's old tip addresses nothing: only its first orphan does.
+    let (status, json) = get_json(&app, &d7(20, &[0xa3; 32])).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
 }
 
+/// A switch that rolled blocks back but persisted no first orphan (a store
+/// from before W5) cannot be addressed: an error naming the event, never a
+/// row without its address.
 #[tokio::test]
-async fn first_orphan_of_a_two_block_switch_is_traced_on_the_node_and_addressable() {
+async fn a_rollback_without_a_recorded_first_orphan_is_an_error() {
+    let store = test_store();
+    let key = put_event(
+        &store,
+        1_754_000_000_000,
+        0x11,
+        &automatic(10, 12, [0xa2; 32]),
+    );
+    let app = create_router(config_without_node_reader(store)).await;
+    let (status, json) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&key) && message.contains("records no first orphan"),
+        "{json}"
+    );
+}
+
+/// With the node reader the persisted first orphan is checked against the
+/// node's copy of the old branch.
+#[tokio::test]
+async fn first_orphan_of_a_two_block_switch_is_recorded_and_matches_the_node_branch() {
     use ckb_types::{
         core::{BlockBuilder, EpochNumberWithFraction},
         packed,
         prelude::*,
     };
-    let store = test_store();
     let fork_hash = [0x33; 32];
     let epoch = EpochNumberWithFraction::new(1, 0, 1800);
     let old11 = BlockBuilder::default()
@@ -1090,27 +1156,42 @@ async fn first_orphan_of_a_two_block_switch_is_traced_on_the_node_and_addressabl
         .parent_hash(old11.hash())
         .timestamp(1_700_000_001_010u64.pack())
         .build();
-    let chain = seed_ckb_chain(&[old11.clone(), old12.clone()]);
-    let mut record = automatic(10, 12, old12.hash().unpack());
-    record.fork_point_hash = fork_hash.to_vec();
-    put_event(&store, 1_754_000_000_000, 0x11, &record);
-    let app = create_router(test_config_with_ckb_db_path(
-        store.clone(),
-        store,
-        chain.path.clone(),
-        Some(chain.cleanup.clone()),
-    ))
-    .await;
-    let (status, list) = get_json(&app, "/forks?limit=10").await;
-    assert_eq!(status, StatusCode::OK, "{list}");
-    assert_eq!(list["data"][0]["firstOrphanStatus"], "traced");
-    assert_eq!(
-        list["data"][0]["firstOrphanHash"],
-        format!("0x{}", hex::encode(old11.hash().as_slice()))
-    );
-    // The old tip's prefix does not address the event: only the first dropped block does.
-    let (status, json) = get_json(&app, &d7(10, old12.hash().as_slice())).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    for (persisted, expect_ok) in [(old11.hash().unpack(), true), ([0xee; 32], false)] {
+        let store = test_store();
+        let chain = seed_ckb_chain(&[old11.clone(), old12.clone()]);
+        let mut record = automatic(10, 12, old12.hash().unpack());
+        record.fork_point_hash = fork_hash.to_vec();
+        record.first_orphan_hash = Some(persisted);
+        put_event(&store, 1_754_000_000_000, 0x11, &record);
+        let app = create_router(test_config_with_ckb_db_path(
+            store.clone(),
+            store,
+            chain.path.clone(),
+            Some(chain.cleanup.clone()),
+        ))
+        .await;
+        let (status, list) = get_json(&app, "/forks?limit=10").await;
+        if expect_ok {
+            assert_eq!(status, StatusCode::OK, "{list}");
+            assert_eq!(list["data"][0]["firstOrphanStatus"], "recorded");
+            assert_eq!(
+                list["data"][0]["firstOrphanHash"],
+                format!("0x{}", hex::encode(old11.hash().as_slice()))
+            );
+            // The old tip's prefix does not address the event: only the first dropped block does.
+            let (status, json) = get_json(&app, &d7(10, old12.hash().as_slice())).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        } else {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{list}");
+            assert!(
+                list["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("the event's first orphan is 0xeeee"),
+                "{list}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -1191,6 +1272,7 @@ async fn overview_reports_the_node_switch_record_over_all_events() {
     let mut one = automatic(10, 11, [0xa1; 32]);
     one.orphaned_txs = 3;
     let mut two = automatic(20, 22, [0xa2; 32]);
+    two.first_orphan_hash = Some([0xf2; 32]);
     two.orphaned_txs = 4;
     put_event(&store, utc8_ms("2026-10-21"), 0x11, &one);
     put_event(&store, utc8_ms("2026-10-21") + 1000, 0x12, &two);

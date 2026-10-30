@@ -2000,6 +2000,13 @@ pub struct ReorgEvent {
     /// DB tip on the abandoned branch at detection time.
     pub old_tip: i64,
     pub old_tip_hash: Vec<u8>,
+    /// The first block the switch dropped: height `fork_point + 1` on the
+    /// abandoned branch, the second half of the event's D7 address
+    /// `/forks/<fork_point>/<first 8 hex digits>`. Read from the indexer's own
+    /// headers before the rollback deletes them, after proving the branch
+    /// `fork_point_hash -> first orphan -> ... -> old_tip_hash` links. `None`
+    /// exactly for a deep-fork detection, which rolls nothing back.
+    pub first_orphan_hash: Option<[u8; 32]>,
     /// Chain tip on the winning branch at detection time.
     pub new_tip: i64,
     pub new_tip_hash: Vec<u8>,

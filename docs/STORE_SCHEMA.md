@@ -355,7 +355,12 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   fork-point check remains a strict invariant. Interruption and `superseded_by_tip_hash` may
   coexist; deep events always have interruption false. A crash after rollback but before the
   new event is written can still lose that new observation; this change does not journal it.
-  The `ReorgEvent` bincode layout changed and requires a genesis re-sync.
+  Every event that rolled blocks back records `first_orphan_hash` (`Option<[u8; 32]>`): the first
+  block the switch dropped (height `fork_point + 1`), read by `execute_reorg` from the domain
+  store's own headers before the rollback, after proving `fork_point_hash -> first orphan -> … ->
+old_tip_hash` links; `None` exactly for a deep detection. It is the event's D7 address, so the API
+  resolves every fork row without the node store. Reconcile and interruption rewrites carry it
+  unchanged. The `ReorgEvent` bincode layout changed (again, W5) and requires a genesis re-sync.
 
 #### `entity_stats_undo_contract`
 
