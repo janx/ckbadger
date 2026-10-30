@@ -36,12 +36,31 @@ function RecordValue({ value }: { value: IdentityRecordValue }) {
  * the profile as a grid — with the stored keys kept beside them. The records as stored, byte
  * for byte, stay in tier 2.
  */
+interface RecordParty {
+  lockHash: string | null;
+  scriptName: string | null;
+}
+
+/** "the manager's own JoyID wallet": an address record that is the owner's or manager's lock. */
+function whose(lockHash: string | null, parties?: { owner: RecordParty; manager: RecordParty }) {
+  if (!lockHash || !parties) return null;
+  const owner = parties.owner.lockHash === lockHash,
+    manager = parties.manager.lockHash === lockHash;
+  const party = owner ? parties.owner : manager ? parties.manager : null;
+  if (!party) return null;
+  const lock = party.scriptName ? `${party.scriptName} ` : '';
+  return `the ${owner ? 'owner' : 'manager'}'s own ${lock}wallet`;
+}
+
 export function IdentityRecords({
   subject,
   records,
+  parties,
 }: {
   subject: string;
   records: readonly IdentityRecordInput[];
+  /** `.cell`: the named owner and manager, to say when an address record is one of theirs. */
+  parties?: { owner: RecordParty; manager: RecordParty };
 }) {
   const view = describeIdentityRecords(records);
   const title = `What ${subject} points to`;
@@ -78,6 +97,11 @@ export function IdentityRecords({
                       </AppLink>
                     ) : (
                       <RecordValue value={a.value} />
+                    )}
+                    {whose(a.ckbLockHash, parties) && (
+                      <span className="text-text-dim block text-[12px]">
+                        {whose(a.ckbLockHash, parties)}
+                      </span>
                     )}
                   </dd>
                 </div>

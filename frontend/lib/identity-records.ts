@@ -11,6 +11,8 @@ export interface IdentityRecordInput {
   ttl: number;
   /** A CKB address the API decoded from the value (`.cell` `address.309`), else null. */
   address: string | null;
+  /** That address's lock hash, as the API decoded it. */
+  addressLockHash?: string | null;
 }
 
 export type IdentityRecordValue =
@@ -25,6 +27,7 @@ export interface IdentityAddressRecord {
   coin: string;
   value: IdentityRecordValue;
   ckbAddress: string | null;
+  ckbLockHash: string | null;
 }
 export interface IdentityProfileRecord {
   key: string;
@@ -87,6 +90,7 @@ export function describeIdentityRecords(
         coin: COINS[coinType] ?? `Coin type ${coinType}`,
         value: valueOf(record, false),
         ckbAddress: record.address,
+        ckbLockHash: record.address === null ? null : (record.addressLockHash ?? null),
       });
       continue;
     }

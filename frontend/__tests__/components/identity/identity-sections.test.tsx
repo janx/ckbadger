@@ -48,6 +48,27 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
     expect(section).toHaveTextContent('6 records · each cached for 300 s');
   });
 
+  it("marks a CKB address that is the manager's own lock (ID-DC5)", () => {
+    render(
+      <IdentityRecords
+        subject="apt.cell"
+        records={[
+          { ...rec('address.309', 'ckb1mgr'), address: 'ckb1mgr', addressLockHash: '0x1e' },
+          { ...rec('address.0', 'bc1q'), addressLockHash: null },
+        ]}
+        parties={{
+          owner: { lockHash: '0x69', scriptName: 'Quantum-Resistant Lock' },
+          manager: { lockHash: '0x1e', scriptName: 'JoyID' },
+        }}
+      />
+    );
+    // Each address row is its own grid row: the note belongs to the CKB row only.
+    expect(screen.getByText('CKB').closest('div')).toHaveTextContent(
+      "the manager's own JoyID wallet"
+    );
+    expect(screen.getByText('Bitcoin').closest('div')).not.toHaveTextContent('own');
+  });
+
   it('says plainly when no records are set', () => {
     render(<IdentityRecords subject="valar.bit" records={[]} />);
     expect(screen.getByRole('region', { name: 'What valar.bit points to' })).toHaveTextContent(

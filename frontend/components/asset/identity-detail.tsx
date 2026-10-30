@@ -188,9 +188,11 @@ export function CanonicalIdentityDetail({
           address: null,
         }))
       : p?.kind === 'dotcell'
-        ? p.versions
-            .at(-1)!
-            .decoded.records.map((r) => ({ ...r, address: r.decodedAddress?.address ?? null }))
+        ? p.versions.at(-1)!.decoded.records.map((r) => ({
+            ...r,
+            address: r.decodedAddress?.address ?? null,
+            addressLockHash: r.decodedAddress?.lockHash ?? null,
+          }))
         : [];
   const termSection =
     term?.kind === 'term' ? (
@@ -302,7 +304,14 @@ export function CanonicalIdentityDetail({
       )}
       {p?.kind === 'dotcell' && (
         <>
-          <IdentityRecords subject={subject} records={records} />
+          <IdentityRecords
+            subject={subject}
+            records={records}
+            parties={{
+              owner: p.versions.at(-1)!.decoded.owner,
+              manager: p.versions.at(-1)!.decoded.manager,
+            }}
+          />
           <DotcellRoles protocol={p} />
         </>
       )}
