@@ -432,6 +432,21 @@ interface HardforkTimelineResponse {
   events: HardforkEvent[];
   consensusFeatures: Array<{ rfc: string; activationEpoch: number | null }>;
   scriptDeployments: HardforkScriptDeployment[];
+  /**
+   * F2 charts group (R11 contract, CH-41): always the four lanes, in VM order. Typed optional only
+   * so older consumers' fixtures still compile; the Hardforks page rejects a response without it.
+   */
+  hashTypeLanes?: HardforkHashTypeLaneF2[];
+}
+
+// --- F2 charts group (R11 contract) ---
+/** How the script registry's versions are referenced with one hash_type (CH-41). */
+export interface HardforkHashTypeLaneF2 {
+  hashType: 'type' | 'data1' | 'data2' | 'data';
+  /** Registered versions with at least one registered reference form of this hash_type. */
+  knownVersions: number;
+  /** Exact decimal: live cells whose lock or type references one of those forms. */
+  liveReferences: string;
 }
 
 export interface VesselCell {
