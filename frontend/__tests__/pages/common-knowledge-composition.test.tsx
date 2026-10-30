@@ -18,28 +18,33 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }
 vi.mock('@/components/charts/chart-small-multiple', () => ({ ChartSmallMultiple: () => null }));
 
 describe('CommonKnowledgeCompositionPage', () => {
-  it('renders both exact occupied and free components in the shared chart', async () => {
+  // F2 charts: the API's own kinds, named and coloured by class (CH-06, CH-14).
+  it('renders exact occupied components by kind in the shared chart', async () => {
     chartMock.mockClear();
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue({
       title: 'Common Knowledge Bytes Composition',
-      data: [{ date: '2026-02-23', values: { used: '100.00000001', unused: '50.00000002' } }],
+      data: [{ date: '2026-02-23', values: { transfer: '100.00000001', dao: '50.00000002' } }],
       series: [
-        { key: 'used', label: 'Used', color: '#00c389' },
-        { key: 'unused', label: 'Unused', color: '#64748b' },
+        { key: 'transfer', label: 'CKB Transfer', color: '#22c55e' },
+        { key: 'dao', label: 'DAO', color: '#f59e0b' },
       ],
     });
     render(<CommonKnowledgeCompositionPage />);
     expect(await screen.findByText('Knowledge by kind')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /All charts/ })).toHaveAttribute(
+    // F2 charts (CH-26): a breadcrumb to the chart's own section replaces "← All charts".
+    expect(screen.getByRole('link', { name: 'Charts / Common knowledge' })).toHaveAttribute(
       'href',
-      '/mainnet/charts'
+      '/mainnet/charts#common-knowledge'
     );
     await waitFor(() => expect(chartMock).toHaveBeenCalled());
     expect(chartMock.mock.calls[0][0]).toMatchObject({
       kind: 'stacked',
       unit: 'CKB',
-      data: [{ label: '2026-02-23', values: { used: '100.00000001', unused: '50.00000002' } }],
-      series: [{ label: 'Used' }, { label: 'Unused' }],
+      data: [{ label: '2026-02-23', values: { transfer: '100.00000001', dao: '50.00000002' } }],
+      series: [
+        { label: 'Plain CKB', color: '#3a4258' },
+        { label: 'Nervos DAO', color: '#f2c55c' },
+      ],
     });
   });
 });

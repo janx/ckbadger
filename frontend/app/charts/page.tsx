@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
-import { CHART_SECTIONS, INDEX_CHARTS } from '@/components/charts/chart-catalogue';
+import { CHART_SECTIONS, INDEX_CHARTS, chartSectionId } from '@/components/charts/chart-catalogue';
 import { api } from '@/lib/api';
 
 export default function ChartsPage() {
@@ -16,7 +16,23 @@ export default function ChartsPage() {
         <DetailLayout
           title="Charts"
           kind="index"
-          identity="Canonical chain aggregates and distributions"
+          // One jump per section, the order every reader follows (CH-05, CH-10).
+          actions={
+            <nav
+              aria-label="Chart sections"
+              className="flex flex-wrap gap-x-[18px] gap-y-1 text-[12px]"
+            >
+              {CHART_SECTIONS.map((section) => (
+                <a
+                  key={section}
+                  href={`#${chartSectionId(section)}`}
+                  className="text-text-dim hover:text-jade"
+                >
+                  {section}
+                </a>
+              ))}
+            </nav>
+          }
         >
           {network.data?.syncStatus?.chartDataMayBeIncomplete && (
             <p
@@ -32,14 +48,20 @@ export default function ChartsPage() {
             </p>
           )}
           {CHART_SECTIONS.map((section) => (
-            <DetailSection key={section} title={section}>
-              <div className="grid min-w-0 grid-cols-1 gap-x-10 gap-y-10 sm:grid-cols-2 xl:grid-cols-4">
-                {INDEX_CHARTS.filter((chart) => chart.section === section).map((definition) => (
-                  <ChartSmallMultiple key={definition.slug} definition={definition} />
-                ))}
-              </div>
-            </DetailSection>
+            <div key={section} id={chartSectionId(section)} className="scroll-mt-4">
+              <DetailSection title={section}>
+                <div className="grid min-w-0 grid-cols-1 gap-x-10 gap-y-9 sm:grid-cols-2 xl:grid-cols-4">
+                  {INDEX_CHARTS.filter((chart) => chart.section === section).map((definition) => (
+                    <ChartSmallMultiple key={definition.slug} definition={definition} />
+                  ))}
+                </div>
+              </DetailSection>
+            </div>
           ))}
+          <p className="text-text-dim text-[12px]">
+            Every chart stops at the last complete day. Open a chart for its full resolution, hover
+            readout and source.
+          </p>
         </DetailLayout>
       </main>
     </div>

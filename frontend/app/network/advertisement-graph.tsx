@@ -38,8 +38,9 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
       <p className="text-text-dim mb-4 max-w-4xl text-[12px] leading-relaxed">
         {data.distinctPeerPairs.toLocaleString()} unique advertiser → target peer pairs across{' '}
         {data.edges.length.toLocaleString()} retained endpoint alias observations in completed round
-        #{roundId}. Arrows show address-book gossip, not connections. Retention and later updates
-        can remove earlier evidence; this is a subset of what the crawler heard in that round.
+        #{roundId}. Each row is one address-book report — who named whom — never a connection, so
+        none of it is drawn as a link. Retention and later updates can remove earlier evidence; this
+        is a subset of what the crawler heard in that round.
       </p>
       {visible.length === 0 ? (
         <p className="text-text-dim text-[12px]">No retained advertisement edges for this round.</p>
@@ -58,9 +59,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
               <span title={edge.advertiserPeerId} className="text-text-bright truncate">
                 {edge.advertiserPeerId}
               </span>
-              <span aria-label="advertised" className="text-jade">
-                →
-              </span>
+              <span className="text-text-dim">named</span>
               <span className="min-w-0">
                 <span title={edge.targetPeerId} className="text-text-bright block truncate">
                   {edge.targetPeerId}
