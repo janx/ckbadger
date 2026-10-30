@@ -306,6 +306,40 @@ fn ckbfs_filename(data: &[u8]) -> Result<Option<String>> {
         .ok()
         .map(str::to_owned))
 }
+/// The witness a CKBFS cell's content starts at: the cell data's first field.
+/// Verified against mainnet cells of both bundled deployments: the 4-field
+/// table (`0xb5d13ffe…`) holds a `Uint32` (`01000000` → witness 1); the
+/// 5-field table (`0x31e63762…`) holds a `Uint32` fixvec of every content
+/// witness (`0300000001000000…` → [1, 2, 3]), whose head is the first entry.
+/// Any other shape is an error: the contract checks the content witness the
+/// index names, so a cell whose index cannot be read is not guessed at.
+pub(crate) fn ckbfs_head_witness_index(data: &[u8]) -> Result<usize> {
+    let fields = molecule_fields(data)?;
+    let index = match fields.len() {
+        4 => {
+            let index = fields[0];
+            ensure!(
+                index.len() == 4,
+                "CKBFS 4-field index must be a Uint32, got {} bytes",
+                index.len()
+            );
+            u32_at(index, 0)?
+        }
+        5 => {
+            let indexes = fields[0];
+            let count = u32_at(indexes, 0)?;
+            ensure!(
+                count.checked_mul(4).and_then(|bytes| bytes.checked_add(4)) == Some(indexes.len()),
+                "CKBFS 5-field index fixvec declares {count} entries in {} bytes",
+                indexes.len()
+            );
+            ensure!(count > 0, "CKBFS 5-field index fixvec names no witness");
+            u32_at(indexes, 4)?
+        }
+        count => anyhow::bail!("CKBFS cell data has {count} fields; expected 4 or 5"),
+    };
+    Ok(index)
+}
 fn u32_at(data: &[u8], at: usize) -> Result<usize> {
     Ok(u32::from_le_bytes(
         data.get(at..at + 4)
@@ -398,6 +432,31 @@ mod tests {
             ckbfs_filename(&table(&v2)).unwrap().as_deref(),
             Some("文件.json")
         );
+    }
+    #[test]
+    fn ckbfs_head_witness_index_reads_both_bundled_layouts() {
+        // 4 fields: a Uint32 index.
+        let mut v3 = fields();
+        v3[0] = 7u32.to_le_bytes().to_vec();
+        assert_eq!(ckbfs_head_witness_index(&table(&v3)).unwrap(), 7);
+        // 5 fields: a Uint32 fixvec whose first entry is the head witness.
+        let mut v2 = fields();
+        v2[0] = [3u32, 4, 2, 9]
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .collect();
+        v2.push(4u32.to_le_bytes().to_vec());
+        assert_eq!(ckbfs_head_witness_index(&table(&v2)).unwrap(), 4);
+        // A fixvec whose count disagrees with its width, or that is empty.
+        v2[0] = [2u32, 4].iter().flat_map(|n| n.to_le_bytes()).collect();
+        assert!(ckbfs_head_witness_index(&table(&v2)).is_err());
+        v2[0] = 0u32.to_le_bytes().to_vec();
+        assert!(ckbfs_head_witness_index(&table(&v2)).is_err());
+        // A 4-field index that is not a Uint32, and other field counts.
+        v3[0] = [1u32, 1].iter().flat_map(|n| n.to_le_bytes()).collect();
+        assert!(ckbfs_head_witness_index(&table(&v3)).is_err());
+        assert!(ckbfs_head_witness_index(&table(&fields()[..3])).is_err());
+        assert!(ckbfs_head_witness_index(&[1, 2, 3]).is_err());
     }
     #[test]
     fn ckbfs_metadata_accepts_binary_names_but_rejects_malformed_molecule() {

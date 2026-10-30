@@ -172,10 +172,16 @@ pub fn apply_group_cycles(
 }
 
 /// Override type-group `witness_index` when a Cobuild or CKBFS content witness
-/// is the payload the script actually reads (beyond WitnessArgs at the first input).
-pub fn attach_content_witnesses(
+/// is the payload the script actually reads (beyond the group's WitnessArgs).
+///
+/// A CKBFS group reads the content witness its own output cell data names
+/// (the data's first field; the head index of a multi-witness file). That
+/// index is the attribution — never the order CKBFS witnesses appear in.
+/// `outputs_data` is the transaction's output data, aligned with its outputs.
+pub fn attach_content_witnesses<D: AsRef<[u8]>>(
     groups: &mut [ScriptGroupResponse],
     witnesses: &[String],
+    outputs_data: &[D],
 ) -> anyhow::Result<()> {
     for group in groups.iter_mut() {
         if group
@@ -185,10 +191,10 @@ pub fn attach_content_witnesses(
             group.witness_index = None;
         }
     }
-    let mut ckbfs_indices = Vec::new();
-    let mut ckbfs_continuation_indices = std::collections::BTreeSet::new();
+    let mut ckbfs_witnesses = Vec::with_capacity(witnesses.len());
     for (index, raw) in witnesses.iter().enumerate() {
         let bytes = hex::decode(raw.trim_start_matches("0x"))?;
+        ckbfs_witnesses.push(ckbfs_fields(&bytes).is_some());
         if cobuild_fields(&bytes).is_some() {
             if let Some(hashes) = cobuild_action_script_hashes(&bytes) {
                 for hash in hashes {
@@ -199,43 +205,36 @@ pub fn attach_content_witnesses(
                     }
                 }
             }
-        } else if ckbfs_fields(&bytes).is_some() {
-            ckbfs_indices.push(index);
-            if bytes.get(5) == Some(&3) && bytes.len() >= 50 {
-                let next_index =
-                    u32::from_le_bytes(bytes[46..50].try_into().expect("4-byte slice")) as usize;
-                if next_index != 0 {
-                    ckbfs_continuation_indices.insert(next_index);
-                }
-            }
         }
     }
-    if ckbfs_indices.is_empty() {
-        return Ok(());
-    }
-    let head_ckbfs_indices: Vec<usize> = ckbfs_indices
-        .iter()
-        .copied()
-        .filter(|index| !ckbfs_continuation_indices.contains(index))
-        .collect();
-    let assigned_indices = if head_ckbfs_indices.is_empty() {
-        &ckbfs_indices
-    } else {
-        &head_ckbfs_indices
-    };
-    let mut ckbfs_groups: Vec<&mut ScriptGroupResponse> = groups
-        .iter_mut()
-        .filter(|group| {
-            group.kind == "type" && cell_type(Some(&group.script)).ok().as_deref() == Some("ckbfs")
-        })
-        .collect();
-    if ckbfs_groups.len() > assigned_indices.len() {
-        // Output-only CKBFS groups (publishes) have no input WitnessArgs and
-        // require a CKBFS content witness, whereas input+output CKBFS groups
-        // may be plain ownership transfers without a CKBFS witness.
-        ckbfs_groups.sort_by_key(|group| !group.input_indices.is_empty());
-    }
-    for (group, &index) in ckbfs_groups.iter_mut().zip(assigned_indices) {
+    for group in groups.iter_mut() {
+        if group.kind != "type" {
+            continue;
+        }
+        let protocol = cell_type(Some(&group.script))
+            .map_err(|(_, error)| anyhow::anyhow!(error.0.message.clone()))?;
+        if protocol != "ckbfs" {
+            continue;
+        }
+        // A consumed CKBFS cell without a successor declares no new content;
+        // its group reads WitnessArgs at its first input like any type group.
+        let Some(&output) = group.output_indices.first() else {
+            continue;
+        };
+        let data = outputs_data.get(output).ok_or_else(|| {
+            anyhow::anyhow!(
+                "CKBFS output {output} has no output data ({} data entries)",
+                outputs_data.len()
+            )
+        })?;
+        let index = super::transaction_cells::ckbfs_head_witness_index(data.as_ref())
+            .map_err(|e| anyhow::anyhow!("CKBFS output {output} cell data: {e:#}"))?;
+        anyhow::ensure!(
+            ckbfs_witnesses.get(index) == Some(&true),
+            "CKBFS output {output} names witness {index}, which is not a CKBFS witness \
+             ({} witnesses)",
+            witnesses.len()
+        );
         group.witness_index = Some(index);
     }
     Ok(())
@@ -784,7 +783,7 @@ mod tests {
             "0x10000000100000001000000010000000".into(),
             format!("0x{}", hex::encode(cobuild)),
         ];
-        attach_content_witnesses(&mut groups, &witnesses).unwrap();
+        attach_content_witnesses(&mut groups, &witnesses, &[] as &[&[u8]]).unwrap();
         let type_group = groups.iter().find(|g| g.kind == "type").unwrap();
         assert_eq!(type_group.witness_index, Some(1));
         let lock_group = groups.iter().find(|g| g.kind == "lock").unwrap();
@@ -891,108 +890,323 @@ mod tests {
         assert_eq!(cell_type(Some(&groups[0].script)).unwrap(), "typed");
     }
 
-    #[test]
-    fn ckbfs_witness_attachment_handles_chains_transfers_and_missing_witnesses() {
-        let ckbfs_code_hash = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a";
-        let lock = ScriptResponse {
-            code_hash: format!("0x{}", "11".repeat(32)),
-            hash_type: "type".into(),
-            args: "0x".into(),
-        };
-        let transferred_ckbfs = ScriptResponse {
-            code_hash: ckbfs_code_hash.into(),
-            hash_type: "data1".into(),
-            args: format!("0x{}", "aa".repeat(32)),
-        };
-        let published_ckbfs = ScriptResponse {
-            code_hash: ckbfs_code_hash.into(),
-            hash_type: "data1".into(),
-            args: format!("0x{}", "bb".repeat(32)),
-        };
-        let second_lock = ScriptResponse {
-            code_hash: format!("0x{}", "22".repeat(32)),
-            hash_type: "type".into(),
-            args: "0x".into(),
-        };
-        let input0 = TransactionInputResponse {
+    fn script(code_hash: &str, hash_type: &str, args: &str) -> ScriptResponse {
+        ScriptResponse {
+            code_hash: code_hash.into(),
+            hash_type: hash_type.into(),
+            args: args.into(),
+        }
+    }
+    fn input(lock: &ScriptResponse, r#type: Option<&ScriptResponse>) -> TransactionInputResponse {
+        TransactionInputResponse {
             display: None,
             previous_output: None,
             since: "0x0".into(),
             capacity: Some("100".into()),
             used_capacity: Some("74".into()),
             lock: Some(lock.clone()),
-            r#type: Some(transferred_ckbfs.clone()),
+            r#type: r#type.cloned(),
             address: None,
-            cell_type: Some("ckbfs".into()),
-        };
-        let input1 = TransactionInputResponse {
-            display: None,
-            previous_output: None,
-            since: "0x0".into(),
-            capacity: Some("100".into()),
-            used_capacity: Some("74".into()),
-            lock: Some(second_lock.clone()),
-            r#type: None,
-            address: None,
-            cell_type: Some("plain".into()),
-        };
-        let output0 = TransactionOutputResponse {
+            cell_type: None,
+        }
+    }
+    fn output(lock: &ScriptResponse, r#type: Option<&ScriptResponse>) -> TransactionOutputResponse {
+        TransactionOutputResponse {
             display: None,
             capacity: "99".into(),
             used_capacity: "74".into(),
             virtual_used_capacity: None,
-            cell_type: Some("ckbfs".into()),
+            cell_type: None,
             lock: Some(lock.clone()),
-            r#type: Some(transferred_ckbfs.clone()),
+            r#type: r#type.cloned(),
             address: None,
             status: None,
             consumed_by_tx: None,
-        };
-        let output1 = TransactionOutputResponse {
-            display: None,
-            capacity: "99".into(),
-            used_capacity: "74".into(),
-            virtual_used_capacity: None,
-            cell_type: Some("ckbfs".into()),
-            lock: Some(lock),
-            r#type: Some(published_ckbfs.clone()),
-            address: None,
-            status: None,
-            consumed_by_tx: None,
-        };
-        let mut groups = script_groups(&[input0, input1], &[output0, output1]).unwrap();
-        // Empty witness list clears out-of-bounds default input witness indices.
-        let mut no_witness_groups = groups.clone();
-        attach_content_witnesses(&mut no_witness_groups, &[]).unwrap();
-        assert!(no_witness_groups.iter().all(|g| g.witness_index.is_none()));
+        }
+    }
+    fn hex_bytes(raw: &str) -> Vec<u8> {
+        hex::decode(raw.trim_start_matches("0x")).unwrap()
+    }
+    fn type_group_witness(
+        groups: &[ScriptGroupResponse],
+        script: &ScriptResponse,
+    ) -> Option<usize> {
+        let hash = script_hash(script).unwrap();
+        groups
+            .iter()
+            .find(|g| g.kind == "type" && g.script_hash == hash)
+            .unwrap()
+            .witness_index
+    }
+    fn ckbfs_content_witness(content: &[u8]) -> String {
+        let mut bytes = b"CKBFS".to_vec();
+        bytes.push(0);
+        bytes.extend(content);
+        format!("0x{}", hex::encode(bytes))
+    }
+    /// 5-field CKBFS cell data whose index fixvec names `indexes`.
+    fn ckbfs_v2_data(indexes: &[u32]) -> Vec<u8> {
+        let mut index = (indexes.len() as u32).to_le_bytes().to_vec();
+        for i in indexes {
+            index.extend(i.to_le_bytes());
+        }
+        table(&[
+            index,
+            42u32.to_le_bytes().to_vec(),
+            [4u32.to_le_bytes().to_vec(), b"text".to_vec()].concat(),
+            [5u32.to_le_bytes().to_vec(), b"a.txt".to_vec()].concat(),
+            4u32.to_le_bytes().to_vec(),
+        ])
+    }
+    const CKBFS_V2: &str = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a";
+    const CKBFS_V3: &str = "0xb5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695";
+    const SECP: &str = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 
-        // Witness 1 is a v3 CKBFS head witness chaining to continuation witness 2.
-        let mut head = b"CKBFS".to_vec();
-        head.push(3);
-        head.extend([0u8; 40]);
-        head.extend(2u32.to_le_bytes()); // nextWitnessIndex = 2
-        head.extend(b"part1");
-        let mut cont = b"CKBFS".to_vec();
-        cont.push(3);
-        cont.extend([0u8; 44]);
-        cont.extend(b"part2");
+    /// Review #8: two published files whose cells name witnesses [3] and [1].
+    /// Pairing CKBFS groups with CKBFS witnesses by order swapped them.
+    #[test]
+    fn ckbfs_groups_read_the_witness_their_own_cell_data_names() {
+        let lock = script(SECP, "type", &format!("0x{}", "11".repeat(20)));
+        let first = script(CKBFS_V2, "data1", &format!("0x{}", "aa".repeat(32)));
+        let second = script(CKBFS_V2, "data1", &format!("0x{}", "bb".repeat(32)));
+        let mut groups = script_groups(
+            &[input(&lock, None)],
+            &[output(&lock, Some(&first)), output(&lock, Some(&second))],
+        )
+        .unwrap();
         let witnesses = vec![
-            "0x10000000100000001000000010000000".into(),
-            format!("0x{}", hex::encode(&head)),
-            format!("0x{}", hex::encode(&cont)),
+            "0x10000000100000001000000010000000".to_string(),
+            ckbfs_content_witness(b"second file"),
+            "0x".to_string(),
+            ckbfs_content_witness(b"first file"),
         ];
-        attach_content_witnesses(&mut groups, &witnesses).unwrap();
-        let transfer_hash = script_hash(&transferred_ckbfs).unwrap();
-        let publish_hash = script_hash(&published_ckbfs).unwrap();
-        let transfer_group = groups
+        let data = [ckbfs_v2_data(&[3]), ckbfs_v2_data(&[1])];
+        attach_content_witnesses(&mut groups, &witnesses, &data).unwrap();
+        assert_eq!(type_group_witness(&groups, &first), Some(3));
+        assert_eq!(type_group_witness(&groups, &second), Some(1));
+        let lock_group = groups.iter().find(|g| g.kind == "lock").unwrap();
+        assert_eq!(lock_group.witness_index, Some(0));
+    }
+
+    /// A v3 head chaining to a continuation witness, beside a transfer whose
+    /// own witness comes later: each group follows its own declared index and
+    /// the continuation is attributed to no group.
+    #[test]
+    fn ckbfs_attribution_ignores_witness_order_and_chain_links() {
+        let lock = script(SECP, "type", &format!("0x{}", "11".repeat(20)));
+        let transferred = script(CKBFS_V3, "data1", &format!("0x{}", "aa".repeat(32)));
+        let published = script(CKBFS_V3, "data1", &format!("0x{}", "bb".repeat(32)));
+        let mut groups = script_groups(
+            &[input(&lock, Some(&transferred))],
+            &[
+                output(&lock, Some(&transferred)),
+                output(&lock, Some(&published)),
+            ],
+        )
+        .unwrap();
+        let v3 = |next: u32, content: &[u8]| {
+            let mut bytes = b"CKBFS".to_vec();
+            bytes.push(3);
+            bytes.extend([0u8; 40]);
+            bytes.extend(next.to_le_bytes());
+            bytes.extend(content);
+            format!("0x{}", hex::encode(bytes))
+        };
+        let witnesses = vec![
+            "0x10000000100000001000000010000000".to_string(),
+            v3(2, b"part1"),
+            v3(0, b"part2"),
+            v3(0, b"TRANSFER"),
+        ];
+        let v3_data = |index: u32| {
+            table(&[
+                index.to_le_bytes().to_vec(),
+                42u32.to_le_bytes().to_vec(),
+                [4u32.to_le_bytes().to_vec(), b"text".to_vec()].concat(),
+                [5u32.to_le_bytes().to_vec(), b"a.txt".to_vec()].concat(),
+            ])
+        };
+        let data = [v3_data(3), v3_data(1)];
+        attach_content_witnesses(&mut groups, &witnesses, &data).unwrap();
+        assert_eq!(type_group_witness(&groups, &transferred), Some(3));
+        assert_eq!(type_group_witness(&groups, &published), Some(1));
+        assert!(groups.iter().all(|g| g.witness_index != Some(2)));
+    }
+
+    #[test]
+    fn ckbfs_attribution_rejects_unreadable_or_mismatched_indexes() {
+        let lock = script(SECP, "type", &format!("0x{}", "11".repeat(20)));
+        let file = script(CKBFS_V2, "data1", &format!("0x{}", "aa".repeat(32)));
+        let groups = script_groups(&[input(&lock, None)], &[output(&lock, Some(&file))]).unwrap();
+        let witnesses = vec![
+            "0x10000000100000001000000010000000".to_string(),
+            ckbfs_content_witness(b"file"),
+        ];
+        let error = |data: Vec<u8>, witnesses: &[String]| {
+            attach_content_witnesses(&mut groups.clone(), witnesses, &[data])
+                .unwrap_err()
+                .to_string()
+        };
+        // Malformed molecule.
+        assert!(error(vec![1, 2, 3], &witnesses).contains("CKBFS output 0 cell data"));
+        // A fixvec whose count disagrees with its bytes, and an empty fixvec.
+        let mut bad = ckbfs_v2_data(&[1]);
+        bad[24] = 2;
+        assert!(error(bad, &witnesses).contains("declares 2 entries"));
+        assert!(error(ckbfs_v2_data(&[]), &witnesses).contains("names no witness"));
+        // The named witness is WitnessArgs, or does not exist.
+        assert!(error(ckbfs_v2_data(&[0]), &witnesses).contains("names witness 0"));
+        assert!(error(ckbfs_v2_data(&[5]), &witnesses).contains("names witness 5"));
+        assert!(error(ckbfs_v2_data(&[1]), &[]).contains("names witness 1"));
+    }
+
+    #[test]
+    fn consumed_ckbfs_without_successor_keeps_its_first_input_witness_args() {
+        let lock = script(SECP, "type", &format!("0x{}", "11".repeat(20)));
+        let file = script(CKBFS_V3, "data1", &format!("0x{}", "aa".repeat(32)));
+        let mut groups =
+            script_groups(&[input(&lock, Some(&file))], &[output(&lock, None)]).unwrap();
+        let witnesses = vec!["0x10000000100000001000000010000000".to_string()];
+        attach_content_witnesses(&mut groups, &witnesses, &[Vec::<u8>::new()]).unwrap();
+        assert_eq!(type_group_witness(&groups, &file), Some(0));
+        // Without witnesses the default WitnessArgs index is cleared.
+        attach_content_witnesses(&mut groups, &[], &[Vec::<u8>::new()]).unwrap();
+        assert!(groups.iter().all(|g| g.witness_index.is_none()));
+    }
+
+    /// Mainnet tx 0xfcf43898…4fb47dab: a 4-field CKBFS v3 transfer (index 1)
+    /// beside a Spore transfer whose CoBuild witness is 2.
+    #[test]
+    fn mainnet_ckbfs_v3_transfer_beside_cobuild_spore() {
+        let secp = script(SECP, "type", "0x55c5d42e9d8b708f0d099a4139e361b4c273a0b9");
+        let ckbfs = script(
+            CKBFS_V3,
+            "data1",
+            "0xfd9e85a3542c681c95c8178fed1727de087f78c09fb64f45c55a59e4b46d2193",
+        );
+        let spore = script(
+            "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "data1",
+            "0x3b97fb30a0a5c02d6abc66d478ec33cdd864702282d7651ed9dc9c570336a240",
+        );
+        let owner = script(
+            "0x43b292bb8345189a1eb3f80330fbc2c75c547ab0627ddd26e7ca27ce4925895d",
+            "type",
+            "0x03240f480572de2a923b701e09636dcf0fae3dfa2af6cde008dcc6bb5a025970f4",
+        );
+        let spore_owner = script(
+            "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+            "data1",
+            "0x012c785eac8e2e741828ecdcec3826f01b31260a12496e6e28af556e6ffbb15c15",
+        );
+        let mut groups = script_groups(
+            &[
+                input(&secp, Some(&ckbfs)),
+                input(&secp, None),
+                input(&secp, Some(&spore)),
+            ],
+            &[
+                output(&owner, Some(&ckbfs)),
+                output(&spore_owner, Some(&spore)),
+                output(&secp, None),
+            ],
+        )
+        .unwrap();
+        let data = [
+            hex_bytes("0x4500000014000000180000001c0000002a000000010000001e62cd580a000000746578742f706c61696e170000003358303132354e4d4e5641503033333430312e4c4f4753"),
+            hex_bytes("0xb500000010000000190000009100000005000000646f622f30740000007b22646e61223a2233636363343566306165363139306138343332343936363161356534356165656330326164363633653335356263343638376237613461653137356130336435303333333538333033313332333534653464346535363431353033303333333333343330333130303030227d2000000026a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c"),
+            Vec::new(),
+        ];
+        let witnesses = vec![
+            "0x5500000010000000550000005500000041000000673bacf254cd8f7a0ad1f67a76991e94383b6ef7be883c9003dbc694174468046eb42707cf7734894df30ec4cd2327b576928c8d4cc1f5e9b70ab04295d64fdd01".to_string(),
+            "0x434b424653035c42e55ba7a52d5f2c4d1d3ca3d169c6ccd2bc5369dd322ffd955c8586548ebe01000000c9140b2f000000005452414e534645522c46524f4d3a30783033333633613136613464343733396430666339613564363766353837396163613738363235346237396466383632626235393862306531383063613238613737662c544f3a30783033323430663438303537326465326139323362373031653039363336646366306661653364666132616636636465303038646363366262356130323539373066340a434c41494d2c46524f4d3a30783033303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030302c544f3a30783033353235343764633835363463383565306165656637653236346330346237313737383832643335656636656538353834633839383234623436363431383538340a".to_string(),
+            "0x010000ff4f0100000c00000010000000000000003f0100000800000037010000080000002f01000010000000300000005000000023cde495cfd125019140ea933e76e3cbf16189483232ab5a05d88fb34d1023e1dd5179dc214b6d6c022bfd6e8e80bfe240ec4d5ac7c6228755302104a1927c73db00000001000000d700000010000000300000007d0000003b97fb30a0a5c02d6abc66d478ec33cdd864702282d7651ed9dc9c570336a24000000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8011400000055c5d42e9d8b708f0d099a4139e361b4c273a0b900000000560000001000000030000000310000006361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f240221000000012c785eac8e2e741828ecdcec3826f01b31260a12496e6e28af556e6ffbb15c15".to_string(),
+        ];
+        attach_content_witnesses(&mut groups, &witnesses, &data).unwrap();
+        assert_eq!(type_group_witness(&groups, &ckbfs), Some(1));
+        assert_eq!(type_group_witness(&groups, &spore), Some(2));
+        let rows = witness_details(&witnesses).unwrap();
+        assert_eq!(rows[1].kind, "ckbfs");
+        assert_eq!(rows[2].kind, "cobuild");
+    }
+
+    /// Mainnet tx 0x35df73ff…7c5acc5: the v3 file's cell names witness 0, which
+    /// is a CKBFS head; the secp input's WitnessArgs is witness 1.
+    #[test]
+    fn mainnet_ckbfs_v3_content_at_witness_zero() {
+        let owner = script(
+            "0x43b292bb8345189a1eb3f80330fbc2c75c547ab0627ddd26e7ca27ce4925895d",
+            "type",
+            "0x03ce623219c147d8271d738c3292ff91eb201c3971ea01d0fea49babaf0d1f78b4",
+        );
+        let ckbfs = script(
+            CKBFS_V3,
+            "data1",
+            "0xfb934bec5d638acbf8406b3a945c10321422319281d8b8ac23b5916fe25d6d35",
+        );
+        let payer = script(SECP, "type", "0x1c9f58f2445f805d97fc92378e6b777aa6419e86");
+        let change = script(
+            "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "type",
+            "0x0001d499102af334e2f44d3fa563d27a2db1af45de7e",
+        );
+        let mut groups = script_groups(
+            &[input(&owner, Some(&ckbfs)), input(&payer, None)],
+            &[output(&owner, Some(&ckbfs)), output(&change, None)],
+        )
+        .unwrap();
+        let data = [
+            hex_bytes("0x4500000014000000180000001c0000002a00000000000000576a6ce50a000000746578742f706c61696e170000003358303132354e4d4e5641503030303130322e4c4f4753"),
+            Vec::new(),
+        ];
+        let witnesses = vec![
+            "0x434b42465303f843339d255f1c0c7f61a194998fe6621934324c87f8a291b8b68f63dd6d96a2010000002062cb1a00000000474956455f4e414d452c4e45575f4e414d453a58754368656e670a".to_string(),
+            "0x55000000100000005500000055000000410000004e790b7253df7cfdd896e97575856258a74af758c3bf7b584bf1af9f045a05575d9c213df96ab9ac0f0d177d8dcaff2e17b1c7252f64185b05930c1850336dbb00".to_string(),
+        ];
+        attach_content_witnesses(&mut groups, &witnesses, &data).unwrap();
+        assert_eq!(type_group_witness(&groups, &ckbfs), Some(0));
+        let payer_hash = script_hash(&payer).unwrap();
+        let payer_group = groups
             .iter()
-            .find(|g| g.kind == "type" && g.script_hash == transfer_hash)
+            .find(|g| g.kind == "lock" && g.script_hash == payer_hash)
             .unwrap();
-        let publish_group = groups
-            .iter()
-            .find(|g| g.kind == "type" && g.script_hash == publish_hash)
-            .unwrap();
-        assert_eq!(publish_group.witness_index, Some(1));
-        assert_eq!(transfer_group.witness_index, Some(0));
+        assert_eq!(payer_group.witness_index, Some(1));
+    }
+
+    /// Mainnet tx 0x1750e961…b63d6f3f: a 5-field CKBFS publish naming [1].
+    #[test]
+    fn mainnet_ckbfs_v2_publish_names_its_witness_in_a_fixvec() {
+        let secp = script(SECP, "type", "0x9d938bb5eece35e6d9264edafb752c34304c4587");
+        let ckbfs = script(
+            CKBFS_V2,
+            "data1",
+            "0x7d18022c252e266e8719196ffa66487e6a1c0f29f85b101d74d0908dfd25663f",
+        );
+        let mut groups = script_groups(
+            &[input(&secp, None)],
+            &[output(&secp, Some(&ckbfs)), output(&secp, None)],
+        )
+        .unwrap();
+        let data = [
+            hex_bytes("0x5400000018000000200000002400000032000000500000000100000001000000290b82b20a000000746578742f706c61696e1a0000006469726563745f636f6e74656e745f6578616d706c652e74787404000000"),
+            Vec::new(),
+        ];
+        let witnesses = vec![
+            "0x550000001000000055000000550000004100000092e6256ddd5aa37d833d0f7fc4a2e40b4655924d87a1e4a447cc48a560048aeb4f2157ce6617ea664e9d83df4ecc5ebd4ec3cbd3ac895a2f727dd8a03e1e835301".to_string(),
+            "0x434b4246530048656c6c6f20434b4246532066726f6d2064697265637420636f6e74656e7421".to_string(),
+        ];
+        attach_content_witnesses(&mut groups, &witnesses, &data).unwrap();
+        assert_eq!(type_group_witness(&groups, &ckbfs), Some(1));
+    }
+
+    /// Mainnet tx 0xd824b272…4b141d0e (cell data only; its witnesses are
+    /// 77 KB): a multi-witness file's head index is the fixvec's first entry.
+    #[test]
+    fn mainnet_ckbfs_v2_multi_witness_head_index() {
+        let data = hex_bytes("0x6300000018000000280000002c0000003a0000005f00000003000000010000000200000003000000482330f50a000000696d6167652f6a70656721000000666f756e64696e672d6d656d6265722d646f622d6f7074696d697a65642e6a706704000000");
+        assert_eq!(
+            super::super::transaction_cells::ckbfs_head_witness_index(&data).unwrap(),
+            1
+        );
     }
 }
