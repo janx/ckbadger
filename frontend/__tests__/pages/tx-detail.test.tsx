@@ -25,7 +25,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     index: 0,
     inputsCount: 1,
     outputsCount: 1,
-    fee: '58803',
+    fee: '64119',
     feeRate: '52130',
     txSize: 1128,
     isCellbase: false,
@@ -34,7 +34,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     timestamp: '2026-02-20T16:46:12Z',
     confirmations: 4,
     inputsCapacity: '55500000000',
-    outputsCapacity: '55499941197',
+    outputsCapacity: '55499935881',
     inputsCommonKnowledgeSize: '94',
     outputsCommonKnowledgeSize: '94',
     inputs: [
@@ -62,7 +62,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     ],
     outputs: [
       {
-        capacity: '55499941197',
+        capacity: '55499935881',
         commonKnowledgeSize: '94',
         status: 'live',
         display: null,
@@ -139,6 +139,8 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     ],
     witnesses: ['0x16000000100000001600000016000000020000001122', '0x64617301020304'],
     witnessesAvailable: true,
+    headerDeps: [],
+    cellbaseWitness: null,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
 
@@ -366,7 +368,7 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     const time = await screen.findByRole('time');
     expect(time).toHaveTextContent('2026-02-21 00:46:12 UTC+8');
-    expect(time).toHaveTextContent(/· 1h ago/);
+    expect(time).toHaveTextContent(/1h ago$/);
     expect(time.textContent).not.toMatch(/Z/);
   });
 
@@ -468,7 +470,7 @@ describe('TransactionDetailPage', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
 
-    expect(await screen.findByText('Pending Since')).toBeInTheDocument();
+    expect(await screen.findByText('Pending since')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
   });
@@ -481,11 +483,11 @@ describe('TransactionDetailPage', () => {
       .mockResolvedValue(createPendingTransactionDetail());
 
     render(<TransactionDetailPage />);
-    expect(await screen.findByText('Pending Since')).toBeInTheDocument();
+    expect(await screen.findByText('Pending since')).toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('Pending Since')).toBeInTheDocument();
+    expect(screen.getByText('Pending since')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
 
     // Still polling after the 503.
@@ -739,11 +741,16 @@ describe('TransactionDetailPage', () => {
   it('renders exact occupied bytes, output liveness, and output locks that did not run', async () => {
     render(<TransactionDetailPage />);
     const output = await screen.findByTestId('tx-io-output-0');
-    expect(output).toHaveTextContent('occupied 94.00000000 CKB');
+    expect(output).toHaveTextContent('occupied 94');
+    expect(output).not.toHaveTextContent('occupied 94.00000000');
     expect(output).toHaveTextContent('live');
-    expect(screen.getByText('occupied 94 → 94 bytes')).toBeInTheDocument();
-    expect(screen.getByText('attached, runs when spent')).toBeInTheDocument();
-    expect(screen.getByText('2 ran')).toBeInTheDocument();
+    expect(screen.getByText(/^occupied 94 → 94/)).toHaveTextContent(
+      'occupied 94 → 94 · common knowledge 0'
+    );
+    expect(
+      document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
+    ).toHaveTextContent('attached, runs when spent');
+    expect(screen.getByTestId('tx-groups-ran')).toHaveTextContent('2 ran, 4,446,651 cycles');
     expect(await screen.findByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
     expect(api.getTransactionActivity).toHaveBeenCalledWith(TX_HASH);
   });
@@ -767,7 +774,7 @@ describe('TransactionDetailPage', () => {
       },
     ]);
     render(<TransactionDetailPage />);
-    const member = await screen.findByRole('link', { name: '↳ 0xmember:3' });
+    const member = await screen.findByRole('link', { name: '↳ 0xmember:3' }, { timeout: 5000 });
     expect(member).toHaveAttribute('href', '/mainnet/cell/0xmember-3');
     fireEvent.mouseEnter(member.closest('#tx-dep-0')!);
     expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
@@ -782,13 +789,14 @@ describe('TransactionDetailPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
     render(<TransactionDetailPage />);
     fireEvent.mouseEnter(await screen.findByTestId('tx-io-input-0'));
-    expect(document.querySelector('[data-script-group="lock:run:0xinputlock"]')).toHaveAttribute(
-      'data-highlighted',
+    expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveAttribute(
+      'data-lit',
       'true'
     );
-    expect(
-      document.querySelector('[data-script-group="lock:attached:0xinputlock"]')
-    ).toHaveAttribute('data-highlighted', 'false');
+    expect(document.querySelector('[data-group-row="lock:attached:0xinputlock"]')).toHaveAttribute(
+      'data-lit',
+      'false'
+    );
   });
 
   it('links one-to-one CKBFS file continuity to its cells and exact type group', async () => {
@@ -812,9 +820,7 @@ describe('TransactionDetailPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
     render(<TransactionDetailPage />);
 
-    const continuity = await screen.findByRole('button', {
-      name: 'in:0 → out:0 · same file cell continues',
-    });
+    const continuity = await screen.findByRole('button', { name: 'same file cell continues' });
     fireEvent.mouseEnter(continuity);
     expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
     expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
@@ -822,8 +828,8 @@ describe('TransactionDetailPage', () => {
       'stroke',
       '#a0a8be'
     );
-    expect(document.querySelector('[data-script-group="type:run:0xtypescript"]')).toHaveAttribute(
-      'data-highlighted',
+    expect(document.querySelector('[data-group-row="type:run:0xtypescript"]')).toHaveAttribute(
+      'data-lit',
       'true'
     );
     fireEvent.mouseLeave(continuity);

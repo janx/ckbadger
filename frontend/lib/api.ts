@@ -519,8 +519,10 @@ interface TransactionScriptGroup {
 interface TransactionWitness {
   index: number;
   size: number;
-  kind: 'empty' | 'witness_args' | 'ckbfs' | 'cobuild' | 'opaque';
+  kind: 'empty' | 'witness_args' | 'ckbfs' | 'cobuild' | 'opaque' | 'cellbase';
   fields: Array<{ name: string; start: number; end: number; hex: string }>;
+  /** F2-tx (R9): only on a `cobuild` witness that carries a message. */
+  actions?: CobuildAction[];
 }
 
 /** Per-cell semantics read from its payload and the canonical item indexes. */
@@ -639,6 +641,10 @@ interface TransactionDetail extends Omit<
    * index. Absent when there are none.
    */
   dotcellNames?: DotCellNameWitness[];
+  /** F2-tx (R9): headers read, not consumed, in `header_deps` order (`[]` when none). */
+  headerDeps: TransactionHeaderDep[];
+  /** F2-tx (R9): a cellbase's decoded witness 0; null for every other transaction. */
+  cellbaseWitness: TransactionCellbaseWitness | null;
 }
 
 /** A `.cell` name a transaction creates, with the records its witness carries. */
@@ -4945,3 +4951,26 @@ export const api = {
   getNetworkPeer: async (peerId: string): Promise<NetworkPeerDetail> =>
     fetchApi(`/network/peers/${encodeURIComponent(peerId)}`),
 };
+
+// ---------------------------------------------------------------------------
+// F2-tx (round 2): R9 transaction detail completions (contracts.md R9; TX-33, TX-35, TX-36), read
+// by `TransactionDetail.headerDeps` / `.cellbaseWitness` and `TransactionWitness.actions` above.
+// ---------------------------------------------------------------------------
+
+/** A header the transaction reads, "read, not consumed" (a DAO withdrawal reads two). */
+export interface TransactionHeaderDep {
+  blockHash: string;
+  /** Always set for a committed transaction; null only while an uncommitted one's block is unindexed. */
+  blockNumber: number | null;
+}
+/** A cellbase's witness 0: the miner's lock and the client message, raw bytes. */
+export interface TransactionCellbaseWitness {
+  lock: Script;
+  message: string;
+}
+/** One CoBuild message action: whose script it is for and its raw data (name not decoded). */
+export interface CobuildAction {
+  scriptInfoHash: string;
+  scriptHash: string;
+  data: string;
+}

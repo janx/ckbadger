@@ -47,6 +47,25 @@ export interface TxStructureProps {
   meOut?: string;
   /** txviz `onward`: the legend for that bridge. */
   onward?: string;
+  // F2-tx (round 2, Main.dc.html v5 / D4): the three props below are additive; their defaults keep
+  // every other page's behaviour.
+  /**
+   * `page`: the page owns hover linking (cells ↔ script groups ↔ witnesses ↔ deps, TX-14); only
+   * `focusedCellIds` light and every other cell dims. `continuity` (default): a hovered cell
+   * also lights its continuity partner.
+   */
+  linking?: 'continuity' | 'page';
+  /** Capacity entering the pool from no cell: DAO compensation (gold, dashed) or a block reward. */
+  inflow?: TxInflow;
+  /** `false` when the page draws the continuity legend itself (in its section header). */
+  continuityList?: boolean;
+}
+/** F2-tx (D4): a source that is not a consumed cell. */
+export interface TxInflow {
+  tone: 'dao' | 'reward';
+  label: string;
+  /** Exact shannons. */
+  amount: string;
 }
 /** One hover selection ties cells, continuity and the script evidence together. */
 export function TxStructure({
@@ -65,6 +84,9 @@ export function TxStructure({
   onCellHover,
   meOut,
   onward = 'this cell, onward',
+  linking = 'continuity',
+  inflow,
+  continuityList = true,
 }: TxStructureProps) {
   const continuityColor = (kind: TxContinuity['kind']) =>
     kind === 'file' ? '#a0a8be' : kind ? CLASS_COLORS[kind] : CLASS_COLORS.objects;
@@ -80,6 +102,11 @@ export function TxStructure({
       root.querySelectorAll<HTMLElement>('[data-cell-id]').forEach((cell) => {
         const bounds = cell.getBoundingClientRect();
         next[cell.dataset.cellId!] = bounds.top - top + bounds.height / 2;
+      });
+      // F2-tx (D4): the inflow source joins the pool like a consumed cell.
+      root.querySelectorAll<HTMLElement>('[data-inflow]').forEach((source) => {
+        const bounds = source.getBoundingClientRect();
+        next[INFLOW_ID] = bounds.top - top + bounds.height / 2;
       });
       setCenters((previous) =>
         JSON.stringify(previous) === JSON.stringify(next) ? previous : next
@@ -108,16 +135,18 @@ export function TxStructure({
     throw new Error(`${txHash}: onward cell ${meOut} is not an output`);
   const activeGroup = hover?.kind === 'group' ? groups.find((g) => g.id === hover.id) : null;
   const linked = new Set(
-    activeGroup
-      ? activeGroup.cellIds
-      : hover
-        ? [
-            hover.id,
-            ...continuity.flatMap((l) =>
-              l.from === hover.id ? [l.to] : l.to === hover.id ? [l.from] : []
-            ),
-          ]
-        : focusedCellIds
+    linking === 'page'
+      ? focusedCellIds
+      : activeGroup
+        ? activeGroup.cellIds
+        : hover
+          ? [
+              hover.id,
+              ...continuity.flatMap((l) =>
+                l.from === hover.id ? [l.to] : l.to === hover.id ? [l.from] : []
+              ),
+            ]
+          : focusedCellIds
   );
   const ys = Object.values(centers);
   const poolTop = ys.length ? Math.min(...ys) - 16 : 0;
@@ -128,19 +157,20 @@ export function TxStructure({
         {formatCount(cells.length, 'cell')} {label}
       </h3>
       <div className="space-y-3">
+        {label === 'consumed' && inflow && <InflowSource txHash={txHash} inflow={inflow} />}
         {cells.map((cell) => (
           <CellTile
             key={cell.id}
             cell={cell}
             highlighted={linked.has(cell.id) || cell.id === meOut}
             dimmed={
-              (Boolean(hover) || focusedCellIds.length > 0) &&
+              ((linking === 'continuity' && Boolean(hover)) || focusedCellIds.length > 0) &&
               !linked.has(cell.id) &&
               cell.id !== meOut
             }
             onClick={focusedCellIds.includes(cell.id) ? onClearFocus : undefined}
             onHover={(id) => {
-              setHover(id ? { kind: 'cell', id } : null);
+              if (linking === 'continuity') setHover(id ? { kind: 'cell', id } : null);
               onCellHover?.(id);
             }}
           />
@@ -180,6 +210,15 @@ export function TxStructure({
                     strokeWidth="1.5"
                   />
                 ))}
+                {inflow && centers[INFLOW_ID] !== undefined && (
+                  <path
+                    data-inflow-path={inflow.tone}
+                    d={`M0 ${centers[INFLOW_ID]}H46`}
+                    className={inflow.tone === 'dao' ? 'stroke-gold' : 'stroke-text-dim'}
+                    strokeWidth="1.5"
+                    strokeDasharray="4 3"
+                  />
+                )}
                 {outputs.map((cell) => (
                   <path
                     key={cell.id}
@@ -265,7 +304,7 @@ export function TxStructure({
           />
         </p>
       )}
-      {continuity.length > 0 && (
+      {continuityList && continuity.length > 0 && (
         <ul
           aria-label="Cell continuity"
           className="text-text-dim flex flex-wrap gap-x-6 gap-y-2 text-[11px]"
@@ -367,6 +406,28 @@ export function TxStructure({
           {dependencies}
         </section>
       )}
+    </div>
+  );
+}
+
+// F2-tx (D4): the inflow source tile and its measurement key.
+const INFLOW_ID = '__inflow';
+function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) {
+  return (
+    <div
+      data-inflow={inflow.tone}
+      data-testid="tx-inflow"
+      className={cn(
+        'rounded-md border border-dashed px-3 py-2 text-xs',
+        inflow.tone === 'dao' ? 'border-gold/60 text-gold' : 'border-text-dim/60 text-text'
+      )}
+    >
+      <span className="block">{inflow.label}</span>
+      <ExactCkb
+        shannons={exactUnsignedInteger(inflow.amount, `${txHash}: ${inflow.label}`)}
+        signed={false}
+        tone="plain"
+      />
     </div>
   );
 }
