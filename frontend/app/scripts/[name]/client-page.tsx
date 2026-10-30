@@ -184,6 +184,7 @@ function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
+const FAMILY_CELLS_PAGE_SIZE = 12;
 
 function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number {
   const aTs = a.deployedAt ?? null;
@@ -819,6 +820,8 @@ export default function ScriptDetailPage({
     enabled: isCodeHashMode && Boolean(selectedVersion),
   });
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
+  // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
+  const cellsPageSize = isCodeHashMode ? DEFAULT_PAGE_SIZE : FAMILY_CELLS_PAGE_SIZE;
   const selectedVersionCellsQueries = useQueries({
     queries: cellReferences.map((reference) => ({
       queryKey: [
@@ -834,7 +837,7 @@ export default function ScriptDetailPage({
           codeHash: reference.referenceHash,
           hashType: reference.hashType,
           scriptKind: cellsKind,
-          limit: DEFAULT_PAGE_SIZE,
+          limit: cellsPageSize,
           cursor: versionCellsCursorState[reference.key],
         }),
       enabled: isCodeHashMode ? Boolean(selectedVersion) : Boolean(namedScriptDetail),
@@ -905,7 +908,7 @@ export default function ScriptDetailPage({
     }
 
     const mergedEntries = Array.from(merged.values()).sort(compareCellsByCreatedAt);
-    const pageEntries = mergedEntries.slice(0, DEFAULT_PAGE_SIZE);
+    const pageEntries = mergedEntries.slice(0, cellsPageSize);
     const includedOutpoints = new Set(
       pageEntries.map((entry) => `${entry.cell.txHash}:${entry.cell.outputIndex}`)
     );
@@ -942,7 +945,7 @@ export default function ScriptDetailPage({
     }
 
     const hasMore =
-      mergedEntries.length > DEFAULT_PAGE_SIZE ||
+      mergedEntries.length > cellsPageSize ||
       selectedVersionCellsQueries.some((query) => Boolean(query.data?.hasMore));
 
     return {
@@ -955,6 +958,7 @@ export default function ScriptDetailPage({
     };
   }, [
     cellsKind,
+    cellsPageSize,
     selectedVersionCellsQueries,
     selectedVersionLiveCellsCount,
     versionCellsCursorState,
@@ -1211,6 +1215,7 @@ export default function ScriptDetailPage({
         )}
         codeCells={codeCells}
         cells={{
+          pageSize: cellsPageSize,
           rows: selectedVersionCellsData.data,
           loading: isVersionCellsLoading,
           page: cellsPagination.page,

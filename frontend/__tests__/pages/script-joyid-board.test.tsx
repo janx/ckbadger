@@ -158,7 +158,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(rows[0]).toHaveTextContent('consumed by v2');
     expect(rows[0]).toHaveTextContent('first deployed');
     expect(rows[0]).toHaveTextContent('into multisig 0xd1db…b95c');
-    expect(rows[2]).toHaveTextContent('hands it to multisig 0x07a2…68ca');
+    expect(rows[2]).toHaveTextContent('hands it to 0x07a2…68ca');
     expect(rows[4]).toHaveTextContent('current');
     expect(rows[4]).toHaveTextContent('100,438.00000000');
     expect(rows[4]).toHaveTextContent('live');
@@ -218,5 +218,54 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(
       within(tier2).getByRole('heading', { name: 'Registered references' })
     ).toBeInTheDocument();
+  });
+});
+
+describe('JoyID script page · visual pass', () => {
+  beforeEach(() => {
+    stubChartWidth(900);
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('draws the upgrade days as dashed lines through every panel, not as a link list', async () => {
+    await renderJoyid();
+    const history = screen.getByTestId('script-history');
+    expect(history.querySelectorAll('[data-upgrade-line]')).toHaveLength(3);
+    expect(within(history).queryByRole('link', { name: /v1 · v2 · 2023-10-07/ })).toBeNull();
+  });
+
+  it('staggers code-track labels so neighbours never overlap (390 px)', async () => {
+    await renderJoyid();
+    const track = screen.getByLabelText('Code track');
+    expect(
+      [...track.querySelectorAll<HTMLElement>('[data-upgrade-day]')].map((n) => n.dataset.row)
+    ).toEqual(['0', '1', '0']);
+    const custodians = [...track.querySelectorAll<HTMLElement>('[data-custodian-label]')];
+    expect(custodians.map((n) => n.dataset.row)).toEqual(['0', '1', '0']);
+    // a label that starts past the middle hangs from the right edge instead of running off it
+    expect(custodians[2].style.right).toBe('0%');
+    expect(custodians[0].style.left).toBe('0%');
+  });
+
+  it('states the peak of CKB held from the API (SC-S8, R2b-b totalPeak)', async () => {
+    await renderJoyid();
+    expect(screen.getByTestId('script-history-peak')).toHaveTextContent(
+      /CKB held peaked at 456,002,179\.570* CKB on 2026-10-29/
+    );
+  });
+
+  it('pages its cells 12 at a time, oldest first, as the board does', async () => {
+    await renderJoyid();
+    expect(api.getCellsByScriptRef).toHaveBeenCalledWith(expect.objectContaining({ limit: 12 }));
+    expect(screen.getByText(/Oldest first, as the cell index keeps them/)).toBeInTheDocument();
   });
 });
