@@ -9,7 +9,10 @@ describe('m-NFT identity evidence', () => {
     expect(
       screen.getByText('29 bytes · 3 described fields · 1 unexplained bytes')
     ).toBeInTheDocument();
-    fireEvent.focus(screen.getByRole('button', { name: 'Token index · big-endian bytes 24–27' }));
+    // F2 objects (OB-M11): each index field carries its decoded value.
+    fireEvent.focus(
+      screen.getByRole('button', { name: 'Token index · big-endian = 99 bytes 24–27' })
+    );
     expect(container.querySelector('[data-byte-offset="27"]')).toHaveAttribute(
       'data-highlighted',
       'true'
@@ -39,7 +42,8 @@ describe('m-NFT class renderer', () => {
     'keeps %s as a declared link without embedding remote media',
     (renderer) => {
       const { container } = render(<MnftRenderer renderer={renderer} />);
-      expect(screen.getByRole('link', { name: 'Open the renderer ↗' })).toHaveAttribute(
+      // F2 objects (OB-M4): the frame says where the picture lives and links the file.
+      expect(screen.getByRole('link', { name: 'Open the file ↗' })).toHaveAttribute(
         'href',
         renderer
       );

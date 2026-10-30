@@ -115,6 +115,8 @@ export function ObjectTraits({
 export function spelledDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) throw new Error(`invalid duration ${ms} ms`);
   const units: [number, string][] = [
+    [365 * 86_400_000, 'year'],
+    [30 * 86_400_000, 'month'],
     [86_400_000, 'day'],
     [3_600_000, 'hour'],
     [60_000, 'minute'],
@@ -130,7 +132,8 @@ export function spelledDuration(ms: number): string {
 
 export function lockPhrase(name: string | null): string {
   if (!name) return 'an unregistered lock';
-  const article = /^[aeiou]/i.test(name) ? 'an' : 'a';
+  // "an Omnilock", "a UniPass lock": a leading U usually sounds like "you".
+  const article = /^[aeio]/i.test(name) ? 'an' : 'a';
   return /lock$/i.test(name) ? `${article} ${name}` : `${article} ${name} lock`;
 }
 
@@ -147,12 +150,13 @@ function timeOf(v: ItemCellVersion): number {
 export function itemLifeSentence(
   versions: readonly ItemCellVersion[],
   now: number,
-  verb: 'Minted' | 'Issued' = 'Minted'
+  verb: 'Minted' | 'Issued' = 'Minted',
+  by?: string
 ): string {
   const first = versions[0];
   const last = versions.at(-1);
   if (!first || !last) throw new Error('item life sentence needs at least one cell version');
-  const born = `${verb} ${spelledDuration(now - timeOf(first))} ago to ${lockPhrase(first.lockName)}`;
+  const born = `${verb}${by ? ` by ${by}` : ''} ${spelledDuration(now - timeOf(first))} ago to ${lockPhrase(first.lockName)}`;
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
@@ -163,4 +167,62 @@ export function itemLifeSentence(
   return moves === 1
     ? `${born}, then moved ${later} later to ${lockPhrase(last.lockName)}, where it sits now.`
     : `${born}, then moved ${moves} times; the last move, ${spelledDuration(now - timeOf(last))} ago, put it under ${lockPhrase(last.lockName)}, where it sits now.`;
+}
+
+// ── The cell over its life (OB-9, OB-M7) ──
+const SHANNONS = BigInt(100000000);
+
+/** Whole CKB when the amount is whole (cells of bytes), else exact. */
+export function ckbText(shannons: bigint): string {
+  if (shannons % SHANNONS === BigInt(0)) return (shannons / SHANNONS).toLocaleString('en-US');
+  const whole = shannons / SHANNONS,
+    frac = (shannons % SHANNONS).toString().padStart(8, '0').replace(/0+$/, '');
+  return `${whole.toLocaleString('en-US')}.${frac}`;
+}
+
+/**
+ * OB-9: what the cell is worth over its life — now, at minting, and which part of its bytes
+ * changed between them. Every number is read from the canonical cell versions.
+ */
+export function cellLifeSentence(
+  versions: readonly ItemCellVersion[],
+  noun: 'object' | 'token'
+): string {
+  const first = versions[0],
+    last = versions.at(-1)!;
+  const cap = BigInt(last.capacity),
+    occupied = BigInt(last.occupiedCapacity);
+  const now =
+    cap === occupied
+      ? `The ${noun}’s cell holds ${ckbText(cap)} CKB.`
+      : `The ${noun}’s cell holds ${ckbText(cap)} CKB, ${ckbText(occupied)} of it occupied by its bytes.`;
+  if (versions.length === 1) return now;
+  const was = BigInt(first.capacity);
+  const changes = (['lock', 'type', 'data'] as const).flatMap((part) => {
+    const key = `${part}Bytes` as const;
+    const d = last.anatomy[key] - first.anatomy[key];
+    return d === 0 ? [] : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${Math.abs(d)} bytes`];
+  });
+  const dCap = cap - was,
+    dOcc = occupied - BigInt(first.occupiedCapacity);
+  const why =
+    changes.length && dCap === dOcc && dCap !== BigInt(0)
+      ? `; ${changes.join(', ')}, so the cell ${dCap > BigInt(0) ? 'grew' : 'shrank'} by ${ckbText(dCap > BigInt(0) ? dCap : -dCap)} CKB when it moved.`
+      : '.';
+  return `${now} It held ${ckbText(was)} ${noun === 'token' ? 'at issue' : 'at minting'}${why}`;
+}
+
+export function lockFootnote(versions: readonly ItemCellVersion[]): string | null {
+  const first = versions[0],
+    last = versions.at(-1)!;
+  if (versions.length < 2) return null;
+  const args = (v: ItemCellVersion) => v.anatomy.lockBytes - 33;
+  const sameType = versions.every(
+    (v) => JSON.stringify(v.type) === JSON.stringify(first.type) && v.dataHash === first.dataHash
+  );
+  const lock =
+    first.lock.codeHash === last.lock.codeHash && first.lock.args === last.lock.args
+      ? `Lock: ${first.lockName ?? 'unregistered lock'} throughout.`
+      : `Lock: ${first.lockName ?? 'unregistered lock'} with ${args(first)}-byte args at minting → ${last.lockName ?? 'unregistered lock'} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
+  return `${lock}${sameType ? ' Type and data never changed.' : ''}`;
 }

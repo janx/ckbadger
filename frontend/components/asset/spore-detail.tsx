@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type ItemCellVersion, type SporeDetail } from '@/lib/api';
+import { api, type SporeDetail } from '@/lib/api';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CellVersions } from '@/components/asset/cell-versions';
@@ -12,7 +12,10 @@ import {
   CompositionLine,
   LiveBadge,
   ObjectTraits,
+  cellLifeSentence,
+  ckbText,
   itemLifeSentence,
+  lockFootnote,
 } from '@/components/asset/object-hero';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CompositionBadge } from '@/components/ui/composition-mark';
@@ -26,59 +29,6 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
-
-const SHANNONS = BigInt(100000000);
-/** Whole CKB when the amount is whole (cells of bytes), else exact. */
-function ckbText(shannons: bigint): string {
-  if (shannons % SHANNONS === BigInt(0)) return (shannons / SHANNONS).toLocaleString('en-US');
-  const whole = shannons / SHANNONS,
-    frac = (shannons % SHANNONS).toString().padStart(8, '0').replace(/0+$/, '');
-  return `${whole.toLocaleString('en-US')}.${frac}`;
-}
-
-/**
- * OB-9: what the cell is worth over its life — now, at minting, and which part of its bytes
- * changed between them. Every number is read from the canonical cell versions.
- */
-function cellLifeSentence(versions: readonly ItemCellVersion[]): string {
-  const first = versions[0],
-    last = versions.at(-1)!;
-  const cap = BigInt(last.capacity),
-    occupied = BigInt(last.occupiedCapacity);
-  const now =
-    cap === occupied
-      ? `The object’s cell holds ${ckbText(cap)} CKB.`
-      : `The object’s cell holds ${ckbText(cap)} CKB, ${ckbText(occupied)} of it occupied by its bytes.`;
-  if (versions.length === 1) return now;
-  const was = BigInt(first.capacity);
-  const changes = (['lock', 'type', 'data'] as const).flatMap((part) => {
-    const key = `${part}Bytes` as const;
-    const d = last.anatomy[key] - first.anatomy[key];
-    return d === 0 ? [] : [`the ${part} ${d > 0 ? 'grew' : 'shrank'} by ${Math.abs(d)} bytes`];
-  });
-  const dCap = cap - was,
-    dOcc = occupied - BigInt(first.occupiedCapacity);
-  const why =
-    changes.length && dCap === dOcc && dCap !== BigInt(0)
-      ? `; ${changes.join(', ')}, so the cell ${dCap > BigInt(0) ? 'grew' : 'shrank'} by ${ckbText(dCap > BigInt(0) ? dCap : -dCap)} CKB when it moved.`
-      : '.';
-  return `${now} It held ${ckbText(was)} at minting${why}`;
-}
-
-function lockFootnote(versions: readonly ItemCellVersion[]): string | null {
-  const first = versions[0],
-    last = versions.at(-1)!;
-  if (versions.length < 2) return null;
-  const args = (v: ItemCellVersion) => v.anatomy.lockBytes - 33;
-  const sameType = versions.every(
-    (v) => JSON.stringify(v.type) === JSON.stringify(first.type) && v.dataHash === first.dataHash
-  );
-  const lock =
-    first.lock.codeHash === last.lock.codeHash && first.lock.args === last.lock.args
-      ? `Lock: ${first.lockName ?? 'unregistered lock'} throughout.`
-      : `Lock: ${first.lockName ?? 'unregistered lock'} with ${args(first)}-byte args at minting → ${last.lockName ?? 'unregistered lock'} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
-  return `${lock}${sameType ? ' Type and data never changed.' : ''}`;
-}
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -409,7 +359,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               intro={
                 versions.data.data.length > 0 && (
                   <p className="mb-4 text-[13px] leading-relaxed">
-                    {cellLifeSentence(versions.data.data)}
+                    {cellLifeSentence(versions.data.data, 'object')}
                   </p>
                 )
               }

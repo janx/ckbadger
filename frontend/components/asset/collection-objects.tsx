@@ -27,7 +27,8 @@ function objectNumber(number: string | null, sporeId: string): string {
   if (number === null) return `${sporeId.slice(0, 10)}…${sporeId.slice(-4)}`;
   if (!/^(0|[1-9]\d*)$/.test(number))
     throw new Error(`${sporeId}: invalid object number ${number}`);
-  return `#${BigInt(number).toLocaleString('en-US')}`;
+  // an object's number in its collection (not a block height)
+  return '#' + BigInt(number).toLocaleString('en-US');
 }
 
 export interface CollectionObjectsProps {

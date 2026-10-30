@@ -23,6 +23,8 @@ export interface CellVersionsProps {
    * largest cell with its free part, as the Object and Mnft boards do.
    */
   life?: boolean;
+  /** The first cell's label in `life` mode ("At minting"; "Issued" for an m-NFT token). */
+  firstLabel?: string;
 }
 export function CellVersions({
   history,
@@ -31,6 +33,7 @@ export function CellVersions({
   actions,
   intro,
   life = false,
+  firstLabel = 'At minting',
 }: CellVersionsProps) {
   const [active, setActive] = useState<string | null>(null);
   if (history.total !== history.data.length)
@@ -70,10 +73,10 @@ export function CellVersions({
   const label = (v: ItemCellVersion, i: number) =>
     life
       ? i === 0
-        ? 'At minting'
+        ? firstLabel
         : v.isLive
           ? 'Now'
-          : `Version ${i + 1}`
+          : 'Moved'
       : `${i === 0 ? 'Minted cell' : `Version ${i + 1}`}${v.isLive ? ' · current' : ''}`;
   return (
     <DetailSection
