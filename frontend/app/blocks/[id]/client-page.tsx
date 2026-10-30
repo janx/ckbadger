@@ -15,7 +15,7 @@ import { TransactionTable } from '@/components/transaction/transaction-table';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { BlockPosition } from '@/components/blocks/block-position';
 import { decodeDaoHeader } from '@/lib/dao-header';
-import { formatScaledInteger } from '@/lib/exact-integer';
+import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
@@ -401,30 +401,7 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim">{key}</dt>
                   <dd className="break-all">
                     {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
-                    {key === 'dao' && (
-                      <div className="mt-2 space-y-2" aria-label="Decoded DAO header">
-                        <p>
-                          <span className="text-text-dim">C · total issued </span>
-                          <ExactCkb shannons={dao.C} signed={false} tone="plain" />
-                        </p>
-                        <p>
-                          <span className="text-text-dim">AR · accumulated rate </span>
-                          {formatScaledInteger(dao.AR, BigInt('10000000000000000'), 16)}
-                        </p>
-                        <p>
-                          <span className="text-text-dim">S · unissued secondary pool </span>
-                          <ExactCkb shannons={dao.S} signed={false} tone="plain" />
-                        </p>
-                        <p>
-                          <span className="text-text-dim">U · protocol occupied </span>
-                          <ExactCkb shannons={dao.U} signed={false} tone="plain" />
-                        </p>
-                        <p className="text-text-dim">
-                          U includes genesis virtual occupied capacity. These are the four
-                          little-endian u64 header fields.
-                        </p>
-                      </div>
-                    )}
+                    {key === 'dao' && <DaoHeaderFields dao={dao} />}
                   </dd>
                 </div>
               ))}

@@ -164,6 +164,10 @@ describe('BlockDetailPage', () => {
     expect(decoded).toHaveTextContent('7,587,904,816.56475767');
     expect(decoded).toHaveTextContent('5,191,267,849.00000000');
     expect(decoded).toHaveTextContent('U includes genesis virtual occupied capacity');
+    // DAO-5: S counts owed compensation and the burnt share; it is not a pool of future issuance.
+    expect(decoded).toHaveTextContent('S · compensation still owed + the burnt share');
+    expect(decoded).toHaveTextContent('it holds nothing for anyone');
+    expect(decoded).not.toHaveTextContent(/unissued|pool/);
   });
 
   it('shows hardfork activation badge on activation block', async () => {

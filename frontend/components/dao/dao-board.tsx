@@ -7,6 +7,9 @@ import { Chart } from '@/components/ui/chart';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
 import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { DaoSources } from '@/components/dao/dao-sources';
+import { formatAccumulatedRate } from '@/lib/dao-header';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { formatCapacity } from '@/lib/utils';
 
 interface Props {
   statistics: DaoStatistics;
@@ -42,9 +45,10 @@ function CkbDecimal({ value, signed = false }: { value: string; signed?: boolean
   );
 }
 
+/** Header AR integers (×10¹⁶) as the exact rate, the same form the block page decodes. */
 function formatAr(raw: string): string {
   if (!/^\d+$/.test(raw)) throw new Error(`DAO AR "${raw}" is not an unsigned integer`);
-  return BigInt(raw).toLocaleString('en-US');
+  return formatAccumulatedRate(BigInt(raw));
 }
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
@@ -148,14 +152,7 @@ function History({
           unit="%"
           kind="line"
           height={120}
-          formatValue={(v) => {
-            const n = Number(v);
-            if (!Number.isFinite(n)) throw new Error(`DAO ratio "${v}" is not a finite number`);
-            return n.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 4,
-            });
-          }}
+          formatValue={ratioText}
         />
         <Chart
           title="Net change per week"
@@ -172,22 +169,23 @@ function History({
         <span>
           Deposited: <CkbDecimal value={latest.value} /> CKB
         </span>
-        <span>
-          Current depositors:{' '}
-          {latest.value2 != null ? Number(latest.value2).toLocaleString('en-US') : '—'}
-        </span>
-        <span>
-          Share of circulating CKB:{' '}
-          {ratioByDate.get(latest.date) != null
-            ? `${Number(ratioByDate.get(latest.date)).toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 4,
-              })}%`
-            : '—'}
-        </span>
+        <span>Current depositors: {depositorCount(latest)}</span>
+        <span>Share of circulating CKB: {ratioText(alignedRatio.at(-1)!.values.ratio)}%</span>
       </div>
     </div>
   );
+}
+
+/** The circulation ratio exactly as the API states it (a decimal percentage). */
+function ratioText(value: string): string {
+  return formatExactDecimal(value, 'DAO circulation ratio');
+}
+
+/** Every complete total-deposit day carries its current depositor count in `value2`. */
+function depositorCount(row: ChartResponse['data'][number]): string {
+  if (row.value2 === undefined || row.value2 === null)
+    throw new Error(`DAO total-deposit day ${row.date} has no current depositor count`);
+  return exactUnsignedInteger(row.value2, `DAO depositors on ${row.date}`).toLocaleString('en-US');
 }
 
 function exactCkbDecimal(shannons: bigint): string {
@@ -283,8 +281,10 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         </div>
       </div>
       <p className="text-text-dim mt-3 text-[12px]">
-        Each block allocates secondary issuance by occupied capacity, free capacity in DAO, and the
-        remainder. The burnt share cannot be claimed later.
+        Each block splits its secondary issuance by capacity use: the protocol occupied share goes
+        to miners; the depositors&apos; weight, phase-0 free capacity plus the compensation it has
+        already accrued, goes to DAO depositors (withdrawal requests are frozen and take no share);
+        the rest is burnt and cannot be claimed later.
       </p>
       <div className="mt-4">
         <div className="text-text-dim mb-1 text-[12px]">
@@ -298,7 +298,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           ].map((part) => (
             <div
               key={part.key}
-              title={`${part.key}: ${part.value} shannons`}
+              title={`${part.key}: ${formatCapacity(part.value)}`}
               style={{ width: `${formatPercent(part.value, issued, 4)}%`, background: part.color }}
             />
           ))}
@@ -314,7 +314,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         </p>
       </div>
       <Link
-        href={`/block/${statistics.tipBlockNumber}`}
+        href={`/blocks/${statistics.tipBlockNumber}`}
         className="mt-2 inline-block text-[11px] text-[#f2c55c] hover:underline"
       >
         Verify statistics anchor block #{statistics.tipBlockNumber.toLocaleString()} →
@@ -514,7 +514,7 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
           {evidence.header.daoHex}
         </div>
         <Link
-          href={`/block/${evidence.header.blockNumber}`}
+          href={`/blocks/${evidence.header.blockNumber}`}
           className="mt-2 inline-block text-[12px] text-[#f2c55c] hover:underline"
         >
           Open source block →

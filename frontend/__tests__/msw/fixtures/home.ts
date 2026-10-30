@@ -160,7 +160,7 @@ export const daoStatistics: DaoStatistics = {
   pendingWithdrawalCapacityCkb: '908722600.89687313',
   daoCapacity: '903761821733487013',
   daoFreeCapacity: '903000000000000000',
-  depositorAllocationWeight: '903000000000000000',
+  depositorAllocationWeight: '880000000000000000',
   tipTotalIssuance: '4000000000000000000',
   tipProtocolOccupiedCapacity: '1200000000000000000',
   rolling24hBaselineBlockNumber: 20830000,

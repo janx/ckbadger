@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import type { GlobalActivity, Transaction } from '@/lib/api';
-import { formatActivityTimestamp } from '@/lib/asset-utils';
+import { formatUtcClock } from '@/lib/utils';
 
 function actionLabel(actions: GlobalActivity['protocolActions']): string {
   const dao = actions.find((action) => action.protocol === 'dao');
@@ -30,7 +30,7 @@ function ActivityRow({ row }: { row: GlobalActivity }) {
           #{row.blockNumber.toLocaleString()}
         </Link>
       </td>
-      <td className="text-text-dim text-right">{formatActivityTimestamp(row.timestamp)}</td>
+      <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
     </tr>
   );
 }
@@ -53,7 +53,7 @@ function TransactionRow({ row }: { row: Transaction }) {
           #{row.blockNumber.toLocaleString()}
         </Link>
       </td>
-      <td className="text-text-dim text-right">{formatActivityTimestamp(row.timestamp)}</td>
+      <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
     </tr>
   );
 }

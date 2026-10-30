@@ -16,3 +16,13 @@ export function decodeDaoHeader(hex: string, context: string): DaoHeader {
   });
   return { C: words[0], AR: words[1], S: words[2], U: words[3] };
 }
+
+/** AR is stored ×10¹⁶ (RFC-0023); 1.0 at genesis. */
+export const AR_SCALE = BigInt('10000000000000000');
+
+/** The accumulated rate as its exact 16-decimal value, e.g. `1.2065094518945692`. */
+export function formatAccumulatedRate(ar: bigint): string {
+  if (ar < BigInt(0)) throw new Error(`DAO AR ${ar} is negative`);
+  const fraction = (ar % AR_SCALE).toString().padStart(16, '0');
+  return `${ar / AR_SCALE}.${fraction}`;
+}

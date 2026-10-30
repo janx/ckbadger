@@ -15,7 +15,8 @@ const activity = {
   txHash: tx,
   txIndex: 2,
   blockNumber: 123,
-  timestamp: '2026-10-28T00:00:00Z',
+  // The activity API sends chain time as milliseconds; the transaction API as RFC 3339.
+  timestamp: '1793268770452',
   protocolActions: [
     { protocol: 'dao', protocolName: 'Nervos DAO', action: 'withdraw_request', metadata: {} },
   ],
@@ -32,7 +33,7 @@ describe('DaoSources', () => {
       nextCursor: 'next',
     } as any);
     vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [{ hash: tx, blockNumber: 123, timestamp: '2026-10-28T00:00:00Z', activity }],
+      data: [{ hash: tx, blockNumber: 123, timestamp: '2026-10-29T11:12:50.452+00:00', activity }],
       limit: 12,
       total: null,
       hasMore: false,
@@ -79,6 +80,14 @@ describe('DaoSources', () => {
       })
     );
     expect(await screen.findByText('withdraw request')).toBeInTheDocument();
+  });
+
+  it('prints the UTC column in UTC whatever the browser zone (DAO-1)', async () => {
+    render(<DaoSources />);
+    expect(await screen.findByText('2026-10-29 10:12:50 UTC')).toBeInTheDocument();
+    expect(screen.queryByText(/1793268770452/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'transactions' }));
+    expect(await screen.findByText('2026-10-29 11:12:50 UTC')).toBeInTheDocument();
   });
 
   it('reports source errors without inventing rows', async () => {

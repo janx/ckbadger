@@ -14,9 +14,11 @@ const stats = {
   tipBlockNumber: 5,
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
+  // Free capacity in DAO counts frozen phase-1 cells; the depositors' weight does not, but adds
+  // the compensation phase-0 deposits already accrued. Distinct values keep the bar honest.
   daoFreeCapacity: '40000000000',
-  depositorAllocationWeight: '40000000000',
-  tipTotalIssuance: '1000000000000000',
+  depositorAllocationWeight: '45000000000',
+  tipTotalIssuance: '1000000000000',
   tipProtocolOccupiedCapacity: '100000000',
 };
 const history = {
@@ -113,6 +115,56 @@ describe('DaoBoard', () => {
       return el.className.includes('tabular-nums') && el.textContent === '−0.00000001';
     });
     expect(net.length).toBeGreaterThan(0);
+  });
+
+  it("draws the depositors' share from their allocation weight, not DAO free capacity (DAO-2)", () => {
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(screen.getByText('DAO depositors 4.50%')).toBeInTheDocument();
+    expect(screen.getByTitle('DAO depositors: 450.00000000 CKB')).toBeInTheDocument();
+    expect(screen.getByText(/phase-0 free capacity plus the compensation/)).toBeInTheDocument();
+    expect(screen.queryByText(/free capacity in DAO/)).not.toBeInTheDocument();
+  });
+
+  it('writes AR as the exact rate and links anchors to real block routes (DAO-4, #7)', () => {
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(
+      screen.getByText(/AR grew from 1\.0000000000000000 at genesis to 1\.0200000000000000/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Verify statistics anchor block #5/ })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/5'
+    );
+    expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
+      'href',
+      `/mainnet/blocks/${evidence.header.blockNumber}`
+    );
+  });
+
+  it('keeps the depositor table at a scrollable width so counts and amounts never fuse (DAO-3)', () => {
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const table = screen.getByRole('region', { name: 'Who deposits' }).querySelector('table')!;
+    expect(table).toHaveClass('min-w-[640px]');
+    expect(table.parentElement).toHaveClass('overflow-x-auto');
+    const [, , , deposits, amount] = Array.from(table.querySelectorAll('tbody tr')[0].children);
+    expect(deposits).toHaveClass('whitespace-nowrap');
+    expect(amount).toHaveClass('whitespace-nowrap');
+  });
+
+  it('fails fast when a complete deposit day lacks its depositor count (#17)', () => {
+    const missing = {
+      ...history,
+      data: history.data.map((row, i) => (i === 2 ? { ...row, value2: null } : row)),
+    };
+    expect(() =>
+      render(
+        <DaoBoard
+          statistics={stats}
+          evidence={evidence}
+          depositedHistory={missing}
+          circulationHistory={ratio}
+        />
+      )
+    ).toThrow('2024-01-15 has no current depositor count');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {
