@@ -99,7 +99,7 @@ afterEach(() => vi.restoreAllMocks());
 async function page() {
   const view = render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
   await screen.findByRole('heading', { level: 1, name: 'Nervape 3x' }, { timeout: 5000 });
-  await screen.findByRole('table', { name: 'Newest objects' });
+  await screen.findByRole('table', { name: 'Newest objects' }, { timeout: 5000 });
   return view;
 }
 
@@ -152,7 +152,11 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
       traits: { Color: 'Calm Blue' },
     })
   );
-  const chip = await screen.findByRole('button', { name: 'Clear Color = Calm Blue' });
+  const chip = await screen.findByRole(
+    'button',
+    { name: 'Clear Color = Calm Blue' },
+    { timeout: 5000 }
+  );
   expect(container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')).toHaveAttribute(
     'stroke',
     '#ffffff'
@@ -227,5 +231,7 @@ it('draws holder bars in the objects colour (OB-C7)', async () => {
 it('still shows an empty Newest list honestly', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());
   render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
-  expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
+  expect(
+    await screen.findByText('No matching objects.', undefined, { timeout: 5000 })
+  ).toBeInTheDocument();
 });

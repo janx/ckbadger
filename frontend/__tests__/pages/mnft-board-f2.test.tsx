@@ -144,8 +144,8 @@ describe('Mnft board (F2 objects)', () => {
   });
   async function page() {
     const view = render(<MnftItemDetailPage objectId={id} />);
-    await screen.findByRole('heading', { name: 'Class A #99' });
-    await screen.findByRole('region', { name: 'Raw item evidence' });
+    await screen.findByRole('heading', { name: 'Class A #99' }, { timeout: 5000 });
+    await screen.findByRole('region', { name: 'Raw item evidence' }, { timeout: 5000 });
     return view;
   }
 

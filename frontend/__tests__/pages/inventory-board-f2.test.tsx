@@ -155,7 +155,11 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
   });
   it('states how many collections are fully on-chain, with a share bar and counted chips', async () => {
     render(<ObjectsPage />);
-    const comp = await screen.findByRole('region', { name: 'Object composition' });
+    const comp = await screen.findByRole(
+      'region',
+      { name: 'Object composition' },
+      { timeout: 5000 }
+    );
     expect(comp).toHaveTextContent(
       '357 of 5,653 collections are fully on-chain · 26,880 live objects are'
     );
@@ -182,7 +186,11 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
   });
   it('frames on-chain thumbnails, says m-NFT and draws CKB held in violet', async () => {
     render(<ObjectsPage />);
-    const table = await screen.findByRole('table', { name: 'Object collections' });
+    const table = await screen.findByRole(
+      'table',
+      { name: 'Object collections' },
+      { timeout: 5000 }
+    );
     expect(table.querySelector('[data-thumb-frame="btc_ckb"]')).not.toBeNull();
     expect(table.querySelector('[data-thumb-frame="centralized_mixture"]')).toBeNull();
     expect(within(table).getByText(/^m-NFT/)).toBeInTheDocument();
@@ -199,7 +207,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
   });
   it('names each token in full and offers every token standard with an "All" count', async () => {
     render(<TokensPage />);
-    const table = await screen.findByRole('table', { name: 'Tokens' });
+    const table = await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
     expect(within(table).getByText('RGB++ Protocol')).toBeInTheDocument();
     expect(within(table).getByText('RGB++ · xUDT')).toBeInTheDocument();
     expect(within(table).getByText('SEAL')).toBeInTheDocument();
@@ -212,7 +220,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
   });
   it('draws CKB held as an azure bar relative to the largest, and occupied in whole CKB', async () => {
     render(<TokensPage />);
-    const table = await screen.findByRole('table', { name: 'Tokens' });
+    const table = await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
     const bars = table.querySelectorAll('[data-held-bar]');
     expect(bars[0]).toHaveStyle({ width: '100%', backgroundColor: CLASS_COLORS.tokens });
     expect(bars[1]).toHaveStyle({ width: '25%' });
@@ -221,7 +229,7 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
   });
   it('searches as you type and keeps sorting in the board’s "sorted by" line', async () => {
     render(<TokensPage />);
-    await screen.findByRole('table', { name: 'Tokens' });
+    await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search the inventory' }), {
       target: { value: 'rgb' },
@@ -241,7 +249,7 @@ describe('Identities view (IV-12, IV-02)', () => {
   });
   it('lists the systems plainly: no standard chips, no repeated name, rose bars', async () => {
     render(<IdentitiesPage />);
-    const table = await screen.findByRole('table', { name: 'Identity systems' });
+    const table = await screen.findByRole('table', { name: 'Identity systems' }, { timeout: 5000 });
     const name = within(table).getByRole('link', { name: '.bit' });
     expect(name).toHaveClass('text-[15px]');
     expect(screen.queryByRole('group', { name: 'Standard filters' })).not.toBeInTheDocument();

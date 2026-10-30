@@ -1,7 +1,7 @@
 'use client';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Chart } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -24,6 +24,21 @@ export interface AssetHistoryProps {
   token?: { symbol: string | null; decimals: number | null };
   /** The newest supply events and how many there are in all. */
   supplyEvents?: { rows: readonly TokenSupplyEvent[]; total: number };
+  // ── F2 objects (round 2, IV-17 / IV-27) ──
+  /** A line under the charts (the Token board's "N mints · N burns · N transfers"). */
+  footnote?: ReactNode;
+  /** Paging controls for the supply events; replaces the "newest N are listed" note. */
+  supplyPager?: ReactNode;
+}
+/** A small colour swatch for the readout (Token board), the same ink as its chart. */
+function Swatch({ color }: { color: string }) {
+  return (
+    <span
+      aria-hidden
+      className="mr-1.5 inline-block h-2 w-2 rounded-sm align-middle"
+      style={{ backgroundColor: color }}
+    />
+  );
 }
 function time(date: string) {
   const value = Date.parse(`${date}T00:00:00+08:00`);
@@ -45,6 +60,8 @@ export function AssetHistory({
   completeThrough,
   token,
   supplyEvents,
+  footnote,
+  supplyPager,
 }: AssetHistoryProps) {
   const [range, setRange] = useState<'1W' | '1M' | '1Y' | 'All'>('All');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -117,7 +134,9 @@ export function AssetHistory({
       label: 'Change',
       minWidth: 65,
       render: (e) => (
-        <span className={e.kind === 'mint' ? 'text-positive' : 'text-negative'}>{e.kind}</span>
+        <span className={e.kind === 'mint' ? 'text-positive' : 'text-negative'}>
+          {e.kind === 'mint' ? 'Mint' : 'Burn'}
+        </span>
       ),
     },
     {
@@ -213,6 +232,7 @@ export function AssetHistory({
               <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
             </span>
             <span>
+              <Swatch color={DATA_COLOR} />
               occupied{' '}
               <ExactCkb
                 shannons={BigInt(point.occupiedCapacity)}
@@ -222,6 +242,7 @@ export function AssetHistory({
               />
             </span>
             <span>
+              <Swatch color={CLASS_COLORS.ckb} />
               free{' '}
               <ExactCkb
                 shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
@@ -232,6 +253,7 @@ export function AssetHistory({
             </span>
             {token && (
               <span>
+                <Swatch color={CLASS_COLORS.tokens} />
                 Supply <AssetAmount amount={point.supply!} decimals={token.decimals} />{' '}
                 {token.symbol}
               </span>
@@ -317,6 +339,7 @@ export function AssetHistory({
       ) : (
         <p className="text-text-dim py-6 text-xs">No complete daily history in this range.</p>
       )}
+      {footnote && <div className="text-text-dim mt-3 text-xs">{footnote}</div>}
       {peak && (
         <p className="text-text-dim mt-3 text-xs">
           CKB held peaked at{' '}
@@ -333,7 +356,7 @@ export function AssetHistory({
           <summary className="cursor-pointer text-xs">
             Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})
           </summary>
-          {supplyEvents.rows.length < supplyEvents.total && (
+          {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
             <p className="text-text-dim mt-2 text-[11px]">
               The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
             </p>
@@ -349,6 +372,7 @@ export function AssetHistory({
             rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
             empty="No supply changes."
           />
+          {supplyPager}
         </details>
       )}
     </DetailSection>

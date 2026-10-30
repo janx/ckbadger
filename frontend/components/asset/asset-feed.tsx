@@ -28,6 +28,7 @@ import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
+import type { AssetClass } from '@/lib/design-tokens';
 export type { ItemFeedHeadline, ItemFeedSubject } from '@/lib/feed-headlines';
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
@@ -191,6 +192,8 @@ export interface AssetFeedProps {
   plain?: boolean;
   /** F2 objects: the object a folded batch leads with (this page's item). */
   focusItemId?: string;
+  /** F2 objects (IV-14): every row of this feed is about one class (the token board's mark). */
+  mark?: AssetClass;
 }
 export function AssetFeed({
   queryKey,
@@ -205,6 +208,7 @@ export function AssetFeed({
   collection = false,
   plain = false,
   focusItemId,
+  mark,
 }: AssetFeedProps) {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
@@ -279,7 +283,7 @@ export function AssetFeed({
                     headline={headline && <FeedHeadlineText headline={headline} />}
                     className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
                     // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
-                    mark={item?.kind === 'identity' ? 'identities' : undefined}
+                    mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
                     showScriptDetails={!plain}
                     lockColumn={plain}
                     foldObjects={plain}

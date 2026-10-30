@@ -11,6 +11,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { ConcentrationBar } from '@/components/ui/concentration-bar';
 export interface TokenDistributionViewProps {
   distribution: TokenDistribution;
   symbol: string | null;
@@ -22,10 +23,15 @@ export function TokenDistributionView({
   holders,
 }: TokenDistributionViewProps) {
   const total = exactUnsignedInteger(d.totalSupply, 'distribution supply');
+  // F2 objects (IV-18): the board's names for the three groups.
+  const next = Math.max(Math.min(9, d.holdersCount - 1), 0);
   const groups = [
     ['Largest holder', d.largestHolderBalance],
-    ['Next 9', d.nextNineBalance],
-    ['Remaining holders', d.remainingBalance],
+    [`Next ${next}`, d.nextNineBalance],
+    [
+      d.holdersCount > 10 ? `Other ${(d.holdersCount - 10).toLocaleString('en-US')}` : 'Others',
+      d.remainingBalance,
+    ],
   ] as const;
   const groupAmounts = groups.map(([name, value]) => exactUnsignedInteger(value, name));
   if (groupAmounts.reduce((a, b) => a + b, BigInt(0)) !== total)
@@ -77,7 +83,7 @@ export function TokenDistributionView({
         <span className="flex flex-wrap items-center justify-end gap-2">
           <span aria-hidden="true" className="bg-base-elevated h-1.5 w-10">
             <span
-              className="bg-jade block h-full"
+              className="bg-token block h-full"
               style={{
                 width: d.holdersCount === 0 ? '0%' : `${(b.holdersCount / d.holdersCount) * 100}%`,
               }}
@@ -98,28 +104,14 @@ export function TokenDistributionView({
   return (
     <div className="space-y-4">
       {total > BigInt(0) && (
-        <div
-          className="flex h-2"
-          role="img"
-          aria-label={groups.map(([n], i) => `${n} ${share(groupAmounts[i])}`).join(', ')}
-        >
-          {groupAmounts.map((v, i) => (
-            <span
-              key={i}
-              className={['bg-jade', 'bg-jade/50', 'bg-jade/20'][i]}
-              style={{ width: `${(Number(v) / Number(total)) * 100}%` }}
-            />
-          ))}
-        </div>
+        // F2 objects (IV-18): the shared concentration bar, in the token colour.
+        <ConcentrationBar
+          label="Share of supply"
+          assetClass="tokens"
+          total={total}
+          groups={groups.map(([label], i) => ({ label, value: groupAmounts[i] }))}
+        />
       )}
-      <dl className="flex flex-wrap gap-x-6 gap-y-2 text-xs">
-        {groups.map(([n], i) => (
-          <div key={n}>
-            <dt className="text-text-dim">{n}</dt>
-            <dd>{share(groupAmounts[i])}</dd>
-          </div>
-        ))}
-      </dl>
       <div
         className={
           holders ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'min-w-0'
@@ -177,7 +169,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               className="text-xs"
             />
           </AppLink>
-          <span className="text-text-dim ml-2 text-[11px]">
+          <span className="text-text-dim ml-2 whitespace-nowrap text-[11px]">
             {h.lockKind ?? 'Lock kind unavailable'}
           </span>
         </>

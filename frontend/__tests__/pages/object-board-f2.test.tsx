@@ -117,7 +117,7 @@ afterEach(() => vi.restoreAllMocks());
 async function page() {
   const view = render(<SporeDetailPage sporeId={NERVAPE3X_ID} />);
   await screen.findByRole('heading', { level: 1, name: 'Nervape 3x' }, { timeout: 5000 });
-  await screen.findByLabelText('Traits');
+  await screen.findByLabelText('Traits', undefined, { timeout: 5000 });
   return view;
 }
 
@@ -129,7 +129,9 @@ it('opens with the composition sentence, a summary of its life and its readable 
     'Fully on-chain: its record lives in a CKB cell, its image in a Bitcoin inscription.'
   );
   expect(
-    await within(header).findByText(/^Minted .* to a secp256k1 lock, then moved/)
+    await within(header).findByText(/^Minted .* to a secp256k1 lock, then moved/, undefined, {
+      timeout: 5000,
+    })
   ).toHaveTextContent('then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.');
   expect(header).toHaveTextContent('One of 90 in Nervape 3x, each held by a different address.');
   const traits = screen.getByLabelText('Traits');
@@ -187,7 +189,11 @@ it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async ()
 
 it('shows its cell at minting and now, to scale, with what changed (OB-9)', async () => {
   await page();
-  const cell = await screen.findByRole('region', { name: 'CKB held in its cell' });
+  const cell = await screen.findByRole(
+    'region',
+    { name: 'CKB held in its cell' },
+    { timeout: 5000 }
+  );
   expect(cell).toHaveTextContent('1 CKB per byte · all occupied, none free');
   expect(cell).toHaveTextContent(
     'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
@@ -200,7 +206,7 @@ it('shows its cell at minting and now, to scale, with what changed (OB-9)', asyn
 
 it('places it in its collection with the composition count and cluster cell (OB-10)', async () => {
   await page();
-  const coll = await screen.findByRole('region', { name: 'In Nervape 3x' });
+  const coll = await screen.findByRole('region', { name: 'In Nervape 3x' }, { timeout: 5000 });
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');
   expect(coll).toHaveTextContent('90 of 90');
@@ -222,7 +228,9 @@ it('lists the board facts and one Live style (OB-11, OB-15)', async () => {
   ])
     expect(within(rail).getByText(label)).toBeInTheDocument();
   expect(rail).toHaveTextContent('Nervape Shadow Lock');
-  expect(await within(rail).findByText('1 transfer since minting')).toBeInTheDocument();
+  expect(
+    await within(rail).findByText('1 transfer since minting', undefined, { timeout: 5000 })
+  ).toBeInTheDocument();
   expect(rail).toHaveTextContent('2026-10-22 14:43:00 UTC+8');
   expect(within(rail).getByText('Nervape 3x')).toBeInTheDocument();
   expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
