@@ -2067,6 +2067,21 @@ pub(super) struct NftLifecycleRow {
     /// Set only when the transaction rewrote this name's cell as a ring
     /// neighbour and the name has no own action in it.
     pub(super) ring_relink: Option<RingRelink>,
+    /// Whether the transaction's protocol actions are about this item
+    /// (`self`) or only about another one whose change rewrote this item's
+    /// cell (`neighbour`): a `.cell` ring relink, or a `.bit` transaction
+    /// whose `dotbit` actions all name other accounts.
+    pub(super) acted_on: ActedOn,
+}
+
+/// Who a lifecycle transaction's protocol actions were about, seen from one
+/// item. Serialized as `itemContext.actedOn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ActedOn {
+    #[serde(rename = "self")]
+    Own,
+    Neighbour,
 }
 
 /// Why a `.cell` name's cell was rewritten as a ring neighbour.
@@ -2214,6 +2229,132 @@ fn dotcell_lifecycle_action(
     }
 }
 
+/// What one transaction did to one item: the one meaning the item feeds
+/// (`itemContext`), the item activity lists and the collection feeds
+/// (`collectionContext`) all read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NftItemTxMeaning {
+    pub(super) action: ckbadger_store::AssetAction,
+    pub(super) protocol_actions: Vec<String>,
+    pub(super) ring_relink: Option<RingRelink>,
+    pub(super) acted_on: ActedOn,
+}
+
+/// The `dotbit` protocol actions of a transaction that are about `item_id`
+/// (`metadata.accountId`), as `dotbit:<action>` in protocol order, and
+/// whether the transaction's `dotbit` actions were only about other accounts.
+fn dotbit_item_actions(
+    item_id: &[u8],
+    tx_hash: &[u8],
+    protocol_actions: &[ckbadger_store::types::ProtocolAction],
+) -> Result<(Vec<String>, ActedOn), ApiRouteError> {
+    let item_id = format!("0x{}", hex::encode(item_id));
+    let mut any = false;
+    let mut own = Vec::new();
+    for action in protocol_actions
+        .iter()
+        .filter(|action| action.protocol == "dotbit")
+    {
+        any = true;
+        let metadata = action
+            .metadata_value()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let account = metadata["accountId"].as_str().ok_or_else(|| {
+            ApiError::internal(format!(
+                ".bit action {:?} in 0x{} has no metadata.accountId",
+                action.action,
+                hex::encode(tx_hash)
+            ))
+        })?;
+        if account.eq_ignore_ascii_case(&item_id) {
+            own.push(format!("dotbit:{}", action.action));
+        }
+    }
+    let acted_on = if any && own.is_empty() {
+        ActedOn::Neighbour
+    } else {
+        ActedOn::Own
+    };
+    Ok((own, acted_on))
+}
+
+/// What `tx_hash` did to item `item_id` of `standard`, given the output (if
+/// any) of `tx_hash` that holds the item's new cell, whether the transaction
+/// consumed the item's previous cell, and the transaction's protocol actions
+/// (read for `.cell` and `.bit`, whose actions name items).
+///
+/// - `.cell`: its `dotcell` actions alone ([`dotcell_lifecycle_action`]);
+/// - `.bit`, `.bit Cell`, did:ckb: the action the indexer recorded on the
+///   created outpoint, or — when the transaction only consumed the item —
+///   `recycle` (`.bit`) / `burn`;
+/// - Spore, m-NFT: created and consumed is a transfer, created only a mint,
+///   consumed only a burn.
+pub(super) fn nft_item_tx_meaning(
+    store: &CkbadgerStore,
+    standard: NftLifecycleStandard,
+    item_id: &[u8],
+    tx_hash: &[u8],
+    created_output: Option<i16>,
+    consumed: bool,
+    protocol_actions: &[ckbadger_store::types::ProtocolAction],
+) -> Result<NftItemTxMeaning, ApiRouteError> {
+    use ckbadger_store::AssetAction;
+    if matches!(standard, NftLifecycleStandard::DotCell) {
+        let meaning = dotcell_lifecycle_action(item_id, tx_hash, protocol_actions)?;
+        let acted_on = if meaning.ring_relink.is_some() {
+            ActedOn::Neighbour
+        } else {
+            ActedOn::Own
+        };
+        return Ok(NftItemTxMeaning {
+            action: meaning.asset_action,
+            protocol_actions: meaning.protocol_actions,
+            ring_relink: meaning.ring_relink,
+            acted_on,
+        });
+    }
+    let recorded = match (standard, created_output) {
+        (NftLifecycleStandard::DotBit, Some(output)) => Some(
+            store
+                .get_dotbit_item_action(item_id, tx_hash, output)
+                .map_err(|e| ApiError::internal(e.to_string()))?,
+        ),
+        (NftLifecycleStandard::DidCkb | NftLifecycleStandard::BitCell, Some(output)) => Some(
+            store
+                .get_identity_item_action(item_id, tx_hash, output)
+                .map_err(|e| ApiError::internal(e.to_string()))?,
+        ),
+        _ => None,
+    };
+    let action = match (recorded, created_output.is_some(), consumed) {
+        (Some(action), _, _) => action,
+        (None, true, true) => AssetAction::Transfer,
+        (None, true, false) => AssetAction::Mint,
+        (None, false, true) if matches!(standard, NftLifecycleStandard::DotBit) => {
+            AssetAction::Recycle
+        }
+        (None, false, true) => AssetAction::Burn,
+        (None, false, false) => {
+            return Err(ApiError::internal(format!(
+                "invalid nft lifecycle action state: nft_id=0x{}, tx_hash=0x{}",
+                hex::encode(item_id),
+                hex::encode(tx_hash)
+            )))
+        }
+    };
+    let (protocol_actions, acted_on) = if matches!(standard, NftLifecycleStandard::DotBit) {
+        dotbit_item_actions(item_id, tx_hash, protocol_actions)?
+    } else {
+        (Vec::new(), ActedOn::Own)
+    };
+    Ok(NftItemTxMeaning {
+        action,
+        protocol_actions,
+        ring_relink: None,
+        acted_on,
+    })
+}
+
 pub(super) fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
@@ -2237,28 +2378,8 @@ pub(super) fn collect_nft_item_lifecycle_actions(
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
 
-    let mut exact_created = HashMap::new();
-    for (tx_hash, index) in &outpoints {
-        let action = match standard {
-            NftLifecycleStandard::DotBit => Some(state.store.get_dotbit_item_action(
-                nft_id_bytes,
-                tx_hash,
-                *index,
-            )),
-            NftLifecycleStandard::DidCkb | NftLifecycleStandard::BitCell => Some(
-                state
-                    .store
-                    .get_identity_item_action(nft_id_bytes, tx_hash, *index),
-            ),
-            _ => None,
-        };
-        if let Some(action) = action {
-            let action = action.map_err(|error| ApiError::internal(error.to_string()))?;
-            exact_created.insert(tx_hash.clone(), action);
-        }
-    }
-
-    let mut created_txs: HashSet<Vec<u8>> = HashSet::new();
+    // The output of each lifecycle transaction that holds the item's new cell.
+    let mut created_outputs: HashMap<Vec<u8>, i16> = HashMap::new();
     let mut consumed_txs: HashSet<Vec<u8>> = HashSet::new();
 
     let outpoint_refs: Vec<(&[u8], i16)> = outpoints
@@ -2271,8 +2392,6 @@ pub(super) fn collect_nft_item_lifecycle_actions(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     for (tx_hash, output_index) in outpoints {
-        created_txs.insert(tx_hash.clone());
-
         if let Some(meta) = consumed_meta.get(&(tx_hash.clone(), output_index)) {
             let consumed_by_tx = meta.consumed_by_tx.clone().ok_or_else(|| {
                 ApiError::internal(format!(
@@ -2284,78 +2403,60 @@ pub(super) fn collect_nft_item_lifecycle_actions(
             })?;
             consumed_txs.insert(consumed_by_tx);
         }
+        created_outputs.insert(tx_hash, output_index);
     }
 
-    let mut lifecycle_txs = created_txs.clone();
+    let mut lifecycle_txs: HashSet<Vec<u8>> = created_outputs.keys().cloned().collect();
     lifecycle_txs.extend(consumed_txs.iter().cloned());
 
     let mut rows = Vec::with_capacity(lifecycle_txs.len());
     for tx_hash in lifecycle_txs {
-        if matches!(standard, NftLifecycleStandard::DotCell) {
+        // Only `.cell` and `.bit` name items in their protocol actions.
+        let protocol_actions = if matches!(
+            standard,
+            NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
+        ) {
             let (block, index) = state
                 .store
                 .get_tx_location(&tx_hash)
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .ok_or_else(|| {
                     ApiError::internal(format!(
-                        "missing .cell action transaction 0x{}",
-                        hex::encode(&tx_hash)
+                        "missing lifecycle transaction 0x{} of item 0x{}",
+                        hex::encode(&tx_hash),
+                        hex::encode(nft_id_bytes)
                     ))
                 })?;
-            let actions = state
+            state
                 .store
                 .get_tx_actions(block, index, &tx_hash)
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .ok_or_else(|| {
                     ApiError::internal(format!(
-                        "missing .cell canonical actions 0x{}",
-                        hex::encode(&tx_hash)
+                        "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
+                        hex::encode(&tx_hash),
+                        hex::encode(nft_id_bytes)
                     ))
-                })?;
-            let meaning =
-                dotcell_lifecycle_action(nft_id_bytes, &tx_hash, &actions.protocol_actions)?;
-            rows.push(NftLifecycleRow {
-                tx_hash,
-                action: asset_action_name(meaning.asset_action),
-                protocol_actions: meaning.protocol_actions,
-                ring_relink: meaning.ring_relink,
-            });
-            continue;
-        }
-        // No other item standard writes item-naming protocol actions, so its
-        // rows carry neither a protocol action nor a ring relink.
-        if let Some(action) = exact_created.get(&tx_hash).copied() {
-            rows.push(NftLifecycleRow {
-                tx_hash,
-                action: asset_action_name(action),
-                protocol_actions: Vec::new(),
-                ring_relink: None,
-            });
-            continue;
-        }
-        // Standards without a recorded action for this transaction. `.cell`
-        // never reaches here: every one of its transactions resolved above.
-        let action = match (
-            created_txs.contains(&tx_hash),
-            consumed_txs.contains(&tx_hash),
-        ) {
-            (true, true) => "transfer",
-            (true, false) => "mint",
-            (false, true) if matches!(standard, NftLifecycleStandard::DotBit) => "recycle",
-            (false, true) => "burn",
-            (false, false) => {
-                return Err(ApiError::internal(format!(
-                    "invalid nft lifecycle action state: nft_id=0x{}, tx_hash=0x{}",
-                    hex::encode(nft_id_bytes),
-                    hex::encode(&tx_hash)
-                )))
-            }
+                })?
+                .protocol_actions
+        } else {
+            Vec::new()
         };
+        let meaning = nft_item_tx_meaning(
+            &state.store,
+            standard,
+            nft_id_bytes,
+            &tx_hash,
+            created_outputs.get(&tx_hash).copied(),
+            consumed_txs.contains(&tx_hash),
+            &protocol_actions,
+        )?;
         rows.push(NftLifecycleRow {
             tx_hash,
-            action,
-            protocol_actions: Vec::new(),
-            ring_relink: None,
+            action: asset_action_name(meaning.action),
+            protocol_actions: meaning.protocol_actions,
+            ring_relink: meaning.ring_relink,
+            acted_on: meaning.acted_on,
         });
     }
 
@@ -3881,6 +3982,99 @@ mod tests {
 
     fn hex_id(id: [u8; 20]) -> String {
         format!("0x{}", hex::encode(id))
+    }
+
+    fn dotbit_action(action: &str, account: [u8; 20]) -> ProtocolAction {
+        ProtocolAction::new(
+            "dotbit",
+            action,
+            serde_json::json!({ "accountId": hex_id(account) }),
+        )
+    }
+
+    /// §5.1: a `.bit` row names the account's own `dotbit` actions as
+    /// `dotbit:<action>`; a transaction whose `dotbit` actions are all about
+    /// other accounts (valar.bit's cell rewritten while a neighbour is
+    /// recycled) was acted on as a neighbour. The coarse action stays the one
+    /// the indexer recorded on the created outpoint.
+    #[test]
+    fn dotbit_item_meaning_names_own_actions_and_neighbour_rewrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let valar = [0x2d; 20];
+        let neighbour = [0x2e; 20];
+        let renew_tx = [0x71; 32];
+        let recycle_tx = [0x72; 32];
+        let legacy_tx = [0x73; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dotbit_outpoint_by_account_id(&valar, &renew_tx, 0, AssetAction::Renew);
+        batch.put_dotbit_outpoint_by_account_id(&valar, &recycle_tx, 1, AssetAction::Update);
+        batch.put_dotbit_outpoint_by_account_id(&valar, &legacy_tx, 0, AssetAction::Update);
+        batch.commit().unwrap();
+        let meaning =
+            |item: [u8; 20], tx: [u8; 32], created: Option<i16>, actions: &[ProtocolAction]| {
+                nft_item_tx_meaning(
+                    &store,
+                    NftLifecycleStandard::DotBit,
+                    &item,
+                    &tx,
+                    created,
+                    true,
+                    actions,
+                )
+                .unwrap()
+            };
+
+        let renew = meaning(
+            valar,
+            renew_tx,
+            Some(0),
+            &[dotbit_action("renew_account", valar)],
+        );
+        assert_eq!(renew.action, AssetAction::Renew);
+        assert_eq!(renew.protocol_actions, ["dotbit:renew_account"]);
+        assert_eq!(renew.acted_on, ActedOn::Own);
+
+        let recycle = [dotbit_action("recycle_expired_account", neighbour)];
+        let rewritten = meaning(valar, recycle_tx, Some(1), &recycle);
+        assert_eq!(rewritten.action, AssetAction::Update);
+        assert!(rewritten.protocol_actions.is_empty());
+        assert_eq!(rewritten.acted_on, ActedOn::Neighbour);
+
+        let recycled = meaning(neighbour, recycle_tx, None, &recycle);
+        assert_eq!(recycled.action, AssetAction::Recycle);
+        assert_eq!(
+            recycled.protocol_actions,
+            ["dotbit:recycle_expired_account"]
+        );
+        assert_eq!(recycled.acted_on, ActedOn::Own);
+
+        // A transaction with no `dotbit` action is about the item itself.
+        let legacy = meaning(valar, legacy_tx, Some(0), &[]);
+        assert!(legacy.protocol_actions.is_empty());
+        assert_eq!(legacy.acted_on, ActedOn::Own);
+
+        // Every `dotbit` action names its account; one that does not is an error.
+        let unnamed = [ProtocolAction::new(
+            "dotbit",
+            "edit_records",
+            serde_json::json!({}),
+        )];
+        let error = nft_item_tx_meaning(
+            &store,
+            NftLifecycleStandard::DotBit,
+            &valar,
+            &renew_tx,
+            Some(0),
+            true,
+            &unnamed,
+        )
+        .unwrap_err();
+        assert!(
+            error.1 .0.message.contains("metadata.accountId"),
+            "{:?}",
+            error.1 .0.message
+        );
     }
 
     fn relink(by: &str, by_id: Option<String>) -> DotcellLifecycle {

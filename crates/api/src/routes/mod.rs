@@ -12,6 +12,7 @@ mod asset_summary;
 pub mod assets;
 mod blocks;
 pub(crate) mod cells;
+mod collection_context;
 mod dao;
 mod fiber;
 mod forks;

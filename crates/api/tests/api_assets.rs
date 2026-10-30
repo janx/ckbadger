@@ -3257,6 +3257,23 @@ async fn test_assets_nft_item_activities_dotbit() {
         340,
         Some(&transfer_tx_2),
     );
+    // Every canonical transaction has its `TxActions`; a `.bit` lifecycle
+    // reads them for the account's own `dotbit` actions.
+    for (hash, block) in [
+        (&mint_tx, 300),
+        (&transfer_tx_1, 320),
+        (&transfer_tx_2, 340),
+    ] {
+        batch.put_tx_actions(&make_test_tx_actions(
+            &[0x11; 32],
+            hash,
+            &[0xba; 32],
+            block,
+            0,
+            0,
+            0,
+        ));
+    }
     batch.put_tx_hash_map(&mint_tx, 300, 0);
     batch.put_tx_index(
         300,
@@ -3453,6 +3470,19 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         260,
         Some(&burn_tx),
     );
+    // Every canonical transaction has its `TxActions`; a `.bit` lifecycle
+    // reads them for the account's own `dotbit` actions.
+    for (hash, block) in [(&mint_tx, 100), (&transfer_tx, 200), (&burn_tx, 260)] {
+        batch.put_tx_actions(&make_test_tx_actions(
+            &[0x11; 32],
+            hash,
+            &[0xba; 32],
+            block,
+            0,
+            0,
+            0,
+        ));
+    }
     batch.put_tx_hash_map(&mint_tx, 100, 0);
     batch.put_tx_index(
         100,
@@ -5249,6 +5279,60 @@ async fn regression_spore_collection_activity_count_matches_canonical_surfaces()
             ..Default::default()
         },
     );
+    // The cluster's items each canonical row touched: tx 0x21 mints spore A
+    // and burns spore B, tx 0x22 transfers spore A.
+    let (spore_a, spore_b) = ([0xa1; 32], [0xa2; 32]);
+    for spore in [spore_a, spore_b] {
+        batch.put_spore(
+            &spore,
+            &ObjectEntry {
+                standard: ObjectStandard::Spore,
+                collection_id: Some(id.to_vec()),
+                token_id: None,
+                owner_lock_hash: None,
+                name: None,
+                description: None,
+                is_live: false,
+                created_at_block: 0,
+                created_at_tx: vec![0x21; 32],
+                extra: ObjectExtra::Spore {
+                    content_type: "image/png".to_string(),
+                    content_length: 1,
+                    media_profile: Default::default(),
+                },
+            },
+        );
+    }
+    let object = |spore: [u8; 32], negative: bool| ckbadger_store::types::ItemDelta {
+        item_id: spore.to_vec(),
+        kind: ckbadger_store::types::ItemKind::Object,
+        magnitude: 1,
+        negative,
+    };
+    for (block, tx, sender, receiver) in [
+        (
+            1,
+            [0x21; 32],
+            vec![object(spore_b, true)],
+            vec![object(spore_a, false)],
+        ),
+        (
+            2,
+            [0x22; 32],
+            vec![object(spore_a, true)],
+            vec![object(spore_a, false)],
+        ),
+    ] {
+        let mut actions = make_test_tx_actions(&[0x11; 32], &tx, &[0xba; 32], block, 0, 1, 0);
+        actions.timestamp = 1_700_000_000_000 + block;
+        actions.participants[0].item_deltas = sender;
+        let mut gainer = actions.participants[0].clone();
+        gainer.id = ckbadger_store::types::ParticipantId::lock(&[0x12; 32]).unwrap();
+        gainer.item_deltas = receiver;
+        actions.participants.push(gainer);
+        batch.put_tx_actions(&actions);
+        batch.put_spore_outpoint(&tx, 0, &spore_a);
+    }
     for (block, tx, block_hash, actions) in [
         (
             1,

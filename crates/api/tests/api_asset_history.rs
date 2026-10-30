@@ -890,6 +890,13 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
                 != context["ringRelink"].is_null(),
             "exactly one of protocolActions / ringRelink: {context}"
         );
+        // §5.1: a ring neighbour's rewrite is about another name.
+        let acted_on = if ring_relink.is_null() {
+            "self"
+        } else {
+            "neighbour"
+        };
+        assert_eq!(context["actedOn"], acted_on, "{context}");
     }
 
     // The transactions view carries the same per-item meaning.
@@ -1423,6 +1430,15 @@ async fn collection_full_feeds_exclude_orphan_activity_rows_and_share_pagination
             100,
             0,
         ));
+        // The did:ckb item's action the indexer records on each created
+        // outpoint (what the item and collection feeds read).
+        batch
+            .put_raw_cf_by_name(
+                ckbadger_store::CF_STATS_SPORE,
+                &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&[0x44; 20], &hash, 0),
+                &[action.compact()],
+            )
+            .unwrap();
         batch.put_identity_collection_activity(
             collection,
             100,

@@ -2,6 +2,7 @@
 use super::{
     asset_feed, asset_history,
     assets::{self, NftLifecycleStandard},
+    collection_context::{collection_context, CollectionMembers},
 };
 use crate::{
     response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse},
@@ -78,13 +79,15 @@ fn item_feed(
         }
         // The row's meaning for this item is the lifecycle computation's,
         // never re-derived: `protocolActions` (the item's own actions, in
-        // protocol order) and `ringRelink` (why a `.cell` neighbour's cell was
-        // rewritten).
+        // protocol order: bare `.cell` action names, `dotbit:<action>` for
+        // `.bit`), `ringRelink` (why a `.cell` neighbour's cell was rewritten)
+        // and `actedOn` (`neighbour` when the actions were about another item).
         row["itemContext"] = json!({
             "itemId": format!("0x{}", hex::encode(&id)),
             "action": meaning.action,
             "protocolActions": meaning.protocol_actions,
             "ringRelink": meaning.ring_relink,
+            "actedOn": meaning.acted_on,
             "createdCell": created.first(),
             "consumedCell": consumed.first(),
         });
@@ -158,6 +161,15 @@ fn collection_feed(
     } else {
         None
     };
+    // What each row did to THIS collection's items (OB-C13), computed once.
+    let members = CollectionMembers::of(collection.source, &id)?;
+    let contexts = page
+        .iter()
+        .map(|row| {
+            let actions = asset_feed::canonical_actions(state, row).map_err(context)?;
+            collection_context(&state.store, &members, &actions, row.entry.outputs_count)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let total = collection.activities_count(state, &id).map_err(context)?;
     let response = if transactions {
         serde_json::to_value(CursorPaginatedResponse::new(
@@ -174,7 +186,15 @@ fn collection_feed(
             next,
         ))
     };
-    ok(response.map_err(|e| ApiError::internal(e.to_string()))?)
+    let mut response = response.map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows = response["data"]
+        .as_array_mut()
+        .ok_or_else(|| ApiError::internal("collection feed data is not an array"))?;
+    for (row, context) in rows.iter_mut().zip(contexts) {
+        row["collectionContext"] =
+            serde_json::to_value(context).map_err(|e| ApiError::internal(e.to_string()))?;
+    }
+    ok(response)
 }
 macro_rules! item_handlers {
     ($activity:ident,$transactions:ident,$standard:ident) => {
