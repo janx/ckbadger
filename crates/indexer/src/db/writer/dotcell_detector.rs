@@ -21,7 +21,7 @@ use ckbadger_store::types::{
     AssetAction, IdentityStandard, ItemDelta, ItemKind, ObjectCollectionActivityEntry,
     ParticipantId, ProtocolAction,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::parser::dotcell::{DotCellNameData, DotCellParser, DOTCELL_GRACE_SECONDS};
 use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
@@ -194,12 +194,23 @@ pub(crate) fn is_expired_takeover(
     Ok(grace_end < block_seconds)
 }
 
-/// The ring neighbours a transaction rewrote, keyed both ways. A name
-/// registered between P and its old successor makes P point at the new id; a
-/// name recycled from after P makes P point past it. Each is the exact pointer
-/// change, so pairing a neighbour with the registration or removal that moved
-/// it is a lookup, never a guess. The ring root is infrastructure and never
-/// named as a relinked neighbour.
+/// The ring neighbours a transaction rewrote, keyed both ways.
+///
+/// A name's id is `blake2b(label)[..20]` and never changes, so owner, manager,
+/// expiry, records, sale and takeover changes never move a name in the ring.
+/// A neighbour's `next` is rewritten only when ring membership changes:
+///
+/// - a `register` / `register_subname` inserts a name after P: P's new `next`
+///   is the new id;
+/// - a `recycle` removes the name after P: P's old `next` is the removed id;
+/// - the ring root as P is infrastructure and is never named.
+///
+/// Each pairing is the exact pointer change, a lookup and never a guess. The
+/// Cells contracts are closed source (spec 2026-09-23 §0 and Non-Goals), so
+/// that one transaction cannot relink two neighbours to (or away from) the
+/// same successor is observed, not a guarantee: such a successor is left
+/// unattributed and logged rather than stopping the sync, and its neighbours
+/// surface through [`unattributed_ring_links`].
 struct RingRelinks {
     /// New `next` → the neighbour that now points there.
     into_new_next: HashMap<[u8; 20], [u8; 20]>,
@@ -212,11 +223,11 @@ impl RingRelinks {
         prev: &BTreeMap<[u8; 20], &DotCellNameData>,
         next: &BTreeMap<[u8; 20], DotCellNameData>,
         tx_hash: &[u8],
-    ) -> Result<Self> {
-        let mut relinks = Self {
-            into_new_next: HashMap::new(),
-            away_from_old_next: HashMap::new(),
-        };
+    ) -> Self {
+        let mut into_new_next = HashMap::new();
+        let mut away_from_old_next = HashMap::new();
+        let mut ambiguous_new_next = HashSet::new();
+        let mut ambiguous_old_next = HashSet::new();
         for (id, previous) in prev {
             let Some(name) = next.get(id) else {
                 continue;
@@ -224,29 +235,67 @@ impl RingRelinks {
             if previous.is_root() || name.is_root() || previous.next_id == name.next_id {
                 continue;
             }
-            // In a ring every id has exactly one predecessor, so two names
-            // cannot take (or give up) the same successor in one transaction.
-            if let Some(other) = relinks.into_new_next.insert(name.next_id, *id) {
-                bail!(
-                    "dotcell ring: 0x{} and 0x{} both relinked to next 0x{} in tx 0x{}",
-                    hex::encode(other),
-                    hex::encode(id),
-                    hex::encode(name.next_id),
-                    hex::encode(tx_hash)
-                );
-            }
-            if let Some(other) = relinks.away_from_old_next.insert(previous.next_id, *id) {
-                bail!(
-                    "dotcell ring: 0x{} and 0x{} both relinked away from next 0x{} in tx 0x{}",
-                    hex::encode(other),
-                    hex::encode(id),
-                    hex::encode(previous.next_id),
-                    hex::encode(tx_hash)
-                );
-            }
+            Self::insert_unambiguous(
+                &mut into_new_next,
+                &mut ambiguous_new_next,
+                name.next_id,
+                *id,
+            );
+            Self::insert_unambiguous(
+                &mut away_from_old_next,
+                &mut ambiguous_old_next,
+                previous.next_id,
+                *id,
+            );
         }
-        Ok(relinks)
+        for successor in ambiguous_new_next.iter().chain(ambiguous_old_next.iter()) {
+            warn!(
+                tx = %hex0x(tx_hash),
+                successor = %hex0x(successor),
+                "several .cell ring neighbours relinked around one successor in one tx; none is attributed to a registration or recycle"
+            );
+        }
+        Self {
+            into_new_next,
+            away_from_old_next,
+        }
     }
+
+    fn insert_unambiguous(
+        map: &mut HashMap<[u8; 20], [u8; 20]>,
+        ambiguous: &mut HashSet<[u8; 20]>,
+        successor: [u8; 20],
+        neighbour: [u8; 20],
+    ) {
+        if ambiguous.contains(&successor) {
+            return;
+        }
+        if map.insert(successor, neighbour).is_some() {
+            map.remove(&successor);
+            ambiguous.insert(successor);
+        }
+    }
+}
+
+/// The `RingLink` neighbours no `register` / `register_subname` / `recycle`
+/// in the same transaction names as `relinked`. Every next-only rewrite the
+/// protocol is known to make is attributed, so a non-empty result is a ring
+/// change ckbadger does not model: it is logged here, and the item's lifecycle
+/// API refuses to classify the transaction rather than guessing.
+pub(crate) fn unattributed_ring_links(transitions: &[DotCellTransition]) -> Vec<[u8; 20]> {
+    let attributed: HashSet<[u8; 20]> = transitions
+        .iter()
+        .filter_map(|t| match &t.kind {
+            DotCellTransitionKind::Register { relinked, .. }
+            | DotCellTransitionKind::Recycle { relinked, .. } => *relinked,
+            _ => None,
+        })
+        .collect();
+    transitions
+        .iter()
+        .filter(|t| matches!(t.kind, DotCellTransitionKind::RingLink) && !attributed.contains(&t.id))
+        .map(|t| t.id)
+        .collect()
 }
 
 /// Diff the `.cell` names on both sides of a transaction.
@@ -287,7 +336,7 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
     }
 
     let sales = sale_instances(tx)?;
-    let relinks = RingRelinks::of(&prev, &next, tx.tx_hash)?;
+    let relinks = RingRelinks::of(&prev, &next, tx.tx_hash);
     let ids: BTreeSet<[u8; 20]> = prev.keys().chain(next.keys()).copied().collect();
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
@@ -409,6 +458,13 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
             (None, None) => unreachable!("id came from one of the two maps"),
         };
         out.push(transition);
+    }
+    for id in unattributed_ring_links(&out) {
+        warn!(
+            tx = %hex0x(tx.tx_hash),
+            neighbour = %hex0x(&id),
+            ".cell ring neighbour relinked with no registration or recycle naming it"
+        );
     }
     Ok(out)
 }
@@ -1641,10 +1697,12 @@ mod tests {
         );
     }
 
-    /// Two neighbours pointing at the same new successor cannot both be ring
-    /// predecessors of it: the classification fails naming both.
+    /// Two neighbours pointing at the same new successor in one tx is a ring
+    /// shape the closed-source contract is only observed, not known, to
+    /// forbid. The sync must not stop: the registration names neither, and
+    /// both neighbours surface as unattributed.
     #[test]
-    fn two_neighbours_relinked_to_one_successor_is_an_error() {
+    fn two_neighbours_relinked_to_one_successor_are_attributed_to_neither() {
         let owner = [0x44u8; 20];
         let target = DotCellParser::derive_id("target");
         let cell = |label: &str, next: [u8; 20], as_input: bool| {
@@ -1661,8 +1719,75 @@ mod tests {
                 cell("target", [0x03; 20], false),
             ],
         );
-        let err = classify_dotcell_transitions(&owned.view()).unwrap_err();
-        assert!(err.to_string().contains("both relinked to next"), "{err}");
+        let ts = classify_dotcell_transitions(&owned.view()).expect("never stops the sync");
+        let register = ts.iter().find(|t| t.id == target).unwrap();
+        assert!(
+            matches!(register.kind, DotCellTransitionKind::Register { relinked: None, .. }),
+            "{:?}",
+            register.kind
+        );
+        let mut unattributed = unattributed_ring_links(&ts);
+        unattributed.sort();
+        let mut expected = vec![DotCellParser::derive_id("one"), DotCellParser::derive_id("two")];
+        expected.sort();
+        assert_eq!(unattributed, expected);
+    }
+
+    /// A neighbour relinked with no registration or recycle in the tx is a
+    /// ring change ckbadger does not model: reported, not attributed.
+    #[test]
+    fn a_relink_without_registration_or_recycle_is_unattributed() {
+        let owner = [0x44u8; 20];
+        let p = |next: [u8; 20], as_input: bool| {
+            synthetic_cell(
+                name_data("lone", owner, owner, 1_900_000_000, next, [0u8; 32]),
+                as_input,
+            )
+        };
+        let owned = synthetic_tx(vec![p([0x01; 20], true)], vec![p([0x02; 20], false)]);
+        let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+        assert_eq!(ts[0].kind, DotCellTransitionKind::RingLink);
+        assert_eq!(
+            unattributed_ring_links(&ts),
+            vec![DotCellParser::derive_id("lone")]
+        );
+    }
+
+    /// Every real transaction on both networks: each next-only neighbour
+    /// rewrite is named by the registration (or recycle) that caused it. A new
+    /// fixture whose relink is unattributed fails here, before the strict
+    /// lifecycle API would refuse it in production.
+    #[test]
+    fn every_ring_link_in_real_transactions_is_attributed() {
+        let all = [
+            ("M1_RING_ROOT", &fixture::M1_RING_ROOT),
+            ("M2_REGISTER_SUPPORT", &fixture::M2_REGISTER_SUPPORT),
+            ("M3_TRANSFER_ABUSE", &fixture::M3_TRANSFER_ABUSE),
+            ("M4_TRANSFER_APT", &fixture::M4_TRANSFER_APT),
+            ("M5_LIST_SATOSHI", &fixture::M5_LIST_SATOSHI),
+            ("T1_RING_ROOT", &fixture::T1_RING_ROOT),
+            ("T2_REGISTER_JOAOM", &fixture::T2_REGISTER_JOAOM),
+            ("T3_REGISTER_SUBNAME", &fixture::T3_REGISTER_SUBNAME),
+            ("T4_EDIT_MANAGER", &fixture::T4_EDIT_MANAGER),
+            ("T5_RENEW", &fixture::T5_RENEW),
+            ("T6_LIST_CARTAOPROVA", &fixture::T6_LIST_CARTAOPROVA),
+            ("T7_BUY_CARTAOPROVA", &fixture::T7_BUY_CARTAOPROVA),
+            ("T8_CANCEL_CARTAOPROVA", &fixture::T8_CANCEL_CARTAOPROVA),
+            ("T9_TOUCH_REF43EUEW", &fixture::T9_TOUCH_REF43EUEW),
+        ];
+        let mut ring_links = 0;
+        for (name, f) in all {
+            let ts = transitions(f);
+            ring_links += ts
+                .iter()
+                .filter(|t| matches!(t.kind, DotCellTransitionKind::RingLink))
+                .count();
+            assert!(
+                unattributed_ring_links(&ts).is_empty(),
+                "{name}: unattributed ring links in {ts:?}"
+            );
+        }
+        assert!(ring_links >= 2, "the fixtures exercise real relinks");
     }
 
     #[test]
