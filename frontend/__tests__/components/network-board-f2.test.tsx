@@ -5,7 +5,8 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { NetworkClientPage } from '@/app/network/client-page';
-import { NetworkMapView } from '@/app/network/network-map';
+import { layoutCountryClusters, NetworkMapView } from '@/app/network/network-map';
+import { PeersTable } from '@/app/network/nodes-table';
 import { HostingBar, NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
 import type { NetworkMap } from '@/lib/api';
@@ -262,5 +263,52 @@ describe('Network board (F2 charts)', () => {
     expect(screen.queryByText('Observed network peers')).toBeNull();
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2.querySelector('.uppercase')).toBeNull();
+  });
+
+  it('keeps country clusters and their labels apart, as the board relaxes them (visual pass)', () => {
+    const at = (country: string, lat: number, lon: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...point(`${country}${i}`, country, i % 2 === 0, i === 0),
+        lat,
+        lon,
+      }));
+    const points = [
+      ...at('DE', 51, 10, 10),
+      ...at('FR', 46.5, 2, 10),
+      ...at('GB', 54, -2, 3),
+      ...at('PL', 52, 19, 1),
+      ...at('NL', 52.3, 4.9, 4),
+      ...at('US', 39, -98, 12),
+    ];
+    const { dots, labels } = layoutCountryClusters(points, 880, 430);
+    expect(dots).toHaveLength(points.length);
+    for (let i = 0; i < dots.length; i++)
+      for (let j = i + 1; j < dots.length; j++)
+        expect(Math.hypot(dots[i].x - dots[j].x, dots[i].y - dots[j].y)).toBeGreaterThanOrEqual(7);
+    const box = (l: (typeof labels)[number]) => {
+      const w = `${l.country} ${l.count}`.length * 6.2;
+      return { x0: l.x - w / 2, x1: l.x + w / 2, y0: l.y - 10, y1: l.y + 2 };
+    };
+    for (let i = 0; i < labels.length; i++)
+      for (let j = i + 1; j < labels.length; j++) {
+        const a = box(labels[i]);
+        const b = box(labels[j]);
+        const overlap = a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+        expect(overlap, `${labels[i].country} / ${labels[j].country}`).toBe(false);
+      }
+    // Every cluster stays on the map.
+    for (const d of dots) {
+      expect(d.x).toBeGreaterThanOrEqual(0);
+      expect(d.x).toBeLessThanOrEqual(880);
+      expect(d.y).toBeGreaterThanOrEqual(0);
+      expect(d.y).toBeLessThanOrEqual(430);
+    }
+  });
+
+  it('lets the peer filters shrink to a phone width (visual pass: 390 overflowed to 448)', async () => {
+    render(wrap(<PeersTable />));
+    const select = await screen.findByLabelText('Filter by address observation');
+    expect(select).toHaveClass('max-w-full');
+    expect(screen.getByLabelText('Filter by crawler dial state')).toHaveClass('max-w-full');
   });
 });
