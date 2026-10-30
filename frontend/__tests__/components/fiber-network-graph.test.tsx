@@ -30,7 +30,10 @@ describe('FiberNetworkGraph', () => {
     expect(svg.querySelectorAll('[data-forced]').length).toBeGreaterThan(0);
     expect(svg.querySelectorAll('[data-forced]')[0]).toHaveAttribute('stroke-dasharray', '3 3');
     // the small groups sit in the right strip with the board's note
-    expect(screen.getByText('not linked to the rest')).toBeInTheDocument();
+    const note = screen.getByText('not linked to the rest');
+    // anchored to the canvas edge so the scroll box never clips it (visual pass, 1440)
+    expect(note).toHaveAttribute('text-anchor', 'end');
+    expect(Number(note.getAttribute('x'))).toBeLessThanOrEqual(860);
     // tier 1 carries no developer sentence about represented histories (FF-F6)
     expect(screen.queryByText(/channel histories represented/)).toBeNull();
   });
@@ -85,5 +88,7 @@ describe('FiberNetworkGraph', () => {
     const svg = container.querySelector('svg[data-fiber-graph]')!;
     expect(svg).toHaveClass('min-w-[640px]');
     expect(svg.parentElement).toHaveClass('overflow-x-auto');
+    // phones are told the graph scrolls sideways (visual pass, 390)
+    expect(screen.getByText('scroll sideways for the whole network')).toHaveClass('md:hidden');
   });
 });

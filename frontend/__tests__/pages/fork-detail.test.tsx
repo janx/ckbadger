@@ -78,6 +78,9 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(tree.querySelectorAll('[data-uncle-link]')).toHaveLength(1);
     expect(tree.querySelectorAll('[data-tip-mark]')).toHaveLength(2);
     expect(screen.getByText(/the node switches to #12/)).toBeInTheDocument();
+    // the legend's times fit their column: the date is in the header (visual pass)
+    expect(screen.getByText('before 06:13:20 UTC+8')).toBeInTheDocument();
+    expect(screen.getByText('scroll sideways for both branches')).toHaveClass('md:hidden');
   });
 
   it('lists the blocks in one table with miner, transactions and fate, and the uncle sentence (FF-D5, FF-D6)', async () => {

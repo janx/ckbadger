@@ -5,8 +5,10 @@ import { FIBER_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { epochDelayWords, fiberDuration } from '@/lib/fiber-format';
 import { formatUtc8Date } from '@/lib/utils';
+import { useElementWidth } from '@/hooks/useElementWidth';
 
-const W = 1232;
+/** The board's drawing width, used until the box is measured. */
+const DESIGN_WIDTH = 1232;
 const L = 40;
 
 interface Point {
@@ -31,6 +33,10 @@ function required<T>(value: T | null, what: string, channelId: string): T {
 
 /** "Opened → (force-)closed → settled" on one time axis (FiberChannel board V66). */
 export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail }) {
+  // Drawn 1:1 in its box; below 700 px each point's block and date go on two lines (390 pass).
+  const [box, measured] = useElementWidth<HTMLDivElement>();
+  const W = measured ?? DESIGN_WIDTH;
+  const narrow = W < 700;
   const id = channel.channelId;
   const lifetime = fiberDuration(
     required(channel.observedLifetimeMs, 'an observed lifetime', id),
@@ -71,7 +77,7 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
       place: 'above-end',
     });
   const waiting = channel.state === 'forceClosed';
-  const right = waiting ? W - 200 : W - L;
+  const right = waiting ? W - Math.min(200, W * 0.3) : W - L;
   const t0 = points[0].t;
   const t1 = Math.max(points[points.length - 1].t, t0 + 1);
   const X = (t: number) => L + ((t - t0) / (t1 - t0)) * (right - L);
@@ -85,96 +91,132 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
           ? `Opened, force-closed ${lifetime} later, not settled yet`
           : `Opened, force-closed ${lifetime} later, settled after a wait of ${delay}`;
   return (
-    <svg viewBox={`0 -14 ${W} 92`} role="img" aria-label={aria} className="block h-auto w-full">
-      <line
-        data-segment="open"
-        x1={X(open.t)}
-        x2={X(second.t)}
-        y1="30"
-        y2="30"
-        stroke={FIBER_COLORS.open}
-        strokeWidth="4"
-        strokeOpacity=".6"
-      />
-      <text
-        x={(X(open.t) + X(second.t)) / 2}
-        y="24"
-        textAnchor="middle"
-        fontSize="11"
-        fill={FIBER_COLORS.open}
+    <div ref={box} className="min-w-0">
+      <svg
+        viewBox={`0 ${narrow ? -46 : -14} ${W} ${narrow ? 138 : 92}`}
+        role="img"
+        aria-label={aria}
+        className="block h-auto w-full"
       >
-        open {lifetime}
-        {channel.state === 'open' ? ' so far' : ''} · payments off chain
-      </text>
-      {third && (
-        <>
-          <line
-            data-segment="wait"
-            x1={X(second.t)}
-            x2={X(third.t)}
-            y1="30"
-            y2="30"
-            stroke={FIBER_COLORS.forced}
-            strokeWidth="1.5"
-            strokeDasharray="3 3"
-          />
-          <text
-            x={(X(second.t) + X(third.t)) / 2}
-            y="48"
-            textAnchor="middle"
-            fontSize="10.5"
-            fill={FIBER_COLORS.history}
-          >
-            {delay}
-          </text>
-        </>
-      )}
-      {waiting && (
-        <>
-          <line
-            data-segment="wait"
-            x1={X(second.t)}
-            x2={W - L}
-            y1="30"
-            y2="30"
-            stroke={FIBER_COLORS.forced}
-            strokeWidth="1.5"
-            strokeDasharray="3 3"
-          />
-          <text x={W - L} y="0" textAnchor="end" fontSize="11.5" fill={FIBER_COLORS.count}>
-            not settled · wait {delay}
-          </text>
-        </>
-      )}
-      {points.map((point) => {
-        const x = X(point.t);
-        const [anchor, dx, y] =
-          point.place === 'below-start'
-            ? (['start', -6, 56] as const)
-            : point.place === 'below-end'
-              ? (['end', -10, 56] as const)
-              : (['end', 6, 0] as const);
-        return (
-          <g key={point.key}>
-            <circle
-              data-point={point.key}
-              cx={x}
-              cy="30"
-              r="6"
-              fill={FIBER_COLORS.halo}
-              stroke={FIBER_COLORS.count}
+        <line
+          data-segment="open"
+          x1={X(open.t)}
+          x2={X(second.t)}
+          y1="30"
+          y2="30"
+          stroke={FIBER_COLORS.open}
+          strokeWidth="4"
+          strokeOpacity=".6"
+        />
+        <text
+          x={(X(open.t) + X(second.t)) / 2}
+          y="24"
+          textAnchor="middle"
+          fontSize="11"
+          fill={FIBER_COLORS.open}
+        >
+          open {lifetime}
+          {channel.state === 'open' ? ' so far' : ''} · payments off chain
+        </text>
+        {third && (
+          <>
+            <line
+              data-segment="wait"
+              x1={X(second.t)}
+              x2={X(third.t)}
+              y1="30"
+              y2="30"
+              stroke={FIBER_COLORS.forced}
               strokeWidth="1.5"
-              strokeDasharray={point.hollow ? '2 2' : undefined}
+              strokeDasharray="3 3"
             />
-            <text x={x + dx} y={y} textAnchor={anchor} fontSize="11.5" fill={FIBER_COLORS.count}>
-              {point.label}
+            <text
+              x={narrow ? X(second.t) + 10 : (X(second.t) + X(third.t)) / 2}
+              y="48"
+              textAnchor={narrow ? 'start' : 'middle'}
+              fontSize="10.5"
+              fill={FIBER_COLORS.history}
+            >
+              {delay}
             </text>
-            <text x={x + dx} y={y + 15} textAnchor={anchor} fontSize="11" fill={FIBER_COLORS.note}>
-              {`${formatBlockNumber(point.block)} · ${formatUtc8Date(point.t)}`}
+          </>
+        )}
+        {waiting && (
+          <>
+            <line
+              data-segment="wait"
+              x1={X(second.t)}
+              x2={W - L}
+              y1="30"
+              y2="30"
+              stroke={FIBER_COLORS.forced}
+              strokeWidth="1.5"
+              strokeDasharray="3 3"
+            />
+            <text x={W - L} y="0" textAnchor="end" fontSize="11.5" fill={FIBER_COLORS.count}>
+              not settled · wait {delay}
             </text>
-          </g>
-        );
-      })}
-    </svg>
+          </>
+        )}
+        {points.map((point) => {
+          const x = X(point.t);
+          const [anchor, dx, y] =
+            point.place === 'below-start'
+              ? (['start', -6, 56] as const)
+              : point.place === 'below-end'
+                ? (['end', -10, 56] as const)
+                : (['end', 6, narrow ? -30 : 0] as const);
+          return (
+            <g key={point.key}>
+              <circle
+                data-point={point.key}
+                cx={x}
+                cy="30"
+                r="6"
+                fill={FIBER_COLORS.halo}
+                stroke={FIBER_COLORS.count}
+                strokeWidth="1.5"
+                strokeDasharray={point.hollow ? '2 2' : undefined}
+              />
+              <text x={x + dx} y={y} textAnchor={anchor} fontSize="11.5" fill={FIBER_COLORS.count}>
+                {point.label}
+              </text>
+              {narrow ? (
+                <>
+                  <text
+                    x={x + dx}
+                    y={y + 15}
+                    textAnchor={anchor}
+                    fontSize="11"
+                    fill={FIBER_COLORS.note}
+                  >
+                    {formatBlockNumber(point.block)}
+                  </text>
+                  <text
+                    x={x + dx}
+                    y={y + 30}
+                    textAnchor={anchor}
+                    fontSize="11"
+                    fill={FIBER_COLORS.note}
+                  >
+                    {formatUtc8Date(point.t)}
+                  </text>
+                </>
+              ) : (
+                <text
+                  x={x + dx}
+                  y={y + 15}
+                  textAnchor={anchor}
+                  fontSize="11"
+                  fill={FIBER_COLORS.note}
+                >
+                  {`${formatBlockNumber(point.block)} · ${formatUtc8Date(point.t)}`}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }

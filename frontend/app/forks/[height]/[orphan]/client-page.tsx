@@ -30,7 +30,7 @@ import {
 } from '@/lib/fork-format';
 import { MinerLink } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
-import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8DateTime, formatUtc8Time } from '@/lib/utils';
 
 type MinerBlock = { number: number; minerLockHash: string | null; minerAddress: string | null };
 
@@ -321,16 +321,19 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
           <div className="min-w-0 overflow-x-auto pt-6">
             <ForkTree model={model} />
           </div>
+          <p className="text-text-dim mt-1 text-[11px] md:hidden">
+            scroll sideways for both branches
+          </p>
           <div className="mt-2 grid grid-cols-[34px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 text-[12.5px] sm:grid-cols-[34px_190px_minmax(0,1fr)]">
             <span className="text-text-bright">{TIP_MARKS[1]}</span>
-            <span className="text-text-dim">before {formatUtc8DateTime(event.detectedAt)}</span>
+            <span className="text-text-dim">before {formatUtc8Time(event.detectedAt)}</span>
             <span className="text-text col-span-2 sm:col-span-1">
               this node’s tip is {formatBlockNumber(event.oldTipNumber)}{' '}
               <span className="text-text-dim">{hashShort(event.oldTipHash)}</span>{' '}
               {where(event.oldTipHash)}
             </span>
             <span className="text-text-bright">{TIP_MARKS[2]}</span>
-            <span className="text-text-dim">{formatUtc8DateTime(event.detectedAt)}</span>
+            <span className="text-text-dim">{formatUtc8Time(event.detectedAt)}</span>
             <span className="text-text col-span-2 sm:col-span-1">
               the node switches to {formatBlockNumber(event.newTipNumber)}{' '}
               <span className="text-text-dim">{hashShort(event.newTipHash)}</span> and drops{' '}

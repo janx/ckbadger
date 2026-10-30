@@ -88,10 +88,11 @@ export function ForkTree({ model }: { model: ForkTreeModel }) {
     <svg
       data-fork-tree
       viewBox={`0 0 ${width} ${height}`}
-      width="100%"
+      width={width}
+      height={height}
       role="img"
       aria-label={`Blocks ${formatBlockNumber(model.first)} to ${formatBlockNumber(model.last)}: today's chain, the branch that lost above it, and where it was taken as an uncle`}
-      className="block min-w-[720px] overflow-visible"
+      className="block max-w-none overflow-visible"
     >
       <defs>
         <marker

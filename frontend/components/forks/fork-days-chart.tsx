@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useElementWidth } from '@/hooks/useElementWidth';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 
@@ -10,7 +11,8 @@ interface Day {
   nodeSwitches: number;
 }
 
-const W = 1160;
+/** The board's drawing width, used until the box is measured. */
+const DESIGN_WIDTH = 1210;
 const H0 = 120;
 const LEFT = 44;
 
@@ -33,12 +35,15 @@ const reading = (day: Day) =>
  */
 export function ForkDaysChart({ days }: { days: readonly Day[] }) {
   const [active, setActive] = useState<number | null>(null);
+  // Drawn 1:1 in its box, so the 11 px axis text stays 11 px at phone width (visual pass, 390).
+  const [box, measured] = useElementWidth<HTMLDivElement>();
+  const W = (measured ?? DESIGN_WIDTH) - LEFT - 6;
   const { cap, step } = scale(Math.max(...days.map((d) => Math.max(d.uncles, d.nodeSwitches))));
   const bw = W / Math.max(days.length, 1);
   const y = (v: number) => H0 - (v / cap) * H0;
   const ticks = Array.from({ length: cap / step }, (_, i) => (i + 1) * step);
   return (
-    <div className="min-w-0">
+    <div ref={box} className="min-w-0">
       <p data-testid="fork-day-reading" className="text-text mb-1 min-h-[18px] text-[12px]">
         {active === null ? (
           <span className="text-text-dim">hover a day, or focus the chart and use ← →</span>
@@ -78,8 +83,9 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
           0
         </text>
         {days.map((day, i) => {
-          const x = i * bw + 3;
-          const width = Math.max(bw - 6, 1);
+          const gap = Math.min(6, bw * 0.3);
+          const x = i * bw + gap / 2;
+          const width = Math.max(bw - gap, 1);
           return (
             <g
               key={day.date}
@@ -110,10 +116,24 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
                   fill={FORK_COLORS.nodeSwitches}
                 />
               )}
-              {(i % 5 === 0 || i === days.length - 1) && (
-                <text x={x} y={H0 + 16} fontSize="11" fill={FORK_COLORS.tick}>
+              {i === days.length - 1 ? (
+                <text
+                  x={x + width}
+                  y={H0 + 16}
+                  textAnchor="end"
+                  fontSize="11"
+                  fill={FORK_COLORS.tick}
+                >
                   {day.date.slice(5)}
                 </text>
+              ) : (
+                // every fifth day, unless it would crowd the last day's right-aligned label
+                i % 5 === 0 &&
+                (days.length - 1 - i) * bw >= 48 && (
+                  <text x={x} y={H0 + 16} fontSize="11" fill={FORK_COLORS.tick}>
+                    {day.date.slice(5)}
+                  </text>
+                )
               )}
             </g>
           );

@@ -534,7 +534,12 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
               <Grid>
                 {evidence.stages.map((stage) => (
                   <span key={stage.txHash} className="contents">
-                    <span className="text-text-dim">{STAGE_WORDS[stage.stage] ?? stage.stage}</span>
+                    <span className="text-text-dim">
+                      {stage.stage === STAGE_KEYS.close &&
+                      (channel.state === 'forceClosed' || channel.state === 'settled')
+                        ? 'force close'
+                        : (STAGE_WORDS[stage.stage] ?? stage.stage)}
+                    </span>
                     <StageWitnesses stage={stage} />
                   </span>
                 ))}

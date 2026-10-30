@@ -168,7 +168,7 @@ describe('FiberChannelBoard', () => {
     expect(screen.getByText('the wait').nextElementSibling).toHaveTextContent(
       'commitment at epoch 11,639 · 836 / 1,434 · settled at epoch 11,645 · 1,005 / 1,710'
     );
-    expect(screen.getByText('close').nextElementSibling).toHaveTextContent(
+    expect(screen.getByText('force close').nextElementSibling).toHaveTextContent(
       'fee 455 shannons, out of the channel'
     );
   });
