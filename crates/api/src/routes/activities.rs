@@ -902,54 +902,26 @@ fn list_canonical_activities_page(
     Ok(out)
 }
 
-/// Classify a TxActions for global activity filtering based on aggregate participant tags.
+/// Whether a `TxActions` falls under a global activity filter. The bucket comes
+/// from `ckbadger_store::classify_global_bucket`, the one classification the
+/// indexer also keys `CF_TX_ACTIONS_BY_BUCKET` by; `cellbase` is the one
+/// filter that names no bucket.
 pub(crate) fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> bool {
-    use ckbadger_store::types::*;
-
-    fn classify_global_bucket(actions: &TxActions) -> &'static str {
-        if actions.is_cellbase {
-            return "cellbase";
-        }
-        // DAO operations are emitted as protocol actions with protocol="dao";
-        // check before the generic protocol bucket so filter=dao still works.
-        if actions.protocol_actions.iter().any(|a| a.protocol == "dao") {
-            return "dao";
-        }
-        if !actions.protocol_actions.is_empty() {
-            return "protocol";
-        }
-        let combined_tags: u16 = actions
-            .participants
-            .iter()
-            .fold(0u16, |acc, p| acc | p.tags);
-        if combined_tags & TAG_DAO != 0 {
-            return "dao";
-        }
-        if combined_tags & TAG_TOKEN != 0 {
-            return "token";
-        }
-        if combined_tags & TAG_OBJECT != 0 {
-            return "object";
-        }
-        if combined_tags & TAG_IDENTITY != 0 {
-            return "identity";
-        }
-        if combined_tags & (TAG_TYPE_CALL | TAG_LOCK_CALL) != 0
-            || !actions.type_calls.is_empty()
-            || !actions.lock_calls.is_empty()
-        {
-            return "script";
-        }
-        "ckb"
-    }
-
     match filter {
         None | Some("") | Some("all") => true,
-        Some(expected) => classify_global_bucket(actions) == expected,
+        Some("cellbase") => actions.is_cellbase,
+        Some(expected) => ckbadger_store::classify_global_bucket(actions)
+            .is_some_and(|bucket| bucket.as_filter() == expected),
     }
 }
 
-/// List canonical global activities (TX-level), applying filter and canonicity checks.
+/// List canonical global activities (TX-level), newest first, strictly older
+/// than `cursor`.
+///
+/// A bucket filter reads `CF_TX_ACTIONS_BY_BUCKET`, which the indexer writes
+/// beside every non-cellbase `TxActions` row and deletes above the fork point
+/// on rollback: each row is canonical by construction and a page costs one
+/// position seek per row. The unfiltered feed walks `CF_TX_ACTIONS`.
 pub(crate) fn list_canonical_global_actions_page(
     store: &CkbadgerStore,
     limit: usize,
@@ -959,7 +931,24 @@ pub(crate) fn list_canonical_global_actions_page(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    match filter {
+        None | Some("") | Some("all") => {
+            list_canonical_unfiltered_actions_page(store, limit, cursor)
+        }
+        Some(value) => {
+            let bucket = ckbadger_store::GlobalBucket::from_filter(value).ok_or_else(|| {
+                anyhow::anyhow!("global activity filter '{value}' names no activity bucket")
+            })?;
+            store.list_tx_actions_page_by_bucket(bucket, cursor, limit)
+        }
+    }
+}
 
+fn list_canonical_unfiltered_actions_page(
+    store: &CkbadgerStore,
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+) -> anyhow::Result<Vec<TxActions>> {
     let scan_limit = ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
     let mut out = Vec::with_capacity(limit);
     let mut scan_cursor = cursor;
@@ -982,9 +971,6 @@ pub(crate) fn list_canonical_global_actions_page(
                 actions.tx_index,
                 &actions.tx_hash,
             )? {
-                continue;
-            }
-            if !matches_global_activity_filter(&actions, filter) {
                 continue;
             }
             out.push(actions);
