@@ -538,7 +538,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).not.toHaveTextContent('10200000000000000 scaled rate');
     expect(t2).toHaveTextContent('Cbytes 0..810,000,000.00000000 CKB issued in total');
     expect(t2).toHaveTextContent(
-      'At block #5, S equals the compensation still owed plus the burnt share to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+      'At block #5, S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
     );
     expect(t2).toHaveTextContent(
       'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
@@ -546,30 +546,32 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8');
   });
 
-  it('says in place when the header S disagrees with still owed + burnt at one height', () => {
+  it('fails when the statistics row S is not still owed + burnt', () => {
+    stubCalculator();
+    expect(() =>
+      render(
+        <DaoBoard
+          statistics={{ ...sameBlock, tipSecondaryPool: '500000001' }}
+          evidence={evidence}
+        />
+      )
+    ).toThrow('DAO statistics at #5: S 500000001 is not still owed + burnt 500000000');
+  });
+
+  it('states the identity from the statistics row even when the header shown is another block', () => {
     stubCalculator();
     const { container } = render(
       <DaoBoard
-        statistics={{ ...sameBlock, burnt: '300000001', miningReward: '99999999' }}
+        statistics={{ ...sameBlock, tipBlockNumber: 4, tipSecondaryPool: '500000000' }}
         evidence={evidence}
       />
     );
-    expect(within(tier2(container) as HTMLElement).getByRole('alert')).toHaveTextContent(
-      'DAO header S at #5 is 500000000 shannons, but still owed + burnt is 500000001'
-    );
-    expect(tier2(container)).not.toHaveTextContent('to the shannon');
-  });
-
-  it('does not claim the S identity across two different blocks', () => {
-    stubCalculator();
-    const { container } = render(
-      <DaoBoard statistics={{ ...sameBlock, tipBlockNumber: 4 }} evidence={evidence} />
-    );
     const t2 = tier2(container);
-    expect(t2).not.toHaveTextContent('to the shannon');
+    expect(t2).toHaveTextContent('The DAO field in every block header · #5');
     expect(t2).toHaveTextContent(
-      'This S is block #5’s and the statistics above are block #4’s, so S = still owed + burnt is not shown across two blocks.'
+      'At block #4, S (5.00000000 CKB) equals the compensation still owed'
     );
+    expect(t2).not.toHaveTextContent('not shown across two blocks');
   });
 });
 
