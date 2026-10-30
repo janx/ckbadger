@@ -688,10 +688,11 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
 
 /// Every `.cell` item feed row says what the transaction meant for this name,
 /// computed once by the API's lifecycle classification: the name's own
-/// `dotcell` action (`protocolAction`), or — when the tx only rewrote its ring
-/// `next` pointer — which action relinked it (`ringRelink`), including a
-/// rewrite the indexer recorded as an unattributed `ring_relink`. Exactly one
-/// of the two is set; the frontend derives nothing.
+/// `dotcell` actions in protocol order (`protocolActions`), or — when the tx
+/// only rewrote its ring `next` pointer — which action relinked it
+/// (`ringRelink`), including a rewrite the indexer recorded as an unattributed
+/// `ring_relink`. Exactly one of the two is set; the frontend derives nothing.
+/// A buy and re-list in one tx is two own actions and a transfer row.
 #[tokio::test]
 async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
     let store = test_store();
@@ -747,6 +748,19 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
                 "edit_records",
                 serde_json::json!({"id": item, "changes": ["records"]}),
             )],
+        ),
+        (
+            [0x67; 32],
+            vec![
+                dotcell(
+                    "buy",
+                    serde_json::json!({"id": item, "changes": ["owner"], "price": "10000000000"}),
+                ),
+                dotcell(
+                    "list",
+                    serde_json::json!({"id": item, "changes": ["owner"], "price": "25000000000"}),
+                ),
+            ],
         ),
     ];
     let mut batch = StoreBatch::new(&store);
@@ -821,49 +835,57 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
             .unwrap_or_else(|| panic!("no row for {hash}: {feed}"))["itemContext"]
             .clone()
     };
+    let none = serde_json::json!([]);
     let expected = [
-        ([0x61; 32], "mint", serde_json::json!("register"), serde_json::Value::Null),
+        ([0x61; 32], "mint", serde_json::json!(["register"]), serde_json::Value::Null),
         (
             [0x62; 32],
             "update",
-            serde_json::Value::Null,
+            none.clone(),
             serde_json::json!({"by": "register", "byId": registered}),
         ),
         (
             [0x63; 32],
             "update",
-            serde_json::Value::Null,
+            none.clone(),
             serde_json::json!({"by": "register_subname", "byId": subname}),
         ),
         (
             [0x64; 32],
             "update",
-            serde_json::Value::Null,
+            none.clone(),
             serde_json::json!({"by": "recycle", "byId": recycled}),
         ),
         (
             [0x65; 32],
             "update",
-            serde_json::Value::Null,
+            none.clone(),
             serde_json::json!({"by": "unattributed", "byId": null}),
         ),
         (
             [0x66; 32],
             "update",
-            serde_json::json!("edit_records"),
+            serde_json::json!(["edit_records"]),
+            serde_json::Value::Null,
+        ),
+        (
+            [0x67; 32],
+            "transfer",
+            serde_json::json!(["buy", "list"]),
             serde_json::Value::Null,
         ),
     ];
     assert_eq!(feed["data"].as_array().unwrap().len(), expected.len(), "{feed}");
-    for (hash, action, protocol_action, ring_relink) in &expected {
+    for (hash, action, protocol_actions, ring_relink) in &expected {
         let context = context_of(&feed, *hash);
         assert_eq!(context["itemId"], item.as_str());
         assert_eq!(context["action"], *action, "{context}");
-        assert_eq!(context["protocolAction"], *protocol_action, "{context}");
+        assert_eq!(context["protocolActions"], *protocol_actions, "{context}");
         assert_eq!(context["ringRelink"], *ring_relink, "{context}");
         assert!(
-            context["protocolAction"].is_null() != context["ringRelink"].is_null(),
-            "exactly one of protocolAction / ringRelink: {context}"
+            context["protocolActions"].as_array().unwrap().is_empty()
+                != context["ringRelink"].is_null(),
+            "exactly one of protocolActions / ringRelink: {context}"
         );
     }
 
@@ -879,13 +901,14 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
         serde_json::json!({"by": "unattributed", "byId": null})
     );
     assert_eq!(
-        context_of(&transactions, [0x66; 32])["protocolAction"],
-        "edit_records"
+        context_of(&transactions, [0x66; 32])["protocolActions"],
+        serde_json::json!(["edit_records"])
     );
+    assert_eq!(context_of(&transactions, [0x67; 32])["action"], "transfer");
 }
 
-/// Items of the other standards have no item-naming protocol actions: both
-/// new fields are present and null.
+/// Items of the other standards have no item-naming protocol actions:
+/// `protocolActions` is empty and `ringRelink` null.
 #[tokio::test]
 async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() {
     let (store, id) = history_fixture();
@@ -923,9 +946,9 @@ async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() 
     assert_eq!(status, StatusCode::OK, "{feed}");
     for row in feed["data"].as_array().unwrap() {
         let context = row["itemContext"].as_object().unwrap();
-        assert!(context.contains_key("protocolAction"), "{row}");
+        assert_eq!(context["protocolActions"], serde_json::json!([]), "{row}");
         assert!(context.contains_key("ringRelink"), "{row}");
-        assert!(context["protocolAction"].is_null() && context["ringRelink"].is_null());
+        assert!(context["ringRelink"].is_null(), "{row}");
     }
 }
 

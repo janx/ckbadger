@@ -76,12 +76,13 @@ fn item_feed(
             )));
         }
         // The row's meaning for this item is the lifecycle computation's,
-        // never re-derived: `protocolAction` (the item's own action) and
-        // `ringRelink` (why a `.cell` neighbour's cell was rewritten).
+        // never re-derived: `protocolActions` (the item's own actions, in
+        // protocol order) and `ringRelink` (why a `.cell` neighbour's cell was
+        // rewritten).
         row["itemContext"] = json!({
             "itemId": format!("0x{}", hex::encode(&id)),
             "action": meaning.action,
-            "protocolAction": meaning.protocol_action,
+            "protocolActions": meaning.protocol_actions,
             "ringRelink": meaning.ring_relink,
             "createdCell": created.first(),
             "consumedCell": consumed.first(),
