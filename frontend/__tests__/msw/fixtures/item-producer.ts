@@ -384,7 +384,7 @@ export const itemActivityFeedProducer = {
       isCellbase: false,
       itemContext: {
         action: 'transfer',
-        protocolAction: null,
+        protocolActions: [],
         ringRelink: null,
         consumedCell: {
           anatomy: {
@@ -519,7 +519,7 @@ export const itemTransactionsProducer = {
       isCellbase: false,
       itemContext: {
         action: 'mint',
-        protocolAction: null,
+        protocolActions: [],
         ringRelink: null,
         consumedCell: null,
         createdCell: {

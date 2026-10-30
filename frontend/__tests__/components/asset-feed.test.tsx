@@ -70,7 +70,7 @@ describe('Shared asset feeds', () => {
       itemContext: {
         itemId: aptId,
         action: 'update',
-        protocolAction: null,
+        protocolActions: [],
         ringRelink: null,
         createdCell: null,
         consumedCell: null,
@@ -80,13 +80,13 @@ describe('Shared asset feeds', () => {
   const cell = { kind: 'identity', protocolName: '.cell' } as const;
 
   it('names a .cell row by the protocol action the API attributes to this item (ID-C1, #5)', () => {
-    expect(itemFeedHeadline(row({ protocolAction: 'edit_records' }), cell)).toEqual({
+    expect(itemFeedHeadline(row({ protocolActions: ['edit_records'] }), cell)).toEqual({
       text: '.cell · edit records',
       neighbour: false,
     });
     // A batch tx: another name's action comes first in protocolActions; it is not this row's.
     const batch = row(
-      { protocolAction: 'transfer', action: 'transfer' },
+      { protocolActions: ['transfer'], action: 'transfer' },
       {
         protocolActions: [
           { protocol: 'dotcell', protocolName: '.cell', action: 'edit_records', metadata: {} },
@@ -95,6 +95,16 @@ describe('Shared asset feeds', () => {
       }
     );
     expect(itemFeedHeadline(batch, cell).text).toBe('.cell · transfer');
+    // Several own actions in one tx, in order.
+    expect(itemFeedHeadline(row({ protocolActions: ['buy', 'list'] }), cell)).toEqual({
+      text: '.cell · buy, list',
+      neighbour: false,
+    });
+    // A rewrite nothing else attributes is its own ring_relink action: named, dimmed.
+    expect(itemFeedHeadline(row({ protocolActions: ['ring_relink'] }), cell)).toEqual({
+      text: '.cell · ring pointer changed',
+      neighbour: true,
+    });
   });
 
   it('names other standards by the exact item action, never a net-delta guess or "Item"', () => {

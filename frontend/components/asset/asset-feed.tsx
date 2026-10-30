@@ -9,7 +9,11 @@ import type {
   Transaction,
 } from '@/lib/api';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { ActivityReadError, capitalizeAction } from '@/components/activity-event-row';
+import {
+  ActivityReadError,
+  capitalizeAction,
+  dotcellActionLabel,
+} from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -42,7 +46,7 @@ export interface ItemFeedSubject {
 
 /**
  * Headline of a row in one item's own feed. The API states what the tx meant for this item
- * (`itemContext.protocolAction` / `ringRelink`); this only displays it (ID-C1, #5). A ring
+ * (`itemContext.protocolActions` / `ringRelink`); this only displays it (ID-C1, #5). A ring
  * neighbour's rewrite is dimmed; a `.cell` row is its own protocol action; any other standard is
  * named by its exact item action ("Identity Renew").
  */
@@ -58,10 +62,11 @@ export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject):
       );
     return { text, neighbour: true };
   }
-  if (item.protocolName && context.protocolAction)
+  if (item.protocolName && context.protocolActions.length)
     return {
-      text: `${item.protocolName} · ${context.protocolAction.replaceAll('_', ' ')}`,
-      neighbour: false,
+      text: `${item.protocolName} · ${context.protocolActions.map((action) => dotcellActionLabel(action)).join(', ')}`,
+      // A rewrite nothing else attributes is its own ring_relink: someone else's doing, dimmed.
+      neighbour: context.protocolActions.every((action) => action === 'ring_relink'),
     };
   return {
     text: `${item.kind === 'identity' ? 'Identity' : 'Object'} ${capitalizeAction(context.action)}`,

@@ -1489,8 +1489,8 @@ export interface ItemRingRelink {
 export interface ItemFeedContext {
   itemId: string;
   action: string;
-  /** The item's own protocol action in this tx (e.g. `edit_records`); null when it has none. */
-  protocolAction: string | null;
+  /** The item's own protocol actions in this tx, in order (e.g. `["buy", "list"]`); empty when none. */
+  protocolActions: string[];
   /** Set only when the item's cell was rewritten as a ring neighbour with no own action. */
   ringRelink: ItemRingRelink | null;
   createdCell: ItemCellVersion | null;
