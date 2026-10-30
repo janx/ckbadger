@@ -3596,52 +3596,70 @@ async fn get_total_supply_chart(
     ok(response)
 }
 
+/// Quarter-year samples of the nominal APC model, years 0 through 20 since genesis.
+const NOMINAL_APC_LAST_QUARTER: i64 = 80;
+/// One quarter of a mean Gregorian year (365.25 days), in ms. The model is
+/// continuous in years since genesis; the tip's quarter is exact integer math.
+const NOMINAL_APC_QUARTER_MS: i64 = 36_525 * 86_400_000 / 400;
+
+/// The quarterly sample holding the indexed tip: `floor(elapsed / quarter)`.
+/// A tip beyond the model's sampled range is an error, not a clamped marker.
+fn nominal_apc_tip_quarter(
+    tip_chain_time_ms: i64,
+    genesis_chain_time_ms: i64,
+) -> Result<i64, ApiRouteError> {
+    let elapsed_ms = tip_chain_time_ms
+        .checked_sub(genesis_chain_time_ms)
+        .filter(|elapsed| *elapsed >= 0)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "nominal APC: tip chain time {tip_chain_time_ms} precedes genesis {genesis_chain_time_ms}"
+            ))
+        })?;
+    let quarter = elapsed_ms / NOMINAL_APC_QUARTER_MS;
+    if quarter > NOMINAL_APC_LAST_QUARTER {
+        return Err(ApiError::internal(format!(
+            "nominal APC: tip chain time {tip_chain_time_ms} is {elapsed_ms} ms after genesis, \
+             quarter {quarter} beyond the model's last sampled quarter {NOMINAL_APC_LAST_QUARTER}"
+        )));
+    }
+    Ok(quarter)
+}
+
 async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     // Derived genesis circulating supply in CKB (25.2B on mainnet), from the
     // persisted per-network GenesisBaseline — not a hardcoded mainnet literal.
     let baseline = state.genesis_baseline()?;
     let genesis_supply_ckb =
         (baseline.total_issuance - baseline.burnt) as f64 / SHANNONS_PER_CKB as f64;
-    let chain = load_chain_time(&state.store).await?;
-    let tip_year = match chain {
-        Some(chain) => {
-            let genesis = state
-                .store
-                .get_block_header(0)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| ApiError::internal("missing genesis header for nominal APC"))?;
-            let elapsed_ms = chain
-                .chain_time_ms()
-                .checked_sub(genesis.chain_time_ms)
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "tip chain time {} precedes genesis {}",
-                        chain.chain_time_ms(),
-                        genesis.chain_time_ms
-                    ))
-                })?;
-            // Mean Gregorian year in ms — the model is continuous in years since genesis.
-            elapsed_ms as f64 / (365.25 * 24.0 * 3_600_000.0)
-        }
-        None => 0.0,
-    };
-    // Closest quarterly sample at or before tip; future quarters stay for the projection.
-    let current_quarter = ((tip_year / 0.25).floor() as i32).clamp(0, 80) as usize;
-    let data: Vec<ChartDataPoint> = (0..=80)
+    // The timeline marks the tip's quarter, so the chart needs an indexed tip,
+    // like every other tip-anchored statistic.
+    let chain = load_chain_time(&state.store)
+        .await?
+        .ok_or_else(|| ApiError::initializing("no synced block header for nominal APC yet"))?;
+    let genesis = state
+        .store
+        .get_block_header(0)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::internal("missing genesis header for nominal APC"))?;
+    let current_quarter = nominal_apc_tip_quarter(chain.chain_time_ms(), genesis.chain_time_ms)?;
+    let data: Vec<ChartDataPoint> = (0..=NOMINAL_APC_LAST_QUARTER)
         .map(|i| {
             let year = i as f64 * 0.25;
             let apc = calculate_nominal_apc(year, genesis_supply_ckb);
             ChartDataPoint {
                 date: format!("{}", year),
                 value: format!("{:.4}", apc),
-                // Timeline marker for the headline "today" sample (not a Y2 series).
-                value2: Some(if i < current_quarter {
-                    "past".into()
-                } else if i == current_quarter {
-                    "current".into()
-                } else {
-                    "future".into()
-                }),
+                // Timeline marker: exactly one sample — the tip's quarter — is
+                // "current" (not a Y2 series).
+                value2: Some(
+                    match i.cmp(&current_quarter) {
+                        std::cmp::Ordering::Less => "past",
+                        std::cmp::Ordering::Equal => "current",
+                        std::cmp::Ordering::Greater => "future",
+                    }
+                    .into(),
+                ),
             }
         })
         .collect();

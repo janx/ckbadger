@@ -1483,3 +1483,67 @@ async fn redesign_utilized_chart_retains_identity_category() {
         "{json}"
     );
 }
+
+/// Genesis and an indexed tip `elapsed_ms` of chain time later.
+fn nominal_apc_store(elapsed_ms: i64) -> Arc<CkbadgerStore> {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let genesis = utc_ms("2019-11-16T06:00:00Z");
+    seed_block_headers_at(&store, &[(0, genesis), (1, genesis + elapsed_ms)]);
+    store
+}
+
+/// A quarter of a mean Gregorian year, the model's sample step.
+const QUARTER_MS: i64 = 7_889_400_000;
+
+#[tokio::test]
+async fn nominal_apc_timeline_marks_exactly_the_tip_quarter_current() {
+    // 29 quarters and one hour after genesis: sample 29 (7.25 y) holds the tip.
+    let app = create_router(test_config(nominal_apc_store(29 * QUARTER_MS + 3_600_000))).await;
+    let (status, json) = get_json(&app, "/charts/nominal-apc").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["y2AxisLabel"], "nominal-apc-timeline");
+    let points = json["data"].as_array().unwrap();
+    assert_eq!(points.len(), 81);
+    let markers: Vec<&str> = points
+        .iter()
+        .map(|point| point["value2"].as_str().unwrap())
+        .collect();
+    assert_eq!(markers.iter().filter(|m| **m == "current").count(), 1);
+    assert_eq!(points[29]["date"], "7.25");
+    assert_eq!(markers[29], "current");
+    assert!(markers[..29].iter().all(|m| *m == "past"));
+    assert!(markers[30..].iter().all(|m| *m == "future"));
+
+    // On the quarter boundary itself the new quarter is current.
+    let app = create_router(test_config(nominal_apc_store(30 * QUARTER_MS))).await;
+    let (status, json) = get_json(&app, "/charts/nominal-apc").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][30]["value2"], "current");
+    assert_eq!(json["data"][29]["value2"], "past");
+}
+
+#[tokio::test]
+async fn nominal_apc_without_indexed_tip_is_initializing_not_year_zero() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/nominal-apc").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert!(
+        json["message"].as_str().unwrap().contains("nominal APC"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn nominal_apc_tip_beyond_model_range_is_an_error_not_clamped() {
+    let app = create_router(test_config(nominal_apc_store(81 * QUARTER_MS))).await;
+    let (status, json) = get_json(&app, "/charts/nominal-apc").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("quarter 81") && message.contains("last sampled quarter 80"),
+        "{message}"
+    );
+}
