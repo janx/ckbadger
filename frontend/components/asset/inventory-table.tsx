@@ -23,17 +23,18 @@ export function AssetAmount({ amount, decimals }: AssetAmountProps) {
   exactUnsignedInteger(amount, 'asset amount');
   const { integer, fraction } = splitTokenAmount(amount, decimals);
   const significant = fraction.replace(/0+$/, '');
+  const groups = integer.split(',');
+  // A digit run never breaks by itself; the only soft breaks are after thousands separators
+  // (IV-28 / IV-13), so a wrapped amount never strands a digit or splits the fraction.
   return (
-    <span
-      className="break-all tabular-nums"
-      title={formatTokenBalanceWithRawMarker(amount, decimals)}
-    >
-      {integer}
+    <span className="tabular-nums" title={formatTokenBalanceWithRawMarker(amount, decimals)}>
+      {groups.flatMap((group, i) =>
+        i < groups.length - 1 ? [`${group},`, <wbr key={i} />] : [group]
+      )}
       {fraction && (
         <>
-          .<wbr />
-          <span className="opacity-80">{significant}</span>
-          <span className="text-text-muted">{fraction.slice(significant.length)}</span>
+          .<span className="opacity-80">{significant}</span>
+          <span className="text-text-ghost">{fraction.slice(significant.length)}</span>
         </>
       )}
       {decimals === null && ' (raw)'}
