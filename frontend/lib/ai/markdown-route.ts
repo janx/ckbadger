@@ -21,6 +21,8 @@ export type ParsedMarkdownPage =
   | { kind: 'clusters_detail'; pathname: string; clusterId: string }
   | { kind: 'dao_overview'; pathname: '/dao' }
   | { kind: 'dao_charts'; pathname: '/dao/charts' }
+  // F2 group dao (DAO-12)
+  | { kind: 'dao_depositors'; pathname: '/dao/depositors' }
   | { kind: 'forks_list'; pathname: '/forks' }
   | { kind: 'fork_detail'; pathname: string; id: string }
   | { kind: 'hardforks'; pathname: '/hardforks' }
