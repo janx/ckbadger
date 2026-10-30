@@ -1,6 +1,5 @@
 //! Global pool rows from the same immutable mirror used by address activity feeds.
 use axum::extract::{Query, State};
-use ckbadger_store::types::ScriptInfo;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
@@ -213,7 +212,7 @@ pub async fn list_pool_transactions(
     } else {
         None
     };
-    let mut script_cache: HashMap<Vec<u8>, Option<ScriptInfo>> = HashMap::new();
+    let mut script_cache = super::activities::ScriptNameCache::new();
     let mut addresses = HashMap::new();
     let mut data = Vec::with_capacity(records.len());
     for record in records {

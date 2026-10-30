@@ -6,7 +6,7 @@ use axum::{
 use ckbadger_store::{
     types::{
         participant_roles, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
-        ScriptInfo, TxActions, TypeCallEntry,
+        TxActions, TypeCallEntry,
     },
     CkbadgerStore,
 };
@@ -24,7 +24,9 @@ use crate::utils::address::{
     address_to_lock_script_hash, compute_script_hash, encode_lock_address, resolve_lock_address,
 };
 use crate::utils::exact_json::integers_as_strings;
-use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
+use crate::utils::{
+    is_ckb_address, parse_hash32, parse_optional_block_tx_cursor, registered_script_name,
+};
 use crate::AppState;
 use ckbadger_indexer::parser::registry::protocol_display_name;
 
@@ -91,9 +93,9 @@ pub(crate) fn participant_lock_kind(
         store.get_lock_script(lock_hash)?.map(|lock| lock.code_hash)
     };
     code_hash
-        .map(|hash| store.get_script_info(&hash))
+        .map(|hash| registered_script_name(store, &hash))
         .transpose()
-        .map(|info| normalized_script_name(info.flatten().as_ref()))
+        .map(Option::flatten)
 }
 
 fn participant_ref(
@@ -125,9 +127,7 @@ fn participant_ref(
                 )?),
                 lock_hash: Some(format!("0x{}", hex::encode(hash))),
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
-                lock_kind: normalized_script_name(
-                    store.get_script_info(&entry.code_hash)?.as_ref(),
-                ),
+                lock_kind: registered_script_name(store, &entry.code_hash)?,
                 roles,
             }),
             None => Ok(ParticipantRef {
@@ -422,28 +422,26 @@ fn lookup_token_info(
     Ok(result.unwrap_or((None, None)))
 }
 
-fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
-    info.and_then(|item| item.name.as_deref())
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("unknown"))
-        .map(|name| name.to_string())
-}
+/// Registered script names already read by one response, keyed by code hash
+/// (`utils::registered_script_name`, the one name rule `/cells` also uses).
+pub(crate) type ScriptNameCache = HashMap<Vec<u8>, Option<String>>;
 
-fn resolve_script_info_cached<'a>(
+fn cached_script_name(
     store: &CkbadgerStore,
-    cache: &'a mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    cache: &mut ScriptNameCache,
     code_hash: &[u8],
-) -> anyhow::Result<Option<&'a ScriptInfo>> {
-    if !cache.contains_key(code_hash) {
-        cache.insert(code_hash.to_vec(), store.get_script_info(code_hash)?);
+) -> anyhow::Result<Option<String>> {
+    if let Some(name) = cache.get(code_hash) {
+        return Ok(name.clone());
     }
-
-    Ok(cache.get(code_hash).and_then(Option::as_ref))
+    let name = registered_script_name(store, code_hash)?;
+    cache.insert(code_hash.to_vec(), name.clone());
+    Ok(name)
 }
 
 fn convert_type_call(
     store: &CkbadgerStore,
-    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    cache: &mut ScriptNameCache,
     call: &TypeCallEntry,
 ) -> anyhow::Result<TypeCallResponse> {
     let hash_type = hash_type_to_str(call.type_hash_type).ok_or_else(|| {
@@ -457,20 +455,20 @@ fn convert_type_call(
         call.type_hash_type as u8,
         &call.type_args,
     );
-    let script_info = resolve_script_info_cached(store, cache, &call.type_code_hash)?;
+    let script_name = cached_script_name(store, cache, &call.type_code_hash)?;
 
     Ok(TypeCallResponse {
         type_code_hash: format!("0x{}", hex::encode(&call.type_code_hash)),
         type_hash_type: hash_type.to_string(),
         type_args: format!("0x{}", hex::encode(&call.type_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
-        script_name: normalized_script_name(script_info),
+        script_name,
     })
 }
 
 fn convert_type_calls(
     store: &CkbadgerStore,
-    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    cache: &mut ScriptNameCache,
     calls: &[TypeCallEntry],
 ) -> anyhow::Result<Vec<TypeCallResponse>> {
     calls
@@ -627,7 +625,7 @@ fn decode_utxoswap_intent_args(args: &[u8]) -> Option<serde_json::Value> {
 
 fn convert_lock_call(
     store: &CkbadgerStore,
-    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    cache: &mut ScriptNameCache,
     call: &LockCallEntry,
 ) -> anyhow::Result<LockCallResponse> {
     let hash_type = hash_type_to_str(call.lock_hash_type).ok_or_else(|| {
@@ -641,14 +639,14 @@ fn convert_lock_call(
         call.lock_hash_type as u8,
         &call.lock_args,
     );
-    let script_info = resolve_script_info_cached(store, cache, &call.lock_code_hash)?;
+    let script_name = cached_script_name(store, cache, &call.lock_code_hash)?;
 
     Ok(LockCallResponse {
         lock_code_hash: format!("0x{}", hex::encode(&call.lock_code_hash)),
         lock_hash_type: hash_type.to_string(),
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
-        script_name: normalized_script_name(script_info),
+        script_name,
         decoded: LOCK_ARGS_DECODERS
             .get(call.lock_code_hash.as_slice())
             .and_then(|decoder| decoder(&call.lock_args))
@@ -660,7 +658,7 @@ fn convert_lock_call(
 
 fn convert_lock_calls(
     store: &CkbadgerStore,
-    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    cache: &mut ScriptNameCache,
     calls: &[LockCallEntry],
 ) -> anyhow::Result<Vec<LockCallResponse>> {
     calls
@@ -721,7 +719,7 @@ pub(crate) fn build_activity_response(
     network: &str,
     actions: &TxActions,
     participant: &ParticipantDelta,
-    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    script_info_cache: &mut ScriptNameCache,
     item_cache: &mut ItemDeltaCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
     pool: Option<PoolRowMeta<'_>>,
@@ -779,7 +777,7 @@ pub(crate) fn build_global_activity_response(
     _ao_store: &CkbadgerStore,
     network: &str,
     actions: &TxActions,
-    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    script_info_cache: &mut ScriptNameCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<GlobalActivityResponse> {
     build_global_activity_response_with_pool(
@@ -799,7 +797,7 @@ pub(crate) fn build_global_activity_response_with_pool(
     _ao_store: &CkbadgerStore,
     network: &str,
     actions: &TxActions,
-    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    script_info_cache: &mut ScriptNameCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
     pool_record: Option<&PoolTxRecord>,
 ) -> anyhow::Result<GlobalActivityResponse> {
@@ -1050,7 +1048,7 @@ pub(crate) fn build_pool_activity_rows(
     snapshot: &crate::pool::PoolSnapshot,
     lock_hash: &[u8; 32],
     filter: Option<&str>,
-    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    script_info_cache: &mut ScriptNameCache,
     item_cache: &mut ItemDeltaCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<(Vec<ActivityResponse>, crate::pool::PoolSummaryResponse)> {
@@ -1501,6 +1499,53 @@ async fn get_latest_activities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Activity type/lock call names and participant lock kinds read the one
+    /// registry name rule `/cells` uses (`utils::registered_script_name`):
+    /// trimmed, `None` for an unregistered or "Unknown" reference; and one
+    /// response reads each code hash once.
+    #[test]
+    fn activity_script_names_are_the_registered_names_read_once_per_response() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let named = [0x01; 32];
+        let unknown = [0x02; 32];
+        let mut batch = ckbadger_store::StoreBatch::new(&store);
+        for (code_hash, name) in [(named, " JoyID "), (unknown, "Unknown")] {
+            batch.put_script_info(
+                &code_hash,
+                &ckbadger_store::types::ScriptInfo {
+                    code_hash: code_hash.to_vec(),
+                    name: Some(name.to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        let mut cache = ScriptNameCache::new();
+        for code_hash in [named, unknown, [0x03; 32]] {
+            assert_eq!(
+                cached_script_name(&store, &mut cache, &code_hash).unwrap(),
+                registered_script_name(&store, &code_hash).unwrap()
+            );
+        }
+        assert_eq!(
+            cached_script_name(&store, &mut cache, &named).unwrap(),
+            Some("JoyID".to_string())
+        );
+        assert_eq!(
+            cached_script_name(&store, &mut cache, &unknown).unwrap(),
+            None
+        );
+        store.reset_read_call_counters();
+        cached_script_name(&store, &mut cache, &named).unwrap();
+        assert_eq!(
+            store.read_call_counts(),
+            (0, 0),
+            "a cached name is not re-read"
+        );
+    }
 
     #[test]
     fn discrete_item_delta_requires_exact_unit_magnitude() {
