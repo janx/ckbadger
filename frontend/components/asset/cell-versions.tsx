@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { ItemCellVersions, ItemCellVersion } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { CellBar } from '@/components/ui/cell-bar';
@@ -13,8 +13,25 @@ import { formatBlockNumber } from '@/lib/format-block';
 export interface CellVersionsProps {
   history: ItemCellVersions;
   subject: string;
+  // ── F2 objects (round 2, OB-9 / OB-M7): the Object / Mnft board's "CKB held in its cell" ──
+  /** Section title; "Cell versions" by default. */
+  title?: string;
+  actions?: ReactNode;
+  intro?: ReactNode;
+  /**
+   * Label the first cell "At minting" and the live one "Now", draw each bar to scale against the
+   * largest cell with its free part, as the Object and Mnft boards do.
+   */
+  life?: boolean;
 }
-export function CellVersions({ history, subject }: CellVersionsProps) {
+export function CellVersions({
+  history,
+  subject,
+  title = 'Cell versions',
+  actions,
+  intro,
+  life = false,
+}: CellVersionsProps) {
   const [active, setActive] = useState<string | null>(null);
   if (history.total !== history.data.length)
     throw new Error(
@@ -42,15 +59,34 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
     if (occupied > exactUnsignedInteger(v.capacity, `${position} capacity`))
       throw new Error(`${position}: occupied exceeds capacity`);
   }
+  const largest = history.data.reduce(
+    (max, v) => (BigInt(v.capacity) > max ? BigInt(v.capacity) : max),
+    BigInt(0)
+  );
+  const scaled = (capacity: string) =>
+    largest === BigInt(0)
+      ? '0%'
+      : `${Number(((BigInt(capacity) * BigInt(200000)) / largest + BigInt(1)) / BigInt(2)) / 1000}%`;
+  const label = (v: ItemCellVersion, i: number) =>
+    life
+      ? i === 0
+        ? 'At minting'
+        : v.isLive
+          ? 'Now'
+          : `Version ${i + 1}`
+      : `${i === 0 ? 'Minted cell' : `Version ${i + 1}`}${v.isLive ? ' · current' : ''}`;
   return (
     <DetailSection
-      title="Cell versions"
+      title={title}
       actions={
-        <span className="text-text-dim text-[11px]">
-          Every canonical cell version · oldest first
-        </span>
+        actions ?? (
+          <span className="text-text-dim text-[11px]">
+            Every canonical cell version · oldest first
+          </span>
+        )
       }
     >
+      {intro}
       <div aria-label={`${subject} cell versions`} className="space-y-3">
         {history.data.map((v, i) => {
           const key = `${v.txHash}:${v.outputIndex}`;
@@ -70,22 +106,41 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
             >
               <div className="min-w-0">
                 <AppLink className="text-text-bright" href={`/cell/${v.txHash}-${v.outputIndex}`}>
-                  {i === 0 ? 'Minted cell' : `Version ${i + 1}`}
-                  {v.isLive ? ' · current' : ''}
+                  {label(v, i)}
                 </AppLink>
                 <AppLink href={`/blocks/${v.blockNumber}`} className="text-text-dim mt-1 block">
                   {formatBlockNumber(v.blockNumber)}
                 </AppLink>
               </div>
               <div className="min-w-0">
-                <CellBar
-                  subject={key}
-                  anatomy={{
-                    lock: String(v.anatomy.lockBytes),
-                    type: String(v.anatomy.typeBytes),
-                    data: String(v.anatomy.dataBytes),
-                  }}
-                />
+                {life ? (
+                  <div data-scaled style={{ width: scaled(v.capacity) }}>
+                    <CellBar
+                      subject={key}
+                      capacity={v.capacity}
+                      anatomy={{
+                        lock: String(v.anatomy.lockBytes),
+                        type: String(v.anatomy.typeBytes),
+                        data: String(v.anatomy.dataBytes),
+                      }}
+                    />
+                    <div className="text-text-dim mt-1.5 flex flex-wrap gap-x-4 text-[11px]">
+                      <span>capacity 8</span>
+                      <span>lock {v.anatomy.lockBytes}</span>
+                      <span>type {v.anatomy.typeBytes}</span>
+                      <span>data {v.anatomy.dataBytes}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <CellBar
+                    subject={key}
+                    anatomy={{
+                      lock: String(v.anatomy.lockBytes),
+                      type: String(v.anatomy.typeBytes),
+                      data: String(v.anatomy.dataBytes),
+                    }}
+                  />
+                )}
                 <div className="text-text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
                   <span>
                     Owner{' '}

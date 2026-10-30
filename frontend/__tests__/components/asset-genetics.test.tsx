@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
 import {
   ObjectGeneticsView,
+  ObjectGeneticsEvidence,
   CollectionGenes,
   CurrentPatternEvidence,
 } from '@/components/asset/genetics';
@@ -71,6 +72,8 @@ describe('Independent DOB evidence', () => {
     expect(screen.queryByRole('button', { name: 'Colour 11 9 / 300' })).not.toBeInTheDocument();
   });
 
+  // F2 objects (OB-8): the VM provenance and the declared ranges moved to the tier-2 DNA evidence;
+  // the gel keeps the number and the byte ↔ gene hover.
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';
@@ -79,13 +82,14 @@ describe('Independent DOB evidence', () => {
     data.currentPattern.steps[0].bytes[0].truncated = true;
     const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/18446744073709551614/)).toBeInTheDocument();
+    fireEvent.focus(container.querySelector('[data-gene]')!);
+    expect(container.querySelector('[data-nibble="2"]')).toHaveAttribute('opacity', '0.15');
+    expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
+    render(<ObjectGeneticsEvidence evidence={data} subject="Spore" />);
     expect(screen.getByText(/decoded 2023-11-15 06:13:20 UTC\+8/)).toBeInTheDocument();
     expect(screen.queryByText(/Unix second/)).not.toBeInTheDocument();
     expect(screen.getByText(/original decoder binary hash was not recorded/)).toBeInTheDocument();
     expect(screen.getByText(/Clipped to the actual DNA shown/)).toBeInTheDocument();
-    fireEvent.focus(container.querySelector('[data-gene]')!);
-    expect(container.querySelector('[data-nibble="2"]')).toHaveAttribute('opacity', '0.15');
-    expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
   });
   it('does not invent trait values or byte ranges for pending/unsupported evidence', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
@@ -108,26 +112,36 @@ describe('Independent DOB evidence', () => {
   it('preserves multiple VM values for one trait name', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.cachedVmTraits.traits.push({ name: 'Face', value: 'Green' });
-    render(<ObjectGeneticsView evidence={data} subject="Spore" />);
-    expect(screen.getByText('Cached VM result: Blue · Green')).toBeInTheDocument();
+    const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
+    // F2 objects (OB-8): the gene reads its values plainly ("Cached VM result" was developer wording).
+    expect(container.querySelector('[data-gene="Face"]')!.textContent).toContain('Blue · Green');
   });
+  // F2 objects (OB-4): the counts are drawn as the collection's allele gel with "this one" on it.
   it('uses complete same-name/value collection counts and never presents partial frequencies', () => {
     const view = render(
       <ObjectGeneticsView
         evidence={objectGeneticsProducer}
         subject="Spore"
-        collection={collectionInsightsProducer.genetics}
+        collection={collectionInsightsProducer}
+        collectionName="Genes"
       />
     );
-    expect(screen.getByText('4 of 8 live DOB items')).toBeInTheDocument();
+    expect(view.container.querySelector('[data-allele="Blue"] title')!.textContent).toBe(
+      'Face = Blue: 4 of 8 (50.00%)'
+    );
+    expect(view.container.querySelector('[data-overlay="me"]')).not.toBeNull();
     view.rerender(
       <ObjectGeneticsView
         evidence={objectGeneticsProducer}
         subject="Spore"
-        collection={collectionInsightsPendingProducer.genetics}
+        collection={collectionInsightsPendingProducer}
+        collectionName="Genes"
       />
     );
-    expect(screen.queryByText(/of 8 live DOB items/)).not.toBeInTheDocument();
+    expect(view.container.querySelector('[data-allele]')).toBeNull();
+    expect(
+      screen.getByText('Collection variant frequencies await complete decoding.')
+    ).toBeInTheDocument();
   });
   it('rejects a byte map that disagrees with immutable DNA', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);

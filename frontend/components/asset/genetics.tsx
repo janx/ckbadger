@@ -1,73 +1,89 @@
 'use client';
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { CollectionInsights, CurrentPattern, ObjectGenetics } from '@/lib/api';
-import { AlleleGel, type DnaGene } from '@/components/ui/allele-gel';
+import { AlleleGel } from '@/components/ui/allele-gel';
+import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { hexBytes } from '@/lib/hex-bytes';
-import { HUE_RAMP } from '@/lib/design-tokens';
-import { formatUnixSecondsUtc8 } from '@/lib/utils';
+import { COMPOSITION_BADGES, HUE_RAMP } from '@/lib/design-tokens';
+import { alleleLanes, geneOrder, genotypePoints, sequencingGenes } from '@/lib/dob-genes';
+import type { CompositionTier } from '@/lib/asset-utils';
+import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
 
+// ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
   evidence: ObjectGenetics;
   subject: string;
-  collection?: CollectionInsights['genetics'];
+  /** The object's collection insights, for the allele-gel bridge ("Among <collection>"). */
+  collection?: CollectionInsights;
+  collectionName?: string | null;
+  collectionHref?: string;
+  tier?: CompositionTier;
+  /** The gene lit across trait list, sequencing gel and allele gel (three-way hover). */
+  active?: string | null;
+  onActive?: (gene: string | null) => void;
 }
-export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGeneticsViewProps) {
-  const { dnaHex, cachedVmTraits: cached, currentPattern: pattern } = evidence;
+function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefined {
+  if (tier !== 'btc_ckb' && tier !== 'pure_ckb') return undefined;
+  return {
+    backgroundImage: COMPOSITION_BADGES[tier].frame,
+    backgroundClip: 'padding-box, border-box',
+    backgroundOrigin: 'padding-box, border-box',
+    border: '1px solid transparent',
+  };
+}
+/**
+ * The object's DNA: a sequencing gel of its own bytes (gene by gene), then, on the same plate, the
+ * allele gel of its collection with this object's genotype drawn across it ("this one").
+ */
+export function ObjectGeneticsView({
+  evidence,
+  subject,
+  collection,
+  collectionName,
+  collectionHref,
+  tier,
+  active: controlled,
+  onActive,
+}: ObjectGeneticsViewProps) {
+  const [own, setOwn] = useState<string | null>(null);
+  const active = controlled === undefined ? own : controlled;
+  const setActive = (gene: string | null) => {
+    setOwn(gene);
+    onActive?.(gene);
+  };
+  const { dnaHex, cachedVmTraits: cached } = evidence;
   if (dnaHex === null)
     return <p className="text-text-dim text-[11px]">This object has no DOB DNA.</p>;
-  const dna = hexBytes(dnaHex, subject);
-  const genes: DnaGene[] = [];
-  const unmapped: string[] = [];
-  if (pattern.status === 'dob')
-    for (const step of pattern.steps) {
-      if (step.description.status !== 'supported') continue;
-      for (const map of step.bytes) {
-        const definition = step.description.genes.find((g) => g.index === map.geneIndex);
-        if (!definition)
-          throw new Error(
-            `${subject}: decoder step ${step.step} maps missing gene ${map.geneIndex}`
-          );
-        if (
-          dna.slice(map.byteOffset, map.byteOffset + map.byteLength).join('') !==
-          map.rawHex.replace(/^0x/, '').toLowerCase()
-        )
-          throw new Error(`${subject}: gene ${definition.name} bytes disagree with DNA`);
-        const declared = `Declared bytes ${map.declaredByteOffset} + ${map.declaredByteLength}`;
-        if (map.byteLength === 0) {
-          unmapped.push(
-            `${definition.name}: ${declared}; no bytes of this DNA fall in the declared range.`
-          );
-          continue;
-        }
-        const traits = cached.traits.filter((t) => t.name === definition.name);
-        genes.push({
-          id: `${step.step}:${map.geneIndex}`,
-          label: definition.name,
-          offset: map.byteOffset,
-          length: map.byteLength,
-          value: traits.length
-            ? `Cached VM result: ${traits.map((t) => t.value).join(' · ')}`
-            : 'No cached VM value for this gene',
-          description: `${declared}. ${map.truncated ? 'Clipped to the actual DNA shown. ' : ''}${definition.rule}; raw 0x${map.rawHex.replace(/^0x/, '')}.`,
-          color: HUE_RAMP[genes.length % HUE_RAMP.length],
-        });
-      }
-    }
+  const layout = sequencingGenes(evidence, subject);
+  const geneNames = [...new Set(layout.genes.map((g) => g.name))];
+  const pointer = layout.genes.find((g) => g.owns && /^btcfs/i.test(g.ruleName));
+  const bridge = collection?.genetics.complete
+    ? alleleLanes(
+        collection.genetics,
+        geneOrder(collection.currentPattern),
+        collectionName ?? subject
+      )
+    : null;
+  const own3 = bridge ? genotypePoints(bridge, cached.traits) : null;
   return (
-    <section aria-label="DNA and expression" className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-baseline gap-3">
-        <h2 className="text-text-bright text-[15px]">DNA & expression</h2>
-        <span className="text-text-dim text-[11px]">
-          {dna.length} bytes{evidence.number !== null ? ` · number ${evidence.number}` : ''}
+    <section aria-labelledby="h-dna" className="min-w-0 space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-4">
+        <h2 id="h-dna" className="text-text-bright text-[15px]">
+          DNA
+        </h2>
+        <span className="text-text-dim text-[12px]">
+          {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
+          {evidence.number !== null ? ` · number ${evidence.number}` : ''} · hover a gene
         </span>
       </div>
-      <p className="text-text-dim text-[11px]">
-        The byte map describes the current decoder. Trait values are cached VM results
-        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
-        the original decoder binary hash was not recorded. These are separate pieces of evidence.
+      <p className="text-[13px] leading-relaxed">
+        The object’s traits are not stored as text. It carries {layout.bytes.length} bytes of DNA,
+        and the collection’s decoder reads each gene to express a trait.
+        {pointer && tier === 'btc_ckb'
+          ? ` Its ${pointer.name} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
+          : ''}
       </p>
       {cached.status === 'pending' && (
         <p role="status" className="text-text-dim">
@@ -77,44 +93,124 @@ export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGene
       {cached.status === 'failed' && (
         <p role="alert">DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}</p>
       )}
-      {genes.length ? (
-        <AlleleGel dna={dnaHex} genes={genes} subject={subject} />
-      ) : (
-        <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
-      )}
-      {unmapped.map((line) => (
-        <p key={line} className="text-text-dim text-[11px]">
-          {line}
-        </p>
-      ))}
-      {pattern.status === 'dob' &&
-        pattern.steps.map((step) =>
-          step.description.status === 'unsupported' ? (
-            <p key={step.step} role="status" className="text-text-dim text-[11px]">
-              Decoder {step.step + 1}: byte mapping unavailable — {step.description.reason}
+      <div
+        className={cn('rounded-[10px] p-[5px]', !plateStyle(tier) && 'border-base-border border')}
+        style={plateStyle(tier)}
+      >
+        <div className="space-y-4 rounded-md px-4 py-4 sm:px-5">
+          {layout.genes.length ? (
+            <SequencingGel layout={layout} subject={subject} active={active} onActive={setActive} />
+          ) : (
+            <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
+          )}
+          {layout.unsupported.map((u) => (
+            <p key={u.step} role="status" className="text-text-dim text-[11px]">
+              Decoder {u.step + 1}: byte mapping unavailable — {u.reason}
             </p>
-          ) : null
-        )}
-      {cached.traits.length > 0 && (
-        <dl aria-label="Cached VM traits" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {cached.traits.map((t, i) => (
-            <div key={`${t.name}:${i}`}>
-              <dt className="text-text-dim text-[11px]">{t.name}</dt>
-              <dd className="text-text-bright break-words">
-                {t.value}
-                {collection?.complete && (
-                  <span className="text-text-dim block text-[11px]">
-                    {(() => {
-                      const count = collection.traits
-                        .find((g) => g.name === t.name)
-                        ?.values.find((v) => v.value === t.value)?.count;
-                      return count === undefined
-                        ? 'Variant absent from the current collection result'
-                        : `${count} of ${collection.eligibleItems} live DOB items`;
-                    })()}
-                  </span>
+          ))}
+          {collection && (
+            <div className="border-base-border space-y-2 border-t pt-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-4">
+                <span className="text-text text-[12.5px]">
+                  Among {collectionName ?? 'its collection'} · its variant in each gene, and how
+                  common it is among the {collection.genetics.eligibleItems.toLocaleString('en-US')}
+                </span>
+                {collectionHref && (
+                  <AppLink href={collectionHref} className="text-[12px]">
+                    Open the collection →
+                  </AppLink>
                 )}
+              </div>
+              {bridge && own3 ? (
+                <>
+                  <AlleleGel
+                    lanes={bridge}
+                    total={collection.genetics.eligibleItems}
+                    subject={collectionName ?? subject}
+                    ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
+                    height={300}
+                    overlays={[
+                      { key: 'me', label: 'this one', points: own3.points, persistent: true },
+                    ]}
+                    activeGene={active}
+                    onGeneHover={setActive}
+                  />
+                  {own3.absent.length > 0 && (
+                    <p role="status" className="text-text-dim text-[11px]">
+                      Its {own3.absent.join(', ')} variant is not among the collection’s counted
+                      variants.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p role="status" className="text-text-dim text-[11px]">
+                  Collection variant frequencies await complete decoding.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+/**
+ * Tier 2 (OB-8): what each piece of DNA evidence is — the current decoder's byte map, the cached
+ * VM result and when it was decoded, every raw trait value — so tier 1 can speak plainly.
+ */
+export function ObjectGeneticsEvidence({
+  evidence,
+  subject,
+}: {
+  evidence: ObjectGenetics;
+  subject: string;
+}) {
+  const { dnaHex, cachedVmTraits: cached } = evidence;
+  const layout = dnaHex === null ? null : sequencingGenes(evidence, subject);
+  return (
+    <section aria-label="DNA evidence" className="min-w-0 space-y-3">
+      <h2 className="text-text-bright text-[15px]">DNA evidence</h2>
+      <p className="text-text-dim text-[11px]">
+        The byte map describes the current decoder. Trait values are cached VM results
+        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
+        the original decoder binary hash was not recorded. These are separate pieces of evidence.
+      </p>
+      {dnaHex !== null && <p className="break-all text-[11px]">DNA {dnaHex}</p>}
+      {layout && (
+        <dl className="divide-base-elevated divide-y text-[11px]">
+          {layout.genes.map((g) => (
+            <div key={g.key} className="py-2">
+              <dt>
+                {g.name}{' '}
+                <span className="text-text-dim">
+                  bytes {g.offset}–{g.offset + g.length - 1}
+                </span>
+              </dt>
+              <dd className="text-text-dim break-words">
+                Declared bytes {g.declared.offset} + {g.declared.length}.{' '}
+                {g.truncated ? 'Clipped to the actual DNA shown. ' : ''}
+                {g.ruleName}
+                {g.ruleArguments !== null && g.ruleArguments !== undefined
+                  ? ` ${JSON.stringify(g.ruleArguments)}`
+                  : ''}
+                ; raw 0x{g.raw}.
               </dd>
+            </div>
+          ))}
+          {layout.unmapped.map((u) => (
+            <div key={u.name} className="text-text-dim py-2">
+              {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this
+              DNA fall in the declared range.
+            </div>
+          ))}
+        </dl>
+      )}
+      {cached.traits.length > 0 && (
+        <dl aria-label="Cached VM traits" className="grid gap-2 text-[11px] sm:grid-cols-2">
+          {cached.traits.map((t, i) => (
+            <div key={`${t.name}:${i}`} className="min-w-0">
+              <dt className="text-text-dim">{t.name}</dt>
+              <dd className="break-all">{t.value === '' ? '(empty)' : t.value}</dd>
             </div>
           ))}
         </dl>

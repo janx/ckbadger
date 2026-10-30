@@ -5,7 +5,6 @@ import { detectPreview } from '@/lib/preview-utils';
 import { hexBytes } from '@/lib/hex-bytes';
 import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
-import { CompositionBadge } from '@/components/ui/composition-mark';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
@@ -23,11 +22,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
   const preview = bitcoin.length ? null : detectPreview(object.contentType, bytes, decoded?.media);
   return (
     <section aria-label="Object media" className="min-w-0 space-y-4">
-      {profile ? (
-        <CompositionBadge tier={profile.tier} />
-      ) : (
-        <span className="text-text-dim text-[11px]">Composition not recorded</span>
-      )}
+      {/* F2 objects (OB-6): the composition badge and its sentence now open the page hero. */}
       {bitcoin.length ? (
         <figure className="border-copper/40 space-y-3 border p-6 text-center">
           <div className="text-copper text-[18px]">Its image lives on Bitcoin</div>

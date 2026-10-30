@@ -58,10 +58,11 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
 });
 it('renders exact raw protocol bytes and current gene mapping with separate VM provenance', async () => {
   render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByLabelText('DNA and expression')).toHaveTextContent(
+  // F2 objects (OB-8): the number stays with the DNA; VM provenance is tier-2 DNA evidence.
+  expect(await screen.findByRole('region', { name: 'DNA' })).toHaveTextContent(
     '18446744073709551614'
   );
-  expect(screen.getByLabelText('DNA and expression')).toHaveTextContent(
+  expect(screen.getByLabelText('DNA evidence')).toHaveTextContent(
     'original decoder binary hash was not recorded'
   );
   expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent('spore cell data');

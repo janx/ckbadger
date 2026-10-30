@@ -153,3 +153,32 @@ export const ELF_REGION_COLORS = {
   sectionHeaders: '#5f9fb2',
   padding: '#4b5266',
 } as const;
+
+// ---- F2 group `objects` (Object sequencing gel, collection allele gel, Inventory bars) ----
+/**
+ * Gene colours of the Object board's sequencing gel: a Bitcoin-pointer gene (`btcfs` rule) is
+ * copper, like Bitcoin everywhere; the other genes that own DNA bytes take cyan, violet and slate
+ * in DNA order; a gene that only reads bytes another gene owns (a one-option gene) is light ink.
+ */
+export const GENE_COLORS = {
+  bitcoin: BITCOIN_COLORS.copper,
+  cycle: ['#68ccf0', '#a98cf5', '#7c849c'],
+  shared: '#dee2ec',
+} as const;
+/** The gel plate: faint copper lanes, light wells, the byte ruler and the genotype overlay. */
+export const GEL_COLORS = {
+  lane: BITCOIN_COLORS.copper,
+  well: '#dee2ec',
+  ruler: '#343c50',
+  rulerText: '#4b5266',
+  label: '#7c849c',
+  heading: '#a0a8be',
+  overlay: '#ffffff',
+  bandText: '#17170c',
+} as const;
+/** Allele ink by the collection's composition (board `url(#ink)`, copper since FINAL_REVIEW 3). */
+export const GEL_INK = {
+  btc_ckb: ['#ffe7d8', BITCOIN_COLORS.copper, '#9df6dc'],
+  pure_ckb: ['#f3fffb', '#9df6dc', '#3ee0b0'],
+  other: [CLASS_COLORS.objects, CLASS_COLORS.objects, CLASS_COLORS.objects],
+} as const;

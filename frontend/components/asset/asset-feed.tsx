@@ -184,6 +184,13 @@ export interface AssetFeedProps {
   item?: ItemFeedSubject;
   /** A collection's feed: every row carries its collection context (OB-C13). */
   collection?: boolean;
+  /**
+   * F2 objects (OB-12, IV-14, OB-M3): the asset boards' plain rows — no script-call lines, the
+   * lock kind as its own column, and a batch of objects folded behind "+N more objects".
+   */
+  plain?: boolean;
+  /** F2 objects: the object a folded batch leads with (this page's item). */
+  focusItemId?: string;
 }
 export function AssetFeed({
   queryKey,
@@ -196,6 +203,8 @@ export function AssetFeed({
   onActivityCursorChange,
   item,
   collection = false,
+  plain = false,
+  focusItemId,
 }: AssetFeedProps) {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
@@ -271,6 +280,10 @@ export function AssetFeed({
                     className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
                     // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
                     mark={item?.kind === 'identity' ? 'identities' : undefined}
+                    showScriptDetails={!plain}
+                    lockColumn={plain}
+                    foldObjects={plain}
+                    focusItemId={focusItemId}
                   />
                 );
               })
