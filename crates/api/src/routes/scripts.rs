@@ -3225,11 +3225,60 @@ fn build_script_capacity_history_chart(
     })
 }
 
+/// A script's capacity history plus the peak of the total it holds (SC-S8).
+/// The per-series `peaks` stay on the chart; the total is the stack's sum.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCapacityHistoryChartResponse {
+    #[serde(flatten)]
+    pub chart: StackedAreaChartResponse,
+    /// The FIRST day holding the greatest sum of all series (used + unused =
+    /// total CKB held), exact; `None` for an empty chart.
+    pub total_peak: Option<crate::response::ChartPeak>,
+}
+
+impl ScriptCapacityHistoryChartResponse {
+    fn new(chart: StackedAreaChartResponse) -> Result<Self, ApiRouteError> {
+        let mut totals = Vec::with_capacity(chart.data.len());
+        for point in &chart.data {
+            let mut total = 0i128;
+            for series in &chart.series {
+                let raw = point.values.get(&series.key).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "chart {:?} day {} has no {} value",
+                        chart.title, point.date, series.key
+                    ))
+                })?;
+                let value: i128 = raw.parse().map_err(|_| {
+                    ApiError::internal(format!(
+                        "chart {:?} day {} {} is not an integer: {raw}",
+                        chart.title, point.date, series.key
+                    ))
+                })?;
+                total = total.checked_add(value).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "chart {:?} day {} total overflow",
+                        chart.title, point.date
+                    ))
+                })?;
+            }
+            totals.push((point.date.clone(), total.to_string()));
+        }
+        let total_peak = crate::response::series_peak(
+            totals
+                .iter()
+                .map(|(date, value)| (date.as_str(), value.as_str())),
+        )
+        .map_err(|e| ApiError::internal(format!("chart {:?} total peak: {e}", chart.title)))?;
+        Ok(Self { chart, total_peak })
+    }
+}
+
 async fn get_script_capacity_history_chart(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Query(params): Query<ScriptCapacityHistoryQuery>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<ScriptCapacityHistoryChartResponse> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -3270,12 +3319,14 @@ async fn get_script_capacity_history_chart(
         }
     }
 
-    ok(build_script_capacity_history_chart(
-        &state,
-        targets,
-        format!("{name} Capacity History"),
-        from_date,
-        to_date,
+    ok(ScriptCapacityHistoryChartResponse::new(
+        build_script_capacity_history_chart(
+            &state,
+            targets,
+            format!("{name} Capacity History"),
+            from_date,
+            to_date,
+        )?,
     )?)
 }
 
@@ -3294,7 +3345,7 @@ async fn get_script_capacity_history_chart(
 async fn get_script_capacity_history_chart_by_code_hash(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScriptCapacityHistoryByCodeHashQuery>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<ScriptCapacityHistoryChartResponse> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -3310,8 +3361,8 @@ async fn get_script_capacity_history_chart_by_code_hash(
             .iter()
             .map(|is_type| (code_hash.clone(), hash_type, *is_type))
             .collect();
-        return ok(build_script_capacity_history_chart(
-            &state, targets, title, from_date, to_date,
+        return ok(ScriptCapacityHistoryChartResponse::new(
+            build_script_capacity_history_chart(&state, targets, title, from_date, to_date)?,
         )?);
     }
 
@@ -3366,8 +3417,8 @@ async fn get_script_capacity_history_chart_by_code_hash(
         }
     }
 
-    ok(build_script_capacity_history_chart(
-        &state, targets, title, from_date, to_date,
+    ok(ScriptCapacityHistoryChartResponse::new(
+        build_script_capacity_history_chart(&state, targets, title, from_date, to_date)?,
     )?)
 }
 

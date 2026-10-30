@@ -3581,6 +3581,11 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     assert_eq!(data[2]["date"], "2024-01-17");
     assert_eq!(data[2]["values"]["used"], "85");
     assert_eq!(data[2]["values"]["unused"], "55");
+    // SC-S8: the peak of total CKB held (used + unused), the first greatest day.
+    assert_eq!(
+        json["totalPeak"],
+        serde_json::json!({ "date": "2024-01-15", "value": "150" })
+    );
 
     let request = Request::builder()
         .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/capacity-history?from=2024-01-16&to=2024-01-16")
