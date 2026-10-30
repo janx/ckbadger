@@ -58,6 +58,11 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
     expect(screen.getByRole('heading', { name: /^2 · Force close/ })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^3 · Settle/ })).toBeInTheDocument();
     // the tier-2 witnesses row reads the step's own transaction (sizes and fee)
-    expect(await screen.findByText('2 witnesses, 85, 85 B · fee 920 shannons')).toBeInTheDocument();
+    expect(
+      await screen.findByText('2 witnesses, 85, 85 B · fee 920 shannons, from outside inputs')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^2 · Force close/ })).toHaveTextContent(
+      'epoch 11,639 · 836 / 1,434'
+    );
   });
 });

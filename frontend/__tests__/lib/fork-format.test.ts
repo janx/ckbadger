@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   forkDetailHref,
   forkEventHref,
+  forkRefHref,
+  missingAddressWords,
   orphanFateWords,
   parseForkRoute,
+  uncleDistanceWords,
   uncleRateFigure,
 } from '@/lib/fork-format';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
@@ -20,8 +23,37 @@ describe('fork routes (D7)', () => {
     expect(() => forkDetailHref(10, '0x1234')).toThrow('not a 32-byte hash');
   });
 
-  it('has no address for an event without an orphaned block (deep detection, no preview)', () => {
-    expect(forkEventHref({ ...event, preview: null, previewStatus: 'no_old_branch' })).toBeNull();
+  it('links from the API’s firstOrphanHash, never from the preview or the ms id (R2b-b)', () => {
+    expect(forkEventHref({ ...event, preview: null })).toBe('/forks/10/17404795');
+    expect(
+      forkEventHref({ ...event, firstOrphanHash: null, firstOrphanStatus: 'not_observed' })
+    ).toBeNull();
+    expect(() =>
+      forkEventHref({ ...event, firstOrphanHash: null, firstOrphanStatus: 'recorded' })
+    ).toThrow('fork #10 is recorded but has no first orphan hash');
+  });
+
+  it('addresses a related event by its own fork point and first orphan', () => {
+    expect(
+      forkRefHref({
+        forkPointNumber: 20617704,
+        firstOrphanHash: `0x9f8e7d6c${'0'.repeat(56)}`,
+        firstOrphanStatus: 'recorded',
+      })
+    ).toBe('/forks/20617704/9f8e7d6c');
+    expect(
+      forkRefHref({ forkPointNumber: 7, firstOrphanHash: null, firstOrphanStatus: 'not_observed' })
+    ).toBeNull();
+  });
+
+  it('says why a switch has no detail page', () => {
+    expect(missingAddressWords('not_observed')).toBe('nothing was rolled back, so no detail page');
+    expect(missingAddressWords('needs_node_reader')).toBe(
+      'its first dropped block needs the node reader'
+    );
+    expect(missingAddressWords('old_branch_unavailable')).toBe(
+      'the node no longer has the dropped branch'
+    );
   });
 
   it('parses only a canonical height and a lowercase 8-hex prefix', () => {
@@ -74,5 +106,17 @@ describe('blockClock', () => {
     expect(blockClock('2023-11-14T22:13:20.050+00:00')).toBe('06:13:20.050');
     expect(blockClock('2026-10-02T01:12:32.761Z')).toBe('09:12:32.761');
     expect(() => blockClock('yesterday')).toThrow('Invalid block timestamp');
+  });
+});
+
+describe('uncleDistanceWords', () => {
+  it('reads uncle distances the board’s way', () => {
+    expect(
+      uncleDistanceWords([
+        { distance: 1, count: 51 },
+        { distance: 2, count: 215 },
+      ])
+    ).toBe('51 one block later, 215 two blocks later');
+    expect(uncleDistanceWords([{ distance: 12, count: 1 }])).toBe('1 12 blocks later');
   });
 });

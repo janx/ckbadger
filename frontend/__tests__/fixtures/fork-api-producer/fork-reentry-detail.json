@@ -5,7 +5,8 @@
       "minerLockHash": null,
       "number": 11,
       "timestamp": "2023-11-14T22:13:20.100+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     }
   ],
   "canonicalBranch": [
@@ -14,7 +15,8 @@
       "minerLockHash": null,
       "number": 11,
       "timestamp": "2023-11-14T22:13:20+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     }
   ],
   "canonicalTipNumber": 11,
@@ -38,9 +40,15 @@
     "resolvedAt": null,
     "resolvedBy": null,
     "reversesEvents": [],
-    "revertedByEvent": 1754000001000,
+    "revertedByEvent": {
+      "forkPointNumber": 10,
+      "firstOrphanHash": "0x8ee026e324d5c5473cea2f388969a9c9b1f992b837370f112f1da2f0cb72fb03",
+      "firstOrphanStatus": "recorded"
+    },
     "supersededByTipHash": null,
-    "reconcileInterrupted": false
+    "reconcileInterrupted": false,
+    "firstOrphanHash": "0x028ea506691ad1f3e4a9ddecbd1c1ec412612afb4067d7f10d6fcddb1e7189ef",
+    "firstOrphanStatus": "recorded"
   },
   "orphanedBlocks": [
     {
@@ -53,7 +61,8 @@
       "timestamp": "2023-11-14T22:13:20+00:00",
       "timestampGapMs": null,
       "transactionsCount": 0,
-      "uncleIn": null
+      "uncleIn": null,
+      "minerAddress": null
     }
   ],
   "orphanedTransactions": []

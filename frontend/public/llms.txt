@@ -70,7 +70,8 @@ Machine-friendly endpoints:
   `/cells/by-script?code_hash=0x…&hash_type=data|type|data1|data2&script_kind=lock|type|both`
   lists current matching cells, with cursor pagination.
 - DAO and chain topics: `/api/{network}/v1/dao/evidence` separates phase-0 deposits from phase-1
-  withdrawal requests; `/forks/{id}` distinguishes the branch adopted at a recorded switch from
+  withdrawal requests; `/forks/{fork_point_height}/{orphan_hash_prefix8}` (the fork point and the first 8 hex digits
+  of the first block the switch dropped) distinguishes the branch adopted at a recorded switch from
   today's canonical branch. The API's `/hardforks` endpoint and network-scoped `/charts/{slug}`
   pages expose upgrade and chart evidence.
 - Identifier search: `/api/{network}/v1/search?q=block:0x…` (also `tx:` and `cell:`) returns typed

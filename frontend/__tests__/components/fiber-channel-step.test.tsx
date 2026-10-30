@@ -45,6 +45,7 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
         blockNumber={channel.closeBlock}
         timestamp={channel.closeTimestamp}
         description="One side posted the commitment."
+        epoch="11639+836/1434"
         consumes={{ txHash: channel.fundingTxHash, index: 0, role: 'Fiber funding' }}
         carries={{ index: evidence.currentCommitment.outputIndex, role: 'Fiber commitment' }}
         box={{ head: '→ step 3, after 6 epochs', lines: ['the commitment lock waits'] }}
@@ -55,6 +56,8 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
     const step = screen.getByRole('heading', { name: /^2 · Force close/ });
     expect(step).toHaveTextContent('#15,634,497');
     expect(step).toHaveTextContent('2025-03-14 14:15:32 UTC+8');
+    // R2b-b-16: the stage's epoch beside its block (FF-C4)
+    expect(step).toHaveTextContent('epoch 11,639 · 836 / 1,434');
     const input = container.querySelector('[data-cell-id="in:0"]') as HTMLElement;
     expect(within(input).getByText('Fiber funding')).toBeInTheDocument();
     const output = container.querySelector('[data-cell-id="out:0"]') as HTMLElement;

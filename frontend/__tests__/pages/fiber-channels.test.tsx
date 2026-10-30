@@ -11,7 +11,13 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const page = (rows: unknown[]) => ({ data: rows, limit: 50, hasMore: false, nextCursor: null });
+const page = (rows: unknown[]) => ({
+  data: rows,
+  total: rows.length,
+  limit: 50,
+  hasMore: false,
+  nextCursor: null,
+});
 
 describe('FiberChannelsPage', () => {
   it('does not show a stale Open row beneath a newly selected filter while it loads', async () => {
@@ -38,7 +44,17 @@ describe('FiberChannelsPage', () => {
 
   it('leads with the board hero: open now, channels ever, parties, typical lifetime (FF-F5, FF-F9)', async () => {
     server.use(
-      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/network', () =>
+        HttpResponse.json({
+          ...network,
+          summary: {
+            ...network.summary,
+            channelsByToken: [
+              { udtTypeHash: `0x${'7f'.repeat(32)}`, symbol: 'USDI', channels: 1, openChannels: 0 },
+            ],
+          },
+        })
+      ),
       http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
     );
     render(<FiberChannelsPage />);
@@ -58,7 +74,7 @@ describe('FiberChannelsPage', () => {
       'Typical lifetime',
     ]);
     const hero = screen.getAllByRole('term')[0].closest('dl')!;
-    expect(within(hero).getByText(/^since 2023-11-15$/)).toBeInTheDocument();
+    expect(within(hero).getByText('since 2023-11-15 · 1 in USDI')).toBeInTheDocument();
     expect(within(hero).getByText('in 1 pair')).toBeInTheDocument();
     expect(within(hero).getByText('1 m 40 s')).toBeInTheDocument();
     expect(within(hero).getByText('2 of 2 closed within an hour')).toBeInTheDocument();
@@ -68,13 +84,21 @@ describe('FiberChannelsPage', () => {
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();
   });
 
-  it('defaults the table to Open with state counts and the board columns (FF-F4, FF-F6)', async () => {
+  it('defaults the table to Open, sorted by capacity, with state counts and the board columns (FF-F4, FF-F6, N5)', async () => {
     const requested: string[] = [];
+    const sorts: (string | null)[] = [];
     server.use(
       http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
       http.get('/api/:network/v1/fiber/channels', ({ request }) => {
-        requested.push(new URL(request.url).searchParams.get('state') ?? 'all');
-        return HttpResponse.json(page([channel]));
+        const params = new URL(request.url).searchParams;
+        requested.push(params.get('state') ?? 'all');
+        sorts.push(params.get('sort'));
+        return HttpResponse.json({
+          ...page([channel]),
+          total: 38,
+          hasMore: true,
+          nextCursor: '1:0x01',
+        });
       })
     );
     render(<FiberChannelsPage />);
@@ -98,6 +122,9 @@ describe('FiberChannelsPage', () => {
     expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
     expect(within(table).getByText('3 m 20 s')).toBeInTheDocument();
     expect(within(table).getByText('0xaaaaaaaa…aaaaaa')).toBeInTheDocument();
+    expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
+    expect(screen.getByText('sorted by capacity')).toBeInTheDocument();
+    expect(screen.getByText(/Showing 1-1 of 38 channels/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Closed together 1' }));
     await waitFor(() => expect(requested).toContain('cooperativelyClosed'));
     expect(

@@ -30,11 +30,13 @@
     "observedParties": [
       {
         "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
-        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr"
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+        "lockScriptName": "Default Lock"
       },
       {
         "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
-        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y"
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y",
+        "lockScriptName": "Default Lock"
       }
     ],
     "observedLifetimeMs": "704383877",
@@ -122,7 +124,25 @@
         "timestamp": "1741228548404",
         "inputs": 2,
         "outputs": 3,
-        "witnessCount": 2
+        "witnessCount": 2,
+        "epoch": "11590+1185/1305",
+        "fee": "920",
+        "channelInput": null,
+        "feeSource": "outside_inputs",
+        "partyFlows": [
+          {
+            "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+            "inputCapacity": "150000000000",
+            "outputCapacity": "49999999431",
+            "netReceived": "-100000000569"
+          },
+          {
+            "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+            "inputCapacity": "150000000000",
+            "outputCapacity": "143799999649",
+            "netReceived": "-6200000351"
+          }
+        ]
       },
       {
         "stage": "close",
@@ -131,7 +151,12 @@
         "timestamp": "1741932932281",
         "inputs": 1,
         "outputs": 1,
-        "witnessCount": 1
+        "witnessCount": 1,
+        "epoch": "11639+836/1434",
+        "fee": "455",
+        "channelInput": "106200000000",
+        "feeSource": "channel_only",
+        "partyFlows": []
       },
       {
         "stage": "settlement",
@@ -140,7 +165,25 @@
         "timestamp": "1742018027989",
         "inputs": 2,
         "outputs": 3,
-        "witnessCount": 2
+        "witnessCount": 2,
+        "epoch": "11645+1005/1710",
+        "fee": "1267",
+        "channelInput": "106199999545",
+        "feeSource": "outside_inputs",
+        "partyFlows": [
+          {
+            "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+            "inputCapacity": "49999999431",
+            "outputCapacity": "139999998164",
+            "netReceived": "89999998733"
+          },
+          {
+            "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+            "inputCapacity": "0",
+            "outputCapacity": "16199999545",
+            "netReceived": "16199999545"
+          }
+        ]
       }
     ],
     "settlementOutputs": [

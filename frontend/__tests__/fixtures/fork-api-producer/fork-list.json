@@ -21,7 +21,9 @@
         "oldBlockHash": "0x17404795231f70f04f67479bed95cace406fac2307e14bb6cf69784e39a3e72a",
         "oldMinerLockHash": null,
         "timestampGapMs": 50,
-        "uncleInBlock": 12
+        "uncleInBlock": 12,
+        "oldMinerAddress": null,
+        "competingMinerAddress": null
       },
       "previewStatus": "available",
       "resolutionAction": null,
@@ -31,7 +33,9 @@
       "reversesEvents": [],
       "revertedByEvent": null,
       "supersededByTipHash": null,
-      "reconcileInterrupted": false
+      "reconcileInterrupted": false,
+      "firstOrphanHash": "0x17404795231f70f04f67479bed95cace406fac2307e14bb6cf69784e39a3e72a",
+      "firstOrphanStatus": "recorded"
     }
   ],
   "hasMore": false,

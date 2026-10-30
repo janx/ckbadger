@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { http, HttpResponse } from 'msw';
+import { server } from '../msw/server';
 import { render, screen, within } from '../utils/test-utils';
 import { FiberChannelBoard, formatEpochDelay } from '@/components/fiber/fiber-channel-board';
 import forceClosed from '../fixtures/fiber-force-closed.json';
@@ -12,16 +14,21 @@ vi.mock('@/components/fiber/fiber-channel-step', () => ({
     n: number;
     title: string;
     txHash: string;
+    epoch?: string;
     consumes?: { txHash: string; index: number; role: string };
     carries?: { index: number; role: string };
-    box: { head: string; lines: string[] };
+    box: { head: string; lines: React.ReactNode[] };
   }) => (
     <div
       data-testid={`step-${props.n}`}
+      data-epoch={props.epoch ?? ''}
       data-consumes={props.consumes ? `${props.consumes.txHash}:${props.consumes.index}` : ''}
       data-carries={props.carries ? String(props.carries.index) : ''}
     >
       {props.n} · {props.title} {props.txHash} | {props.box.head}
+      {props.box.lines.map((line, i) => (
+        <span key={i}> / {line}</span>
+      ))}
     </div>
   ),
 }));
@@ -74,12 +81,29 @@ const waitingEvidence: FiberChannelEvidence = {
       inputs: 1,
       outputs: 2,
       witnessCount: 1,
+      epoch: '120+0/3',
+      fee: '1000',
+      channelInput: forceClosed.capacity,
+      feeSource: 'channel_only',
+      partyFlows: [],
     },
   ],
   settlementOutputs: [],
 };
 
 describe('FiberChannelBoard', () => {
+  // tier 2 reads each stage's own transaction for its witness sizes
+  beforeEach(() => {
+    const txs = c07e.transactions as Record<string, Record<string, unknown>>;
+    server.use(
+      http.get('/api/:network/v1/transactions/:hash/detail', ({ params }) =>
+        txs[String(params.hash)]
+          ? HttpResponse.json(txs[String(params.hash)])
+          : HttpResponse.json({ error: 'not_found' }, { status: 404 })
+      )
+    );
+  });
+
   it('opens with the pair, the capacity and one summary sentence from API facts (FF-C3, FF-C6)', () => {
     render(<FiberChannelBoard channel={channel} evidence={evidence} />);
     const pair = screen.getByTestId('channel-pair');
@@ -110,6 +134,43 @@ describe('FiberChannelBoard', () => {
     expect(
       screen.getByText(/^at open, 2025-03-06 · net input to the opening transaction/)
     ).toBeInTheDocument();
+  });
+
+  it('draws the split at the close beside the split at open, from the stages’ party flows (FF-C3)', () => {
+    const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    const bars = container.querySelectorAll('[data-split="left"]');
+    expect(bars).toHaveLength(2);
+    const close = bars[1].closest('[data-split-bar]') as HTMLElement;
+    expect(
+      Array.from(close.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
+    ).toEqual(['899.99998733 CKB', '161.99999545 CKB']);
+    expect(close).toHaveTextContent(
+      'at the close, 2025-03-15 · net received in the settlement transaction, payout and change alike'
+    );
+    expect(
+      screen.getByText(
+        /the chain does not say which side paid them, so the amount that changed sides is not shown/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('dates every step by its epoch and says what each side received at the end (FF-C4)', () => {
+    render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    expect(screen.getByTestId('step-1')).toHaveAttribute('data-epoch', '11590+1185/1305');
+    expect(screen.getByTestId('step-2')).toHaveAttribute('data-epoch', '11639+836/1434');
+    expect(screen.getByTestId('step-3')).toHaveAttribute('data-epoch', '11645+1005/1710');
+    expect(screen.getByTestId('step-3')).toHaveTextContent('ppedrr received 899.99998733 CKB net');
+    expect(screen.getByTestId('step-3')).toHaveTextContent('5eyy6y received 161.99999545 CKB net');
+  });
+
+  it('times the wait in tier 2 from the stages’ epochs and says where each fee came from (FF-C5)', () => {
+    render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    expect(screen.getByText('the wait').nextElementSibling).toHaveTextContent(
+      'commitment at epoch 11,639 · 836 / 1,434 · settled at epoch 11,645 · 1,005 / 1,710'
+    );
+    expect(screen.getByText('close').nextElementSibling).toHaveTextContent(
+      'fee 455 shannons, out of the channel'
+    );
   });
 
   it('tells the chain story in three steps: timeline, then open → force close → settle (FF-C4)', () => {

@@ -1,5 +1,6 @@
 import type { FiberChannelState, FiberEpochDelay } from '@/lib/api';
 import { formatDurationMs } from '@/lib/utils';
+import { formatEpochPosition } from '@/lib/epoch';
 
 /** The board's words for a channel's on-chain state (Fiber V65 / V66). */
 export const FIBER_STATE_WORDS: Record<FiberChannelState, string> = {
@@ -27,4 +28,16 @@ export function epochDelayWords(delay: FiberEpochDelay): string {
   const amount = `${epochs.toLocaleString('en-US')}${index ? ` ${index}/${length}` : ''}`;
   if (!relative) return `until epoch ${amount}`;
   return `${amount} epoch${epochs === 1 && index === 0 ? '' : 's'}`;
+}
+
+/** An evidence stage's epoch (`number+index/length`) on the site's one epoch form. */
+export function stageEpoch(epoch: string): string {
+  const match = /^(0|[1-9]\d*)\+(0|[1-9]\d*)\/([1-9]\d*)$/.exec(epoch);
+  if (!match)
+    throw new Error(`Fiber stage epoch ${JSON.stringify(epoch)} is not number+index/length`);
+  return formatEpochPosition({
+    number: Number(match[1]),
+    index: Number(match[2]),
+    length: Number(match[3]),
+  });
 }

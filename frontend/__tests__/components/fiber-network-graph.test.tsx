@@ -45,6 +45,10 @@ describe('FiberNetworkGraph', () => {
     expect(node('kdeakp')).toHaveAttribute('opacity', '0.18');
     expect(within(panel()).getByRole('link', { name: /ppedrr$/ })).toBeInTheDocument();
     expect(within(panel()).getByText(/with 1 party/)).toBeInTheDocument();
+    // R2b-b: the party's own state counts, first channel and lock name (FF-F3)
+    expect(within(panel()).getByText(/^Default Lock · lock hash/)).toBeInTheDocument();
+    for (const label of ['closed together', 'force-closed', 'first channel'])
+      expect(within(panel()).getByText(label)).toBeInTheDocument();
     fireEvent.mouseLeave(node('ppedrr'));
     expect(node('kdeakp')).toHaveAttribute('data-lit', 'true');
   });
@@ -61,6 +65,8 @@ describe('FiberNetworkGraph', () => {
     expect(within(p).getByText('0 settled · 0 not yet')).toBeInTheDocument();
     expect(within(p).getByText('1 m 40 s')).toBeInTheDocument();
     expect(within(p).getAllByRole('link', { name: '#10' })).toHaveLength(2);
+    // R2b-b: first · last opening dates beside the blocks (FF-F3)
+    expect(within(p).getByText('2023-11-15 · 2023-11-15')).toBeInTheDocument();
     // the selected pair stays jade/grey as drawn, never repainted grey at 4 px (FF-F7)
     const selected = container.querySelector('[data-edge][data-lit="true"]')!;
     expect(selected.querySelector('[stroke-width="4"]')).toBeNull();

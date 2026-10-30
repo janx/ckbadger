@@ -22,7 +22,7 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
   // Percent with 4 decimals: a presentation width, the amounts themselves stay exact.
   const leftPercent = Number((left.shannons * BigInt(1_000_000)) / total) / 10_000;
   return (
-    <div className="min-w-0">
+    <div data-split-bar className="min-w-0">
       <div className="mb-1.5 flex flex-wrap justify-between gap-4 text-[12.5px]">
         <span>
           <span className="text-text-dim">{left.name}</span>{' '}

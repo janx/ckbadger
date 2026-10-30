@@ -36,3 +36,12 @@ describe('epochDelayWords', () => {
     );
   });
 });
+
+describe('stageEpoch', () => {
+  it('reads an evidence stage epoch on the site’s one epoch form (R2b-b-16)', async () => {
+    const { stageEpoch } = await import('@/lib/fiber-format');
+    expect(stageEpoch('11639+836/1434')).toBe('11,639 · 836 / 1,434');
+    expect(() => stageEpoch('11639 836/1434')).toThrow('Fiber stage epoch');
+    expect(() => stageEpoch('1+5/5')).toThrow();
+  });
+});

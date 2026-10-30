@@ -6,7 +6,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import type { FiberNetwork, FiberParty } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { formatDurationMs } from '@/lib/utils';
+import { formatDurationMs, formatUtc8Date } from '@/lib/utils';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import {
   fiberGraphModel,
@@ -70,7 +70,8 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
         <PartyLink party={party} />
       </div>
       <div className="text-text-dim mb-2 mt-0.5 text-[11.5px]" style={{ overflowWrap: 'anywhere' }}>
-        lock hash {party.lockScriptHash.slice(0, 10)}…{party.lockScriptHash.slice(-6)}
+        {party.lockScriptName ? `${party.lockScriptName} · ` : ''}lock hash{' '}
+        {party.lockScriptHash.slice(0, 10)}…{party.lockScriptHash.slice(-6)}
       </div>
       <Rows
         rows={[
@@ -83,6 +84,20 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
             'open now',
             <OpenNow key="open" count={party.openChannels} capacity={party.openCapacity} />,
             party.openChannels ? 'text-jade' : 'text-text-dim',
+          ],
+          ['closed together', party.cooperativelyClosedChannels.toLocaleString('en-US')],
+          [
+            'force-closed',
+            `${party.forceClosedSettledChannels} settled · ${party.forceClosedWaitingChannels} not yet`,
+          ],
+          [
+            'first channel',
+            <span key="first">
+              {formatUtc8Date(party.firstOpenTimestamp)} ·{' '}
+              <Link href={`/blocks/${party.firstOpenBlock}`} className="hover:text-jade">
+                {formatBlockNumber(party.firstOpenBlock)}
+              </Link>
+            </span>,
           ],
         ]}
       />
@@ -118,6 +133,10 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
             pair.typicalClosedLifetimeMs === null
               ? 'none closed yet'
               : formatDurationMs(Number(pair.typicalClosedLifetimeMs)),
+          ],
+          [
+            'first · last',
+            `${formatUtc8Date(pair.firstOpenTimestamp)} · ${formatUtc8Date(pair.lastOpenTimestamp)}`,
           ],
           [
             'opened in',

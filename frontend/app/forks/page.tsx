@@ -10,8 +10,9 @@ import { TopicHero, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { ForkDaysChart } from '@/components/forks/fork-days-chart';
 import { ForkGlyph } from '@/components/forks/fork-glyph';
+import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type ReorgEvent } from '@/lib/api';
+import { api, type ForkNodeRecord, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -19,10 +20,13 @@ import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
   forkEventHref,
+  missingAddressWords,
   orphanFateWords,
+  uncleDistanceWords,
   uncleRateFigure,
 } from '@/lib/fork-format';
-import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
+import { formatExactDecimal } from '@/lib/exact-integer';
+import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
 type Overview = Awaited<ReturnType<typeof api.getForkOverview>>;
 
@@ -33,8 +37,6 @@ const PREVIEW_STATUS_WORDS: Record<ReorgEvent['previewStatus'], string> = {
   node_reader_unavailable: 'node reader unavailable',
   not_loaded: 'fate not loaded',
 };
-
-const lockShort = (hash: string) => `${hash.slice(0, 8)}…${hash.slice(-4)}`;
 
 function heroFigures(overview: Overview): TopicFigure[] {
   const rate = uncleRateFigure(overview);
@@ -52,9 +54,65 @@ function heroFigures(overview: Overview): TopicFigure[] {
     {
       label: 'This node switched branch',
       value: formatCount(overview.nodeSwitchesAllTime, 'time'),
-      sub: `${overview.nodeSwitchesInWindow.toLocaleString('en-US')} in these ${formatCount(overview.days.length, 'day')}`,
+      sub: switchedSub(overview.nodeRecord),
+    },
+    ...orphanFigures(overview.nodeRecord),
+  ];
+}
+
+/** "since 2026-09-25, 1 of them more than one block deep" — the node's own record (R2b-b). */
+function switchedSub(record: ForkNodeRecord): string {
+  const parts = [
+    record.observedSince ? `since ${formatUtc8Date(record.observedSince)}` : 'not live yet',
+  ];
+  if (record.switchesDeeperThanOneBlock > 0)
+    parts.push(
+      `${record.switchesDeeperThanOneBlock.toLocaleString('en-US')} of them more than one block deep`
+    );
+  if (record.deepDetections > 0)
+    parts.push(`${formatCount(record.deepDetections, 'deep detection')}`);
+  return parts.join(', ');
+}
+
+function orphanFigures(record: ForkNodeRecord): TopicFigure[] {
+  const fates = record.orphanFates;
+  if (!fates) return [];
+  const { blocks, userTransactions: txs } = fates;
+  const rest = [
+    blocks.canonicalNow > 0 &&
+      `${blocks.canonicalNow.toLocaleString('en-US')} back on the main chain`,
+    blocks.notIncludedAsUncle > 0 &&
+      `${blocks.notIncludedAsUncle.toLocaleString('en-US')} never taken as an uncle`,
+    blocks.uncleFatePending > 0 &&
+      `${blocks.uncleFatePending.toLocaleString('en-US')} can still be taken`,
+  ].filter(Boolean);
+  return [
+    {
+      label: 'Its orphans',
+      value: formatCount(blocks.includedAsUncle, 'uncle'),
+      tone: 'jade',
+      sub: [uncleDistanceWords(blocks.uncleDistances), ...rest].filter(Boolean).join(' · '),
+    },
+    {
+      label: 'Orphaned transactions',
+      value: `${txs.committedLater.toLocaleString('en-US')} of ${txs.total.toLocaleString('en-US')}`,
+      sub:
+        txs.total === 0 ? 'the dropped blocks held only cellbases' : 'committed in a later block',
     },
   ];
+}
+
+/** "79 of 266 were one miner against itself · median gap 78 ms" (Forks V67 list header). */
+function competingLine(record: ForkNodeRecord): string {
+  const fates = record.orphanFates;
+  if (!fates) return 'what became of the dropped blocks needs the node reader';
+  const { compared, sameMiner, gapMedianMs } = fates.competing;
+  return [
+    `${sameMiner.toLocaleString('en-US')} of ${compared.toLocaleString('en-US')} were one miner against itself`,
+    gapMedianMs !== null && `median gap ${formatExactDecimal(gapMedianMs, 'fork median gap')} ms`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function Seen({ event }: { event: ReorgEvent }) {
@@ -70,6 +128,11 @@ function Seen({ event }: { event: ReorgEvent }) {
         <span className="text-text-bright">{when}</span>
       )}
       <span className="text-text-dim block text-[11px]">{formatTimeAgo(event.detectedAt)}</span>
+      {!href && (
+        <span className="text-text-dim block text-[11px]">
+          {missingAddressWords(event.firstOrphanStatus)}
+        </span>
+      )}
     </span>
   );
 }
@@ -101,19 +164,33 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
   if (event.eventType === 'deep') return <span className="text-text-dim">—</span>;
   if (!event.preview)
     return <span className="text-text-dim">{PREVIEW_STATUS_WORDS[event.previewStatus]}</span>;
-  const { oldMinerLockHash: dropped, competingMinerLockHash: winner, fate } = event.preview;
-  const side = (hash: string | null, fallback: string) =>
-    hash ? (
-      <span className="text-text-bright" title={hash}>
-        {lockShort(hash)}
-      </span>
+  const {
+    oldMinerLockHash: dropped,
+    oldMinerAddress,
+    competingMinerLockHash: winner,
+    competingMinerAddress,
+    fate,
+  } = event.preview;
+  const side = (hash: string | null, address: string | null, fallback: string) => {
+    if ((hash === null) !== (address === null))
+      throw new Error(
+        `Fork ${formatBlockNumber(event.forkPointNumber)}: miner lock ${hash} and address ${address} disagree`
+      );
+    return address ? (
+      <MinerLink address={address} />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
+  };
   return (
     <span>
-      {side(dropped, 'witness unavailable')} <span className="text-[#4b5266]">vs</span>{' '}
-      {side(winner, fate === 'canonical_now' ? 'the same block now' : 'witness unavailable')}
+      {side(dropped, oldMinerAddress, 'witness unavailable')}{' '}
+      <span className="text-[#4b5266]">vs</span>{' '}
+      {side(
+        winner,
+        competingMinerAddress,
+        fate === 'canonical_now' ? 'the same block now' : 'witness unavailable'
+      )}
       {dropped && dropped === winner && (
         <span className="text-text-dim ml-1.5 text-[11px]">same miner</span>
       )}
@@ -237,6 +314,7 @@ export default function ForksPage() {
             <span className="text-text-dim flex flex-wrap gap-x-4 gap-y-1 text-[11.5px]">
               <span>dashed: the block it dropped</span>
               <span className="text-jade">→ the block that took it as an uncle</span>
+              {data && <span>{competingLine(data.nodeRecord)}</span>}
             </span>
           }
         >

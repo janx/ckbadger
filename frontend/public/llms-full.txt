@@ -85,7 +85,9 @@ API:
   deposits, phase-1 withdrawal requests, readiness windows, concentration and header/AR proof.
   `/dao/charts/*` and `/charts/*` are historical chart endpoints; complete-day chart points do not
   stand in for the current DAO inventory.
-- Chain switches and upgrades: `/forks`, `/forks/overview`, `/forks/{id}` and `/hardforks` expose
+- Chain switches and upgrades: `/forks`, `/forks/overview`,
+  `/forks/{fork_point_height}/{orphan_hash_prefix8}` (fork point + first 8 hex of the first dropped
+  block) and `/hardforks` expose
   recorded local reorg events, branch/uncle fate and hardfork chronology. A recorded branch
   adoption can differ from today's canonical branch; uncles are chain history, not a count of this
   node's observed switches.

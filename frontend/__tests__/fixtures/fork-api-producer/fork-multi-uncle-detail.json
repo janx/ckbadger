@@ -5,21 +5,24 @@
       "minerLockHash": null,
       "number": 11,
       "timestamp": "2023-11-14T22:13:20+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     },
     {
       "hash": "0x2f6bc89707e41016b6b4a6ffc69dab4040d4661bd55f1725c47c0f7299599323",
       "minerLockHash": null,
       "number": 12,
       "timestamp": "2023-11-14T22:13:21+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     },
     {
       "hash": "0x56fa5946eab0ccdf02beeb424b538d21effecab3e8c646baeaac23e0f26c4411",
       "minerLockHash": null,
       "number": 13,
       "timestamp": "2023-11-14T22:13:22+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     }
   ],
   "canonicalBranch": [
@@ -28,21 +31,24 @@
       "minerLockHash": null,
       "number": 11,
       "timestamp": "2023-11-14T22:13:20+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     },
     {
       "hash": "0x2f6bc89707e41016b6b4a6ffc69dab4040d4661bd55f1725c47c0f7299599323",
       "minerLockHash": null,
       "number": 12,
       "timestamp": "2023-11-14T22:13:21+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     },
     {
       "hash": "0x56fa5946eab0ccdf02beeb424b538d21effecab3e8c646baeaac23e0f26c4411",
       "minerLockHash": null,
       "number": 13,
       "timestamp": "2023-11-14T22:13:22+00:00",
-      "transactionsCount": 0
+      "transactionsCount": 0,
+      "minerAddress": null
     }
   ],
   "canonicalTipNumber": 13,
@@ -68,7 +74,9 @@
     "reversesEvents": [],
     "revertedByEvent": null,
     "supersededByTipHash": null,
-    "reconcileInterrupted": false
+    "reconcileInterrupted": false,
+    "firstOrphanHash": "0x950980498e706d2ffec6862067c057901cedba4e0b4f40de8ce1887d3caf49a9",
+    "firstOrphanStatus": "traced"
   },
   "orphanedBlocks": [
     {
@@ -77,7 +85,8 @@
         "minerLockHash": null,
         "number": 11,
         "timestamp": "2023-11-14T22:13:20+00:00",
-        "transactionsCount": 0
+        "transactionsCount": 0,
+        "minerAddress": null
       },
       "fate": "included_as_uncle",
       "hash": "0x950980498e706d2ffec6862067c057901cedba4e0b4f40de8ce1887d3caf49a9",
@@ -91,7 +100,8 @@
         "blockHash": "0x56fa5946eab0ccdf02beeb424b538d21effecab3e8c646baeaac23e0f26c4411",
         "blockNumber": 13,
         "distance": 2
-      }
+      },
+      "minerAddress": null
     },
     {
       "competingBlock": {
@@ -99,7 +109,8 @@
         "minerLockHash": null,
         "number": 12,
         "timestamp": "2023-11-14T22:13:21+00:00",
-        "transactionsCount": 0
+        "transactionsCount": 0,
+        "minerAddress": null
       },
       "fate": "included_as_uncle",
       "hash": "0xbbc3744063c98cb010ba0adc31943a8f6f18d882c0ae0d22f66061aa6fe8528e",
@@ -113,7 +124,8 @@
         "blockHash": "0x56fa5946eab0ccdf02beeb424b538d21effecab3e8c646baeaac23e0f26c4411",
         "blockNumber": 13,
         "distance": 1
-      }
+      },
+      "minerAddress": null
     }
   ],
   "orphanedTransactions": []

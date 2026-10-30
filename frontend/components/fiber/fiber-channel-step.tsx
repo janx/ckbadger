@@ -8,6 +8,7 @@ import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { api, type TransactionDetail } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
+import { stageEpoch } from '@/lib/fiber-format';
 
 export interface FiberStepBox {
   head: ReactNode;
@@ -21,6 +22,8 @@ interface Props {
   blockNumber: number;
   timestamp: string;
   description: ReactNode;
+  /** The stage block's epoch from the channel evidence (`number+index/length`), when loaded. */
+  epoch?: string;
   /** The channel cell this step spends (funding or commitment), by outpoint from the API. */
   consumes?: { txHash: string; index: number; role: string };
   /** The output that carries the channel to the next step. */
@@ -52,6 +55,7 @@ export function FiberChannelStep({
   blockNumber,
   timestamp,
   description,
+  epoch,
   consumes,
   carries,
   box,
@@ -81,6 +85,7 @@ export function FiberChannelStep({
           {formatBlockNumber(blockNumber)}
         </Link>
         {` · ${formatUtc8DateTime(timestamp)}`}
+        {epoch !== undefined && ` · epoch ${stageEpoch(epoch)}`}
       </span>
     </h3>
   );

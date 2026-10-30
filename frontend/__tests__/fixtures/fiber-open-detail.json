@@ -14,7 +14,8 @@
   "observedParties": [
     {
       "address": null,
-      "lockScriptHash": "0x81dc08f32082179afe569100d9b7d13498b1edd432f2936c651f4a0465f49932"
+      "lockScriptHash": "0x81dc08f32082179afe569100d9b7d13498b1edd432f2936c651f4a0465f49932",
+      "lockScriptName": null
     }
   ],
   "openBlock": 10,

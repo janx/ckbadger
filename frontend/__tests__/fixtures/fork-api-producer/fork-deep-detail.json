@@ -24,7 +24,9 @@
     "reversesEvents": [],
     "revertedByEvent": null,
     "supersededByTipHash": null,
-    "reconcileInterrupted": false
+    "reconcileInterrupted": false,
+    "firstOrphanHash": null,
+    "firstOrphanStatus": "not_observed"
   },
   "orphanedBlocks": [],
   "orphanedTransactions": []

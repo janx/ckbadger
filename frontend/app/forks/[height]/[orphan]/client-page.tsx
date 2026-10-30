@@ -8,6 +8,7 @@ import {
   api,
   isNotFoundApiError,
   type CanonicalBranchBlock,
+  type ForkEventRef,
   type OrphanedBlock,
   type OrphanedTransaction,
   type ReorgDetail,
@@ -20,11 +21,33 @@ import { ListTable } from '@/components/ui/list-table';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { blockClock, orphanFateWords, parseForkRoute } from '@/lib/fork-format';
+import {
+  blockClock,
+  forkRefHref,
+  missingAddressWords,
+  orphanFateWords,
+  parseForkRoute,
+} from '@/lib/fork-format';
+import { MinerLink } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
-const lockShort = (hash: string) => `${hash.slice(0, 8)}…${hash.slice(-4)}`;
+type MinerBlock = { number: number; minerLockHash: string | null; minerAddress: string | null };
+
+/** A block's miner address; the API gives one exactly when it knows the miner's lock (R2b-b-12). */
+function minerAddressOf(block: MinerBlock): string {
+  if (block.minerLockHash === null || block.minerAddress === null)
+    throw new Error(
+      `Fork block ${formatBlockNumber(block.number)}: miner lock ${block.minerLockHash} without an address ${block.minerAddress}`
+    );
+  return block.minerAddress;
+}
+
+function Miner({ block }: { block: MinerBlock }) {
+  if (block.minerLockHash === null && block.minerAddress === null)
+    return <span className="text-text-dim">witness unavailable</span>;
+  return <MinerLink address={minerAddressOf(block)} />;
+}
 const hashShort = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 const blockAt = (number: number) => (
   <Link href={`/blocks/${number}`} className="hover:text-jade">
@@ -64,6 +87,8 @@ export default function ForkDetailPage() {
       mismatch = `API answered ${address} with a ${event.eventType === 'deep' ? 'deep detection' : 'switch'} at ${formatBlockNumber(event.forkPointNumber)} with no orphaned block`;
     else if (event.forkPointNumber !== route.height || first.hash.slice(2, 10) !== route.orphan)
       mismatch = `API answered ${address} with the fork at ${formatBlockNumber(event.forkPointNumber)} whose first orphan is ${first.hash.slice(0, 10)}`;
+    else if (event.firstOrphanHash !== first.hash)
+      mismatch = `API answered ${address} with first dropped block ${first.hash.slice(0, 10)}, but its event names first orphan ${event.firstOrphanHash?.slice(0, 14) ?? 'none'}`;
   }
   return (
     <div className="bg-base-bg min-h-screen">
@@ -98,7 +123,7 @@ function narrative(data: ReorgDetail): string[] {
         block.minerLockHash !== null && block.competingBlock!.minerLockHash === block.minerLockHash;
       const miner = same
         ? i === 0
-          ? `, both by the same miner (${lockShort(block.minerLockHash!)})`
+          ? `, both by the same miner (…${minerAddressOf(block).slice(-6)})`
           : ', again both by it'
         : '';
       parts.push(
@@ -179,6 +204,7 @@ interface BlockRow {
   hash: string;
   timestamp: string;
   minerLockHash: string | null;
+  minerAddress: string | null;
   transactionsCount: number;
   dropped: boolean;
   fate: ReactNode;
@@ -204,6 +230,7 @@ function blockRows(data: ReorgDetail): BlockRow[] {
         hash: block.hash,
         timestamp: block.timestamp,
         minerLockHash: block.minerLockHash,
+        minerAddress: block.minerAddress,
         transactionsCount: block.transactionsCount,
         dropped: true,
         fate: block.uncleIn ? (
@@ -226,6 +253,21 @@ function blockRows(data: ReorgDetail): BlockRow[] {
       })
     );
   return [...main, ...dropped, ...adopted];
+}
+
+/** Another switch, linked by its D7 address when it has one (R2b-b). */
+function EventRef({ target, text }: { target: ForkEventRef; text: string }) {
+  const href = forkRefHref(target);
+  return href ? (
+    <Link href={href} className="hover:text-jade underline decoration-dotted">
+      {text}
+    </Link>
+  ) : (
+    <span>
+      {text}{' '}
+      <span className="text-text-dim">({missingAddressWords(target.firstOrphanStatus)})</span>
+    </span>
+  );
 }
 
 function ForkEvidence({ data }: { data: ReorgDetail }) {
@@ -331,12 +373,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 key: 'miner',
                 label: 'Miner',
                 minWidth: 150,
-                render: (row) =>
-                  row.minerLockHash ? (
-                    <span title={row.minerLockHash}>{lockShort(row.minerLockHash)}</span>
-                  ) : (
-                    <span className="text-text-dim">witness unavailable</span>
-                  ),
+                render: (row) => <Miner block={row} />,
               },
               {
                 key: 'txs',
@@ -445,21 +482,24 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                   <span>interrupted by a later rollback</span>
                 </>
               )}
-              {event.revertedByEvent !== null && event.revertedByEvent !== undefined && (
+              {event.revertedByEvent && (
                 <>
                   <span className="text-text-dim">later</span>
-                  <span>a later switch on this node reversed it</span>
+                  <EventRef
+                    target={event.revertedByEvent}
+                    text="a later switch on this node reversed it"
+                  />
                 </>
               )}
-              {event.reversesEvents && event.reversesEvents.length > 0 && (
-                <>
+              {event.reversesEvents.map((ref, index) => (
+                <span key={index} className="contents">
                   <span className="text-text-dim">earlier</span>
-                  <span>
-                    it reversed{' '}
-                    {formatCount(event.reversesEvents.length, 'earlier switch', 'earlier switches')}
-                  </span>
-                </>
-              )}
+                  <EventRef
+                    target={ref}
+                    text={`it reversed an earlier switch at ${formatBlockNumber(ref.forkPointNumber)}`}
+                  />
+                </span>
+              ))}
             </div>
           </DetailSection>
           {inclusions.map((number) => {
@@ -476,8 +516,13 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                   ))}
                   <span className="text-text-dim">included by</span>
                   <span className="break-all">
-                    {includer?.minerLockHash ? (
-                      `miner lock ${includer.minerLockHash}`
+                    {includer && includer.minerLockHash !== null ? (
+                      <Link
+                        href={`/address/${minerAddressOf(includer)}`}
+                        className="hover:text-jade"
+                      >
+                        {minerAddressOf(includer)}
+                      </Link>
                     ) : (
                       <span className="text-text-dim">miner witness unavailable</span>
                     )}
