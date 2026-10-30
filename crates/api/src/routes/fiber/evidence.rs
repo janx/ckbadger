@@ -8,7 +8,7 @@ use ckbadger_store::types::{CachedBlockHeader, FiberChannel, FiberChannelState};
 use serde::Serialize;
 use std::sync::Arc;
 
-use super::{canonical_header, decode_epoch_delay, format_hex};
+use super::{canonical_header, decode_epoch_delay, format_hex, FiberEpochDelay};
 use crate::{
     response::{ok, ApiError, ApiResult},
     utils::parse_hash32,
@@ -47,6 +47,8 @@ pub struct FiberCommitmentEvidence {
     pub cell: FiberCellEvidence,
     pub pubkey_hash: String,
     pub delay_epoch: String,
+    /// `delay_epoch` decoded by the channel's one since-epoch decoder.
+    pub delay_epoch_decoded: FiberEpochDelay,
     pub version: String,
     pub settlement_hash: Option<String>,
     pub settlement_flag: Option<u8>,
@@ -213,8 +215,7 @@ fn stage(
 
 /// Add a relative epoch fraction to the tracked cell's creation epoch, using
 /// exact integer arithmetic. Neither calendar days nor wall time enter it.
-fn ready_epoch(header: &CachedBlockHeader, delay: u64) -> Result<String> {
-    let part = decode_epoch_delay(delay).map_err(anyhow::Error::msg)?;
+fn ready_epoch(header: &CachedBlockHeader, part: &FiberEpochDelay) -> Result<String> {
     ensure!(part.relative, "Fiber commitment delay must be relative");
     ensure!(
         header.epoch_length > 0
@@ -289,7 +290,7 @@ fn commitment_epoch_rule(
     flag: Option<u8>,
     header: &CachedBlockHeader,
     tip: &CachedBlockHeader,
-    delay: u64,
+    delay: &FiberEpochDelay,
 ) -> Result<(String, Option<String>, Option<bool>)> {
     match flag {
         Some(0) => {
@@ -428,16 +429,21 @@ fn build_evidence(
             "Fiber commitment 0x{}:{output_index} delay differs from indexed channel",
             hex::encode(hash)
         );
+        let delay = decode_epoch_delay(parsed.delay_epoch).map_err(|error| {
+            anyhow!(
+                "Fiber commitment 0x{}:{output_index}: {error}",
+                hex::encode(hash)
+            )
+        })?;
         let header = canonical_header(&state.store, version.response.block_number)?;
         let (_, tip) = state
             .store
             .get_sync_tip_block()?
             .ok_or_else(|| anyhow!("Fiber evidence missing indexed tip"))?;
         let (epoch_lock, ready, met) =
-            commitment_epoch_rule(parsed.settlement_flag, &header, &tip, parsed.delay_epoch)
-                .with_context(|| {
-                    format!("Fiber commitment 0x{}:{output_index}", hex::encode(hash))
-                })?;
+            commitment_epoch_rule(parsed.settlement_flag, &header, &tip, &delay).with_context(
+                || format!("Fiber commitment 0x{}:{output_index}", hex::encode(hash)),
+            )?;
         if is_updated_commitment(ch.close_tx_hash.as_deref(), hash) {
             stages.push(stage(
                 "currentCommitment",
@@ -470,6 +476,7 @@ fn build_evidence(
             cell: cell_evidence(&version),
             pubkey_hash: format_hex(&parsed.pubkey_hash),
             delay_epoch: parsed.delay_epoch.to_string(),
+            delay_epoch_decoded: delay,
             version: parsed.version.to_string(),
             settlement_hash: parsed.settlement_hash.as_ref().map(|v| format_hex(v)),
             settlement_flag: parsed.settlement_flag,
@@ -580,14 +587,14 @@ mod tests {
             chain_time_ms: 0,
         };
         assert_eq!(
-            ready_epoch(&header, 0xa000_0000_0000_0001).unwrap(),
+            ready_epoch(&header, &decode_epoch_delay(0xa000_0000_0000_0001).unwrap()).unwrap(),
             "101+2/3"
         );
         assert!(epoch_at_or_after(&header, "100+2/3").unwrap());
         header.epoch_index = 1;
         assert!(!epoch_at_or_after(&header, "100+2/3").unwrap());
         assert_eq!(
-            ready_epoch(&header, 0xa000_0200_0000_0001).unwrap(),
+            ready_epoch(&header, &decode_epoch_delay(0xa000_0200_0000_0001).unwrap()).unwrap(),
             "101+1/3"
         );
         header.epoch_number = i64::MAX;
@@ -621,22 +628,21 @@ mod tests {
             cycles: None,
             chain_time_ms: 0,
         };
-        let (_, ready, met) =
-            commitment_epoch_rule(Some(1), &header, &header, 0xa001_0000_0000_0006).unwrap();
+        let delay = decode_epoch_delay(0xa001_0000_0000_0006).unwrap();
+        let (_, ready, met) = commitment_epoch_rule(Some(1), &header, &header, &delay).unwrap();
         assert!(ready.is_none() && met.is_none());
         assert_eq!(
-            commitment_epoch_rule(None, &header, &header, 0xa001_0000_0000_0006)
+            commitment_epoch_rule(None, &header, &header, &delay)
                 .unwrap()
                 .0,
             "legacyFormatRuleUnverified"
         );
-        let (_, ready, met) =
-            commitment_epoch_rule(Some(0), &header, &header, 0xa001_0000_0000_0006).unwrap();
+        let (_, ready, met) = commitment_epoch_rule(Some(0), &header, &header, &delay).unwrap();
         assert_eq!(ready.as_deref(), Some("106+0/1"));
         assert_eq!(met, Some(false));
         header.epoch_number = 106;
         assert_eq!(
-            commitment_epoch_rule(Some(0), &header, &header, 0xa001_0000_0000_0006)
+            commitment_epoch_rule(Some(0), &header, &header, &delay)
                 .unwrap()
                 .1
                 .as_deref(),
