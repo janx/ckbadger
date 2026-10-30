@@ -742,6 +742,9 @@ mod tests {
             let (_dir, store, append, writer) = setup();
             seed_pending_reorg(&store, false);
             seed_full_entity_stats_coverage(&store);
+            append
+                .put_cf(append.cf_cells(), &[7; 36], b"immutable")
+                .unwrap();
             let fork_hash = store.get_block_header(fork_point).unwrap().unwrap().hash;
             let first_orphan: [u8; 32] = store
                 .get_block_header(fork_point + 1)
@@ -778,6 +781,7 @@ mod tests {
                 "only a one-block switch's first orphan is its old tip"
             );
             assert!(store.get_block_header(fork_point + 1).unwrap().is_none());
+            assert_append_payload_unchanged(&append);
         }
     }
 
@@ -793,6 +797,9 @@ mod tests {
             let (_dir, store, append, writer) = setup();
             let pending = seed_pending_reorg(&store, false);
             seed_full_entity_stats_coverage(&store);
+            append
+                .put_cf(append.cf_cells(), &[7; 36], b"immutable")
+                .unwrap();
 
             let err = writer
                 .execute_reorg(&append, 8, &fork_hash, 11, &old_tip_hash, 12, &[0xc2; 32])
@@ -814,6 +821,7 @@ mod tests {
             let latest = store.get_latest_reorg_event().unwrap().unwrap();
             assert_eq!(latest.key, pending, "no event recorded");
             assert!(!latest.event.reconcile_interrupted);
+            assert_append_payload_unchanged(&append);
         }
     }
 
