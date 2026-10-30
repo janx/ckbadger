@@ -29,6 +29,9 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(y('[data-tile][data-dropped] rect')).toBeLessThan(
       y('[data-tile="11"]:not([data-dropped]) rect')
     );
-    expect(svg).toHaveClass('min-w-[720px]');
+    // drawn at its natural size: 1:1 text at 1440, a sideways scroll at 390 (visual pass)
+    const viewBoxWidth = svg.getAttribute('viewBox')!.split(' ')[2];
+    expect(svg.getAttribute('width')).toBe(viewBoxWidth);
+    expect(svg).not.toHaveAttribute('width', '100%');
   });
 });

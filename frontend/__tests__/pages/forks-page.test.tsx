@@ -52,6 +52,41 @@ describe('ForksPage', () => {
     expect(api.getForkOverview).toHaveBeenCalledWith(30);
   });
 
+  it('claims nothing about orphans before the node has switched at all (visual pass, live empty store)', async () => {
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: [],
+      total: 0,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const record = overview().nodeRecord;
+    const fates = record.orphanFates!;
+    vi.mocked(api.getForkOverview).mockResolvedValue({
+      ...overview(),
+      nodeSwitchesAllTime: 0,
+      nodeSwitchesInWindow: 0,
+      days: overview().days.map((day) => ({ ...day, nodeSwitches: 0 })),
+      nodeRecord: {
+        ...record,
+        orphanedBlocks: 0,
+        orphanedTransactions: 0,
+        orphanFates: {
+          ...fates,
+          eventsWithEvidence: 0,
+          blocks: { ...fates.blocks, total: 0, includedAsUncle: 0, uncleDistances: [] },
+          userTransactions: { ...fates.userTransactions, total: 0, committedLater: 0 },
+          competing: { compared: 0, sameMiner: 0, minerUnknown: 0, gapMedianMs: null },
+        },
+      },
+    });
+    render(<ForksPage />);
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(2));
+    expect(screen.queryByText('Its orphans')).toBeNull();
+    expect(screen.queryByText(/held only cellbases/)).toBeNull();
+    expect(screen.queryByText(/0 of 0 were one miner/)).toBeNull();
+  });
+
   it('leaves out the orphan figures when the node reader is not open, and says so', async () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue({

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubChartWidth } from '../utils/chart-width';
 import { fireEvent, render, screen } from '../utils/test-utils';
 import { ForkDaysChart } from '@/components/forks/fork-days-chart';
 
@@ -37,5 +38,31 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     const svg = container.querySelector('svg')!;
     fireEvent.keyDown(svg, { key: 'ArrowRight' });
     expect(screen.getByTestId('fork-day-reading')).toHaveTextContent('2026-10-22 · 199 uncles');
+  });
+
+  describe('at phone width (visual pass, 390)', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    it('draws 1:1 in its box so the axis text stays 11 px', () => {
+      stubChartWidth(358);
+      const { container } = render(<ForkDaysChart days={days} />);
+      const svg = container.querySelector('svg')!;
+      expect(svg.getAttribute('viewBox')).toBe('-44 -10 358 154');
+      for (const bar of container.querySelectorAll('[data-uncles]'))
+        expect(Number(bar.getAttribute('width'))).toBeGreaterThan(50);
+    });
+
+    it('ends the x axis on the last day, right-aligned, and drops a tick that would crowd it', () => {
+      stubChartWidth(358);
+      const month = Array.from({ length: 30 }, (_, i) => ({
+        date: `2026-10-${String(i + 1).padStart(2, '0')}`,
+        canonicalBlocks: 9000,
+        uncles: 200 + i,
+        nodeSwitches: 0,
+      }));
+      render(<ForkDaysChart days={month} />);
+      expect(screen.getByText('10-30')).toHaveAttribute('text-anchor', 'end');
+      expect(screen.getByText('10-21')).toBeInTheDocument();
+      expect(screen.queryByText('10-26')).toBeNull();
+    });
   });
 });

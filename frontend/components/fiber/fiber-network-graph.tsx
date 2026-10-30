@@ -272,7 +272,13 @@ export function FiberNetworkGraph({ network }: Props) {
               className="block h-auto w-full min-w-[640px] overflow-visible"
             >
               {sideX !== null && (
-                <text x={sideX + 10} y={48} fontSize="10.5" fill={FIBER_COLORS.note}>
+                <text
+                  x={width - 2}
+                  y={48}
+                  textAnchor="end"
+                  fontSize="10.5"
+                  fill={FIBER_COLORS.note}
+                >
                   not linked to the rest
                 </text>
               )}
@@ -388,6 +394,9 @@ export function FiberNetworkGraph({ network }: Props) {
                 );
               })}
             </svg>
+            <p className="text-text-dim mt-1 text-[11px] md:hidden">
+              scroll sideways for the whole network
+            </p>
           </div>
           <aside
             aria-label="Party or pair"

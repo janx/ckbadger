@@ -76,7 +76,8 @@ function switchedSub(record: ForkNodeRecord): string {
 
 function orphanFigures(record: ForkNodeRecord): TopicFigure[] {
   const fates = record.orphanFates;
-  if (!fates) return [];
+  // Nothing dropped yet: no orphan figures at all, rather than "0 uncles" and "0 of 0".
+  if (!fates || fates.blocks.total === 0) return [];
   const { blocks, userTransactions: txs } = fates;
   const rest = [
     blocks.canonicalNow > 0 &&
@@ -103,10 +104,11 @@ function orphanFigures(record: ForkNodeRecord): TopicFigure[] {
 }
 
 /** "79 of 266 were one miner against itself · median gap 78 ms" (Forks V67 list header). */
-function competingLine(record: ForkNodeRecord): string {
+function competingLine(record: ForkNodeRecord): string | null {
   const fates = record.orphanFates;
   if (!fates) return 'what became of the dropped blocks needs the node reader';
   const { compared, sameMiner, gapMedianMs } = fates.competing;
+  if (compared === 0) return null;
   return [
     `${sameMiner.toLocaleString('en-US')} of ${compared.toLocaleString('en-US')} were one miner against itself`,
     gapMedianMs !== null && `median gap ${formatExactDecimal(gapMedianMs, 'fork median gap')} ms`,
@@ -314,7 +316,9 @@ export default function ForksPage() {
             <span className="text-text-dim flex flex-wrap gap-x-4 gap-y-1 text-[11.5px]">
               <span>dashed: the block it dropped</span>
               <span className="text-jade">→ the block that took it as an uncle</span>
-              {data && <span>{competingLine(data.nodeRecord)}</span>}
+              {data && competingLine(data.nodeRecord) && (
+                <span>{competingLine(data.nodeRecord)}</span>
+              )}
             </span>
           }
         >
