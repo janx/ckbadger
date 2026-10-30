@@ -3887,10 +3887,6 @@ export const api = {
     return fetchApi(`/forks?${query}`);
   },
 
-  getForkDetail: (id: number): Promise<ReorgDetail> => {
-    return fetchApi(`/forks/${id}`);
-  },
-
   getForkOverview: (days = 30): Promise<ForkOverview> => {
     return fetchApi(`/forks/overview?days=${days}`);
   },
@@ -5109,8 +5105,8 @@ export const api = {
   // ---- F2 group `fiber` ----
   /**
    * D7: one fork event by its fork point height and the first 8 hex digits of the first block it
-   * dropped (`/forks/<fork_point_height>/<orphan_hash_prefix8>`). Needs the backend route of the
-   * same shape; the response is the existing fork detail.
+   * dropped (`/forks/<fork_point_height>/<orphan_hash_prefix8>`); the response is the fork detail.
+   * The millisecond-id route is gone, not redirected.
    */
   getForkAt: (forkPointNumber: number, orphanPrefix: string): Promise<ReorgDetail> =>
     fetchApi(`/forks/${forkPointNumber}/${orphanPrefix}`),

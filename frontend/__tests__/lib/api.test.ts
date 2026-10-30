@@ -1741,27 +1741,6 @@ describe('api', () => {
       expect(result.data[0].depth).toBe(3);
     });
 
-    it('getForkDetail returns event with orphaned data', async () => {
-      server.use(
-        http.get('/api/:network/v1/forks/1', () => {
-          return HttpResponse.json({
-            event: {
-              id: 1,
-              eventType: 'auto',
-              depth: 3,
-            },
-            orphanedBlocks: [{ blockNumber: 1001, transactionsCount: 5 }],
-            orphanedTransactions: [{ txHash: '0xaaa', blockNumber: 1001 }],
-          });
-        })
-      );
-
-      const result = await api.getForkDetail(1);
-      expect(result.event.id).toBe(1);
-      expect(result.orphanedBlocks).toHaveLength(1);
-      expect(result.orphanedTransactions).toHaveLength(1);
-    });
-
     it('getRecentReorg returns deep fork status', async () => {
       server.use(
         http.get('/api/:network/v1/forks/recent', () => {

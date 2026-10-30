@@ -120,12 +120,12 @@ describe('not-found identifier evidence', () => {
   it('does not search an unsupported identifier namespace', async () => {
     const search = vi.fn();
     const evidence = await resolveNotFoundEvidence(
-      { kind: 'fork', identifier: '7', checkedEndpoint: '/forks/7' },
+      { kind: 'fork', identifier: '7/a9bc1b75', checkedEndpoint: '/forks/7/a9bc1b75' },
       search
     );
     expect(search).not.toHaveBeenCalled();
     expect(evidence.query).toBeNull();
-    expect(evidence.checkedEndpoint).toBe('/forks/7');
+    expect(evidence.checkedEndpoint).toBe('/forks/7/a9bc1b75');
   });
 
   it('works outside QueryClientProvider and exposes search failure separately from the entity 404', async () => {

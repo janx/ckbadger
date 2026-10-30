@@ -298,51 +298,6 @@ export const handlers = [
     });
   }),
 
-  http.get(`${API_BASE}/forks/:id`, ({ params }) => {
-    const { id } = params;
-    return HttpResponse.json({
-      event: {
-        id: parseInt(id as string),
-        eventType: 'auto',
-        depth: 3,
-        forkPointNumber: 1000,
-        forkPointHash: '0xabc123',
-        oldTipNumber: 1003,
-        oldTipHash: '0xdef456',
-        newTipNumber: 1004,
-        newTipHash: '0x789abc',
-        orphanedBlocksCount: 3,
-        orphanedTxsCount: 15,
-        detectedAt: '2024-01-15T10:30:00Z',
-        resolvedAt: null,
-        resolvedBy: null,
-        resolutionAction: null,
-        resolutionNotes: null,
-      },
-      orphanedBlocks: [
-        {
-          number: 1001,
-          hash: '0x111',
-          parentHash: '0x000',
-          timestamp: '2024-01-15T10:28:00Z',
-          transactionsCount: 5,
-          minerLockHash: null,
-        },
-      ],
-      orphanedTransactions: [
-        {
-          hash: '0xaaa',
-          blockNumber: 1001,
-          blockHash: '0x111',
-          txIndex: 0,
-          inputsCount: 2,
-          outputsCount: 3,
-          totalCapacity: '100000000000',
-        },
-      ],
-    });
-  }),
-
   // Page one of an address activity feed: one unconfirmed row above one
   // committed row, exactly the shape the API serves.
   http.get(`${API_BASE}/addresses/:addr/activities`, ({ request }) => {

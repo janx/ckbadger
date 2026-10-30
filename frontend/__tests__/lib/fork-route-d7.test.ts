@@ -30,6 +30,10 @@ describe('D7 fork address /forks/<fork_point_height>/<orphan_hash_prefix8>', () 
     expect(parseMarkdownSourcePath('/forks/1793278270779').kind).toBe('unknown');
   });
 
+  it('keeps no client method for the removed millisecond route (D7: removed, not redirected)', () => {
+    expect(api).not.toHaveProperty('getForkDetail');
+  });
+
   it('renders the fork markdown titled by its fork point, and refuses a malformed address', async () => {
     const getForkAt = vi.spyOn(api, 'getForkAt').mockResolvedValue(uncleFixture as never);
     const page = await renderMarkdownPage({
