@@ -509,7 +509,9 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
   }, BigInt(0));
   const first = evidence.windows[0];
   if (!first || first.nominalDay !== 1)
-    throw new Error(`DAO evidence at #${evidence.tipBlockNumber} has no first-day cycle window`);
+    throw new Error(
+      `DAO evidence at ${formatBlockNumber(evidence.tipBlockNumber)} has no first-day cycle window`
+    );
   const ready = evidence.phase1ReadyByEpochLock;
   const waiting = evidence.phase1WaitingForEpochLock;
   const readyShannons = parseShannons(ready.capacity, 'phase-1 ready capacity');
@@ -520,7 +522,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     ready.count + waiting.count !== evidence.phase1.count
   )
     throw new Error(
-      `DAO phase-1 readiness does not partition the requests at #${evidence.tipBlockNumber}`
+      `DAO phase-1 readiness does not partition the requests at ${formatBlockNumber(evidence.tipBlockNumber)}`
     );
   return (
     <Section title="When deposits can leave" note={`at indexed epoch ${evidence.tipEpoch.display}`}>
@@ -661,7 +663,7 @@ function concentrationGroups(evidence: DaoEvidence) {
       groups.push({ label, value });
     } else if (value !== BigInt(0)) {
       throw new Error(
-        `DAO concentration at #${evidence.tipBlockNumber}: ${value} shannons in an empty rank group`
+        `DAO concentration at ${formatBlockNumber(evidence.tipBlockNumber)}: ${value} shannons in an empty rank group`
       );
     }
     before = Math.max(before, Math.min(bound, n));

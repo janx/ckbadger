@@ -22,10 +22,13 @@ function ar(value: string, context: string): bigint {
 }
 
 function chainMs(m: Milestone): number {
-  const ms = exactUnsignedInteger(m.chainTimeMs, `DAO AR milestone #${m.blockNumber} chain time`);
+  const ms = exactUnsignedInteger(
+    m.chainTimeMs,
+    `DAO AR milestone ${formatBlockNumber(m.blockNumber)} chain time`
+  );
   if (ms > BigInt(Number.MAX_SAFE_INTEGER))
     throw new Error(
-      `DAO AR milestone #${m.blockNumber} chain time ${m.chainTimeMs} is out of range`
+      `DAO AR milestone ${formatBlockNumber(m.blockNumber)} chain time ${m.chainTimeMs} is out of range`
     );
   return Number(ms);
 }
@@ -51,15 +54,20 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
   });
   const index = active ?? 0;
   const point = milestones[index];
-  const pointAr = ar(point.ar, `DAO AR at #${point.blockNumber}`);
+  const pointAr = ar(point.ar, `DAO AR at ${formatBlockNumber(point.blockNumber)}`);
   if (pointAr > tipAr)
-    throw new Error(`DAO AR at #${point.blockNumber} exceeds the tip AR at #${tip}`);
+    throw new Error(
+      `DAO AR at ${formatBlockNumber(point.blockNumber)} exceeds the tip AR at ${formatBlockNumber(tip)}`
+    );
   const result = owed[index];
   const years = milestones.slice(0, -2).map((from, k) => {
     const to = milestones[k + 1];
-    const a = ar(from.ar, `DAO AR at #${from.blockNumber}`);
-    const b = ar(to.ar, `DAO AR at #${to.blockNumber}`);
-    if (b < a) throw new Error(`DAO AR fell from #${from.blockNumber} to #${to.blockNumber}`);
+    const a = ar(from.ar, `DAO AR at ${formatBlockNumber(from.blockNumber)}`);
+    const b = ar(to.ar, `DAO AR at ${formatBlockNumber(to.blockNumber)}`);
+    if (b < a)
+      throw new Error(
+        `DAO AR fell from ${formatBlockNumber(from.blockNumber)} to ${formatBlockNumber(to.blockNumber)}`
+      );
     return { from, percent: formatPercent(b - a, a, 2) };
   });
   const yearMax = Math.max(...years.map((y) => Number(y.percent)), 0);
@@ -93,7 +101,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
             <OwedAmount
               shannons={parseShannons(
                 result.data.estimatedCompensation,
-                `DAO calculator compensation for #${point.blockNumber}`
+                `DAO calculator compensation for ${formatBlockNumber(point.blockNumber)}`
               )}
             />{' '}
             CKB compensation
