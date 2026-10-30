@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import type { ItemProtocol, ItemFeedContext, Transaction } from '@/lib/api';
+import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from '@/lib/api';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -12,8 +12,10 @@ import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
+  /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
+  title?: (version: ProtocolVersion<unknown>, index: number) => string;
 }
-export function ItemEvidence({ protocol }: ItemEvidenceProps) {
+export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const version =
     selected === null
@@ -81,7 +83,16 @@ export function ItemEvidence({ protocol }: ItemEvidenceProps) {
           )
       )}
       <ProtocolEvidence
-        title={`${protocol.kind} cell data · version ${protocol.versions.findIndex((v) => v.cell.txHash === cell.txHash && v.cell.outputIndex === cell.outputIndex) + 1}`}
+        title={
+          title
+            ? title(
+                version as ProtocolVersion<unknown>,
+                protocol.versions.findIndex(
+                  (v) => v.cell.txHash === cell.txHash && v.cell.outputIndex === cell.outputIndex
+                )
+              )
+            : `${protocol.kind} cell data · version ${protocol.versions.findIndex((v) => v.cell.txHash === cell.txHash && v.cell.outputIndex === cell.outputIndex) + 1}`
+        }
         dataHex={version.dataHex}
         fields={version.fields}
         decoded={version.decoded}

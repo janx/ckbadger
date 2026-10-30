@@ -269,6 +269,8 @@ export function AssetFeed({
                     activity={a}
                     headline={headline && <FeedHeadlineText headline={headline} />}
                     className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
+                    // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
+                    mark={item?.kind === 'identity' ? 'identities' : undefined}
                   />
                 );
               })

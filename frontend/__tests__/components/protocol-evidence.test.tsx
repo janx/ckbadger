@@ -273,3 +273,25 @@ describe('protocol byte evidence', () => {
     ).toThrow('invalid byte-map base offset');
   });
 });
+
+// F2 identities (round 2): ID-C12 / TX-16 — a tier-2 heading is 13 px in the quiet text colour.
+describe('protocol byte evidence in tier 2', () => {
+  it('takes the quiet tier-2 heading inside DetailTier2 and keeps the tier-1 one outside', async () => {
+    const { DetailTier2 } = await import('@/components/ui/detail-layout');
+    const { unmount } = render(
+      <DetailTier2>
+        <ProtocolEvidence title="Account cell data" dataHex="0x01aabbcc" fields={fields} />
+      </DetailTier2>
+    );
+    expect(screen.getByRole('heading', { name: 'Account cell data' })).toHaveClass(
+      'text-[13px]',
+      'text-text'
+    );
+    unmount();
+    render(<ProtocolEvidence title="Account cell data" dataHex="0x01aabbcc" fields={fields} />);
+    expect(screen.getByRole('heading', { name: 'Account cell data' })).toHaveClass(
+      'text-[15px]',
+      'text-text-bright'
+    );
+  });
+});

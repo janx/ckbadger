@@ -163,3 +163,29 @@ describe('itemFeedHeadline · other standards', () => {
     );
   });
 });
+
+// F2 identities (round 2): did:ckb and .bit Cell rows carry no protocol action, only the API's
+// coarse item action; each standard words it as its board does (ID-C1). "Handle changed" and
+// "Updated by its owner" need an API fact and are not inferred here.
+describe('identity standards word their coarse item action (ID-C1)', () => {
+  const self = (action: string): ItemFeedContext => ({
+    itemId: '0x' + '11'.repeat(32),
+    action,
+    protocolActions: [],
+    ringRelink: null,
+    actedOn: 'self',
+    createdCell: null,
+    consumedCell: null,
+  });
+  it('names did:ckb and .bit Cell rows in their own words', async () => {
+    const { IDENTITY_ACTION_WORDS } = await import('@/lib/feed-headlines');
+    const did = { kind: 'identity' as const, actionWords: IDENTITY_ACTION_WORDS.did_ckb };
+    const bitCell = { kind: 'identity' as const, actionWords: IDENTITY_ACTION_WORDS.bit_cell };
+    expect(itemFeedHeadline(self('mint'), null, TX, did).text).toBe('Created');
+    expect(itemFeedHeadline(self('update'), null, TX, did).text).toBe('Document updated');
+    expect(itemFeedHeadline(self('mint'), null, TX, bitCell).text).toBe('Minted as a .bit Cell');
+    expect(itemFeedHeadline(self('update'), null, TX, bitCell).text).toBe('Updated');
+    // An action the standard has no word for keeps the generic, exact name.
+    expect(itemFeedHeadline(self('renew'), null, TX, did).text).toBe('Identity renew');
+  });
+});

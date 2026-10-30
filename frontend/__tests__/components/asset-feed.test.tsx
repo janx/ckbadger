@@ -137,6 +137,37 @@ describe('Shared asset feeds', () => {
     expect(itemFeedHeadline(relinked, cell)).toEqual({ text, neighbour: true });
   });
 
+  // F2 identities (round 2), ID-C13: an in-place edit moves no item, so the classifier would
+  // leave it unmarked; an item feed's rows all belong to the item and carry its class mark.
+  it('marks every identity item-feed row with the identity class, even an in-place edit', async () => {
+    const edit = row({ action: 'update', protocolActions: ['edit_records'] });
+    render(
+      <AssetFeed
+        queryKey="identity-mark"
+        scope="This identity's whole life"
+        item={cell}
+        loadActivities={async () => ({
+          data: [edit],
+          total: 1,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })}
+        loadTransactions={async () => ({
+          data: [],
+          total: 0,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })}
+      />
+    );
+    const headline = await screen.findByText('.cell · edit records');
+    expect(
+      headline.closest('[data-role="headline"]')!.querySelector('[aria-label="identities class"]')
+    ).not.toBeNull();
+  });
+
   it('keeps the identity page up when a row breaks the feed contract, naming the tx', async () => {
     // T3 shape: shop.v3-first-name registered as a sub-name, rewriting its parent's ring pointer.
     const t3 = row(
