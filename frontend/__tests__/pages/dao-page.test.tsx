@@ -83,7 +83,7 @@ describe('DaoPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/at indexed epoch 185\+2\/4/)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      'DAO epoch lock met: 400.00000000 CKB in 1 withdrawal-request cells'
+      '400.00000000 CKB in 1 cell is past its window and can be claimed now'
     );
     expect(screen.getByLabelText('History reading')).toHaveTextContent('depositors2');
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');

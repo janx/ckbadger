@@ -499,21 +499,41 @@ function Swatch({ color }: { color: string }) {
   );
 }
 
+function plural(count: number, word: string): string {
+  return `${count.toLocaleString('en-US')} ${word}${count === 1 ? '' : 's'}`;
+}
+
 function Windows({ evidence }: { evidence: DaoEvidence }) {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const max = evidence.windows.reduce((largest, row) => {
     const value = parseShannons(row.capacity, 'window capacity');
     return value > largest ? value : largest;
   }, BigInt(0));
+  const first = evidence.windows[0];
+  if (!first || first.nominalDay !== 1)
+    throw new Error(`DAO evidence at #${evidence.tipBlockNumber} has no first-day cycle window`);
+  const ready = evidence.phase1ReadyByEpochLock;
+  const waiting = evidence.phase1WaitingForEpochLock;
+  const readyShannons = parseShannons(ready.capacity, 'phase-1 ready capacity');
+  const waitingShannons = parseShannons(waiting.capacity, 'phase-1 waiting capacity');
+  const requested = parseShannons(evidence.phase1.capacity, 'phase-1 capacity');
+  if (
+    readyShannons + waitingShannons !== requested ||
+    ready.count + waiting.count !== evidence.phase1.count
+  )
+    throw new Error(
+      `DAO phase-1 readiness does not partition the requests at #${evidence.tipBlockNumber}`
+    );
   return (
     <Section title="When deposits can leave" note={`at indexed epoch ${evidence.tipEpoch.display}`}>
-      <p className="text-text-dim mb-4 max-w-4xl text-[13px]">
-        A deposit runs in 180-epoch cycles from its creation epoch. Each of the 30 bars covers six
-        exact epochs (about one nominal day), measured from the indexed tip. These are epoch ranges,
-        not predicted calendar dates.
+      <p className="text-text mb-4 text-[13px] leading-relaxed">
+        A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A
+        withdrawal completes only at the end of a cycle. Each bar is the CKB whose current cycle
+        ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
+        calendar dates.
       </p>
       <div
-        className="grid grid-cols-10 gap-1 sm:grid-cols-[repeat(30,minmax(0,1fr))]"
+        className="grid grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]"
         role="list"
         aria-label="Phase-0 cycle boundaries"
       >
@@ -528,11 +548,12 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
               onFocus={() => setSelectedDay(row.nominalDay)}
               onMouseEnter={() => setSelectedDay(row.nominalDay)}
-              className="group flex h-28 flex-col justify-end focus:outline focus:outline-[#f2c55c]"
+              className="focus:outline-gold group flex h-28 flex-col justify-end focus:outline"
               title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
             >
               <div
-                className="w-full bg-[#f2c55c]/80 transition-colors group-hover:bg-[#f2c55c]"
+                data-window-bar
+                className={`bg-gold w-full rounded-t-sm transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
                 style={{ height: `${height}%` }}
               />
               <span className="text-text-dim mt-1 text-center font-mono text-[10px]">
@@ -542,9 +563,13 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           );
         })}
       </div>
+      <div className="text-text-dim mt-1 flex justify-between text-[11px]">
+        <span>days from now · 6 epochs a day</span>
+        <span>{plural(evidence.phase0.count, 'deposit')}</span>
+      </div>
       <div className="text-text-bright mt-2 min-h-5 text-[12px]" aria-live="polite">
         {selectedDay === null
-          ? 'Focus or hover a bar for its exact epoch range and amount.'
+          ? null
           : (() => {
               const row = evidence.windows[selectedDay - 1];
               return (
@@ -556,26 +581,51 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               );
             })()}
       </div>
-      <div className="text-text-dim mt-3 text-xs">
-        {evidence.phase0.count.toLocaleString()} live deposits ·{' '}
-        <Amount value={evidence.phase0.capacity} /> CKB across the full 180-epoch cycle.
-      </div>
-      <div className="border-base-border mt-5 grid gap-3 border-t pt-4 text-[12px] md:grid-cols-2">
-        <div>
-          <span className="text-[#f2c55c]">DAO epoch lock met:</span>{' '}
-          <Amount value={evidence.phase1ReadyByEpochLock.capacity} /> CKB in{' '}
-          {evidence.phase1ReadyByEpochLock.count.toLocaleString()} withdrawal-request cells
-        </div>
-        <div>
-          <span className="text-text-dim">Waiting for epoch lock:</span>{' '}
-          <Amount value={evidence.phase1WaitingForEpochLock.capacity} /> CKB in{' '}
-          {evidence.phase1WaitingForEpochLock.count.toLocaleString()} cells
-        </div>
-      </div>
-      <p className="text-text-dim mt-2 text-[11px]">
-        Epoch-lock readiness alone does not prove a complete withdraw transaction; the required
-        input, headers, witnesses and script execution still apply.
+      <p className="text-[12.5px]">
+        <span className="text-text-bright">
+          <Amount value={first.capacity} /> CKB
+        </span>{' '}
+        in {plural(first.count, 'deposit')} ends its cycle within a day.
       </p>
+      <div className="border-base-border-subtle mt-3 flex flex-col gap-1.5 border-t pt-3">
+        <span className="text-text-dim text-[12px]">
+          withdrawals already requested · {plural(evidence.phase1.count, 'cell')} ·{' '}
+          <span className="text-text">
+            <Amount value={evidence.phase1.capacity} /> CKB
+          </span>
+        </span>
+        {requested > BigInt(0) && (
+          <div
+            role="img"
+            aria-label={`Withdrawal requests: past the window ${formatCapacity(readyShannons)}, waiting ${formatCapacity(waitingShannons)}`}
+            className="flex h-2 w-full gap-0.5 overflow-hidden rounded"
+          >
+            <span
+              className="bg-gold opacity-45"
+              style={{ width: `${formatPercent(readyShannons, requested, 4)}%` }}
+            />
+            <span
+              className="bg-gold"
+              style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
+            />
+          </div>
+        )}
+        <span className="text-[12px] leading-relaxed">
+          <span className="text-text-bright">
+            <Amount value={ready.capacity} /> CKB
+          </span>{' '}
+          in {plural(ready.count, 'cell')} is past its window and can be claimed now; its
+          compensation stopped growing at the request.{' '}
+          <span className="text-text-bright">
+            <Amount value={waiting.capacity} /> CKB
+          </span>{' '}
+          in {plural(waiting.count, 'cell')} waits for its window.
+        </span>
+        <span className="text-text-dim text-[11px]">
+          Epoch-lock readiness alone does not prove a complete withdraw transaction; the required
+          input, headers, witnesses and script execution still apply.
+        </span>
+      </div>
     </Section>
   );
 }

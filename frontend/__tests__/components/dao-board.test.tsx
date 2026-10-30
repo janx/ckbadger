@@ -90,7 +90,10 @@ describe('DaoBoard', () => {
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
     );
-    expect(screen.getByText(/Waiting for epoch lock:/)).toBeInTheDocument();
+    // Board wording (DAO-14) for the same readiness partition.
+    expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
+      '500.00000000 CKB in 1 cell waits for its window.'
+    );
     expect(screen.getByText(/does not prove a complete withdraw transaction/)).toBeInTheDocument();
     expect(screen.getByTestId('sources')).toBeInTheDocument();
   });
@@ -428,5 +431,28 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     expect(grows()).not.toHaveTextContent(/anchor|observed span/);
     expect(screen.getByText(/365-day anchor/).closest('[data-tier="2"]')).not.toBeNull();
+  });
+});
+
+describe('DaoBoard when deposits can leave (DAO-14)', () => {
+  it('says what ends its cycle within a day and what is already requested', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const windows = screen.getByRole('region', { name: 'When deposits can leave' });
+    expect(windows).toHaveTextContent('days from now · 6 epochs a day2 deposits');
+    expect(windows).toHaveTextContent('300.00000000 CKB in 1 deposit ends its cycle within a day.');
+    expect(windows).toHaveTextContent('withdrawals already requested · 2 cells · 900.00000000 CKB');
+    expect(windows).toHaveTextContent(
+      '400.00000000 CKB in 1 cell is past its window and can be claimed now; its compensation stopped growing at the request. 500.00000000 CKB in 1 cell waits for its window.'
+    );
+    const ready = within(windows).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(ready).toHaveAccessibleName(
+      'Withdrawal requests: past the window 400.00000000 CKB, waiting 500.00000000 CKB'
+    );
+    // The next day's bar leads; the rest are quieter (board).
+    const bars = windows.querySelectorAll('[data-window-bar]');
+    expect(bars).toHaveLength(30);
+    expect(bars[0]).toHaveClass('opacity-90');
+    expect(bars[1]).toHaveClass('opacity-50');
   });
 });
