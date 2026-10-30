@@ -463,8 +463,31 @@ fn dotbit_account_witness(
             anyhow::ensure!(f.len() == 5, ".bit Record field count invalid");
             records.push(serde_json::json!({"type":std::str::from_utf8(molecule_bytes(f[0])?)?,"key":std::str::from_utf8(molecule_bytes(f[1])?)?,"label":std::str::from_utf8(molecule_bytes(f[2])?)?,"value":std::str::from_utf8(molecule_bytes(f[3])?).ok(),"valueHex":format!("0x{}",hex::encode(molecule_bytes(f[3])?)),"ttl":u32le(f[4])?}));
         }
+        // AccountCellData v1: id, account, registered_at, updated_at, status,
+        // records. v2 replaces updated_at by last_transfer_account_at,
+        // last_edit_manager_at, last_edit_records_at; v3 appends
+        // enable_sub_account (Uint8) and renew_sub_account_price (Uint64); v4
+        // appends approval.
+        // Uint64 fields as exact decimal strings (seconds, or shannons).
+        let u64_text = |index: usize| -> Result<Value> {
+            Ok(Value::String(u64le(fields[index])?.to_string()))
+        };
+        let (updated_at, last_transfer, last_edit_manager, last_edit_records) = if version == 1 {
+            (u64_text(3)?, Value::Null, Value::Null, Value::Null)
+        } else {
+            (Value::Null, u64_text(3)?, u64_text(4)?, u64_text(5)?)
+        };
+        let (enable_sub_account, renew_sub_account_price) = if version >= 3 {
+            anyhow::ensure!(
+                fields[8].len() == 1,
+                ".bit enable_sub_account width invalid"
+            );
+            (Value::from(fields[8][0]), u64_text(9)?)
+        } else {
+            (Value::Null, Value::Null)
+        };
         found = Some(
-            serde_json::json!({"account":account,"witnessVersion":version,"registeredAt":u64le(fields[2])?.to_string(),"status":fields[status_index][0],"records":records}),
+            serde_json::json!({"account":account,"witnessVersion":version,"registeredAt":u64le(fields[2])?.to_string(),"updatedAt":updated_at,"lastTransferAccountAt":last_transfer,"lastEditManagerAt":last_edit_manager,"lastEditRecordsAt":last_edit_records,"enableSubAccount":enable_sub_account,"renewSubAccountPrice":renew_sub_account_price,"status":fields[status_index][0],"records":records}),
         );
     }
     found.ok_or_else(|| {
@@ -524,7 +547,9 @@ pub(crate) fn protocol(
                     let (owner,manager)=dotbit_lock(&args)?;
                     let map=value.as_object_mut().expect("decoded account object");map.insert("accountId".into(),Value::String(format!("0x{}",hex::encode(&id))));map.insert("nextAccountId".into(),serde_json::to_value(account.next_account_id.map(|n|format!("0x{}",hex::encode(n))))?);map.insert("nextAccountName".into(),serde_json::to_value(next_name)?);map.insert("expiredAt".into(),serde_json::to_value(account.expired_at.map(|n|n.to_string()))?);map.insert("owner".into(),owner);map.insert("manager".into(),manager);
                     fields.push(field(&data,"accountDataHash",0,32)?);fields.push(field(&data,"accountId",32,52)?);if data.len()>=72 {fields.push(field(&data,"nextAccountId",52,72)?)}
-                    if data.len()>=80{fields.push(field(&data,"expiredAt",72,80)?)}value
+                    if data.len()>=80{fields.push(field(&data,"expiredAt",72,80)?)}
+                    // ID-B3: the account name the cell carries after expiredAt.
+                    if data.len()>80{fields.push(field(&data,"account",80,data.len())?)}value
                 },
                 S::DotCell=>{
                     let name=ckbadger_indexer::parser::DotCellParser::parse_name_data(&data)?;anyhow::ensure!(name.id.as_slice()==id,".cell payload identity mismatch");
