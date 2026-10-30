@@ -606,6 +606,7 @@ fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
             &TokenDailyDelta {
                 owned_capacity_delta: 1_000,
                 owned_knowledge_delta: 600,
+                tx_count: 1,
             },
         )
         .unwrap();
