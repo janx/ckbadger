@@ -69,7 +69,15 @@ function formatAr(raw: string): string {
   return formatAccumulatedRate(BigInt(raw));
 }
 
-function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+function Section({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="min-w-0" aria-label={title}>
       <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -749,7 +757,11 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
   return (
     <Section
       title="Who deposits"
-      note={`${evidence.concentration.currentDepositors.toLocaleString('en-US')} current phase-0 owners`}
+      note={
+        <Link href="/dao/depositors" className="text-text hover:text-text-bright hover:underline">
+          All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors →
+        </Link>
+      }
     >
       {total > BigInt(0) && (
         <div className="mb-4">

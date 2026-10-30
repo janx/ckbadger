@@ -548,8 +548,11 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     expect(
       within(who()).getByRole('list', { name: 'Largest depositors, compact' })
     ).toHaveTextContent('300.00000000');
-    // No "All N depositors" link: the API has no ranked list of every depositor (needs backend).
-    expect(within(who()).queryByRole('link', { name: /depositors →/ })).toBeNull();
+    // R2b-a 42: every depositor, ranked, on its own page (board: "All N depositors →").
+    expect(within(who()).getByRole('link', { name: 'All 2 depositors →' })).toHaveAttribute(
+      'href',
+      '/mainnet/dao/depositors'
+    );
   });
 });
 

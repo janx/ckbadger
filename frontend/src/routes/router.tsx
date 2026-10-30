@@ -145,6 +145,8 @@ const UncleRatePage = lazyPage(() => import('@/app/charts/uncle-rate/page'));
 const FiberChannelsPage = lazyPage(() => import('@/app/fiber/channels/page'));
 const FiberChannelDetailPage = lazyPage(() => import('@/app/fiber/channels/[id]/page'));
 const DaoPage = lazyPage(() => import('@/app/dao/page'));
+// F2 group dao (DAO-12): every depositor, ranked
+const DaoDepositorsPage = lazyPage(() => import('@/app/dao/depositors/page'));
 const HardforksPage = lazyPage(() => import('@/app/hardforks/page'));
 const NetworkPage = lazyPage(() => import('@/app/network/page'));
 const ScriptByCodeHashRoute = lazyParamPage(
@@ -420,6 +422,11 @@ export function createAppRouter(): RouteObject[] {
     {
       path: 'dao',
       element: <DaoPage />,
+    },
+    // F2 group dao (DAO-12)
+    {
+      path: 'dao/depositors',
+      element: <DaoDepositorsPage />,
     },
     {
       path: 'hardforks',
