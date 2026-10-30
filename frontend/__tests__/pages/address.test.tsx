@@ -265,6 +265,15 @@ describe('Address v3', () => {
       expect.stringContaining('/tokens/')
     );
   });
+  it('names an xUDT-compatible token standard, not its raw enum (BA-30)', async () => {
+    vi.mocked(api.getAddressTokens).mockResolvedValue(
+      pageFixture([{ ...addressTokensFixture[0], standard: 'xudt_compatible' }])
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    expect(await screen.findByText('xUDT-compatible')).toBeInTheDocument();
+    expect(screen.queryByText('xudt_compatible')).not.toBeInTheDocument();
+  });
   it('pages tokens beyond 100 without treating page length as holdings count', async () => {
     vi.mocked(api.getAddressHoldings).mockResolvedValue({
       ...holdingsFixture,

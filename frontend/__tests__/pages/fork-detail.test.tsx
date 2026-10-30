@@ -37,6 +37,9 @@ describe('ForkDetailPage', () => {
     expect(screen.getByText('Two branches at this switch')).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Historical old branch' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Historically adopted branch' })).toBeInTheDocument();
+    // FF-D1: the two branch tables stack full width; side by side they were crushed.
+    const branches = screen.getByRole('table', { name: 'Historical old branch' }).closest('.grid');
+    expect(branches).not.toHaveClass('xl:grid-cols-2');
     expect(screen.getAllByText('included as uncle').length).toBeGreaterThan(0);
     expect(screen.getAllByText('+50 ms').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Miner witness unavailable').length).toBeGreaterThan(0);
