@@ -10,6 +10,8 @@ import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ListTable } from '@/components/ui/list-table';
+import { CapacityPartition } from '@/components/ui/capacity-partition';
+import { scriptLabel } from '@/components/address/address-history';
 import type { Transaction } from '@/lib/api';
 
 const rewardBlock = {
@@ -192,5 +194,30 @@ describe('additive shared props (F2 blocks)', () => {
       />
     );
     expect(screen.getByRole('columnheader')).toHaveTextContent('A rich');
+  });
+});
+
+describe('Address board pieces (F2 blocks)', () => {
+  it('CapacityPartition keeps small parts visible and leaves a zero part out of the bar', () => {
+    render(
+      <CapacityPartition
+        subject="A"
+        total="1000"
+        occupied="1"
+        free="0"
+        daoFree="999"
+        minSegmentWidth={3}
+        daoFreeNote="free part of 1 deposit"
+      />
+    );
+    const parts = Array.from(document.querySelectorAll('[data-part]')) as HTMLElement[];
+    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'DAO free']);
+    expect(parts[0].style.minWidth).toBe('3px');
+    expect(screen.getByText(/free part of 1 deposit/)).toBeInTheDocument();
+    expect(screen.getByText('free')).toBeInTheDocument();
+  });
+  it('scriptLabel maps the closed label set and refuses an unknown one', () => {
+    expect(scriptLabel('NervosDAO', '0x1')).toEqual({ name: 'Nervos DAO', mark: 'dao' });
+    expect(() => scriptLabel('Mystery', '0x1')).toThrow('unknown script label "Mystery"');
   });
 });

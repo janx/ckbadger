@@ -185,6 +185,47 @@ function TokenAmount({ amount, decimals }: { amount: string; decimals: number | 
     </>
   );
 }
+/** "free part of 5 deposits": what the DAO free figure is made of (BA-37). */
+function daoFreeNote(holdings: AddressHoldings): string | undefined {
+  const { depositCellsCount: deposits, withdrawalRequestCellsCount: requests } = holdings;
+  if (deposits + requests === 0) return undefined;
+  const parts = [
+    ...(deposits ? [formatCount(deposits, 'deposit')] : []),
+    ...(requests ? [formatCount(requests, 'withdrawal request')] : []),
+  ];
+  return `free part of ${parts.join(' and ')}`;
+}
+
+/**
+ * Display order (BA-34): the four asset classes by the space they take, largest first; other
+ * scripts and plain CKB stay last.
+ */
+function spaceOrder(holdings: AddressHoldings) {
+  const assets = ADDRESS_CLASSES.slice(0, 4);
+  const occupied = (key: AddressCellClass) => BigInt(holdings.classes[key].occupiedCapacity);
+  return [
+    ...[...assets].sort((a, b) =>
+      occupied(b.key) > occupied(a.key) ? 1 : occupied(b.key) < occupied(a.key) ? -1 : 0
+    ),
+    ...ADDRESS_CLASSES.slice(4),
+  ];
+}
+
+/**
+ * Largest collections first; among equals the fully on-chain ones (BTC+CKB, then Pure CKB),
+ * then by name, so the order never depends on the API's id order (BA-34).
+ */
+function collectionOrder(groups: AddressHoldings['objectCollections']) {
+  const key = (g: AddressHoldings['objectCollections'][number]) => g.name ?? g.id ?? '';
+  return [...groups].sort(
+    (a, b) =>
+      b.itemCount - a.itemCount ||
+      b.compositionCounts.btcCkb - a.compositionCounts.btcCkb ||
+      b.compositionCounts.pureCkb - a.compositionCounts.pureCkb ||
+      key(a).localeCompare(key(b), 'en')
+  );
+}
+
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   return (
     <section aria-label="Balance" className="space-y-4">
@@ -198,6 +239,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
         occupied={holdings.occupiedCapacity}
         free={holdings.freeCapacity}
         daoFree={holdings.daoFreeCapacity}
+        minSegmentWidth={3}
+        daoFreeNote={daoFreeNote(holdings)}
       />
     </section>
   );
@@ -232,7 +275,7 @@ function HoldingSection({
       <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
         <h3 className="text-text-bright flex items-center gap-2 text-[15px] font-medium">
           <ClassMark kind={cls.mark} size={16} />
-          {kind === 'dao' ? 'Nervos DAO' : cls.label}
+          {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
         </h3>
         <span className="text-text-dim max-w-full text-xs">{summary}</span>
       </div>
@@ -372,7 +415,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             aria-label="Occupied capacity by class"
             className="flex h-2.5 gap-0.5 overflow-hidden rounded"
           >
-            {ADDRESS_CLASSES.map((c) => (
+            {spaceOrder(holdings).map((c) => (
               <span
                 key={c.key}
                 data-space-class={c.key}
@@ -389,7 +432,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             ))}
           </div>
           <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
-            {ADDRESS_CLASSES.map((c) => (
+            {spaceOrder(holdings).map((c) => (
               <button
                 key={c.key}
                 className="flex flex-wrap items-center gap-x-1.5 text-left"
@@ -433,7 +476,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               </p>
               <dl className="grid gap-3 py-3 text-xs sm:grid-cols-3">
                 <div>
-                  <dt className="text-text-dim">CKB held</dt>
+                  <dt className="text-text-dim">
+                    {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
+                  </dt>
                   <dd className="mt-1">
                     <ExactCkb
                       shannons={BigInt(holdings.classes.dao.capacity)}
@@ -464,7 +509,17 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               {deposits.data && <AddressStaleNotice error={deposits.error} label="DAO holdings" />}
               {deposits.data ? (
                 <>
-                  {deposits.data.data.map((cell) => {
+                  {(deposits.data.hasMore || daoPage.hasPrevious
+                    ? deposits.data.data
+                    : // The whole set is on this page: largest amount first (BA-34).
+                      [...deposits.data.data].sort((a, b) =>
+                        BigInt(b.capacity) > BigInt(a.capacity)
+                          ? 1
+                          : BigInt(b.capacity) < BigInt(a.capacity)
+                            ? -1
+                            : 0
+                      )
+                  ).map((cell) => {
                     const d = cell.dao;
                     if (!d)
                       throw new Error(
@@ -485,6 +540,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     return (
                       <div
                         key={`${cell.txHash}:${cell.outputIndex}`}
+                        data-dao-cell
                         className="border-base-elevated flex flex-wrap items-baseline justify-between gap-2 border-t py-2 text-xs"
                       >
                         <span className="text-text-dim">
@@ -547,6 +603,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               {tokens.data.data.map((t) => (
                 <div
                   key={t.typeScriptHash}
+                  data-token-row={t.typeScriptHash}
                   className="border-base-elevated flex flex-wrap items-baseline justify-between gap-2 border-b py-2 text-xs"
                 >
                   <span className="min-w-0">
@@ -554,13 +611,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       href={`/tokens/${t.typeScriptHash}`}
                       className="text-text-bright hover:text-jade"
                     >
-                      {t.name ?? t.symbol ?? (
+                      {tokenName(t) ?? (
                         <Hash hash={t.typeScriptHash} copyable={false} className="text-xs" />
                       )}
                     </Link>{' '}
                     <span className="text-text-dim">{formatStandard(t.standard)}</span>
-                    {t.name && (
-                      <span className="ml-2 text-[11px]">
+                    {sharedNames(tokens.data.data).has(tokenName(t) ?? '') && (
+                      <span data-type-hash className="ml-2 text-[11px]">
                         <Hash
                           hash={t.typeScriptHash}
                           startChars={4}
@@ -607,7 +664,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             <p className="text-text-dim py-4 text-xs">No objects held.</p>
           ) : objects.data ? (
             <>
-              {holdings.objectCollections.map((g) => {
+              {collectionOrder(holdings.objectCollections).map((g) => {
                 const items = objects.data.data.filter(
                   (c) => c.display?.collectionId === g.id && c.display.standard === g.standard
                 );
@@ -620,6 +677,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 return (
                   <div
                     key={`${g.standard}:${g.id}`}
+                    data-collection-row={g.name ?? g.id ?? `uncollected ${g.standard}`}
                     className="border-base-elevated space-y-2 border-b py-3"
                   >
                     <div className="flex flex-wrap justify-between gap-2 text-xs">
@@ -766,4 +824,21 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       </div>
     </section>
   );
+}
+
+// ---- F2 blocks (BA-32): a token's type hash only where two rows would read the same ----
+
+/** The name a token row shows: its name, else its symbol; null when it has neither. */
+function tokenName(t: { name: string | null; symbol: string | null }): string | null {
+  return t.name ?? t.symbol;
+}
+
+/** Names that two or more of these rows share; only those rows carry the type hash. */
+function sharedNames(rows: readonly { name: string | null; symbol: string | null }[]) {
+  const seen = new Map<string, number>();
+  for (const row of rows) {
+    const name = tokenName(row);
+    if (name !== null) seen.set(name, (seen.get(name) ?? 0) + 1);
+  }
+  return new Set([...seen].filter(([, n]) => n > 1).map(([name]) => name));
 }
