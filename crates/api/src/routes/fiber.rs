@@ -7,7 +7,10 @@ use ckbadger_store::types::FiberChannelState;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
+use crate::utils::script_resolution::registered_script_name;
 use crate::utils::{address_to_lock_script_hash, is_ckb_address, parse_hash32, script_to_address};
 use crate::AppState;
 
@@ -70,6 +73,9 @@ pub struct FiberChannelResponse {
 pub struct FiberParticipantResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
+    /// The script registry's name for the party's lock code hash ("JoyID",
+    /// "Default Lock", …); `None` when the lock is not indexed or unregistered.
+    pub lock_script_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +143,18 @@ pub struct FiberStatsResponse {
     pub closed_within_hour: u64,
     pub tip_block_number: i64,
     pub tip_chain_time_ms: String,
+    /// UDT-funded channels per token type hash ("1 in USDI"), by type hash.
+    pub channels_by_token: Vec<FiberTokenChannelsResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiberTokenChannelsResponse {
+    pub udt_type_hash: String,
+    /// The token's indexed symbol (the token page's); `None` when not indexed.
+    pub symbol: Option<String>,
+    pub channels: u64,
+    pub open_channels: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,9 +163,16 @@ pub struct FiberPartyResponse {
     pub lock_script_hash: String,
     /// Unknown is a valid observation when the indexed lock script is absent.
     pub address: Option<String>,
+    pub lock_script_name: Option<String>,
     pub channels: u64,
     pub open_channels: u64,
+    pub cooperatively_closed_channels: u64,
+    pub force_closed_waiting_channels: u64,
+    pub force_closed_settled_channels: u64,
     pub open_capacity: String,
+    /// The party's earliest channel opening (block and its header timestamp, ms).
+    pub first_open_block: i64,
+    pub first_open_timestamp: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +188,9 @@ pub struct FiberPairResponse {
     pub open_capacity: String,
     pub first_open_block: i64,
     pub last_open_block: i64,
+    /// Header timestamps (ms) of `firstOpenBlock` / `lastOpenBlock`.
+    pub first_open_timestamp: String,
+    pub last_open_timestamp: String,
     pub typical_closed_lifetime_ms: Option<String>,
 }
 
@@ -182,6 +210,9 @@ pub struct ListChannelsParams {
     limit: i64,
     cursor: Option<String>,
     state: Option<String>,
+    /// `id` (default, channel id ascending) or `capacity` (capacity
+    /// descending, channel id ascending among equals).
+    sort: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,7 +356,7 @@ fn observed_party(
         "Fiber party lock hash has {} bytes",
         lock_hash.len()
     );
-    let address = match store.get_lock_script(lock_hash)? {
+    let (address, lock_script_name) = match store.get_lock_script(lock_hash)? {
         Some(lock) => {
             let hash_type = u8::try_from(lock.hash_type)?;
             anyhow::ensure!(
@@ -334,16 +365,20 @@ fn observed_party(
                 "Fiber party lock payload does not hash to indexed lock 0x{}",
                 hex::encode(lock_hash)
             );
-            Some(
-                script_to_address(&lock.code_hash, lock.hash_type, &lock.args, network)
-                    .map_err(anyhow::Error::msg)?,
+            (
+                Some(
+                    script_to_address(&lock.code_hash, lock.hash_type, &lock.args, network)
+                        .map_err(anyhow::Error::msg)?,
+                ),
+                registered_script_name(store, &lock.code_hash)?,
             )
         }
-        None => None,
+        None => (None, None),
     };
     Ok(FiberParticipantResponse {
         lock_script_hash: format_hex(lock_hash),
         address,
+        lock_script_name,
     })
 }
 
@@ -443,9 +478,113 @@ struct PairCounts {
     waiting: u64,
     settled: u64,
     open_capacity: u128,
-    first_open_block: Option<i64>,
-    last_open_block: Option<i64>,
+    first_open: Option<(i64, i64)>,
+    last_open: Option<(i64, i64)>,
     closed_lifetimes: Vec<i64>,
+}
+
+#[derive(Default)]
+struct PartyCounts {
+    channels: u64,
+    open: u64,
+    cooperative: u64,
+    waiting: u64,
+    settled: u64,
+    open_capacity: u128,
+    first_open: Option<(i64, i64)>,
+}
+
+/// Every indexed channel, in channel-id order.
+fn load_channels(
+    store: &ckbadger_store::CkbadgerStore,
+) -> anyhow::Result<Vec<(Vec<u8>, ckbadger_store::types::FiberChannel)>> {
+    let mut channels = Vec::new();
+    let mut cursor: Option<Vec<u8>> = None;
+    loop {
+        let rows = store.list_fiber_channels(500, cursor.as_deref(), None)?;
+        let full = rows.len() == 500;
+        cursor = rows.last().map(|(id, _)| id.clone());
+        channels.extend(rows);
+        if !full {
+            break;
+        }
+    }
+    Ok(channels)
+}
+
+/// One canonical tip's Fiber channels and network aggregate, built once in
+/// one pinned read view and served from API memory (never written to a
+/// store) until the tip moves: channels change only when blocks commit.
+pub struct FiberView {
+    tip_number: i64,
+    tip_chain_time_ms: i64,
+    channels: Vec<(Vec<u8>, ckbadger_store::types::FiberChannel)>,
+    network: FiberNetworkResponse,
+}
+
+/// Call on a blocking thread.
+fn fiber_view(state: &AppState) -> anyhow::Result<Arc<FiberView>> {
+    let (tip_number, tip) = state
+        .store
+        .get_sync_tip_block()?
+        .ok_or_else(|| anyhow::anyhow!("Fiber network unavailable before first committed block"))?;
+    if let Some(view) = state.fiber_view.get(tip_number, &tip.hash) {
+        return Ok(view);
+    }
+    let channels = load_channels(&state.store)?;
+    let network = aggregate_network(
+        &state.store,
+        &state.ckb_network,
+        &channels,
+        tip_number,
+        &tip,
+    )?;
+    let view = Arc::new(FiberView {
+        tip_number,
+        tip_chain_time_ms: tip.chain_time_ms,
+        channels,
+        network,
+    });
+    state.fiber_view.set(tip_number, tip.hash, view.clone());
+    Ok(view)
+}
+
+/// `/fiber/channels` order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelSort {
+    Id,
+    Capacity,
+}
+
+/// A page cursor: the last row's channel id, plus its capacity under `sort=capacity`
+/// (`"<capacity>:0x<channel id>"`).
+fn parse_channel_cursor(
+    sort: ChannelSort,
+    raw: &str,
+) -> Result<(Option<u64>, Vec<u8>), ApiRouteError> {
+    match sort {
+        ChannelSort::Id => Ok((None, parse_hash32(raw, "cursor (expected a channel_id)")?)),
+        ChannelSort::Capacity => {
+            let invalid = || {
+                ApiError::bad_request(format!(
+                    "Invalid capacity cursor (expected <capacity>:0x<channel_id>): {raw}"
+                ))
+            };
+            let (capacity, id) = raw.split_once(':').ok_or_else(invalid)?;
+            let canonical = capacity == "0"
+                || (!capacity.is_empty()
+                    && !capacity.starts_with('0')
+                    && capacity.bytes().all(|b| b.is_ascii_digit()));
+            if !canonical {
+                return Err(invalid());
+            }
+            let capacity = capacity.parse::<u64>().map_err(|_| invalid())?;
+            Ok((
+                Some(capacity),
+                parse_hash32(id, "cursor (expected <capacity>:0x<channel_id>)")?,
+            ))
+        }
+    }
 }
 
 fn median_lifetime(mut durations: Vec<i64>) -> Option<String> {
@@ -459,10 +598,10 @@ fn median_lifetime(mut durations: Vec<i64>) -> Option<String> {
 fn aggregate_network(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
+    channels: &[(Vec<u8>, ckbadger_store::types::FiberChannel)],
+    tip_number: i64,
+    tip: &ckbadger_store::types::CachedBlockHeader,
 ) -> anyhow::Result<FiberNetworkResponse> {
-    let (tip_number, tip) = store
-        .get_sync_tip_block()?
-        .ok_or_else(|| anyhow::anyhow!("Fiber network unavailable before first committed block"))?;
     let mut summary = FiberStatsResponse {
         total_channels: 0,
         open_channels: 0,
@@ -477,19 +616,16 @@ fn aggregate_network(
         closed_within_hour: 0,
         tip_block_number: tip_number,
         tip_chain_time_ms: tip.chain_time_ms.to_string(),
+        channels_by_token: Vec::new(),
     };
-    let mut parties = BTreeMap::<Vec<u8>, (u64, u64, u128)>::new();
+    let mut tokens = BTreeMap::<Vec<u8>, (u64, u64)>::new();
+    let mut parties = BTreeMap::<Vec<u8>, PartyCounts>::new();
     let mut pairs = BTreeMap::<(Vec<u8>, Vec<u8>), PairCounts>::new();
     let mut all_closed_lifetimes = Vec::new();
     let mut first_open: Option<(i64, i64)> = None;
     let mut locked = 0u128;
-    let mut cursor: Option<Vec<u8>> = None;
-    loop {
-        let rows = store.list_fiber_channels(500, cursor.as_deref(), None)?;
-        if rows.is_empty() {
-            break;
-        }
-        for (id, ch) in &rows {
+    {
+        for (id, ch) in channels {
             let (lifetime, _) = channel_lifetime(store, id, ch, tip_number, tip.chain_time_ms)?;
             summary.total_channels = summary
                 .total_channels
@@ -497,6 +633,13 @@ fn aggregate_network(
                 .ok_or_else(|| anyhow::anyhow!("Fiber channel count overflow"))?;
             if first_open.is_none_or(|(block, _)| ch.open_block < block) {
                 first_open = Some((ch.open_block, ch.open_timestamp));
+            }
+            if let Some(udt) = &ch.udt_type_hash {
+                let row = tokens.entry(udt.clone()).or_default();
+                row.0 += 1;
+                if ch.state == FiberChannelState::Open {
+                    row.1 += 1;
+                }
             }
             if ch.state == FiberChannelState::Open {
                 summary.open_channels += 1;
@@ -525,13 +668,24 @@ fn aggregate_network(
                     hash.len()
                 );
                 let row = parties.entry(hash.clone()).or_default();
-                row.0 += 1;
-                if ch.state == FiberChannelState::Open {
-                    row.1 += 1;
-                    row.2 = row
-                        .2
-                        .checked_add(u128::from(ch.capacity))
-                        .ok_or_else(|| anyhow::anyhow!("Fiber party open capacity overflow"))?;
+                row.channels += 1;
+                if row
+                    .first_open
+                    .is_none_or(|(block, _)| ch.open_block < block)
+                {
+                    row.first_open = Some((ch.open_block, ch.open_timestamp));
+                }
+                match ch.state {
+                    FiberChannelState::Open => {
+                        row.open += 1;
+                        row.open_capacity = row
+                            .open_capacity
+                            .checked_add(u128::from(ch.capacity))
+                            .ok_or_else(|| anyhow::anyhow!("Fiber party open capacity overflow"))?;
+                    }
+                    FiberChannelState::CooperativelyClosed => row.cooperative += 1,
+                    FiberChannelState::ForceClosed => row.waiting += 1,
+                    FiberChannelState::Settled => row.settled += 1,
                 }
             }
             if ch.participants.len() == 2 && ch.participants[0] != ch.participants[1] {
@@ -539,14 +693,15 @@ fn aggregate_network(
                 key.sort();
                 let row = pairs.entry((key[0].clone(), key[1].clone())).or_default();
                 row.channels += 1;
-                row.first_open_block = Some(
-                    row.first_open_block
-                        .map_or(ch.open_block, |v| v.min(ch.open_block)),
-                );
-                row.last_open_block = Some(
-                    row.last_open_block
-                        .map_or(ch.open_block, |v| v.max(ch.open_block)),
-                );
+                if row
+                    .first_open
+                    .is_none_or(|(block, _)| ch.open_block < block)
+                {
+                    row.first_open = Some((ch.open_block, ch.open_timestamp));
+                }
+                if row.last_open.is_none_or(|(block, _)| ch.open_block > block) {
+                    row.last_open = Some((ch.open_block, ch.open_timestamp));
+                }
                 match ch.state {
                     FiberChannelState::Open => {
                         row.open += 1;
@@ -563,10 +718,6 @@ fn aggregate_network(
                     row.closed_lifetimes.push(lifetime);
                 }
             }
-            cursor = Some(id.clone());
-        }
-        if rows.len() < 500 {
-            break;
         }
     }
     summary.total_capacity_locked = locked.to_string();
@@ -574,22 +725,48 @@ fn aggregate_network(
     summary.typical_closed_lifetime_ms = median_lifetime(all_closed_lifetimes);
     summary.observed_parties = parties.len() as u64;
     summary.observed_pairs = pairs.len() as u64;
+    summary.channels_by_token = tokens
+        .into_iter()
+        .map(|(hash, (channels, open_channels))| {
+            Ok(FiberTokenChannelsResponse {
+                symbol: store.get_token(&hash)?.and_then(|token| token.symbol),
+                udt_type_hash: format_hex(&hash),
+                channels,
+                open_channels,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let parties = parties
         .into_iter()
-        .map(|(hash, (channels, open_channels, open_capacity))| {
+        .map(|(hash, counts)| {
             let party = observed_party(store, network, &hash)?;
+            let (first_open_block, first_open_timestamp) = counts
+                .first_open
+                .ok_or_else(|| anyhow::anyhow!("Fiber party has no first open block"))?;
             Ok(FiberPartyResponse {
                 lock_script_hash: party.lock_script_hash,
                 address: party.address,
-                channels,
-                open_channels,
-                open_capacity: open_capacity.to_string(),
+                lock_script_name: party.lock_script_name,
+                channels: counts.channels,
+                open_channels: counts.open,
+                cooperatively_closed_channels: counts.cooperative,
+                force_closed_waiting_channels: counts.waiting,
+                force_closed_settled_channels: counts.settled,
+                open_capacity: counts.open_capacity.to_string(),
+                first_open_block,
+                first_open_timestamp: first_open_timestamp.to_string(),
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let pairs = pairs
         .into_iter()
         .map(|((first, second), counts)| {
+            let (first_open_block, first_open_timestamp) = counts
+                .first_open
+                .ok_or_else(|| anyhow::anyhow!("Fiber pair has no first open block"))?;
+            let (last_open_block, last_open_timestamp) = counts
+                .last_open
+                .ok_or_else(|| anyhow::anyhow!("Fiber pair has no last open block"))?;
             Ok(FiberPairResponse {
                 first_lock_script_hash: format_hex(&first),
                 second_lock_script_hash: format_hex(&second),
@@ -599,12 +776,10 @@ fn aggregate_network(
                 force_closed_waiting_channels: counts.waiting,
                 force_closed_settled_channels: counts.settled,
                 open_capacity: counts.open_capacity.to_string(),
-                first_open_block: counts
-                    .first_open_block
-                    .ok_or_else(|| anyhow::anyhow!("Fiber pair has no first open block"))?,
-                last_open_block: counts
-                    .last_open_block
-                    .ok_or_else(|| anyhow::anyhow!("Fiber pair has no last open block"))?,
+                first_open_block,
+                last_open_block,
+                first_open_timestamp: first_open_timestamp.to_string(),
+                last_open_timestamp: last_open_timestamp.to_string(),
                 typical_closed_lifetime_ms: median_lifetime(counts.closed_lifetimes),
             })
         })
@@ -629,52 +804,78 @@ async fn list_channels(
         Some(s) => Some(parse_state_filter(s).map_err(ApiError::bad_request)?),
         None => None,
     };
-
-    let cursor_bytes = match params.cursor.as_deref() {
-        Some(c) => Some(parse_hash32(c, "cursor (expected a channel_id)")?),
-        None => None,
+    let sort = match params.sort.as_deref() {
+        None | Some("id") => ChannelSort::Id,
+        Some("capacity") => ChannelSort::Capacity,
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid sort '{other}': expected id|capacity"
+            )))
+        }
     };
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(|raw| parse_channel_cursor(sort, raw))
+        .transpose()?;
 
-    // Fetch limit+1 to determine has_more.
-    let store = state.store.clone();
-    let rows = tokio::task::spawn_blocking(move || {
-        store.list_fiber_channels(limit + 1, cursor_bytes.as_deref(), state_filter)
+    let (data, total, next_cursor) = tokio::task::spawn_blocking(move || {
+        let view = fiber_view(&state)?;
+        let mut rows: Vec<&(Vec<u8>, ckbadger_store::types::FiberChannel)> = view
+            .channels
+            .iter()
+            .filter(|(_, ch)| state_filter.is_none_or(|wanted| ch.state == wanted))
+            .collect();
+        if sort == ChannelSort::Capacity {
+            rows.sort_by(|(a_id, a), (b_id, b)| {
+                b.capacity.cmp(&a.capacity).then_with(|| a_id.cmp(b_id))
+            });
+        }
+        let total = i64::try_from(rows.len())?;
+        let after_cursor = |id: &Vec<u8>, ch: &ckbadger_store::types::FiberChannel| match &cursor {
+            None => true,
+            Some((None, cursor_id)) => id > cursor_id,
+            Some((Some(capacity), cursor_id)) => {
+                ch.capacity < *capacity || (ch.capacity == *capacity && id > cursor_id)
+            }
+        };
+        let page: Vec<_> = rows
+            .into_iter()
+            .filter(|(id, ch)| after_cursor(id, ch))
+            .take(limit + 1)
+            .collect();
+        let has_more = page.len() > limit;
+        let page = &page[..page.len().min(limit)];
+        let next_cursor = if has_more {
+            page.last().map(|(id, ch)| match sort {
+                ChannelSort::Id => format_hex(id),
+                ChannelSort::Capacity => format!("{}:{}", ch.capacity, format_hex(id)),
+            })
+        } else {
+            None
+        };
+        let data = page
+            .iter()
+            .map(|(id, ch)| {
+                enrich_channel(
+                    &state.store,
+                    &state.ckb_network,
+                    id,
+                    ch,
+                    view.tip_number,
+                    view.tip_chain_time_ms,
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok::<_, anyhow::Error>((data, total, next_cursor))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .map_err(|e| ApiError::internal(format!("{e:#}")))?;
 
-    let has_more = rows.len() > limit;
-    let page: Vec<_> = rows.into_iter().take(limit).collect();
-
-    let next_cursor = if has_more {
-        page.last().map(|(id, _)| format_hex(id))
-    } else {
-        None
-    };
-
-    let (tip_number, tip) = state
-        .store
-        .get_sync_tip_block()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::initializing("Fiber channels require an indexed tip"))?;
-    let data: Vec<FiberChannelResponse> = page
-        .iter()
-        .map(|(id, ch)| {
-            enrich_channel(
-                &state.store,
-                &state.ckb_network,
-                id,
-                ch,
-                tip_number,
-                tip.chain_time_ms,
-            )
-        })
-        .collect::<anyhow::Result<_>>()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    ok(CursorPaginatedResponse::without_total(
+    ok(CursorPaginatedResponse::new(
         data,
+        total,
         limit as i64,
         next_cursor,
     ))
@@ -765,25 +966,19 @@ async fn get_address_channels(
 
 /// GET /fiber/stats
 async fn get_stats(State(state): State<Arc<AppState>>) -> ApiResult<FiberStatsResponse> {
-    let store = state.store.clone();
-    let network = state.ckb_network.clone();
-    let stats = tokio::task::spawn_blocking(move || aggregate_network(&store, &network))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .summary;
-
-    ok(stats)
-}
-
-async fn get_network(State(state): State<Arc<AppState>>) -> ApiResult<FiberNetworkResponse> {
-    let store = state.store.clone();
-    let network = state.ckb_network.clone();
-    let data = tokio::task::spawn_blocking(move || aggregate_network(&store, &network))
+    let view = tokio::task::spawn_blocking(move || fiber_view(&state))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    ok(data)
+    ok(view.network.summary.clone())
+}
+
+async fn get_network(State(state): State<Arc<AppState>>) -> ApiResult<FiberNetworkResponse> {
+    let view = tokio::task::spawn_blocking(move || fiber_view(&state))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    ok(view.network.clone())
 }
 
 #[cfg(test)]
@@ -1030,6 +1225,7 @@ mod tests {
             closed_within_hour: 32,
             tip_block_number: 30,
             tip_chain_time_ms: "3000".into(),
+            channels_by_token: Vec::new(),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["totalChannels"], 42);

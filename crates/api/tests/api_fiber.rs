@@ -698,3 +698,178 @@ async fn fiber_force_close_evidence_serializes_decoded_commitment_delay() {
     assert_eq!(commitment["epochLockMetAtTip"], false);
     export_fiber_fixture("fiber-evidence-force-closed", &body);
 }
+
+// ---- Lane R2b-b: channel ordering, totals and network facts (FF-F3, FF-F4, FF-F5, N5) ----
+
+fn fiber_secp_party(args: u8) -> (Vec<u8>, ckbadger_store::types::LockScriptEntry) {
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let entry = ckbadger_store::types::LockScriptEntry {
+        code_hash: code_hash.clone(),
+        hash_type: 1,
+        args: vec![args; 20],
+    };
+    let hash = ckbadger_api::utils::address::compute_script_hash(&code_hash, 1, &[args; 20]);
+    (hash, entry)
+}
+
+#[tokio::test]
+async fn fiber_channels_sort_by_capacity_with_totals_and_network_names_parties_pairs_tokens() {
+    let store = test_store();
+    seed_fiber_headers(&store);
+    let (party_a, lock_a) = fiber_secp_party(0x11);
+    let (party_b, lock_b) = fiber_secp_party(0x22);
+    let base = FiberChannel {
+        funding_tx_hash: vec![0x11; 32],
+        funding_output_index: 0,
+        state: FiberChannelState::Open,
+        capacity: 300_000_000_000,
+        udt_type_hash: None,
+        udt_amount: None,
+        open_block: 10,
+        open_timestamp: 1_700_000_000_000,
+        close_tx_hash: None,
+        close_block: None,
+        close_timestamp: None,
+        commitment_tx_hash: None,
+        commitment_output_index: None,
+        delay_epoch: None,
+        settlement_tx_hash: None,
+        settlement_block: None,
+        settlement_timestamp: None,
+        participants: vec![party_a.clone(), party_b.clone()],
+        funding_lock_args: vec![0x44; 20],
+    };
+    let mut cooperative = base.clone();
+    cooperative.state = FiberChannelState::CooperativelyClosed;
+    cooperative.capacity = 200_000_000_000;
+    cooperative.close_tx_hash = Some(vec![0x22; 32]);
+    cooperative.close_block = Some(20);
+    cooperative.close_timestamp = Some(1_700_000_100_000);
+    let mut waiting = cooperative.clone();
+    waiting.state = FiberChannelState::ForceClosed;
+    waiting.capacity = 100_000_000_000;
+    waiting.close_tx_hash = Some(vec![0x33; 32]);
+    waiting.commitment_tx_hash = Some(vec![0x44; 32]);
+    waiting.commitment_output_index = Some(0);
+    waiting.delay_epoch = Some(0xa000_0100_0000_0001);
+    let mut usdi = base.clone();
+    usdi.capacity = 500_000_000_000;
+    usdi.udt_type_hash = Some(vec![0x77; 32]);
+    usdi.udt_amount = Some(1_000_000);
+    usdi.open_block = 20;
+    usdi.open_timestamp = 1_700_000_100_000;
+    let mut late = base.clone();
+    late.capacity = 100_000_000_000;
+    late.open_block = 30;
+    late.open_timestamp = 1_700_000_200_000;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_fiber_channel(&[0x01; 32], &base);
+    batch.put_fiber_channel(&[0x02; 32], &cooperative);
+    batch.put_fiber_channel(&[0x03; 32], &waiting);
+    batch.put_fiber_channel(&[0x04; 32], &usdi);
+    batch.put_fiber_channel(&[0x05; 32], &late);
+    batch.put_lock_script(&party_a, &lock_a);
+    batch.put_lock_script(&party_b, &lock_b);
+    batch.put_script_info(
+        &lock_a.code_hash,
+        &ckbadger_store::types::ScriptInfo {
+            code_hash: lock_a.code_hash.clone(),
+            hash_type: 1,
+            name: Some("Default Lock".into()),
+            ..Default::default()
+        },
+    );
+    batch.put_token(
+        &[0x77; 32],
+        &ckbadger_store::types::TokenInfo {
+            type_code_hash: vec![0x78; 32],
+            hash_type: 1,
+            type_args: vec![],
+            standard: "xudt".into(),
+            name: Some("USD Interest".into()),
+            symbol: Some("USDI".into()),
+            decimals: Some(6),
+            max_supply: None,
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    // FF-F4 / N5: open channels by capacity, with the filtered total.
+    let (status, page1) = get_json(&app, "/fiber/channels?state=open&sort=capacity&limit=2").await;
+    assert_eq!(status, StatusCode::OK, "{page1}");
+    assert_eq!(page1["total"], 3, "{page1}");
+    let ids: Vec<_> = page1["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["capacity"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            serde_json::json!("500000000000"),
+            serde_json::json!("300000000000")
+        ]
+    );
+    let cursor = page1["nextCursor"].as_str().unwrap().to_string();
+    assert_eq!(cursor, format!("300000000000:0x{}", "01".repeat(32)));
+    let (status, page2) = get_json(
+        &app,
+        &format!("/fiber/channels?state=open&sort=capacity&limit=2&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page2}");
+    assert_eq!(page2["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        page2["data"][0]["channelId"],
+        format!("0x{}", "05".repeat(32))
+    );
+    assert_eq!(page2["nextCursor"], serde_json::Value::Null);
+    // The default order keeps channel-id order and now carries the total too.
+    let (status, all) = get_json(&app, "/fiber/channels?limit=2").await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["total"], 5);
+    assert_eq!(
+        all["data"][0]["channelId"],
+        format!("0x{}", "01".repeat(32))
+    );
+    for bad in [
+        "/fiber/channels?sort=size",
+        "/fiber/channels?sort=capacity&cursor=0x0101",
+        "/fiber/channels?sort=capacity&cursor=abc:0x01",
+    ] {
+        let (status, body) = get_json(&app, bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+    }
+
+    // FF-F5: token-funded channels by token; FF-F3: party and pair facts.
+    let (status, network) = get_json(&app, "/fiber/network").await;
+    assert_eq!(status, StatusCode::OK, "{network}");
+    assert_eq!(
+        network["summary"]["channelsByToken"],
+        serde_json::json!([{ "udtTypeHash": format!("0x{}", "77".repeat(32)), "symbol": "USDI",
+            "channels": 1, "openChannels": 1 }])
+    );
+    let party = network["parties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["lockScriptHash"] == format!("0x{}", hex::encode(&party_a)))
+        .unwrap();
+    assert_eq!(party["cooperativelyClosedChannels"], 1, "{party}");
+    assert_eq!(party["forceClosedWaitingChannels"], 1, "{party}");
+    assert_eq!(party["forceClosedSettledChannels"], 0, "{party}");
+    assert_eq!(party["firstOpenBlock"], 10, "{party}");
+    assert_eq!(party["firstOpenTimestamp"], "1700000000000", "{party}");
+    assert_eq!(party["lockScriptName"], "Default Lock", "{party}");
+    assert_eq!(network["pairs"][0]["firstOpenTimestamp"], "1700000000000");
+    assert_eq!(network["pairs"][0]["lastOpenTimestamp"], "1700000200000");
+}
