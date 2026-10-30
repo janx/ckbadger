@@ -29,6 +29,7 @@ use tracing::instrument;
 mod dao_epoch;
 #[path = "dao_evidence.rs"]
 mod dao_evidence;
+pub(crate) use dao_evidence::dao_header_fields;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);

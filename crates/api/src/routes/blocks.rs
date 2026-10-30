@@ -32,6 +32,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/blocks/{id}", get(get_block))
         .route("/blocks/{id}/fee-stats", get(get_block_fee_stats))
         .route("/blocks/{id}/proposals", get(get_block_proposals))
+        .route("/blocks/{id}/uncles/{index}", get(get_block_uncle))
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +131,61 @@ pub struct RawBlockHeaderResponse {
     pub dao: String,
     pub proposals_hash: String,
     pub extra_hash: String,
+}
+
+/// `/blocks/{id}/uncles/{index}`: an uncle's full header exactly as the
+/// including canonical block embeds it. Uncles are never canonical, so they
+/// have no `/blocks/{hash}` page; this is their only detail view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleDetailResponse {
+    pub number: i64,
+    pub hash: String,
+    pub parent_hash: String,
+    pub timestamp: String,
+    pub epoch: String,
+    pub epoch_number: i64,
+    pub epoch_index: i32,
+    pub epoch_length: i32,
+    pub compact_target: String,
+    pub difficulty: String,
+    pub nonce: String,
+    pub version: i32,
+    pub transactions_root: String,
+    pub proposals_hash: String,
+    pub extra_hash: String,
+    pub dao: DaoHeaderResponse,
+    pub proposal_ids: Vec<String>,
+    pub included_by: UncleInclusionResponse,
+    pub canonical_at_height: BlockRefResponse,
+}
+
+/// A header DAO field: its raw bytes and their four u64 words, as exact
+/// decimal strings (each can exceed 2^53).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoHeaderResponse {
+    pub raw: String,
+    pub c: String,
+    pub ar: String,
+    pub s: String,
+    pub u: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleInclusionResponse {
+    pub number: i64,
+    pub hash: String,
+    /// The uncle's position in the including block's uncle list.
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockRefResponse {
+    pub number: i64,
+    pub hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +330,73 @@ struct BlockExtra {
     reward_finalizes_at: Option<i64>,
 }
 
+// ── Header field formatting ─────────────────────────────────────────────
+// One path for every header the API serves: a canonical block, the uncle
+// summaries its detail embeds, and an uncle's own detail.
+
+fn format_hash(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+/// RFC 3339 of a header's millisecond timestamp.
+fn format_header_timestamp(ms: i64, context: &str) -> Result<String, ApiRouteError> {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|date| date.to_rfc3339())
+        .ok_or_else(|| ApiError::internal(format!("{context}: invalid timestamp {ms} ms")))
+}
+
+/// `compactTarget` (hex) and the PoW difficulty it encodes — the single
+/// source of a header's difficulty.
+fn format_pow(compact_target: u32) -> (String, String) {
+    (
+        format!("{compact_target:#x}"),
+        compact_to_difficulty(compact_target).to_string(),
+    )
+}
+
+fn format_nonce(nonce: u128) -> String {
+    format!("{nonce:#x}")
+}
+
+fn format_epoch_display(index: impl std::fmt::Display, length: impl std::fmt::Display) -> String {
+    format!("{index}/{length}")
+}
+
+fn header_version(version: u32, context: &str) -> Result<i32, ApiRouteError> {
+    i32::try_from(version)
+        .map_err(|_| ApiError::internal(format!("{context}: version {version} exceeds i32")))
+}
+
+fn raw_header_response(header: &ckb_types::core::HeaderView) -> RawBlockHeaderResponse {
+    RawBlockHeaderResponse {
+        epoch: format!("{:#x}", header.epoch().full_value()),
+        dao: format_hash(header.dao().as_slice()),
+        proposals_hash: format_hash(header.proposals_hash().as_slice()),
+        extra_hash: format_hash(header.extra_hash().as_slice()),
+    }
+}
+
+/// The summary of an uncle embedded in a block, as block detail lists it.
+fn uncle_summary(
+    uncle: &ckb_types::core::UncleBlockView,
+    context: &str,
+) -> Result<UncleBlockResponse, ApiRouteError> {
+    let ms = i64::try_from(uncle.header().timestamp())
+        .map_err(|_| ApiError::internal(format!("{context}: uncle timestamp exceeds i64")))?;
+    Ok(UncleBlockResponse {
+        number: uncle.number(),
+        hash: format_hash(uncle.hash().as_slice()),
+        parent_hash: format_hash(uncle.header().parent_hash().as_slice()),
+        timestamp: format_header_timestamp(ms, context)?,
+        proposal_ids: uncle
+            .data()
+            .proposals()
+            .into_iter()
+            .map(|id| format_hash(id.as_slice()))
+            .collect(),
+    })
+}
+
 fn cached_header_to_block_response(
     block_num: i64,
     header: ckbadger_store::CachedBlockHeader,
@@ -286,29 +409,14 @@ fn cached_header_to_block_response(
             "block {block_num} header evidence missing from node DB; configure ckb_db_path"
         ))
     })?;
-    let nonce = format!("{:#x}", info.nonce);
-    let transactions_root = format!("0x{}", hex::encode(info.transactions_root));
-    let version = i32::try_from(info.version).map_err(|_| {
-        ApiError::internal(format!(
-            "block {block_num} version {} exceeds i32",
-            info.version
-        ))
-    })?;
+    let context = format!("cached block {block_num} (0x{})", hex::encode(&header.hash));
+    let nonce = format_nonce(info.nonce);
+    let transactions_root = format_hash(&info.transactions_root);
+    let version = header_version(info.version, &context)?;
     // Difficulty is derived from the header's stored compact_target — the
     // single source of truth for per-block PoW difficulty.
-    let compact_target = format!("{:#x}", header.compact_target);
-    let difficulty = compact_to_difficulty(header.compact_target).to_string();
-
-    // Format timestamp from millis to RFC3339
-    let timestamp = chrono::DateTime::from_timestamp_millis(header.timestamp)
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "cached block {block_num} (0x{}): invalid timestamp {} ms",
-                hex::encode(&header.hash),
-                header.timestamp
-            ))
-        })?
-        .to_rfc3339();
+    let (compact_target, difficulty) = format_pow(header.compact_target);
+    let timestamp = format_header_timestamp(header.timestamp, &context)?;
 
     Ok(BlockResponse {
         number: block_num,
@@ -318,7 +426,7 @@ fn cached_header_to_block_response(
         transactions_count: header.transactions_count,
         proposals_count: header.proposals_count,
         uncles_count: header.uncles_count,
-        epoch: format!("{}/{}", header.epoch_index, header.epoch_length),
+        epoch: format_epoch_display(header.epoch_index, header.epoch_length),
         epoch_number: header.epoch_number,
         epoch_index: header.epoch_index,
         epoch_length: header.epoch_length,
@@ -607,11 +715,6 @@ fn read_block_evidence(
         .and_then(|n| n.checked_add(1))
         .filter(|n| *n > 0)
         .ok_or_else(|| error(format!("invalid canonical tip {tip}")))?;
-    let timestamp = |ms: i64| {
-        chrono::DateTime::from_timestamp_millis(ms)
-            .map(|date| date.to_rfc3339())
-            .ok_or_else(|| error(format!("invalid timestamp {ms}")))
-    };
     let parent_timestamp = if block_num == 0 {
         None
     } else {
@@ -619,40 +722,17 @@ fn read_block_evidence(
             .get_block_header(block_num - 1)
             .map_err(|e| error(e.to_string()))?
             .ok_or_else(|| error(format!("missing canonical parent at {}", block_num - 1)))?;
-        Some(timestamp(parent.timestamp)?)
+        Some(format_header_timestamp(parent.timestamp, &context)?)
     };
     let miner_message_text = miner_message
         .as_ref()
         .and_then(|message| std::str::from_utf8(message).ok())
         .map(str::to_owned);
-    let raw_header = RawBlockHeaderResponse {
-        epoch: format!("{:#x}", block.epoch().full_value()),
-        dao: format!("0x{}", hex::encode(block.header().dao().as_slice())),
-        proposals_hash: format!(
-            "0x{}",
-            hex::encode(block.header().proposals_hash().as_slice())
-        ),
-        extra_hash: format!("0x{}", hex::encode(block.header().extra_hash().as_slice())),
-    };
+    let raw_header = raw_header_response(&block.header());
     let uncles = block
         .uncles()
         .into_iter()
-        .map(|uncle| {
-            let ms = i64::try_from(uncle.header().timestamp())
-                .map_err(|_| error("uncle timestamp exceeds i64".into()))?;
-            Ok(UncleBlockResponse {
-                number: uncle.number(),
-                hash: format!("0x{}", hex::encode(uncle.hash().as_slice())),
-                parent_hash: format!("0x{}", hex::encode(uncle.header().parent_hash().as_slice())),
-                timestamp: timestamp(ms)?,
-                proposal_ids: uncle
-                    .data()
-                    .proposals()
-                    .into_iter()
-                    .map(|id| format!("0x{}", hex::encode(id.as_slice())))
-                    .collect(),
-            })
-        })
+        .map(|uncle| uncle_summary(&uncle, &context))
         .collect::<Result<Vec<_>, ApiRouteError>>()?;
     let size = block.data().as_slice().len();
     let overhead_size = size
@@ -750,19 +830,18 @@ fn resolve_block_cycles(
     ))
 }
 
-async fn get_block(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> ApiResult<BlockResponse> {
+/// Resolve `/blocks/{id}`'s `{id}` — a block number or a 0x-prefixed hash —
+/// to the canonical indexed block. `None` when no canonical block matches.
+async fn resolve_canonical_block(
+    state: &Arc<AppState>,
+    id: &str,
+) -> Result<Option<(i64, ckbadger_store::CachedBlockHeader)>, ApiRouteError> {
     let store = state.store.clone();
-    let block_result: Option<(i64, ckbadger_store::CachedBlockHeader)> = if id.starts_with("0x") {
-        let hash = parse_hash32(&id, "block hash")?;
-
-        let store_c = store.clone();
-        let hash_c = hash.clone();
+    if id.starts_with("0x") {
+        let hash = parse_hash32(id, "block hash")?;
         tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
-            if let Some(block_num) = store_c.get_block_number_by_hash(&hash_c)? {
-                if let Some(header) = store_c.get_block_header(block_num)? {
+            if let Some(block_num) = store.get_block_number_by_hash(&hash)? {
+                if let Some(header) = store.get_block_header(block_num)? {
                     return Ok(Some((block_num, header)));
                 }
             }
@@ -770,22 +849,25 @@ async fn get_block(
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))
     } else {
-        let number = parse_block_number(&id, "block number")?;
-
-        let store_c = store.clone();
+        let number = parse_block_number(id, "block number")?;
         tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
-            Ok(store_c
+            Ok(store
                 .get_block_header(number)?
                 .map(|header| (number, header)))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
+        .map_err(|e| ApiError::internal(e.to_string()))
+    }
+}
 
-    match block_result {
+async fn get_block(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<BlockResponse> {
+    match resolve_canonical_block(&state, &id).await? {
         Some((block_num, header)) => {
             let activation = {
                 let stats_store_c = state.store.clone();
@@ -811,6 +893,131 @@ async fn get_block(
         }
         None => Err(ApiError::not_found("Block not found")),
     }
+}
+
+async fn get_block_uncle(
+    State(state): State<Arc<AppState>>,
+    Path((id, index)): Path<(String, String)>,
+) -> ApiResult<UncleDetailResponse> {
+    let index: usize = index.parse().map_err(|_| {
+        ApiError::bad_request(format!(
+            "Invalid uncle index: expected a non-negative integer, got {index:?}"
+        ))
+    })?;
+    let (block_num, header) = resolve_canonical_block(&state, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Block not found"))?;
+    let node = state.ckb_store.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "block {block_num} uncles require the node DB; configure ckb_db_path"
+        ))
+    })?;
+    let store = state.store.clone();
+    let uncle = tokio::task::spawn_blocking(move || {
+        read_block_uncle(&node, &store, block_num, &header, index)
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("block {block_num} uncle task: {e}")))??;
+    ok(uncle)
+}
+
+fn read_block_uncle(
+    node: &CkbChainReader,
+    store: &ckbadger_store::CkbadgerStore,
+    block_num: i64,
+    header: &ckbadger_store::CachedBlockHeader,
+    index: usize,
+) -> Result<UncleDetailResponse, ApiRouteError> {
+    let context = format!(
+        "block {block_num} 0x{} uncle {index}",
+        hex::encode(&header.hash)
+    );
+    let error = |detail: String| ApiError::internal(format!("{context}: {detail}"));
+    let hash: [u8; 32] = header
+        .hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| error("invalid stored block hash".into()))?;
+    let block = node
+        .get_block(&hash)
+        .ok_or_else(|| error("indexed block is unavailable or malformed in the node DB".into()))?;
+    let uncle_count = block.data().uncles().len();
+    if block.number() != block_num as u64 || uncle_count != header.uncles_count as usize {
+        return Err(error(format!(
+            "node block metadata mismatch: number={}, uncles={uncle_count}, indexed uncles={}",
+            block.number(),
+            header.uncles_count
+        )));
+    }
+    let uncle = block.uncles().get(index).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "Block {block_num} has {uncle_count} uncle(s); no uncle at index {index}"
+        ))
+    })?;
+    let summary = uncle_summary(&uncle, &context)?;
+    let uncle_header = uncle.header();
+    let number = i64::try_from(summary.number)
+        .map_err(|_| error(format!("uncle number {} exceeds i64", summary.number)))?;
+    if number >= block_num {
+        return Err(error(format!(
+            "uncle height {number} is not below its including block"
+        )));
+    }
+    let canonical = store
+        .get_block_header(number)
+        .map_err(|e| error(e.to_string()))?
+        .ok_or_else(|| {
+            error(format!(
+                "no canonical block indexed at uncle height {number}"
+            ))
+        })?;
+    if canonical.hash.as_slice() == uncle.hash().as_slice() {
+        return Err(error(format!(
+            "uncle {} is the canonical block at height {number}",
+            summary.hash
+        )));
+    }
+    let epoch = uncle_header.epoch();
+    let (compact_target, difficulty) = format_pow(uncle_header.compact_target());
+    let raw = raw_header_response(&uncle_header);
+    let [c, ar, s, u] = super::dao::dao_header_fields(uncle_header.dao().as_slice(), &context)
+        .map_err(|e| error(format!("{e:#}")))?;
+    Ok(UncleDetailResponse {
+        number,
+        hash: summary.hash,
+        parent_hash: summary.parent_hash,
+        timestamp: summary.timestamp,
+        epoch: format_epoch_display(epoch.index(), epoch.length()),
+        epoch_number: i64::try_from(epoch.number())
+            .map_err(|_| error(format!("uncle epoch {} exceeds i64", epoch.number())))?,
+        // EpochNumberWithFraction packs index and length in 16 bits each.
+        epoch_index: epoch.index() as i32,
+        epoch_length: epoch.length() as i32,
+        compact_target,
+        difficulty,
+        nonce: format_nonce(uncle_header.nonce()),
+        version: header_version(uncle_header.version(), &context)?,
+        transactions_root: format_hash(uncle_header.transactions_root().as_slice()),
+        proposals_hash: raw.proposals_hash,
+        extra_hash: raw.extra_hash,
+        dao: DaoHeaderResponse {
+            raw: raw.dao,
+            c: c.to_string(),
+            ar: ar.to_string(),
+            s: s.to_string(),
+            u: u.to_string(),
+        },
+        proposal_ids: summary.proposal_ids,
+        included_by: UncleInclusionResponse {
+            number: block_num,
+            hash: format_hash(&hash),
+            index,
+        },
+        canonical_at_height: BlockRefResponse {
+            number,
+            hash: format_hash(&canonical.hash),
+        },
+    })
 }
 
 #[derive(Debug, Deserialize)]
