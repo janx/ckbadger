@@ -28,7 +28,7 @@ import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
 
 const activityFilters = [
   ['all', 'All'],
@@ -301,7 +301,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         <span className="text-text-dim">
                           {n.expiredAt === null
                             ? 'Expiry unavailable'
-                            : `expires ${new Date(n.expiredAt * 1000).toISOString().slice(0, 10)}`}
+                            : `expires ${formatUtc8Date(n.expiredAt * 1000)}`}
                         </span>
                       </div>
                     ))}

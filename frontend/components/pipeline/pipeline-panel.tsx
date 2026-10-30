@@ -65,6 +65,7 @@ import {
 } from '@/components/pipeline/pipeline-tooltip';
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/window-ruler';
+import { formatBlockNumber } from '@/lib/format-block';
 
 const SVG_LABEL =
   'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase';
@@ -104,7 +105,7 @@ function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined })
     <div data-testid="pipeline-stats" className="flex flex-wrap gap-x-[18px] gap-y-1">
       <Stat
         label="Tip"
-        value={snapshot ? `#${fmtInt(snapshot.tip.number)}` : '—'}
+        value={snapshot ? `${formatBlockNumber(snapshot.tip.number)}` : '—'}
         tone="text-text-bright"
       />
     </div>
@@ -753,21 +754,21 @@ function selectionText(
     const state = block?.proposals.find((p) => p.txHash === hash)?.state;
     return {
       tag: 'proposed',
-      text: `proposal in #${fmtInt(proposed.proposedIn.block)} · can commit next? ${commitNote(proposed.proposedIn.block, state === 'early', s)}`,
+      text: `proposal in ${formatBlockNumber(proposed.proposedIn.block)} · can commit next? ${commitNote(proposed.proposedIn.block, state === 'early', s)}`,
     };
   }
   for (const b of s.blocks) {
     if (b.cellbase.hash === hash) {
       return {
         tag: 'cellbase',
-        text: `first tx of #${fmtInt(b.number)}${b.cellbase.pays ? ` · pays the reward of #${fmtInt(b.cellbase.pays.number)}` : ''}`,
+        text: `first tx of ${formatBlockNumber(b.number)}${b.cellbase.pays ? ` · pays the reward of ${formatBlockNumber(b.cellbase.pays.number)}` : ''}`,
       };
     }
     const tx = b.txs.find((t) => t.hash === hash);
     if (tx) {
       return {
         tag: 'committed',
-        text: `committed in #${fmtInt(b.number)} · its proposal is in #${fmtInt(tx.proposedIn.block)}, ${b.number - tx.proposedIn.block} blocks earlier`,
+        text: `committed in ${formatBlockNumber(b.number)} · its proposal is in ${formatBlockNumber(tx.proposedIn.block)}, ${b.number - tx.proposedIn.block} blocks earlier`,
       };
     }
   }

@@ -2,9 +2,16 @@
 
 import Link from '@/components/ui/link';
 import { DeepForkStatus } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface DeepForkAlertProps {
   status: DeepForkStatus;
+}
+
+/** A detected deep fork always reports its heights; a missing one is a contract violation. */
+function detectedHeight(value: number | null, field: string): string {
+  if (value === null) throw new Error(`Deep fork detected but ${field} is missing`);
+  return formatBlockNumber(value);
 }
 
 export function DeepForkAlert({ status }: DeepForkAlertProps) {
@@ -34,15 +41,19 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
             </div>
             <div className="flex flex-col">
               <span className="text-xs uppercase text-white/70">DB Tip</span>
-              <span className="font-mono font-bold">#{status.dbTip?.toLocaleString()}</span>
+              <span className="font-mono font-bold">{detectedHeight(status.dbTip, 'dbTip')}</span>
             </div>
             <div className="flex flex-col">
               <span className="text-xs uppercase text-white/70">Chain Tip</span>
-              <span className="font-mono font-bold">#{status.chainTip?.toLocaleString()}</span>
+              <span className="font-mono font-bold">
+                {detectedHeight(status.chainTip, 'chainTip')}
+              </span>
             </div>
             <div className="flex flex-col">
               <span className="text-xs uppercase text-white/70">Fork Point</span>
-              <span className="font-mono font-bold">#{status.forkPoint?.toLocaleString()}</span>
+              <span className="font-mono font-bold">
+                {detectedHeight(status.forkPoint, 'forkPoint')}
+              </span>
             </div>
 
             <Link

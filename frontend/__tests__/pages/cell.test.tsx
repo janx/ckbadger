@@ -115,9 +115,9 @@ describe('CellDetailPage', () => {
     expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
     expect(screen.getByText(/input #2/)).toBeInTheDocument();
     expect(screen.getByText(/30 s on chain/)).toBeInTheDocument();
-    // Created / Spent times read as UTC clock, never raw ISO (#16, SC-C1 row).
-    expect(screen.getByText('2024-01-01 00:00:00 UTC')).toBeInTheDocument();
-    expect(screen.getByText('2024-01-02 00:00:00 UTC')).toBeInTheDocument();
+    // Created / Spent times read as the site UTC+8 clock, never raw ISO (#16, SC-C1 row).
+    expect(screen.getByText('2024-01-01 08:00:00 UTC+8')).toBeInTheDocument();
+    expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
   });

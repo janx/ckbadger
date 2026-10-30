@@ -13,6 +13,7 @@ import { shadeStep, tok } from '@/lib/pipeline/encoding';
 import { inWindow, tail4, windowRange } from '@/lib/pipeline/layout';
 import { fmtInt } from '@/components/pipeline/svg-text';
 import { formatCapacity } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 /** What a hover explains: a header with a tag, label/value rows and an optional footnote. */
 export interface TipContent {
@@ -39,7 +40,7 @@ export const pct = (a: number, b: number) => {
   return p <= 0 ? '0%' : p < 0.01 ? '<0.01%' : p < 1 ? `${p.toFixed(2)}%` : `${p.toFixed(1)}%`;
 };
 export const shortHash = (h: string) => `${h.slice(0, 8)}…${h.slice(-6)}`;
-const num = (n: number) => `#${fmtInt(n)}`;
+const num = (n: number) => `${formatBlockNumber(n)}`;
 const STEPS = ['few', 'moderate', 'many', 'very many'];
 const TONE = {
   pending: tok('aqua'),

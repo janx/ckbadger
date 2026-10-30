@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   truncateHash,
@@ -8,8 +10,9 @@ import {
   formatCompactCkbDelta,
   formatTimeAgo,
   formatDurationMs,
-  formatUtcClock,
-  formatUnixSecondsUtc,
+  formatUtc8DateTime,
+  formatUtc8Time,
+  formatUnixSecondsUtc8,
   hexToBytes,
   bytesToHex,
 } from '@/lib/utils';
@@ -128,11 +131,48 @@ describe('formatDurationMs', () => {
   });
 });
 
-describe('formatUtcClock / formatUnixSecondsUtc', () => {
-  it('drops raw Z suffixes and formats protocol Unix seconds as UTC', () => {
-    expect(formatUtcClock('2026-10-22T14:43:55.651Z')).toBe('2026-10-22 14:43:55 UTC');
-    expect(formatUnixSecondsUtc('1700000000')).toBe('2023-11-14 22:13:20 UTC');
-    expect(() => formatUnixSecondsUtc('not-a-second')).toThrow(/Invalid Unix seconds/);
+describe('one site clock: UTC+8 (D2)', () => {
+  it('writes chain and observer times as UTC+8 whatever the input form', () => {
+    expect(formatUtc8DateTime('2026-10-22T14:43:55.651Z')).toBe('2026-10-22 22:43:55 UTC+8');
+    expect(formatUtc8DateTime('2026-10-20T16:00:00+00:00')).toBe('2026-10-21 00:00:00 UTC+8');
+    expect(formatUtc8DateTime(String(Date.parse('2024-01-01T15:59:59Z')))).toBe(
+      '2024-01-01 23:59:59 UTC+8'
+    );
+    expect(formatUtc8DateTime(Date.parse('2024-01-01T16:00:00Z'))).toBe(
+      '2024-01-02 00:00:00 UTC+8'
+    );
+    expect(formatUtc8Time('2026-10-22T14:43:55.651Z')).toBe('22:43:55 UTC+8');
+    expect(formatUnixSecondsUtc8('1700000000')).toBe('2023-11-15 06:13:20 UTC+8');
+  });
+  it('rejects malformed times instead of printing them', () => {
+    expect(() => formatUtc8DateTime('not-a-date')).toThrow('Invalid timestamp "not-a-date"');
+    expect(() => formatUtc8DateTime(-1)).toThrow('Invalid timestamp -1');
+    expect(() => formatUnixSecondsUtc8('not-a-second')).toThrow(/Invalid Unix seconds/);
+  });
+  it('is the only time formatter page code uses: no UTC clocks remain', () => {
+    const root = join(__dirname, '..', '..');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.(tsx|ts)$/.test(name)) {
+          const text = readFileSync(path, 'utf8');
+          text.split('\n').forEach((line, i) => {
+            if (
+              /formatUtcClock|formatUnixSecondsUtc\b|formatObserverTimeUtc8|toUTCString\(|toISOString\(\)\.slice\(11/.test(
+                line
+              )
+            )
+              offenders.push(`${relative(root, path)}:${i + 1}`);
+          });
+        }
+      }
+    };
+    walk(join(root, 'app'));
+    walk(join(root, 'components'));
+    walk(join(root, 'lib'));
+    expect(offenders).toEqual([]);
   });
 });
 

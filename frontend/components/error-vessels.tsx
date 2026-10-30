@@ -6,6 +6,7 @@ import { layoutVessels, readVessel, type DrawVessel, type VesselRect } from '@/l
 import type { VesselSnapshot } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import Link from '@/components/ui/link';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   className?: string;
@@ -219,7 +220,7 @@ export function VesselsCaption() {
       {visible} live Common knowledge cells from {network}: first 6 transactions and first 4 outputs
       in each of {blocksInWindow} recent indexed blocks, up to 64 vessels, anchored at{' '}
       <Link href={`/blocks/${anchorBlock}`} className="underline">
-        block #{anchorBlock.toLocaleString()}
+        block {formatBlockNumber(anchorBlock)}
       </Link>
       .{' '}
       {state === 'live'

@@ -43,6 +43,19 @@ describe('Inventory rows', () => {
     expect(within(table).getByText('xUDT')).toBeInTheDocument();
     expect(table.querySelector('.truncate')).toBeNull();
   });
+  it('breaks a long amount only after a thousands separator and ghosts trailing zeros (IV-28/IV-13/IV-05)', () => {
+    const { container } = render(
+      <AssetAmount amount="100000000000000000000000000000" decimals={20} />
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root).toHaveTextContent('1,000,000,000.00000000000000000000');
+    expect(root).not.toHaveClass('break-all');
+    const breaks = Array.from(root.querySelectorAll('wbr'));
+    expect(breaks.length).toBe(3);
+    for (const wbr of breaks) expect(wbr.previousSibling?.textContent?.endsWith(',')).toBe(true);
+    expect(screen.getByText('00000000000000000000')).toHaveClass('text-text-ghost');
+    expect(container.querySelector('.text-text-muted')).toBeNull();
+  });
   it('labels unknown decimals as raw instead of guessing the unit', () => {
     render(<AssetAmount amount="12345678901234567890" decimals={null} />);
     expect(screen.getByText('12,345,678,901,234,567,890 (raw)')).toBeInTheDocument();

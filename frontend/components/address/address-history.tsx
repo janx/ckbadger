@@ -19,6 +19,7 @@ import type {
 import { formatTimeAgo } from '@/lib/utils';
 import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface AddressActivityProps {
   activity: Activity;
@@ -70,7 +71,7 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
         </>
       ) : (
         <>
-          <Link href={`/blocks/${tx.blockNumber}`}>#{tx.blockNumber.toLocaleString('en-US')}</Link>
+          <Link href={`/blocks/${tx.blockNumber}`}>{formatBlockNumber(tx.blockNumber)}</Link>
           {tx.timestamp !== null && (
             <span className="text-text-dim">{formatTimeAgo(tx.timestamp)}</span>
           )}
@@ -276,7 +277,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
     label: 'Created at',
     minWidth: 120,
     render: (c) => (
-      <Link href={`/blocks/${c.createdAtBlock}`}>#{c.createdAtBlock.toLocaleString('en-US')}</Link>
+      <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
     ),
   },
 ];

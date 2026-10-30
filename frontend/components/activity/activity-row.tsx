@@ -9,6 +9,7 @@ import {
   ItemDeltaFact,
   LockCallExpr,
   TypeCallExpr,
+  activityClassMark,
   activityHeadline,
   globalTxEvents,
   protocolActionLabel,
@@ -22,6 +23,7 @@ import type { GlobalActivity, ParticipantInfo, PoolStatus, PoolInterpretation } 
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import type { ActivityBody } from '@/lib/activity-classify';
 import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 transition-colors';
 /**
@@ -54,7 +56,7 @@ export function ActivityRowHead({
         <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-              #{blockNumber.toLocaleString('en-US')}
+              {formatBlockNumber(blockNumber)}
             </Link>
           ) : poolStatus ? (
             <PoolStatusBadge status={poolStatus} />
@@ -238,7 +240,7 @@ export type ActivityRowProps = {
   activity: ActivityRowData;
   fresh?: boolean;
   /** Participant endpoints cannot infer whole-transaction mint/burn from a single delta. */
-  headline?: string;
+  headline?: ReactNode;
   className?: string;
   showParticipants?: boolean;
   showScriptDetails?: boolean;
@@ -261,16 +263,7 @@ export function ActivityRow({
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const displayType = classifyActivity(activity).displayType;
-  const mark = displayType.startsWith('dao')
-    ? 'dao'
-    : displayType === 'token'
-      ? 'tokens'
-      : displayType === 'object'
-        ? 'objects'
-        : displayType === 'identity'
-          ? 'identities'
-          : null;
+  const mark = activityClassMark(activity);
   return (
     <article
       data-feed-row={activity.txHash}

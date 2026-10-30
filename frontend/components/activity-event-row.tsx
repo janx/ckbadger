@@ -26,6 +26,17 @@ import type {
   ActivityLockCall,
   ActivityProtocolAction,
 } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
+import { ClassMark } from '@/components/ui/class-mark';
+import { CompositionBadge } from '@/components/ui/composition-mark';
+import type { AssetClass } from '@/lib/design-tokens';
+
+/** A row that is not a pool row sits in a block; an absent number is a contract violation. */
+function committedActivityBlock(activity: { blockNumber: number | null; txHash: string }): number {
+  if (activity.blockNumber === null)
+    throw new Error(`Activity ${activity.txHash} has neither a block nor a pool status`);
+  return activity.blockNumber;
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -535,7 +546,7 @@ export function ActivityEventGroup({
       <PoolStatusBadge status={activity.poolStatus} />
     ) : (
       <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
-        #{activity.blockNumber?.toLocaleString()}
+        {formatBlockNumber(committedActivityBlock(activity))}
       </Link>
     );
 
@@ -776,6 +787,20 @@ function itemMovement(activity: ActivityBody, primary: ItemDelta | null): string
   return net > BigInt(0) ? 'mint' : net < BigInt(0) ? 'burn' : 'transfer';
 }
 
+/** The asset class a feed headline is about, or null for CKB transfers and script calls. */
+export function activityClassMark(activity: ActivityBody): AssetClass | null {
+  const displayType = classifyActivity(activity).displayType;
+  return displayType.startsWith('dao')
+    ? 'dao'
+    : displayType === 'token'
+      ? 'tokens'
+      : displayType === 'object'
+        ? 'objects'
+        : displayType === 'identity'
+          ? 'identities'
+          : null;
+}
+
 /**
  * The Layer-3 narrative of a global activity, as the feed heads it: the classifier picks the
  * highest non-empty layer, and the existing labels name it.
@@ -860,21 +885,26 @@ export function ItemDeltaFact({ item }: { item: ItemDelta }) {
       const abs = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
       const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
       return (
-        <Link
-          href={getTokenDetailHref(item.typeScriptHash)}
-          className="text-text-bright hover:text-jade tabular-nums transition-colors"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {sign}
-          {formatTokenBalanceWithRawMarker(abs, item.decimals ?? null)} {label}
-        </Link>
+        <span className="inline-flex items-baseline gap-1.5">
+          <ClassMark kind="tokens" size={12} className="self-center" />
+          <Link
+            href={getTokenDetailHref(item.typeScriptHash)}
+            className="text-text-bright hover:text-jade tabular-nums transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {sign}
+            {formatTokenBalanceWithRawMarker(abs, item.decimals ?? null)} {label}
+          </Link>
+        </span>
       );
     }
-    case 'object':
+    case 'object': {
+      const collectionName = item.collection?.name?.trim();
       return (
         <span className="text-text-bright">
+          <ClassMark kind="objects" size={12} className="mr-1.5" />
           <span className="whitespace-nowrap">
-            {'object '}
+            {collectionName ? `${collectionName} ` : 'object '}
             <Link
               href={getObjectDetailHref(item.objectId)}
               className="hover:text-jade transition-colors"
@@ -884,11 +914,16 @@ export function ItemDeltaFact({ item }: { item: ItemDelta }) {
             </Link>
           </span>
           {item.delta > 0 ? ' arrived' : ' departed'}
+          {item.composition && (
+            <CompositionBadge tier={item.composition} size="sm" className="ml-1.5 align-middle" />
+          )}
         </span>
       );
+    }
     case 'identity':
       return (
         <span className="text-text-bright">
+          <ClassMark kind="identities" size={12} className="mr-1.5" />
           <span className="whitespace-nowrap">
             {`${formatStandard(item.standard)} `}
             <Link
@@ -926,7 +961,7 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
     );
   }
   if (meta.depositBlock !== null) {
-    parts.push(`deposited at #${meta.depositBlock.toLocaleString('en-US')}`);
+    parts.push(`deposited at ${formatBlockNumber(meta.depositBlock)}`);
   }
   if (meta.compensation !== null) {
     parts.push(

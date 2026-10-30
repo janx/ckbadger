@@ -79,7 +79,7 @@ describe('Independent DOB evidence', () => {
     data.currentPattern.steps[0].bytes[0].truncated = true;
     const { container } = render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/18446744073709551614/)).toBeInTheDocument();
-    expect(screen.getByText(/decoded 2023-11-14 22:13:20 UTC/)).toBeInTheDocument();
+    expect(screen.getByText(/decoded 2023-11-15 06:13:20 UTC\+8/)).toBeInTheDocument();
     expect(screen.queryByText(/Unix second/)).not.toBeInTheDocument();
     expect(screen.getByText(/original decoder binary hash was not recorded/)).toBeInTheDocument();
     expect(screen.getByText(/Clipped to the actual DNA shown/)).toBeInTheDocument();
@@ -185,14 +185,18 @@ describe('Per-version raw protocol and item context', () => {
   });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];
-    const { rerender } = render(<ItemTransactionContext transaction={tx} />);
-    expect(screen.getByText(tx.itemContext.action)).toBeInTheDocument();
+    const { rerender } = render(
+      <ItemTransactionContext transaction={tx} item={{ kind: 'object' }} />
+    );
+    // Named like its Activities row (ID-C4), not the raw item action.
+    expect(screen.getByText(`Object ${tx.itemContext.action}`)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /cell after/ })).toHaveAttribute(
       'href',
       `/mainnet/cell/${tx.itemContext.createdCell!.txHash}-${tx.itemContext.createdCell!.outputIndex}`
     );
     rerender(
       <ItemTransactionContext
+        item={{ kind: 'object' }}
         transaction={{
           ...tx,
           itemContext: { ...tx.itemContext, action: 'burn', createdCell: null },

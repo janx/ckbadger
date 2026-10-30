@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import type { Cell, Token } from '@/lib/api';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { formatNumber, truncateHash } from '@/lib/utils';
+import { formatNumber, truncateHash, formatUtc8Date } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
 // Detection
@@ -251,8 +251,9 @@ export function useInventoryLabel(cell: Cell | undefined | null): InventoryLabel
       const ownerSeg = segments?.find((s) => s.label === 'owner_hash20');
       if (ownerSeg?.humanValue) parts.push(`owner ${truncateHash(ownerSeg.humanValue, 6, 4)}`);
       const expirySeg = segments?.find((s) => s.label === 'expired_at');
-      // `2027-09-21T06:21:18+00:00 (unix 1821507678)` → the UTC date.
-      if (expirySeg?.humanValue) parts.push(`expires ${expirySeg.humanValue.split('T')[0]}`);
+      // `2027-09-21T06:21:18+00:00 (unix 1821507678)` → the site's UTC+8 date (D2).
+      if (expirySeg?.humanValue)
+        parts.push(`expires ${formatUtc8Date(expirySeg.humanValue.split(' ')[0])} UTC+8`);
       summary = parts.length > 0 ? parts.join(' · ') : null;
       break;
     }

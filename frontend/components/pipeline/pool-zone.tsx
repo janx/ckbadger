@@ -6,6 +6,7 @@ import { CARD_H, G, type Scene, type ScenePoolGrid } from '@/lib/pipeline/layout
 import type { DimLevel } from '@/components/pipeline/block-card';
 import { T10, T10B, T11C, fmtInt } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface PoolZoneProps {
   scene: Scene;
@@ -118,7 +119,7 @@ export function PoolZone({ scene, dimOf, onIds }: PoolZoneProps) {
         ) : (
           <text data-pool-status x={G.mempoolX + G.padX} y={G.poolTop + 10} className={T10B}>
             <title>
-              {`The node's tx pool is at #${fmtInt(snapshot.poolTip.number)} (${snapshot.poolTip.hash}) but ckbadger has synced #${fmtInt(snapshot.tip.number)} (${snapshot.tip.hash}). The pool view returns once both are at the same block.`}
+              {`The node's tx pool is at ${formatBlockNumber(snapshot.poolTip.number)} (${snapshot.poolTip.hash}) but ckbadger has synced ${formatBlockNumber(snapshot.tip.number)} (${snapshot.tip.hash}). The pool view returns once both are at the same block.`}
             </title>
             unavailable
           </text>

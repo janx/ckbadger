@@ -383,6 +383,8 @@ export const itemActivityFeedProducer = {
       blockNumber: 100,
       isCellbase: false,
       itemContext: {
+        // contracts §5.1 (lane R): a Spore row is always the item's own action.
+        actedOn: 'self',
         action: 'transfer',
         protocolActions: [],
         ringRelink: null,
@@ -518,6 +520,8 @@ export const itemTransactionsProducer = {
       inputsCount: 1,
       isCellbase: false,
       itemContext: {
+        // contracts §5.1 (lane R): a Spore row is always the item's own action.
+        actedOn: 'self',
         action: 'mint',
         protocolActions: [],
         ringRelink: null,

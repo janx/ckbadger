@@ -12,19 +12,20 @@ import {
 } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
-import { formatObserverTimeUtc8 } from '@/lib/fork-time';
-import { formatUtcClock } from '@/lib/utils';
+import { formatUtc8DateTime } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
+import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 const fullHash = (hash: string) => <span className="break-all font-mono text-xs">{hash}</span>;
 const blockAt = (number: number) => (
   <Link href={`/blocks/${number}`} className="text-emphasis hover:underline">
-    #{number.toLocaleString()}
+    {formatBlockNumber(number)}
   </Link>
 );
-const historicalHeight = (number: number) => <span>#{number.toLocaleString()}</span>;
+const historicalHeight = (number: number) => <span>{formatBlockNumber(number)}</span>;
 const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false) => (
   <ListTable
     label={label}
@@ -50,7 +51,7 @@ const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false)
         key: 'time',
         label: 'Header time',
         minWidth: 180,
-        render: (block) => formatUtcClock(block.timestamp),
+        render: (block) => formatUtc8DateTime(block.timestamp),
       },
     ]}
     mobileRow={(block) => (
@@ -60,7 +61,7 @@ const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false)
         <div>
           Miner: {block.minerLockHash ? fullHash(block.minerLockHash) : 'witness unavailable'}
         </div>
-        <div>{formatUtcClock(block.timestamp)}</div>
+        <div>{formatUtc8DateTime(block.timestamp)}</div>
       </div>
     )}
   />
@@ -103,7 +104,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
       title={`Fork event #${event.id}`}
       identity={
         <>
-          Detected {formatObserverTimeUtc8(event.detectedAt)} ·{' '}
+          Detected {formatUtc8DateTime(event.detectedAt)} ·{' '}
           {event.eventType === 'deep' ? 'deep fork detection' : 'branch switch'}
         </>
       }
@@ -113,13 +114,13 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
           label: event.eventType === 'deep' ? 'Indexed → node tip' : 'Old → adopted tip',
           value: (
             <>
-              #{event.oldTipNumber.toLocaleString()} → #{event.newTipNumber.toLocaleString()}
+              {formatBlockNumber(event.oldTipNumber)} → {formatBlockNumber(event.newTipNumber)}
             </>
           ),
         },
         {
           label: event.eventType === 'deep' ? 'Detected depth' : 'Switch depth',
-          value: `${event.depth.toLocaleString()} blocks`,
+          value: formatCount(event.depth, 'block'),
         },
         { label: 'Old branch transactions', value: event.orphanedTxsCount.toLocaleString() },
         {

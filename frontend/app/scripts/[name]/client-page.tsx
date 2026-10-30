@@ -28,6 +28,7 @@ import {
 } from '@/lib/script-ref';
 import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
 import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
 
 function CellOccupiedValue({ cell }: { cell: Cell }) {
   if (cell.cellType === 'genesis_special_burn') {
@@ -1252,7 +1253,7 @@ export default function ScriptDetailPage({
                             href={`/blocks/${row.firstDeploymentCell.createdAtBlock}`}
                             className="text-emphasis"
                           >
-                            #{formatNumber(row.firstDeploymentCell.createdAtBlock)}
+                            {formatBlockNumber(row.firstDeploymentCell.createdAtBlock)}
                           </Link>
                         ) : (
                           'No deployment observed'
@@ -1359,7 +1360,7 @@ export default function ScriptDetailPage({
                               href={`/blocks/${row.codeCell.createdAtBlock}`}
                               className="text-emphasis"
                             >
-                              #{formatNumber(row.codeCell.createdAtBlock)}
+                              {formatBlockNumber(row.codeCell.createdAtBlock)}
                             </Link>
                           ) : (
                             'unavailable'
@@ -1455,7 +1456,7 @@ export default function ScriptDetailPage({
                           numeric: true,
                           render: (cell) => (
                             <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
-                              #{cell.createdAtBlock.toLocaleString()}
+                              {formatBlockNumber(cell.createdAtBlock)}
                             </Link>
                           ),
                         },
@@ -1488,7 +1489,7 @@ export default function ScriptDetailPage({
                           <div>
                             Created{' '}
                             <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
-                              #{cell.createdAtBlock.toLocaleString()}
+                              {formatBlockNumber(cell.createdAtBlock)}
                             </Link>
                           </div>
                           <CellAnatomyBar cell={cell} />

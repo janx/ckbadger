@@ -49,7 +49,10 @@ describe('ForkDetailPage', () => {
         (el) => el.textContent === '0.00001234 CKB'
       )
     ).toBe(true);
-    expect(screen.getAllByText('2023-11-14 22:13:21 UTC').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2023-11-15 06:13:21 UTC+8').length).toBeGreaterThan(0);
+    // FF-D6: the noun agrees with the depth.
+    expect(screen.getByText('1 block')).toBeInTheDocument();
+    expect(screen.queryByText('1 blocks')).not.toBeInTheDocument();
     expect(screen.queryByText('2023-11-14T22:13:21+00:00')).not.toBeInTheDocument();
   });
 

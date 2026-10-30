@@ -36,8 +36,8 @@ describe('Uncle detail page', () => {
       '/mainnet/blocks/8775638'
     );
     expect(screen.getByText('uncle 0', { exact: false })).toBeInTheDocument();
-    expect(screen.getAllByText('2026-02-21 23:59:40 UTC').length).toBeGreaterThan(0);
-    expect(screen.getByText('5,414 · 1 / 1,800')).toBeInTheDocument();
+    expect(screen.getAllByText('2026-02-22 07:59:40 UTC+8').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('5,414 · 1 / 1,800')).toHaveLength(2);
     expect(screen.getByText('0xaabbccddeeff00112233')).toBeInTheDocument();
     expect(screen.getByText('1,210,829,853,049,231,829')).toBeInTheDocument();
     const decoded = screen.getByLabelText('Decoded DAO header');
@@ -45,6 +45,17 @@ describe('Uncle detail page', () => {
     expect(decoded).toHaveTextContent('1.2065094518945692');
     expect(decoded).toHaveTextContent('S · compensation still owed + the burnt share');
     expect(screen.getByText(blockUncle.dao.raw)).toBeInTheDocument();
+  });
+
+  it('writes the header epoch like the facts and never breaks DAO prose mid-word (BA-41/BA-42)', async () => {
+    params.current = { id: '8775638', index: '0' };
+    render(<UncleDetailPage />);
+    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    // facts strip + raw header row: one epoch format on the page
+    expect(screen.getAllByText('5,414 · 1 / 1,800')).toHaveLength(2);
+    const decoded = screen.getByLabelText('Decoded DAO header');
+    expect(decoded.closest('.break-all')).toBeNull();
+    expect(screen.getByText(blockUncle.dao.raw)).toHaveClass('break-all');
   });
 
   it('shows the checked endpoint for an index the block does not have', async () => {

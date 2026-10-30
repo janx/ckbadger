@@ -54,6 +54,11 @@ export interface ChartProps {
   xDomain?: readonly [number, number];
   /** Index of the last observed point; a line is dashed after it (a model projected ahead). */
   projectedAfter?: number;
+  /**
+   * The reading shown while nothing is hovered. Omitted: the last point. `null`: no reading,
+   * because the source has not provided one (a model's "today", CH-03) — never a stand-in sample.
+   */
+  reading?: ChartPoint | null;
   /** Requires `xDomain`; series lines and areas break across each gap instead of joining it. */
   gaps?: readonly ChartGap[];
   plotLeft?: number;
@@ -78,6 +83,7 @@ export function Chart({
   xDomain,
   gaps = [],
   projectedAfter,
+  reading,
   plotLeft,
   hideCaption = false,
   hideXAxis = false,
@@ -152,7 +158,12 @@ export function Chart({
     series[i].color ??
     (series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : HUE_RAMP[i % HUE_RAMP.length]);
   const activeIndex = active !== null && active < data.length ? active : null;
-  const selected = data[activeIndex === null ? data.length - 1 : activeIndex];
+  const selected =
+    activeIndex !== null
+      ? data[activeIndex]
+      : reading !== undefined
+        ? reading
+        : data[data.length - 1];
   const plotValues =
     kind === 'stacked' ? values.map((row) => row.reduce((s, v) => s + v, 0)) : values.flat();
   const geometryValues =

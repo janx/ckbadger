@@ -27,7 +27,10 @@ export function CursorPagination({
   onPrevious,
   className,
 }: CursorPaginationProps) {
-  const totalPages = total !== undefined && pageSize ? Math.ceil(total / pageSize) : undefined;
+  // An empty list has no pages: no pager, and never "Page 1 of 0" (FF-L5).
+  if (total === 0 && !hasMore && !hasPrevious) return null;
+  const totalPages =
+    total !== undefined && total > 0 && pageSize ? Math.ceil(total / pageSize) : undefined;
   const canShowRange = page !== undefined && pageSize !== undefined && currentCount !== undefined;
   const rangeStart = canShowRange && currentCount > 0 ? (page - 1) * pageSize + 1 : 0;
   const rangeEnd = canShowRange && currentCount > 0 ? rangeStart + currentCount - 1 : 0;

@@ -9,6 +9,10 @@ import {
   type AssetCapacityHistory,
 } from '@/lib/api';
 import * as producer from '@/__tests__/msw/fixtures/item-producer';
+import {
+  collectionActivityFeedProducer,
+  collectionTransactionsProducer,
+} from '@/__tests__/msw/fixtures/collection-feed';
 export const emptyPage = <T>(data: T[] = []): CursorPaginatedResponse<T> => ({
   data,
   total: data.length,
@@ -105,8 +109,8 @@ export function mockItemReads() {
   vi.spyOn(api, 'getCollectionGallery').mockResolvedValue(
     producer.collectionGalleryFilteredProducer
   );
-  vi.spyOn(api, 'getCollectionActivityFeed').mockResolvedValue(producer.itemActivityFeedProducer);
-  vi.spyOn(api, 'getCollectionTransactions').mockResolvedValue(producer.itemTransactionsProducer);
+  vi.spyOn(api, 'getCollectionActivityFeed').mockResolvedValue(collectionActivityFeedProducer);
+  vi.spyOn(api, 'getCollectionTransactions').mockResolvedValue(collectionTransactionsProducer);
   const chart: AssetCapacityHistory = {
     source: 'indexedChainTimeUtc8',
     completeThrough: '2023-11-14',

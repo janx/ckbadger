@@ -14,11 +14,12 @@ import { CellVersions } from '@/components/asset/cell-versions';
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
-import { ObjectCompositionLabel } from '@/components/address/address-holdings';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { formatBlockNumber } from '@/lib/format-block';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -154,7 +155,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         <div className="space-y-4">
           <AssetReadState error={detail.error} label="m-NFT" retained />
           {item.composition ? (
-            <ObjectCompositionLabel tier={item.composition.tier} />
+            <CompositionBadge tier={item.composition.tier} />
           ) : (
             <p className="text-text-dim text-[11px]">Composition unavailable.</p>
           )}
@@ -198,7 +199,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             <>
               <span className="block text-[11px]">{formatUtc8Date(first.timestamp)} UTC+8</span>
               <AppLink href={`/blocks/${first.blockNumber}`}>
-                #<AssetCount value={first.blockNumber} />
+                {formatBlockNumber(first.blockNumber)}
               </AppLink>
             </>
           ) : (
@@ -210,7 +211,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           value: last ? (
             <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
               <span className="block text-[11px]">{formatUtc8Date(last.timestamp)} UTC+8</span>Block{' '}
-              <AssetCount value={last.blockNumber} /> · output {last.outputIndex}
+              {formatBlockNumber(last.blockNumber)} · output {last.outputIndex}
             </AppLink>
           ) : (
             evidenceState
@@ -251,7 +252,9 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           loadTransactions={(params) => api.getItemTransactions('mnft', objectId, params)}
           context={{
             label: 'This token',
-            render: (transaction) => <ItemTransactionContext transaction={transaction} />,
+            render: (transaction) => (
+              <ItemTransactionContext transaction={transaction} item={{ kind: 'object' }} />
+            ),
           }}
         />
       }

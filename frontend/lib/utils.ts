@@ -14,15 +14,7 @@ export function truncateHash(hash: string, start = 10, end = 8): string {
 
 /** Raw block timestamp displayed in the indexer's fixed UTC+8 calendar timezone. */
 export function formatUtc8Date(timestamp: string | number): string {
-  const value =
-    typeof timestamp === 'string' && /^\d+$/.test(timestamp)
-      ? Number(timestamp)
-      : typeof timestamp === 'number'
-        ? timestamp
-        : Date.parse(timestamp);
-  if (!Number.isSafeInteger(value) || value < 0)
-    throw new Error(`Invalid block timestamp ${timestamp}`);
-  return new Date(value + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return utc8Iso(timestampMs(timestamp, 'block timestamp')).slice(0, 10);
 }
 
 export function formatTimeAgo(timestamp: string | number | Date): string {
@@ -39,21 +31,40 @@ export function formatTimeAgo(timestamp: string | number | Date): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-/** Wall-clock UTC string without a trailing raw "…Z" (TX-10). */
-export function formatUtcClock(timestamp: string | number | Date): string {
-  const date =
-    typeof timestamp === 'string' && /^\d+$/.test(timestamp)
-      ? new Date(Number(timestamp))
-      : new Date(timestamp);
-  if (Number.isNaN(date.getTime())) throw new Error(`Invalid UTC timestamp ${String(timestamp)}`);
-  return date
-    .toISOString()
-    .replace('T', ' ')
-    .replace(/\.\d{3}Z$/, ' UTC');
+const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** Milliseconds since the epoch from a ms number, a decimal ms string, or an ISO string. */
+function timestampMs(timestamp: string | number | Date, what = 'timestamp'): number {
+  const value =
+    timestamp instanceof Date
+      ? timestamp.getTime()
+      : typeof timestamp === 'number'
+        ? timestamp
+        : /^\d+$/.test(timestamp)
+          ? Number(timestamp)
+          : Date.parse(timestamp);
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new Error(`Invalid ${what} ${JSON.stringify(timestamp)}`);
+  return value;
 }
 
-/** Protocol/cache Unix-second timestamps as human UTC (OB-1). */
-export function formatUnixSecondsUtc(seconds: string): string {
+function utc8Iso(ms: number): string {
+  return new Date(ms + UTC8_OFFSET_MS).toISOString();
+}
+
+/** The site's one clock (D2): `2026-10-22 22:43:55 UTC+8`, for chain and observer times alike. */
+export function formatUtc8DateTime(timestamp: string | number | Date): string {
+  const shifted = utc8Iso(timestampMs(timestamp));
+  return `${shifted.slice(0, 10)} ${shifted.slice(11, 19)} UTC+8`;
+}
+
+/** The time-of-day part of the same clock: `22:43:55 UTC+8`. */
+export function formatUtc8Time(timestamp: string | number | Date): string {
+  return formatUtc8DateTime(timestamp).slice(11);
+}
+
+/** Protocol/cache Unix-second timestamps on the same UTC+8 clock (OB-1). */
+export function formatUnixSecondsUtc8(seconds: string): string {
   if (!/^(0|[1-9]\d*)$/.test(seconds)) {
     throw new Error(`Invalid Unix seconds ${JSON.stringify(seconds)}`);
   }
@@ -61,7 +72,7 @@ export function formatUnixSecondsUtc(seconds: string): string {
   if (ms > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new Error(`Unix seconds ${seconds} exceeds safe Date range`);
   }
-  return formatUtcClock(Number(ms));
+  return formatUtc8DateTime(Number(ms));
 }
 
 /** Human duration from an exact millisecond count (SC-C1: not raw "… ms"). */

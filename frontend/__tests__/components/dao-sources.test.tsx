@@ -17,9 +17,34 @@ const activity = {
   blockNumber: 123,
   // The activity API sends chain time as milliseconds; the transaction API as RFC 3339.
   timestamp: '1793268770452',
+  isCellbase: false,
+  participants: [],
+  typeCalls: [],
+  lockCalls: [],
   protocolActions: [
-    { protocol: 'dao', protocolName: 'Nervos DAO', action: 'withdraw_request', metadata: {} },
+    {
+      protocol: 'dao',
+      protocolName: 'Nervos DAO',
+      action: 'withdraw_request',
+      metadata: { capacity: '2605000000000', depositBlock: '19695550' },
+    },
   ],
+};
+const transaction = {
+  hash: tx,
+  blockNumber: 123,
+  blockHash: '0x' + 'b'.repeat(64),
+  index: 2,
+  inputsCount: 1,
+  outputsCount: 1,
+  fee: '1000',
+  value: '0',
+  txSize: 600,
+  cycles: 1000,
+  cyclesStatus: 'complete',
+  isCellbase: false,
+  timestamp: '2026-10-29T11:12:50.452+00:00',
+  activity,
 };
 
 describe('DaoSources', () => {
@@ -33,7 +58,7 @@ describe('DaoSources', () => {
       nextCursor: 'next',
     } as any);
     vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [{ hash: tx, blockNumber: 123, timestamp: '2026-10-29T11:12:50.452+00:00', activity }],
+      data: [transaction],
       limit: 12,
       total: null,
       hasMore: false,
@@ -50,8 +75,9 @@ describe('DaoSources', () => {
         cursor: undefined,
       })
     );
-    expect(await screen.findByText('withdraw request')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /0xaaaaaaaaaa/ })).toHaveAttribute(
+    // The shared protocol-action name (DAO-13), on the row or the table and its compact layout.
+    expect((await screen.findAllByText(/withdraw request/i)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /^0xaaaaaaaa/ })).toHaveAttribute(
       'href',
       `/mainnet/tx/${tx}`
     );
@@ -79,15 +105,25 @@ describe('DaoSources', () => {
         cursor: undefined,
       })
     );
-    expect(await screen.findByText('withdraw request')).toBeInTheDocument();
+    // The shared protocol-action name (DAO-13), on the row or the table and its compact layout.
+    expect((await screen.findAllByText(/withdraw request/i)).length).toBeGreaterThan(0);
   });
 
-  it('prints the UTC column in UTC whatever the browser zone (DAO-1)', async () => {
-    render(<DaoSources />);
-    expect(await screen.findByText('2026-10-29 10:12:50 UTC')).toBeInTheDocument();
+  it('lists DAO rows with the shared activity row and transaction table (DAO-13)', async () => {
+    const { container } = render(<DaoSources />);
+    const row = await screen.findByText(/withdraw request/i);
+    const article = row.closest('article[data-feed-row]');
+    expect(article).toHaveAttribute('data-feed-row', tx);
+    // The vault ring and the action's own amounts come with the shared row.
+    expect(article!.querySelector('svg[data-class="dao"]')).not.toBeNull();
+    expect(article).toHaveTextContent('26,050');
+    expect(container.querySelector('table')).toBeNull();
+    // Raw milliseconds never reach the page (DAO-1).
     expect(screen.queryByText(/1793268770452/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'transactions' }));
-    expect(await screen.findByText('2026-10-29 11:12:50 UTC')).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'Committed transactions' });
+    // Same protocol-action name as the Activities tab.
+    expect(table).toHaveTextContent(/withdraw request/i);
   });
 
   it('reports source errors without inventing rows', async () => {

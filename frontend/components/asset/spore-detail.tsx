@@ -15,6 +15,7 @@ import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { formatUtc8Date } from '@/lib/utils';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface SporeDetailViewProps {
   object: SporeDetail;
   error: Error | null;
@@ -92,12 +93,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
         <>
           <span>{formatUtc8Date(first.timestamp)} · UTC+8</span>
           <AppLink className="block" href={`/blocks/${first.blockNumber}`}>
-            #{first.blockNumber.toLocaleString('en-US')}
+            {formatBlockNumber(first.blockNumber)}
           </AppLink>
         </>
       ) : (
         <AppLink href={`/blocks/${object.createdAtBlock}`}>
-          #{object.createdAtBlock.toLocaleString('en-US')}
+          {formatBlockNumber(object.createdAtBlock)}
         </AppLink>
       ),
     },
@@ -105,7 +106,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       label: 'Current / final cell',
       value: last ? (
         <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
-          Block #{last.blockNumber.toLocaleString('en-US')} · output {last.outputIndex}
+          Block {formatBlockNumber(last.blockNumber)} · output {last.outputIndex}
         </AppLink>
       ) : (
         'Loading cell history'
@@ -147,7 +148,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           loadTransactions={(p) => api.getItemTransactions('spore', id, p)}
           context={{
             label: 'Object · cell after',
-            render: (t) => <ItemTransactionContext transaction={t} />,
+            render: (t) => <ItemTransactionContext transaction={t} item={{ kind: 'object' }} />,
           }}
         />
       }

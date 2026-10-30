@@ -9,7 +9,9 @@ import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@
 import { DaoSources } from '@/components/dao/dao-sources';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
-import { formatCapacity, formatDurationMs, formatUtcClock } from '@/lib/utils';
+import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
 interface Props {
   statistics: DaoStatistics;
@@ -49,6 +51,10 @@ function CkbDecimal({ value, signed = false }: { value: string; signed?: boolean
 function formatAr(raw: string): string {
   if (!/^\d+$/.test(raw)) throw new Error(`DAO AR "${raw}" is not an unsigned integer`);
   return formatAccumulatedRate(BigInt(raw));
+}
+
+function Note({ children }: { children: ReactNode }) {
+  return <span className="text-text-dim font-mono text-[11px]">{children}</span>;
 }
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
@@ -247,7 +253,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
   return (
     <Section
       title="Where secondary issuance goes"
-      note={`since genesis · exact shannons at block #${statistics.tipBlockNumber.toLocaleString()}`}
+      note={`since genesis · exact shannons at block ${formatBlockNumber(statistics.tipBlockNumber)}`}
     >
       <div className="mb-3 text-[13px]">
         Secondary issuance since genesis: <Amount value={total.toString()} /> CKB
@@ -296,7 +302,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
       </p>
       <div className="mt-4">
         <div className="text-text-dim mb-1 text-[12px]">
-          Current capacity use at statistics block #{statistics.tipBlockNumber.toLocaleString()}
+          Current capacity use at statistics block {formatBlockNumber(statistics.tipBlockNumber)}
         </div>
         <div className="flex h-3 w-full" aria-label="Current capacity use partition">
           {[
@@ -325,7 +331,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         href={`/blocks/${statistics.tipBlockNumber}`}
         className="mt-2 inline-block text-[11px] text-[#f2c55c] hover:underline"
       >
-        Verify statistics anchor block #{statistics.tipBlockNumber.toLocaleString()} →
+        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
       </Link>
     </Section>
   );
@@ -492,10 +498,10 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
     { key: 'U', bytes: '24–31', value: evidence.header.u, note: 'protocol occupied capacity' },
   ];
   return (
-    <div className="mt-[72px] space-y-8">
-      <Section
-        title={`The DAO field in block #${evidence.header.blockNumber.toLocaleString()}`}
-        note="32 raw header bytes · four little-endian u64 fields"
+    <DetailTier2>
+      <DetailSection
+        title={`The DAO field in block ${formatBlockNumber(evidence.header.blockNumber)}`}
+        actions={<Note>32 raw header bytes · four little-endian u64 fields</Note>}
       >
         <div className="grid gap-2 md:grid-cols-4">
           {fields.map((field) => (
@@ -527,8 +533,8 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
         >
           Open source block →
         </Link>
-      </Section>
-      <Section title="The DAO script" note="type script · genesis deployment">
+      </DetailSection>
+      <DetailSection title="The DAO script" actions={<Note>type script · genesis deployment</Note>}>
         <Link
           href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
           className="text-text-bright break-all font-mono text-[12px] hover:text-[#f2c55c] hover:underline"
@@ -540,8 +546,8 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
           as little-endian u64. A completed withdrawal cites the deposit and request headers and an
           absolute epoch <code>since</code> at its required cycle boundary.
         </p>
-      </Section>
-    </div>
+      </DetailSection>
+    </DetailTier2>
   );
 }
 
@@ -561,78 +567,84 @@ export function DaoBoard({
     );
   }
   return (
-    <div className="space-y-8">
-      <div>
-        <div className="grid gap-5 border-b border-[#f2c55c]/30 pb-6 md:grid-cols-4">
-          <Metric label="Deposited" detail="phase-0 capacity">
-            <Amount value={statistics.totalDeposited} /> <span className="text-[11px]">CKB</span>
-          </Metric>
-          <Metric label="Estimated APC" detail="issuance model at indexed tip">
-            {statistics.estimatedApc}%
-          </Metric>
-          <Metric
-            label="Observed AR growth, ~365 days"
-            detail={`AR anchor: block #${evidence.ar.year365?.anchorBlockNumber ?? '—'}`}
-          >
-            {evidence.ar.year365 ? `${evidence.ar.year365.observedGrowthPercent}%` : '—'}
-          </Metric>
-          <Metric
-            label="Current depositors"
-            detail={`${evidence.phase0.count.toLocaleString()} deposits · ${evidence.phase1.count.toLocaleString()} withdrawal requests`}
-          >
-            {evidence.concentration.currentDepositors.toLocaleString()}
-          </Metric>
-        </div>
-        <div className="text-text-dim mt-3 text-[12px]">
-          24h net deposited:{' '}
-          {statistics.depositChange24h != null ? (
-            <CkbDecimal value={statistics.depositChange24h} signed />
-          ) : (
-            '—'
-          )}{' '}
-          CKB · indexed at block #{statistics.tipBlockNumber.toLocaleString()}
-        </div>
-      </div>
-      <Section title="History" note="complete indexed days · current depositor count">
-        <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
-      </Section>
-      <Issuance statistics={statistics} />
-      <Section title="How a deposit grows" note="header AR · free capacity only">
-        <p className="text-text-dim text-[13px]">
-          AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)}{' '}
-          at block #{evidence.tipBlockNumber.toLocaleString()}: +
-          {evidence.ar.sinceGenesisGrowthPercent}% on a deposit’s free capacity since genesis.
-          Compensation freezes at the withdrawal request AR. Estimated APC above models current
-          issuance; the observed growth uses the last canonical block at or before the 365-day
-          chain-time cutoff.
-        </p>
-        <Chart
-          title="Accumulated rate"
-          subtitle="Canonical yearly chain-time anchors and indexed tip"
-          data={evidence.ar.milestones.map((row) => ({
-            label: `#${row.blockNumber.toLocaleString()}`,
-            values: { ar: row.arIndex },
-          }))}
-          series={[{ key: 'ar', label: 'AR', color: '#f2c55c' }]}
-          unit="×"
-          kind="line"
-          height={165}
-          formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
-        />
-        {evidence.ar.year365 && (
-          <div className="text-text-dim mt-2 font-mono text-[11px]">
-            365-day anchor: block #{evidence.ar.year365.anchorBlockNumber.toLocaleString()} · chain
-            time {formatUtcClock(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
-            {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
-            {formatDurationMs(
-              exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
-            )}
+    <div>
+      <div className="space-y-8">
+        <div>
+          <div className="grid gap-5 border-b border-[#f2c55c]/30 pb-6 md:grid-cols-4">
+            <Metric label="Deposited" detail="phase-0 capacity">
+              <Amount value={statistics.totalDeposited} /> <span className="text-[11px]">CKB</span>
+            </Metric>
+            <Metric label="Estimated APC" detail="issuance model at indexed tip">
+              {statistics.estimatedApc}%
+            </Metric>
+            <Metric
+              label="Observed AR growth, ~365 days"
+              detail={
+                evidence.ar.year365
+                  ? `AR anchor: block ${formatBlockNumber(evidence.ar.year365.anchorBlockNumber)}`
+                  : undefined
+              }
+            >
+              {evidence.ar.year365 ? `${evidence.ar.year365.observedGrowthPercent}%` : '—'}
+            </Metric>
+            <Metric
+              label="Current depositors"
+              detail={`${evidence.phase0.count.toLocaleString()} deposits · ${evidence.phase1.count.toLocaleString()} withdrawal requests`}
+            >
+              {evidence.concentration.currentDepositors.toLocaleString()}
+            </Metric>
           </div>
-        )}
-      </Section>
-      <Windows evidence={evidence} />
-      <Owners evidence={evidence} />
-      <DaoSources />
+          <div className="text-text-dim mt-3 text-[12px]">
+            24h net deposited:{' '}
+            {statistics.depositChange24h != null ? (
+              <CkbDecimal value={statistics.depositChange24h} signed />
+            ) : (
+              '—'
+            )}{' '}
+            CKB · indexed at block {formatBlockNumber(statistics.tipBlockNumber)}
+          </div>
+        </div>
+        <Section title="History" note="complete indexed days · current depositor count">
+          <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
+        </Section>
+        <Issuance statistics={statistics} />
+        <Section title="How a deposit grows" note="header AR · free capacity only">
+          <p className="text-text-dim text-[13px]">
+            AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
+            {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: +
+            {evidence.ar.sinceGenesisGrowthPercent}% on a deposit’s free capacity since genesis.
+            Compensation freezes at the withdrawal request AR. Estimated APC above models current
+            issuance; the observed growth uses the last canonical block at or before the 365-day
+            chain-time cutoff.
+          </p>
+          <Chart
+            title="Accumulated rate"
+            subtitle="Canonical yearly chain-time anchors and indexed tip"
+            data={evidence.ar.milestones.map((row) => ({
+              label: `${formatBlockNumber(row.blockNumber)}`,
+              values: { ar: row.arIndex },
+            }))}
+            series={[{ key: 'ar', label: 'AR', color: '#f2c55c' }]}
+            unit="×"
+            kind="line"
+            height={165}
+            formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
+          />
+          {evidence.ar.year365 && (
+            <div className="text-text-dim mt-2 font-mono text-[11px]">
+              365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} ·
+              chain time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+              {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
+              {formatDurationMs(
+                exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
+              )}
+            </div>
+          )}
+        </Section>
+        <Windows evidence={evidence} />
+        <Owners evidence={evidence} />
+        <DaoSources />
+      </div>
       <RawEvidence evidence={evidence} />
     </div>
   );

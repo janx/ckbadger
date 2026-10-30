@@ -2,6 +2,7 @@
 import Link from '@/components/ui/link';
 import type { Cell } from '@/lib/api';
 import { elfMachineLabel, elfProgramTypeLabel, elfSectionTypeLabel } from '@/lib/elf-labels';
+import { formatBlockNumber } from '@/lib/format-block';
 
 function fileExtent(offset: string | null, size: string | null): string {
   return offset === null || size === null
@@ -193,7 +194,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               >
                 {item.codeCellTxHash}:{item.codeCellOutputIndex}
               </Link>{' '}
-              · observed block #{item.observedAtBlock} · {item.typeScriptHash}
+              · observed block {formatBlockNumber(item.observedAtBlock)} · {item.typeScriptHash}
             </p>
           ))
         ) : (

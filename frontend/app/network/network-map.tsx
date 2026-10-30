@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type NetworkMap } from '@/lib/api';
+import { formatUtc8Date } from '@/lib/utils';
 
 type Point = NetworkMap['points'][number];
 
@@ -133,7 +134,7 @@ export function NetworkMapView() {
                   {selected.lat.toFixed(2)}°, {selected.lon.toFixed(2)}°
                 </dd>
                 <dt className="text-text-dim">First seen</dt>
-                <dd>{new Date(selected.firstSeen * 1000).toISOString().slice(0, 10)}</dd>
+                <dd>{formatUtc8Date(selected.firstSeen * 1000)}</dd>
                 <dt className="text-text-dim">Advertisers</dt>
                 <dd>
                   {selected.advertiserCount.toLocaleString()} retained in round #{data.roundId}

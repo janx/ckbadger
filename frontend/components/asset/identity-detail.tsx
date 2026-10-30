@@ -16,6 +16,8 @@ import { AppLink } from '@/components/ui/app-link';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { getIdentityCollectionHref } from '@/lib/detail-routes';
 import { formatUtc8Date } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+import type { ItemFeedSubject } from '@/lib/feed-headlines';
 export interface CanonicalIdentityDetailProps {
   kind: Extract<ItemKind, 'dotbit' | 'bit-cell' | 'did' | 'dotcell'>;
   id: string;
@@ -39,6 +41,13 @@ export function CanonicalIdentityDetail({
   const search = useSearchParams(),
     pathname = usePathname(),
     router = useRouter();
+  // How this standard's rows are named: .cell by bare actions, .bit by its `dotbit:` actions.
+  const feedSubject: ItemFeedSubject =
+    kind === 'dotcell'
+      ? { kind: 'identity', protocolName: '.cell' }
+      : kind === 'dotbit'
+        ? { kind: 'identity', protocol: 'dotbit' }
+        : { kind: 'identity' };
   const [initialActivityCursor] = useState(() =>
     parseActivityCursor(search.get('activity_cursor'))
   );
@@ -90,9 +99,7 @@ export function CanonicalIdentityDetail({
       label: 'Created',
       value: (
         <>
-          <AppLink href={`/blocks/${createdAtBlock}`}>
-            #{createdAtBlock.toLocaleString('en-US')}
-          </AppLink>
+          <AppLink href={`/blocks/${createdAtBlock}`}>{formatBlockNumber(createdAtBlock)}</AppLink>
           {first && (
             <span className="text-text-dim block text-[11px]">
               {formatUtc8Date(first.timestamp)} UTC+8
@@ -105,7 +112,7 @@ export function CanonicalIdentityDetail({
       label: 'Current / final cell',
       value: current ? (
         <AppLink href={`/cell/${current.txHash}-${current.outputIndex}`}>
-          Block #{current.blockNumber.toLocaleString('en-US')} · output {current.outputIndex}
+          Block {formatBlockNumber(current.blockNumber)} · output {current.outputIndex}
         </AppLink>
       ) : (
         'Loading cell history'
@@ -142,16 +149,14 @@ export function CanonicalIdentityDetail({
           key={`${kind}:${id}`}
           queryKey={`${kind}:${id}`}
           scope="This identity's whole life"
-          item={
-            kind === 'dotcell' ? { kind: 'identity', protocolName: '.cell' } : { kind: 'identity' }
-          }
+          item={feedSubject}
           initialActivityCursor={initialActivityCursor}
           onActivityCursorChange={cursorChanged}
           loadActivities={(p) => api.getItemActivityFeed(kind, id, p)}
           loadTransactions={(p) => api.getItemTransactions(kind, id, p)}
           context={{
             label: 'Identity · cell after',
-            render: (tx) => <ItemTransactionContext transaction={tx} />,
+            render: (tx) => <ItemTransactionContext transaction={tx} item={feedSubject} />,
           }}
         />
       }

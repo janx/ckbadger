@@ -352,12 +352,20 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
   });
 
-  it('shows commit time as UTC with a relative age, not a raw ISO Z string (TX-10)', async () => {
+  it('agrees nouns with counts in the cell heading and the confirmations (TX-34)', async () => {
+    render(<TransactionDetailPage />);
+    const heading = await screen.findByRole('heading', { name: /consumed → .* created$/ });
+    expect(heading.textContent).toMatch(/^1 cell consumed → (1 cell|\d+ cells) created$/);
+    expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
+    expect(screen.getByText(/\d confirmations?$/)).toBeInTheDocument();
+  });
+
+  it('shows commit time as UTC+8 with a relative age, not a raw ISO Z string (TX-10)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-02-20T17:46:12Z'));
     render(<TransactionDetailPage />);
     const time = await screen.findByRole('time');
-    expect(time).toHaveTextContent('2026-02-20 16:46:12 UTC');
+    expect(time).toHaveTextContent('2026-02-21 00:46:12 UTC+8');
     expect(time).toHaveTextContent(/· 1h ago/);
     expect(time.textContent).not.toMatch(/Z/);
   });
@@ -425,7 +433,7 @@ describe('TransactionDetailPage', () => {
     expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Confirming').length).toBeGreaterThan(0);
     expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Confirmations$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/confirmations?$/i)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
 
     // Still provisional: the page keeps asking until the store has it.
@@ -436,7 +444,7 @@ describe('TransactionDetailPage', () => {
     // Indexed: `poolStatus` is gone, the committed view renders, polling stops.
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
-    expect(await screen.findByText(/4\s+Confirmations/)).toBeInTheDocument();
+    expect(await screen.findByText(/4\s+confirmations/)).toBeInTheDocument();
     expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(9000));

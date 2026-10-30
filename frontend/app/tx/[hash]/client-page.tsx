@@ -30,8 +30,10 @@ import {
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref, getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { cn, formatTimeAgo, formatUtcClock, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo, truncateHash, formatUtc8DateTime } from '@/lib/utils';
 import dynamic from '@/lib/dynamic-client';
+import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-xs">Loading graph section...</p>,
@@ -566,11 +568,7 @@ export default function TransactionDetailPage() {
         <span className={cn('text-xs', tx.status === 'proposed' ? 'text-gold' : 'text-text-dim')}>
           {status}
           {!isProvisional && (
-            <>
-              {' '}
-              · {required(tx.confirmations, hash, 'confirmations').toLocaleString('en-US')}{' '}
-              Confirmations
-            </>
+            <> · {formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')}</>
           )}
         </span>
       }
@@ -732,14 +730,14 @@ export default function TransactionDetailPage() {
                 {lifecycle?.proposedIn && (
                   <>
                     <Link href={`/blocks/${lifecycle.proposedIn.blockNumber}`}>
-                      #{lifecycle.proposedIn.blockNumber.toLocaleString('en-US')}
+                      {formatBlockNumber(lifecycle.proposedIn.blockNumber)}
                     </Link>{' '}
                     →{' '}
                   </>
                 )}
                 {tx.blockNumber !== undefined ? (
                   <Link href={`/blocks/${tx.blockNumber}`}>
-                    #{tx.blockNumber.toLocaleString('en-US')}
+                    {formatBlockNumber(tx.blockNumber)}
                   </Link>
                 ) : (
                   <PendingValue />
@@ -876,7 +874,7 @@ export default function TransactionDetailPage() {
       )}
       {tiles && (
         <DetailSection
-          title={`${tiles.inputs.length} cells consumed → ${tiles.outputs.length} cells created`}
+          title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
         >
           <p className="text-text-dim mb-4 text-xs">
             A transaction spends whole cells and creates new ones.
@@ -936,7 +934,7 @@ export default function TransactionDetailPage() {
               <PendingValue />
             ) : (
               <time dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}>
-                {formatUtcClock(required(tx.timestamp, hash, 'timestamp'))}
+                {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
                 <span className="text-text-dim">
                   {' '}
                   · {formatTimeAgo(required(tx.timestamp, hash, 'timestamp'))}
@@ -949,9 +947,7 @@ export default function TransactionDetailPage() {
           <dt className="text-text-dim">Block</dt>
           <dd className="text-text-bright mt-1">
             {tx.blockNumber !== undefined ? (
-              <Link href={`/blocks/${tx.blockNumber}`}>
-                #{tx.blockNumber.toLocaleString('en-US')}
-              </Link>
+              <Link href={`/blocks/${tx.blockNumber}`}>{formatBlockNumber(tx.blockNumber)}</Link>
             ) : (
               <PendingValue />
             )}
@@ -971,7 +967,7 @@ export default function TransactionDetailPage() {
           <div>
             <dt className="text-text-dim">Pending Since</dt>
             <dd className="mt-1">
-              {formatUtcClock(tx.pendingSince)} · {formatTimeAgo(tx.pendingSince)}
+              {formatUtc8DateTime(tx.pendingSince)} · {formatTimeAgo(tx.pendingSince)}
             </dd>
           </div>
         )}

@@ -159,6 +159,7 @@ describe('BlockDetailPage', () => {
     await screen.findByText('Position in the chain');
     fireEvent.click(screen.getByText('Raw data'));
     const decoded = screen.getByLabelText('Decoded DAO header');
+    expect(decoded.closest('.break-all')).toBeNull(); // BA-42: prose never breaks mid-word
     expect(decoded).toHaveTextContent('65,862,172,919.14818600');
     expect(decoded).toHaveTextContent('1.2065094518945692');
     expect(decoded).toHaveTextContent('7,587,904,816.56475767');

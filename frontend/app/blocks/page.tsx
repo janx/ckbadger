@@ -15,6 +15,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
@@ -39,7 +40,7 @@ export default function BlocksPage() {
       render: (block) => (
         <div className="space-y-1">
           <Link href={`/blocks/${block.number}`} className="text-text-bright hover:text-jade">
-            #{block.number.toLocaleString('en-US')}
+            {formatBlockNumber(block.number)}
           </Link>
           <span className="text-text-dim block text-[11px]">
             <Hash hash={block.hash} copyable={false} className="text-xs" />
@@ -95,7 +96,7 @@ export default function BlocksPage() {
               <>
                 in{' '}
                 <Link href={`/blocks/${block.rewardFinalizesAt}`}>
-                  #{block.rewardFinalizesAt.toLocaleString('en-US')}
+                  {formatBlockNumber(block.rewardFinalizesAt)}
                 </Link>
               </>
             )}

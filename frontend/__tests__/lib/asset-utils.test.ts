@@ -63,11 +63,11 @@ describe('formatCompositionTier', () => {
   });
 
   it('formats decentralized_mixture', () => {
-    expect(formatCompositionTier('decentralized_mixture')).toBe('Decentralized Mixture');
+    expect(formatCompositionTier('decentralized_mixture')).toBe('Decentralized mix');
   });
 
   it('formats centralized_mixture', () => {
-    expect(formatCompositionTier('centralized_mixture')).toBe('Centralized Mixture');
+    expect(formatCompositionTier('centralized_mixture')).toBe('Centralized mix');
   });
 
   it('returns Unknown for unrecognized tier', () => {

@@ -1,11 +1,11 @@
 'use client';
 import type { SporeDetail, SporeDobDecoded } from '@/lib/api';
 import { SporePreview } from '@/components/object/spore-preview';
-import { ObjectCompositionLabel } from '@/components/address/address-holdings';
 import { detectPreview } from '@/lib/preview-utils';
 import { hexBytes } from '@/lib/hex-bytes';
 import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
@@ -24,7 +24,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
   return (
     <section aria-label="Object media" className="min-w-0 space-y-4">
       {profile ? (
-        <ObjectCompositionLabel tier={profile.tier} />
+        <CompositionBadge tier={profile.tier} />
       ) : (
         <span className="text-text-dim text-[11px]">Composition not recorded</span>
       )}

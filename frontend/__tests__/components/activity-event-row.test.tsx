@@ -748,6 +748,64 @@ describe('ItemDeltaFact', () => {
   });
 });
 
+describe('ItemDeltaFact marks (IV-24, TX-12, TX-29)', () => {
+  it('puts a 12 px class mark before every item change', () => {
+    const { container } = render(
+      <>
+        <ItemDeltaFact
+          item={{
+            kind: 'token',
+            typeScriptHash: '0xseal',
+            delta: '5',
+            symbol: 'Seal',
+            decimals: 0,
+          }}
+        />
+        <ItemDeltaFact
+          item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }}
+        />
+        <ItemDeltaFact
+          item={{
+            kind: 'identity',
+            standard: 'dotbit',
+            identityId: '0xabc0000000000000000def',
+            delta: 1,
+          }}
+        />
+      </>
+    );
+    const marks = Array.from(container.querySelectorAll('svg[data-class]'));
+    expect(marks.map((m) => m.getAttribute('data-class'))).toEqual([
+      'tokens',
+      'objects',
+      'identities',
+    ]);
+    for (const m of marks) expect(m).toHaveAttribute('width', '12');
+  });
+
+  it('names the collection and shows the composition badge only when the API sends them (R12)', () => {
+    const { rerender, container } = render(
+      <ItemDeltaFact
+        item={{
+          kind: 'object',
+          objectId: '0x51c75a0000000000000096f2',
+          delta: -1,
+          collection: { id: '0xd585', name: 'Nervape 3x' },
+          composition: 'btc_ckb',
+        }}
+      />
+    );
+    expect(container).toHaveTextContent('Nervape 3x 0x51c75a...96f2 departed');
+    expect(container.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
+    rerender(
+      <ItemDeltaFact item={{ kind: 'object', objectId: '0x51c75a0000000000000096f2', delta: -1 }} />
+    );
+    // No field, no badge and no guessed name.
+    expect(container.querySelector('[data-composition]')).toBeNull();
+    expect(container).toHaveTextContent('object 0x51c75a...96f2 departed');
+  });
+});
+
 describe('ProtocolActionNote — the action metadata in one quiet line', () => {
   it('reads a DAO withdraw request: amount and the deposit block', () => {
     render(

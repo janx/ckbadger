@@ -7,6 +7,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { ScriptDeploymentTimeline } from '@/components/hardforks/script-deployment-timeline';
+import { formatBlockNumber } from '@/lib/format-block';
 
 export default function HardforksPage() {
   const network = useActiveNetwork();
@@ -131,7 +132,7 @@ export default function HardforksPage() {
                             href={'/blocks/' + event.activationBlock}
                             className="text-emphasis hover:underline"
                           >
-                            View activation block #{event.activationBlock.toLocaleString()}
+                            View activation block {formatBlockNumber(event.activationBlock)}
                           </Link>
                         )}
                         {event.resources.map((resource) => (

@@ -6,6 +6,10 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
+import { formatBlockNumber } from '@/lib/format-block';
+import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';
+import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
+import { cn } from '@/lib/utils';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
 }
@@ -31,7 +35,7 @@ export function ItemEvidence({ protocol }: ItemEvidenceProps) {
               key={`${v.cell.txHash}:${v.cell.outputIndex}`}
               value={`${v.cell.txHash}:${v.cell.outputIndex}`}
             >
-              Version {i + 1} · block {v.cell.blockNumber}
+              Version {i + 1} · block {formatBlockNumber(v.cell.blockNumber)}
               {v.cell.isLive ? ' · current' : ''}
             </option>
           ))}
@@ -87,15 +91,32 @@ export function ItemEvidence({ protocol }: ItemEvidenceProps) {
 }
 export function ItemTransactionContext({
   transaction,
+  item,
 }: {
   transaction: Transaction & { itemContext?: ItemFeedContext };
+  /** Names the row's protocol actions as its Activities row does (ID-C4). */
+  item: ItemFeedSubject;
 }) {
   const context = (transaction as Transaction & { itemContext?: ItemFeedContext }).itemContext;
   if (!context)
     throw new Error(`${transaction.hash}: item transaction is missing its item context`);
+  const headline = itemFeedHeadline(
+    context,
+    transaction.activity?.protocolActions ?? null,
+    transaction.hash,
+    item
+  );
   return (
-    <div className="space-y-1 whitespace-normal text-[11px]">
-      <span className="text-text-bright">{context.action}</span>
+    <div
+      data-acted-on={context.actedOn}
+      className={cn(
+        'space-y-1 whitespace-normal text-[11px]',
+        headline.neighbour && 'opacity-[0.45]'
+      )}
+    >
+      <span className="text-text-bright">
+        <FeedHeadlineText headline={headline} />
+      </span>
       {context.createdCell ? (
         <>
           <AppLink

@@ -2,6 +2,7 @@ import type { InventorySummary } from '@/lib/api';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { formatStandard } from '@/components/activity-event-row';
 import { formatCompositionTier } from '@/lib/asset-utils';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface InventorySummaryNoticeProps {
   summary: InventorySummary;
   assetType: 'token' | 'object' | 'identity';
@@ -58,7 +59,7 @@ export function InventorySummaryNotice({ summary, assetType }: InventorySummaryN
       <p className="text-[11px]">
         Canonical asset totals
         {summary.anchor
-          ? ` at block #${summary.anchor.blockNumber.toLocaleString('en-US')}`
+          ? ` at block ${formatBlockNumber(summary.anchor.blockNumber)}`
           : ' · empty index'}
         . The list refreshes separately from a cached snapshot and can lag behind these totals.
       </p>

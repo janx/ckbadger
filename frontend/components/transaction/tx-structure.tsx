@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { formatCount } from '@/lib/format-count';
 
 export interface TxStructureGroup {
   id: string;
@@ -39,6 +40,13 @@ export interface TxStructureProps {
   focusedCellIds?: readonly string[];
   onClearFocus?: () => void;
   onCellHover?: (id: string | null) => void;
+  /**
+   * txviz `me_out`: the output this page follows. It stays lit and a dashed bridge carries it
+   * past the outputs to the next step (Cell "Its transactions", Fiber channel steps).
+   */
+  meOut?: string;
+  /** txviz `onward`: the legend for that bridge. */
+  onward?: string;
 }
 /** One hover selection ties cells, continuity and the script evidence together. */
 export function TxStructure({
@@ -55,6 +63,8 @@ export function TxStructure({
   focusedCellIds = [],
   onClearFocus,
   onCellHover,
+  meOut,
+  onward = 'this cell, onward',
 }: TxStructureProps) {
   const continuityColor = (kind: TxContinuity['kind']) =>
     kind === 'file' ? '#a0a8be' : kind ? CLASS_COLORS[kind] : CLASS_COLORS.objects;
@@ -94,6 +104,8 @@ export function TxStructure({
   for (const l of continuity)
     if (!inputs.some((c) => c.id === l.from) || !outputs.some((c) => c.id === l.to))
       throw new Error(`${txHash}: invalid continuity ${l.from} → ${l.to}`);
+  if (meOut !== undefined && !outputs.some((c) => c.id === meOut))
+    throw new Error(`${txHash}: onward cell ${meOut} is not an output`);
   const activeGroup = hover?.kind === 'group' ? groups.find((g) => g.id === hover.id) : null;
   const linked = new Set(
     activeGroup
@@ -113,15 +125,19 @@ export function TxStructure({
   const column = (cells: readonly CellTileData[], label: string) => (
     <div className="min-w-0">
       <h3 className="text-text-dim mb-3 text-xs">
-        {cells.length} {label}
+        {formatCount(cells.length, 'cell')} {label}
       </h3>
       <div className="space-y-3">
         {cells.map((cell) => (
           <CellTile
             key={cell.id}
             cell={cell}
-            highlighted={linked.has(cell.id)}
-            dimmed={(Boolean(hover) || focusedCellIds.length > 0) && !linked.has(cell.id)}
+            highlighted={linked.has(cell.id) || cell.id === meOut}
+            dimmed={
+              (Boolean(hover) || focusedCellIds.length > 0) &&
+              !linked.has(cell.id) &&
+              cell.id !== meOut
+            }
             onClick={focusedCellIds.includes(cell.id) ? onClearFocus : undefined}
             onHover={(id) => {
               setHover(id ? { kind: 'cell', id } : null);
@@ -136,9 +152,15 @@ export function TxStructure({
     <div className="min-w-0 space-y-6" aria-label={`Transaction ${txHash} structure`}>
       <div
         ref={canvas}
-        className="relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)] lg:gap-0"
+        data-tx-canvas
+        className={cn(
+          'relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:gap-0',
+          meOut === undefined
+            ? 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)]'
+            : 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)_96px]'
+        )}
       >
-        {column(inputs, 'cells consumed')}
+        {column(inputs, 'consumed')}
         <div className="text-text-dim relative flex flex-wrap items-center justify-center gap-2 py-3 text-center text-[11px] lg:block lg:min-h-[180px] lg:p-0">
           <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
           <span aria-hidden="true" className="lg:hidden">
@@ -162,7 +184,7 @@ export function TxStructure({
                   <path
                     key={cell.id}
                     d={`M66 ${centers[cell.id]}H112`}
-                    stroke={linked.has(cell.id) ? '#dee2ec' : '#4b5266'}
+                    stroke={linked.has(cell.id) || cell.id === meOut ? '#dee2ec' : '#4b5266'}
                     strokeWidth="1.5"
                   />
                 ))}
@@ -199,8 +221,40 @@ export function TxStructure({
             />
           </div>
         </div>
-        {column(outputs, 'cells created')}
+        {column(outputs, 'created')}
+        {meOut !== undefined && (
+          <div
+            data-onward-bridge
+            data-onward-from={meOut}
+            aria-hidden="true"
+            className="relative hidden lg:block"
+          >
+            <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+              {centers[meOut] !== undefined && (
+                <path
+                  d={`M0 ${centers[meOut]}H96`}
+                  className="stroke-text-bright"
+                  strokeWidth="1.2"
+                  strokeDasharray="3 3"
+                />
+              )}
+            </svg>
+          </div>
+        )}
       </div>
+      {meOut !== undefined && (
+        <p className="text-text-dim flex items-center gap-1.5 text-[11px]">
+          <svg aria-hidden="true" width="22" height="6">
+            <path
+              d="M0 3h22"
+              className="stroke-text-bright"
+              strokeWidth="1.2"
+              strokeDasharray="3 3"
+            />
+          </svg>
+          {onward}
+        </p>
+      )}
       {poolCapacity !== undefined && (
         <p className="text-text-dim text-[11px]">
           Capacity entering the pool{' '}

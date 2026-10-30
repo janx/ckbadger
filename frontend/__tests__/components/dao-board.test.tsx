@@ -150,7 +150,7 @@ describe('DaoBoard', () => {
     expect(amount).toHaveClass('whitespace-nowrap');
   });
 
-  it('reads the 365-day AR anchor as a rate, a UTC time and a span, not raw integers (#11)', () => {
+  it('reads the 365-day AR anchor as a rate, a UTC+8 time and a span, not raw integers (#11)', () => {
     const year365 = {
       anchorBlockNumber: 3,
       anchorChainTimeMs: '1761733970452',
@@ -163,7 +163,7 @@ describe('DaoBoard', () => {
     );
     const line = screen.getByText(/365-day anchor/);
     expect(line).toHaveTextContent(
-      '365-day anchor: block #3 · chain time 2025-10-29 10:32:50 UTC · AR 1.0100000000000000 · observed span 365 d'
+      '365-day anchor: block #3 · chain time 2025-10-29 18:32:50 UTC+8 · AR 1.0100000000000000 · observed span 365 d'
     );
     expect(line).not.toHaveTextContent(/ ms|10100000000000000/);
   });
@@ -183,6 +183,28 @@ describe('DaoBoard', () => {
         />
       )
     ).toThrow('2024-01-15 has no current depositor count');
+  });
+
+  it('keeps the 72 px tier-2 boundary and quiet 13 px tier-2 headings (DAO-20)', () => {
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2).not.toBeNull();
+    expect(tier2).toHaveClass('mt-[72px]');
+    // A space-y-* parent's sibling selector overrides the 72 px margin (measured 32 px).
+    expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
+    const headings = Array.from(tier2.querySelectorAll('h2'));
+    expect(headings.map((h) => h.textContent)).toEqual([
+      'The DAO field in block #5',
+      'The DAO script',
+    ]);
+    for (const h of headings) expect(h).toHaveClass('text-[13px]', 'text-[#a0a8be]');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {

@@ -35,3 +35,12 @@ export function validateByteRanges(
       );
   }
 }
+
+/** An exact decimal u64 (e.g. a `since`) as its 8-byte value and its little-endian bytes (FF-C1). */
+export function u64Hex(decimal: string, context: string): { value: string; littleEndian: string } {
+  if (!/^(0|[1-9]\d*)$/.test(decimal) || BigInt(decimal) >= BigInt(1) << BigInt(64))
+    throw new Error(`${context}: ${decimal} is not a u64`);
+  const hex = BigInt(decimal).toString(16).padStart(16, '0');
+  const le = (hex.match(/../g) as string[]).reverse().join('');
+  return { value: `0x${hex}`, littleEndian: `0x${le}` };
+}

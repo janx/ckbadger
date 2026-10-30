@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 vi.mock('@/lib/api', () => ({
   api: {
     getHashRateChart: vi.fn(),
+    getNominalApcChart: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
     getNetworkStats: vi.fn(),
     getHardforks: vi.fn(),
@@ -20,8 +21,22 @@ vi.mock('@/components/charts/chart-small-multiple', () => ({
   ChartSmallMultiple: () => <div>Related preview</div>,
 }));
 vi.mock('@/components/ui/chart', () => ({
-  Chart: ({ title, data, yScale }: { title: string; data: unknown[]; yScale?: string }) => (
-    <div role="img" aria-label={`${title}: ${data.length} points, ${yScale ?? 'linear'}`} />
+  Chart: ({
+    title,
+    data,
+    yScale,
+    reading,
+  }: {
+    title: string;
+    data: unknown[];
+    yScale?: string;
+    reading?: unknown;
+  }) => (
+    <div
+      role="img"
+      aria-label={`${title}: ${data.length} points, ${yScale ?? 'linear'}`}
+      data-reading={reading === undefined ? 'last-point' : JSON.stringify(reading)}
+    />
   ),
 }));
 
@@ -43,6 +58,34 @@ describe('shared chart detail', () => {
     vi.mocked(api.getHardforks).mockResolvedValue({ events: [] } as unknown as Awaited<
       ReturnType<typeof api.getHardforks>
     >);
+  });
+
+  it("hands nominal APC's API today point to the chart as its main reading (CH-03)", async () => {
+    const timeline = {
+      title: 'Nominal APC',
+      yAxisLabel: 'Nominal APC (%)',
+      y2AxisLabel: 'nominal-apc-timeline',
+      data: [
+        { date: '0', value: '4.2', value2: 'past' },
+        { date: '6.75', value: '2.3642', value2: 'current' },
+        { date: '20', value: '1.59', value2: 'future' },
+      ],
+    };
+    vi.mocked(api.getNominalApcChart).mockResolvedValue({
+      ...timeline,
+      today: { date: '6.83', value: '2.3601' },
+    });
+    const view = render(<ChartDetail slug="nominal-apc" />);
+    const chart = await screen.findByRole('img', { name: /^Nominal APC: 3 points/ });
+    expect(JSON.parse(chart.getAttribute('data-reading')!)).toEqual({
+      label: 'year 6.83',
+      values: { primary: '2.3601' },
+    });
+    view.unmount();
+    vi.mocked(api.getNominalApcChart).mockResolvedValue(timeline);
+    render(<ChartDetail slug="nominal-apc" />);
+    const gap = await screen.findByRole('img', { name: /^Nominal APC: 3 points/ });
+    expect(gap.getAttribute('data-reading')).toBe('null');
   });
 
   it('keeps exact latest value, range, log, source and evidence navigation', async () => {

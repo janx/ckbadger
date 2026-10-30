@@ -5,6 +5,8 @@ import Link from '@/components/ui/link';
 import { BlockContents } from '@/components/blocks/block-visual';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { getUncleDetailHref } from '@/lib/detail-routes';
+import { formatBlockNumber } from '@/lib/format-block';
+import { formatUtc8Time } from '@/lib/utils';
 
 interface BlockPositionProps {
   block: Pick<
@@ -122,7 +124,7 @@ export function BlockPosition({
       <div aria-label="Chain position relationships" className="min-w-0 space-y-4 md:hidden">
         <div className="space-y-2 rounded-md bg-[#123029] p-3 text-xs">
           <Link href={`/blocks/${block.hash}`} className="text-text-bright block">
-            Current block #{block.number.toLocaleString('en-US')}
+            Current block {formatBlockNumber(block.number)}
           </Link>
           <BlockContents
             transactionSizes={block.transactionSizes}
@@ -133,12 +135,12 @@ export function BlockPosition({
         <nav aria-label="Chain neighbors" className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
           {block.number > 0 && (
             <Link href={`/blocks/${block.parentHash}`}>
-              ← #{(block.number - 1).toLocaleString('en-US')}
+              ← {formatBlockNumber(block.number - 1)}
             </Link>
           )}
           {block.confirmations > 1 && (
             <Link href={`/blocks/${block.number + 1}`}>
-              #{(block.number + 1).toLocaleString('en-US')} →
+              {formatBlockNumber(block.number + 1)} →
             </Link>
           )}
         </nav>
@@ -152,11 +154,11 @@ export function BlockPosition({
               blocks
             </p>
             <p className="flex flex-wrap items-center gap-2">
-              <Link href={`/blocks/${arc.from}`}>#{arc.from.toLocaleString('en-US')}</Link>
+              <Link href={`/blocks/${arc.from}`}>{formatBlockNumber(arc.from)}</Link>
               <span aria-hidden="true" className="text-text-dim">
                 →
               </span>
-              <Link href={`/blocks/${arc.to}`}>#{arc.to.toLocaleString('en-US')}</Link>
+              <Link href={`/blocks/${arc.to}`}>{formatBlockNumber(arc.to)}</Link>
             </p>
             {arc.uncles.size > 0 && (
               <p className="text-text-dim">
@@ -175,11 +177,11 @@ export function BlockPosition({
               Parent {uncle.parentHash}
             </Link>
             <Link href={getUncleDetailHref(block.number, index)} className="block break-all">
-              Uncle #{uncle.number.toLocaleString('en-US')} · {uncle.hash}
+              Uncle {formatBlockNumber(uncle.number)} · {uncle.hash}
             </Link>
             <p className="text-text-dim">
               Included by{' '}
-              <Link href={`/blocks/${block.hash}`}>#{block.number.toLocaleString('en-US')}</Link>
+              <Link href={`/blocks/${block.hash}`}>{formatBlockNumber(block.number)}</Link>
             </p>
           </div>
         ))}
@@ -195,7 +197,7 @@ export function BlockPosition({
           viewBox={`0 0 ${width} ${height}`}
           style={{ minWidth: width, width: '100%', maxWidth: width }}
           role="img"
-          aria-label={`Position of block #${block.number.toLocaleString('en-US')}: ${links.length} proposal relationships and ${block.uncles.length} included uncles`}
+          aria-label={`Position of block ${formatBlockNumber(block.number)}: ${links.length} proposal relationships and ${block.uncles.length} included uncles`}
         >
           {ordered.slice(1).map((number, index) => (
             <g key={number}>
@@ -228,7 +230,8 @@ export function BlockPosition({
                 data-proposal-to={arc.to}
               >
                 <title>
-                  {arc.hashes.size} transactions proposed in #{arc.from} and committed in #{arc.to}
+                  {arc.hashes.size} transactions proposed in {formatBlockNumber(arc.from)} and
+                  committed in {formatBlockNumber(arc.to)}
                   {arc.uncles.size
                     ? `; includes proposals carried by ${arc.uncles.size} uncle(s)`
                     : ''}
@@ -260,7 +263,7 @@ export function BlockPosition({
               <g key={number} transform={`translate(${x(number)}, ${tileTop})`}>
                 <Link
                   href={`/blocks/${current ? block.hash : parent ? block.parentHash : number}`}
-                  aria-label={`Block #${number.toLocaleString('en-US')}`}
+                  aria-label={`Block ${formatBlockNumber(number)}`}
                 >
                   <rect
                     width={tileWidth}
@@ -269,11 +272,11 @@ export function BlockPosition({
                     fill={current ? '#123029' : '#131826'}
                   />
                   <text x="10" y="20" fill={current ? '#dee2ec' : '#a0a8be'} fontSize="12">
-                    #{number.toLocaleString('en-US')}
+                    {formatBlockNumber(number)}
                   </text>
                   {timestamp && (
                     <text x="10" y="39" fill="#7c849c" fontSize="11">
-                      {new Date(timestamp).toISOString().slice(11, 19)} UTC
+                      {formatUtc8Time(timestamp)}
                     </text>
                   )}
                 </Link>
@@ -304,11 +307,11 @@ export function BlockPosition({
                 />
                 <Link
                   href={`/blocks/${uncle.parentHash}`}
-                  aria-label={`Parent of uncle #${uncle.number.toLocaleString('en-US')}`}
+                  aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
                   <rect x={parentX} y={top} width="178" height="58" rx="6" fill="#10131c" />
                   <text x={parentX + 10} y={top + 21} fill="#7c849c" fontSize="11">
-                    Parent #{(uncle.number - 1).toLocaleString('en-US')}
+                    Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
                   <text x={parentX + 10} y={top + 41} fill="#a0a8be" fontSize="11">
                     {uncle.parentHash.slice(0, 12)}…{uncle.parentHash.slice(-6)}
@@ -316,7 +319,7 @@ export function BlockPosition({
                 </Link>
                 <Link
                   href={getUncleDetailHref(block.number, index)}
-                  aria-label={`Included uncle #${uncle.number.toLocaleString('en-US')}`}
+                  aria-label={`Included uncle ${formatBlockNumber(uncle.number)}`}
                 >
                   <rect
                     x={uncleX}
@@ -329,7 +332,7 @@ export function BlockPosition({
                     strokeDasharray="3 3"
                   />
                   <text x={uncleX + 10} y={top + 21} fill="#a0a8be" fontSize="11">
-                    Uncle #{uncle.number.toLocaleString('en-US')}
+                    Uncle {formatBlockNumber(uncle.number)}
                   </text>
                   <text x={uncleX + 10} y={top + 41} fill="#7c849c" fontSize="11">
                     {uncle.hash.slice(0, 12)}…{uncle.hash.slice(-6)}

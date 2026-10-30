@@ -2,61 +2,9 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
-import type { GlobalActivity, Transaction } from '@/lib/api';
-import { formatUtcClock } from '@/lib/utils';
-
-function actionLabel(actions: GlobalActivity['protocolActions']): string {
-  const dao = actions.find((action) => action.protocol === 'dao');
-  if (!dao) throw new Error('DAO-filtered source row has no DAO protocol action');
-  return dao.action.replaceAll('_', ' ');
-}
-
-function ActivityRow({ row }: { row: GlobalActivity }) {
-  return (
-    <tr className="border-base-border/50 border-b">
-      <td className="py-2 capitalize text-[#f2c55c]">{actionLabel(row.protocolActions)}</td>
-      <td>
-        <Link href={`/tx/${row.txHash}`} className="text-text-bright font-mono hover:underline">
-          {row.txHash.slice(0, 12)}…{row.txHash.slice(-8)}
-        </Link>
-      </td>
-      <td>
-        <Link
-          href={`/blocks/${row.blockNumber}`}
-          className="text-text-dim font-mono hover:underline"
-        >
-          #{row.blockNumber.toLocaleString()}
-        </Link>
-      </td>
-      <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
-    </tr>
-  );
-}
-
-function TransactionRow({ row }: { row: Transaction }) {
-  const step = row.activity ? actionLabel(row.activity.protocolActions) : 'DAO transaction';
-  return (
-    <tr className="border-base-border/50 border-b">
-      <td className="py-2 capitalize text-[#f2c55c]">{step}</td>
-      <td>
-        <Link href={`/tx/${row.hash}`} className="text-text-bright font-mono hover:underline">
-          {row.hash.slice(0, 12)}…{row.hash.slice(-8)}
-        </Link>
-      </td>
-      <td>
-        <Link
-          href={`/blocks/${row.blockNumber}`}
-          className="text-text-dim font-mono hover:underline"
-        >
-          #{row.blockNumber.toLocaleString()}
-        </Link>
-      </td>
-      <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
-    </tr>
-  );
-}
+import { ActivityRow } from '@/components/activity/activity-row';
+import { TransactionTable } from '@/components/transaction/transaction-table';
 
 export function DaoSources() {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
@@ -105,27 +53,13 @@ export function DaoSources() {
         <div className="text-text-dim py-7 text-xs">No DAO {tab} at this indexed tip.</div>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[650px] text-left text-[12px]">
-              <thead className="text-text-dim border-base-border border-b">
-                <tr>
-                  <th className="py-2">DAO step</th>
-                  <th>Transaction</th>
-                  <th>Block</th>
-                  <th className="text-right">UTC</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tab === 'activities'
-                  ? activities.data?.data.map((row) => (
-                      <ActivityRow key={`${row.txHash}:${row.txIndex}`} row={row} />
-                    ))
-                  : transactions.data?.data.map((row) => (
-                      <TransactionRow key={row.hash} row={row} />
-                    ))}
-              </tbody>
-            </table>
-          </div>
+          {tab === 'activities' ? (
+            activities.data?.data.map((row) => (
+              <ActivityRow key={`${row.txHash}:${row.txIndex}`} activity={row} />
+            ))
+          ) : (
+            <TransactionTable transactions={transactions.data?.data ?? []} />
+          )}
           {page.hasMore && page.nextCursor && (
             <button
               type="button"

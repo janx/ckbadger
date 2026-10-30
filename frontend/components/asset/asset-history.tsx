@@ -12,6 +12,7 @@ import { AssetAmount } from '@/components/asset/inventory-table';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenHistory } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
 const DAY = 86400000;
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
@@ -126,9 +127,7 @@ export function AssetHistory({
       minWidth: 160,
       render: (e) => (
         <>
-          <AppLink href={`/blocks/${e.blockNumber}`}>
-            #{e.blockNumber.toLocaleString('en-US')}
-          </AppLink>
+          <AppLink href={`/blocks/${e.blockNumber}`}>{formatBlockNumber(e.blockNumber)}</AppLink>
           <AppLink className="text-text-dim block text-[11px]" href={`/tx/${e.txHash}`}>
             tx {e.txIndex} · sequence {e.transferSequence}
           </AppLink>

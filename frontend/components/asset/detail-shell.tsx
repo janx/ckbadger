@@ -46,7 +46,7 @@ export function AssetDetailShell({
               >
                 {breadcrumb.map((b, i) => (
                   <span key={`${b.href}:${b.label}`}>
-                    {i > 0 && <span className="text-text-muted mr-2">/</span>}
+                    {i > 0 && <span className="text-text-ghost mr-2">/</span>}
                     <AppLink href={b.href}>{b.label}</AppLink>
                   </span>
                 ))}

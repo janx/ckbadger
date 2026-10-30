@@ -1,3 +1,4 @@
+import { AlignedBar } from '@/components/ui/aligned-bar';
 import { niceTicks } from '@/lib/chart-ticks';
 
 interface BlockContentsProps {
@@ -84,14 +85,29 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
   ) {
     throw new Error(`${label}: overhead ${overhead} exceeds resource value ${value}`);
   }
+  // Inline: the shared aligned bar, so every row starts at one left baseline (BA-01).
+  if (!stacked)
+    return (
+      <AlignedBar
+        label={label}
+        scale={scale}
+        segments={
+          overhead === undefined
+            ? [{ key: 'value', label, value, tone: 'data' }]
+            : [
+                { key: 'overhead', label: 'overhead', value: overhead, tone: 'overhead' },
+                {
+                  key: 'user',
+                  label: 'user transactions',
+                  value: value - overhead,
+                  tone: 'data',
+                },
+              ]
+        }
+      />
+    );
   return (
-    <span
-      className={
-        stacked
-          ? 'flex min-w-0 flex-col items-end gap-1.5'
-          : 'flex min-w-0 items-center justify-end gap-3'
-      }
-    >
+    <span className="flex min-w-0 flex-col items-end gap-1.5">
       <span
         role="img"
         aria-label={`${label}: ${value.toLocaleString('en-US')}${overhead === undefined ? '' : `, ${overhead.toLocaleString('en-US')} overhead, ${(value - overhead).toLocaleString('en-US')} user transactions`}`}

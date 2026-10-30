@@ -128,3 +128,13 @@ it('separates physical cell ownership from protocol-named .cell parties', async 
   expect(screen.getByText('Named owner')).toBeInTheDocument();
   expect(screen.getByText('Named manager')).toBeInTheDocument();
 });
+it("titles collection feed rows from the API's collectionContext, never the tx's first item (OB-C13)", async () => {
+  render(<CollectionDetail id={clusterDetailProducer.clusterId} kind="spore" />);
+  const feed = await screen.findByRole('region', { name: 'What happened' });
+  expect(await within(feed).findByText('Transferred 1')).toBeInTheDocument();
+  expect(within(feed).queryByText(/^Object (mint|transfer|burn)$/)).toBeNull();
+  // The Transactions tab says the same thing per row.
+  act(() => within(feed).getByRole('tab', { name: 'Transactions' }).click());
+  // Table and compact layouts both carry it.
+  expect((await within(feed).findAllByText('Minted 1')).length).toBeGreaterThan(0);
+});

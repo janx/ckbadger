@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from '@/components/ui/link';
 import type { FiberNetwork, FiberPair } from '@/lib/api';
 import { formatCkbAmount } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   network: FiberNetwork;
@@ -162,11 +163,11 @@ export function FiberNetworkGraph({ network }: Props) {
                 <div className="text-text-dim">
                   Opened in blocks{' '}
                   <Link href={`/blocks/${selected.firstOpenBlock}`} className="text-jade">
-                    #{selected.firstOpenBlock}
+                    {formatBlockNumber(selected.firstOpenBlock)}
                   </Link>
                   –
                   <Link href={`/blocks/${selected.lastOpenBlock}`} className="text-jade">
-                    #{selected.lastOpenBlock}
+                    {formatBlockNumber(selected.lastOpenBlock)}
                   </Link>
                 </div>
               </div>

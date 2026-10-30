@@ -10,6 +10,7 @@ import type {
 } from '@/lib/api';
 import { formatCkbAmount, formatCkbCompact, truncateHash } from '@/lib/utils';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import { formatBlockNumber } from '@/lib/format-block';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Fixed bytecode',
@@ -176,7 +177,7 @@ export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi
                   href={`/blocks/${marker.blockNumber}`}
                   className="text-emphasis hover:underline"
                 >
-                  Block #{marker.blockNumber.toLocaleString()}
+                  Block {formatBlockNumber(marker.blockNumber)}
                 </AppLink>
               </div>
               <div className="text-text-dim mt-1 break-all font-mono text-[11px]">
@@ -337,7 +338,7 @@ export function ScriptCapacityEvidenceChart({
                 aria-pressed={selected === marker}
                 className="border-base-border text-text-dim hover:text-text-bright shrink-0 rounded border px-2 py-1 text-[11px]"
               >
-                {marker.indexedDay} · {marker.event} · #{marker.blockNumber} ·{' '}
+                {marker.indexedDay} · {marker.event} · {formatBlockNumber(marker.blockNumber)} ·{' '}
                 {truncateHash(marker.referenceHash, 8, 6)}:{marker.codeCellOutputIndex}
               </button>
             ))}

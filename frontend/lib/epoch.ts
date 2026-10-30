@@ -30,3 +30,17 @@ export function parseEpoch(raw: string): EpochInfo {
   }
   return info;
 }
+
+/** One written form of an epoch position: `15,173 · 1,001 / 1,472` (BA-41). */
+export function formatEpochPosition({ number, index, length }: EpochInfo): string {
+  for (const [name, value] of [
+    ['number', number],
+    ['index', index],
+    ['length', length],
+  ] as const)
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new Error(`epoch ${name} ${value} is not a non-negative integer`);
+  if (index >= length) throw new Error(`epoch index ${index} is outside its length ${length}`);
+  const n = (v: number) => v.toLocaleString('en-US');
+  return `${n(number)} · ${n(index)} / ${n(length)}`;
+}

@@ -41,6 +41,12 @@ export interface ChartModel {
   summaryLabel?: string;
   /** A model timeline's "today" index: drawn solid up to it and dashed ahead (CH-03). */
   projectedAfter?: number;
+  /**
+   * A model timeline's main reading: the API's `today` point (lane R8), or `null` while the API
+   * does not send one, so the detail chart shows no reading rather than the last (future) sample.
+   * Absent on every other chart.
+   */
+  today?: ChartPoint | null;
   contextFacts?: { label: string; value: string }[];
   coverage?: string;
 }
@@ -151,6 +157,7 @@ function singleChart(
     yAxisLabel: string;
     y2AxisLabel?: string;
     data: { date: string; value: string; value2?: string | null }[];
+    today?: { date: string; value: string };
   }
 ): ChartModel {
   const primaryField = definition.primaryField ?? 'value';
@@ -291,6 +298,20 @@ function singleChart(
           : null,
     summaryLabel: leadingBucket ? 'Largest bucket' : todayPoint ? 'Today' : undefined,
     projectedAfter: currentIndex ?? undefined,
+    today: timelineMarkers
+      ? payload.today
+        ? {
+            label: `year ${payload.today.date}`,
+            values: {
+              primary: chartUnitValue(
+                payload.today.value,
+                definition.scale,
+                `${definition.slug} today at ${payload.today.date}`
+              ),
+            },
+          }
+        : null
+      : undefined,
   };
 }
 

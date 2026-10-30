@@ -1,3 +1,4 @@
+import type { CompositionTier } from '@/lib/asset-utils';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 export { resolveApiBase } from '@/lib/runtime-config';
@@ -89,16 +90,7 @@ export function isServiceUnavailableError(error: unknown): error is ApiRequestEr
   return candidate.code === 'service_unavailable' && candidate.status === 503;
 }
 
-/**
- * "The resource does not exist", read from the HTTP status the API answered
- * with — never from the rendered message text, which is prose and changes.
- */
-export function isNotFoundApiError(error: unknown): error is ApiRequestError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  return (error as Partial<ApiRequestError>).status === 404;
-}
+export { isNotFoundApiError } from '@/lib/api-errors';
 
 interface PaginatedResponse<T> {
   data: T[];
@@ -1091,7 +1083,19 @@ type ItemDelta =
       symbol?: string;
       decimals?: number | null;
     }
-  | { kind: 'object'; objectId: string; delta: number }
+  | {
+      kind: 'object';
+      objectId: string;
+      delta: number;
+      /**
+       * Lane R12 (TX-12 / TX-29; contracts.md: resolver ready, not yet on the wire): the object's
+       * collection (`name: null` for m-NFT classes and clusterless spores), its asset class and
+       * its composition tier (`null` for m-NFT). Each is rendered only when present.
+       */
+      collection?: { id: string; name: string | null } | null;
+      class?: 'object';
+      composition?: CompositionTier | null;
+    }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
 interface ActivityTypeCall {
@@ -1489,15 +1493,32 @@ export interface ItemRingRelink {
 export interface ItemFeedContext {
   itemId: string;
   action: string;
-  /** The item's own protocol actions in this tx, in order (e.g. `["buy", "list"]`); empty when none. */
+  /**
+   * The item's own protocol actions in this tx, in order. `.bit`: `"dotbit:<action>"` entries
+   * (`[]` on a neighbour row); `.cell`: bare names (`["buy", "list"]`); other standards `[]`.
+   */
   protocolActions: string[];
   /** Set only when the item's cell was rewritten as a ring neighbour with no own action. */
   ringRelink: ItemRingRelink | null;
+  /** Whose action this row is (contracts §5.1, ID-C1 / ID-C4): a neighbour's row is dimmed. */
+  actedOn: 'self' | 'neighbour';
   createdCell: ItemCellVersion | null;
   consumedCell: ItemCellVersion | null;
 }
 export type ItemActivity = GlobalActivity & { itemContext: ItemFeedContext };
 export type ItemTransaction = Transaction & { itemContext: ItemFeedContext };
+/** What one transaction did to one collection's items (contracts §5.2 / R2, OB-C13). */
+export interface CollectionFeedContext {
+  action: 'mint' | 'burn' | 'transfer' | 'update' | 'mixed';
+  minted: number;
+  burned: number;
+  transferred: number;
+  updated: number;
+  /** Only items of this collection. */
+  items: { id: string; change: 'minted' | 'burned' | 'transferred' | 'updated' }[];
+}
+export type CollectionFeedActivity = GlobalActivity & { collectionContext: CollectionFeedContext };
+export type CollectionFeedTransaction = Transaction & { collectionContext: CollectionFeedContext };
 export interface DidProtocol {
   did: string;
   itemId: string;
@@ -2299,6 +2320,11 @@ interface ChartResponse {
   title: string;
   yAxisLabel: string;
   y2AxisLabel?: string;
+  /**
+   * `/charts/nominal-apc` only (lane R8, CH-03): the model's value today, the detail chart's main
+   * reading. Until the API sends it the page shows no reading rather than the last sample.
+   */
+  today?: { date: string; value: string };
 }
 
 /**
@@ -4008,13 +4034,13 @@ export const api = {
     kind: 'spore' | 'object' | 'identity',
     id: string,
     params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<GlobalActivity>> =>
+  ): Promise<CursorPaginatedResponse<CollectionFeedActivity>> =>
     fetchApi(`${collectionReadPath(kind, id)}/activity-feed?${cursorReadQuery(params)}`),
   getCollectionTransactions: (
     kind: 'spore' | 'object' | 'identity',
     id: string,
     params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<Transaction>> =>
+  ): Promise<CursorPaginatedResponse<CollectionFeedTransaction>> =>
     fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
   getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
     fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),
