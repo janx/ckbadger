@@ -79,6 +79,21 @@ impl TokenBalance {
     }
 }
 
+/// Serialized as its fixed 32-byte big-endian form (the RocksDB key form), so
+/// a bincode row holding a balance has a fixed width.
+impl serde::Serialize for TokenBalance {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_be_bytes().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TokenBalance {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes = <[u8; Self::ENCODED_LEN]>::deserialize(deserializer)?;
+        Self::from_be_bytes(&bytes).map_err(serde::de::Error::custom)
+    }
+}
+
 impl From<u128> for TokenBalance {
     fn from(value: u128) -> Self {
         Self(U256::from(value))
@@ -162,6 +177,19 @@ mod tests {
             .checked_add(&TokenBalance::from(1))
             .unwrap();
         assert_eq!(above.to_u128(), None);
+    }
+
+    #[test]
+    fn bincode_form_is_the_fixed_32_byte_big_endian_form() {
+        let above = TokenBalance::from(u128::MAX)
+            .checked_add(&TokenBalance::from(7))
+            .unwrap();
+        let encoded = bincode::serialize(&above).unwrap();
+        assert_eq!(encoded, above.to_be_bytes());
+        assert_eq!(
+            bincode::deserialize::<TokenBalance>(&encoded).unwrap(),
+            above
+        );
     }
 
     #[test]

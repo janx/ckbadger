@@ -12,6 +12,7 @@ describe('Asset history', () => {
     try {
       render(
         <AssetHistory
+          weeklyNoun="transfers"
           daily={daily.map((day, i) => ({ ...day, supply: String(i + 1) }))}
           weekly={[]}
           completeThrough="2024-01-08"
@@ -33,18 +34,21 @@ describe('Asset history', () => {
   });
 
   it('uses jade for occupied capacity and neutral ink for free capacity', () => {
-    render(<AssetHistory daily={daily} weekly={[]} completeThrough="2024-01-08" />);
+    render(
+      <AssetHistory weeklyNoun="transfers" daily={daily} weekly={[]} completeThrough="2024-01-08" />
+    );
     expect(screen.getByText('Occupied', { exact: true })).toHaveStyle({ color: '#2edba3' });
     expect(screen.getByText('Free', { exact: true })).toHaveStyle({ color: '#3a4258' });
   });
   it('keeps exact tier-one readouts, complete-day scope and the actual peak date', () => {
     render(
       <AssetHistory
+        weeklyNoun="transfers"
         daily={daily}
-        weekly={[{ weekStart: '2024-01-01', transfersCount: 3 }]}
+        weekly={[{ weekStart: '2024-01-01', count: 3 }]}
         completeThrough="2024-01-08"
         token={{ symbol: 'T', decimals: 8 }}
-        supplyEvents={[]}
+        supplyEvents={{ rows: [], total: 0 }}
       />
     );
     const readout = screen.getByLabelText('History readout');
@@ -59,41 +63,85 @@ describe('Asset history', () => {
   it('labels supply events in UTC+8 and distinguishes raw block dates from indexed chart days', () => {
     render(
       <AssetHistory
+        weeklyNoun="transfers"
         daily={daily}
         weekly={[]}
         completeThrough="2024-01-08"
         token={{ symbol: 'T', decimals: 8 }}
-        supplyEvents={[
-          {
-            txHash: '0xaa',
-            blockNumber: 10,
-            txIndex: 0,
-            transferSequence: 0,
-            timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
-            kind: 'mint',
-            amount: '1',
-            supplyAfter: '13',
-            lockHash: '0xbb',
-            address: null,
-            lockKind: null,
-          },
-        ]}
+        supplyEvents={{
+          total: 1,
+          rows: [
+            {
+              txHash: '0xaa',
+              blockNumber: 10,
+              txIndex: 0,
+              transferSequence: 0,
+              timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+              kind: 'mint',
+              amount: '1',
+              supplyAfter: '13',
+              lockHash: '0xbb',
+              address: null,
+              lockKind: null,
+            },
+          ],
+        }}
       />
     );
     fireEvent.click(screen.getByText('Every change to the supply (1)'));
     expect(screen.getByRole('table', { name: 'Mints and burns' })).toHaveTextContent('2024-01-02');
     expect(screen.getByText(/Event dates use raw block timestamps/)).toHaveTextContent('UTC+8');
   });
+  it('names what the weekly totals count and says when only the newest supply events are listed', () => {
+    stubChartWidth(358);
+    render(
+      <AssetHistory
+        weeklyNoun="transactions"
+        daily={daily}
+        weekly={[{ weekStart: '2024-01-01', count: 3 }]}
+        completeThrough="2024-01-14"
+        token={{ symbol: 'T', decimals: 8 }}
+        supplyEvents={{
+          total: 1234,
+          rows: [
+            {
+              txHash: '0xaa',
+              blockNumber: 10,
+              txIndex: 0,
+              transferSequence: 0,
+              timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+              kind: 'mint',
+              amount: '1',
+              supplyAfter: '13',
+              lockHash: '0xbb',
+              address: null,
+              lockKind: null,
+            },
+          ],
+        }}
+      />
+    );
+    expect(
+      screen.getByRole('img', { name: 'Transactions per week, transactions' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /Transfers/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Every change to the supply (1,234)'));
+    expect(screen.getByText('The newest 1 are listed.')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
   it('rejects invalid day labels and incomplete weekly buckets', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
-      render(<AssetHistory daily={[]} weekly={[]} completeThrough="2024-02-31" />)
+      render(
+        <AssetHistory weeklyNoun="transfers" daily={[]} weekly={[]} completeThrough="2024-02-31" />
+      )
     ).toThrow('Invalid indexed history date');
     expect(() =>
       render(
         <AssetHistory
+          weeklyNoun="transfers"
           daily={daily}
-          weekly={[{ weekStart: '2024-01-08', transfersCount: 0 }]}
+          weekly={[{ weekStart: '2024-01-08', count: 0 }]}
           completeThrough="2024-01-08"
         />
       )
@@ -103,11 +151,19 @@ describe('Asset history', () => {
   it('rejects incomplete-day values and mismatched partitions instead of repairing them', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
-      render(<AssetHistory daily={daily} weekly={[]} completeThrough="2024-01-07" />)
+      render(
+        <AssetHistory
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-07"
+        />
+      )
     ).toThrow('incomplete day');
     expect(() =>
       render(
         <AssetHistory
+          weeklyNoun="transfers"
           daily={[{ ...daily[0], occupiedCapacity: '10000000002' }]}
           weekly={[]}
           completeThrough="2024-01-08"

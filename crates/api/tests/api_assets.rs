@@ -115,6 +115,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                     owned_capacity_delta: 100,
                     owned_knowledge_delta: 50,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -476,6 +477,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -487,6 +489,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 owned_capacity_delta: 300,
                 owned_knowledge_delta: 120,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -677,6 +680,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
                 owned_capacity_delta: 200,
                 owned_knowledge_delta: 100,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -690,6 +694,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 120,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -3617,6 +3622,7 @@ fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -3628,6 +3634,7 @@ fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]
                 owned_capacity_delta: 300,
                 owned_knowledge_delta: 120,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();

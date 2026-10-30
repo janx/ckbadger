@@ -42,6 +42,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(super::token_history::history),
         )
         .route(
+            "/tokens/{type_hash}/supply-events",
+            get(super::token_history::supply_events),
+        )
+        .route(
             "/tokens/{type_hash}/distribution",
             get(super::token_history::distribution),
         )

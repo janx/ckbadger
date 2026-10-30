@@ -1511,6 +1511,96 @@ pub struct TokenDailyDelta {
     /// Every row has at least one: a token day only exists because a
     /// transaction touched the token's cells.
     pub tx_count: u64,
+    /// Exact sum of that day's mint amounts: the token transfer records with
+    /// `is_mint` (`UdtParser::build_transfers_from_cells`, the facts the
+    /// Transactions tab shows). The day's signed supply change is
+    /// `minted - burned`; two unsigned sums keep it exact past `i128`.
+    pub minted: ckbadger_common::TokenBalance,
+    /// Exact sum of that day's burn amounts (`is_burn` transfer records).
+    pub burned: ckbadger_common::TokenBalance,
+    /// How many mint transfer records that day (`0` exactly when `minted`
+    /// is zero: a mint record always moves a positive amount).
+    pub mint_count: u64,
+    /// How many burn transfer records that day (`0` exactly when `burned`
+    /// is zero).
+    pub burn_count: u64,
+}
+
+impl TokenDailyDelta {
+    /// Fold one mint or burn transfer record
+    /// (`UdtParser::build_transfers_from_cells`, the record the Transactions
+    /// tab shows) into this day. A record that is neither is a caller bug.
+    pub fn add_supply_transfer(
+        &mut self,
+        is_mint: bool,
+        is_burn: bool,
+        amount: u128,
+    ) -> anyhow::Result<()> {
+        let amount = ckbadger_common::TokenBalance::from(amount);
+        let (sum, count) = match (is_mint, is_burn) {
+            (true, false) => (&mut self.minted, &mut self.mint_count),
+            (false, true) => (&mut self.burned, &mut self.burn_count),
+            _ => anyhow::bail!(
+                "token supply transfer must be exactly one of mint/burn: is_mint={is_mint} is_burn={is_burn}"
+            ),
+        };
+        *sum = sum
+            .checked_add(&amount)
+            .ok_or_else(|| anyhow::anyhow!("token daily supply sum overflow: {sum} + {amount}"))?;
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("token daily supply record count overflow"))?;
+        Ok(())
+    }
+
+    /// Add another contribution of the same token day, every field checked.
+    pub fn merge(&mut self, other: &Self) -> anyhow::Result<()> {
+        let overflow = |field: &str| anyhow::anyhow!("token daily {field} overflow");
+        self.owned_capacity_delta = self
+            .owned_capacity_delta
+            .checked_add(other.owned_capacity_delta)
+            .ok_or_else(|| overflow("capacity delta"))?;
+        self.owned_knowledge_delta = self
+            .owned_knowledge_delta
+            .checked_add(other.owned_knowledge_delta)
+            .ok_or_else(|| overflow("knowledge delta"))?;
+        self.tx_count = self
+            .tx_count
+            .checked_add(other.tx_count)
+            .ok_or_else(|| overflow("tx_count"))?;
+        self.minted = self
+            .minted
+            .checked_add(&other.minted)
+            .ok_or_else(|| overflow("minted"))?;
+        self.burned = self
+            .burned
+            .checked_add(&other.burned)
+            .ok_or_else(|| overflow("burned"))?;
+        self.mint_count = self
+            .mint_count
+            .checked_add(other.mint_count)
+            .ok_or_else(|| overflow("mint_count"))?;
+        self.burn_count = self
+            .burn_count
+            .checked_add(other.burn_count)
+            .ok_or_else(|| overflow("burn_count"))?;
+        Ok(())
+    }
+
+    /// The token's supply after this day, given its supply before it:
+    /// `supply + minted - burned`, exact. `Ok(None)` when the day burns more
+    /// than there is (a write-path bug the caller reports with its context);
+    /// an error only if the sum leaves the 256-bit balance domain. The one
+    /// supply step every reader (verify, the token history) uses.
+    pub fn apply_supply(
+        &self,
+        supply: &ckbadger_common::TokenBalance,
+    ) -> anyhow::Result<Option<ckbadger_common::TokenBalance>> {
+        let raised = supply
+            .checked_add(&self.minted)
+            .ok_or_else(|| anyhow::anyhow!("supply {supply} + minted {} overflows", self.minted))?;
+        Ok(raised.checked_sub(&self.burned))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

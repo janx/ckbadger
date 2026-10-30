@@ -1340,23 +1340,25 @@ export interface TokenHistory {
   completeThrough: string;
   anchor: { blockNumber: number; blockHash: string };
   daily: { date: string; supply: string; capacity: string; occupiedCapacity: string }[];
-  weekly: { weekStart: string; transfersCount: number }[];
-  supplyEvents: {
-    txHash: string;
-    blockNumber: number;
-    txIndex: number;
-    transferSequence: number;
-    timestamp: string;
-    kind: 'mint' | 'burn';
-    amount: string;
-    supplyAfter: string;
-    lockHash: string;
-    address: string | null;
-    lockKind: string | null;
-  }[];
+  /** Transactions (not transfer legs) per complete Monday-start week. */
+  weeklyTransactions: { weekStart: string; transactionsCount: number }[];
   mintCount: number;
   burnCount: number;
   transfersCount: number;
+}
+/** One mint or burn, from `/tokens/{hash}/supply-events` (newest first, paged). */
+export interface TokenSupplyEvent {
+  txHash: string;
+  blockNumber: number;
+  txIndex: number;
+  transferSequence: number;
+  timestamp: string;
+  kind: 'mint' | 'burn';
+  amount: string;
+  supplyAfter: string;
+  lockHash: string;
+  address: string | null;
+  lockKind: string | null;
 }
 export interface TokenDistribution {
   holdersCount: number;
@@ -4084,6 +4086,15 @@ export const api = {
   getDidPdsDistribution: (): Promise<DidPdsDistribution> => fetchApi('/assets/identities/did/pds'),
   getTokenHistory: (typeHash: string): Promise<TokenHistory> =>
     fetchApi(`/tokens/${typeHash}/history`),
+  getTokenSupplyEvents: (
+    typeHash: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<TokenSupplyEvent>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return fetchApi(`/tokens/${typeHash}/supply-events?${query}`);
+  },
   getTokenDistribution: (typeHash: string): Promise<TokenDistribution> =>
     fetchApi(`/tokens/${typeHash}/distribution`),
   getTokenActivityFeed: (

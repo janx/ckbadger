@@ -578,6 +578,7 @@ async fn consume_in_orphan_restores_token_day_with_its_transaction_count() {
             owned_capacity_delta: 0,
             owned_knowledge_delta: 0,
             tx_count: 2,
+            ..Default::default()
         }
     );
 
@@ -618,6 +619,7 @@ async fn same_block_create_then_consume_nets_zero_row() {
             owned_capacity_delta: 0,
             owned_knowledge_delta: 0,
             tx_count: 2,
+            ..Default::default()
         }
     );
 }

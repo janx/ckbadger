@@ -15,11 +15,20 @@ import { formatTimeAgo } from '@/lib/utils';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+/** The supply-event route always reports its total; a page without one is a contract break. */
+function supplyEventsTotal(page: { total?: number }): number {
+  if (page.total === undefined) throw new Error('supply events page has no total');
+  return page.total;
+}
 export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   const token = useQuery({ queryKey: ['token', typeHash], queryFn: () => api.getToken(typeHash) });
   const history = useQuery({
     queryKey: ['token-history', typeHash],
     queryFn: () => api.getTokenHistory(typeHash),
+  });
+  const supplyEvents = useQuery({
+    queryKey: ['token-supply-events', typeHash],
+    queryFn: () => api.getTokenSupplyEvents(typeHash, { limit: 100 }),
   });
   const latest = useQuery({
     queryKey: ['token-latest-activity', typeHash],
@@ -292,11 +301,20 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           <AssetReadState error={history.error} label="token history" retained />
           <AssetHistory
             daily={history.data.daily}
-            weekly={history.data.weekly}
+            weekly={history.data.weeklyTransactions.map((w) => ({
+              weekStart: w.weekStart,
+              count: w.transactionsCount,
+            }))}
+            weeklyNoun="transactions"
             completeThrough={history.data.completeThrough}
-            supplyEvents={history.data.supplyEvents}
+            supplyEvents={
+              supplyEvents.data
+                ? { rows: supplyEvents.data.data, total: supplyEventsTotal(supplyEvents.data) }
+                : undefined
+            }
             token={{ symbol: t.symbol, decimals: t.decimals }}
           />
+          <AssetReadState error={supplyEvents.error} label="supply events" retained />
           <p className="text-text-dim -mt-5 text-xs">
             <AssetCount value={history.data.mintCount} /> mints ·{' '}
             <AssetCount value={history.data.burnCount} /> burns ·{' '}

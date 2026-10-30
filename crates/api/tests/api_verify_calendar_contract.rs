@@ -116,6 +116,7 @@ async fn calendar_contract_real_api_and_verifier_keep_amounts_exact_and_dates_ex
                     owned_capacity_delta: capacity * SHANNON,
                     owned_knowledge_delta: knowledge * SHANNON,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();

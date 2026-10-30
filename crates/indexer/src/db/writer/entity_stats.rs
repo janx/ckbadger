@@ -247,8 +247,9 @@ struct DailyPair {
 
 /// Encoded width of a [`DailyPair`] row.
 const DAILY_PAIR_LEN: usize = 32;
-/// Encoded width of a `TokenDailyDelta` row: the pair plus `tx_count: u64`.
-const TOKEN_DAILY_LEN: usize = 40;
+/// Encoded width of a `TokenDailyDelta` row: the pair, `tx_count: u64`, the
+/// two 32-byte supply sums and the two `u64` record counts.
+const TOKEN_DAILY_LEN: usize = 120;
 
 /// The previous row of a daily family, decoded only if it has exactly the
 /// family's width — bincode would otherwise read a wider row's prefix.
@@ -330,30 +331,14 @@ pub fn apply_daily_pair(
 /// zero.
 pub fn apply_token_daily(
     prev: Option<&[u8]>,
-    capacity_delta: i128,
-    knowledge_delta: i128,
-    tx_count: u64,
+    contribution: &crate::sync::types::TokenDayContribution,
     ctx: &dyn Fn() -> String,
 ) -> Result<Option<Vec<u8>>> {
     let mut current: TokenDailyDelta = decode_daily(prev, TOKEN_DAILY_LEN, ctx)?;
-    current.owned_capacity_delta = add_daily_i128(
-        current.owned_capacity_delta,
-        capacity_delta,
-        "capacity",
-        ctx,
-    )?;
-    current.owned_knowledge_delta = add_daily_i128(
-        current.owned_knowledge_delta,
-        knowledge_delta,
-        "knowledge",
-        ctx,
-    )?;
-    current.tx_count = current.tx_count.checked_add(tx_count).ok_or_else(|| {
+    current.merge(contribution).map_err(|e| {
         anyhow::anyhow!(
-            "token daily tx_count overflow: {}, current={}, delta={}",
-            ctx(),
-            current.tx_count,
-            tx_count
+            "{e}: {}, current={current:?}, delta={contribution:?}",
+            ctx()
         )
     })?;
     if current == TokenDailyDelta::default() {
@@ -401,6 +386,7 @@ pub fn apply_hourly_increment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync::types::TokenDayContribution;
     use ckbadger_store::keys;
     use ckbadger_store::types::{
         ClusterDailyDelta, MnftDailyDelta, ScriptDailyDelta, SporeDailyDelta,
@@ -762,11 +748,34 @@ mod tests {
             owned_capacity_delta: cap,
             owned_knowledge_delta: know,
             tx_count: 7,
+            ..Default::default()
         })
         .unwrap();
         assert_eq!(token.len(), TOKEN_DAILY_LEN);
         assert_eq!(token[..DAILY_PAIR_LEN], pair[..]);
-        assert_eq!(token[DAILY_PAIR_LEN..], 7u64.to_le_bytes());
+        assert_eq!(
+            token[DAILY_PAIR_LEN..DAILY_PAIR_LEN + 8],
+            7u64.to_le_bytes()
+        );
+        // ... then the two fixed-width supply sums and their record counts.
+        let supply = bincode::serialize(&TokenDailyDelta {
+            minted: ckbadger_common::TokenBalance::from(u128::MAX)
+                .checked_add(&1u128.into())
+                .unwrap(),
+            mint_count: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(supply.len(), TOKEN_DAILY_LEN);
+    }
+
+    fn contribution(capacity: i128, knowledge: i128, tx_count: u64) -> TokenDayContribution {
+        TokenDayContribution {
+            owned_capacity_delta: capacity,
+            owned_knowledge_delta: knowledge,
+            tx_count,
+            ..Default::default()
+        }
     }
 
     fn token_day(cap: i128, know: i128, tx_count: u64) -> Vec<u8> {
@@ -774,19 +783,26 @@ mod tests {
             owned_capacity_delta: cap,
             owned_knowledge_delta: know,
             tx_count,
+            ..Default::default()
         })
         .unwrap()
     }
 
     #[test]
     fn token_daily_accumulates_transactions_and_keeps_a_zero_capacity_day() {
-        let first = apply_token_daily(None, 300, 100, 1, &ctx()).unwrap();
+        let first = apply_token_daily(None, &contribution(300, 100, 1), &ctx()).unwrap();
         assert_eq!(first, Some(token_day(300, 100, 1)));
         // A transaction that moves token cells without changing their total
         // capacity still counts, and the day keeps its row.
-        let second = apply_token_daily(first.as_deref(), -300, -100, 1, &ctx()).unwrap();
+        let second =
+            apply_token_daily(first.as_deref(), &contribution(-300, -100, 1), &ctx()).unwrap();
         assert_eq!(second, Some(token_day(0, 0, 2)));
-        let err = apply_token_daily(Some(&token_day(0, 0, u64::MAX)), 0, 0, 1, &ctx()).unwrap_err();
+        let err = apply_token_daily(
+            Some(&token_day(0, 0, u64::MAX)),
+            &contribution(0, 0, 1),
+            &ctx(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("tx_count overflow"), "got: {err}");
     }
 
@@ -794,14 +810,15 @@ mod tests {
     /// prefix to read.
     #[test]
     fn daily_codecs_reject_the_other_familys_width() {
-        let err = apply_token_daily(Some(&daily(1, 1)), 0, 0, 1, &ctx()).unwrap_err();
+        let err =
+            apply_token_daily(Some(&daily(1, 1)), &contribution(0, 0, 1), &ctx()).unwrap_err();
         assert!(
-            err.to_string().contains("has 32 bytes, expected 40"),
+            err.to_string().contains("has 32 bytes, expected 120"),
             "got: {err}"
         );
         let err = apply_daily_pair(Some(&token_day(1, 1, 1)), 0, 0, &ctx()).unwrap_err();
         assert!(
-            err.to_string().contains("has 40 bytes, expected 32"),
+            err.to_string().contains("has 120 bytes, expected 32"),
             "got: {err}"
         );
     }

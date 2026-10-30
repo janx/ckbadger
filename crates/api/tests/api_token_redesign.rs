@@ -136,18 +136,41 @@ fn fixture() -> Arc<CkbadgerStore> {
     }
     batch.put_token_holder(&TOKEN, &[0x32; 32], 90);
     batch.put_token_holder_by_balance(&TOKEN, &[0x32; 32], 90);
+    batch.put_token_transfers_count(&TOKEN, 4);
     batch.commit().unwrap();
-    store
-        .put_token_daily_delta(
-            &TOKEN,
+    // The rows the indexer writes for these transfers: one transaction a day,
+    // the mint on 10-01, the burn on 10-08 (`TokenDailyDelta` supply facts).
+    for (date, row) in [
+        (
             20261001,
-            &TokenDailyDelta {
+            TokenDailyDelta {
                 owned_capacity_delta: 1000,
                 owned_knowledge_delta: 600,
                 tx_count: 1,
+                minted: 100u128.into(),
+                mint_count: 1,
+                ..Default::default()
             },
-        )
-        .unwrap();
+        ),
+        (
+            20261002,
+            TokenDailyDelta {
+                tx_count: 1,
+                ..Default::default()
+            },
+        ),
+        (
+            20261008,
+            TokenDailyDelta {
+                tx_count: 1,
+                burned: 10u128.into(),
+                burn_count: 1,
+                ..Default::default()
+            },
+        ),
+    ] {
+        store.put_token_daily_delta(&TOKEN, date, &row).unwrap();
+    }
     store
 }
 
@@ -174,8 +197,13 @@ async fn asset_feeds_deduplicate_transactions_and_preserve_all_participants() {
     assert_eq!(last["data"][0]["cyclesStatus"], "complete");
 }
 
+/// IV-27 (I4): the history is the token's persisted days — supply from
+/// `minted - burned`, weekly counts of transactions (not transfer legs) from
+/// `tx_count`, mint / burn counts from the rows, the transfer count from the
+/// persisted counter — over complete indexed calendar days. The supply-event
+/// list is its own paged route.
 #[tokio::test]
-async fn token_history_uses_all_transfers_and_complete_indexed_calendar_days() {
+async fn token_history_reads_its_persisted_token_days() {
     let app = create_router(test_config(fixture())).await;
     let (status, body) =
         response_json(&app, &format!("/tokens/0x{}/history", hex::encode(TOKEN))).await;
@@ -185,13 +213,86 @@ async fn token_history_uses_all_transfers_and_complete_indexed_calendar_days() {
     assert_eq!(body["transfersCount"], 4);
     assert_eq!(body["mintCount"], 1);
     assert_eq!(body["burnCount"], 1);
-    assert_eq!(body["supplyEvents"][1]["supplyAfter"], "90");
     let daily = body["daily"].as_array().unwrap();
     assert_eq!(daily.len(), 11);
+    assert_eq!(daily[0]["supply"], "100");
+    assert_eq!(daily[6]["supply"], "100", "10-07, before the burn");
+    assert_eq!(daily[7]["supply"], "90", "10-08, the burn");
     assert_eq!(daily.last().unwrap()["capacity"], "1000");
     assert_eq!(daily.last().unwrap()["supply"], "90");
-    assert_eq!(body["weekly"][0]["transfersCount"], 3);
-    assert_eq!(body["weekly"][1]["transfersCount"], 1);
+    assert_eq!(
+        body["weeklyTransactions"],
+        serde_json::json!([
+            {"weekStart": "2026-09-28", "transactionsCount": 2},
+            {"weekStart": "2026-10-05", "transactionsCount": 1},
+        ]),
+        "{body}"
+    );
+    assert!(
+        body.get("weekly").is_none() && body.get("supplyEvents").is_none(),
+        "{body}"
+    );
+}
+
+/// The supply-event list (moved off `/history`): every mint and burn, newest
+/// first, paged, with the exact supply after each, and `total` = the
+/// persisted record count.
+#[tokio::test]
+async fn token_supply_events_page_newest_first_with_exact_supply_after() {
+    let app = create_router(test_config(fixture())).await;
+    let path = format!("/tokens/0x{}/supply-events", hex::encode(TOKEN));
+    let (status, first) = response_json(&app, &format!("{path}?limit=1")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["total"], 2, "{first}");
+    assert_eq!(first["data"].as_array().unwrap().len(), 1);
+    assert_eq!(first["data"][0]["kind"], "burn");
+    assert_eq!(first["data"][0]["blockNumber"], 2);
+    assert_eq!(first["data"][0]["amount"], "10");
+    assert_eq!(first["data"][0]["supplyAfter"], "90");
+    assert_eq!(first["nextCursor"], "2:0");
+    let (status, second) = response_json(&app, &format!("{path}?limit=1&cursor=2:0")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["data"][0]["kind"], "mint");
+    assert_eq!(second["data"][0]["blockNumber"], 0);
+    assert_eq!(second["data"][0]["supplyAfter"], "100");
+    assert_eq!(
+        second["data"][0]["lockHash"],
+        format!("0x{}", "32".repeat(32))
+    );
+    assert_eq!(second["nextCursor"], serde_json::Value::Null);
+    let (_, all) = response_json(&app, &path).await;
+    assert_eq!(all["data"].as_array().unwrap().len(), 2, "{all}");
+}
+
+/// A day row that disagrees with the day's own mint / burn records is a
+/// write-path bug: a 500 naming the day.
+#[tokio::test]
+async fn token_supply_events_reject_a_day_row_that_disagrees_with_its_records() {
+    let store = fixture();
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261008,
+            &TokenDailyDelta {
+                tx_count: 1,
+                burned: 10u128.into(),
+                burn_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = response_json(
+        &app,
+        &format!("/tokens/0x{}/supply-events", hex::encode(TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains("disagree with its row") && message.contains("date=2026-10-08"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -322,6 +423,21 @@ async fn token_history_dates_follow_chain_time_after_raw_timestamp_regression() 
     let mut batch = StoreBatch::new(&store);
     batch.put_block_header(2, &header);
     batch.commit().unwrap();
+    // The indexer dates a token day by chain time, so the burn's row is
+    // 10-09's, not the raw timestamp's 10-08.
+    let burn_day = store
+        .get_token_daily_delta(&TOKEN, 20261008)
+        .unwrap()
+        .unwrap();
+    store
+        .delete_cf(
+            store.cf_stats_token(),
+            &ckbadger_store::keys::encode_token_daily_key(&TOKEN, 20261008),
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(&TOKEN, 20261009, &burn_day)
+        .unwrap();
     let app = create_router(test_config(store)).await;
     let (_, body) = response_json(&app, &format!("/tokens/0x{}/history", hex::encode(TOKEN))).await;
     assert_eq!(body["daily"][7]["date"], "2026-10-08");
@@ -445,10 +561,17 @@ async fn distribution_preserves_wide_balances_and_explicit_unknown_units() {
 #[tokio::test]
 async fn token_history_rejects_missing_capacity_evidence_for_existing_transfers() {
     let store = fixture();
+    // The mint's day carries supply but no capacity for the cells holding it.
     store
-        .delete_cf(
-            store.cf_stats_token(),
-            &ckbadger_store::keys::encode_token_daily_key(&TOKEN, 20261001),
+        .put_token_daily_delta(
+            &TOKEN,
+            20261001,
+            &TokenDailyDelta {
+                tx_count: 1,
+                minted: 100u128.into(),
+                mint_count: 1,
+                ..Default::default()
+            },
         )
         .unwrap();
     let app = create_router(test_config(store)).await;
@@ -460,7 +583,7 @@ async fn token_history_rejects_missing_capacity_evidence_for_existing_transfers(
 }
 
 #[tokio::test]
-async fn token_history_accepts_same_day_mint_burn_with_deleted_zero_net_capacity_row() {
+async fn token_history_accepts_same_day_mint_burn_with_zero_net_capacity() {
     let info = fixture().get_token(&TOKEN).unwrap().unwrap();
     let store = test_store();
     store.put_token_direct(&TOKEN, &info).unwrap();
@@ -513,26 +636,62 @@ async fn token_history_accepts_same_day_mint_burn_with_deleted_zero_net_capacity
         );
     }
     batch.commit().unwrap();
-    // The owning daily writer removes a date's row when its net capacity and
-    // occupied deltas both become zero; no holders remain after this burn.
-    assert!(store.list_token_daily_deltas(&TOKEN).unwrap().is_empty());
+    // The day keeps its row although its capacity nets to zero (W3): two
+    // transactions, the mint and the burn; no holders remain after the burn.
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261001,
+            &TokenDailyDelta {
+                tx_count: 2,
+                minted: 100u128.into(),
+                mint_count: 1,
+                burned: 100u128.into(),
+                burn_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let app = create_router(test_config(store)).await;
     let (status, body) =
         response_json(&app, &format!("/tokens/0x{}/history", hex::encode(TOKEN))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["supplyEvents"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        (body["mintCount"].clone(), body["burnCount"].clone()),
+        (1.into(), 1.into())
+    );
     assert_eq!(
         body["daily"],
         serde_json::json!([{
             "date":"2026-10-01", "supply":"0", "capacity":"0", "occupiedCapacity":"0"
         }])
     );
+    let (status, events) = response_json(
+        &app,
+        &format!("/tokens/0x{}/supply-events", hex::encode(TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    let after: Vec<_> = events["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap(),
+                e["supplyAfter"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(after, [("burn", "0"), ("mint", "100")]);
 }
 
 /// A token whose history spans `blocks` (at most 40) blocks, four per UTC+8
 /// day from 2026-10-01: block 1 mints 1,000 to `0x32…`, every later block
 /// moves one unit to `0x33…`. The indexed chain is 48 blocks long whatever
-/// `blocks` is, so two fixtures differ only in their transfers.
+/// `blocks` is, so two fixtures differ only in their history. The token's
+/// daily rows are the ones the indexer writes for it (one transaction per
+/// transfer block, the mint's supply and capacity on 10-01).
 fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
     assert!(blocks <= 40);
     let store = test_store();
@@ -564,6 +723,7 @@ fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
         .collect();
     seed_block_headers_at(&store, &headers);
     let mut batch = StoreBatch::new(&store);
+    let mut days: std::collections::BTreeMap<u32, TokenDailyDelta> = Default::default();
     for block in 1..=blocks {
         let hash = long_history_tx(block);
         let timestamp = store.get_block_header(block).unwrap().unwrap().timestamp;
@@ -598,22 +758,24 @@ fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
                 timestamp,
             },
         );
+        let day = 20261001 + u32::try_from(block / 4).unwrap();
+        let row = days.entry(day).or_default();
+        row.tx_count += 1;
+        if block == 1 {
+            row.owned_capacity_delta = 1_000;
+            row.owned_knowledge_delta = 600;
+            row.minted = 1_000u128.into();
+            row.mint_count = 1;
+        }
     }
     let moved = u128::try_from(blocks - 1).unwrap();
     batch.put_token_holder(&TOKEN, &[0x32; 32], 1_000 - moved);
     batch.put_token_holder(&TOKEN, &[0x33; 32], moved);
+    batch.put_token_transfers_count(&TOKEN, blocks);
     batch.commit().unwrap();
-    store
-        .put_token_daily_delta(
-            &TOKEN,
-            20261001,
-            &TokenDailyDelta {
-                owned_capacity_delta: 1_000,
-                owned_knowledge_delta: 600,
-                tx_count: 1,
-            },
-        )
-        .unwrap();
+    for (day, row) in days {
+        store.put_token_daily_delta(&TOKEN, day, &row).unwrap();
+    }
     store
 }
 
@@ -623,104 +785,119 @@ fn long_history_tx(block: i64) -> [u8; 32] {
     hash
 }
 
-/// IV-27: `/history` read one block header per transfer block (4–13 s for
-/// USDI). Header reads are batched, so a history's point reads do not grow
-/// with the number of blocks its transfers span.
+/// Overwrite the token's transfer rows of blocks `from..=to` with bytes no
+/// reader can decode: a route that reads any of them fails.
+fn corrupt_transfer_rows(store: &CkbadgerStore, from: i64, to: i64) {
+    for block in from..=to {
+        store
+            .put_cf(
+                store.cf_token_transfers(),
+                &ckbadger_store::keys::encode_token_transfer_key(&TOKEN, block, 0),
+                b"not a transfer record",
+            )
+            .unwrap();
+    }
+}
+
+/// IV-27 (I4): `/history` walked every transfer of the token and read block
+/// headers for them (4–13 s for USDI, linear in history for Seal). It now
+/// reads no transfer row at all — every row is corrupt here and the history
+/// is still exact — and its point reads do not grow from 5 to 10 days of
+/// history: no per-block header and no per-day read.
 #[tokio::test]
-async fn token_history_reads_no_header_per_transfer_block() {
+async fn token_history_reads_no_transfer_and_no_per_block_header() {
     let path = format!("/tokens/0x{}/history", hex::encode(TOKEN));
     let mut reads = Vec::new();
     for blocks in [20, 40] {
         let store = long_history_fixture(blocks);
+        corrupt_transfer_rows(&store, 1, blocks);
         let app = router_from_state(test_app_state(test_config(store.clone())));
         store.reset_read_call_counters();
         let (status, body) = response_json(&app, &path).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["transfersCount"], blocks, "{body}");
+        assert_eq!(body["mintCount"], 1, "{body}");
+        assert_eq!(body["daily"].as_array().unwrap().len(), 12, "10-01 … 10-12");
+        assert_eq!(body["daily"][11]["supply"], "1000", "{body}");
+        let weekly_total: u64 = body["weeklyTransactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["transactionsCount"].as_u64().unwrap())
+            .sum();
+        // Every transfer block is one transaction in a complete week.
+        assert_eq!(weekly_total, u64::try_from(blocks).unwrap(), "{body}");
         reads.push((blocks, store.read_call_counts()));
     }
     assert_eq!(
-        reads[0].1 .0, reads[1].1 .0,
-        "get_cf point reads grew with transfer blocks: {reads:?}"
+        reads[0].1, reads[1].1,
+        "history point reads grew with its days: {reads:?}"
     );
 }
 
-/// IV-27: complete days are computed once per complete-day boundary and
-/// served from memory; only the incomplete day is read live.
+/// Only the tip day is "live": it is the indexer's running row for that day,
+/// read like every other row. A transaction later on the tip day changes the
+/// counts and the anchor, never a complete day.
 #[tokio::test]
-async fn token_history_serves_complete_days_from_memory() {
+async fn token_history_tip_day_reads_its_running_row() {
     let store = long_history_fixture(40);
     let app = router_from_state(test_app_state(test_config(store.clone())));
     let path = format!("/tokens/0x{}/history", hex::encode(TOKEN));
-    store.reset_read_call_counters();
     let (status, first) = response_json(&app, &path).await;
     assert_eq!(status, StatusCode::OK, "{first}");
-    let cold = store.read_call_counts();
-    store.reset_read_call_counters();
-    let (_, second) = response_json(&app, &path).await;
-    let warm = store.read_call_counts();
-    assert_eq!(first, second);
-    assert!(
-        cold.1 > 0,
-        "the cold build batch-reads the transfers: {cold:?}"
-    );
-    assert_eq!(
-        warm.1, 0,
-        "the warm read must not walk the complete days again: cold={cold:?} warm={warm:?}"
-    );
 
-    // A transfer later on the incomplete day is read live on top of the
-    // cached complete days.
+    // What the indexer writes for one more transfer on the tip day.
     let tip = store.get_sync_tip_block().unwrap().unwrap();
     let block = tip.0 + 1;
     let mut header = tip.1.clone();
     header.timestamp += 60_000;
     header.chain_time_ms += 60_000;
     header.hash = vec![0xee; 32];
-    let hash = long_history_tx(block);
     let mut batch = StoreBatch::new(&store);
     batch.put_block_header(block, &header);
-    batch.put_tx_hash_map(&hash, block, 1);
-    batch.put_tx_index(
-        block,
-        1,
-        &TxIndexEntry {
-            tx_hash: hash,
-            is_cellbase: false,
-            timestamp: header.timestamp,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 10,
-            tx_size: 100,
-            cycles: None,
-            semantic_tags: 0,
-        },
-    );
-    batch.put_token_transfer(
-        &TOKEN,
-        block,
-        0,
-        &TokenTransferRecord {
-            tx_hash: hash.to_vec(),
-            block_number: block,
-            from_lock_hash: Some(vec![0x32; 32]),
-            to_lock_hash: vec![0x33; 32],
-            amount: 1,
-            is_mint: false,
-            is_burn: false,
-            timestamp: header.timestamp,
-        },
-    );
     batch.put_token_holder(&TOKEN, &[0x32; 32], 1_000 - 40);
     batch.put_token_holder(&TOKEN, &[0x33; 32], 40);
+    batch.put_token_transfers_count(&TOKEN, 41);
     batch.commit().unwrap();
-    let (status, third) = response_json(&app, &path).await;
-    assert_eq!(status, StatusCode::OK, "{third}");
-    assert_eq!(third["transfersCount"], 41, "{third}");
-    assert_eq!(third["completeThrough"], first["completeThrough"]);
-    assert_eq!(third["daily"], first["daily"]);
-    assert_eq!(third["weekly"], first["weekly"]);
-    assert_eq!(third["anchor"]["blockNumber"], block);
+    store
+        .update_sync_status(|status| status.tip_block_number = block)
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261013,
+            &TokenDailyDelta {
+                tx_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let (status, second) = response_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["transfersCount"], 41, "{second}");
+    assert_eq!(second["anchor"]["blockNumber"], block);
+    assert_eq!(second["completeThrough"], first["completeThrough"]);
+    assert_eq!(second["daily"], first["daily"]);
+    assert_eq!(second["weeklyTransactions"], first["weeklyTransactions"]);
+}
+
+/// The supply-event list reads transfers only inside the days whose row
+/// records a mint or burn: every other day's transfer rows are corrupt here.
+#[tokio::test]
+async fn token_supply_events_read_transfers_only_on_mint_or_burn_days() {
+    let store = long_history_fixture(40);
+    corrupt_transfer_rows(&store, 4, 40);
+    let app = router_from_state(test_app_state(test_config(store)));
+    let (status, body) = response_json(
+        &app,
+        &format!("/tokens/0x{}/supply-events", hex::encode(TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 1, "{body}");
+    assert_eq!(body["data"][0]["kind"], "mint");
+    assert_eq!(body["data"][0]["blockNumber"], 1);
+    assert_eq!(body["data"][0]["supplyAfter"], "1000");
 }
 
 /// IV-27: a Transactions-tab row summed its output capacity with one point

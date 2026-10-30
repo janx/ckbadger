@@ -893,6 +893,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 owned_capacity_delta: 300,
                 owned_knowledge_delta: 250,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -926,6 +927,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 owned_capacity_delta: 900,
                 owned_knowledge_delta: 100,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -937,6 +939,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 owned_capacity_delta: 10_000,
                 owned_knowledge_delta: 10_000,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();

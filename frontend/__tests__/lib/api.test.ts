@@ -51,6 +51,7 @@ describe('api', () => {
       );
       await api.getInventorySummary();
       await api.getTokenHistory('0xab');
+      await api.getTokenSupplyEvents('0xab', { limit: 100, cursor: '2:0' });
       await api.getTokenDistribution('0xab');
       await api.getTokenActivityFeed('0xab', { limit: 25, cursor: '9:3' });
       await api.getTokenTransactions('0xab', { limit: 25, cursor: '8:2' });
@@ -60,6 +61,7 @@ describe('api', () => {
       expect(seen).toEqual([
         '/api/mainnet/v1/assets/summary',
         '/api/mainnet/v1/tokens/0xab/history',
+        '/api/mainnet/v1/tokens/0xab/supply-events?limit=100&cursor=2%3A0',
         '/api/mainnet/v1/tokens/0xab/distribution',
         '/api/mainnet/v1/tokens/0xab/activity-feed?limit=25&cursor=9%3A3',
         '/api/mainnet/v1/tokens/0xab/transactions?limit=25&cursor=8%3A2',

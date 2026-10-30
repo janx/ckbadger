@@ -2171,6 +2171,7 @@ async fn test_asset_ecosystem_returns_expected_structure() {
                 owned_capacity_delta: 500_00000000,
                 owned_knowledge_delta: 300_00000000,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2331,6 +2332,7 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
                 owned_capacity_delta: 500_00000000,
                 owned_knowledge_delta: 300_00000000,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();

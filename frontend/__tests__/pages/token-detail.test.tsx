@@ -15,6 +15,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   api: {
     getToken: vi.fn(),
     getTokenHistory: vi.fn(),
+    getTokenSupplyEvents: vi.fn(),
     getTokenHolders: vi.fn(),
     getTokenDistribution: vi.fn(),
     getTokenActivityFeed: vi.fn(),
@@ -70,8 +71,7 @@ const history: TokenHistory = {
       occupiedCapacity: '15300000000000',
     },
   ],
-  weekly: [{ weekStart: '2024-01-01', transfersCount: 5 }],
-  supplyEvents: [],
+  weeklyTransactions: [{ weekStart: '2024-01-01', transactionsCount: 5 }],
   mintCount: 2,
   burnCount: 1,
   transfersCount: 1000,
@@ -104,6 +104,7 @@ describe('TokenDetailPage', () => {
     vi.clearAllMocks();
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
     vi.mocked(api.getTokenHistory).mockResolvedValue(history);
+    vi.mocked(api.getTokenSupplyEvents).mockResolvedValue({ ...empty, total: 0 });
     vi.mocked(api.getTokenHolders).mockResolvedValue({
       ...empty,
       total: 0,
@@ -163,6 +164,7 @@ describe('TokenDetailPage', () => {
     const p = tokenProducer;
     vi.mocked(api.getToken).mockResolvedValue(p.token);
     vi.mocked(api.getTokenHistory).mockResolvedValue(p.history);
+    vi.mocked(api.getTokenSupplyEvents).mockResolvedValue(p.supplyEvents);
     vi.mocked(api.getTokenDistribution).mockResolvedValue(p.distribution);
     vi.mocked(api.getTokenHolders).mockResolvedValue(p.holders);
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue(p.activityFeed);
@@ -255,9 +257,10 @@ describe('TokenDetailPage', () => {
       sameSymbolTokens: [{ typeScriptHash: other, holdersCount: 2 }],
       issuer: { lockHash: other, address: null, lockKind: 'JoyID' },
     });
-    vi.mocked(api.getTokenHistory).mockResolvedValue({
-      ...history,
-      supplyEvents: [
+    vi.mocked(api.getTokenSupplyEvents).mockResolvedValue({
+      ...empty,
+      total: 1,
+      data: [
         {
           txHash: other,
           blockNumber: 99,

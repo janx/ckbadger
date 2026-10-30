@@ -7,10 +7,7 @@ use super::{
 use crate::utils::address::resolve_lock_address;
 use crate::{
     response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse},
-    utils::{
-        apply_owned_capacity_delta, parse_hash32,
-        stats_bucket::{complete_days_cache_key, ChainTime},
-    },
+    utils::{apply_owned_capacity_delta, parse_hash32, stats_bucket::ChainTime},
     AppState,
 };
 use anyhow::{ensure, Context};
@@ -242,17 +239,26 @@ fn require_token(
         .ok_or_else(|| ApiError::not_found("Token not found"))
 }
 
+/// A token's history, built from its persisted daily rows
+/// (`TokenDailyDelta`): capacity, supply (`minted - burned`), transactions
+/// and mint / burn record counts per UTC+8 chain-time day. Complete days are
+/// rows the indexer sealed; the tip (incomplete) day's row is the indexer's
+/// running row. No transfer is read and no block header per transfer block.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct History {
     source: &'static str,
     complete_through: String,
     anchor: Anchor,
+    /// One point per complete day from the token's first day.
     daily: Vec<Day>,
-    weekly: Vec<Week>,
-    supply_events: Vec<SupplyEvent>,
-    mint_count: i64,
-    burn_count: i64,
+    /// Transactions per complete Monday-start week (`TokenDailyDelta.tx_count`:
+    /// transactions that created or consumed a cell of the token).
+    weekly_transactions: Vec<Week>,
+    /// Mint / burn transfer records through the tip.
+    mint_count: u64,
+    burn_count: u64,
+    /// Every transfer record through the tip (the token's persisted counter).
     transfers_count: i64,
 }
 #[derive(Serialize)]
@@ -261,7 +267,7 @@ struct Anchor {
     block_number: i64,
     block_hash: String,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Day {
     date: String,
@@ -269,50 +275,27 @@ struct Day {
     capacity: String,
     occupied_capacity: String,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Week {
     week_start: String,
-    transfers_count: i64,
+    transactions_count: u64,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SupplyEvent {
+pub(super) struct SupplyEvent {
     tx_hash: String,
     block_number: i64,
     tx_index: i32,
     transfer_sequence: i32,
     timestamp: String,
-    kind: String,
+    kind: &'static str,
     amount: String,
     supply_after: String,
     lock_hash: String,
     address: Option<String>,
     lock_kind: Option<String>,
 }
-
-/// A token's history through its last complete day: everything its transfers
-/// in blocks before the incomplete day's first block contribute. Complete
-/// days never change without a fork, so this is built once per complete-day
-/// boundary and kept in memory (keyed like every complete-day response).
-#[derive(Clone, Serialize, Deserialize)]
-struct CompleteHistory {
-    daily: Vec<Day>,
-    weekly: Vec<Week>,
-    supply_events: Vec<SupplyEvent>,
-    mint_count: i64,
-    burn_count: i64,
-    transfers_count: i64,
-    /// Supply after the last complete day.
-    supply: String,
-    /// Owned capacity and occupied capacity after the last complete day.
-    capacity: i128,
-    occupied: i128,
-}
-
-/// Complete days of a token history stay valid until the complete-day
-/// boundary moves (the key carries it), so the TTL only bounds memory.
-const TOKEN_HISTORY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 
 pub(super) async fn history(
     State(state): State<Arc<AppState>>,
@@ -326,147 +309,59 @@ pub(super) async fn history(
     ok(result)
 }
 
-/// What the transfers of one block range contribute: weekly transfer counts,
-/// mint/burn events with their stats day, and the transfer count.
-#[derive(Default)]
-struct TransferTally {
-    weeks: BTreeMap<NaiveDate, i64>,
-    events: Vec<(i64, i32, i32, NaiveDate, TokenTransferRecord)>,
-    count: i64,
+/// A token's daily rows in date order, each with the supply and owned
+/// capacity after it. The one fold of `TokenDailyDelta` rows every token
+/// read uses (history, supply events).
+struct TokenDays {
+    days: Vec<(
+        NaiveDate,
+        ckbadger_store::TokenDailyDelta,
+        TokenBalance,
+        i128,
+        i128,
+    )>,
 }
 
-/// Walk the transfers of `range`, dating each by its block's chain time.
-/// Headers are read in one batch per 1024 transfer rows, never one point
-/// read per block.
-fn tally_transfers(
-    store: &CkbadgerStore,
-    hash: &[u8],
-    range: BlockRange,
-    tip: i64,
-) -> anyhow::Result<TransferTally> {
-    let mut tally = TransferTally::default();
-    let mut pending = Vec::with_capacity(asset_feed::TRANSACTION_BATCH_SIZE);
-    visit_transfers_in(store, hash, range, |block, seq, tx, row| {
-        ensure!(
-            block <= tip,
-            "token history transfer after tip: block={block} tip={tip}"
-        );
-        pending.push((block, seq, tx.tx_index, row));
-        if pending.len() == asset_feed::TRANSACTION_BATCH_SIZE {
-            tally_batch(store, &mut pending, &mut tally)?;
+impl TokenDays {
+    fn load(store: &CkbadgerStore, hash: &[u8]) -> anyhow::Result<Self> {
+        let mut days = Vec::new();
+        let (mut supply, mut capacity, mut occupied) = (TokenBalance::zero(), 0i128, 0i128);
+        for (key, delta) in store.list_token_daily_deltas(hash)? {
+            let date = NaiveDate::parse_from_str(&key.to_string(), "%Y%m%d")
+                .with_context(|| format!("token daily key {key}"))?;
+            let context = || format!("token=0x{} date={date}", hex::encode(hash));
+            ensure!(
+                delta.tx_count > 0,
+                "token day without a transaction: {}",
+                context()
+            );
+            supply = delta
+                .apply_supply(&supply)?
+                .with_context(|| format!("token day burns more than its supply: {}", context()))?;
+            (capacity, occupied) = apply_owned_capacity_delta(
+                capacity,
+                occupied,
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
+                &format!("token history {}", context()),
+            )?;
+            ensure_day_has_capacity(hash, date, &supply, capacity, occupied)?;
+            days.push((date, delta, supply.clone(), capacity, occupied));
         }
-        Ok(())
-    })?;
-    tally_batch(store, &mut pending, &mut tally)?;
-    Ok(tally)
+        Ok(Self { days })
+    }
+
+    /// The supply after the last row (the token's current supply).
+    fn supply(&self) -> TokenBalance {
+        self.days
+            .last()
+            .map(|(_, _, supply, _, _)| supply.clone())
+            .unwrap_or_else(TokenBalance::zero)
+    }
 }
 
-fn tally_batch(
-    store: &CkbadgerStore,
-    pending: &mut Vec<(i64, i32, i32, TokenTransferRecord)>,
-    tally: &mut TransferTally,
-) -> anyhow::Result<()> {
-    if pending.is_empty() {
-        return Ok(());
-    }
-    let mut blocks: Vec<i64> = pending.iter().map(|(block, ..)| *block).collect();
-    blocks.dedup();
-    let headers = store.get_block_headers_batch(&blocks)?;
-    for (block, seq, index, row) in pending.drain(..) {
-        let header = headers
-            .get(&block)
-            .with_context(|| format!("token history missing header block={block}"))?;
-        ensure!(
-            header.chain_time_ms >= header.timestamp,
-            "token history invalid chain time block={block}"
-        );
-        let date = stats_day(header.chain_time_ms)?;
-        let monday = date
-            .checked_sub_days(Days::new(u64::from(date.weekday().num_days_from_monday())))
-            .context("token week underflow")?;
-        let total = tally.weeks.entry(monday).or_default();
-        *total = total
-            .checked_add(1)
-            .context("weekly token transfer count overflow")?;
-        tally.count = tally
-            .count
-            .checked_add(1)
-            .context("token transfer count overflow")?;
-        if row.is_mint || row.is_burn {
-            tally.events.push((block, seq, index, date, row));
-        }
-    }
-    Ok(())
-}
-
-/// Apply mint/burn events in chain order on top of `supply`, recording each
-/// as a [`SupplyEvent`] and the end-of-day supply of each date.
-#[allow(clippy::type_complexity)]
-fn apply_supply_events(
-    state: &AppState,
-    hash: &[u8],
-    mut events: Vec<(i64, i32, i32, NaiveDate, TokenTransferRecord)>,
-    mut supply: TokenBalance,
-) -> anyhow::Result<(
-    TokenBalance,
-    BTreeMap<NaiveDate, TokenBalance>,
-    Vec<SupplyEvent>,
-    i64,
-    i64,
-)> {
-    let store = &state.store;
-    events.sort_by_key(|(block, seq, index, _, _)| (*block, *index, *seq));
-    let mut daily_supply = BTreeMap::new();
-    let mut supply_events = Vec::new();
-    let mut mint_count = 0i64;
-    let mut burn_count = 0i64;
-    for (block, seq, index, date, row) in events {
-        let amount = TokenBalance::from(row.amount);
-        supply = if row.is_mint {
-            mint_count = mint_count.checked_add(1).context("mint count overflow")?;
-            supply.checked_add(&amount)
-        } else {
-            burn_count = burn_count.checked_add(1).context("burn count overflow")?;
-            supply.checked_sub(&amount)
-        }
-        .with_context(|| {
-            format!(
-                "token supply overflow/underflow token=0x{} block={block} sequence={seq}",
-                hex::encode(hash)
-            )
-        })?;
-        daily_supply.insert(date, supply.clone());
-        let lock = if row.is_mint {
-            row.to_lock_hash.as_slice()
-        } else {
-            row.from_lock_hash
-                .as_deref()
-                .context("token burn missing sender lock")?
-        };
-        let lock32: [u8; 32] = lock.try_into().with_context(|| {
-            format!("token supply event invalid lock block={block} sequence={seq}")
-        })?;
-        supply_events.push(SupplyEvent {
-            tx_hash: format!("0x{}", hex::encode(&row.tx_hash)),
-            block_number: block,
-            tx_index: index,
-            transfer_sequence: seq,
-            timestamp: row.timestamp.to_string(),
-            kind: if row.is_mint { "mint" } else { "burn" }.to_string(),
-            amount: amount.to_string(),
-            supply_after: supply.to_string(),
-            lock_hash: format!("0x{}", hex::encode(lock)),
-            address: resolve_lock_address(store, lock, &state.ckb_network)?
-                .map(|resolved| resolved.address),
-            lock_kind: participant_lock_kind(store, &lock32, None)?,
-        });
-    }
-    Ok((supply, daily_supply, supply_events, mint_count, burn_count))
-}
-
-/// Zero-net daily rows are legitimately absent after mint/burn or
-/// create/consume within one day. Positive end-of-day supply still requires
-/// cells, so it cannot coexist with zero indexed capacity.
+/// Positive end-of-day supply requires cells, so it cannot coexist with zero
+/// indexed capacity.
 fn ensure_day_has_capacity(
     hash: &[u8],
     date: NaiveDate,
@@ -482,98 +377,11 @@ fn ensure_day_has_capacity(
     Ok(())
 }
 
-/// The history of a token's complete days: transfers in blocks before
-/// `boundary` (the incomplete day's first block) and daily capacity rows
-/// through `last`.
-fn build_complete_history(
-    state: &AppState,
-    hash: &[u8],
-    boundary: i64,
-    last: NaiveDate,
-    tip: i64,
-) -> anyhow::Result<CompleteHistory> {
-    let store = &state.store;
-    let tally = tally_transfers(
-        store,
-        hash,
-        BlockRange {
-            from: 0,
-            before: Some(boundary),
-        },
-        tip,
-    )?;
-    let (supply, daily_supply, supply_events, mint_count, burn_count) =
-        apply_supply_events(state, hash, tally.events, TokenBalance::zero())?;
-    let mut capacities = BTreeMap::new();
-    for (key, delta) in store.list_token_daily_deltas(hash)? {
-        let date = NaiveDate::parse_from_str(&key.to_string(), "%Y%m%d")?;
-        if date <= last {
-            capacities.insert(date, delta);
-        }
-    }
-    let first = daily_supply.keys().chain(capacities.keys()).min().copied();
-    let mut daily = Vec::new();
-    let (mut capacity, mut occupied) = (0, 0);
-    let mut cumulative = TokenBalance::zero();
-    if let Some(mut date) = first {
-        while date <= last {
-            if let Some(value) = daily_supply.get(&date) {
-                cumulative = value.clone();
-            }
-            if let Some(delta) = capacities.get(&date) {
-                (capacity, occupied) = apply_owned_capacity_delta(
-                    capacity,
-                    occupied,
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                    &format!("token history token=0x{} date={date}", hex::encode(hash)),
-                )?;
-            }
-            ensure_day_has_capacity(hash, date, &cumulative, capacity, occupied)?;
-            daily.push(Day {
-                date: date.to_string(),
-                supply: cumulative.to_string(),
-                capacity: capacity.to_string(),
-                occupied_capacity: occupied.to_string(),
-            });
-            date = date.succ_opt().context("token history date overflow")?;
-        }
-    }
-    // Complete weeks only: a week whose end is past `last` holds the
-    // incomplete day.
-    let tip_day = last.succ_opt().context("token history date overflow")?;
-    let mut weekly = Vec::new();
-    if let Some(mut week) = tally.weeks.keys().next().copied() {
-        loop {
-            let end = week
-                .checked_add_days(Days::new(7))
-                .context("token week overflow")?;
-            if end > tip_day {
-                break;
-            }
-            weekly.push(Week {
-                week_start: week.to_string(),
-                transfers_count: tally.weeks.get(&week).copied().unwrap_or(0),
-            });
-            week = end;
-        }
-    }
-    Ok(CompleteHistory {
-        daily,
-        weekly,
-        supply_events,
-        mint_count,
-        burn_count,
-        transfers_count: tally.count,
-        supply: supply.to_string(),
-        capacity,
-        occupied,
-    })
+fn week_start(date: NaiveDate) -> anyhow::Result<NaiveDate> {
+    date.checked_sub_days(Days::new(u64::from(date.weekday().num_days_from_monday())))
+        .context("token week underflow")
 }
 
-/// A token's history: its complete days (built once per complete-day
-/// boundary, see [`CompleteHistory`]) plus the incomplete day, read live from
-/// the transfers at and after the boundary block.
 fn build_history(state: &AppState, hash: &[u8]) -> Result<History, crate::response::ApiRouteError> {
     let store = &state.store;
     let (tip, header) = store
@@ -590,102 +398,278 @@ fn build_history(state: &AppState, hash: &[u8]) -> Result<History, crate::respon
     }
     let tip_day = chain.tip_day()?;
     let last = chain.last_complete_day()?;
-    let boundary = chain.complete_day_boundary_block()?;
-    let key = complete_days_cache_key(
-        &format!("token-history:v1:0x{}", hex::encode(hash)),
-        Some(chain),
-    )?;
-    let complete = match state.mem_cache.get::<CompleteHistory>(&key) {
-        Some(complete) => complete,
-        None => {
-            let complete =
-                build_complete_history(state, hash, boundary, last, tip).map_err(internal)?;
-            state
-                .mem_cache
-                .set(&key, &complete, TOKEN_HISTORY_CACHE_TTL);
-            complete
+    (|| -> anyhow::Result<History> {
+        let days = TokenDays::load(store, hash)?;
+        let (_, holders) = store.aggregate_token_holder_stats(hash)?;
+        ensure!(
+            days.supply() == holders,
+            "token supply history disagrees with current holders: token=0x{} history={} holders={holders}",
+            hex::encode(hash),
+            days.supply()
+        );
+        let (mut mint_count, mut burn_count) = (0u64, 0u64);
+        let mut weeks: BTreeMap<NaiveDate, u64> = BTreeMap::new();
+        let mut daily = Vec::new();
+        let mut cursor: Option<(NaiveDate, String, i128, i128)> = None;
+        for (date, delta, supply, capacity, occupied) in &days.days {
+            ensure!(
+                *date <= tip_day,
+                "token day after the indexed tip: token=0x{} date={date} tip={tip_day}",
+                hex::encode(hash)
+            );
+            mint_count = mint_count
+                .checked_add(delta.mint_count)
+                .context("mint count overflow")?;
+            burn_count = burn_count
+                .checked_add(delta.burn_count)
+                .context("burn count overflow")?;
+            if *date > last {
+                continue;
+            }
+            let week = weeks.entry(week_start(*date)?).or_default();
+            *week = week
+                .checked_add(delta.tx_count)
+                .context("weekly token transaction count overflow")?;
+            // Fill the days without a row with the previous day's values.
+            if let Some((mut fill, ref fill_supply, fill_capacity, fill_occupied)) = cursor {
+                fill = fill.succ_opt().context("token history date overflow")?;
+                while fill < *date {
+                    daily.push(Day {
+                        date: fill.to_string(),
+                        supply: fill_supply.clone(),
+                        capacity: fill_capacity.to_string(),
+                        occupied_capacity: fill_occupied.to_string(),
+                    });
+                    fill = fill.succ_opt().context("token history date overflow")?;
+                }
+            }
+            daily.push(Day {
+                date: date.to_string(),
+                supply: supply.to_string(),
+                capacity: capacity.to_string(),
+                occupied_capacity: occupied.to_string(),
+            });
+            cursor = Some((*date, supply.to_string(), *capacity, *occupied));
         }
-    };
-    let today = (|| -> anyhow::Result<_> {
-        let tally = tally_transfers(
-            store,
-            hash,
-            BlockRange {
-                from: boundary,
-                before: None,
+        if let Some((mut fill, fill_supply, fill_capacity, fill_occupied)) = cursor {
+            fill = fill.succ_opt().context("token history date overflow")?;
+            while fill <= last {
+                daily.push(Day {
+                    date: fill.to_string(),
+                    supply: fill_supply.clone(),
+                    capacity: fill_capacity.to_string(),
+                    occupied_capacity: fill_occupied.to_string(),
+                });
+                fill = fill.succ_opt().context("token history date overflow")?;
+            }
+        }
+        // Complete weeks only: a week whose end is past `last` holds the
+        // incomplete day.
+        let mut weekly_transactions = Vec::new();
+        if let Some(mut week) = weeks.keys().next().copied() {
+            loop {
+                let end = week
+                    .checked_add_days(Days::new(7))
+                    .context("token week overflow")?;
+                if end > tip_day {
+                    break;
+                }
+                weekly_transactions.push(Week {
+                    week_start: week.to_string(),
+                    transactions_count: weeks.get(&week).copied().unwrap_or(0),
+                });
+                week = end;
+            }
+        }
+        Ok(History {
+            source: "indexed_chain_time",
+            complete_through: last.to_string(),
+            anchor: Anchor {
+                block_number: tip,
+                block_hash: format!("0x{}", hex::encode(&header.hash)),
             },
-            tip,
-        )?;
-        for (block, seq, _, date, _) in &tally.events {
-            ensure!(
-                *date == tip_day,
-                "token history transfer at or after the incomplete day's first block {boundary} is dated {date}, not {tip_day}: block={block} sequence={seq}"
-            );
-        }
-        let supply = complete
-            .supply
-            .parse::<TokenBalance>()
-            .map_err(|e| anyhow::anyhow!("cached token supply: {e}"))?;
-        let (supply, _, events, mints, burns) =
-            apply_supply_events(state, hash, tally.events, supply)?;
-        let (mut capacity, mut occupied) = (complete.capacity, complete.occupied);
-        for (key, delta) in store.list_token_daily_deltas_in_range(
-            hash,
-            Some(stats_day_key(tip_day)?),
-            None,
-        )? {
-            ensure!(
-                key == stats_day_key(tip_day)?,
-                "token capacity delta after indexed tip: date={key} tip={tip_day}"
-            );
-            (capacity, occupied) = apply_owned_capacity_delta(
-                capacity,
-                occupied,
-                delta.owned_capacity_delta,
-                delta.owned_knowledge_delta,
-                &format!("token history token=0x{} date={tip_day}", hex::encode(hash)),
-            )?;
-        }
-        ensure_day_has_capacity(hash, tip_day, &supply, capacity, occupied)?;
-        let (_, current) = store.aggregate_token_holder_stats(hash)?;
-        ensure!(supply==current,"token supply history disagrees with current holders: token=0x{} history={supply} holders={current}",hex::encode(hash));
-        Ok((tally.count, events, mints, burns))
+            daily,
+            weekly_transactions,
+            mint_count,
+            burn_count,
+            transfers_count: store.get_token_transfers_count(hash)?,
+        })
     })()
-    .map_err(internal)?;
-    let (count, events, mints, burns) = today;
-    let mut supply_events = complete.supply_events;
-    supply_events.extend(events);
-    Ok(History {
-        source: "indexed_chain_time",
-        complete_through: last.to_string(),
-        anchor: Anchor {
-            block_number: tip,
-            block_hash: format!("0x{}", hex::encode(header.hash)),
-        },
-        daily: complete.daily,
-        weekly: complete.weekly,
-        supply_events,
-        mint_count: complete
-            .mint_count
-            .checked_add(mints)
-            .ok_or_else(|| ApiError::internal("mint count overflow"))?,
-        burn_count: complete
-            .burn_count
-            .checked_add(burns)
-            .ok_or_else(|| ApiError::internal("burn count overflow"))?,
-        transfers_count: complete
-            .transfers_count
-            .checked_add(count)
-            .ok_or_else(|| ApiError::internal("token transfer count overflow"))?,
-    })
+    .map_err(internal)
 }
 
-/// The `YYYYMMDD` key of a stats day.
-fn stats_day_key(date: NaiveDate) -> anyhow::Result<u32> {
-    date.format("%Y%m%d")
-        .to_string()
-        .parse()
-        .context("stats day key")
+/// Every mint and burn of a token, newest first, paged (IV-27: no longer part
+/// of `/history`). `total` is the persisted record count (`Σ mint_count +
+/// burn_count`). A page reads transfers only inside the days whose daily row
+/// records a mint or burn, and `supplyAfter` comes from that day's persisted
+/// end-of-day supply, walked back through the day's own events.
+pub(super) async fn supply_events(
+    State(state): State<Arc<AppState>>,
+    Path(hash): Path<String>,
+    Query(params): Query<FeedParams>,
+) -> ApiResult<CursorPaginatedResponse<SupplyEvent>> {
+    let hash = parse_hash32(&hash, "type_hash")?;
+    require_token(&state.store, &hash)?;
+    let limit = params.limit.clamp(1, 100);
+    let cursor = crate::utils::parse_optional_block_tx_cursor(
+        params.cursor.as_deref(),
+        "supply event cursor",
+    )?;
+    let page = tokio::task::spawn_blocking(move || {
+        build_supply_events(&state, &hash, limit, cursor).map_err(internal)
+    })
+    .await
+    .map_err(internal)??;
+    ok(page)
+}
+
+fn build_supply_events(
+    state: &AppState,
+    hash: &[u8],
+    limit: i64,
+    cursor: Option<(i64, i32)>,
+) -> anyhow::Result<CursorPaginatedResponse<SupplyEvent>> {
+    let store = &state.store;
+    let days = TokenDays::load(store, hash)?;
+    let total = days.days.iter().try_fold(0u64, |sum, (_, delta, ..)| {
+        sum.checked_add(delta.mint_count)
+            .and_then(|sum| sum.checked_add(delta.burn_count))
+            .context("supply event count overflow")
+    })?;
+    let cursor_day = cursor
+        .map(|(block, _)| -> anyhow::Result<NaiveDate> {
+            let header = store
+                .get_block_header(block)?
+                .with_context(|| format!("supply event cursor names unindexed block {block}"))?;
+            stats_day(header.chain_time_ms)
+        })
+        .transpose()?;
+    let wanted = usize::try_from(limit)? + 1;
+    let mut events: Vec<SupplyEvent> = Vec::new();
+    let mut previous_supply = TokenBalance::zero();
+    let mut day_supply_before = Vec::with_capacity(days.days.len());
+    for (_, _, supply, _, _) in &days.days {
+        day_supply_before.push(previous_supply.clone());
+        previous_supply = supply.clone();
+    }
+    for (index, (date, delta, end_supply, _, _)) in days.days.iter().enumerate().rev() {
+        if events.len() >= wanted {
+            break;
+        }
+        if delta.mint_count == 0 && delta.burn_count == 0 {
+            continue;
+        }
+        if cursor_day.is_some_and(|cursor_day| *date > cursor_day) {
+            continue;
+        }
+        let context = || format!("token=0x{} date={date}", hex::encode(hash));
+        let start_ms = ckbadger_common::stats_bucket::utc8_day_end_ms(
+            date.pred_opt().context("supply event day underflow")?,
+        )?;
+        let end_ms = ckbadger_common::stats_bucket::utc8_day_end_ms(*date)?;
+        let from = store
+            .find_first_block_at_or_after_chain_time_ms(start_ms)?
+            .with_context(|| {
+                format!("no block on a token day with supply events: {}", context())
+            })?;
+        let before = store.find_first_block_at_or_after_chain_time_ms(end_ms)?;
+        // Walk the day newest first from its end-of-day supply; every mint /
+        // burn of the day is seen, so the walk must land on the supply before
+        // the day and on the row's record counts.
+        let mut running = end_supply.clone();
+        let (mut mints, mut burns) = (0u64, 0u64);
+        let mut day_events = Vec::new();
+        visit_transfers_in(
+            store,
+            hash,
+            BlockRange { from, before },
+            |block, seq, tx, row| {
+                if !(row.is_mint || row.is_burn) {
+                    return Ok(());
+                }
+                let amount = TokenBalance::from(row.amount);
+                let supply_after = running.clone();
+                running = if row.is_mint {
+                    mints += 1;
+                    running.checked_sub(&amount)
+                } else {
+                    burns += 1;
+                    running.checked_add(&amount)
+                }
+                .with_context(|| {
+                    format!(
+                        "supply walk out of range block={block} sequence={seq}: {}",
+                        context()
+                    )
+                })?;
+                if cursor.is_some_and(|(cursor_block, cursor_seq)| {
+                    (block, seq) >= (cursor_block, cursor_seq)
+                }) {
+                    return Ok(());
+                }
+                day_events.push((block, seq, tx.tx_index, row, amount, supply_after));
+                Ok(())
+            },
+        )?;
+        ensure!(
+            (mints, burns) == (delta.mint_count, delta.burn_count),
+            "token day's mint/burn records disagree with its row: rows=({mints}, {burns}) counts=({}, {}) {}",
+            delta.mint_count,
+            delta.burn_count,
+            context()
+        );
+        ensure!(
+            running == day_supply_before[index],
+            "token day's supply walk does not land on the previous day's supply: walked={running} previous={} {}",
+            day_supply_before[index],
+            context()
+        );
+        for (block, seq, tx_index, row, amount, supply_after) in day_events {
+            if events.len() >= wanted {
+                break;
+            }
+            let lock = if row.is_mint {
+                row.to_lock_hash.as_slice()
+            } else {
+                row.from_lock_hash
+                    .as_deref()
+                    .context("token burn missing sender lock")?
+            };
+            let lock32: [u8; 32] = lock.try_into().with_context(|| {
+                format!("token supply event invalid lock block={block} sequence={seq}")
+            })?;
+            events.push(SupplyEvent {
+                tx_hash: format!("0x{}", hex::encode(&row.tx_hash)),
+                block_number: block,
+                tx_index,
+                transfer_sequence: seq,
+                timestamp: row.timestamp.to_string(),
+                kind: if row.is_mint { "mint" } else { "burn" },
+                amount: amount.to_string(),
+                supply_after: supply_after.to_string(),
+                lock_hash: format!("0x{}", hex::encode(lock)),
+                address: resolve_lock_address(store, lock, &state.ckb_network)?
+                    .map(|resolved| resolved.address),
+                lock_kind: participant_lock_kind(store, &lock32, None)?,
+            });
+        }
+    }
+    let has_more = events.len() >= wanted;
+    events.truncate(usize::try_from(limit)?);
+    // `CursorPaginatedResponse::new` derives `hasMore` from the cursor.
+    let next_cursor = if has_more {
+        events
+            .last()
+            .map(|event| format!("{}:{}", event.block_number, event.transfer_sequence))
+    } else {
+        None
+    };
+    Ok(CursorPaginatedResponse::new(
+        events,
+        i64::try_from(total)?,
+        limit,
+        next_cursor,
+    ))
 }
 
 #[derive(Serialize)]

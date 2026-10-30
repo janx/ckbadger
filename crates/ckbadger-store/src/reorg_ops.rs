@@ -7068,6 +7068,7 @@ mod tests {
                 owned_capacity_delta: cap,
                 owned_knowledge_delta: know,
                 tx_count: 1,
+                ..Default::default()
             })
             .unwrap()
         };
@@ -7203,12 +7204,14 @@ mod tests {
             owned_capacity_delta: 100_000_000_000,
             owned_knowledge_delta: 6_100_000_000,
             tx_count: 1,
+            ..Default::default()
         })
         .unwrap();
         let value_b = bincode::serialize(&TokenDailyDelta {
             owned_capacity_delta: 250_000_000_000,
             owned_knowledge_delta: 14_200_000_000,
             tx_count: 1,
+            ..Default::default()
         })
         .unwrap();
 

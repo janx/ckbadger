@@ -52,6 +52,9 @@ pub struct TokenDailyValidationError {
     pub used_delta: i128,
     /// The row's transaction count; a row with none is invalid by itself.
     pub tx_count: u64,
+    /// The token's supply after this row (`Σ minted - burned` through it);
+    /// `None` when this row's burns exceed the supply before it.
+    pub supply_after: Option<ckbadger_common::TokenBalance>,
 }
 
 impl CkbadgerStore {
@@ -290,6 +293,7 @@ impl CkbadgerStore {
         let mut current_type_hash: Option<Vec<u8>> = None;
         let mut owned_capacity: i128 = 0;
         let mut owned_knowledge: i128 = 0;
+        let mut supply = ckbadger_common::TokenBalance::zero();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -323,6 +327,7 @@ impl CkbadgerStore {
                 current_type_hash = Some(type_hash.clone());
                 owned_capacity = 0;
                 owned_knowledge = 0;
+                supply = ckbadger_common::TokenBalance::zero();
             }
 
             owned_capacity = owned_capacity
@@ -348,10 +353,20 @@ impl CkbadgerStore {
                     )
                 })?;
 
+            let supply_after = delta.apply_supply(&supply).map_err(|e| {
+                anyhow::anyhow!(
+                    "token daily validation overflow on supply: type_hash=0x{}, date={}, {e}",
+                    bytes_to_hex(&type_hash),
+                    date_yyyymmdd,
+                )
+            })?;
             if delta.tx_count == 0
                 || owned_capacity < 0
                 || owned_knowledge < 0
                 || owned_knowledge > owned_capacity
+                || supply_after.is_none()
+                || (delta.mint_count == 0) != delta.minted.is_zero()
+                || (delta.burn_count == 0) != delta.burned.is_zero()
             {
                 return Ok(Some(TokenDailyValidationError {
                     type_hash,
@@ -361,8 +376,10 @@ impl CkbadgerStore {
                     capacity_delta: delta.owned_capacity_delta,
                     used_delta: delta.owned_knowledge_delta,
                     tx_count: delta.tx_count,
+                    supply_after,
                 }));
             }
+            supply = supply_after.expect("checked above");
         }
 
         Ok(None)
@@ -1090,6 +1107,7 @@ mod tests {
                     owned_capacity_delta: 1_000_000_000_000,
                     owned_knowledge_delta: 610_000_000_000,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1101,6 +1119,7 @@ mod tests {
                     owned_capacity_delta: -200_000_000_000,
                     owned_knowledge_delta: -150_000_000_000,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1154,6 +1173,7 @@ mod tests {
                     owned_capacity_delta: 300,
                     owned_knowledge_delta: 100,
                     tx_count: 2,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1165,6 +1185,7 @@ mod tests {
                     owned_capacity_delta: 10,
                     owned_knowledge_delta: 5,
                     tx_count: 0,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1181,6 +1202,73 @@ mod tests {
         );
     }
 
+    fn supply_day(
+        tx_count: u64,
+        minted: u128,
+        mint_count: u64,
+        burned: u128,
+        burn_count: u64,
+    ) -> TokenDailyDelta {
+        TokenDailyDelta {
+            owned_capacity_delta: 0,
+            owned_knowledge_delta: 0,
+            tx_count,
+            minted: minted.into(),
+            burned: burned.into(),
+            mint_count,
+            burn_count,
+        }
+    }
+
+    /// I4: a token's supply is the running sum of its days' `minted - burned`
+    /// and can never go below zero; a day whose burns exceed the supply so far
+    /// is a write-path bug, reported with the running supply.
+    #[test]
+    fn test_find_first_invalid_token_daily_delta_flags_burns_beyond_the_supply() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x0bu8; 32];
+        store
+            .put_token_daily_delta(&type_hash, 20240115, &supply_day(1, 1_000, 1, 0, 0))
+            .unwrap();
+        store
+            .put_token_daily_delta(&type_hash, 20240116, &supply_day(1, 0, 0, 400, 2))
+            .unwrap();
+        assert!(store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none());
+        store
+            .put_token_daily_delta(&type_hash, 20240117, &supply_day(1, 0, 0, 601, 1))
+            .unwrap();
+        let invalid = store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .expect("burning more than the supply is invalid");
+        assert_eq!(invalid.date_yyyymmdd, 20240117);
+        assert_eq!(invalid.supply_after, None, "the running supply underflowed");
+    }
+
+    /// A mint count without a minted amount (or a minted amount without a
+    /// count) cannot come from the transfer records it sums.
+    #[test]
+    fn test_find_first_invalid_token_daily_delta_flags_counts_without_amounts() {
+        for (row, what) in [
+            (supply_day(1, 5, 0, 0, 0), "minted without a mint"),
+            (supply_day(1, 0, 1, 0, 0), "a mint without an amount"),
+            (supply_day(1, 5, 1, 0, 1), "a burn without an amount"),
+        ] {
+            let (_dir, store) = test_store();
+            store
+                .put_token_daily_delta(&[0x0c; 32], 20240115, &row)
+                .unwrap();
+            let invalid = store
+                .find_first_invalid_token_daily_delta()
+                .unwrap()
+                .unwrap_or_else(|| panic!("{what} is invalid"));
+            assert_eq!(invalid.date_yyyymmdd, 20240115, "{what}");
+        }
+    }
+
     #[test]
     fn test_find_first_invalid_token_daily_delta_none_for_valid_data() {
         let (_dir, store) = test_store();
@@ -1194,6 +1282,7 @@ mod tests {
                     owned_capacity_delta: 1_000,
                     owned_knowledge_delta: 600,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1205,6 +1294,7 @@ mod tests {
                     owned_capacity_delta: -200,
                     owned_knowledge_delta: -100,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1229,6 +1319,7 @@ mod tests {
                     owned_capacity_delta: 500,
                     owned_knowledge_delta: 300,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1240,6 +1331,7 @@ mod tests {
                     owned_capacity_delta: 100,
                     owned_knowledge_delta: 120,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();

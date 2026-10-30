@@ -2184,7 +2184,10 @@ impl Indexer {
             script_daily_changes.remap_keys(|block, (code, hash_type, is_type)| {
                 Ok((code, hash_type, is_type, chain_day_key(block)?))
             })?;
-        let token_daily_changes =
+        // Folded with the batch's mint / burn transfer records in Group B and
+        // applied after it (below), so a token day's supply facts are the
+        // records the writer persists.
+        let mut token_daily_changes =
             token_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
         let spore_daily_changes =
             spore_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
@@ -2196,12 +2199,6 @@ impl Indexer {
             batch_undo_seq.with(|undo_seq| {
                 self.writer.update_script_daily_deltas_batch(
                     &script_daily_changes,
-                    overlay,
-                    undo_seq,
-                    &mut domain_analytics_batch,
-                )?;
-                self.writer.update_token_daily_deltas_batch(
-                    &token_daily_changes,
                     overlay,
                     undo_seq,
                     &mut domain_analytics_batch,
@@ -2412,6 +2409,28 @@ impl Indexer {
                         all_transfers.push((transfer, ctx.tx_hash.clone(), ctx.block_number));
                     }
                 }
+                for (transfer, tx_hash, block_number) in &all_transfers {
+                    if transfer.is_mint || transfer.is_burn {
+                        token_daily_changes
+                            .add_supply_transfer(
+                                *block_number,
+                                &(
+                                    transfer.type_script_hash.clone(),
+                                    chain_day_key(*block_number)?,
+                                ),
+                                transfer.is_mint,
+                                transfer.is_burn,
+                                transfer.amount,
+                            )
+                            .with_context(|| {
+                                format!(
+                                    "token daily supply: type_hash=0x{} tx=0x{}",
+                                    hex::encode(&transfer.type_script_hash),
+                                    hex::encode(tx_hash)
+                                )
+                            })?;
+                    }
+                }
 
                 if !all_transfers.is_empty() {
                     let transfer_refs: Vec<_> = all_transfers
@@ -2442,6 +2461,16 @@ impl Indexer {
                 }
             }
         }
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_token_daily_deltas_batch(
+                    &token_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
 
         let mut object_activity_batch = StoreBatch::new(self.writer.store());
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -10623,6 +10652,94 @@ mod tests {
                 .is_none());
         }
 
+        /// [`blocks`] plus 103: B burns 400 of its 1000 units.
+        fn supply_blocks() -> Vec<BlockResponseWithCycles> {
+            let burn = TransactionView {
+                hash: format!("0x{}", hex::encode([0xf3u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xf2, 0)],
+                outputs: vec![xudt_output(198_00000000, lock_script_b())],
+                outputs_data: vec![amount_data(600)],
+                witnesses: vec![],
+            };
+            let mut blocks = blocks();
+            blocks.push(block(
+                103,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc3, 100_000_000), burn],
+            ));
+            blocks
+        }
+
+        /// I4 (IV-27): a token day carries the exact sums and counts of its
+        /// mint and burn transfer records — the facts the Transactions tab
+        /// shows — identically on the live writer and in bulk build, and a
+        /// shallow rollback of the burn's block takes the burn back out.
+        #[tokio::test]
+        async fn token_daily_supply_facts_match_on_both_paths_and_roll_back() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = supply_blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            let day = ckbadger_store::keys::timestamp_ms_to_date(1_700_000_101_000);
+            let daily_key = ckbadger_store::keys::encode_token_daily_key(&type_hash, day).to_vec();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+            let bulk_rows = token_daily_rows(&bulk.token_rows);
+            assert_eq!(bulk_rows.len(), 1, "all four blocks share one day");
+            assert_eq!(
+                (
+                    bulk_rows[0].minted.clone(),
+                    bulk_rows[0].mint_count,
+                    bulk_rows[0].burned.clone(),
+                    bulk_rows[0].burn_count,
+                    bulk_rows[0].tx_count,
+                ),
+                (1000u128.into(), 1, 400u128.into(), 1, 3),
+                "bulk: the mint, the transfer and the burn"
+            );
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            for b in &blocks[1..3] {
+                write_live_blocks_with_parser_token_daily(&indexer, vec![b.clone()])
+                    .await
+                    .unwrap();
+            }
+            let before_burn: TokenDailyDelta =
+                bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
+            assert_eq!(
+                (before_burn.minted.clone(), before_burn.burn_count),
+                (1000u128.into(), 0)
+            );
+            write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[3].clone()])
+                .await
+                .unwrap();
+            let live_rows = token_daily_rows(
+                &crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap(),
+            );
+            assert_eq!(live_rows, bulk_rows, "live and bulk TOKEN_DAILY rows");
+
+            indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 103, 103)
+                .unwrap();
+            let rolled_back: TokenDailyDelta =
+                bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
+            assert_eq!(rolled_back, before_burn, "the burn is rolled back");
+            assert!(store
+                .find_first_invalid_token_daily_delta()
+                .unwrap()
+                .is_none());
+        }
+
         #[tokio::test]
         async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
             let _guard =
@@ -11662,8 +11779,7 @@ mod tests {
 
     mod script_binding_parity {
         use super::live_dao_fee::{
-            block, cellbase_tx, indexer_for_live_write_test, lock_script, write_live_block,
-            AR_DEPOSIT,
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, AR_DEPOSIT,
         };
         use super::*;
         use crate::parser::ScriptParser;
@@ -11826,8 +11942,15 @@ mod tests {
             live.put_script_version_by_family_direct(family_id, &old_version_hash)
                 .unwrap();
             let indexer = indexer_for_live_write_test(live.clone());
+            // The parser stage always hands the writer its token-daily
+            // contributions; a mint's supply facts fold into them.
             for block in blocks {
-                write_live_block(&indexer, block).await.unwrap();
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    vec![block],
+                )
+                .await
+                .unwrap();
             }
             let live_rows =
                 crate::sync::bulk_build::collect_script_binding_rows_for_test(live.as_ref())
@@ -11891,9 +12014,7 @@ mod tests {
     }
 
     mod live_token_binding {
-        use super::live_dao_fee::{
-            block, cellbase_tx, indexer_for_live_write_test, lock_script, write_live_block,
-        };
+        use super::live_dao_fee::{block, cellbase_tx, indexer_for_live_write_test, lock_script};
         use super::*;
         use crate::parser::udt::XUDT_CODE_HASH_TYPE;
         use crate::parser::ScriptParser;
@@ -12053,8 +12174,15 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             let indexer = indexer_for_live_write_test(store.clone());
+            // The parser stage always hands the writer its token-daily
+            // contributions; a mint's supply facts fold into them.
             for block in blocks {
-                write_live_block(&indexer, block.clone()).await.unwrap();
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    vec![block.clone()],
+                )
+                .await
+                .unwrap();
             }
             store
         }

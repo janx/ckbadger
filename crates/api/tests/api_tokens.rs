@@ -872,6 +872,7 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -883,6 +884,7 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
                 owned_capacity_delta: -20,
                 owned_knowledge_delta: -10,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -971,6 +973,7 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
                 tx_count: 1,
+                ..Default::default()
             },
         )
         .unwrap();

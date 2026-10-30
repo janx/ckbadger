@@ -1342,18 +1342,20 @@ fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> 
         capacity_delta = invalid.capacity_delta,
         used_delta = invalid.used_delta,
         tx_count = invalid.tx_count,
+        supply_after = ?invalid.supply_after,
         "Detected invalid token daily deltas at startup; fail-fast without automatic rebuild"
     );
 
     anyhow::bail!(
-        "invalid token daily deltas detected at startup: type_hash=0x{}, date={}, owned_capacity={}, owned_knowledge={}, capacity_delta={}, used_delta={}, tx_count={}; automatic rebuild is disabled, delete RocksDB and re-sync from genesis",
+        "invalid token daily deltas detected at startup: type_hash=0x{}, date={}, owned_capacity={}, owned_knowledge={}, capacity_delta={}, used_delta={}, tx_count={}, supply_after={:?}; automatic rebuild is disabled, delete RocksDB and re-sync from genesis",
         type_hash_hex,
         invalid.date_yyyymmdd,
         invalid.owned_capacity,
         invalid.owned_knowledge,
         invalid.capacity_delta,
         invalid.used_delta,
-        invalid.tx_count
+        invalid.tx_count,
+        invalid.supply_after
     );
 }
 
@@ -1967,6 +1969,7 @@ mod tests {
                     owned_capacity_delta: 100,
                     owned_knowledge_delta: 200,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1978,6 +1981,7 @@ mod tests {
                     owned_capacity_delta: 50,
                     owned_knowledge_delta: 50,
                     tx_count: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();

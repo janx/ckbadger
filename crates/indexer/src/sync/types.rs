@@ -364,14 +364,11 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
 }
 
 /// One block's contribution to one token day: the net capacity / knowledge
-/// change of the token's cells and the number of transactions that touched
-/// them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TokenDayContribution {
-    pub capacity_delta: i128,
-    pub knowledge_delta: i128,
-    pub tx_count: u64,
-}
+/// change of the token's cells, the number of transactions that touched
+/// them, and the mint / burn transfer records among those transactions — the
+/// stored row's own shape, so a contribution and a row add up through one
+/// `TokenDailyDelta::merge`.
+pub type TokenDayContribution = ckbadger_store::TokenDailyDelta;
 
 /// `TOKEN_DAILY` changes accumulated **per block**, like
 /// [`EntityDailyChanges`], with a transaction count beside the
@@ -411,9 +408,10 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
             block,
             key,
             TokenDayContribution {
-                capacity_delta,
-                knowledge_delta,
+                owned_capacity_delta: capacity_delta,
+                owned_knowledge_delta: knowledge_delta,
                 tx_count: 1,
+                ..Default::default()
             },
         )
     }
@@ -441,37 +439,39 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
             .1
             .entry(key)
             .or_default();
-        entry.capacity_delta = entry
-            .capacity_delta
-            .checked_add(contribution.capacity_delta)
-            .ok_or_else(|| {
+        entry
+            .merge(&contribution)
+            .map_err(|e| anyhow::anyhow!("token daily changes in block {block}: {e}"))
+    }
+
+    /// Fold one mint or burn transfer record of `block` into the token day
+    /// `key` whose transaction this block already counted ([`Self::add_tx`]):
+    /// a supply change always moves a member cell of the token, so a record
+    /// without its counted transaction is an error, never a new row.
+    pub fn add_supply_transfer(
+        &mut self,
+        block: i64,
+        key: &K,
+        is_mint: bool,
+        is_burn: bool,
+        amount: u128,
+    ) -> anyhow::Result<()> {
+        let position = self
+            .by_block
+            .binary_search_by_key(&block, |(b, _)| *b)
+            .map_err(|_| {
                 anyhow::anyhow!(
-                    "token daily capacity delta overflow in block {block}: current={}, delta={}",
-                    entry.capacity_delta,
-                    contribution.capacity_delta
+                    "token supply transfer in block {block} has no token daily contribution in that block"
                 )
             })?;
-        entry.knowledge_delta = entry
-            .knowledge_delta
-            .checked_add(contribution.knowledge_delta)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token daily knowledge delta overflow in block {block}: current={}, delta={}",
-                    entry.knowledge_delta,
-                    contribution.knowledge_delta
-                )
-            })?;
-        entry.tx_count = entry
-            .tx_count
-            .checked_add(contribution.tx_count)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token daily tx_count overflow in block {block}: current={}, delta={}",
-                    entry.tx_count,
-                    contribution.tx_count
-                )
-            })?;
-        Ok(())
+        let entry = self.by_block[position].1.get_mut(key).ok_or_else(|| {
+            anyhow::anyhow!(
+                "token supply transfer in block {block} names a token day no transaction of that block counted"
+            )
+        })?;
+        entry
+            .add_supply_transfer(is_mint, is_burn, amount)
+            .map_err(|e| anyhow::anyhow!("block {block}: {e}"))
     }
 
     /// Blocks in ascending order with their per-block contributions.
@@ -513,9 +513,10 @@ mod token_daily_changes_tests {
         assert_eq!(
             blocks[0].1[&(vec![0x22; 32], 20_260_922)],
             TokenDayContribution {
-                capacity_delta: 0,
-                knowledge_delta: 0,
-                tx_count: 2
+                owned_capacity_delta: 0,
+                owned_knowledge_delta: 0,
+                tx_count: 2,
+                ..Default::default()
             },
             "a net-zero block still counts its two transactions"
         );

@@ -30,9 +30,10 @@ export function CapacityHistory({ history, subject, weekly }: CapacityHistoryPro
             ? weekly
             : weekly.map((w) => ({
                 weekStart: w.weekStart,
-                transfersCount: w.transferTransactions,
+                count: w.transferTransactions,
               }))
         }
+        weeklyNoun="transfers"
         completeThrough={history.completeThrough}
       />
     </section>

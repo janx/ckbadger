@@ -11,16 +11,19 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
-import type { TokenHistory } from '@/lib/api';
+import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 const DAY = 86400000;
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
-  /** Completed weekly transfer totals, or why this page has none to draw. */
-  weekly: readonly { weekStart: string; transfersCount: number }[] | { unavailable: string };
+  /** Completed weekly totals, or why this page has none to draw. */
+  weekly: readonly { weekStart: string; count: number }[] | { unavailable: string };
+  /** What the weekly totals count. */
+  weeklyNoun: 'transfers' | 'transactions';
   completeThrough: string;
   token?: { symbol: string | null; decimals: number | null };
-  supplyEvents?: TokenHistory['supplyEvents'];
+  /** The newest supply events and how many there are in all. */
+  supplyEvents?: { rows: readonly TokenSupplyEvent[]; total: number };
 }
 function time(date: string) {
   const value = Date.parse(`${date}T00:00:00+08:00`);
@@ -38,6 +41,7 @@ function ckbDecimal(value: string) {
 export function AssetHistory({
   daily,
   weekly: weeklySource,
+  weeklyNoun,
   completeThrough,
   token,
   supplyEvents,
@@ -63,13 +67,8 @@ export function AssetHistory({
   let previousWeek = -Infinity;
   for (const w of weekly) {
     const t = time(w.weekStart);
-    if (
-      t <= previousWeek ||
-      t + 6 * DAY > end ||
-      !Number.isSafeInteger(w.transfersCount) ||
-      w.transfersCount < 0
-    )
-      throw new Error(`History ${w.weekStart}: invalid or incomplete weekly transfer total`);
+    if (t <= previousWeek || t + 6 * DAY > end || !Number.isSafeInteger(w.count) || w.count < 0)
+      throw new Error(`History ${w.weekStart}: invalid or incomplete weekly ${weeklyNoun} total`);
     previousWeek = t;
   }
   const visible = daily.filter((p) => from === null || time(p.date) >= from);
@@ -106,7 +105,7 @@ export function AssetHistory({
       free: ckbDecimal((BigInt(p.capacity) - BigInt(p.occupiedCapacity)).toString()),
     },
   }));
-  const eventColumns: ListColumn<TokenHistory['supplyEvents'][number]>[] = [
+  const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
       label: 'Date · UTC+8',
@@ -240,7 +239,7 @@ export function AssetHistory({
             <span>
               {weeklyUnavailable ??
                 (week
-                  ? `Week of ${week.weekStart}: ${week.transfersCount.toLocaleString('en-US')} transfers`
+                  ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
                   : 'No completed weekly total for this day')}
             </span>
           </div>
@@ -288,19 +287,23 @@ export function AssetHistory({
           )}
           {weeklyUnavailable === null && (
             <Chart
-              title="Transfers per week"
+              title={`${weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions'} per week`}
               subtitle="Completed UTC+8 weeks"
               data={weeks.map((w) => ({
                 label: w.weekStart,
                 x: time(w.weekStart),
-                values: { count: String(w.transfersCount) },
+                values: { count: String(w.count) },
               }))}
               series={[
-                { key: 'count', label: 'Transfers', assetClass: token ? 'tokens' : 'objects' },
+                {
+                  key: 'count',
+                  label: weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions',
+                  assetClass: token ? 'tokens' : 'objects',
+                },
               ]}
-              unit="transfers"
+              unit={weeklyNoun}
               kind="bars"
-              formatValue={(value) => formatExactDecimal(value, 'weekly transfers')}
+              formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
               plotLeft={100}
               xDomain={domain}
@@ -328,8 +331,13 @@ export function AssetHistory({
       {supplyEvents && token && (
         <details className="border-base-border mt-4 border-t pt-3">
           <summary className="cursor-pointer text-xs">
-            Every change to the supply ({supplyEvents.length})
+            Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})
           </summary>
+          {supplyEvents.rows.length < supplyEvents.total && (
+            <p className="text-text-dim mt-2 text-[11px]">
+              The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
+            </p>
+          )}
           <p className="text-text-dim my-3 text-[11px]">
             Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
             which preserves time through backward block timestamps.
@@ -337,7 +345,7 @@ export function AssetHistory({
           <ListTable
             label="Mints and burns"
             columns={eventColumns}
-            rows={supplyEvents}
+            rows={supplyEvents.rows}
             rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
             empty="No supply changes."
           />

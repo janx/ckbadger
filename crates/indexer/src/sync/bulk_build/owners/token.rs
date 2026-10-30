@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::{
@@ -372,6 +372,29 @@ impl BulkReducer for TokenOwner {
                     )
                 })?;
             token.record_transfer(hour_bucket, &transfer.type_script_hash, tx)?;
+            // The day's supply facts are these same records (the live writer
+            // folds the records it persists the same way).
+            if transfer.is_mint || transfer.is_burn {
+                self.daily_deltas
+                    .get_mut(&transfer.type_script_hash)
+                    .and_then(|days| days.get_mut(&date))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "token supply transfer without its counted token day: type_hash=0x{} date={} tx=0x{}",
+                            hex::encode(&transfer.type_script_hash),
+                            date,
+                            hex::encode(tx.tx_hash)
+                        )
+                    })?
+                    .add_supply_transfer(transfer.is_mint, transfer.is_burn, transfer.amount)
+                    .with_context(|| {
+                        format!(
+                            "token daily supply: type_hash=0x{} tx=0x{}",
+                            hex::encode(&transfer.type_script_hash),
+                            hex::encode(tx.tx_hash)
+                        )
+                    })?;
+            }
         }
 
         Ok(())

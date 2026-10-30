@@ -4,6 +4,7 @@
 import type {
   Token,
   TokenHistory,
+  TokenSupplyEvent,
   TokenDistribution,
   TokenHoldersResponse,
   GlobalActivity,
@@ -280,20 +281,21 @@ export const tokenProducer = {
     ],
     mintCount: 1,
     source: 'indexed_chain_time',
-    supplyEvents: [
+    transfersCount: 4,
+    weeklyTransactions: [
       {
-        address: null,
-        amount: '100',
-        blockNumber: 0,
-        kind: 'mint',
-        lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
-        lockKind: null,
-        supplyAfter: '100',
-        timestamp: '1790812800000',
-        transferSequence: 0,
-        txHash: '0x8181818181818181818181818181818181818181818181818181818181818181',
-        txIndex: 2,
+        transactionsCount: 2,
+        weekStart: '2026-09-28',
       },
+      {
+        transactionsCount: 1,
+        weekStart: '2026-10-05',
+      },
+    ],
+  },
+  // `/tokens/{hash}/supply-events` for the same fixture: newest first.
+  supplyEvents: {
+    data: [
       {
         address: null,
         amount: '10',
@@ -307,18 +309,24 @@ export const tokenProducer = {
         txHash: '0x8383838383838383838383838383838383838383838383838383838383838383',
         txIndex: 2,
       },
-    ],
-    transfersCount: 4,
-    weekly: [
       {
-        transfersCount: 3,
-        weekStart: '2026-09-28',
-      },
-      {
-        transfersCount: 1,
-        weekStart: '2026-10-05',
+        address: null,
+        amount: '100',
+        blockNumber: 0,
+        kind: 'mint',
+        lockHash: '0x3232323232323232323232323232323232323232323232323232323232323232',
+        lockKind: null,
+        supplyAfter: '100',
+        timestamp: '1790812800000',
+        transferSequence: 0,
+        txHash: '0x8181818181818181818181818181818181818181818181818181818181818181',
+        txIndex: 2,
       },
     ],
+    hasMore: false,
+    limit: 100,
+    nextCursor: null,
+    total: 2,
   },
   holders: {
     anchor: {
@@ -561,6 +569,7 @@ export const tokenProducer = {
 } satisfies {
   token: Token;
   history: TokenHistory;
+  supplyEvents: CursorPaginatedResponse<TokenSupplyEvent>;
   distribution: TokenDistribution;
   holders: TokenHoldersResponse;
   activityFeed: CursorPaginatedResponse<GlobalActivity>;

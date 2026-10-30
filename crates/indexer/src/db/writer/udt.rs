@@ -81,13 +81,7 @@ impl BatchWriter {
                     anyhow::bail!("token daily contribution without a transaction: {}", ctx());
                 }
                 let prev = overlay.current(self.store.as_ref(), &key)?;
-                let next = apply_token_daily(
-                    prev.as_deref(),
-                    contribution.capacity_delta,
-                    contribution.knowledge_delta,
-                    contribution.tx_count,
-                    &ctx,
-                )?;
+                let next = apply_token_daily(prev.as_deref(), contribution, &ctx)?;
                 overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
             }
         }
@@ -664,6 +658,7 @@ mod tests {
                 owned_capacity_delta: 0,
                 owned_knowledge_delta: 0,
                 tx_count: 3,
+                ..Default::default()
             }
         );
     }
@@ -691,7 +686,7 @@ mod tests {
         // still names the family and the entity.
         assert!(
             err.to_string()
-                .contains("entity daily delta has 31 bytes, expected 40")
+                .contains("entity daily delta has 31 bytes, expected 120")
                 && err.to_string().contains("token_daily type_hash="),
             "got: {err}"
         );
