@@ -13,10 +13,18 @@ import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/util
 import { formatBlockNumber } from '@/lib/format-block';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
+/** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
+export interface ChartPeakPoint {
+  date: string;
+  value: string;
+}
+/** `/dao/charts/total-deposit`; `peak` is optional in the type only until `ChartResponse` names it. */
+export type DaoDepositHistory = ChartResponse & { peak?: ChartPeakPoint | null };
+
 interface Props {
   statistics: DaoStatistics;
   evidence: DaoEvidence;
-  depositedHistory?: ChartResponse;
+  depositedHistory?: DaoDepositHistory;
   circulationHistory?: ChartResponse;
   historyError?: boolean;
 }
@@ -73,17 +81,114 @@ function Metric({
   label,
   children,
   detail,
+  className,
 }: {
   label: string;
   children: ReactNode;
-  detail?: string;
+  detail?: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="border-base-border min-w-0 border-r pr-4 last:border-0">
-      <div className="text-text-dim text-xs">{label}</div>
-      <div className="text-text-bright mt-1 text-[18px] leading-tight">{children}</div>
-      {detail && <div className="text-text-dim mt-1 text-[11px]">{detail}</div>}
+    <div className={`min-w-0 ${className ?? ''}`}>
+      <dt className="text-text-dim text-xs">{label}</dt>
+      <dd className="text-text-bright mt-1 text-[18px] leading-tight">{children}</dd>
+      {detail && <dd className="text-text-dim mt-1 text-[11.5px]">{detail}</dd>}
     </div>
+  );
+}
+
+/**
+ * The hero (board V63): deposited, its share of circulation on the last complete day and its peak,
+ * then the metrics. Deposited, deposits and depositors are the evidence anchor's phase-0 facts;
+ * Estimated APC and the 24 h change are the statistics anchor's.
+ */
+function Hero({
+  statistics,
+  evidence,
+  deposited,
+  ratio,
+}: {
+  statistics: DaoStatistics;
+  evidence: DaoEvidence;
+  deposited?: DaoDepositHistory;
+  ratio?: ChartResponse;
+}) {
+  if (deposited && deposited.peak === undefined)
+    throw new Error('/dao/charts/total-deposit has no peak (R8 chart contract)');
+  const share = ratio?.data.at(-1);
+  const peak = deposited?.peak ?? null;
+  const change = statistics.depositChange24h;
+  const changeShannons = change === null ? null : parseCkbDecimal(change);
+  const year = evidence.ar.year365;
+  return (
+    <section
+      aria-label="Nervos DAO summary"
+      className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_460px] lg:items-end lg:gap-12"
+    >
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="text-text-dim text-xs">deposited</span>
+        <span className="text-text-bright text-[30px] font-medium leading-tight">
+          <Amount value={evidence.phase0.capacity} />{' '}
+          <span className="text-text-dim text-[14px]">CKB</span>
+        </span>
+        {share && deposited && (
+          <span className="text-text-dim text-[13px]">
+            <span className="text-gold">{ratioText(share.value)}%</span> of circulating CKB on{' '}
+            {share.date}
+            {peak && (
+              <>
+                {' · '}peak{' '}
+                <span className="text-text">
+                  <CkbDecimal value={peak.value} />
+                </span>{' '}
+                CKB on {peak.date}
+              </>
+            )}
+          </span>
+        )}
+      </div>
+      <dl className="m-0 grid grid-cols-2 gap-x-7 gap-y-[18px]">
+        <Metric label="Estimated APC" detail="at today's issuance and deposits">
+          {statistics.estimatedApc}%
+        </Metric>
+        <Metric
+          label="Compensation, last 365 days"
+          detail={
+            year ? "on free capacity, from the header's AR" : 'the chain is younger than 365 days'
+          }
+        >
+          {year ? `${year.observedGrowthPercent}%` : '—'}
+        </Metric>
+        <Metric label="Depositors">
+          {evidence.concentration.currentDepositors.toLocaleString('en-US')}
+        </Metric>
+        <Metric
+          label="Deposits"
+          detail={`+ ${evidence.phase1.count.toLocaleString('en-US')} withdrawals requested`}
+        >
+          {evidence.phase0.count.toLocaleString('en-US')}
+        </Metric>
+        <Metric label="Change in 24 h" className="col-span-2">
+          {changeShannons === null ? (
+            <span className="text-text-dim">—</span>
+          ) : (
+            <span
+              data-role="change24h"
+              className={
+                changeShannons > BigInt(0)
+                  ? 'text-positive'
+                  : changeShannons < BigInt(0)
+                    ? 'text-negative'
+                    : 'text-text'
+              }
+            >
+              <CkbDecimal value={change!} signed />
+            </span>
+          )}{' '}
+          <span className="text-text-dim text-[12px]">CKB</span>
+        </Metric>
+      </dl>
+    </section>
   );
 }
 
@@ -569,41 +674,12 @@ export function DaoBoard({
   return (
     <div>
       <div className="space-y-8">
-        <div>
-          <div className="grid gap-5 border-b border-[#f2c55c]/30 pb-6 md:grid-cols-4">
-            <Metric label="Deposited" detail="phase-0 capacity">
-              <Amount value={statistics.totalDeposited} /> <span className="text-[11px]">CKB</span>
-            </Metric>
-            <Metric label="Estimated APC" detail="issuance model at indexed tip">
-              {statistics.estimatedApc}%
-            </Metric>
-            <Metric
-              label="Observed AR growth, ~365 days"
-              detail={
-                evidence.ar.year365
-                  ? `AR anchor: block ${formatBlockNumber(evidence.ar.year365.anchorBlockNumber)}`
-                  : undefined
-              }
-            >
-              {evidence.ar.year365 ? `${evidence.ar.year365.observedGrowthPercent}%` : '—'}
-            </Metric>
-            <Metric
-              label="Current depositors"
-              detail={`${evidence.phase0.count.toLocaleString()} deposits · ${evidence.phase1.count.toLocaleString()} withdrawal requests`}
-            >
-              {evidence.concentration.currentDepositors.toLocaleString()}
-            </Metric>
-          </div>
-          <div className="text-text-dim mt-3 text-[12px]">
-            24h net deposited:{' '}
-            {statistics.depositChange24h != null ? (
-              <CkbDecimal value={statistics.depositChange24h} signed />
-            ) : (
-              '—'
-            )}{' '}
-            CKB · indexed at block {formatBlockNumber(statistics.tipBlockNumber)}
-          </div>
-        </div>
+        <Hero
+          statistics={statistics}
+          evidence={evidence}
+          deposited={depositedHistory}
+          ratio={circulationHistory}
+        />
         <Section title="History" note="complete indexed days · current depositor count">
           <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
         </Section>

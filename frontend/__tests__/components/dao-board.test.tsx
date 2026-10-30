@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoBoard } from '@/components/dao/dao-board';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
@@ -30,6 +30,9 @@ const history = {
   title: 'Total Deposit',
   yAxisLabel: 'CKB',
   y2AxisLabel: 'Current depositors',
+  // R8: every chart response carries its first greatest point.
+  peak: { date: '2024-01-15', value: '500' },
+  peak2: { date: '2024-01-14', value: '2' },
 };
 const ratio = {
   data: [
@@ -223,5 +226,64 @@ describe('DaoBoard', () => {
     );
     expect(screen.getByText(/allocation shares are undefined/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Secondary issuance partition')).not.toBeInTheDocument();
+  });
+});
+
+// ---- F2 group dao (round-2 fix) ----
+const peakHistory = {
+  ...history,
+  data: [
+    { date: '2024-01-13', value: '100.1', value2: '1' },
+    { date: '2024-01-14', value: '600.5', value2: '2' },
+    { date: '2024-01-15', value: '500', value2: '2' },
+  ],
+  peak: { date: '2024-01-14', value: '600.5' },
+  peak2: { date: '2024-01-14', value: '2' },
+};
+
+describe('DaoBoard hero (DAO-9, DAO-10)', () => {
+  it('leads with deposited, its share of circulation and its peak, and the board metric names', () => {
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={peakHistory}
+        circulationHistory={ratio}
+      />
+    );
+    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
+    expect(hero).toHaveTextContent('deposited500.00000000 CKB');
+    expect(hero).toHaveTextContent(
+      '1.25% of circulating CKB on 2024-01-15 · peak 600.50000000 CKB on 2024-01-14'
+    );
+    expect(hero).toHaveTextContent(
+      "Compensation, last 365 days2.0000%on free capacity, from the header's AR"
+    );
+    expect(hero).toHaveTextContent('Depositors2');
+    expect(hero).toHaveTextContent('Deposits2+ 2 withdrawals requested');
+    expect(hero).toHaveTextContent('Estimated APC1.99%');
+    // The 24 h net change is signed and coloured by its sign.
+    const change = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'change24h');
+    expect(change).toHaveTextContent('−2,578,825.48689593');
+    expect(change).toHaveClass('text-negative');
+    // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
+    expect(hero).not.toHaveTextContent(/anchor/i);
+    expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
+    // The API has no 24 h deposit / request counts: nothing stands in for them (needs backend).
+    expect(hero).not.toHaveTextContent(/deposits in|requests out/);
+  });
+
+  it('fails when the deposit history arrives without its R8 peak', () => {
+    const noPeak = { ...history, peak: undefined };
+    expect(() =>
+      render(
+        <DaoBoard
+          statistics={stats}
+          evidence={evidence}
+          depositedHistory={noPeak}
+          circulationHistory={ratio}
+        />
+      )
+    ).toThrow('/dao/charts/total-deposit has no peak');
   });
 });

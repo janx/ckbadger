@@ -23,19 +23,18 @@ export default function DaoPage() {
       <Header />
       <main className="container mx-auto max-w-[1440px] px-4 pb-16 pt-6">
         <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-[#f2c55c]">
-              CKB economics
-            </div>
-            <h1 className="text-text-bright mt-1 text-[26px] font-semibold">Nervos DAO</h1>
-            <p className="text-text-dim mt-2 max-w-4xl text-[13px]">
-              CKB locked in Nervos DAO keeps its share of supply. Secondary issuance is allocated
-              between miners, compensation for depositors, and the burnt remainder.
+          <div className="flex min-w-0 flex-col gap-2.5">
+            <h1 className="text-text-bright text-[26px] font-medium">Nervos DAO</h1>
+            <p className="text-text max-w-[700px] text-[15px] leading-relaxed">
+              CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
+              billion CKB a year, is split by how CKB is used: depositors are compensated with the
+              share their deposits make up, miners get the share that is occupied, and the rest is
+              burnt.
             </p>
           </div>
           <Link
             href="/charts/total-deposit"
-            className="border border-[#f2c55c]/30 px-3 py-1.5 font-mono text-[12px] text-[#f2c55c] hover:bg-[#f2c55c]/10"
+            className="border-base-border text-text hover:text-text-bright rounded-md border px-3 py-1.5 font-mono text-[12px]"
           >
             Explore DAO charts →
           </Link>

@@ -35,6 +35,8 @@ const history = {
   title: 'Total Deposit',
   yAxisLabel: 'CKB',
   y2AxisLabel: 'Current depositors',
+  peak: { date: '2024-01-15', value: '500' },
+  peak2: { date: '2024-01-15', value: '2' },
 };
 const ratio = { data: [{ date: '2024-01-15', value: '1.25' }], title: 'Ratio', yAxisLabel: '%' };
 
