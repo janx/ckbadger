@@ -71,23 +71,23 @@ For reorgs deeper than 36 blocks:
 
 ### `GET /api/v1/forks`
 
-Returns current deep-fork event list derived from `sync_status`:
+Returns the persisted reorg-event history (`sync_meta` `reorg:<ms>:<uuid>` rows), newest first:
+automatic switches and deep-fork detections. Each row carries its D7 address facts
+(`firstOrphanHash`, `firstOrphanStatus`) and names related events (`revertedByEvent`,
+`reversesEvents`) by D7 address, never by millisecond id.
 
-- deep fork active: one synthetic event
-- no deep fork: empty list
+### `GET /api/v1/forks/{fork_point_height}/{orphan_hash_prefix8}` (D7)
 
-### `GET /api/v1/forks/{id}`
-
-Returns deep-fork detail only when:
-
-- `id == 1`
-- deep fork is currently active
-
-`orphaned_blocks` and `orphaned_transactions` are empty in RocksDB mode.
+Returns one event's detail: the fork point height plus the first 8 lowercase hex digits of the first
+block the switch dropped (height `fork_point + 1` on the abandoned branch). Exactly one event may
+match; two matches, or an event at the same fork point whose first orphan cannot be resolved, is an
+error naming the events. A one-block switch records its first orphan (its old tip); a deeper switch
+is traced from the recorded old tip on the node store. A deep detection rolled nothing back, so it has
+no address. The old millisecond route `/forks/{id}` is removed.
 
 ### `GET /api/v1/forks/recent`
 
-Returns current deep-fork status and optional synthetic reorg object when deep fork is active.
+Returns current deep-fork status and the newest persisted event.
 
 ## WebSocket Events
 
