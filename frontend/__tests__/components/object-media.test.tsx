@@ -91,35 +91,42 @@ it('parses BTCFS inscription URIs strictly (OB-2)', () => {
     `btcfs://0x${txid}i0`,
     `ord://${txid}i0`,
     `btcfs://${txid}i0/extra`,
+    `btcfs://${txid}i99999999999999999999`,
   ])
-    expect(() => parseBtcfsUri(uri)).toThrow('Invalid BTCFS inscription URI');
+    expect(parseBtcfsUri(uri)).toBeNull();
   expect(bitcoinTxHref(txid)).toBe(`https://mempool.space/tx/${txid}`);
   expect(() => bitcoinTxHref(`0x${txid}`)).toThrow('Invalid Bitcoin txid');
+  // The type script hash is our API's own computed value: a bad one is our invariant violation.
   expect(() => omigaDobHref('0x1234')).toThrow('Invalid spore type script hash');
 });
-it('fails fast on a BTCFS source it cannot read instead of linking it', () => {
-  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-  expect(() =>
-    render(
-      <ObjectMedia
-        object={{
-          ...object,
-          mediaProfile: {
-            tier: 'btc_ckb',
-            sources: [
-              {
-                uri: 'btcfs://abc123i0',
-                scheme: 'btcfs',
-                sourceLocation: 'DNA',
-                dependencyTier: 'btc_ckb',
-              },
-            ],
-            issues: [],
-          },
-        }}
-        contentHex={null}
-      />
-    )
-  ).toThrow('Invalid BTCFS inscription URI "btcfs://abc123i0"');
-  error.mockRestore();
+it('shows a malformed minted BTCFS reference as plain text, never a link or a crash', () => {
+  // Anyone can mint spore content; a bad URI there must not take the object page down.
+  const malformed = 'btcfs://abc123i0';
+  render(
+    <ObjectMedia
+      object={{
+        ...object,
+        mediaProfile: {
+          tier: 'btc_ckb',
+          sources: [
+            { uri: malformed, scheme: 'btcfs', sourceLocation: 'DNA', dependencyTier: 'btc_ckb' },
+            {
+              uri: `btcfs://${txid}i1`,
+              scheme: 'btcfs',
+              sourceLocation: 'DNA',
+              dependencyTier: 'btc_ckb',
+            },
+          ],
+          issues: [],
+        },
+      }}
+      contentHex={null}
+    />
+  );
+  expect(screen.getAllByText(malformed).length).toBeGreaterThan(0);
+  expect(screen.getByText('Not a recognisable btcfs inscription reference.')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /abc123/ })).not.toBeInTheDocument();
+  expect(
+    screen.getByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i1 ↗' })
+  ).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);
 });

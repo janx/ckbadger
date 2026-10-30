@@ -11,13 +11,16 @@ export interface BtcfsInscription {
 
 const BTCFS = /^btcfs:\/\/([0-9a-fA-F]{64})i(0|[1-9]\d*)$/;
 
-/** Strict parse; anything but 64 hex digits, `i` and a decimal index throws. */
-export function parseBtcfsUri(uri: string): BtcfsInscription {
+/**
+ * Strict parse of exactly `btcfs://<64 hex txid>i<decimal index>`. The URI comes from spore
+ * content anyone can mint, so anything else is third-party data we cannot read, not a broken
+ * invariant of ours: it returns null and the caller shows the raw text without a link.
+ */
+export function parseBtcfsUri(uri: string): BtcfsInscription | null {
   const match = BTCFS.exec(uri);
-  if (!match) throw new Error(`Invalid BTCFS inscription URI ${JSON.stringify(uri)}`);
+  if (!match) return null;
   const index = Number(match[2]);
-  if (!Number.isSafeInteger(index))
-    throw new Error(`BTCFS inscription index out of range in ${JSON.stringify(uri)}`);
+  if (!Number.isSafeInteger(index)) return null;
   return { txid: match[1].toLowerCase(), index };
 }
 

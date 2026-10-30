@@ -33,15 +33,21 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
             return (
               <div key={s.uri} className="min-w-0 space-y-2">
                 <div className="text-text-dim break-all text-[11px]">{s.uri}</div>
-                <a
-                  href={bitcoinTxHref(inscription.txid)}
-                  className="text-copper break-all"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Bitcoin tx {inscription.txid.slice(0, 4)}…{inscription.txid.slice(-4)} ·
-                  inscription i{inscription.index} ↗
-                </a>
+                {inscription === null ? (
+                  <p className="text-text-dim text-[11px]">
+                    Not a recognisable btcfs inscription reference.
+                  </p>
+                ) : (
+                  <a
+                    href={bitcoinTxHref(inscription.txid)}
+                    className="text-copper break-all"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Bitcoin tx {inscription.txid.slice(0, 4)}…{inscription.txid.slice(-4)} ·
+                    inscription i{inscription.index} ↗
+                  </a>
+                )}
               </div>
             );
           })}
