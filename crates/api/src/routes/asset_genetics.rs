@@ -2,7 +2,7 @@
 //! value source. Current decoder byte rules and cached results are separate.
 use super::{asset_history, asset_protocol, assets::NftLifecycleStandard};
 use crate::{
-    response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse},
+    response::{default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse},
     utils::parse_hash32,
     AppState,
 };
@@ -308,9 +308,15 @@ async fn insights(State(state): State<Arc<AppState>>, Path(raw): Path<String>) -
 }
 fn insights_read(state: Arc<AppState>, raw: String) -> ApiResult<Value> {
     let id = super::spore::parse_cluster_id_param(&raw)?;
-    let (cluster, _) = super::spore::read_cluster(&state, &id)?;
+    ok(cluster_insights(&state, &id)?)
+}
+
+/// The one producer of a Spore cluster's insights, whether the cluster is
+/// addressed through `/spore/clusters` or `/assets/objects`.
+pub(crate) fn cluster_insights(state: &AppState, id: &[u8]) -> Result<Value, ApiRouteError> {
+    let (cluster, _) = super::spore::read_cluster(state, id)?;
     let result = (|| -> Result<Value> {
-        let items = cluster_items(&state, &id)?;
+        let items = cluster_items(state, id)?;
         let mut owners: BTreeMap<Vec<u8>, u64> = BTreeMap::new();
         let mut distribution: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
         let (mut live, mut decoded, mut pending, mut failed, mut non_dob) = (0, 0, 0, 0, 0);
@@ -347,115 +353,23 @@ fn insights_read(state: Arc<AppState>, raw: String) -> ApiResult<Value> {
                 None => pending += 1,
             }
         }
-        let ranges = ["1", "2", "3–5", "6+"];
-        let mut buckets = [(0u64, 0u64); 4];
-        for count in owners.values() {
-            let i = match count {
-                1 => 0,
-                2 => 1,
-                3..=5 => 2,
-                _ => 3,
-            };
-            buckets[i].0 += 1;
-            buckets[i].1 += count;
-        }
-        let holders: Vec<_> = ranges
-            .iter()
-            .zip(buckets)
-            .map(|(range, (holders, items))| json!({"range":range,"holders":holders,"items":items}))
-            .collect();
+        let holders = super::assets::collection_holder_distribution(owners.values().copied())?;
         let traits: Vec<_> = if pending == 0 && failed == 0 {
             distribution.into_iter().map(|(name,values)|json!({"name":name,"values":values.into_iter().map(|(value,count)|json!({"value":value,"count":count})).collect::<Vec<_>>()})).collect()
         } else {
             Vec::new()
         };
-        let mut weeks: BTreeMap<String, [u64; 3]> = BTreeMap::new();
-        let mut cursor = None;
-        loop {
-            let rows = super::assets::list_canonical_nft_collection_activities_page(
+        let (weekly, complete_through, calendar_anchor) =
+            super::assets::nft_collection_weekly_activity(
                 &state.store,
                 &state.append_only_store,
-                &id,
-                1024,
-                cursor,
-                None,
+                id,
             )?;
-            if rows.is_empty() {
-                break;
-            }
-            cursor = rows.last().map(|(b, i, _)| (*b, *i));
-            for (block, _, activity) in rows {
-                let header = state
-                    .store
-                    .get_block_header(block)?
-                    .context("collection activity block missing")?;
-                let date = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
-                use chrono::Datelike;
-                let monday =
-                    date - chrono::Duration::days(date.weekday().num_days_from_monday() as i64);
-                let counts = weeks.entry(monday.to_string()).or_default();
-                for (action, slot) in [
-                    (ckbadger_store::AssetAction::Mint, 0),
-                    (ckbadger_store::AssetAction::Transfer, 1),
-                    (ckbadger_store::AssetAction::Burn, 2),
-                ] {
-                    if activity.actions.contains(&action) {
-                        counts[slot] += 1
-                    }
-                }
-            }
-        }
-        let (complete_through, calendar_anchor) = if let Some((tip, header)) =
-            state.store.get_sync_tip_block()?
-        {
-            let tip_hash: [u8; 32] = header
-                .hash
-                .as_slice()
-                .try_into()
-                .context("calendar anchor hash width")?;
-            let chain = crate::utils::stats_bucket::ChainTime::from_header(
-                tip,
-                header.timestamp,
-                header.chain_time_ms,
-                tip_hash,
-            )
-            .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
-            let day = chain
-                .tip_day()
-                .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
-            use chrono::Datelike;
-            let current_monday =
-                day - chrono::Duration::days(day.weekday().num_days_from_monday() as i64);
-            let last_sunday = current_monday
-                .pred_opt()
-                .context("weekly cutoff underflow")?;
-            weeks.retain(|start, _| start.as_str() < current_monday.to_string().as_str());
-            if let Some(first) = weeks.keys().next().cloned() {
-                let mut week = chrono::NaiveDate::parse_from_str(&first, "%Y-%m-%d")?;
-                while week < current_monday {
-                    weeks.entry(week.to_string()).or_default();
-                    week = week
-                        .checked_add_signed(chrono::Duration::weeks(1))
-                        .context("weekly range overflow")?;
-                }
-            }
-            (
-                Some(last_sunday.to_string()),
-                json!({"blockNumber":tip,"blockHash":format!("0x{}",hex::encode(header.hash)),"chainTime":header.chain_time_ms.to_string()}),
-            )
-        } else {
-            ensure!(
-                weeks.is_empty(),
-                "collection activity calendar has no canonical tip"
-            );
-            (None, Value::Null)
-        };
-        let weekly:Vec<_>=weeks.into_iter().map(|(week,n)|json!({"weekStart":week,"mintTransactions":n[0],"transferTransactions":n[1],"burnTransactions":n[2]})).collect();
         Ok(
-            json!({"holderDistribution":holders,"weeklyActivity":weekly,"calendarSource":"indexedChainTimeUtc8","completeThrough":complete_through,"calendarAnchor":calendar_anchor,"genetics":{"liveItems":live,"eligibleItems":live-non_dob,"nonDobItems":non_dob,"decodedItems":decoded,"pendingItems":pending,"failedItems":failed,"complete":pending==0&&failed==0,"traits":traits},"currentPattern":current_pattern(&state,cluster.as_ref(),None)?}),
+            json!({"holderDistribution":holders,"weeklyActivity":weekly,"calendarSource":"indexedChainTimeUtc8","completeThrough":complete_through,"calendarAnchor":calendar_anchor,"genetics":{"liveItems":live,"eligibleItems":live-non_dob,"nonDobItems":non_dob,"decodedItems":decoded,"pendingItems":pending,"failedItems":failed,"complete":pending==0&&failed==0,"traits":traits},"currentPattern":current_pattern(state,cluster.as_ref(),None)?}),
         )
     })();
-    ok(result.map_err(|e| ApiError::internal(format!("cluster=0x{}: {e:#}", hex::encode(id))))?)
+    result.map_err(|e| ApiError::internal(format!("cluster=0x{}: {e:#}", hex::encode(id))))
 }
 
 #[derive(Deserialize)]

@@ -5420,3 +5420,193 @@ async fn regression_spore_unknown_collection_still_not_found() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{suffix}: {json}");
     }
 }
+
+/// One m-NFT class with three holders (3 + 1 + 2 live items) and collection
+/// activity in two completed weeks plus the current, incomplete week.
+fn mnft_insights_fixture(aggregate_live_count: i64) -> (Arc<CkbadgerStore>, [u8; 24]) {
+    let store = test_store();
+    let class_id = [0x3cu8; 24];
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, utc_ms("2026-10-05T02:00:00Z")),
+            (1, utc_ms("2026-10-06T02:00:00Z")),
+            (2, utc_ms("2026-10-13T02:00:00Z")),
+            (3, utc_ms("2026-10-27T02:00:00Z")),
+        ],
+    );
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            name: Some("Insight Class".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 7,
+            live_count: aggregate_live_count,
+            holders_count: 3,
+            activities_count: 5,
+            ..Default::default()
+        },
+    );
+    batch.put_mnft_collection_owner_count(&class_id, &[0x11; 32], 3);
+    batch.put_mnft_collection_owner_count(&class_id, &[0x22; 32], 1);
+    batch.put_mnft_collection_owner_count(&class_id, &[0x33; 32], 2);
+    // Two transactions in block 1 exercise the per-block header read.
+    for (block, index, hash, action) in [
+        (0, 1, [0xa0; 32], AssetAction::Mint),
+        (1, 1, [0xa1; 32], AssetAction::Mint),
+        (1, 2, [0xa2; 32], AssetAction::Transfer),
+        (2, 1, [0xa3; 32], AssetAction::Burn),
+        (3, 1, [0xa4; 32], AssetAction::Transfer),
+    ] {
+        batch.put_tx_hash_map(&hash, block, index);
+        batch.put_tx_index(
+            block,
+            index,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000 + block,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 200,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        let header = store.get_block_header(block).unwrap().unwrap();
+        batch.put_object_collection_activity(
+            &class_id,
+            block,
+            index,
+            &ObjectCollectionActivityEntry {
+                tx_hash: hash.to_vec(),
+                block_hash: header.hash,
+                timestamp_ms: header.timestamp,
+                actions: vec![action],
+            },
+        );
+    }
+    batch.commit().unwrap();
+    (store, class_id)
+}
+
+#[tokio::test]
+async fn mnft_class_insights_serve_real_holder_distribution_and_weekly_rows() {
+    let (store, class_id) = mnft_insights_fixture(6);
+    let app = create_router(test_config(store)).await;
+    let base = format!("/assets/objects/0x{}", hex::encode(class_id));
+    let (status, insights) = get_json(&app, &format!("{base}/insights")).await;
+    assert_eq!(status, StatusCode::OK, "{insights}");
+    assert_eq!(
+        insights["holderDistribution"],
+        serde_json::json!([
+            {"range": "1", "holders": 1, "items": 1},
+            {"range": "2", "holders": 1, "items": 2},
+            {"range": "3–5", "holders": 1, "items": 3},
+            {"range": "6+", "holders": 0, "items": 0},
+        ])
+    );
+    // The distribution is the holders list, bucketed.
+    let (status, holders) = get_json(&app, &format!("{base}/holders?limit=100")).await;
+    assert_eq!(status, StatusCode::OK, "{holders}");
+    let rows = holders["data"].as_array().unwrap();
+    let bucketed_holders: u64 = insights["holderDistribution"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|bucket| bucket["holders"].as_u64().unwrap())
+        .sum();
+    let bucketed_items: u64 = insights["holderDistribution"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|bucket| bucket["items"].as_u64().unwrap())
+        .sum();
+    assert_eq!(bucketed_holders, rows.len() as u64);
+    assert_eq!(holders["total"], bucketed_holders);
+    assert_eq!(
+        bucketed_items,
+        rows.iter()
+            .map(|row| row["itemCount"].as_u64().unwrap())
+            .sum::<u64>()
+    );
+    // m-NFT items are not DOB: every live item is counted, none is eligible.
+    assert_eq!(
+        insights["genetics"],
+        serde_json::json!({
+            "liveItems": 6, "eligibleItems": 0, "nonDobItems": 6, "decodedItems": 0,
+            "pendingItems": 0, "failedItems": 0, "complete": true, "traits": []
+        })
+    );
+    assert_eq!(insights["currentPattern"]["status"], "notDob");
+    // Weeks start on Monday (UTC+8); the tip's week (2026-10-26) is incomplete.
+    assert_eq!(insights["completeThrough"], "2026-10-25");
+    assert_eq!(insights["calendarAnchor"]["blockNumber"], 3);
+    assert_eq!(
+        insights["weeklyActivity"],
+        serde_json::json!([
+            {"weekStart": "2026-10-05", "mintTransactions": 2, "transferTransactions": 1, "burnTransactions": 0},
+            {"weekStart": "2026-10-12", "mintTransactions": 0, "transferTransactions": 0, "burnTransactions": 1},
+            {"weekStart": "2026-10-19", "mintTransactions": 0, "transferTransactions": 0, "burnTransactions": 0},
+        ])
+    );
+}
+
+#[tokio::test]
+async fn mnft_class_insights_reject_owner_rows_disagreeing_with_aggregate() {
+    let (store, class_id) = mnft_insights_fixture(7);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/assets/objects/0x{}/insights", hex::encode(class_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&hex::encode(class_id))
+            && message.contains("6 live items")
+            && message.contains("live_count=7"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn object_path_insights_for_spore_cluster_match_spore_insights() {
+    let store = test_store();
+    let cluster = [0x5eu8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore(
+        &cluster,
+        &ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: None,
+            name: Some("Same Producer".into()),
+            description: None,
+            is_live: true,
+            created_at_block: 0,
+            created_at_tx: vec![0x11; 32],
+            extra: ObjectExtra::SporeCluster,
+        },
+    );
+    batch.put_cluster_aggregate(&cluster, &ClusterAggregate::default());
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, spore) = get_json(
+        &app,
+        &format!("/spore/clusters/0x{}/insights", hex::encode(cluster)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{spore}");
+    let (status, object) = get_json(
+        &app,
+        &format!("/assets/objects/0x{}/insights", hex::encode(cluster)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{object}");
+    assert_eq!(object, spore);
+}
