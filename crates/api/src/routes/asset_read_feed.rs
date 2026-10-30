@@ -82,6 +82,19 @@ fn item_feed(
         // protocol order: bare `.cell` action names, `dotbit:<action>` for
         // `.bit`), `ringRelink` (why a `.cell` neighbour's cell was rewritten)
         // and `actedOn` (`neighbour` when the actions were about another item).
+        // `versionDiff` joins the two versions this row moves between; a mint or
+        // burn row has only one, so it has none.
+        let version_diff = match (consumed.first(), created.first()) {
+            (Some(old), Some(new)) => Some(
+                super::asset_protocol::version_diff(standard, old, new).map_err(|e| {
+                    ApiError::internal(format!(
+                        "item=0x{} transaction={hash}: {e:#}",
+                        hex::encode(&id)
+                    ))
+                })?,
+            ),
+            _ => None,
+        };
         row["itemContext"] = json!({
             "itemId": format!("0x{}", hex::encode(&id)),
             "action": meaning.action,
@@ -90,6 +103,7 @@ fn item_feed(
             "actedOn": meaning.acted_on,
             "createdCell": created.first(),
             "consumedCell": consumed.first(),
+            "versionDiff": version_diff,
         });
     }
     ok(result)

@@ -389,6 +389,47 @@ fn dotbit_lock(args: &[u8]) -> Result<(Value, Value)> {
     ))
 }
 
+/// What changed between an item's consumed version and the version the same
+/// transaction created (ID-C1), from the two versions alone:
+/// - `ownerChanged`: the owner each standard defines — the `.bit` das-lock
+///   owner part (algorithm + owner args; a manager change is not an owner
+///   change), the cell's lock for Spore / m-NFT / did:ckb / `.bit Cell`, and
+///   `null` for `.cell`, whose owner is a prefix inside the name's data (its
+///   moves are its `protocolActions`).
+/// - `dataChanged`: the cell data hash differs.
+pub(crate) fn version_diff(
+    standard: super::assets::NftLifecycleStandard,
+    old: &super::asset_history::CellVersion,
+    new: &super::asset_history::CellVersion,
+) -> Result<Value> {
+    use super::assets::NftLifecycleStandard as S;
+    let owner_changed = match standard {
+        S::DotBit => {
+            let owner = |version: &super::asset_history::CellVersion| -> Result<Value> {
+                let args = hex::decode(
+                    version
+                        .lock
+                        .args
+                        .strip_prefix("0x")
+                        .ok_or_else(|| anyhow::anyhow!(".bit lock args lack 0x"))?,
+                )?;
+                Ok(dotbit_lock(&args)
+                    .with_context(|| {
+                        format!(".bit cell {}:{}", version.tx_hash, version.output_index)
+                    })?
+                    .0)
+            };
+            Value::Bool(owner(old)? != owner(new)?)
+        }
+        S::DotCell => Value::Null,
+        _ => Value::Bool(old.owner_lock_hash != new.owner_lock_hash),
+    };
+    Ok(serde_json::json!({
+        "ownerChanged": owner_changed,
+        "dataChanged": old.data_hash != new.data_hash,
+    }))
+}
+
 fn dotbit_account_witness(
     tx: &ckbadger_indexer::rpc::TransactionView,
     index: usize,

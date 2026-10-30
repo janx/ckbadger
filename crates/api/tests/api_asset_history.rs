@@ -681,6 +681,31 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
     assert_eq!(next["data"][0]["index"], 1);
     assert_eq!(next["data"][0]["itemContext"]["action"], "mint");
     assert!(next["data"][0]["itemContext"]["consumedCell"].is_null());
+    // ID-C1: the facts behind "Updated by its owner" / "Transferred to the same
+    // owner", from the two versions the row joins; a mint has no previous version.
+    assert!(
+        next["data"][0]["itemContext"]["versionDiff"].is_null(),
+        "{next}"
+    );
+    let diff = &first["data"][0]["itemContext"]["versionDiff"];
+    let (created, consumed) = (
+        &first["data"][0]["itemContext"]["createdCell"],
+        &first["data"][0]["itemContext"]["consumedCell"],
+    );
+    assert_eq!(
+        diff["ownerChanged"],
+        created["ownerLockHash"] != consumed["ownerLockHash"],
+        "{first}"
+    );
+    assert_eq!(
+        diff["dataChanged"],
+        created["dataHash"] != consumed["dataHash"],
+        "{first}"
+    );
+    assert!(
+        diff["ownerChanged"].is_boolean() && diff["dataChanged"].is_boolean(),
+        "{diff}"
+    );
     let (status, error) = get_json(&app, &format!("{base}/activity-feed?cursor=100:3")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
 }
