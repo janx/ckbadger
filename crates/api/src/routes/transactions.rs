@@ -1436,6 +1436,15 @@ async fn get_transaction_detail(
             }
             _ => None,
         };
+        let mut witness_details =
+            super::transaction_structure::witness_details(&io.witnesses, pool_is_cellbase)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        super::transaction_structure::name_cobuild_actions(
+            &mut witness_details,
+            &io.inputs,
+            &io.outputs,
+        )
+        .map_err(|e| ApiError::internal(format!("transaction {hash} CoBuild actions: {e:#}")))?;
         return ok(TransactionDetailResponse {
             pays,
             fee_paid_by,
@@ -1466,11 +1475,7 @@ async fn get_transaction_detail(
             inputs_used_capacity: Some(io.inputs_used_capacity.to_string()),
             outputs_used_capacity: Some(io.outputs_used_capacity.to_string()),
             script_groups,
-            witness_details: super::transaction_structure::witness_details(
-                &io.witnesses,
-                pool_is_cellbase,
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+            witness_details,
             header_deps: header_deps_response(&state.store, &rpc_tx.header_deps, false, &hash)?,
             cellbase_witness: cellbase_witness_response(pool_is_cellbase, &io.witnesses, &hash)?,
             inputs: io.inputs,
@@ -1667,6 +1672,13 @@ async fn get_transaction_detail(
     } else {
         None
     };
+    let mut witness_details =
+        super::transaction_structure::witness_details(&witnesses, is_cellbase)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    super::transaction_structure::name_cobuild_actions(&mut witness_details, &inputs, &outputs)
+        .map_err(|e| {
+            ApiError::internal(format!("transaction {tx_hash_hex} CoBuild actions: {e:#}"))
+        })?;
     ok(TransactionDetailResponse {
         pays,
         fee_paid_by,
@@ -1694,8 +1706,7 @@ async fn get_transaction_detail(
         inputs_used_capacity: Some(inputs_occupied_capacity.to_string()),
         outputs_used_capacity: Some(outputs_occupied_capacity.to_string()),
         script_groups,
-        witness_details: super::transaction_structure::witness_details(&witnesses, is_cellbase)
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        witness_details,
         header_deps,
         cellbase_witness,
         inputs,

@@ -3444,3 +3444,124 @@ async fn cell_deps_name_output_locks_code_sizes_and_script_names() {
         "{json}"
     );
 }
+
+/// Molecule table of `fields` (test helper).
+fn r2b_table(fields: &[Vec<u8>]) -> Vec<u8> {
+    let mut size = 4 + fields.len() * 4;
+    let mut offsets = Vec::new();
+    for field in fields {
+        offsets.extend_from_slice(&(size as u32).to_le_bytes());
+        size += field.len();
+    }
+    let mut bytes = (size as u32).to_le_bytes().to_vec();
+    bytes.extend(offsets);
+    for field in fields {
+        bytes.extend(field);
+    }
+    bytes
+}
+
+/// Molecule `Bytes` of `content` (test helper).
+fn r2b_bytes(content: &[u8]) -> Vec<u8> {
+    let mut bytes = (content.len() as u32).to_le_bytes().to_vec();
+    bytes.extend(content);
+    bytes
+}
+
+/// TX-36: a CoBuild action whose script is a Spore in this transaction is
+/// decoded with the Spore action schema (`SporeAction`, spore-contract
+/// `action.mol`) and named — `TransferSpore` — while an action for a script
+/// with no known schema keeps only its hashes and raw data.
+#[tokio::test]
+async fn detail_names_cobuild_actions_of_a_known_schema() {
+    use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let spore_code = PROTOCOL_REGISTRY
+        .iter()
+        .filter(|(_, p)| *p == ProtocolScript::SporeNft)
+        .min_by_key(|(hash, _)| *hash)
+        .unwrap()
+        .0
+        .to_vec();
+    let spore_id = [0x41u8; 32];
+    let spore_type = serde_json::json!({
+        "code_hash": format!("0x{}", hex::encode(&spore_code)),
+        "hash_type": "data1",
+        "args": format!("0x{}", hex::encode(spore_id)),
+    });
+    let spore_hash = ckbadger_api::utils::address::compute_script_hash(&spore_code, 2, &spore_id);
+    let lock = |args: u8| {
+        r2b_table(&[
+            TEST_SECP_LOCK_CODE_HASH
+                .trim_start_matches("0x")
+                .as_bytes()
+                .chunks(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect(),
+            vec![1],
+            r2b_bytes(&[args; 20]),
+        ])
+    };
+    let address = |args: u8| [0u32.to_le_bytes().to_vec(), lock(args)].concat();
+    // SporeAction::TransferSpore (union item 1) { spore_id, from, to }.
+    let transfer = [
+        1u32.to_le_bytes().to_vec(),
+        r2b_table(&[spore_id.to_vec(), address(0x33), address(0x44)]),
+    ]
+    .concat();
+    let action = |script_hash: &[u8], data: &[u8]| {
+        r2b_table(&[vec![0x11; 32], script_hash.to_vec(), r2b_bytes(data)])
+    };
+    let message = r2b_table(&[r2b_table(&[
+        action(&spore_hash, &transfer),
+        action(&[0x30; 32], &[1, 0, 0, 0, 0xaa]),
+    ])]);
+    let witness = [
+        0xff000001u32.to_le_bytes().to_vec(),
+        r2b_table(&[vec![0, 0, 0, 0], message]),
+    ]
+    .concat();
+    let spore_data = r2b_table(&[r2b_bytes(b"text/plain"), r2b_bytes(b"hello"), vec![]]);
+    let hash = pending_tx_hash_hex();
+    let mut response = transaction_rpc_response(
+        &hash,
+        &[(&parent, 0)],
+        vec![serde_json::json!({
+            "capacity": "0x174876e400",
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": format!("0x{}", "44".repeat(20)),
+            },
+            "type": spore_type,
+        })],
+        vec![format!("0x{}", hex::encode(&spore_data))],
+        "pending",
+        None,
+    );
+    response["result"]["transaction"]["witnesses"] =
+        serde_json::json!([format!("0x{}", hex::encode(&witness))]);
+    mount_transaction_rpc(&server, response).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let actions = json["witnessDetails"][0]["actions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("CoBuild actions: {json}"));
+    assert_eq!(actions.len(), 2, "{json}");
+    assert_eq!(actions[0]["schema"], "spore", "{json}");
+    assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
+    assert!(actions[1].get("schema").is_none(), "{json}");
+    assert!(actions[1].get("name").is_none(), "{json}");
+    assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+}
