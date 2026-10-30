@@ -5339,24 +5339,48 @@ impl CkbadgerStore {
         // and the data inconsistency from reading uncommitted batch deletes.
 
         // Every surviving `CF_OBJECT_COLLECTION_ACTIVITIES` row must belong to a
-        // collection this rebuild knows: an m-NFT collection aggregate, a Spore
-        // cluster, or the sole-Spores sentinel. Each claims its rows out of this
-        // map; whatever is left names no collection (a key-shape mismatch such
-        // as the 24-vs-32-byte m-NFT id) and fails the rollback below.
-        let mut unclaimed_activity_totals = object_activity_totals;
+        // collection this rebuild knows: an m-NFT collection aggregate (the CF
+        // keys it by the zero-padded 32-byte id, the aggregate by the raw
+        // 24-byte class_id), a Spore cluster, or the sole-Spores sentinel. A
+        // row that names none of them is a key-shape mismatch such as the
+        // 24-vs-32-byte m-NFT id and fails the rollback. Rebuilt aggregates
+        // start at 0 activities, which is exact for a collection no surviving
+        // row names.
+        let mnft_collection_by_padded_id: HashMap<Vec<u8>, Vec<u8>> = object_collection_aggs
+            .keys()
+            .map(|collection_id| (keys::pad_id_32(collection_id).to_vec(), collection_id.clone()))
+            .collect();
+        let mut unclaimed_activity_totals: Vec<(&Vec<u8>, i64)> = Vec::new();
+        for (activity_collection_id, rows) in &object_activity_totals {
+            if let Some(collection_id) = mnft_collection_by_padded_id.get(activity_collection_id) {
+                let agg = object_collection_aggs.get_mut(collection_id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "m-NFT collection aggregate vanished during rollback repair: collection_id=0x{}",
+                        bytes_to_hex(collection_id)
+                    )
+                })?;
+                agg.activities_count = *rows;
+            } else if !cluster_aggs.contains_key(activity_collection_id)
+                && activity_collection_id.as_slice() != SOLE_SPORES_SENTINEL_COLLECTION.as_slice()
+            {
+                unclaimed_activity_totals.push((activity_collection_id, *rows));
+            }
+        }
+        if !unclaimed_activity_totals.is_empty() {
+            unclaimed_activity_totals.sort();
+            let samples = unclaimed_activity_totals
+                .iter()
+                .take(5)
+                .map(|(id, rows)| format!("0x{} ({rows} rows)", bytes_to_hex(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!(
+                "object_collection_activities rows survive rollback to block {rollback_to} for {} collection id(s) that match no m-NFT collection aggregate, Spore cluster or the sole-Spores sentinel: {samples}; the activity writer and the aggregate rebuild disagree on the collection key — fix the writer, then purge and re-sync from genesis",
+                unclaimed_activity_totals.len()
+            );
+        }
         for (collection_id, agg) in &mut object_collection_aggs {
             agg.holders_count = object_owner_totals.get(collection_id).copied().unwrap_or(0);
-            // `CF_OBJECT_COLLECTION_ACTIVITIES` is keyed by the 32-byte
-            // zero-padded id, whereas `object_collection_aggs` is keyed by the
-            // raw m-NFT class_id (24 bytes).
-            let padded_collection_id = keys::pad_id_32(collection_id);
-            agg.activities_count =
-                match unclaimed_activity_totals.remove(padded_collection_id.as_slice()) {
-                    Some(count) => count,
-                    // No surviving row names this collection. The unclaimed
-                    // check below proves no row is keyed by another shape of it.
-                    None => 0,
-                };
             let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize object collection aggregate during rollback repair: collection_id=0x{}, error={}",
@@ -5366,24 +5390,6 @@ impl CkbadgerStore {
             })?;
             batch.put_cf(self.cf_mnft_collection_agg(), collection_id, &encoded);
             aggregate_rows_written += 1;
-        }
-        for cluster_id in cluster_aggs.keys() {
-            unclaimed_activity_totals.remove(cluster_id.as_slice());
-        }
-        unclaimed_activity_totals.remove(SOLE_SPORES_SENTINEL_COLLECTION.as_slice());
-        if !unclaimed_activity_totals.is_empty() {
-            let mut unclaimed: Vec<(&Vec<u8>, &i64)> = unclaimed_activity_totals.iter().collect();
-            unclaimed.sort();
-            let samples = unclaimed
-                .iter()
-                .take(5)
-                .map(|(id, rows)| format!("0x{} ({rows} rows)", bytes_to_hex(id)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow::bail!(
-                "object_collection_activities rows survive rollback to block {rollback_to} for {} collection id(s) that match no m-NFT collection aggregate, Spore cluster or the sole-Spores sentinel: {samples}; the activity writer and the aggregate rebuild disagree on the collection key — fix the writer, then purge and re-sync from genesis",
-                unclaimed.len()
-            );
         }
 
         // Write rebuilt identity owner counts to CF_STATS_IDENTITY.
