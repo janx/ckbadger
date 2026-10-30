@@ -134,5 +134,11 @@
   "status": "dead",
   "txHash": "0xabababababababababababababababababababababababababababababababab",
   "type": null,
-  "typeScriptHash": null
+  "typeScriptHash": null,
+  "createdEpoch": {
+    "number": 1,
+    "index": 3,
+    "length": 1000
+  },
+  "dataHash": null
 }

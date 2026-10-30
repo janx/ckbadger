@@ -499,5 +499,11 @@
       "historicalCells": []
     }
   ],
-  "isDepGroup": false
+  "isDepGroup": false,
+  "createdEpoch": {
+    "number": 13150,
+    "index": 935,
+    "length": 1500
+  },
+  "dataHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe"
 }

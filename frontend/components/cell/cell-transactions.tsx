@@ -1,4 +1,5 @@
 'use client';
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -19,10 +20,13 @@ export function TransactionEvidence({
   label,
   focus,
   onward,
+  afterOnward,
 }: {
   hash: string;
   label: string;
   focus?: string;
+  /** Drawn under the onward bridge (the dashed "Not spent yet" box). */
+  afterOnward?: ReactNode;
   /** The focused output's txviz bridge label (the cell carries on past this transaction). */
   onward?: string;
 }) {
@@ -153,6 +157,7 @@ export function TransactionEvidence({
         focusedCellIds={focus ? [focus] : []}
         meOut={onward !== undefined ? focus : undefined}
         onward={onward}
+        afterOnward={afterOnward}
       />
     </div>
   );
@@ -258,15 +263,16 @@ export function CellTransactions({
           label="Created"
           focus={`out:${cell.outputIndex}`}
           onward={spent ? 'this cell, onward: spent below' : 'this cell, onward: not spent yet'}
+          afterOnward={
+            spent ? undefined : <NotSpentYet cell={cell} lockName={lockName} typeName={typeName} />
+          }
         />
-        {spent ? (
+        {spent && (
           <TransactionEvidence
             hash={cell.consumedByTx!}
             label="Spent"
             focus={`in:${cell.consumingInputIndex}`}
           />
-        ) : (
-          <NotSpentYet cell={cell} lockName={lockName} typeName={typeName} />
         )}
       </div>
     </DetailSection>

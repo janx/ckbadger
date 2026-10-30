@@ -21,7 +21,6 @@ import {
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
 import type { CapacityRangeKey } from '@/lib/capacity-range';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatCapacity, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import {
   codeHolders,
@@ -51,6 +50,7 @@ export interface ScriptFamilyPageProps {
   versionUsage: (versionHash: string) => ReactNode;
   codeCells: ReadonlyMap<string, CodeCellState>;
   cells: {
+    pageSize: number;
     rows: readonly Cell[];
     loading: boolean;
     page: number;
@@ -482,7 +482,7 @@ export function ScriptFamilyPage({
                             {!signer
                               ? `into ${holderName(marker.custody)}`
                               : holderName(signer) !== holderName(marker.custody)
-                                ? `hands it to ${holderName(marker.custody)}`
+                                ? `hands it to ${marker.custody.lockArgs ? shortHex(marker.custody.lockArgs) : holderName(marker.custody)}`
                                 : ''}
                           </span>
                         </span>
@@ -647,10 +647,16 @@ export function ScriptFamilyPage({
               />
             )}
             {cells.rows.length > 0 && (
+              <p className="text-text-dim mt-2 text-xs">
+                Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
+                {family.liveCellsCount.toLocaleString('en-US')}
+              </p>
+            )}
+            {cells.rows.length > 0 && (
               <CursorPagination
                 total={family.liveCellsCount}
                 totalLabel="cells"
-                pageSize={DEFAULT_PAGE_SIZE}
+                pageSize={cells.pageSize}
                 page={cells.page}
                 currentCount={cells.currentCount}
                 hasMore={cells.hasMore}

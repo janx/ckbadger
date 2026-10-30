@@ -31,12 +31,14 @@ describe('script code evidence', () => {
             lockCellsCount: 2,
             lockOwnedCapacitySum: '900719925474099300',
             referenceCount: 1,
+            familyCount: 1,
           },
           {
             class: 'unsupported',
             lockCellsCount: 1,
             lockOwnedCapacitySum: '900719925474099300',
             referenceCount: 1,
+            familyCount: 1,
           },
         ]}
       />

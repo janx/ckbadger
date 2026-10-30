@@ -263,3 +263,21 @@ describe('Its transactions against the Cell board', () => {
     expect(box).toHaveTextContent('Built-in Type ID; no code-cell dep');
   });
 });
+
+describe('Its transactions · visual pass', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getTransactionDetail.mockResolvedValue(sporeTx);
+    getTransactionCellDeps.mockResolvedValue([]);
+    lookupScripts.mockResolvedValue({});
+  });
+
+  it('puts the "Not spent yet" box right after the onward bridge, before the groups table', async () => {
+    view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
+    const groups = await screen.findByRole('heading', { name: 'Script groups' });
+    const box = screen.getByTestId('not-spent-yet');
+    expect(box.compareDocumentPosition(groups) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const onward = screen.getByText('this cell, onward: not spent yet');
+    expect(onward.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

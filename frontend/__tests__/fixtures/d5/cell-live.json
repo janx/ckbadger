@@ -204,5 +204,11 @@
     "codeHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
     "hashType": "type"
   },
-  "typeScriptHash": "0x9e525c8724256323ca50b74fcf6c55d840a7b81a10930b804940d425b6c12f49"
+  "typeScriptHash": "0x9e525c8724256323ca50b74fcf6c55d840a7b81a10930b804940d425b6c12f49",
+  "createdEpoch": {
+    "number": 1,
+    "index": 2,
+    "length": 1000
+  },
+  "dataHash": null
 }

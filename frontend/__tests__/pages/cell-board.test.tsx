@@ -89,6 +89,9 @@ describe('Cell page against the Cell board', () => {
     expect(
       [...index.querySelectorAll('[data-index-group]')].map((node) => node.textContent)
     ).toEqual(['capacity', 'lock', 'type', 'data']);
+    // at 390 px the group name sits above its pills instead of eating an 80 px column
+    for (const label of index.querySelectorAll('[data-index-group]'))
+      expect(label).toHaveClass('w-full', 'sm:absolute', 'sm:w-[74px]');
     // every field is one pill: 21 CellOutput fields + 10 SporeData fields
     expect(index.querySelectorAll('[data-pill]')).toHaveLength(31);
     const box = screen.getByLabelText('Cell bytes');
@@ -168,5 +171,56 @@ describe('Cell page against the Cell board', () => {
     expect(await screen.findByText(/withdrawn · deposit block/)).toHaveTextContent(
       'deposit block #20,311,586'
     );
+  });
+});
+
+describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    outpoint = `${cell.txHash}-1`;
+    vi.mocked(api.getCell).mockResolvedValue(cell);
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
+      [cell.type!.codeHash]: { name: 'Spore' },
+    } as never);
+  });
+
+  it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {
+    view();
+    const facts = await screen.findByRole('region', { name: 'Cell facts' }, { timeout: 5000 });
+    // the epoch takes its own line under the time, so the seven facts fit one row at 1440
+    expect(facts).toHaveTextContent('2026-10-22 22:43:55 UTC+8epoch 15,157 · 112/1800');
+    expect(within(facts).getByText(/^epoch 15,157/)).toHaveClass('block');
+    expect(facts).toHaveTextContent('Occupied320 B · 0 free');
+    expect(within(facts).queryByText('Owner')).toBeNull();
+  });
+
+  it('shows a missing createdEpoch as an error in place, not as a blank (SC-C9)', async () => {
+    const { createdEpoch: _drop, ...withoutEpoch } = cell as Cell & { createdEpoch: unknown };
+    void _drop;
+    vi.mocked(api.getCell).mockResolvedValue(withoutEpoch as Cell);
+    view();
+    expect(
+      await screen.findByText(/has no createdEpoch/, undefined, { timeout: 5000 })
+    ).toHaveAttribute('role', 'alert');
+  });
+
+  it('gives the data its hash formula and value in the detail (SC-C6)', async () => {
+    view();
+    const map = await screen.findByRole('group', { name: 'Capacity map' }, { timeout: 5000 });
+    fireEvent.mouseEnter(within(map).getByTitle('data · 181 bytes'));
+    const detail = screen.getByRole('complementary', { name: 'Field detail' });
+    expect(detail).toHaveTextContent('data hashblake2b(data)');
+    expect(detail).toHaveTextContent(
+      '0x550fe383bf357f4eb3b1853f324f9800dd3e49ac792d892254b646f91b861df1'
+    );
+  });
+
+  it('pads a short last hex row with bytes of the same width, so ASCII columns align', async () => {
+    view();
+    const box = await screen.findByLabelText('Cell bytes', undefined, { timeout: 5000 });
+    const pads = box.querySelectorAll('[data-pad]');
+    expect(pads.length).toBeGreaterThan(0);
+    for (const pad of pads) expect(pad).toHaveClass('px-px');
   });
 });

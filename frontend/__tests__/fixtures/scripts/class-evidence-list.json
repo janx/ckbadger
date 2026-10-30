@@ -4,13 +4,15 @@
       "class": "fixed",
       "lockCellsCount": 1,
       "lockOwnedCapacitySum": "500",
-      "referenceCount": 1
+      "referenceCount": 1,
+      "familyCount": 1
     },
     {
       "class": "one_key",
       "lockCellsCount": 1,
       "lockOwnedCapacitySum": "400",
-      "referenceCount": 1
+      "referenceCount": 1,
+      "familyCount": 1
     }
   ],
   "data": [
@@ -39,7 +41,8 @@
       "ownedKnowledgeSum": "100",
       "scriptKind": "lock",
       "versionsCount": 1,
-      "website": null
+      "website": null,
+      "firstDeployedAt": null
     }
   ],
   "hasMore": false,

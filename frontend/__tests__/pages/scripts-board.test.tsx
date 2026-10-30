@@ -38,6 +38,7 @@ function family(overrides: Partial<KnownScript>): KnownScript {
     cellsCount: 2,
     versionsCount: 1,
     codeClasses: [],
+    firstDeployedAt: null,
     ...overrides,
   };
 }
@@ -51,6 +52,11 @@ const joyid = family({
   liveCellsCount: 161049,
   cellsCount: 2707778,
   versionsCount: 5,
+  firstDeployedAt: {
+    blockNumber: 11132140,
+    timestampMs: 1696664371829,
+    versionHash: '0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c',
+  },
   codeClasses: [
     {
       class: 'multisig',
@@ -68,6 +74,11 @@ const defaultLock = family({
   liveCellsCount: 1717237,
   cellsCount: 78239443,
   versionsCount: 2,
+  firstDeployedAt: {
+    blockNumber: 0,
+    timestampMs: 1573852190812,
+    versionHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+  },
   codeClasses: [
     { class: 'fixed', lockCellsCount: 1, lockOwnedCapacitySum: '1', referenceCount: 1 },
     { class: 'unspendable', lockCellsCount: 2, lockOwnedCapacitySum: '2', referenceCount: 1 },
@@ -103,7 +114,7 @@ describe('Scripts list against the Scripts board', () => {
         'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.'
       )
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search by script name')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
   });
 
   it('writes the Code column as Immutable or Upgradable · N versions · by whom (SC-L2, SC-L4)', async () => {
@@ -171,5 +182,43 @@ describe('Scripts list against the Scripts board', () => {
     render(<ScriptsPage />);
     await screen.findByRole('table', { name: 'Scripts' });
     expect(document.body.textContent).not.toMatch(/Common Knowledge/i);
+  });
+});
+
+describe('Scripts list · visual pass (R2b-b)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getScripts).mockResolvedValue(response);
+  });
+
+  it('dates the code: "since" for upgradable code, "genesis" for genesis code (SC-L4)', async () => {
+    render(<ScriptsPage />);
+    const table = await screen.findByRole('table', { name: 'Scripts' });
+    const code = (name: string) =>
+      within(within(table).getByRole('link', { name }).closest('tr') as HTMLElement).getByTestId(
+        'script-code-class'
+      );
+    expect(code('JoyID')).toHaveTextContent('by a multisig · since 2023-10-07');
+    expect(code('Default Lock')).toHaveTextContent('genesis · code cell unspendable');
+    expect(code('Godwoken Custodian Lock')).toHaveTextContent('Code evidence unavailable');
+  });
+
+  it('searches by code hash through the API (SC-L5)', async () => {
+    render(<ScriptsPage />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search scripts' }), {
+      target: { value: ' 0xd00c84f0 ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() =>
+      expect(api.getScripts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: '0xd00c84f0' })
+      )
+    );
+  });
+
+  it('has no second "Scripts" heading over the table (board: one sort line)', async () => {
+    render(<ScriptsPage />);
+    await screen.findByRole('table', { name: 'Scripts' });
+    expect(screen.queryByRole('heading', { name: 'Scripts', level: 2 })).toBeNull();
+    expect(screen.getByText('3 scripts')).toBeInTheDocument();
   });
 });

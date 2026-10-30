@@ -237,6 +237,7 @@ const mockCapacityChart = {
       values: { used: '6000000000', unused: '4000000000' },
     },
   ],
+  totalPeak: { date: '2024-01-15', value: '10000000000' },
 };
 
 const emptyCells = {

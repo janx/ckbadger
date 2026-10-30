@@ -47,6 +47,7 @@ const mockScriptsResponse = {
       liveCellsCount: 4200,
       cellsCount: 8500,
       deployedAt: 0,
+      firstDeployedAt: null,
     } satisfies KnownScript,
     {
       codeHash: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
@@ -71,6 +72,7 @@ const mockScriptsResponse = {
       liveCellsCount: 1500,
       cellsCount: 3200,
       deployedAt: 100,
+      firstDeployedAt: null,
     } satisfies KnownScript,
   ],
   total: 2,
@@ -84,12 +86,12 @@ describe('ScriptsPage', () => {
     vi.clearAllMocks();
   });
 
-  it('uses a script-name search placeholder (SC-L5: the API searches names only)', async () => {
+  it('offers name or code-hash search (SC-L5, R2b-b)', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 
     render(<ScriptsPage />);
 
-    expect(screen.getByPlaceholderText('Search by script name')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
   });
 
   it('uses server role totals and refetches the filtered family set', async () => {
@@ -101,6 +103,7 @@ describe('ScriptsPage', () => {
           lockCellsCount: 2,
           lockOwnedCapacitySum: '3000000000',
           referenceCount: 1,
+          familyCount: 1,
         },
       ],
       roleCounts: { all: 2, locks: 1, types: 1 },
@@ -222,6 +225,7 @@ describe('ScriptsPage', () => {
           codeCellOutputIndex: null,
           ownedCapacitySum: '2000000000',
           ownedKnowledgeSum: '1000000000',
+          firstDeployedAt: null,
         } satisfies KnownScript,
       ],
       total: 1,

@@ -105,6 +105,8 @@ export function ScriptCodeClassSummary({
   const seen = new Set<string>();
   for (const row of classes) {
     if (!(row.class in CLASS_LABELS)) throw new Error(`Unknown script code class ${row.class}`);
+    if (row.familyCount === undefined)
+      throw new Error(`Script code class ${row.class} summary has no familyCount`);
     if (seen.has(row.class)) throw new Error(`Script code class ${row.class} appears twice`);
     seen.add(row.class);
   }
@@ -112,12 +114,21 @@ export function ScriptCodeClassSummary({
   const total = ordered.reduce((sum, row) => sum + BigInt(row.lockOwnedCapacitySum), BigInt(0));
   const held = ordered.filter((row) => BigInt(row.lockOwnedCapacitySum) > BigInt(0));
   // Immutable classes share one clause; every other class keeps its own.
-  const groups: { does: string; capacity: bigint }[] = [];
+  // A family can hold references of two immutable classes, so their family counts do not add:
+  // the immutable clause states no count; every other clause is one class and states its own.
+  const groups: { does: string; capacity: bigint; families: number | null }[] = [];
   for (const row of held) {
     const does = classDoes(row.class);
     const existing = groups.find((group) => group.does === does);
-    if (existing) existing.capacity += BigInt(row.lockOwnedCapacitySum);
-    else groups.push({ does, capacity: BigInt(row.lockOwnedCapacitySum) });
+    if (existing) {
+      existing.capacity += BigInt(row.lockOwnedCapacitySum);
+      existing.families = null;
+    } else
+      groups.push({
+        does,
+        capacity: BigInt(row.lockOwnedCapacitySum),
+        families: isImmutableClass(row.class) ? null : row.familyCount!,
+      });
   }
   return (
     <DetailSection title={title}>
@@ -127,7 +138,10 @@ export function ScriptCodeClassSummary({
             Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
             {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
-              groups.map((group) => `${scriptShare(group.capacity, total)} ${group.does}`)
+              groups.map(
+                (group) =>
+                  `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
+              )
             )}
             .
           </p>
@@ -157,21 +171,22 @@ export function ScriptCodeClassSummary({
         className="text-text-dim flex flex-wrap gap-x-7 gap-y-1.5 text-[11.5px]"
       >
         {ordered.map((row) => (
-          <li key={row.class} className="inline-flex items-center gap-2">
+          <li key={row.class} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             <CodeClassSwatch value={row.class} />
             <span>{scriptClassLabel(row.class)}</span>·
             <ExactCkb
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
-            />· {formatCount(row.referenceCount, 'reference')}
+            />· {formatCount(row.familyCount!, 'script')}
           </li>
         ))}
       </ul>
       {classes.some((row) => row.class === 'unspendable') && (
-        <p className="text-text-dim mt-2 text-[11px]">
-          Unspendable: the code cell sits under a lock that can never be unlocked, so its code is
-          effectively immutable.
+        <p data-testid="unspendable-note" className="text-text-dim mt-2 text-[11px]">
+          Unspendable: the code cell sits under a lock no one can unlock — the all-zero lock, or a
+          secp256k1 lock over 20 zero bytes, which no known key matches — so its code is effectively
+          immutable.
         </p>
       )}
     </DetailSection>

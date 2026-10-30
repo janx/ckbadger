@@ -1,7 +1,7 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
-import { Chart, type ChartMarker } from '@/components/ui/chart';
+import { Chart } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
 import type {
@@ -139,7 +139,7 @@ export function ScriptFactsRail({
           </dd>
           <dd className="text-text-dim mt-1 text-xs">
             of {family.cellsCount.toLocaleString('en-US')} that ever used it ·{' '}
-            <a href="#its-cells" className="hover:text-text-bright">
+            <a href="#its-cells" className="hover:text-text-bright whitespace-nowrap">
               list them →
             </a>
           </dd>
@@ -252,20 +252,12 @@ export function ScriptHistory({
     if (n === undefined) continue;
     upgradeDays.set(marker.indexedDay, [...(upgradeDays.get(marker.indexedDay) ?? []), n]);
   }
-  const markers: ChartMarker[] = [...upgradeDays].flatMap(([day, versions]) => {
-    const at = chart.data.findIndex((p) => p.date === day);
-    const deployed = lineage!.find((marker) => marker.indexedDay === day)!;
-    return at < 0
-      ? []
-      : [
-          {
-            index: at,
-            label: versions.map((n) => `v${n}`).join(' · '),
-            plotLabel: '',
-            href: `/blocks/${deployed.blockNumber}`,
-          },
-        ];
-  });
+  if (chart.totalPeak === undefined)
+    throw new Error(`${family.name} capacity history has no totalPeak`);
+  const peak = chart.totalPeak;
+  const capacity = BigInt(family.ownedCapacitySum);
+  const occupiedNow = BigInt(family.ownedKnowledgeSum);
+  const upgradeList = [...upgradeDays];
   const shared = {
     data,
     unit: 'CKB',
@@ -277,7 +269,7 @@ export function ScriptHistory({
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
   return (
-    <div className="min-w-0">
+    <div data-testid="script-history" className="min-w-0">
       <div
         aria-live="polite"
         data-testid="script-history-reading"
@@ -325,79 +317,125 @@ export function ScriptHistory({
           <span className="text-text-dim">No capacity history in this range.</span>
         )}
       </div>
-      <p className="text-text-dim mb-1 mt-3 text-[11px]">CKB in {family.name} cells</p>
-      <Chart
-        {...shared}
-        title={`CKB in ${family.name} cells`}
-        subtitle="Occupied and free capacity, indexed chain day"
-        kind="stacked"
-        series={[
-          { key: 'used', label: 'Occupied', color: DATA_COLOR },
-          { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
-        ]}
-        markers={markers}
-      />
-      <p className="text-text-dim mb-1 mt-4 text-[11px]">Occupied by those cells&apos; own bytes</p>
-      <Chart
-        {...shared}
-        title="Occupied by those cells' own bytes"
-        subtitle="Occupied capacity on its own scale"
-        kind="area"
-        height={110}
-        series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
-      />
-      {lineage && chart.data.length > 0 && (
-        <div aria-label="Code track" className="mt-2 text-[10.5px]">
-          <div className="relative h-4 pl-[88px] pr-[10px]">
-            <span className="text-text-dim absolute left-0 top-0">code</span>
-            <div className="relative h-full">
-              {[...upgradeDays].map(([day, versions]) => {
-                const at = position(day);
-                return at === null ? null : (
-                  <span
-                    key={day}
-                    data-upgrade-day={day}
-                    className="text-text-bright absolute top-0 whitespace-nowrap border-l border-dashed border-[#4b5266] pl-1"
-                    style={{ left: `${at}%` }}
-                  >
-                    {versions.map((n) => `v${n}`).join(' · ')}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-          <div className="relative mt-1 h-10 pl-[88px] pr-[10px]">
-            <div className="relative h-full">
-              {holders.map((holder) => {
-                const start = position(holder.from.indexedDay);
-                if (start === null) return null;
-                const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
-                return (
-                  <div
-                    key={holder.lockArgs}
-                    data-custodian={holder.lockArgs}
-                    className="absolute top-0"
-                    style={{ left: `${start}%`, width: `${Math.max(end - start, 0)}%` }}
-                  >
-                    <div
-                      className={`h-2 rounded-sm border ${holder.neverSigned ? 'border-dashed' : ''}`}
-                      style={{
-                        borderColor: 'rgba(160,168,190,.7)',
-                        backgroundColor: holder.neverSigned
-                          ? 'transparent'
-                          : 'rgba(160,168,190,.22)',
-                      }}
-                    />
-                    <span className="mt-0.5 block truncate text-[#a0a8be]">
-                      {holderName(holder.custody)}
-                      {signingText(holder) ? ` · ${signingText(holder)}` : ''}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+      <div className="relative">
+        {/* Upgrade days as dashed lines through both panels and the code track, on the plot's x. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-[88px] right-[10px]"
+        >
+          {upgradeList.map(([day]) => {
+            const at = position(day);
+            return at === null ? null : (
+              <span
+                key={day}
+                data-upgrade-line={day}
+                className="absolute inset-y-0 border-l border-dashed border-[#4b5266]"
+                style={{ left: `${at}%` }}
+              />
+            );
+          })}
         </div>
+        <p className="text-text-dim mb-1 mt-3 text-[11px]">CKB in {family.name} cells</p>
+        <Chart
+          {...shared}
+          title={`CKB in ${family.name} cells`}
+          subtitle="Occupied and free capacity, indexed chain day"
+          kind="stacked"
+          series={[
+            { key: 'used', label: 'Occupied', color: DATA_COLOR },
+            { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+          ]}
+        />
+        <p className="text-text-dim mb-1 mt-4 text-[11px]">
+          Occupied by those cells&apos; own bytes
+        </p>
+        <Chart
+          {...shared}
+          title="Occupied by those cells' own bytes"
+          subtitle="Occupied capacity on its own scale"
+          kind="area"
+          height={110}
+          series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
+        />
+        {lineage && chart.data.length > 0 && (
+          <div aria-label="Code track" className="mt-2 text-[10.5px]">
+            <div className="relative h-8 pl-[88px] pr-[10px]">
+              <span className="text-text-dim absolute left-0 top-0">code</span>
+              <div className="relative h-full">
+                {upgradeList.map(([day, versions], i) => {
+                  const at = position(day);
+                  return at === null ? null : (
+                    <span
+                      key={day}
+                      data-upgrade-day={day}
+                      data-row={i % 2}
+                      className="text-text-bright absolute whitespace-nowrap pl-1"
+                      style={{ left: `${at}%`, top: i % 2 ? 14 : 0 }}
+                    >
+                      {versions.map((n) => `v${n}`).join(' · ')}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            <div
+              className="relative mt-1 pl-[88px] pr-[10px]"
+              style={{ height: 16 + holders.length * 14 }}
+            >
+              <div className="relative h-full">
+                {holders.map((holder, i) => {
+                  const start = position(holder.from.indexedDay);
+                  if (start === null) return null;
+                  const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
+                  // Past the middle a label hangs from its band's end, so it never runs off the
+                  // page; each holder's label has its own row, so labels never overlap.
+                  const anchor = start > 50 ? { right: `${100 - end}%` } : { left: `${start}%` };
+                  return (
+                    <div key={holder.lockArgs}>
+                      <div
+                        data-custodian={holder.lockArgs}
+                        className={`absolute top-0 h-2 rounded-sm border ${holder.neverSigned ? 'border-dashed' : ''}`}
+                        style={{
+                          left: `${start}%`,
+                          width: `${Math.max(end - start, 0)}%`,
+                          borderColor: 'rgba(160,168,190,.7)',
+                          backgroundColor: holder.neverSigned
+                            ? 'transparent'
+                            : 'rgba(160,168,190,.22)',
+                        }}
+                      />
+                      <span
+                        data-custodian-label={holder.lockArgs}
+                        data-row={i}
+                        className="absolute whitespace-nowrap text-[#a0a8be]"
+                        style={{ ...anchor, top: 12 + i * 14 }}
+                      >
+                        {holderName(holder.custody)}
+                        {signingText(holder) ? ` · ${signingText(holder)}` : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      {peak && (
+        <p data-testid="script-history-peak" className="text-text-dim mt-3 text-xs">
+          CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
+          on {peak.date}
+          {capacity > BigInt(0) && (
+            <>
+              {' '}
+              · occupied is now{' '}
+              <span style={{ color: DATA_COLOR }}>
+                <ExactCkb shannons={occupiedNow} signed={false} tone="plain" />
+              </span>
+              , {scriptShare(occupiedNow, capacity)} of what the cells hold
+            </>
+          )}
+        </p>
       )}
       <p className="text-text-dim mt-3 max-w-[780px] text-xs leading-relaxed">
         A cell must hold enough CKB to pay for its own bytes.{' '}

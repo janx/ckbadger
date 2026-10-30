@@ -70,6 +70,9 @@ export interface TxStructureProps {
   inflow?: TxInflow;
   /** `false` when the page draws the continuity legend itself (in its section header). */
   continuityList?: boolean;
+  // group scripts (F2-5): what the bridge leads to (Cell page "Not spent yet" box), drawn right
+  // under the bridge legend instead of after the script groups.
+  afterOnward?: ReactNode;
 }
 /** F2-tx (D4): a source that is not a consumed cell. */
 export interface TxInflow {
@@ -98,6 +101,7 @@ export function TxStructure({
   linking = 'continuity',
   inflow,
   continuityList = true,
+  afterOnward,
 }: TxStructureProps) {
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
@@ -303,6 +307,7 @@ export function TxStructure({
           {onward}
         </p>
       )}
+      {meOut !== undefined && afterOnward}
       {poolCapacity !== undefined && (
         <p className="text-text-dim text-[11px]">
           Capacity entering the pool{' '}

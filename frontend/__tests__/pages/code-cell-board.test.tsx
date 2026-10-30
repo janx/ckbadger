@@ -148,3 +148,31 @@ describe('elfParts (JoyID v5)', () => {
     expect(parts.find((p) => p.label === 'e_type')!.value).toBe('2 = EXEC');
   });
 });
+
+describe('code cell page · visual pass', () => {
+  beforeEach(() => {
+    vi.mocked(api.getCell).mockResolvedValue(cell);
+    vi.mocked(api.lookupScripts).mockResolvedValue({ [MULTISIG]: { name: 'Multisig' } } as never);
+  });
+
+  it('labels small map parts of a large cell with their byte count only, never wrapping', async () => {
+    view();
+    const map = await screen.findByRole('group', { name: 'Capacity map' }, wait);
+    expect(within(map).getByTitle(/^lock · /)).toHaveTextContent(/^53$/);
+    expect(within(map).getByTitle(/^type · /)).toHaveTextContent(/^65$/);
+    expect(within(map).getByTitle(/^data · /)).toHaveTextContent('data 100,312');
+  });
+
+  it('gives 5-digit offsets their own wider column', async () => {
+    view();
+    const data = await screen.findByLabelText('CellData byte map', undefined, wait);
+    const offset = within(data).getByText('0x00000');
+    expect(offset).toHaveClass('w-[74px]');
+  });
+
+  it('shows the epoch the code cell was created in (SC-C9)', async () => {
+    view();
+    const facts = await screen.findByRole('region', { name: 'Cell facts' }, wait);
+    expect(facts).toHaveTextContent('epoch 13,150 · 935/1500');
+  });
+});

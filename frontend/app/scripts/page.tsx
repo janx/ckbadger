@@ -5,7 +5,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 import {
   ScriptCodeClassSummary,
@@ -19,7 +19,7 @@ import { api, type KnownScript } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
-import { truncateHash } from '@/lib/utils';
+import { formatUtc8Date, truncateHash } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { DATA_COLOR } from '@/lib/design-tokens';
 
@@ -60,17 +60,24 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
   const immutable = classes.filter((row) => isImmutableClass(row.class));
   let head: string;
   let sub: string;
+  if (script.firstDeployedAt === undefined)
+    throw new Error(`Script family ${script.name} row has no firstDeployedAt`);
+  const first = script.firstDeployedAt;
   if (!replaceable.length) {
     head = 'Immutable';
-    sub = immutable
-      .map((row) => (row.class === 'fixed' ? 'pinned by data hash' : 'code cell unspendable'))
-      .join(' · ');
+    sub = [
+      ...(first ? [first.blockNumber === 0 ? 'genesis' : formatUtc8Date(first.timestampMs)] : []),
+      ...[...immutable]
+        .sort((a, b) => Number(b.class === 'unspendable') - Number(a.class === 'unspendable'))
+        .map((row) => (row.class === 'fixed' ? 'pinned by data hash' : 'code cell unspendable')),
+    ].join(' · ');
   } else {
     if (script.versionsCount === undefined)
       throw new Error(`Script family ${script.name} has replaceable code but no versionsCount`);
     head = `Upgradable · ${formatCount(script.versionsCount, 'version')}`;
     sub = [
       `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`,
+      ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []),
       ...(immutable.length ? ['some references pinned'] : []),
     ].join(' · ');
   }
@@ -91,9 +98,7 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
         </svg>
         {head}
       </span>
-      <span className="text-text-dim truncate text-[11px]" title={sub}>
-        {sub}
-      </span>
+      <span className="text-text-dim text-[11px]">{sub}</span>
     </span>
   );
 }
@@ -258,7 +263,7 @@ export default function ScriptsPage() {
               <input
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Search by script name"
+                placeholder="Search by name or code hash"
                 aria-label="Search scripts"
                 className="border-base-border bg-base-surface text-text-bright min-w-0 rounded border px-3 py-1.5 text-xs sm:w-64"
               />
@@ -322,16 +327,7 @@ export default function ScriptsPage() {
               lockScriptCount={data.roleCounts.locks}
             />
           )}
-          <DetailSection
-            title="Scripts"
-            actions={
-              <span className="text-text-dim text-xs">
-                {data?.total === undefined || data.total === null
-                  ? ''
-                  : formatCount(data.total, 'script')}
-              </span>
-            }
-          >
+          <section aria-label="Script list" className="min-w-0">
             <div className="text-text-dim mb-3 flex flex-wrap items-center gap-2 text-xs">
               <label htmlFor="scripts-sort">sorted by</label>
               <select
@@ -358,6 +354,9 @@ export default function ScriptsPage() {
               >
                 {sortDirection === 'asc' ? '↑' : '↓'}
               </button>
+              {data?.total !== undefined && data.total !== null && (
+                <span className="ml-auto">{formatCount(data.total, 'script')}</span>
+              )}
             </div>
             {isLoading ? (
               <div className="text-text-dim py-8 text-xs">Loading scripts...</div>
@@ -405,7 +404,7 @@ export default function ScriptsPage() {
                 />
               </div>
             )}
-          </DetailSection>
+          </section>
         </DetailLayout>
       </main>
     </div>
