@@ -252,7 +252,9 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           loadTransactions={(params) => api.getItemTransactions('mnft', objectId, params)}
           context={{
             label: 'This token',
-            render: (transaction) => <ItemTransactionContext transaction={transaction} />,
+            render: (transaction) => (
+              <ItemTransactionContext transaction={transaction} item={{ kind: 'object' }} />
+            ),
           }}
         />
       }

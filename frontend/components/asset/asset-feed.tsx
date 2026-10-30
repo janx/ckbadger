@@ -2,18 +2,20 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
+  CollectionFeedActivity,
   CursorPaginatedResponse,
   GlobalActivity,
   ItemActivity,
-  ItemRingRelink,
   Transaction,
 } from '@/lib/api';
 import { ActivityRow } from '@/components/activity/activity-row';
+import { ActivityReadError } from '@/components/activity-event-row';
 import {
-  ActivityReadError,
-  capitalizeAction,
-  dotcellActionLabel,
-} from '@/components/activity-event-row';
+  collectionFeedHeadline,
+  itemFeedHeadline as itemHeadlineFromContext,
+  type ItemFeedHeadline,
+  type ItemFeedSubject,
+} from '@/lib/feed-headlines';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -25,54 +27,17 @@ import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-const NEIGHBOUR_HEADLINES: Record<ItemRingRelink['by'], string> = {
-  register: 'Neighbour registered',
-  register_subname: 'Neighbour registered a sub-name',
-  recycle: 'Neighbour recycled',
-  unattributed: 'Ring pointer changed',
-};
+import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
+export type { ItemFeedHeadline, ItemFeedSubject } from '@/lib/feed-headlines';
 
-export interface ItemFeedHeadline {
-  text: string;
-  /** Someone else's action that only rewrote this item's cell (a ring neighbour): dimmed. */
-  neighbour: boolean;
-}
-
-/** One item's own feed: its kind, and the protocol name for standards with protocol actions. */
-export interface ItemFeedSubject {
-  kind: 'identity' | 'object';
-  /** `.cell`: its rows are named by the item's own protocol action. */
-  protocolName?: string;
-}
-
-/**
- * Headline of a row in one item's own feed. The API states what the tx meant for this item
- * (`itemContext.protocolActions` / `ringRelink`); this only displays it (ID-C1, #5). A ring
- * neighbour's rewrite is dimmed; a `.cell` row is its own protocol action; any other standard is
- * named by its exact item action ("Identity Renew").
- */
+/** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
 export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject): ItemFeedHeadline {
-  const context = activity.itemContext;
-  if (!context?.action)
-    throw new Error(`${activity.txHash}: item feed row has no item action for ${item.kind}`);
-  if (context.ringRelink) {
-    const text = NEIGHBOUR_HEADLINES[context.ringRelink.by];
-    if (!text)
-      throw new Error(
-        `${activity.txHash}: unknown ring relink ${JSON.stringify(context.ringRelink.by)}`
-      );
-    return { text, neighbour: true };
-  }
-  if (item.protocolName && context.protocolActions.length)
-    return {
-      text: `${item.protocolName} · ${context.protocolActions.map((action) => dotcellActionLabel(action)).join(', ')}`,
-      // A rewrite nothing else attributes is its own ring_relink: someone else's doing, dimmed.
-      neighbour: context.protocolActions.every((action) => action === 'ring_relink'),
-    };
-  return {
-    text: `${item.kind === 'identity' ? 'Identity' : 'Object'} ${capitalizeAction(context.action)}`,
-    neighbour: false,
-  };
+  return itemHeadlineFromContext(
+    activity.itemContext,
+    activity.protocolActions,
+    activity.txHash,
+    item
+  );
 }
 
 export function tokenMoved(transaction: Transaction, typeHash: string): string {
@@ -217,6 +182,8 @@ export interface AssetFeedProps {
   context?: AssetTransactionsProps['context'];
   /** One item's own feed: every row carries its item context (see itemFeedHeadline). */
   item?: ItemFeedSubject;
+  /** A collection's feed: every row carries its collection context (OB-C13). */
+  collection?: boolean;
 }
 export function AssetFeed({
   queryKey,
@@ -228,6 +195,7 @@ export function AssetFeed({
   initialActivityCursor,
   onActivityCursorChange,
   item,
+  collection = false,
 }: AssetFeedProps) {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
@@ -276,7 +244,17 @@ export function AssetFeed({
               acts.data!.data.map((a) => {
                 let headline: ItemFeedHeadline | undefined;
                 try {
-                  headline = item && itemFeedHeadline(a as ItemActivity, item);
+                  headline = item
+                    ? itemFeedHeadline(a as ItemActivity, item)
+                    : collection
+                      ? {
+                          text: collectionFeedHeadline(
+                            (a as CollectionFeedActivity).collectionContext,
+                            a.txHash
+                          ),
+                          neighbour: false,
+                        }
+                      : undefined;
                 } catch (error) {
                   // A row that breaks the feed contract is reported in place; the page stays up.
                   return (
@@ -289,7 +267,7 @@ export function AssetFeed({
                   <ActivityRow
                     key={a.txHash}
                     activity={a}
-                    headline={headline?.text}
+                    headline={headline && <FeedHeadlineText headline={headline} />}
                     className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
                   />
                 );

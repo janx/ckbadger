@@ -1,7 +1,13 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, isNotFoundApiError, type ObjectCollection, type IdentityCollection } from '@/lib/api';
+import {
+  api,
+  isNotFoundApiError,
+  type CollectionFeedTransaction,
+  type ObjectCollection,
+  type IdentityCollection,
+} from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetFeed } from '@/components/asset/asset-feed';
@@ -21,6 +27,7 @@ import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
+import { collectionFeedHeadline } from '@/lib/feed-headlines';
 export interface CollectionDetailProps {
   id: string;
   kind: 'spore' | 'object' | 'identity';
@@ -194,8 +201,20 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         <AssetFeed
           queryKey={`${kind}:${id}`}
           scope="This collection"
+          collection
           loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
           loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
+          context={{
+            label: 'For this collection',
+            render: (tx) => (
+              <span className="text-text-bright">
+                {collectionFeedHeadline(
+                  (tx as CollectionFeedTransaction).collectionContext,
+                  tx.hash
+                )}
+              </span>
+            ),
+          }}
         />
       }
       tier2={

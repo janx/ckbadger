@@ -1491,15 +1491,32 @@ export interface ItemRingRelink {
 export interface ItemFeedContext {
   itemId: string;
   action: string;
-  /** The item's own protocol actions in this tx, in order (e.g. `["buy", "list"]`); empty when none. */
+  /**
+   * The item's own protocol actions in this tx, in order. `.bit`: `"dotbit:<action>"` entries
+   * (`[]` on a neighbour row); `.cell`: bare names (`["buy", "list"]`); other standards `[]`.
+   */
   protocolActions: string[];
   /** Set only when the item's cell was rewritten as a ring neighbour with no own action. */
   ringRelink: ItemRingRelink | null;
+  /** Whose action this row is (contracts §5.1, ID-C1 / ID-C4): a neighbour's row is dimmed. */
+  actedOn: 'self' | 'neighbour';
   createdCell: ItemCellVersion | null;
   consumedCell: ItemCellVersion | null;
 }
 export type ItemActivity = GlobalActivity & { itemContext: ItemFeedContext };
 export type ItemTransaction = Transaction & { itemContext: ItemFeedContext };
+/** What one transaction did to one collection's items (contracts §5.2 / R2, OB-C13). */
+export interface CollectionFeedContext {
+  action: 'mint' | 'burn' | 'transfer' | 'update' | 'mixed';
+  minted: number;
+  burned: number;
+  transferred: number;
+  updated: number;
+  /** Only items of this collection. */
+  items: { id: string; change: 'minted' | 'burned' | 'transferred' | 'updated' }[];
+}
+export type CollectionFeedActivity = GlobalActivity & { collectionContext: CollectionFeedContext };
+export type CollectionFeedTransaction = Transaction & { collectionContext: CollectionFeedContext };
 export interface DidProtocol {
   did: string;
   itemId: string;
@@ -4015,13 +4032,13 @@ export const api = {
     kind: 'spore' | 'object' | 'identity',
     id: string,
     params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<GlobalActivity>> =>
+  ): Promise<CursorPaginatedResponse<CollectionFeedActivity>> =>
     fetchApi(`${collectionReadPath(kind, id)}/activity-feed?${cursorReadQuery(params)}`),
   getCollectionTransactions: (
     kind: 'spore' | 'object' | 'identity',
     id: string,
     params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<Transaction>> =>
+  ): Promise<CursorPaginatedResponse<CollectionFeedTransaction>> =>
     fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
   getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
     fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),

@@ -185,14 +185,18 @@ describe('Per-version raw protocol and item context', () => {
   });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];
-    const { rerender } = render(<ItemTransactionContext transaction={tx} />);
-    expect(screen.getByText(tx.itemContext.action)).toBeInTheDocument();
+    const { rerender } = render(
+      <ItemTransactionContext transaction={tx} item={{ kind: 'object' }} />
+    );
+    // Named like its Activities row (ID-C4), not the raw item action.
+    expect(screen.getByText(`Object ${tx.itemContext.action}`)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /cell after/ })).toHaveAttribute(
       'href',
       `/mainnet/cell/${tx.itemContext.createdCell!.txHash}-${tx.itemContext.createdCell!.outputIndex}`
     );
     rerender(
       <ItemTransactionContext
+        item={{ kind: 'object' }}
         transaction={{
           ...tx,
           itemContext: { ...tx.itemContext, action: 'burn', createdCell: null },

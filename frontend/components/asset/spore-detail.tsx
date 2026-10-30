@@ -148,7 +148,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           loadTransactions={(p) => api.getItemTransactions('spore', id, p)}
           context={{
             label: 'Object · cell after',
-            render: (t) => <ItemTransactionContext transaction={t} />,
+            render: (t) => <ItemTransactionContext transaction={t} item={{ kind: 'object' }} />,
           }}
         />
       }

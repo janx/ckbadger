@@ -72,6 +72,7 @@ describe('Shared asset feeds', () => {
         action: 'update',
         protocolActions: [],
         ringRelink: null,
+        actedOn: context.ringRelink ? 'neighbour' : 'self',
         createdCell: null,
         consumedCell: null,
         ...context,
@@ -100,19 +101,24 @@ describe('Shared asset feeds', () => {
       text: '.cell · buy, list',
       neighbour: false,
     });
-    // A rewrite nothing else attributes is its own ring_relink action: named, dimmed.
+    // A rewrite nothing else attributes is its own ring_relink action: named, and dimmed exactly
+    // when the API says a neighbour acted (contracts §5.1 actedOn), never by a frontend rule.
+    expect(
+      itemFeedHeadline(row({ protocolActions: ['ring_relink'], actedOn: 'neighbour' }), cell)
+    ).toEqual({ text: '.cell · ring pointer changed', neighbour: true });
     expect(itemFeedHeadline(row({ protocolActions: ['ring_relink'] }), cell)).toEqual({
       text: '.cell · ring pointer changed',
-      neighbour: true,
+      neighbour: false,
     });
   });
 
   it('names other standards by the exact item action, never a net-delta guess or "Item"', () => {
+    // One casing site-wide (OB-C14): sentence case, as the collection rows.
     expect(itemFeedHeadline(row({ action: 'renew' }), { kind: 'identity' }).text).toBe(
-      'Identity Renew'
+      'Identity renew'
     );
     expect(itemFeedHeadline(row({ action: 'transfer' }), { kind: 'object' }).text).toBe(
-      'Object Transfer'
+      'Object transfer'
     );
     expect(() => itemFeedHeadline(row({ action: '' }), { kind: 'identity' })).toThrow(
       'item feed row has no item action'
@@ -169,6 +175,51 @@ describe('Shared asset feeds', () => {
     expect(screen.getByTestId('activity-read-error')).toHaveTextContent(
       `Cannot read tx ${broken.txHash}`
     );
+  });
+
+  it('names .bit rows in the board words, keeps unknown actions raw in mono, dims neighbours (ID-C1/C4)', async () => {
+    const valar = '0x2d2ed79a32f078c511108765a384a183e14990e9';
+    const own = row(
+      {
+        itemId: valar,
+        protocolActions: ['dotbit:renew_account', 'dotbit:lock_account_for_cross_chain'],
+      },
+      { txHash: '0x' + 'a1'.repeat(32) }
+    );
+    const neighbour = row(
+      { itemId: valar, actedOn: 'neighbour' },
+      {
+        txHash: '0x' + 'a2'.repeat(32),
+        protocolActions: [
+          {
+            protocol: 'dotbit',
+            protocolName: '.bit',
+            action: 'recycle_expired_account',
+            metadata: { accountId: '0x' + 'da'.repeat(20) },
+          },
+        ],
+      }
+    );
+    render(
+      <AssetFeed
+        queryKey="dotbit:valar"
+        scope="This identity's whole life"
+        item={{ kind: 'identity', protocol: 'dotbit' }}
+        loadActivities={async () => ({
+          data: [own, neighbour],
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })}
+        loadTransactions={async () => ({ data: [], limit: 50, hasMore: false, nextCursor: null })}
+      />
+    );
+    const renewed = await screen.findByText(/^Renewed/);
+    expect(renewed.closest('article')).not.toHaveClass('opacity-[0.45]');
+    const raw = renewed.querySelector('code[data-raw-action]')!;
+    expect(raw).toHaveTextContent('dotbit:lock_account_for_cross_chain');
+    expect(raw).toHaveClass('font-mono');
+    expect(screen.getByText('Neighbour recycled').closest('article')).toHaveClass('opacity-[0.45]');
   });
 
   it('counts this token once from positive participant deltas, not CKB value or both sides', () => {

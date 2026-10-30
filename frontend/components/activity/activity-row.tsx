@@ -240,7 +240,7 @@ export type ActivityRowProps = {
   activity: ActivityRowData;
   fresh?: boolean;
   /** Participant endpoints cannot infer whole-transaction mint/burn from a single delta. */
-  headline?: string;
+  headline?: ReactNode;
   className?: string;
   showParticipants?: boolean;
   showScriptDetails?: boolean;
