@@ -158,6 +158,13 @@ pub struct UncleDetailResponse {
     pub proposal_ids: Vec<String>,
     pub included_by: UncleInclusionResponse,
     pub canonical_at_height: BlockRefResponse,
+    /// The canonical block number that shares this uncle's parent — its
+    /// sibling, the block it lost to — or `null` when the canonical block at
+    /// its height is built on another parent (BA-43).
+    pub same_parent_as: Option<i64>,
+    /// Header timestamp of this uncle minus its sibling's, in ms (negative
+    /// when the uncle is older); `null` exactly when `sameParentAs` is.
+    pub ms_after_sibling: Option<i64>,
 }
 
 /// A header DAO field: its raw bytes and their four u64 words, as exact
@@ -977,6 +984,23 @@ fn read_block_uncle(
             summary.hash
         )));
     }
+    let sibling = canonical.parent_hash.as_slice() == uncle_header.parent_hash().as_slice();
+    let ms_after_sibling = if sibling {
+        let uncle_ms = i64::try_from(uncle_header.timestamp()).map_err(|_| {
+            error(format!(
+                "uncle timestamp {} exceeds i64",
+                uncle_header.timestamp()
+            ))
+        })?;
+        Some(uncle_ms.checked_sub(canonical.timestamp).ok_or_else(|| {
+            error(format!(
+                "uncle/sibling timestamp difference overflows: {uncle_ms} - {}",
+                canonical.timestamp
+            ))
+        })?)
+    } else {
+        None
+    };
     let epoch = uncle_header.epoch();
     let (compact_target, difficulty) = format_pow(uncle_header.compact_target());
     let raw = raw_header_response(&uncle_header);
@@ -1017,6 +1041,8 @@ fn read_block_uncle(
             number,
             hash: format_hash(&canonical.hash),
         },
+        same_parent_as: sibling.then_some(number),
+        ms_after_sibling,
     })
 }
 

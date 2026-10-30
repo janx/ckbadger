@@ -1095,6 +1095,15 @@ struct UncleFixture {
 }
 
 async fn uncle_fixture(seed_canonical_height: bool) -> UncleFixture {
+    uncle_fixture_with_rival_parent(seed_canonical_height, [0u8; 32]).await
+}
+
+/// The uncle fixture with the canonical block at the uncle's height built on
+/// `rival_parent` (the uncle's own parent is `0x37…`).
+async fn uncle_fixture_with_rival_parent(
+    seed_canonical_height: bool,
+    rival_parent: [u8; 32],
+) -> UncleFixture {
     use ckb_types::{core, packed, prelude::*};
     let mut dao = Vec::new();
     for word in [
@@ -1129,7 +1138,7 @@ async fn uncle_fixture(seed_canonical_height: bool) -> UncleFixture {
     let store = test_store();
     let header = |hash: &[u8], uncles_count: i32| CachedBlockHeader {
         hash: hash.to_vec(),
-        parent_hash: vec![0u8; 32],
+        parent_hash: rival_parent.to_vec(),
         timestamp: 1_700_000_000_000,
         epoch_number: 1,
         epoch_index: 0,
@@ -1228,6 +1237,24 @@ async fn block_uncle_detail_serves_the_embedded_header_and_its_canonical_rival()
     .await;
     assert_eq!(status, StatusCode::OK, "{by_hash}");
     assert_eq!(by_hash, json);
+}
+
+/// BA-43: an uncle page says which canonical block it competed with —
+/// "same parent as #439" — and how long after that sibling it was mined.
+#[tokio::test]
+async fn block_uncle_detail_names_its_sibling_and_the_time_after_it() {
+    let fixture = uncle_fixture_with_rival_parent(true, [0x37; 32]).await;
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["sameParentAs"], 439, "{json}");
+    assert_eq!(json["msAfterSibling"], 500, "{json}");
+
+    // A canonical block at the height on another parent is no sibling.
+    let fixture = uncle_fixture(true).await;
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["sameParentAs"].is_null(), "{json}");
+    assert!(json["msAfterSibling"].is_null(), "{json}");
 }
 
 #[tokio::test]
