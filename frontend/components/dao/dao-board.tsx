@@ -69,10 +69,10 @@ function formatAr(raw: string): string {
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <section className="border-base-border border-t pt-5" aria-label={title}>
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-text-bright text-[15px] font-semibold">{title}</h2>
-        {note && <span className="text-text-dim font-mono text-[11px]">{note}</span>}
+    <section className="min-w-0" aria-label={title}>
+      <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-text-bright text-[15px] font-medium">{title}</h2>
+        {note && <span className="text-text-dim text-[12px]">{note}</span>}
       </div>
       {children}
     </section>
@@ -546,7 +546,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
               onFocus={() => setSelectedDay(row.nominalDay)}
               onMouseEnter={() => setSelectedDay(row.nominalDay)}
-              className="focus:outline-gold group flex h-28 flex-col justify-end focus:outline"
+              className="focus:outline-interactive group flex h-28 flex-col justify-end focus:outline"
               title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
             >
               <div
@@ -943,7 +943,7 @@ export function DaoBoard({
   }
   return (
     <div>
-      <div className="space-y-8">
+      <div className="space-y-12">
         <Hero
           statistics={statistics}
           evidence={evidence}
