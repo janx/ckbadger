@@ -347,6 +347,39 @@ describe('ActivitiesStreamExplorer', () => {
     ).toBe(true);
   });
 
+  it('gives each participant lock kind its own column instead of wrapping it under the address', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        makeActivity({
+          txHash: '0xlockkind00000000000000000000000000000000000000000000000000000001',
+          participants: [
+            {
+              ...makeParticipant({
+                address: 'ckb1qzdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq3q7ue',
+                ckbDelta: '-30000',
+              }),
+              lockKind: 'JoyID',
+            },
+          ],
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<ActivitiesStreamExplorer />);
+
+    const row = await screen.findByRole('article');
+    const kinds = row.querySelectorAll('[data-role="lock-kind"]');
+    expect(kinds).toHaveLength(1);
+    expect(kinds[0]).toHaveTextContent('JoyID');
+    // The party cell holds only the address: the kind is not repeated inline under it.
+    const party = row.querySelector('[data-party]');
+    expect(party).not.toBeNull();
+    expect(party).not.toHaveTextContent('JoyID');
+  });
+
   it('keeps polling when the current filter is empty and renders new head activity', async () => {
     vi.mocked(api.getGlobalActivities)
       .mockResolvedValueOnce({

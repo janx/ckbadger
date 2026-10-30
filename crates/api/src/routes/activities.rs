@@ -223,15 +223,19 @@ pub enum ItemDeltaResponse {
         delta: i8,
         /// The object's collection (`transaction_cells::object_delta_context`):
         /// a spore's cluster (id + immutable name; the Sole Spores sentinel
-        /// with `name: null` for a clusterless spore), an m-NFT token's class
-        /// id (`name: null`). `null` only on a pool row whose object is not
-        /// indexed yet.
+        /// with `name: null` for a clusterless spore), a cluster's own id and
+        /// name, an m-NFT token's class id (`name: null`). `null` only on a
+        /// pool row whose object is not indexed yet.
         collection: Option<super::transaction_cells::DeltaCollection>,
         /// The site's asset class vocabulary: always `object`.
         class: &'static str,
-        /// `CompositionTier::as_str` for a spore; `null` for an m-NFT token
-        /// and for a pool row whose object is not indexed yet.
+        /// `CompositionTier::as_str` for a spore; `null` for a Spore cluster,
+        /// an m-NFT token and a pool row whose object is not indexed yet.
         composition: Option<&'static str>,
+        /// What the object is: `spore | cluster | mnft_token`
+        /// (`ObjectDeltaRole::as_str`); `null` only on a pool row whose object
+        /// is not indexed yet. A cluster's `collection` is the cluster itself.
+        role: Option<&'static str>,
     },
     #[serde(rename = "identity", rename_all = "camelCase")]
     Identity {
@@ -378,6 +382,7 @@ fn convert_item_delta(
                 collection: context.collection,
                 class: context.class,
                 composition: context.composition,
+                role: context.role,
             })
         }
         ItemKind::Identity(standard) => Ok(ItemDeltaResponse::Identity {
@@ -2231,6 +2236,7 @@ mod tests {
             collection: None,
             class: "object",
             composition: None,
+            role: None,
         };
         let json = serde_json::to_string(&object).unwrap();
         assert!(json.contains("\"objectId\""), "missing objectId: {}", json);

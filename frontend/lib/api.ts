@@ -1214,13 +1214,16 @@ type ItemDelta =
       objectId: string;
       delta: number;
       /**
-       * Lane R12 (TX-12 / TX-29; contracts.md: resolver ready, not yet on the wire): the object's
-       * collection (`name: null` for m-NFT classes and clusterless spores), its asset class and
-       * its composition tier (`null` for m-NFT). Each is rendered only when present.
+       * Lane R12 (TX-12 / TX-29; contracts.md): the object's collection (`name: null` for m-NFT
+       * classes and clusterless spores; a Spore cluster's is the cluster itself), its asset class
+       * and its composition tier (`null` for clusters and m-NFT). Each is rendered only when
+       * present.
        */
       collection?: { id: string; name: string | null } | null;
       class?: 'object';
       composition?: CompositionTier | null;
+      /** What the object is; `null` only on a pool row whose object is not indexed yet. */
+      role?: 'spore' | 'cluster' | 'mnft_token' | null;
     }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 

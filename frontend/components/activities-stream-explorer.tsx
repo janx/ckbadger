@@ -531,7 +531,8 @@ export function ActivitiesStreamExplorer({
               return (
                 <div key={key}>
                   {showDayDivider && <ActivityDayDivider label={currentLabel} />}
-                  <ActivityRow activity={activity} fresh={highlightedKeys.has(key)} />
+                  {/* The lock kind gets its own column so it never wraps under the address. */}
+                  <ActivityRow activity={activity} fresh={highlightedKeys.has(key)} lockColumn />
                 </div>
               );
             })}
