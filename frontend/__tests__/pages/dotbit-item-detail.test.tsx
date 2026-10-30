@@ -203,3 +203,10 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
   expect(screen.queryByRole('heading', { level: 2, name: 'alice.bit' })).not.toBeInTheDocument();
   expect(tier1).not.toHaveTextContent(/Unix|1900000000/);
 });
+
+it('puts the facts rail right after the header in reading order (ID-C11)', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  const facts = await screen.findByRole('complementary', { name: 'Facts' }, { timeout: 4000 });
+  const term = screen.getByRole('heading', { name: /^Held until/ });
+  expect(facts.compareDocumentPosition(term) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
