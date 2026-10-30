@@ -9,6 +9,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb, activityHeadline, protocolActionLabel } from '@/components/activity-event-row';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
+import { splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
 
@@ -98,9 +99,7 @@ const DAO_TX_COLUMNS: ListColumn<Transaction>[] = [
           step.meta.compensation === null ? (
             <span className="text-text-dim">—</span>
           ) : (
-            <span data-role="compensation" className="text-gold">
-              <ExactCkb shannons={step.meta.compensation} signed={false} tone="plain" />
-            </span>
+            <GoldCkb shannons={step.meta.compensation} />
           )
         }
       />
@@ -114,6 +113,19 @@ const DAO_TX_COLUMNS: ListColumn<Transaction>[] = [
     render: (tx) => <span className="text-text-dim">{tx.activity!.participants.length}</span>,
   },
 ];
+
+/** Compensation in the DAO gold, digits included (the shared amount sets its own ink). */
+function GoldCkb({ shannons }: { shannons: bigint }) {
+  const parts = splitCkbAmount(shannons);
+  return (
+    <span data-role="compensation" className="text-gold whitespace-nowrap tabular-nums">
+      {parts.integer}
+      <span className="opacity-75">{parts.fraction}</span>
+      <span className="opacity-40">{parts.ghost}</span>
+      <span className="text-[11px] opacity-70"> CKB</span>
+    </span>
+  );
+}
 
 /** The DaoTxs board's table: what each DAO transaction did, its amounts and how many took part. */
 function DaoTransactionTable({ transactions }: { transactions: readonly Transaction[] }) {

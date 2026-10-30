@@ -200,6 +200,8 @@ describe('DaoSources board columns (DAO-13, DAO-22)', () => {
     const comp = rows[1].querySelector('[data-role="compensation"]')!;
     expect(comp).toHaveTextContent('25,728.5955841');
     expect(comp).toHaveClass('text-gold');
+    // Gold reaches the digits: nothing inside sets its own text colour (self-check: it was grey).
+    expect(comp.querySelector('[class*="text-text"]')).toBeNull();
     expect(rows[1].lastElementChild).toHaveTextContent('1');
   });
 
