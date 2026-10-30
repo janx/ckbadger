@@ -5440,6 +5440,101 @@ mod tests {
         assert!(live.iter().all(|(_, deltas)| deltas.is_empty()), "{live:?}");
     }
 
+    /// ID-X-N1: the DAS root AccountCell (all-zero id, `expired_at` =
+    /// u64::MAX; 15 re-creations on mainnet) is ring infrastructure, not an
+    /// account. Both sync paths skip it and say so at debug; a cell whose
+    /// data genuinely names no account still warns.
+    #[test]
+    fn das_root_account_cell_logs_at_debug_and_short_account_data_still_warns() {
+        use crate::label_import::test_log_capture::capture_logs;
+        use crate::sync::bulk_build::facts::{parse_protocol_facts, CellSemanticTag};
+        // The root's molecule-free cell data, built here: witness hash (32),
+        // all-zero id (20), next = 0xff…ff (20), expired_at = u64::MAX (8).
+        let mut root = vec![0x5Au8; 32];
+        root.extend_from_slice(&[0u8; 20]);
+        root.extend_from_slice(&[0xFF; 20]);
+        root.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(crate::parser::dotbit::DotbitParser::is_das_root_account_cell(&root));
+        let real_root = crate::rpc::parse_hex_to_bytes(
+            crate::parser::dotbit::fixtures::MAINNET_ROOT_ACCOUNT_CELL_DATA,
+        );
+        assert!(crate::parser::dotbit::DotbitParser::is_das_root_account_cell(&real_root));
+        let short = vec![0x11u8; 40];
+        assert!(!crate::parser::dotbit::DotbitParser::is_das_root_account_cell(&short));
+
+        let tx_with = |data: &[u8]| crate::rpc::TransactionView {
+            hash: format!("0x{}", hex::encode(DOTBIT_PARITY_TX)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![crate::rpc::CellOutput {
+                capacity: "0x6fc23ac00".to_string(),
+                lock: crate::rpc::Script {
+                    code_hash: format!("0x{}", "10".repeat(32)),
+                    hash_type: "type".to_string(),
+                    args: "0x".to_string(),
+                },
+                type_: Some(crate::rpc::Script {
+                    code_hash: crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
+                    hash_type: "type".to_string(),
+                    args: "0x".to_string(),
+                }),
+            }],
+            outputs_data: vec![format!("0x{}", hex::encode(data))],
+            witnesses: vec![],
+        };
+        let parsed_with = |data: &[u8]| crate::parser::cell::ParsedCell {
+            capacity: 300_00000000,
+            lock_code_hash: DOTBIT_PARITY_LOCK_CODE_HASH.to_vec(),
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            lock_script_hash: vec![0xA1; 32],
+            type_code_hash: Some(dotbit_account_code_hash()),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            data_hash: [0x13; 32],
+            data_size: i32::try_from(data.len()).unwrap(),
+            data: data.to_vec(),
+        };
+        let both_paths = |data: &[u8]| {
+            let live = crate::parser::DotbitParser::parse_account_outputs(&tx_with(data)).unwrap();
+            assert_eq!(live.unindexed_output_indices, vec![0]);
+            let bulk = parse_protocol_facts(
+                &parsed_with(data),
+                CellSemanticTag::Dotbit,
+                &crate::parser::dotbit::DotbitWitnessBundle::default(),
+                None,
+                &DOTBIT_PARITY_TX,
+                0,
+            )
+            .unwrap();
+            assert!(bulk.is_none());
+        };
+
+        let (_, warnings) = capture_logs(tracing::Level::WARN, || both_paths(&root));
+        assert!(
+            warnings.is_empty(),
+            "the DAS root must not warn: {warnings}"
+        );
+        let (_, debug) = capture_logs(tracing::Level::DEBUG, || both_paths(&root));
+        assert_eq!(
+            debug
+                .matches("DAS root AccountCell, not an account")
+                .count(),
+            2,
+            "live and bulk each say what the cell is: {debug}"
+        );
+
+        let (_, warnings) = capture_logs(tracing::Level::WARN, || both_paths(&short));
+        assert_eq!(
+            warnings.matches("unparseable DotBit AccountCell").count(),
+            2,
+            "a genuine parse failure warns on both paths: {warnings}"
+        );
+    }
+
     /// Round-2 review #3: an AccountCell whose DAS witness lacks its name was
     /// counted +1 when created (the activity builder reads the id from data)
     /// but recorded as never an account, so its consumption counted nothing.

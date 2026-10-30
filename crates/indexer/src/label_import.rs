@@ -1208,10 +1208,16 @@ pub(crate) mod test_log_capture {
     /// Run `f` with a thread-local subscriber capturing WARN and above, and
     /// return its result together with everything that was logged.
     pub(crate) fn capture_warnings<T>(f: impl FnOnce() -> T) -> (T, String) {
+        capture_logs(tracing::Level::WARN, f)
+    }
+
+    /// Run `f` with a thread-local subscriber capturing `level` and above, and
+    /// return its result together with everything that was logged.
+    pub(crate) fn capture_logs<T>(level: tracing::Level, f: impl FnOnce() -> T) -> (T, String) {
         let buffer = SharedBuffer::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(buffer.clone())
-            .with_max_level(tracing::Level::WARN)
+            .with_max_level(level)
             .with_ansi(false)
             .finish();
         let value = tracing::subscriber::with_default(subscriber, f);

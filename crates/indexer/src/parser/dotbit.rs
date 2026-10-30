@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
@@ -160,6 +160,18 @@ impl DotbitParser {
         Self::parse_account_id_from_data(type_code_hash, type_args, indexed_id_or_data)
     }
 
+    /// The DAS root AccountCell: the head of the account ring. Its data has
+    /// an all-zero account id and `expired_at` = u64::MAX, so it names no
+    /// account; it is protocol infrastructure, not an unparseable cell.
+    pub(crate) fn is_das_root_account_cell(data: &[u8]) -> bool {
+        const ID: std::ops::Range<usize> = HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN;
+        const EXPIRED_AT: std::ops::Range<usize> =
+            HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2..HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 + 8;
+        data.len() >= EXPIRED_AT.end
+            && data[ID].iter().all(|&byte| byte == 0)
+            && data[EXPIRED_AT] == u64::MAX.to_le_bytes()
+    }
+
     fn parse_identity_cell_data(
         type_code_hash: &[u8],
         type_args: &[u8],
@@ -272,12 +284,7 @@ impl DotbitParser {
                 )
             })?;
             let Some(mut account) = Self::parse_account_cell(output, data_hex) else {
-                warn!(
-                    tx_hash = %tx.hash,
-                    output_index,
-                    data_hex_len = data_hex.len(),
-                    "not indexing DotBit AccountCell: its data names no account"
-                );
+                log_unindexed_account_cell(&tx.hash, output_index, &parse_hex_to_bytes(data_hex));
                 outputs.unindexed_output_indices.push(output_index);
                 continue;
             };
@@ -307,6 +314,27 @@ impl DotbitParser {
         }
 
         Ok(outputs)
+    }
+}
+
+/// Log an AccountCell-typed output whose data names no account — the one
+/// message both sync paths use (live `parse_account_outputs`, bulk protocol
+/// facts). The DAS root AccountCell is ring infrastructure that every
+/// registration in its slot re-creates, so it is reported at debug; any other
+/// such cell is a genuine parse failure and warns.
+pub(crate) fn log_unindexed_account_cell(tx_hash: &str, output_index: i16, data: &[u8]) {
+    if DotbitParser::is_das_root_account_cell(data) {
+        debug!(
+            tx_hash,
+            output_index, "DAS root AccountCell, not an account"
+        );
+    } else {
+        warn!(
+            tx_hash,
+            output_index,
+            data_len = data.len(),
+            "unparseable DotBit AccountCell: its data names no account"
+        );
     }
 }
 
