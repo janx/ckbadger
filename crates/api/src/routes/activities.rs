@@ -160,6 +160,9 @@ pub struct ActivityParams {
     filter: Option<String>,
     #[serde(rename = "blockNumber", alias = "block_number")]
     block_number: Option<i64>,
+    /// `asc` (block order) or `desc` (default, newest first); only for a
+    /// block-scoped feed (`blockNumber`), whose rows have a block order (BA-14).
+    order: Option<String>,
 }
 
 /// Per-address activity response: shows one participant's perspective of a transaction.
@@ -850,11 +853,19 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
             value,
-            "all" | "ckb" | "token" | "object" | "identity" | "dao" | "type_call" | "lock_call"
+            "all"
+                | "ckb"
+                | "token"
+                | "object"
+                | "identity"
+                | "dao"
+                | "type_call"
+                | "lock_call"
+                | "script"
         ) && !value.starts_with("protocol:")
         {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, object, identity, dao, type_call, lock_call, protocol:<name>",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, object, identity, dao, type_call, lock_call, script, protocol:<name>",
                 value
             )));
         }
@@ -1372,6 +1383,20 @@ async fn get_global_activities(
         .block_number
         .map(|n| crate::utils::validate_block_number(n, "blockNumber"))
         .transpose()?;
+    let ascending = match (params.order.as_deref(), block_number) {
+        (None | Some("desc"), _) => false,
+        (Some("asc"), Some(_)) => true,
+        (Some("asc"), None) => {
+            return Err(ApiError::bad_request(
+                "order=asc reads one block's activities in block order; it needs blockNumber",
+            ))
+        }
+        (Some(other), _) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid order '{other}'; expected asc or desc"
+            )))
+        }
+    };
     if let (Some(block), Some((cursor_block, _))) = (block_number, cursor) {
         if block != cursor_block {
             return Err(ApiError::bad_request(
@@ -1387,8 +1412,20 @@ async fn get_global_activities(
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = if let Some(block) = block_number {
             let mut rows = Vec::new();
-            for (index, tx) in store.list_block_txs(block)?.into_iter().rev() {
-                if cursor.is_some_and(|(_, last)| index >= last) {
+            let mut txs = store.list_block_txs(block)?;
+            if !ascending {
+                txs.reverse();
+            }
+            for (index, tx) in txs {
+                // The cursor is the last row served: continue past it in the
+                // page's own direction.
+                if cursor.is_some_and(|(_, last)| {
+                    if ascending {
+                        index <= last
+                    } else {
+                        index >= last
+                    }
+                }) {
                     continue;
                 }
                 let actions =
