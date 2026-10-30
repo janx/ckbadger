@@ -26,6 +26,16 @@ export interface TxContinuity {
   // group scripts (F2-5): 'type-id' = the same Type ID continues (a code cell replaced), olive.
   kind?: AssetClass | 'file' | 'type-id';
 }
+/** The dashed stroke of a continuity link, on the structure and in any legend beside it. */
+export function continuityColor(kind: TxContinuity['kind']): string {
+  return kind === 'file'
+    ? '#a0a8be'
+    : kind === 'type-id'
+      ? CELL_COLORS.type
+      : kind
+        ? CLASS_COLORS[kind]
+        : CLASS_COLORS.objects;
+}
 export interface TxStructureProps {
   txHash: string;
   inputs: readonly CellTileData[];
@@ -89,14 +99,6 @@ export function TxStructure({
   inflow,
   continuityList = true,
 }: TxStructureProps) {
-  const continuityColor = (kind: TxContinuity['kind']) =>
-    kind === 'file'
-      ? '#a0a8be'
-      : kind === 'type-id'
-        ? CELL_COLORS.type
-        : kind
-          ? CLASS_COLORS[kind]
-          : CLASS_COLORS.objects;
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const [centers, setCenters] = useState<Record<string, number>>({});

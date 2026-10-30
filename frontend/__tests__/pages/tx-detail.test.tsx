@@ -5,6 +5,8 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, ApiRequestError, type TransactionCellDisplay } from '@/lib/api';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+import { TYPE_ID_CODE_HASH } from '@/lib/tx-continuity';
+import { CELL_COLORS } from '@/lib/design-tokens';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -837,6 +839,30 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'false');
   });
 
+  it('links a one-in one-out Type ID group as the same type id, through the shared continuity path', async () => {
+    const tx = createCommittedTransactionDetail();
+    const typeId = {
+      codeHash: TYPE_ID_CODE_HASH,
+      hashType: 'type' as const,
+      args: `0x${'7'.repeat(64)}`,
+    };
+    tx.inputs![0].type = typeId;
+    tx.outputs![0].type = typeId;
+    tx.scriptGroups![1].script = typeId;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    render(<TransactionDetailPage />);
+
+    const continuity = await screen.findByRole('button', { name: 'same type id continues' });
+    expect(document.querySelector('path[data-continuity-kind="type-id"]')).toHaveAttribute(
+      'stroke',
+      CELL_COLORS.type
+    );
+    expect(continuity.querySelector('path')).toHaveAttribute('stroke', CELL_COLORS.type);
+    fireEvent.mouseEnter(continuity);
+    expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
+  });
+
   it.each(['different identity', 'multiple outputs'])(
     'does not infer file continuity with %s',
     async (reason) => {
@@ -864,6 +890,9 @@ describe('TransactionDetailPage', () => {
       render(<TransactionDetailPage />);
       await screen.findByTestId('tx-io-input-0');
       expect(screen.queryByRole('list', { name: 'Cell continuity' })).not.toBeInTheDocument();
+      // The page draws its legend itself (continuityList={false}), so check its buttons too.
+      expect(screen.queryByRole('button', { name: /continues$/ })).not.toBeInTheDocument();
+      expect(document.querySelector('path[data-continuity-kind]')).toBeNull();
     }
   );
 

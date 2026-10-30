@@ -10,10 +10,8 @@ export const TYPE_ID_CODE_HASH =
  * The dashed "same … continues" links of a transaction structure (txviz): a type script group
  * with exactly one input and one output carries one thing across — a Type ID (the same code cell
  * id, replaced), a file cell, an object or an identity. Read from the API's script groups and
- * cell displays only.
- *
- * group scripts (F2-5): the transaction page builds the same links inline; it should call this
- * so the two pages keep one path.
+ * cell displays only. The one path for these links: the Transaction page and the Cell page's
+ * transactions both call it.
  */
 export function txContinuity(
   tx: TransactionDetail,

@@ -20,7 +20,8 @@ import {
 } from '@/components/activity-event-row';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { TxStructure, type TxContinuity } from '@/components/transaction/tx-structure';
+import { TxStructure, continuityColor } from '@/components/transaction/tx-structure';
+import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
@@ -614,11 +615,6 @@ function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   );
 }
 
-/** The continuity this page draws: a file cell (grey) or an object / identity (its class colour). */
-type PageContinuity = TxContinuity & { kind: 'file' | 'objects' | 'identities' };
-const continuityStroke = (kind: PageContinuity['kind']) =>
-  kind === 'file' ? '#a0a8be' : CLASS_COLORS[kind];
-
 export default function TransactionDetailPage() {
   const { hash } = useParams() as { hash: string };
   const pathname = usePathname();
@@ -795,41 +791,8 @@ export default function TransactionDetailPage() {
   const witnessScale = Math.max(1, ...witnesses.map((w) => w.size));
   const ran = groups.filter((g) => g.ran).length;
 
-  // ---- continuity (same object / same file cell continues) ----
-  const continuity: PageContinuity[] = tiles
-    ? groups.flatMap((g) => {
-        if (g.kind !== 'type' || g.inputIndices.length !== 1 || g.outputIndices.length !== 1)
-          return [];
-        const inputIndex = g.inputIndices[0];
-        const outputIndex = g.outputIndices[0];
-        const kind = tiles.inputs[inputIndex].kind;
-        const inputDisplay = tx.inputs![inputIndex].display;
-        const outputDisplay = tx.outputs![outputIndex].display;
-        if (
-          inputDisplay &&
-          outputDisplay &&
-          (inputDisplay.kind !== outputDisplay.kind ||
-            inputDisplay.standard !== outputDisplay.standard ||
-            inputDisplay.id !== outputDisplay.id)
-        )
-          return [];
-        const file = inputDisplay?.kind === 'file' && outputDisplay?.kind === 'file';
-        const linkKind: PageContinuity['kind'] | null = file
-          ? 'file'
-          : kind === 'objects' || kind === 'identities'
-            ? kind
-            : null;
-        if (linkKind === null) return [];
-        return [
-          {
-            from: `in:${inputIndex}`,
-            to: `out:${outputIndex}`,
-            label: `same ${linkKind === 'file' ? 'file cell' : linkKind === 'objects' ? 'object' : 'identity'} continues`,
-            kind: linkKind,
-          },
-        ];
-      })
-    : [];
+  // ---- continuity (same Type ID / object / identity / file cell continues) ----
+  const continuity = tiles ? txContinuity(tx, tiles.inputs) : [];
   const legend = [...new Set(continuity.map((l) => l.label))].map((label) => ({
     label,
     links: continuity.filter((l) => l.label === label),
@@ -1196,7 +1159,7 @@ export default function TransactionDetailPage() {
                         <svg aria-hidden="true" width="22" height="6" className="shrink-0">
                           <path
                             d="M0 3h22"
-                            stroke={continuityStroke(l.links[0].kind)}
+                            stroke={continuityColor(l.links[0].kind)}
                             strokeWidth="1.3"
                             strokeDasharray="4 3"
                           />
