@@ -926,6 +926,32 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Record an AccountCell-typed output that names no indexable account, so
+    /// its later consumption is classified as "never an account" instead of
+    /// failing as a lost `CF_DOTBIT_OUTPOINT` row. Domain store
+    /// (`stats_mnft`), with a `DotBit`-scope undo pre-image like the account
+    /// outpoint rows.
+    pub(crate) fn insert_dotbit_unindexed_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &DotbitBatchState,
+    ) -> Result<()> {
+        let key = ckbadger_store::keys::encode_dotbit_unindexed_outpoint_key(tx_hash, output_index);
+        let previous = self.store.get_cf(self.store.cf_stats_mnft(), &key)?;
+        self.record_dotbit_stats_object_undo(
+            batch,
+            block_number,
+            &key,
+            previous,
+            &state.undo_seq_by_block,
+        );
+        batch.put_dotbit_unindexed_outpoint(tx_hash, output_index);
+        Ok(())
+    }
+
     /// Consume a .bit account. Returns `Some(DOTBIT_SENTINEL_COLLECTION)` if consumed.
     pub(crate) fn consume_dotbit_account_with_state(
         &self,

@@ -1083,6 +1083,13 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_mnft(), key, account_id);
     }
 
+    /// Record that this `.bit` AccountCell-typed output holds no indexed
+    /// account. Domain store (`stats_mnft`); value empty.
+    pub fn put_dotbit_unindexed_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+        let key = keys::encode_dotbit_unindexed_outpoint_key(tx_hash, output_index);
+        self.put_cf(self.store.cf_stats_mnft(), key, []);
+    }
+
     pub fn put_dotbit_outpoint_by_account_id(
         &mut self,
         account_id: &[u8],

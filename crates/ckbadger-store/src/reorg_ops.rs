@@ -5338,16 +5338,49 @@ impl CkbadgerStore {
         // were already computed during stages 8d/8e to avoid a duplicate full-CF scan
         // and the data inconsistency from reading uncommitted batch deletes.
 
+        // Every surviving `CF_OBJECT_COLLECTION_ACTIVITIES` row must belong to a
+        // collection this rebuild knows: an m-NFT collection aggregate (the CF
+        // keys it by the zero-padded 32-byte id, the aggregate by the raw
+        // 24-byte class_id), a Spore cluster, or the sole-Spores sentinel. A
+        // row that names none of them is a key-shape mismatch such as the
+        // 24-vs-32-byte m-NFT id and fails the rollback. Rebuilt aggregates
+        // start at 0 activities, which is exact for a collection no surviving
+        // row names.
+        let mnft_collection_by_padded_id: HashMap<Vec<u8>, Vec<u8>> = object_collection_aggs
+            .keys()
+            .map(|collection_id| (keys::pad_id_32(collection_id).to_vec(), collection_id.clone()))
+            .collect();
+        let mut unclaimed_activity_totals: Vec<(&Vec<u8>, i64)> = Vec::new();
+        for (activity_collection_id, rows) in &object_activity_totals {
+            if let Some(collection_id) = mnft_collection_by_padded_id.get(activity_collection_id) {
+                let agg = object_collection_aggs.get_mut(collection_id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "m-NFT collection aggregate vanished during rollback repair: collection_id=0x{}",
+                        bytes_to_hex(collection_id)
+                    )
+                })?;
+                agg.activities_count = *rows;
+            } else if !cluster_aggs.contains_key(activity_collection_id)
+                && activity_collection_id.as_slice() != SOLE_SPORES_SENTINEL_COLLECTION.as_slice()
+            {
+                unclaimed_activity_totals.push((activity_collection_id, *rows));
+            }
+        }
+        if !unclaimed_activity_totals.is_empty() {
+            unclaimed_activity_totals.sort();
+            let samples = unclaimed_activity_totals
+                .iter()
+                .take(5)
+                .map(|(id, rows)| format!("0x{} ({rows} rows)", bytes_to_hex(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!(
+                "object_collection_activities rows survive rollback to block {rollback_to} for {} collection id(s) that match no m-NFT collection aggregate, Spore cluster or the sole-Spores sentinel: {samples}; the activity writer and the aggregate rebuild disagree on the collection key — fix the writer, then purge and re-sync from genesis",
+                unclaimed_activity_totals.len()
+            );
+        }
         for (collection_id, agg) in &mut object_collection_aggs {
             agg.holders_count = object_owner_totals.get(collection_id).copied().unwrap_or(0);
-            // `object_activity_totals` is keyed by the 32-byte zero-padded id
-            // decoded from `CF_OBJECT_COLLECTION_ACTIVITIES`, whereas
-            // `object_collection_aggs` is keyed by raw m-NFT class_id (24 bytes).
-            let padded_collection_id = keys::pad_id_32(collection_id);
-            agg.activities_count = object_activity_totals
-                .get(padded_collection_id.as_slice())
-                .copied()
-                .unwrap_or(0);
             let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize object collection aggregate during rollback repair: collection_id=0x{}, error={}",
@@ -8023,6 +8056,174 @@ mod tests {
             rebuilt.activities_count, 1,
             "activities_count should exclude rolled-back block-1 entries"
         );
+    }
+
+    /// Seed headers 0 and 1, one canonical tx in block 0, an m-NFT token of a
+    /// 24-byte class, and a Spore cluster with one clustered Spore, plus one
+    /// surviving block-0 collection activity row per given collection id.
+    fn seed_collection_activity_rollback_fixture(
+        domain: &CkbadgerStore,
+        class_id: &[u8],
+        cluster_id: &[u8; 32],
+        activity_collection_ids: &[Vec<u8>],
+    ) {
+        let header = |hash: u8, timestamp: i64| CachedBlockHeader {
+            hash: vec![hash; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: timestamp,
+        };
+        let header0 = header(0x01, 1_700_000_000_000);
+        let mut batch = StoreBatch::new(domain);
+        batch.put_block_header(0, &header0);
+        batch.put_block_header(1, &header(0x02, 1_700_000_010_000));
+        batch.put_mnft(
+            &[0x55; 28],
+            &ObjectEntry {
+                standard: ObjectStandard::MnftToken,
+                collection_id: Some(class_id.to_vec()),
+                token_id: Some(vec![0x55; 28]),
+                owner_lock_hash: Some(vec![0x66; 32]),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: 0,
+                created_at_tx: vec![],
+                extra: ObjectExtra::MnftToken {
+                    token_index: 1,
+                    characteristic: vec![],
+                    configure: 0,
+                    state: 0,
+                },
+            },
+        );
+        batch.put_spore(
+            cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: None,
+                name: Some("cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 0,
+                created_at_tx: vec![],
+                extra: ObjectExtra::SporeCluster,
+            },
+        );
+        put_canonical_tx(&mut batch, 0, 0, &[0xA1; 32]);
+        for collection_id in activity_collection_ids {
+            batch.put_object_collection_activity(
+                collection_id,
+                0,
+                0,
+                &ObjectCollectionActivityEntry {
+                    tx_hash: vec![0xA1; 32],
+                    block_hash: header0.hash.clone(),
+                    timestamp_ms: 1_700_000_000_000,
+                    actions: vec![AssetAction::Mint],
+                },
+            );
+        }
+        batch.commit().unwrap();
+    }
+
+    /// Every surviving `object_collection_activities` key belongs to an m-NFT
+    /// collection aggregate (by its zero-padded id), a Spore cluster, or the
+    /// sole-Spores sentinel. A key that names none of them — the shape the
+    /// 24-vs-32-byte id mismatch had — is an invariant violation, never a
+    /// silently uncounted collection.
+    #[test]
+    fn test_rollback_fails_on_collection_activity_rows_without_a_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let class_id = vec![0x44; 24];
+        let cluster_id = [0x45; 32];
+        let orphan_id = vec![0x77; 32];
+        seed_collection_activity_rollback_fixture(
+            &domain,
+            &class_id,
+            &cluster_id,
+            &[class_id.clone(), orphan_id.clone()],
+        );
+
+        let err = rollback_fixture(&domain, 0).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("0x{}", hex::encode(&orphan_id))),
+            "the error names the orphan collection id: {err}"
+        );
+        assert!(err.contains("object_collection_activities"), "{err}");
+    }
+
+    /// The legitimate writers of `object_collection_activities`: an m-NFT class
+    /// (24-byte id stored zero-padded), a Spore cluster, and Spores without a
+    /// cluster under the sole-Spores sentinel. None of them trips the
+    /// invariant, and an m-NFT collection with no surviving rows counts 0.
+    #[test]
+    fn test_rollback_accepts_mnft_cluster_and_sole_spore_collection_activity_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let class_id = vec![0x44; 24];
+        let cluster_id = [0x45; 32];
+        seed_collection_activity_rollback_fixture(
+            &domain,
+            &class_id,
+            &cluster_id,
+            &[
+                class_id.clone(),
+                cluster_id.to_vec(),
+                SOLE_SPORES_SENTINEL_COLLECTION.to_vec(),
+            ],
+        );
+        let silent_class_id = vec![0x46; 24];
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_mnft(
+            &silent_class_id,
+            &ObjectEntry {
+                standard: ObjectStandard::MnftClass,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: None,
+                name: Some("silent".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 0,
+                created_at_tx: vec![],
+                extra: ObjectExtra::MnftClass {
+                    description: None,
+                    renderer: None,
+                    total: 0,
+                    issued: 0,
+                    configure: 0,
+                    composition_tier: CompositionTier::Unknown,
+                },
+            },
+        );
+        batch.commit().unwrap();
+
+        rollback_fixture(&domain, 0).unwrap();
+
+        let rebuilt = domain
+            .get_mnft_collection_aggregate(&class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebuilt.activities_count, 1);
+        let silent = domain
+            .get_mnft_collection_aggregate(&silent_class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(silent.activities_count, 0);
     }
 
     #[test]

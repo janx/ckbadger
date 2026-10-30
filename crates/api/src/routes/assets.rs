@@ -1984,6 +1984,55 @@ fn asset_action_name(action: ckbadger_store::AssetAction) -> &'static str {
     }
 }
 
+/// What one lifecycle transaction of a `.cell` name means for that name, from
+/// the canonical `dotcell:*` actions alone:
+///
+/// - its own action (`metadata.id` is this name) maps through
+///   `dotcell_asset_action`;
+/// - otherwise the transaction rewrote only this name's ring `next` pointer,
+///   which emits no action of its own: the registration (or removal) that did
+///   it names this name in `metadata.relinked`, and the row is an `Update`;
+/// - a transaction that consumed or created this name's cell with neither is
+///   one the indexer did not explain, and is an error — never classified from
+///   whether the cell was created or consumed.
+fn dotcell_lifecycle_action(
+    item_id: &[u8],
+    tx_hash: &[u8],
+    protocol_actions: &[ckbadger_store::types::ProtocolAction],
+) -> Result<ckbadger_store::AssetAction, ApiRouteError> {
+    let item_id = format!("0x{}", hex::encode(item_id));
+    let mut own_actions = Vec::new();
+    let mut relinked_by = Vec::new();
+    for action in protocol_actions
+        .iter()
+        .filter(|action| action.protocol == "dotcell")
+    {
+        let metadata = action
+            .metadata_value()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        if metadata["id"].as_str() == Some(item_id.as_str()) {
+            own_actions.push(
+                ckbadger_indexer::db::dotcell_asset_action(&action.action)
+                    .map_err(|e| ApiError::internal(e.to_string()))?,
+            );
+        } else if metadata["relinked"].as_str() == Some(item_id.as_str()) {
+            relinked_by.push(action.action.as_str());
+        }
+    }
+    match (own_actions.as_slice(), relinked_by.as_slice()) {
+        ([action], _) => Ok(*action),
+        ([], [_, ..]) => Ok(ckbadger_store::AssetAction::Update),
+        ([], []) => Err(ApiError::internal(format!(
+            ".cell lifecycle transaction 0x{} touched {item_id} without a dotcell action naming it or relinking it",
+            hex::encode(tx_hash)
+        ))),
+        (_, _) => Err(ApiError::internal(format!(
+            "multiple .cell actions for {item_id} in 0x{}",
+            hex::encode(tx_hash)
+        ))),
+    }
+}
+
 pub(super) fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
@@ -2082,36 +2131,11 @@ pub(super) fn collect_nft_item_lifecycle_actions(
                         hex::encode(&tx_hash)
                     ))
                 })?;
-            let item_id = format!("0x{}", hex::encode(nft_id_bytes));
-            let mut item_actions = Vec::new();
-            for action in actions
-                .protocol_actions
-                .iter()
-                .filter(|action| action.protocol == "dotcell")
-            {
-                let metadata = action
-                    .metadata_value()
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                if metadata["id"].as_str() == Some(item_id.as_str()) {
-                    item_actions.push(
-                        ckbadger_indexer::db::dotcell_asset_action(&action.action)
-                            .map_err(|e| ApiError::internal(e.to_string()))?,
-                    );
-                }
-            }
-            // Neighbour / ring txs rewrite this cell without naming it in
-            // protocol metadata. Keep them in the lifecycle via created/consumed
-            // classification below instead of dropping the version.
-            if item_actions.is_empty() {
-                None
-            } else if item_actions.len() != 1 {
-                return Err(ApiError::internal(format!(
-                    "multiple .cell actions for {item_id} in 0x{}",
-                    hex::encode(&tx_hash)
-                )));
-            } else {
-                item_actions.pop()
-            }
+            Some(dotcell_lifecycle_action(
+                nft_id_bytes,
+                &tx_hash,
+                &actions.protocol_actions,
+            )?)
         } else {
             exact_created.get(&tx_hash).copied()
         };
@@ -2119,6 +2143,8 @@ pub(super) fn collect_nft_item_lifecycle_actions(
             rows.push((tx_hash, asset_action_name(action).to_string()));
             continue;
         }
+        // Standards without a recorded action for this transaction. `.cell`
+        // never reaches here: every one of its transactions resolved above.
         let action = match (
             created_txs.contains(&tx_hash),
             consumed_txs.contains(&tx_hash),
@@ -3648,7 +3674,69 @@ async fn get_object_collection_capacity_chart(
 mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{AssetAction, CachedBlockHeader, TxIndexEntry};
+    use ckbadger_store::types::{AssetAction, CachedBlockHeader, ProtocolAction, TxIndexEntry};
+
+    fn dotcell_action(action: &str, metadata: serde_json::Value) -> ProtocolAction {
+        ProtocolAction::new("dotcell", action, metadata)
+    }
+
+    /// A registration rewrites its ring predecessor's cell (only `next`
+    /// changes) and names it in `metadata.relinked`; on the predecessor's own
+    /// history that transaction is an `Update`, not a transfer.
+    #[test]
+    fn dotcell_lifecycle_maps_a_relinked_neighbour_to_update() {
+        let neighbour = [0xC1u8; 20];
+        let actions = vec![dotcell_action(
+            "register",
+            serde_json::json!({
+                "id": "0x62d71147ac82b83c8531126cacb0d2f072bfd94a",
+                "relinked": format!("0x{}", hex::encode(neighbour)),
+            }),
+        )];
+        assert_eq!(
+            dotcell_lifecycle_action(&neighbour, &[0xAB; 32], &actions).unwrap(),
+            AssetAction::Update
+        );
+    }
+
+    #[test]
+    fn dotcell_lifecycle_uses_the_items_own_action() {
+        let item = [0xC2u8; 20];
+        let actions = vec![
+            dotcell_action(
+                "transfer",
+                serde_json::json!({ "id": format!("0x{}", hex::encode(item)) }),
+            ),
+            dotcell_action(
+                "register",
+                serde_json::json!({ "id": "0x01", "relinked": "0x02" }),
+            ),
+        ];
+        assert_eq!(
+            dotcell_lifecycle_action(&item, &[0xAB; 32], &actions).unwrap(),
+            AssetAction::Transfer
+        );
+    }
+
+    /// A transaction that touched the name's cell with no action naming it and
+    /// no relink reference is unexplained: an error with the item and tx, never
+    /// a created/consumed guess.
+    #[test]
+    fn dotcell_lifecycle_rejects_an_unexplained_transaction() {
+        let item = [0xC3u8; 20];
+        let tx_hash = [0xAD; 32];
+        let actions = vec![dotcell_action(
+            "register",
+            serde_json::json!({ "id": "0x01", "relinked": "0x02" }),
+        )];
+        let (status, body) = dotcell_lifecycle_action(&item, &tx_hash, &actions).unwrap_err();
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let message = serde_json::to_string(&body.0).unwrap();
+        assert!(message.contains(&hex::encode(item)), "{message}");
+        assert!(message.contains(&hex::encode(tx_hash)), "{message}");
+
+        assert!(dotcell_lifecycle_action(&item, &tx_hash, &[]).is_err());
+    }
 
     #[test]
     fn zero_denominator_ratio_is_not_a_fabricated_zero() {

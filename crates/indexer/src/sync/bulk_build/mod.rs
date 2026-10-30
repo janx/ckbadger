@@ -4124,7 +4124,33 @@ fn semantic_tag_to_bit(tag: facts::CellSemanticTag) -> u16 {
 /// materialization later in the same function. Cellbase txs are included in
 /// the returned list because activity stats accumulation walks the full list;
 /// CF_TX_ACTIONS itself excludes cellbase at materialize time.
-fn build_tx_actions_list_for_bulk(
+/// The account id a consumed `.bit` AccountCell carries into the activity
+/// builder: the id its protocol facts were created with, or nothing when its
+/// creation named no account (the DAS root AccountCell, data naming no account,
+/// a name the DAS witness did not carry). The live path reads the same decision
+/// back from `CF_DOTBIT_OUTPOINT` and the unindexed-outpoint marker this
+/// engine writes for those cells.
+pub(in crate::sync) fn bulk_input_dotbit_account_id(input: &facts::ResolvedInputFacts) -> Result<&[u8]> {
+    match (input.semantic_tag, input.protocol_facts.as_ref()) {
+        (facts::CellSemanticTag::Dotbit, Some(facts::CellProtocolFacts::Dotbit(dotbit))) => {
+            Ok(&dotbit.account_id)
+        }
+        (facts::CellSemanticTag::Dotbit, None) => Ok(&[]),
+        (facts::CellSemanticTag::Dotbit, Some(other)) => bail!(
+            "consumed .bit AccountCell carries non-.bit protocol facts while building bulk activities: outpoint=0x{}:{}, facts={other:?}",
+            hex::encode(input.outpoint.tx_hash),
+            input.outpoint.index
+        ),
+        (tag, Some(facts::CellProtocolFacts::Dotbit(_))) => bail!(
+            "consumed cell with semantic tag {tag:?} carries .bit protocol facts while building bulk activities: outpoint=0x{}:{}",
+            hex::encode(input.outpoint.tx_hash),
+            input.outpoint.index
+        ),
+        _ => Ok(&[]),
+    }
+}
+
+pub(in crate::sync) fn build_tx_actions_list_for_bulk(
     block_txs: &[facts::TxFacts],
     block_resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::FrozenIdentityView,
@@ -4230,10 +4256,7 @@ fn build_tx_actions_list_for_bulk(
                             Some(facts::CellProtocolFacts::DotCell(dotcell)) => Some(&dotcell.name),
                             _ => None,
                         },
-                        data: match input.protocol_facts.as_ref() {
-                            Some(facts::CellProtocolFacts::Dotbit(dotbit)) => &dotbit.account_id,
-                            _ => &[],
-                        },
+                        data: bulk_input_dotbit_account_id(input)?,
                         is_dao_withdraw_request,
                         dao_compensation,
                     })

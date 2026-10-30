@@ -1155,6 +1155,8 @@ fn classify_input<'a>(
                 }
             }
         }
+        // `data` is the id the consumed cell was indexed under (empty for a
+        // cell creation did not index), or the real data in the tx-pool mirror.
         Some(AssetKind::Dotbit) => {
             if let Some(account_id) =
                 DotbitParser::resolve_account_id(type_code_hash, type_args, data)
@@ -1269,13 +1271,13 @@ fn classify_output<'a>(
                 }
             }
         }
+        // The DAS root AccountCell and too-short data name no account, exactly
+        // as identity materialization skips them.
         Some(AssetKind::Dotbit) => {
-            if !cell_data.is_empty() {
-                if let Some(account_id) =
-                    DotbitParser::resolve_account_id(type_code_hash, type_args, cell_data)
-                {
-                    accum.dotbit_outputs.push(account_id);
-                }
+            if let Some(account_id) =
+                DotbitParser::parse_account_id_from_data(type_code_hash, type_args, cell_data)
+            {
+                accum.dotbit_outputs.push(account_id);
             }
         }
         Some(AssetKind::BitCell) => {
@@ -2068,33 +2070,42 @@ mod tests {
         assert!(!identity_delta.negative);
     }
 
+    fn dotbit_identity_deltas(actions: &TxActions, owner: u8) -> Vec<ItemDelta> {
+        find_participant(actions, owner)
+            .item_deltas
+            .iter()
+            .filter(|d| d.kind == ItemKind::Identity(IdentityStandard::DotBit))
+            .cloned()
+            .collect()
+    }
+
+    /// A real mainnet AccountCell as the same owner consumes and re-creates it
+    /// (e.g. a records edit). Its type args are EMPTY; the id is only in
+    /// `data[32..52]`. Live and bulk hand the consumed cell over with the id it
+    /// was indexed under, so input −1 cancels output +1.
     #[test]
-    fn test_dotbit_in_place_update_with_empty_input_data_nets_zero_identity_delta() {
-        // ID-C2: same-owner account-cell rewrite must cancel input −1 with
-        // output +1. Live sync leaves input.data empty; resolve from type_args.
+    fn test_dotbit_in_place_update_of_real_account_cell_nets_zero_identity_delta() {
+        use crate::parser::dotbit::fixtures::{MAINNET_ACCOUNT_CELL_DATA, MAINNET_ACCOUNT_CELL_ID};
         let owner = 0xAA;
         let dotbit_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
-        let account_id = vec![0x2d; 20];
+        let account_id = crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_ID);
 
         let mut input = make_input(owner, 216_00000000, 216_00000000);
         input.type_code_hash = Some(dotbit_code_hash.clone());
         input.type_hash_type = Some(1);
-        input.type_args = Some(account_id.clone());
+        input.type_args = Some(vec![]);
         input.type_script_hash = Some(vec![0x11; 32]);
-        input.data = vec![];
+        input.data = account_id.clone();
 
-        let mut output_data = vec![0x00; 32];
-        output_data.extend_from_slice(&account_id);
         let outputs = vec![make_output(
             owner,
             215_99994517,
             Some(dotbit_code_hash),
             Some(vec![0x11; 32]),
-            Some(account_id.clone()),
-            output_data,
+            Some(vec![]),
+            crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_DATA),
         )];
-
         let tx = TxView {
             tx_hash: &[0x91; 32],
             block_hash: &[0xA9; 32],
@@ -2107,16 +2118,50 @@ mod tests {
         };
 
         let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
-        let owner_p = find_participant(&actions_list[0], owner);
-        let identity_deltas: Vec<_> = owner_p
-            .item_deltas
-            .iter()
-            .filter(|d| d.kind == ItemKind::Identity(IdentityStandard::DotBit))
-            .collect();
+        let identity_deltas = dotbit_identity_deltas(&actions_list[0], owner);
         assert!(
             identity_deltas.is_empty(),
             "in-place .bit update must net to no identity item delta, got {identity_deltas:?}"
         );
+    }
+
+    /// The DAS root AccountCell (all-zero id) is no identity on either side: a
+    /// consumed root (handed over with no id) re-created as a root yields no
+    /// identity delta at all.
+    #[test]
+    fn test_dotbit_root_account_cell_recreation_yields_no_identity_delta() {
+        use crate::parser::dotbit::fixtures::MAINNET_ROOT_ACCOUNT_CELL_DATA;
+        let owner = 0xAB;
+        let dotbit_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
+
+        let mut input = make_input(owner, 300_00000000, 300_00000000);
+        input.type_code_hash = Some(dotbit_code_hash.clone());
+        input.type_hash_type = Some(1);
+        input.type_args = Some(vec![]);
+        input.type_script_hash = Some(vec![0x11; 32]);
+        input.data = vec![];
+        let outputs = vec![make_output(
+            owner,
+            300_00000000,
+            Some(dotbit_code_hash),
+            Some(vec![0x11; 32]),
+            Some(vec![]),
+            crate::rpc::parse_hex_to_bytes(MAINNET_ROOT_ACCOUNT_CELL_DATA),
+        )];
+        let tx = TxView {
+            tx_hash: &[0x92; 32],
+            block_hash: &[0xAA; 32],
+            tx_index: 0,
+            block_number: 4_872_342,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert!(dotbit_identity_deltas(&actions_list[0], owner).is_empty());
     }
 
     #[test]

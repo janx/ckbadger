@@ -577,7 +577,6 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
             .entry(family_id.to_string())
             .or_insert_with(|| ScriptFamilyInfo {
                 family_id: family_id.to_string(),
-                deprecated: false,
                 ..Default::default()
             });
         family.family_id = family_id.to_string();
@@ -593,6 +592,11 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         family.versions_count =
             checked_add_family_i64(family_id, "versions_count", family.versions_count, 1)?;
     }
+    // The one rule: a family is deprecated iff it has at least one labeled
+    // version and every labeled version is deprecated. A family with no
+    // labeled version (only Type ID lineage or other on-chain observations) is
+    // never deprecated — deprecation is a label fact, and no label speaks for
+    // that family.
     for (family_id, family) in family_map.iter_mut() {
         family.deprecated = match family_label_state.get(family_id) {
             Some((true, any_active)) => !any_active,

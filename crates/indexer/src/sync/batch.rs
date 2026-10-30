@@ -148,16 +148,14 @@ fn resolve_live_dotbit_account_id_for_consume(
         .get(key)
         .or_else(|| batch_cell_infos.get(key))
     {
+        // The id the cell was indexed under at creation is the one source: it
+        // already applied the parser's id rule, so the type args never stand
+        // in for it.
         Some(info) => info
             .type_code_hash
             .as_deref()
             .filter(|tc| DotbitParser::is_account_cell_type_script(tc))
-            .and_then(|_| {
-                resolve_dotbit_account_id_from_type_args_or_fallback(
-                    info.type_args.as_deref(),
-                    dotbit_map.get(key).cloned(),
-                )
-            }),
+            .and_then(|_| dotbit_map.get(key).cloned()),
         None => dotbit_map.get(key).cloned(),
     }
 }
@@ -469,10 +467,54 @@ struct ActivityInputIndexes<'a> {
     dao_withdraw_outpoints: &'a HashSet<(Vec<u8>, i16)>,
     dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
     dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
+    /// Consumed `.bit` AccountCells the consume pass found recorded as never
+    /// indexed (the DAS root AccountCell, data naming no account, a name the
+    /// DAS witness did not carry).
+    dotbit_unindexed: &'a HashSet<(Vec<u8>, i16)>,
     bit_cell_identity_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
     /// The `.cell` name each consumed name cell carried, captured by the
     /// consume path. An input reaches the activity builder without its data.
     dotcell_inputs: &'a HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData>,
+}
+
+/// One transaction as the live activity builder sees it: inputs resolved
+/// through the batch's indexes, outputs straight from the parsed cells.
+fn build_live_activity_tx_view<'a>(
+    tx_data: &'a TxData,
+    block_number: i64,
+    block_hash: &'a [u8],
+    timestamp_ms: i64,
+    indexes: ActivityInputIndexes<'a>,
+) -> Result<crate::db::writer::activities::TxView<'a>> {
+    let inputs = build_activity_input_views(tx_data, block_number, indexes)?;
+    let outputs = tx_data
+        .cells
+        .iter()
+        .map(|cell| crate::db::writer::activities::OutputCellView {
+            capacity: cell.capacity,
+            lock_code_hash: &cell.lock_code_hash,
+            lock_hash_type: cell.lock_hash_type,
+            lock_args: &cell.lock_args,
+            lock_script_hash: &cell.lock_script_hash,
+            type_code_hash: cell.type_code_hash.as_deref(),
+            type_hash_type: cell.type_hash_type,
+            type_args: cell.type_args.as_deref(),
+            type_script_hash: cell.type_script_hash.as_deref(),
+            data_hash: &cell.data_hash,
+            data_size: cell.data_size,
+            data: &cell.data,
+        })
+        .collect();
+    Ok(crate::db::writer::activities::TxView {
+        tx_hash: &tx_data.hash,
+        block_hash,
+        tx_index: tx_data.tx_index,
+        block_number,
+        timestamp: timestamp_ms,
+        is_cellbase: tx_data.is_cellbase,
+        inputs,
+        outputs,
+    })
 }
 
 fn build_activity_input_views<'a>(
@@ -522,16 +564,38 @@ fn build_activity_input_views<'a>(
             } else {
                 None
             };
-            // For consumed .bit cells, pass the pre-resolved account_id as
-            // data so resolve_dotbit_account_id can use it as fallback when
-            // type_args are empty (old .bit layout).  Raw cell data is
-            // unavailable for inputs; the account_id comes from
-            // CF_DOTBIT_OUTPOINT via the dotbit_map built earlier.
-            let data: &[u8] = indexes
-                .dotbit_ids
-                .get(&key)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
+            // An input reaches the builder without its data. A consumed `.bit`
+            // AccountCell hands over the account id it was indexed under
+            // (`CF_DOTBIT_OUTPOINT`, resolved by the consume pass), or nothing
+            // when its creation recorded it as never an account. Having neither
+            // is a lost index row and stops the batch.
+            let consumed_is_account_cell = info
+                .type_code_hash
+                .as_deref()
+                .is_some_and(DotbitParser::is_account_cell_type_script);
+            let data: &[u8] = match (consumed_is_account_cell, indexes.dotbit_ids.get(&key)) {
+                (true, Some(account_id)) => account_id.as_slice(),
+                (true, None) if indexes.dotbit_unindexed.contains(&key) => &[],
+                (true, None) => bail!(
+                    "consumed .bit AccountCell has neither an indexed account id nor an unindexed-outpoint marker while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, prev_outpoint=0x{}:{}",
+                    block_number,
+                    hex::encode(tx_data.hash),
+                    tx_data.tx_index,
+                    input_index,
+                    hex::encode(input.previous_tx_hash),
+                    previous_output_index
+                ),
+                (false, Some(_)) => bail!(
+                    "a .bit account id was resolved for a consumed cell that is not a .bit AccountCell: block={}, tx_hash=0x{}, tx_index={}, input_index={}, prev_outpoint=0x{}:{}",
+                    block_number,
+                    hex::encode(tx_data.hash),
+                    tx_data.tx_index,
+                    input_index,
+                    hex::encode(input.previous_tx_hash),
+                    previous_output_index
+                ),
+                (false, None) => &[],
+            };
 
             Ok(crate::db::writer::activities::InputCellView {
                 previous_tx_hash: input.previous_tx_hash.as_slice(),
@@ -2387,6 +2451,8 @@ impl Indexer {
 
         // Dotbit account IDs resolved during consume, needed later by activity builder.
         let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+        // Consumed AccountCells whose creation recorded them as never an account.
+        let mut resolved_dotbit_unindexed: HashSet<(Vec<u8>, i16)> = HashSet::new();
         // `.bit Cell` identity IDs resolved from the outpoint index. Legacy
         // testnet cells have empty type args, so the activity builder must use
         // the parser result retained by the identity write path.
@@ -2409,6 +2475,7 @@ impl Indexer {
             let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+            let mut batch_dotbit_unindexed_outpoints: HashSet<(Vec<u8>, i16)> = HashSet::new();
             let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
             let mut spore_state = self
                 .writer
@@ -2735,6 +2802,30 @@ impl Indexer {
                             );
                             if let Some(ref id) = dotbit_account_id {
                                 resolved_dotbit_ids.insert(key.clone(), id.clone());
+                            } else if input_cell_info
+                                .get(&key)
+                                .or_else(|| batch_cell_infos.get(&key))
+                                .and_then(|info| info.type_code_hash.as_deref())
+                                .is_some_and(DotbitParser::is_account_cell_type_script)
+                            {
+                                // An AccountCell without an indexed id must have been
+                                // recorded as never an account when it was created.
+                                let recorded_unindexed = batch_dotbit_unindexed_outpoints
+                                    .contains(&key)
+                                    || self
+                                        .writer
+                                        .store()
+                                        .is_dotbit_unindexed_outpoint(&key.0, key.1)?;
+                                if !recorded_unindexed {
+                                    bail!(
+                                        "consumed .bit AccountCell has no indexed account id and no unindexed-outpoint marker: block={}, tx=0x{}, prev_outpoint=0x{}:{}; its creation wrote neither CF_DOTBIT_OUTPOINT nor the marker — fix the writer, then purge and re-sync from genesis",
+                                        parsed.number,
+                                        hex::encode(tx_data.hash),
+                                        hex::encode(&key.0),
+                                        key.1
+                                    );
+                                }
+                                resolved_dotbit_unindexed.insert(key.clone());
                             }
                             if let Some(account_id) = dotbit_account_id.as_ref() {
                                 let latest_create_order =
@@ -3007,7 +3098,21 @@ impl Indexer {
                             true,
                         );
                     }
-                    let dotbit_accounts = DotbitParser::parse_accounts(tx)?;
+                    let crate::parser::dotbit::DotbitAccountOutputs {
+                        accounts: dotbit_accounts,
+                        unindexed_output_indices: dotbit_unindexed_output_indices,
+                    } = DotbitParser::parse_account_outputs(tx)?;
+                    for output_index in dotbit_unindexed_output_indices {
+                        self.writer.insert_dotbit_unindexed_outpoint(
+                            &tx_data.hash,
+                            output_index,
+                            parsed.number,
+                            &mut data_batch,
+                            &dotbit_state,
+                        )?;
+                        batch_dotbit_unindexed_outpoints
+                            .insert((tx_data.hash.to_vec(), output_index));
+                    }
                     if !dotbit_accounts.is_empty() {
                         let das_action = das_action_cache.get(&tx_data.hash).cloned();
                         let mut created_ids = HashSet::new();
@@ -3159,48 +3264,23 @@ impl Indexer {
 
                 let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
                     .iter()
-                    .map(|td| -> Result<crate::db::writer::activities::TxView<'_>> {
-                        let inputs = build_activity_input_views(
+                    .map(|td| {
+                        build_live_activity_tx_view(
                             td,
                             parsed.number,
+                            &parsed.hash,
+                            parsed.timestamp.timestamp_millis(),
                             ActivityInputIndexes {
                                 cell_info: &input_cell_info,
                                 batch_cell_info: &batch_cell_infos,
                                 dao_withdraw_outpoints: &dao_withdraw_outpoints,
                                 dao_compensations: &dao_compensations,
                                 dotbit_ids: &resolved_dotbit_ids,
+                                dotbit_unindexed: &resolved_dotbit_unindexed,
                                 bit_cell_identity_ids: &resolved_bit_cell_ids,
                                 dotcell_inputs: &resolved_dotcell_inputs,
                             },
-                        )?;
-                        let outputs: Vec<crate::db::writer::activities::OutputCellView<'_>> = td
-                            .cells
-                            .iter()
-                            .map(|cell| crate::db::writer::activities::OutputCellView {
-                                capacity: cell.capacity,
-                                lock_code_hash: &cell.lock_code_hash,
-                                lock_hash_type: cell.lock_hash_type,
-                                lock_args: &cell.lock_args,
-                                lock_script_hash: &cell.lock_script_hash,
-                                type_code_hash: cell.type_code_hash.as_deref(),
-                                type_hash_type: cell.type_hash_type,
-                                type_args: cell.type_args.as_deref(),
-                                type_script_hash: cell.type_script_hash.as_deref(),
-                                data_hash: &cell.data_hash,
-                                data_size: cell.data_size,
-                                data: &cell.data,
-                            })
-                            .collect();
-                        Ok(crate::db::writer::activities::TxView {
-                            tx_hash: &td.hash,
-                            block_hash: &parsed.hash,
-                            tx_index: td.tx_index,
-                            block_number: parsed.number,
-                            timestamp: parsed.timestamp.timestamp_millis(),
-                            is_cellbase: td.is_cellbase,
-                            inputs,
-                            outputs,
-                        })
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -4868,6 +4948,7 @@ mod tests {
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
+                dotbit_unindexed: &HashSet::new(),
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
             },
@@ -4913,6 +4994,7 @@ mod tests {
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
+        let empty_dotbit_unindexed = HashSet::new();
         let inputs = build_activity_input_views(
             &tx,
             100,
@@ -4922,6 +5004,7 @@ mod tests {
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
+                dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
             },
@@ -4969,6 +5052,7 @@ mod tests {
         let empty_batch_info = HashMap::new();
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
+        let empty_dotbit_unindexed = HashSet::new();
         let inputs = build_activity_input_views(
             &tx,
             200,
@@ -4978,6 +5062,7 @@ mod tests {
                 dao_withdraw_outpoints: &dao_withdraw_outpoints,
                 dao_compensations: &dao_compensations,
                 dotbit_ids: &empty_dotbit,
+                dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
             },
@@ -5018,6 +5103,7 @@ mod tests {
         let empty_dotbit_ids = HashMap::new();
         let empty_dotcell = HashMap::new();
 
+        let empty_dotbit_unindexed = HashSet::new();
         let inputs = build_activity_input_views(
             &tx,
             201,
@@ -5027,6 +5113,7 @@ mod tests {
                 dao_withdraw_outpoints: &empty_dao_outpoints,
                 dao_compensations: &empty_dao_compensations,
                 dotbit_ids: &empty_dotbit_ids,
+                dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &bit_cell_ids,
                 dotcell_inputs: &empty_dotcell,
             },
@@ -5036,6 +5123,402 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].bit_cell_identity_id, Some(identity_id.as_slice()));
         assert!(inputs[0].data.is_empty());
+    }
+
+    // ── `.bit` AccountCell: live vs bulk activity parity ──────────────────
+
+    /// One `.bit` AccountCell side of the parity fixtures. Mainnet layout:
+    /// empty type args, the account id only in `data[32..52]`.
+    struct DotbitParityCell {
+        owner: [u8; 32],
+        data: Vec<u8>,
+        /// The account the cell was indexed under; `None` for a cell creation
+        /// did not index (the DAS root AccountCell).
+        account_id: Option<[u8; 20]>,
+    }
+
+    const DOTBIT_PARITY_PREV_TX: [u8; 32] = [0x5A; 32];
+    const DOTBIT_PARITY_TX: [u8; 32] = [0x5B; 32];
+    const DOTBIT_PARITY_LOCK_CODE_HASH: [u8; 32] = [0x10; 32];
+    const DOTBIT_PARITY_TYPE_SCRIPT_HASH: [u8; 32] = [0x12; 32];
+
+    fn dotbit_account_code_hash() -> Vec<u8> {
+        crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID)
+    }
+
+    /// The live activity builder over one tx consuming `input` and creating
+    /// `output`, with the consume pass's resolution of the input handed over.
+    fn live_dotbit_parity_actions(
+        input: &DotbitParityCell,
+        output: &DotbitParityCell,
+    ) -> Result<Vec<crate::db::writer::activities::BuiltTxActions>> {
+        let key = (DOTBIT_PARITY_PREV_TX.to_vec(), 0i16);
+        let mut info = dummy_live_cell_info();
+        info.capacity = 300_00000000;
+        info.occupied_capacity = 200_00000000;
+        info.lock_script_hash = input.owner.to_vec();
+        info.lock_code_hash = DOTBIT_PARITY_LOCK_CODE_HASH.to_vec();
+        info.type_code_hash = Some(dotbit_account_code_hash());
+        info.type_hash_type = Some(1);
+        info.type_args = Some(Vec::new());
+        info.type_script_hash = Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec());
+        info.data_size = i32::try_from(input.data.len()).unwrap();
+        let cell_info = HashMap::from([(key.clone(), PositionedCellInfo::new(info, 1))]);
+        let dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = input
+            .account_id
+            .map(|id| HashMap::from([(key.clone(), id.to_vec())]))
+            .unwrap_or_default();
+        let dotbit_unindexed: HashSet<(Vec<u8>, i16)> = if input.account_id.is_none() {
+            HashSet::from([key.clone()])
+        } else {
+            HashSet::new()
+        };
+
+        let output_cell = ParsedCell {
+            capacity: 300_00000000,
+            lock_code_hash: DOTBIT_PARITY_LOCK_CODE_HASH.to_vec(),
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            lock_script_hash: output.owner.to_vec(),
+            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            type_code_hash: Some(dotbit_account_code_hash()),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            data_hash: [0x13; 32],
+            data_size: i32::try_from(output.data.len()).unwrap(),
+            data: output.data.clone(),
+        };
+        let tx = dummy_tx_data(
+            DOTBIT_PARITY_TX,
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: DOTBIT_PARITY_PREV_TX,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![output_cell],
+            vec![],
+        );
+        let empty_cell_info = HashMap::new();
+        let empty_dao_outpoints = HashSet::new();
+        let empty_dao_comp = HashMap::new();
+        let empty_bit_cell = HashMap::new();
+        let empty_dotcell = HashMap::new();
+        let view = build_live_activity_tx_view(
+            &tx,
+            5_867_661,
+            &[0xA9; 32],
+            1_700_000_000_000,
+            ActivityInputIndexes {
+                cell_info: &cell_info,
+                batch_cell_info: &empty_cell_info,
+                dao_withdraw_outpoints: &empty_dao_outpoints,
+                dao_compensations: &empty_dao_comp,
+                dotbit_ids: &dotbit_ids,
+                dotbit_unindexed: &dotbit_unindexed,
+                bit_cell_identity_ids: &empty_bit_cell,
+                dotcell_inputs: &empty_dotcell,
+            },
+        )?;
+        crate::db::writer::activities::build_tx_actions_for_block_with_io(&[view], &[])
+    }
+
+    /// The bulk activity builder over the same tx, with the input's protocol
+    /// facts as the live-cell owner carries them from the cell's creation.
+    fn bulk_dotbit_parity_actions(
+        input: &DotbitParityCell,
+        output: &DotbitParityCell,
+    ) -> Result<Vec<crate::db::writer::activities::BuiltTxActions>> {
+        use crate::sync::bulk_build::facts::{
+            CellFacts, CellProtocolFacts, CellSemanticTag, DotbitProtocolFacts, OutPointKey,
+            ResolvedInputFacts, ResolvedTxFacts, TxFacts,
+        };
+        let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let lock_code_hash = interner.intern_bytes(DOTBIT_PARITY_LOCK_CODE_HASH.to_vec());
+        let lock_args = interner.intern_bytes(Vec::new());
+        let type_code_hash = interner.intern_bytes(dotbit_account_code_hash());
+        let type_args = interner.intern_bytes(Vec::new());
+        let type_script_hash = interner.intern_bytes(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec());
+        let facts = |account_id: Option<[u8; 20]>| {
+            account_id.map(|account_id| {
+                CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some("metastrike.bit".to_string()),
+                    next_account_id: None,
+                    expired_at: None,
+                    registered_at: None,
+                    status: None,
+                })
+            })
+        };
+        let resolved_input = ResolvedInputFacts {
+            outpoint: OutPointKey::new(DOTBIT_PARITY_PREV_TX, 0),
+            created_at_block: 1,
+            created_by_block_dao_ar: 0,
+            capacity: 300_00000000,
+            occupied_capacity: 200_00000000,
+            udt_amount: None,
+            lock_script_hash_id: interner.intern_bytes(input.owner.to_vec()),
+            lock_code_hash_id: lock_code_hash,
+            lock_hash_type: 1,
+            lock_args_id: lock_args,
+            type_script_hash_id: Some(type_script_hash),
+            type_code_hash_id: Some(type_code_hash),
+            type_hash_type: Some(1),
+            type_args_id: Some(type_args),
+            data_size: i32::try_from(input.data.len()).unwrap(),
+            data_hash: None,
+            semantic_tag: CellSemanticTag::Dotbit,
+            dao_state: None,
+            dao_compensation_ars: None,
+            protocol_facts: facts(input.account_id),
+        };
+        let output_cell = CellFacts {
+            outpoint: OutPointKey::new(DOTBIT_PARITY_TX, 0),
+            created_at_block: 5_867_661,
+            created_by_block_dao_ar: 0,
+            capacity: 300_00000000,
+            lock_script_hash_id: interner.intern_bytes(output.owner.to_vec()),
+            lock_code_hash_id: lock_code_hash,
+            lock_hash_type: 1,
+            lock_args_id: lock_args,
+            type_script_hash_id: Some(type_script_hash),
+            type_code_hash_id: Some(type_code_hash),
+            type_hash_type: Some(1),
+            type_args_id: Some(type_args),
+            occupied_capacity: 200_00000000,
+            data_size: i32::try_from(output.data.len()).unwrap(),
+            data: output.data.clone(),
+            data_hash: Some([0x13; 32]),
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Dotbit,
+            dao_state: None,
+            protocol_facts: facts(output.account_id),
+        };
+        let tx = TxFacts {
+            hash: DOTBIT_PARITY_TX,
+            block_number: 5_867_661,
+            block_hash: [0xA9; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            tx_index: 0,
+            ..TxFacts::default()
+        };
+        let resolved = ResolvedTxFacts {
+            tx_hash: DOTBIT_PARITY_TX,
+            block_number: 5_867_661,
+            block_hash: [0xA9; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: vec![resolved_input],
+            cells: vec![output_cell].into(),
+        };
+        crate::sync::bulk_build::build_tx_actions_list_for_bulk(
+            &[tx],
+            &[resolved],
+            &interner.snapshot_for_reads(),
+            &[],
+        )
+    }
+
+    fn dotbit_item_deltas(
+        built: &[crate::db::writer::activities::BuiltTxActions],
+    ) -> Vec<(ParticipantId, Vec<ckbadger_store::types::ItemDelta>)> {
+        assert_eq!(built.len(), 1);
+        let mut deltas: Vec<_> = built[0]
+            .actions
+            .participants
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    p.item_deltas
+                        .iter()
+                        .filter(|d| {
+                            d.kind
+                                == ckbadger_store::types::ItemKind::Identity(
+                                    ckbadger_store::types::IdentityStandard::DotBit,
+                                )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        deltas.sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+        deltas
+    }
+
+    fn mainnet_account_cell(owner: [u8; 32]) -> DotbitParityCell {
+        use crate::parser::dotbit::fixtures::{MAINNET_ACCOUNT_CELL_DATA, MAINNET_ACCOUNT_CELL_ID};
+        DotbitParityCell {
+            owner,
+            data: crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_DATA),
+            account_id: Some(
+                crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_ID)
+                    .try_into()
+                    .unwrap(),
+            ),
+        }
+    }
+
+    /// The same owner consumes and re-creates a real mainnet AccountCell (an
+    /// in-place update). Bulk and live must both net it to zero: input −1
+    /// cancels output +1. Bulk used to hand the input over with no id at all,
+    /// so the update read as a mint.
+    #[test]
+    fn dotbit_in_place_update_nets_zero_identically_in_bulk_and_live() {
+        let owner = [0xA1; 32];
+        let input = mainnet_account_cell(owner);
+        let output = mainnet_account_cell(owner);
+
+        let live = dotbit_item_deltas(&live_dotbit_parity_actions(&input, &output).unwrap());
+        let bulk = dotbit_item_deltas(&bulk_dotbit_parity_actions(&input, &output).unwrap());
+
+        assert_eq!(bulk, live, "bulk and live .bit item deltas must be identical");
+        assert!(
+            live.iter().all(|(_, deltas)| deltas.is_empty()),
+            "an in-place update moves no .bit identity: {live:?}"
+        );
+    }
+
+    /// A transfer of the same AccountCell moves the identity from one owner to
+    /// the other, identically on both paths.
+    #[test]
+    fn dotbit_transfer_moves_identity_identically_in_bulk_and_live() {
+        let input = mainnet_account_cell([0xA1; 32]);
+        let output = mainnet_account_cell([0xA2; 32]);
+
+        let live = dotbit_item_deltas(&live_dotbit_parity_actions(&input, &output).unwrap());
+        let bulk = dotbit_item_deltas(&bulk_dotbit_parity_actions(&input, &output).unwrap());
+
+        assert_eq!(bulk, live);
+        let moved: Vec<_> = live.iter().filter(|(_, d)| !d.is_empty()).collect();
+        assert_eq!(moved.len(), 2, "sender −1 and recipient +1: {live:?}");
+    }
+
+    /// The DAS root AccountCell (all-zero id; 15 re-creations on mainnet) is
+    /// never an account: consumed with no id (live: its unindexed marker;
+    /// bulk: no protocol facts) and re-created as a root, it moves nothing on
+    /// either path.
+    #[test]
+    fn dotbit_root_account_cell_moves_nothing_in_bulk_and_live() {
+        use crate::parser::dotbit::fixtures::MAINNET_ROOT_ACCOUNT_CELL_DATA;
+        let root = |owner| DotbitParityCell {
+            owner,
+            data: crate::rpc::parse_hex_to_bytes(MAINNET_ROOT_ACCOUNT_CELL_DATA),
+            account_id: None,
+        };
+        let input = root([0xA3; 32]);
+        let output = root([0xA3; 32]);
+
+        let live = dotbit_item_deltas(&live_dotbit_parity_actions(&input, &output).unwrap());
+        let bulk = dotbit_item_deltas(&bulk_dotbit_parity_actions(&input, &output).unwrap());
+
+        assert_eq!(bulk, live);
+        assert!(live.iter().all(|(_, deltas)| deltas.is_empty()), "{live:?}");
+    }
+
+    /// A consumed AccountCell with neither its indexed id nor an unindexed
+    /// marker is a lost index row: the live builder stops with the outpoint.
+    #[test]
+    fn live_dotbit_input_without_id_or_unindexed_marker_fails_fast() {
+        let tx = dummy_tx_data(
+            DOTBIT_PARITY_TX,
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: DOTBIT_PARITY_PREV_TX,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+        );
+        let mut info = dummy_live_cell_info();
+        info.type_code_hash = Some(dotbit_account_code_hash());
+        info.type_args = Some(Vec::new());
+        let cell_info = HashMap::from([(
+            (DOTBIT_PARITY_PREV_TX.to_vec(), 0i16),
+            PositionedCellInfo::new(info, 1),
+        )]);
+        let empty_cell_info = HashMap::new();
+        let empty_dao_outpoints = HashSet::new();
+        let empty_dao_comp = HashMap::new();
+        let empty_ids = HashMap::new();
+        let empty_dotcell = HashMap::new();
+
+        let err = match build_activity_input_views(
+            &tx,
+            77,
+            ActivityInputIndexes {
+                cell_info: &cell_info,
+                batch_cell_info: &empty_cell_info,
+                dao_withdraw_outpoints: &empty_dao_outpoints,
+                dao_compensations: &empty_dao_comp,
+                dotbit_ids: &empty_ids,
+                dotbit_unindexed: &HashSet::new(),
+                bit_cell_identity_ids: &empty_ids,
+                dotcell_inputs: &empty_dotcell,
+            },
+        ) {
+            Ok(_) => panic!("an unclassified consumed AccountCell must fail fast"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("neither an indexed account id nor an unindexed-outpoint marker"), "{err}");
+        assert!(err.contains("block=77"), "{err}");
+        assert!(
+            err.contains(&format!("prev_outpoint=0x{}:0", hex::encode(DOTBIT_PARITY_PREV_TX))),
+            "{err}"
+        );
+    }
+
+    /// Bulk: a consumed AccountCell whose facts are some other protocol's is
+    /// corruption of the live-cell owner, never "no account".
+    #[test]
+    fn bulk_dotbit_input_with_foreign_protocol_facts_fails_fast() {
+        let input = mainnet_account_cell([0xA1; 32]);
+        let output = mainnet_account_cell([0xA1; 32]);
+        let ok = bulk_dotbit_parity_actions(&input, &output);
+        assert!(ok.is_ok());
+
+        use crate::sync::bulk_build::facts::{
+            CellProtocolFacts, CellSemanticTag, DidCkbProtocolFacts, OutPointKey,
+            ResolvedInputFacts,
+        };
+        let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let id = interner.intern_bytes(vec![0x01]);
+        let foreign = ResolvedInputFacts {
+            outpoint: OutPointKey::new(DOTBIT_PARITY_PREV_TX, 0),
+            created_at_block: 1,
+            created_by_block_dao_ar: 0,
+            capacity: 1,
+            occupied_capacity: 1,
+            udt_amount: None,
+            lock_script_hash_id: id,
+            lock_code_hash_id: id,
+            lock_hash_type: 1,
+            lock_args_id: id,
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            data_size: 0,
+            data_hash: None,
+            semantic_tag: CellSemanticTag::Dotbit,
+            dao_state: None,
+            dao_compensation_ars: None,
+            protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                did_id: vec![0x02; 20],
+            })),
+        };
+        let err = crate::sync::bulk_build::bulk_input_dotbit_account_id(&foreign)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-.bit protocol facts"), "{err}");
+        assert!(err.contains(&hex::encode(DOTBIT_PARITY_PREV_TX)), "{err}");
     }
 
     #[test]
