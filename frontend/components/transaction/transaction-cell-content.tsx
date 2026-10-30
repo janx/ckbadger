@@ -5,7 +5,7 @@ import { Hash } from '@/components/ui/hash';
 import { formatStandard } from '@/components/activity-event-row';
 import type { TransactionCellDisplay } from '@/lib/api';
 import { formatCompositionTier } from '@/lib/asset-utils';
-import { BITCOIN_COLORS } from '@/lib/design-tokens';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 import {
   getIdentityItemDetailHref,
   getObjectDetailHref,
@@ -13,7 +13,6 @@ import {
 } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { cn } from '@/lib/utils';
 
 interface TransactionCellContentProps {
   display: TransactionCellDisplay;
@@ -42,7 +41,6 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
           : cellHref;
   const tier = display.compositionTier;
   const tierLabel = tier === null ? null : formatCompositionTier(tier);
-  const dual = tier === 'btc_ckb';
   const name = display.name ?? display.collectionName;
   return (
     <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-1 [overflow-wrap:anywhere]">
@@ -85,7 +83,7 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
           </>
         )}
       </Link>
-      {tierLabel && (
+      {tier !== null && tierLabel && (
         <span
           aria-label={`Media composition: ${tierLabel}`}
           title={
@@ -93,37 +91,9 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
               ? 'Awaiting DOB execution; media composition has not been classified.'
               : `Media storage composition: ${tierLabel}`
           }
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none',
-            !dual &&
-              (tier === 'pure_ckb'
-                ? 'border-jade/30 text-jade'
-                : 'border-base-border text-text-dim')
-          )}
-          style={
-            dual
-              ? {
-                  color: BITCOIN_COLORS.light,
-                  borderColor: 'transparent',
-                  background: `linear-gradient(${BITCOIN_COLORS.inner}, ${BITCOIN_COLORS.inner}) padding-box, linear-gradient(135deg, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper} 35%, #8ff3d6 72%, #1fb88a) border-box`,
-                }
-              : undefined
-          }
+          className="inline-flex shrink-0"
         >
-          {(dual || tier === 'pure_ckb') && (
-            <svg
-              aria-hidden="true"
-              width="12"
-              height="12"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.2"
-            >
-              <path d="m8 1 6 4v6l-6 4-6-4V5l6-4Zm-6 4 6 4 6-4M8 9v6M8 1v8" />
-            </svg>
-          )}
-          {tierLabel}
+          <CompositionBadge tier={tier} size="sm" />
         </span>
       )}
     </span>

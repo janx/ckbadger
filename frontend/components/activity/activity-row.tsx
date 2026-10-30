@@ -9,6 +9,7 @@ import {
   ItemDeltaFact,
   LockCallExpr,
   TypeCallExpr,
+  activityClassMark,
   activityHeadline,
   globalTxEvents,
   protocolActionLabel,
@@ -262,16 +263,7 @@ export function ActivityRow({
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const displayType = classifyActivity(activity).displayType;
-  const mark = displayType.startsWith('dao')
-    ? 'dao'
-    : displayType === 'token'
-      ? 'tokens'
-      : displayType === 'object'
-        ? 'objects'
-        : displayType === 'identity'
-          ? 'identities'
-          : null;
+  const mark = activityClassMark(activity);
   return (
     <article
       data-feed-row={activity.txHash}

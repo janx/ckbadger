@@ -148,7 +148,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   aria-current={type === assetType ? 'page' : undefined}
                   className={`flex items-center gap-2 border-b-2 pb-3 text-[15px] ${type === assetType ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                 >
-                  <ClassMark kind={plural} size={18} />
+                  <ClassMark kind={plural} size={16} />
                   {plural[0].toUpperCase() + plural.slice(1)}
                   {summary.data && (
                     <span className="text-text-dim text-[11px]">

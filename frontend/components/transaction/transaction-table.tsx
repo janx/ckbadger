@@ -3,12 +3,13 @@
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
-import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
+import { ExactCkb, activityClassMark, activityHeadline } from '@/components/activity-event-row';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
 import type { Transaction } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { ClassMark } from '@/components/ui/class-mark';
 
 interface Props {
   transactions: readonly Transaction[];
@@ -65,6 +66,9 @@ export function TransactionTable({
             <span className="text-text-dim block text-[11px]">◆ Cellbase</span>
           ) : showBlock ? (
             <span className="text-text-dim block text-[11px]">
+              {activityClassMark(tx.activity!) && (
+                <ClassMark kind={activityClassMark(tx.activity!)!} size={12} className="mr-1.5" />
+              )}
               {activityHeadline(tx.activity!)}
             </span>
           ) : null}

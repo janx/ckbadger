@@ -86,6 +86,31 @@ describe('TransactionTable', () => {
     ).toHaveClass('flex-col');
     expect(table.querySelector('[data-ckb-amount]')).toHaveClass('flex-wrap');
   });
+  it('marks the class of what a transaction did beside its headline (IV-22 wiring)', () => {
+    const dao = {
+      ...tx,
+      hash: `0x${'de'.repeat(32)}`,
+      activity: {
+        ...tx.activity!,
+        txHash: `0x${'de'.repeat(32)}`,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'deposit',
+            metadata: { capacity: '10000000000' },
+          },
+        ],
+      },
+    } as Transaction;
+    const { container } = render(<TransactionTable transactions={[dao, tx]} showBlock />);
+    const marks = Array.from(container.querySelectorAll('svg[data-class]'));
+    // The DAO deposit row carries the vault ring (table + compact layout); a plain transfer
+    // carries no class mark.
+    expect(marks.map((m) => m.getAttribute('data-class'))).toEqual(['dao', 'dao']);
+    expect(marks[0]).toHaveAttribute('width', '12');
+  });
+
   it('shows cellbase as 0 → N cells, not 1 → N (BA-11)', () => {
     render(
       <TransactionTable

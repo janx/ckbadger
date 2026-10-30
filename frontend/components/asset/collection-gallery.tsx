@@ -8,11 +8,11 @@ import { DnaStrip } from '@/components/ui/dna-strip';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { AppLink } from '@/components/ui/app-link';
-import { ObjectCompositionLabel } from '@/components/address/address-holdings';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatStandard } from '@/components/activity-event-row';
 import { formatBlockNumber } from '@/lib/format-block';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 export interface CollectionGalleryProps {
   id: string;
   traits: Record<string, string>;
@@ -58,7 +58,7 @@ export function CollectionGallery({ id, traits }: CollectionGalleryProps) {
                     <div className="text-text-dim py-3 text-[11px]">No DNA</div>
                   )}
                 </AppLink>
-                {item.mediaProfile && <ObjectCompositionLabel tier={item.mediaProfile.tier} />}
+                {item.mediaProfile && <CompositionBadge tier={item.mediaProfile.tier} />}
                 <div className="text-text-dim text-[11px]">
                   {item.isLive ? 'Live' : 'Melted'} · {item.decodeStatus}
                   <span className="block break-all">

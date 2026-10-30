@@ -22,3 +22,45 @@ export const BITCOIN_COLORS = {
 } as const;
 export const DATA_COLOR = '#2edba3';
 export const HUE_RAMP = ['#2edba3', '#24b68a', '#259775', '#287b64', '#2b6054', '#344e48'] as const;
+
+/**
+ * Object composition (FINAL_REVIEW decision 3, AssetClasses board): Pure CKB is a crystal,
+ * BTC+CKB the crystal set in Bitcoin's copper; the off-chain tiers stay plain grey outlines.
+ */
+export const COMPOSITION_COLORS = {
+  crystal: {
+    top: '#a8f6de',
+    topLight: '#e4fff6',
+    left: '#3fd3a8',
+    right: '#86ecce',
+    edge: '#0b3b30',
+    glint: '#ffffff',
+  },
+  copperMount: {
+    topLight: '#ffeadf',
+    topMid: '#efa682',
+    topDark: '#c86f45',
+    frontLight: '#df8b5f',
+    frontMid: BITCOIN_COLORS.dark,
+    frontDark: '#82422a',
+    edge: '#55291a',
+  },
+  /** Off-chain tier icons: the dim text ink, on the page background. */
+  offchain: '#7c849c',
+  offchainFill: '#0c0e15',
+} as const;
+/** Badge frames and inks for the two fully on-chain tiers (one drawing everywhere, IV-24). */
+export const COMPOSITION_BADGES = {
+  pure_ckb: {
+    /** Two layers: the inner fill (clipped to the padding box) over the gradient frame. */
+    frame:
+      'linear-gradient(#0b1d1a, #0b1d1a), linear-gradient(135deg, #f0fffa, #8ff3d6 40%, #1fb88a 85%)',
+    ink: 'linear-gradient(90deg, #f3fffb, #9df6dc 50%, #3ee0b0)',
+    bar: 'linear-gradient(90deg, #3ee0b0, #f0fffa, #8ff3d6)',
+  },
+  btc_ckb: {
+    frame: `linear-gradient(${BITCOIN_COLORS.inner}, ${BITCOIN_COLORS.inner}), linear-gradient(135deg, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper} 35%, #8ff3d6 72%, #1fb88a)`,
+    ink: `linear-gradient(90deg, #ffe7d8, ${BITCOIN_COLORS.copper} 45%, #9df6dc 92%)`,
+    bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, #8ff3d6)`,
+  },
+} as const;

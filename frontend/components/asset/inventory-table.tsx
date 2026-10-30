@@ -4,7 +4,6 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
-import { ObjectCompositionLabel } from '@/components/address/address-holdings';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import {
@@ -14,6 +13,7 @@ import {
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 
 export interface AssetAmountProps {
   amount: string;
@@ -76,7 +76,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
                 : ''
             }
           >
-            <ClassMark kind={mark} size={18} />
+            <ClassMark kind={mark} size={16} />
           </span>
           <div className="min-w-0">
             <AppLink href={assetHref(a)} className="text-text-bright block break-words">
@@ -108,7 +108,12 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
       key: 'composition',
       label: 'Composition',
       minWidth: 160,
-      render: (a) => <ObjectCompositionLabel tier={a.compositionTier ?? null} />,
+      render: (a) =>
+        a.compositionTier ? (
+          <CompositionBadge tier={a.compositionTier} />
+        ) : (
+          <span className="text-text-dim text-[11px]">Composition unavailable</span>
+        ),
     });
   if (assetType !== 'token')
     columns.push({

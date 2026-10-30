@@ -640,7 +640,7 @@ describe('Objects Inventory Page', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('Centralized Mixture').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Centralized mix').length).toBeGreaterThanOrEqual(1);
     });
   });
 });

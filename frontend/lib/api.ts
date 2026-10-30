@@ -1,3 +1,4 @@
+import type { CompositionTier } from '@/lib/asset-utils';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 export { resolveApiBase } from '@/lib/runtime-config';
@@ -1082,7 +1083,17 @@ type ItemDelta =
       symbol?: string;
       decimals?: number | null;
     }
-  | { kind: 'object'; objectId: string; delta: number }
+  | {
+      kind: 'object';
+      objectId: string;
+      delta: number;
+      /**
+       * Lane R12 (TX-12 / TX-29, not yet in contracts.md): the object's collection and its
+       * composition tier, read from the spore / cluster aggregates. Rendered only when present.
+       */
+      collection?: { id: string; name: string | null } | null;
+      composition?: CompositionTier | null;
+    }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
 interface ActivityTypeCall {

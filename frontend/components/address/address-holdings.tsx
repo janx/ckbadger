@@ -14,7 +14,7 @@ import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { CLASS_COLORS, COMPOSITION_BADGES, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
 import { formatCompositionTier } from '@/lib/asset-utils';
@@ -22,6 +22,7 @@ import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -114,28 +115,6 @@ const composition = [
   ['unknown', 'unknown'],
   ['decodePending', 'decode_pending'],
 ] as const;
-export function ObjectCompositionLabel({ tier }: { tier: string | null }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]',
-        tier === 'btc_ckb'
-          ? 'border-[#dc8a5a]/70 bg-[#1a110d] text-[#ffe1cc]'
-          : tier === 'pure_ckb'
-            ? 'border-jade/40 text-jade'
-            : 'border-base-border text-text-dim'
-      )}
-      title={
-        tier === 'decode_pending'
-          ? 'Awaiting DOB execution; composition has not been classified.'
-          : undefined
-      }
-    >
-      {(tier === 'btc_ckb' || tier === 'pure_ckb') && <ClassMark kind="objects" size={12} />}
-      {tier === null ? 'Composition unavailable' : formatCompositionTier(tier)}
-    </span>
-  );
-}
 function Composition({ counts, total }: { counts: AddressObjectComposition; total: number }) {
   if (composition.reduce((sum, [key]) => sum + counts[key], 0) !== total)
     throw new Error('Address object composition counts do not equal object holdings');
@@ -153,7 +132,7 @@ function Composition({ counts, total }: { counts: AddressObjectComposition; tota
             .filter(([key]) => counts[key] > 0)
             .map(([key, tier]) => (
               <span key={key} className="flex items-center gap-1">
-                <ObjectCompositionLabel tier={tier} />
+                <CompositionBadge tier={tier} />
                 {counts[key]}
               </span>
             ))}
@@ -175,10 +154,10 @@ function Composition({ counts, total }: { counts: AddressObjectComposition; tota
                   width: `${(counts[key] / total) * 100}%`,
                   background:
                     key === 'pureCkb'
-                      ? 'linear-gradient(90deg,#3ee0b0,#f0fffa,#8ff3d6)'
+                      ? COMPOSITION_BADGES.pure_ckb.bar
                       : key === 'btcCkb'
-                        ? 'linear-gradient(90deg,#a95a32,#ffe1cc,#dc8a5a,#8ff3d6)'
-                        : '#2c3348',
+                        ? COMPOSITION_BADGES.btc_ckb.bar
+                        : CLASS_COLORS.other,
                 }}
               />
             ))}
@@ -252,7 +231,7 @@ function HoldingSection({
     >
       <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
         <h3 className="text-text-bright flex items-center gap-2 text-[15px] font-medium">
-          <ClassMark kind={cls.mark} size={18} />
+          <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO' : cls.label}
         </h3>
         <span className="text-text-dim max-w-full text-xs">{summary}</span>
@@ -658,7 +637,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         {composition
                           .filter(([key]) => g.compositionCounts[key] > 0)
                           .map(([key, tier]) => (
-                            <ObjectCompositionLabel key={key} tier={tier} />
+                            <CompositionBadge key={key} tier={tier} />
                           ))}
                         <span className="text-text-dim">{formatStandard(g.standard)}</span>
                       </span>
@@ -676,14 +655,21 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                             aria-label={d.name ?? `Object ${d.id}`}
                             className={cn(
                               'bg-base-surface flex h-[72px] w-[72px] flex-col items-center justify-between rounded border p-1.5 text-[11px]',
-                              d.compositionTier === 'btc_ckb'
-                                ? 'border-[#dc8a5a]/70'
-                                : d.compositionTier === 'pure_ckb'
-                                  ? 'border-jade/60'
-                                  : 'border-base-border'
+                              d.compositionTier === 'btc_ckb' || d.compositionTier === 'pure_ckb'
+                                ? 'border-transparent'
+                                : 'border-base-border'
                             )}
+                            style={
+                              d.compositionTier === 'btc_ckb' || d.compositionTier === 'pure_ckb'
+                                ? {
+                                    backgroundImage: COMPOSITION_BADGES[d.compositionTier].frame,
+                                    backgroundClip: 'padding-box, border-box',
+                                    backgroundOrigin: 'padding-box, border-box',
+                                  }
+                                : undefined
+                            }
                           >
-                            <ClassMark kind="objects" size={20} />
+                            <ClassMark kind="objects" size={24} />
                             <Hash
                               hash={d.id}
                               startChars={4}

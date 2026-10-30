@@ -107,11 +107,15 @@ describe('detail and list foundations', () => {
         ))}
       </>
     );
-    for (const kind of ['dao', 'tokens', 'objects', 'identities'] as const)
-      expect(screen.getByRole('img', { name: `${kind} class` })).toHaveAttribute(
-        'stroke',
-        CLASS_COLORS[kind]
-      );
+    // The approved marks colour their own parts (ring, coin top, cube, head); each mark uses
+    // only its class colour, so gold stays with DAO.
+    for (const kind of ['dao', 'tokens', 'objects', 'identities'] as const) {
+      const svg = screen.getByRole('img', { name: `${kind} class` });
+      const inks = Array.from(svg.querySelectorAll('[fill],[stroke]'))
+        .flatMap((e) => [e.getAttribute('fill'), e.getAttribute('stroke')])
+        .filter((v) => v && v !== 'none');
+      expect(new Set(inks)).toEqual(new Set([CLASS_COLORS[kind]]));
+    }
   });
 });
 

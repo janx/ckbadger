@@ -11,7 +11,6 @@ import { CollectionGenes, CurrentPatternEvidence } from '@/components/asset/gene
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { CapacityHistory } from '@/components/asset/capacity-history';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
-import { ObjectCompositionLabel } from '@/components/address/address-holdings';
 import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
 import { Address } from '@/components/ui/address';
@@ -21,6 +20,7 @@ import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 export interface CollectionDetailProps {
   id: string;
   kind: 'spore' | 'object' | 'identity';
@@ -182,7 +182,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       facts={facts}
       intro={
         <>
-          {object?.composition && <ObjectCompositionLabel tier={object.composition.tier} />}
+          {object?.composition && <CompositionBadge tier={object.composition.tier} />}
           <p className="text-text-dim mt-3 text-[13px]">
             {description?.summary ??
               object?.classDetail?.description ??

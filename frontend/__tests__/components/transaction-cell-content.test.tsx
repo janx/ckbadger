@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import type { TransactionCellDisplay } from '@/lib/api';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 
 const object: TransactionCellDisplay = {
   kind: 'object',
@@ -35,7 +36,13 @@ describe('transaction cell semantics', () => {
     );
     const badge = screen.getByLabelText('Media composition: BTC+CKB');
     expect(badge).toHaveTextContent('BTC+CKB');
-    expect(badge).toHaveStyle({ color: '#ffe1cc' });
+    // IV-24 / BA-33: the same badge as everywhere else, with the crystal-in-copper mark.
+    expect(badge.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
+    expect(badge.querySelector('svg[data-composition-mark="btc_ckb"]')).not.toBeNull();
+    // The board's copper→crystal gradient ink (was a flat #ffe1cc on this tile only).
+    expect(screen.getByText('BTC+CKB')).toHaveStyle({
+      backgroundImage: COMPOSITION_BADGES.btc_ckb.ink,
+    });
     rerender(
       <TransactionCellContent
         display={{ ...object, compositionTier: 'decode_pending' }}
