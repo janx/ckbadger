@@ -714,6 +714,12 @@ pub struct StackedAreaSeries {
     pub key: String,
     pub label: String,
     pub color: String,
+    /// The series' stable identity where a chart ranks entities
+    /// (most-utilized: `family:<id>`, `ref:0x<code hash>:<hash type>`,
+    /// `token:0x<type hash>`, `dob:<cluster id>`, `<asset type>:<collection id>`),
+    /// so same-named series stay apart and can be linked. Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// Serialized with `peaks`: each series' peak by series key, derived from
@@ -998,6 +1004,7 @@ fn build_most_utilized_share_chart(
         .iter()
         .enumerate()
         .map(|(index, key)| StackedAreaSeries {
+            id: Some(key.clone()),
             key: format!("top{index}"),
             label: labels_by_key
                 .get(key)
@@ -1007,6 +1014,7 @@ fn build_most_utilized_share_chart(
         })
         .collect();
     series.push(StackedAreaSeries {
+        id: None,
         key: "others".to_string(),
         label: "Others".to_string(),
         color: "#64748b".to_string(),
@@ -1537,16 +1545,19 @@ async fn get_cell_count_chart(
 
     let series = vec![
         StackedAreaSeries {
+            id: None,
             key: "allCells".to_string(),
             label: "All Cells".to_string(),
             color: "#6b7280".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "liveCells".to_string(),
             label: "Live Cells".to_string(),
             color: "#00c389".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "deadCells".to_string(),
             label: "Dead Cells".to_string(),
             color: "#ef4444".to_string(),
@@ -2046,26 +2057,31 @@ async fn get_common_knowledge_composition_chart(
         data,
         series: vec![
             StackedAreaSeries {
+                id: None,
                 key: "transfer".to_string(),
                 label: "CKB Transfer".to_string(),
                 color: "#22c55e".to_string(),
             },
             StackedAreaSeries {
+                id: None,
                 key: "dao".to_string(),
                 label: "DAO".to_string(),
                 color: "#f59e0b".to_string(),
             },
             StackedAreaSeries {
+                id: None,
                 key: "udt".to_string(),
                 label: "UDT".to_string(),
                 color: "#3b82f6".to_string(),
             },
             StackedAreaSeries {
+                id: None,
                 key: "nftSpore".to_string(),
                 label: "Object (Spore)".to_string(),
                 color: "#ec4899".to_string(),
             },
             StackedAreaSeries {
+                id: None,
                 key: "otherContracts".to_string(),
                 label: "Other Contracts".to_string(),
                 color: "#8b5cf6".to_string(),
@@ -2515,13 +2531,42 @@ async fn get_epoch_time_distribution_chart(
     ok(response)
 }
 
+/// The epoch-duration target of the chain's consensus, in seconds and in the
+/// chart's own unit (hours, two decimals, exact).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpochDurationTargetResponse {
+    pub seconds: u64,
+    pub hours: String,
+}
+
+/// `/charts/epoch-time-length`: the chart plus its consensus reference line
+/// (CH-12). Its own type, so no other chart grows a field only this one fills.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpochTimeLengthChartResponse {
+    #[serde(flatten)]
+    pub chart: ChartResponse,
+    pub target: EpochDurationTargetResponse,
+}
+
 async fn get_epoch_time_length_chart(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:epoch-time-length";
-    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+) -> ApiResult<EpochTimeLengthChartResponse> {
+    let cache_key = "chart:epoch-time-length:v2";
+    if let Some(cached) = state
+        .cache
+        .get::<EpochTimeLengthChartResponse>(cache_key)
+        .await
+    {
         return ok(cached);
     }
+    let target_secs = state.consensus().await?.epoch_duration_target_secs;
+    let target = EpochDurationTargetResponse {
+        seconds: target_secs,
+        hours: crate::utils::exact_ratio::format_ratio(i128::from(target_secs), 3_600, 2)
+            .map_err(|e| ApiError::internal(format!("epoch duration target: {e}")))?,
+    };
 
     let store = state.store.clone();
     let epochs = tokio::task::spawn_blocking(move || store.list_epoch_stats())
@@ -2549,11 +2594,14 @@ async fn get_epoch_time_length_chart(
         })
         .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
-    let response = ChartResponse {
-        data,
-        title: "Epoch Time Length".to_string(),
-        y_axis_label: "Hours".to_string(),
-        y2_axis_label: Some("Blocks".to_string()),
+    let response = EpochTimeLengthChartResponse {
+        chart: ChartResponse {
+            data,
+            title: "Epoch Time Length".to_string(),
+            y_axis_label: "Hours".to_string(),
+            y2_axis_label: Some("Blocks".to_string()),
+        },
+        target,
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -3593,16 +3641,19 @@ async fn get_total_supply_chart(
 
     let series = vec![
         StackedAreaSeries {
+            id: None,
             key: "circulating".to_string(),
             label: "Circulating".to_string(),
             color: "#00c389".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "nervosdao".to_string(),
             label: "Nervos DAO Locked".to_string(),
             color: "#3b82f6".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "burnt".to_string(),
             label: "Burnt".to_string(),
             color: "#6b7280".to_string(),
@@ -3820,16 +3871,19 @@ async fn get_secondary_issuance_chart(
 
     let series = vec![
         StackedAreaSeries {
+            id: None,
             key: "compensation".to_string(),
             label: "Deposit Compensation".to_string(),
             color: "#00c389".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "mining".to_string(),
             label: "Mining Reward".to_string(),
             color: "#8b5cf6".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "burnt".to_string(),
             label: "Burnt".to_string(),
             color: "#6b7280".to_string(),
@@ -4268,41 +4322,49 @@ async fn get_hodl_wave_chart(
 
     let series = vec![
         StackedAreaSeries {
+            id: None,
             key: "gt3y".to_string(),
             label: "> 3y".to_string(),
             color: "#a78bfa".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "1y3y".to_string(),
             label: "1y-3y".to_string(),
             color: "#67e8f9".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "6m1y".to_string(),
             label: "6m-1y".to_string(),
             color: "#22c55e".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "3m6m".to_string(),
             label: "3m-6m".to_string(),
             color: "#d4e157".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "1m3m".to_string(),
             label: "1m-3m".to_string(),
             color: "#f59e0b".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "1w1m".to_string(),
             label: "1w-1m".to_string(),
             color: "#f87171".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "1d1w".to_string(),
             label: "1d-1w".to_string(),
             color: "#4ade80".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "24h".to_string(),
             label: "24h".to_string(),
             color: "#6366f1".to_string(),

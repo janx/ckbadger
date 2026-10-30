@@ -510,11 +510,13 @@ fn build_capacity_history_chart_with_initial(
         data,
         series: vec![
             StackedAreaSeries {
+                id: None,
                 key: "used".to_string(),
                 label: "Used".to_string(),
                 color: "#f59e0b".to_string(),
             },
             StackedAreaSeries {
+                id: None,
                 key: "unused".to_string(),
                 label: "Unused".to_string(),
                 color: "#06b6d4".to_string(),

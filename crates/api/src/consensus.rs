@@ -115,6 +115,9 @@ pub struct ConsensusParams {
     pub max_block_cycles: u64,
     /// Maximum number of proposal short ids one block may carry.
     pub max_block_proposals_limit: u64,
+    /// The epoch length difficulty adjustment steers toward, in seconds
+    /// (mainnet 14400 = 4 h).
+    pub epoch_duration_target_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -174,6 +177,7 @@ struct RpcConsensus {
     max_block_bytes: String,
     max_block_cycles: String,
     max_block_proposals_limit: String,
+    epoch_duration_target: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,6 +224,13 @@ impl ConsensusParams {
                 &raw.max_block_proposals_limit,
                 "max_block_proposals_limit",
             )?,
+            epoch_duration_target_secs: match field(
+                &raw.epoch_duration_target,
+                "epoch_duration_target",
+            )? {
+                0 => return Err(format!("{GET_CONSENSUS}.epoch_duration_target is 0")),
+                seconds => seconds,
+            },
         })
     }
 }
@@ -366,6 +377,15 @@ mod tests {
         assert_eq!(params.max_block_bytes, 597_000);
         assert_eq!(params.max_block_cycles, 3_500_000_000);
         assert_eq!(params.max_block_proposals_limit, 1500);
+        assert_eq!(params.epoch_duration_target_secs, 14_400);
+    }
+
+    #[test]
+    fn zero_epoch_duration_target_is_an_error() {
+        let mut result = mainnet_result();
+        result["epoch_duration_target"] = serde_json::json!("0x0");
+        let err = ConsensusParams::from_get_consensus(&result).unwrap_err();
+        assert!(err.contains("epoch_duration_target"), "{err}");
     }
 
     #[test]

@@ -3107,11 +3107,13 @@ fn build_script_capacity_history_chart(
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let series = vec![
         StackedAreaSeries {
+            id: None,
             key: "used".to_string(),
             label: "Used".to_string(),
             color: "#f59e0b".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "unused".to_string(),
             label: "Unused".to_string(),
             color: "#00c389".to_string(),
