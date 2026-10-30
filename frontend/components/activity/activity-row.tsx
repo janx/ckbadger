@@ -38,7 +38,10 @@ export function ActivityRowHead({
   showEvidence = true,
   poolStatus,
   timeAddedToPool,
+  evidence,
 }: {
+  /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
+  evidence?: ReactNode;
   title: ReactNode;
   hash: string;
   blockNumber: number | null;
@@ -52,7 +55,12 @@ export function ActivityRowHead({
       <span data-role="headline" className="text-text-bright text-[13px] font-medium">
         {title}
       </span>
-      {showEvidence && (
+      {showEvidence && evidence !== undefined && (
+        <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
+          {evidence}
+        </span>
+      )}
+      {showEvidence && evidence === undefined && (
         <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
@@ -245,6 +253,8 @@ export type ActivityRowProps = {
   showParticipants?: boolean;
   showScriptDetails?: boolean;
   showEvidence?: boolean;
+  /** F2 blocks: the row's own evidence line (see `ActivityRowHead.evidence`). */
+  evidence?: ReactNode;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -260,6 +270,7 @@ export function ActivityRow({
   showParticipants = true,
   showScriptDetails = true,
   showEvidence = true,
+  evidence,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -280,6 +291,7 @@ export function ActivityRow({
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
         showEvidence={showEvidence}
+        evidence={evidence}
         poolStatus={activity.poolStatus}
         timeAddedToPool={activity.timeAddedToPool}
       />

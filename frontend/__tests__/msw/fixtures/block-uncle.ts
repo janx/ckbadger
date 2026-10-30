@@ -27,4 +27,7 @@ export const blockUncle: BlockUncle = {
   proposalIds: ['0xaabbccddeeff00112233'],
   includedBy: { number: 8_775_638, hash: `0x${'aa'.repeat(32)}`, index: 0 },
   canonicalAtHeight: { number: 8_775_637, hash: `0x${'bb'.repeat(32)}` },
+  // F2 blocks (R10): the canonical #8,775,637 shares the uncle's parent; the uncle came 92 ms later.
+  sameParentAs: 8_775_637,
+  msAfterSibling: 92,
 };

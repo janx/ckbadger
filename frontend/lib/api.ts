@@ -210,6 +210,11 @@ interface BlockUncle {
   proposalIds: string[];
   includedBy: { number: number; hash: string; index: number };
   canonicalAtHeight: { number: number; hash: string };
+  // F2 blocks (R10, BA-43): the uncle's sibling facts, computed by the API.
+  /** `canonicalAtHeight.number` when that block shares the uncle's parent; otherwise null. */
+  sameParentAs: number | null;
+  /** Uncle timestamp minus its sibling's, in ms (negative if older); null exactly when `sameParentAs` is. */
+  msAfterSibling: number | null;
 }
 
 interface HardforkActivation {

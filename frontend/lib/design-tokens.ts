@@ -66,3 +66,12 @@ export const COMPOSITION_BADGES = {
     bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, #8ff3d6)`,
   },
 } as const;
+
+// ---- F2 blocks: the Block board's reward shares (primary jade, secondary deep jade, committed
+// fees ink, proposal fees gold — gold only for what was proposed). ----
+export const REWARD_COLORS = {
+  primary: DATA_COLOR,
+  secondary: '#17775c',
+  committed: '#a0a8be',
+  proposal: CLASS_COLORS.dao,
+} as const;
