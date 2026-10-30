@@ -120,7 +120,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         },
         {
           label: 'Epoch',
-          value: `${uncle.epoch.number.toLocaleString('en-US')} · ${uncle.epoch.index.toLocaleString('en-US')} / ${uncle.epoch.length.toLocaleString('en-US')}`,
+          value: `${uncle.epochNumber.toLocaleString('en-US')} · ${uncle.epochIndex.toLocaleString('en-US')} / ${uncle.epochLength.toLocaleString('en-US')}`,
         },
       ]}
       tier2={
@@ -147,7 +147,9 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">epoch</dt>
-                <dd className="break-all">{uncle.epoch.display}</dd>
+                <dd className="break-all">
+                  {uncle.epochNumber} · {uncle.epoch}
+                </dd>
               </div>
               {header.map(([key, value]) => (
                 <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">

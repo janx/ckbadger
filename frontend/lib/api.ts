@@ -202,7 +202,11 @@ interface BlockUncle {
   hash: string;
   parentHash: string;
   timestamp: string;
-  epoch: { number: number; index: number; length: number; display: string };
+  /** `index/length` within the epoch, as on `Block`. */
+  epoch: string;
+  epochNumber: number;
+  epochIndex: number;
+  epochLength: number;
   compactTarget: string;
   difficulty: string;
   nonce: string;
