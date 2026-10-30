@@ -135,6 +135,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             height={120}
             hideCaption
             hideXAxis
+            projectedAfter={model.projectedAfter}
             formatValue={(value) => formatChartReadout(value, model.unit)}
           />
         ))}

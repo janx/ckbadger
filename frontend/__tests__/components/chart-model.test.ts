@@ -251,6 +251,7 @@ describe('28 chart variants', () => {
     const model = chartModel(definition, timeline(['past', 'past', 'current', 'future', 'future']));
     expect(model.latest).toEqual({ label: 'year 6.5', raw: '2.3297', display: '2.33' });
     expect(model.summaryLabel).toBe('Today');
+    expect(model.projectedAfter).toBe(2);
     expect(model.delta).toBeNull();
     expect(model.series).toHaveLength(1);
     expect(() =>

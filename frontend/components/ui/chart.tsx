@@ -52,6 +52,8 @@ export interface ChartProps {
   activeIndex?: number | null;
   onActiveIndexChange?: (index: number | null) => void;
   xDomain?: readonly [number, number];
+  /** Index of the last observed point; a line is dashed after it (a model projected ahead). */
+  projectedAfter?: number;
   /** Requires `xDomain`; series lines and areas break across each gap instead of joining it. */
   gaps?: readonly ChartGap[];
   plotLeft?: number;
@@ -75,6 +77,7 @@ export function Chart({
   onActiveIndexChange,
   xDomain,
   gaps = [],
+  projectedAfter,
   plotLeft,
   hideCaption = false,
   hideXAxis = false,
@@ -109,6 +112,14 @@ export function Chart({
       ))
   )
     throw new Error(`${title}: gaps must lie on the shared time axis between observations`);
+  if (
+    projectedAfter !== undefined &&
+    (kind !== 'line' ||
+      !Number.isSafeInteger(projectedAfter) ||
+      projectedAfter < 0 ||
+      projectedAfter >= data.length)
+  )
+    throw new Error(`${title}: projection must start at a returned point of a line chart`);
   if (!series.length) throw new Error(`${title}: chart needs at least one series`);
   if (new Set(series.map((s) => s.key)).size !== series.length)
     throw new Error(`${title}: duplicate chart series`);
@@ -356,7 +367,38 @@ export function Chart({
                         fillOpacity={kind === 'stacked' ? 0.6 : 0.12}
                       />
                     )}
-                    <path d={line} fill="none" stroke={color(si)} strokeWidth="1.5" />
+                    {projectedAfter === undefined ? (
+                      <path d={line} fill="none" stroke={color(si)} strokeWidth="1.5" />
+                    ) : (
+                      <>
+                        <path
+                          d={upper
+                            .slice(0, projectedAfter + 1)
+                            .map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`)
+                            .join(' ')}
+                          fill="none"
+                          stroke={color(si)}
+                          strokeWidth="1.5"
+                        />
+                        <path
+                          data-projected
+                          d={upper
+                            .slice(projectedAfter)
+                            .map((v, k) => `${k ? 'L' : 'M'}${x(projectedAfter + k)},${y(v)}`)
+                            .join(' ')}
+                          fill="none"
+                          stroke={color(si)}
+                          strokeWidth="1.5"
+                          strokeDasharray="4 3"
+                        />
+                        <circle
+                          cx={x(projectedAfter)}
+                          cy={y(upper[projectedAfter])}
+                          r="2.5"
+                          fill={color(si)}
+                        />
+                      </>
+                    )}
                     {runs
                       .filter((run) => run.length === 1)
                       .map(([i]) => (

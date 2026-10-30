@@ -124,3 +124,47 @@ describe('shared Chart gaps', () => {
     error.mockRestore();
   });
 });
+
+describe('shared Chart projection', () => {
+  beforeEach(() => stubChartWidth(480));
+  const model = ['4.2', '3.1', '2.3', '1.9', '1.6'].map((value, i) => ({
+    label: String(i),
+    values: { value },
+  }));
+
+  it('draws a model solid up to today and dashed ahead (CH-03)', () => {
+    const { container } = render(
+      <Chart
+        title="Nominal APC"
+        subtitle="Model"
+        data={model}
+        series={series}
+        unit="%"
+        projectedAfter={2}
+        formatValue={(v) => v}
+      />
+    );
+    const ahead = container.querySelector('path[data-projected]')!;
+    expect(ahead).toHaveAttribute('stroke-dasharray', '4 3');
+    expect(ahead.getAttribute('d')!.match(/[ML]/g)).toHaveLength(3);
+    expect(container.querySelectorAll('path[fill="none"]:not([data-projected])')).toHaveLength(1);
+  });
+
+  it('rejects a projection outside the returned points', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <Chart
+          title="Nominal APC"
+          subtitle="Model"
+          data={model}
+          series={series}
+          unit="%"
+          projectedAfter={5}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow('projection must start at a returned point');
+    error.mockRestore();
+  });
+});

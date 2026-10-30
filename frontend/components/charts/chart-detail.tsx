@@ -257,6 +257,7 @@ function DetailBody({
             yScale={supportsLog && logScale ? 'log' : 'linear'}
             height={360}
             markers={markers}
+            projectedAfter={range === 'all' ? model.projectedAfter : undefined}
             formatValue={(value) => formatChartHover(value, model.unit)}
           />
         )}

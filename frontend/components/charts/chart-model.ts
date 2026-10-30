@@ -39,6 +39,8 @@ export interface ChartModel {
   /** Exact daily histories from both distinct utilization scopes. */
   historicalShares?: { title: string; points: ChartPoint[]; series: ChartSeries[]; unit: string }[];
   summaryLabel?: string;
+  /** A model timeline's "today" index: drawn solid up to it and dashed ahead (CH-03). */
+  projectedAfter?: number;
   contextFacts?: { label: string; value: string }[];
   coverage?: string;
 }
@@ -288,6 +290,7 @@ function singleChart(
           ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
           : null,
     summaryLabel: leadingBucket ? 'Largest bucket' : todayPoint ? 'Today' : undefined,
+    projectedAfter: currentIndex ?? undefined,
   };
 }
 
