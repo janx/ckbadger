@@ -215,6 +215,19 @@ pub struct ScriptFamilyListItemResponse {
     /// Classification of the current registered reference forms. A family may
     /// contain both pinned and replaceable references.
     pub code_classes: Vec<ScriptCodeClassTotalResponse>,
+    /// The family's earliest code cell over all its versions (the same first
+    /// deployment `/hardforks` marks); `None` when no version has an indexed
+    /// code cell.
+    pub first_deployed_at: Option<ScriptFirstDeploymentResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptFirstDeploymentResponse {
+    pub block_number: i64,
+    /// Header timestamp of `blockNumber`, ms.
+    pub timestamp_ms: i64,
+    pub version_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +237,10 @@ pub struct ScriptCodeClassTotalResponse {
     pub lock_cells_count: i64,
     pub lock_owned_capacity_sum: String,
     pub reference_count: i64,
+    /// `classSummary` only: matching families with at least one reference of
+    /// this class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
