@@ -38,7 +38,7 @@ import {
 import { getIdentityCollectionHref } from '@/lib/detail-routes';
 import { IDENTITY_ACTION_WORDS, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { identityTerm, termDays, type IdentityTerm } from '@/lib/identity-term';
-import { formatUtc8Date } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
 import { readDidDocument, splitHandle } from '@/lib/did-document';
 import { formatStandard } from '@/components/activity-event-row';
 
@@ -261,7 +261,13 @@ export function CanonicalIdentityDetail({
           <>
             <AssetReadState label="raw identity evidence" error={protocol.error} retained />
             <ItemEvidence protocol={p} title={identityDataTitle(standard)} />
-            <div className="grid min-w-0 gap-x-14 gap-y-10 lg:grid-cols-2">
+            <div
+              className={cn(
+                'grid min-w-0 gap-x-14 gap-y-10',
+                // One section takes the full width; the three `.cell` sections share two columns.
+                p.kind === 'dotcell' && 'lg:grid-cols-2'
+              )}
+            >
               {p.kind === 'dotbit' && <DotbitAccountData protocol={p} />}
               {p.kind === 'bit_cell' && <BitCellAccountNow protocol={p} />}
               {p.kind === 'did_ckb' && <DidStored protocol={p} />}
@@ -354,7 +360,11 @@ export function CanonicalIdentityDetail({
         {versions.data ? (
           <>
             <AssetReadState label="cell history" error={versions.error} retained />
-            <CellVersions subject={subject} history={versions.data} />
+            <CellVersions
+              subject={subject}
+              history={versions.data}
+              lockAddressLabel={kind === 'dotcell' ? 'Lock' : 'Owner'}
+            />
           </>
         ) : (
           <AssetReadState

@@ -53,6 +53,20 @@ const COINS: Record<string, string> = {
   '501': 'Solana',
 };
 
+const PROFILE_ORDER = [
+  'name',
+  'location',
+  'bio',
+  'description',
+  'website',
+  'email',
+  'twitter',
+  'github',
+  'telegram',
+  'discord',
+  'instagram',
+];
+
 const HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 function valueOf(record: IdentityRecordInput, colour: boolean): IdentityRecordValue {
@@ -106,6 +120,14 @@ export function describeIdentityRecords(
     other.push({ key: record.key, value: valueOf(record, false) });
   }
   addresses.sort((a, b) => Number(a.coinType) - Number(b.coinType));
+  // Read order: who (name, place, bio), then links, then any other text, the colour, and the
+  // binary values last; equal ranks keep their stored order.
+  const rank = (p: IdentityProfileRecord) => {
+    const field = PROFILE_ORDER.indexOf(p.key.slice('profile.'.length));
+    if (field >= 0) return field;
+    return p.value.kind === 'text' ? 100 : p.value.kind === 'colour' ? 200 : 300;
+  };
+  profile.sort((a, b) => rank(a) - rank(b));
   return {
     addresses,
     profile,

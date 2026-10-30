@@ -57,3 +57,28 @@ it('names an owner-written empty key as empty, never an invented "record" (#17, 
   expect(view.other.map((o) => o.key)).toEqual(['']);
   expect(view.profile.map((p) => p.label)).toEqual(['(empty key)']);
 });
+
+it('lays the profile out as people read it: name, place, bio, links, then colour, then binary', () => {
+  const view = describeIdentityRecords([
+    rec('profile.accent', '#476de1'),
+    rec('profile.location', 'New York'),
+    rec('profile.avatar', null, '0x5249'),
+    rec('profile.name', 'Albert'),
+    rec('profile.cover', null, '0x5249'),
+    rec('profile.bio', 'hi'),
+    rec('profile.instagram', 'apl'),
+    rec('profile.twitter', 'apl'),
+    rec('profile.zodiac', 'leo'),
+  ]);
+  expect(view.profile.map((p) => p.label)).toEqual([
+    'Name',
+    'Location',
+    'Bio',
+    'Twitter',
+    'Instagram',
+    'Zodiac',
+    'Accent',
+    'Avatar',
+    'Cover',
+  ]);
+});

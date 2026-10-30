@@ -13,8 +13,13 @@ import { formatBlockNumber } from '@/lib/format-block';
 export interface CellVersionsProps {
   history: ItemCellVersions;
   subject: string;
+  /**
+   * F2 identities (round 2): what the cell's lock address is to this item. A `.cell` name is held
+   * under a lock every name shares; its owner is in the data, so the line says "Lock" there.
+   */
+  lockAddressLabel?: string;
 }
-export function CellVersions({ history, subject }: CellVersionsProps) {
+export function CellVersions({ history, subject, lockAddressLabel = 'Owner' }: CellVersionsProps) {
   const [active, setActive] = useState<string | null>(null);
   if (history.total !== history.data.length)
     throw new Error(
@@ -88,7 +93,7 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
                 />
                 <div className="text-text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
                   <span>
-                    Owner{' '}
+                    {lockAddressLabel}{' '}
                     <AppLink href={`/address/${v.ownerAddress}`}>
                       <Hash
                         hash={v.ownerAddress}

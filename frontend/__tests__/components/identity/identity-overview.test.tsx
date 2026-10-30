@@ -179,3 +179,112 @@ describe('identity summary (ID-C5)', () => {
     );
   });
 });
+
+// F2 identities (round 2, visual pass): R2b-b `.bit` witness timing and sub-account fields.
+describe('.bit witness facts (ID-B1, ID-C6)', () => {
+  function withWitness() {
+    const p = valar();
+    p.versions.forEach((v, i) => {
+      Object.assign(v.decoded, {
+        updatedAt: null,
+        lastTransferAccountAt: '0',
+        lastEditManagerAt: '0',
+        lastEditRecordsAt: i === 0 ? '0' : sec('2024-06-04T09:15:02Z'),
+        enableSubAccount: i === 0 ? 0 : 1,
+        renewSubAccountPrice: '100000000',
+      });
+    });
+    return p;
+  }
+  it('dates the last record edit and says since when sub-accounts are on', () => {
+    const protocol = withWitness();
+    render(
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol)}
+        now={NOW}
+        isLive
+        createdAtBlock={1}
+      />
+    );
+    expect(
+      Array.from(document.querySelectorAll('[data-fact]')).map((f) => f.getAttribute('data-fact'))
+    ).toEqual([
+      'Owner',
+      'Expires',
+      'Registered',
+      'Records',
+      'Sub-accounts',
+      'CKB held in its cell',
+    ]);
+    expect(fact('Records')).toHaveTextContent('none set');
+    expect(fact('Records')).toHaveTextContent('last edited 2024-06-04');
+    expect(fact('Sub-accounts')).toHaveTextContent('enabled');
+    expect(fact('Sub-accounts')).toHaveTextContent('since 2025-02-04');
+  });
+  it('adds the sub-account switch to the summary', () => {
+    const protocol = withWitness();
+    render(
+      <IdentitySummary
+        protocol={protocol}
+        term={identityTerm(protocol)}
+        now={NOW}
+        isLive
+        subject="valar.bit"
+      />
+    );
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      'No records are set; sub-accounts are on.'
+    );
+  });
+});
+
+describe('.bit Cell summary when the term has ended', () => {
+  it('reads "The name\'s term ended on …"', () => {
+    const protocol = structuredClone(bitCellProtocolProducer) as IdentityProtocol;
+    (protocol.versions[0].decoded as { expiredAt: string }).expiredAt = sec('2026-04-24T04:57:22Z');
+    render(
+      <IdentitySummary
+        protocol={protocol}
+        term={identityTerm(protocol)}
+        now={NOW}
+        isLive
+        subject="888899.bit"
+      />
+    );
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      "The name's term ended on 2026-04-24, 184 days ago."
+    );
+  });
+});
+
+describe('.cell rail parties (visual pass)', () => {
+  it('shows each named party as its address and lock, without an inner label', () => {
+    const item = dotcellItem();
+    item.owner = {
+      hashPrefix: '0x69',
+      lockHash: '0x' + '69'.repeat(32),
+      address: 'ckb1qqcz6d',
+      scriptName: 'Quantum-Resistant Lock',
+    };
+    const protocol = structuredClone(dotcellProtocolProducer) as IdentityProtocol;
+    render(
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol, { graceEndsAt: item.graceEndsAt })}
+        now={NOW}
+        isLive
+        createdAtBlock={100}
+        dotcell={item}
+      />
+    );
+    expect(fact('Owner')!.querySelector('a')).toHaveAttribute(
+      'href',
+      '/mainnet/address/ckb1qqcz6d'
+    );
+    expect(fact('Owner')).toHaveTextContent('Quantum-Resistant Lock');
+    expect(fact('Owner')).not.toHaveTextContent("named in the name's data");
+    expect(fact('Manager')).not.toHaveTextContent('edits its records');
+    expect(fact('Manager')).toHaveTextContent('prefix · no uniquely resolved lock');
+  });
+});

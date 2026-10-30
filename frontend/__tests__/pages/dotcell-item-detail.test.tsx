@@ -277,3 +277,10 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
   ]);
   expect(facts).not.toHaveTextContent(/Namespace args|Physical cell owner|Name state/);
 });
+
+it("names a .cell version's physical lock as a lock, not its owner (visual pass)", async () => {
+  render(<Page identityId="alice" />);
+  const versions = await screen.findByLabelText('alice.cell cell versions', {}, { timeout: 4000 });
+  expect(versions).toHaveTextContent('Lock ckb1');
+  expect(versions).not.toHaveTextContent('Owner ckb1');
+});

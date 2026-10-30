@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import type { DotCellItem, ItemProtocol } from '@/lib/api';
+import type { DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Address } from '@/components/ui/address';
 import { ExactCkb } from '@/components/activity-event-row';
-import { NamedParty } from '@/components/asset/identity-document';
+import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { describeIdentityRecords } from '@/lib/identity-records';
 import { readDidDocument } from '@/lib/did-document';
@@ -129,6 +129,53 @@ function physicalSince(protocol: IdentityProtocol, first: string) {
     : ` · since ${formatUtc8Date(run.since.timestamp)}`;
 }
 
+/** `.bit` sub-accounts from the witness switch (R2b-b-17), since the version that set it. */
+function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>) {
+  const d = protocol.versions.at(-1)!.decoded;
+  if (d.enableSubAccount === undefined) return [];
+  if (d.enableSubAccount === null)
+    return [
+      {
+        label: 'Sub-accounts',
+        value: <span className="text-text">not in witness v{d.witnessVersion}</span>,
+      },
+    ];
+  const on = d.enableSubAccount !== 0;
+  const since = ownerRun(protocol.versions, (v) => String(v.decoded.enableSubAccount)).since;
+  return [
+    {
+      label: 'Sub-accounts',
+      value: (
+        <>
+          <span className="text-text">{on ? 'enabled' : 'not enabled'}</span>
+          {on && <Sub>since {formatUtc8Date(since.cell.timestamp)}</Sub>}
+        </>
+      ),
+    },
+  ];
+}
+
+/**
+ * A `.cell` named party in one line: its address when the API resolved the 20-byte prefix to
+ * exactly one lock, else the prefix itself — never an address it does not have.
+ */
+export function PartyLine({ party, size = 13 }: { party: DotCellPartyRef; size?: 13 | 14 }) {
+  const text = size === 14 ? 'text-[14px]' : 'text-[13px]';
+  return party.lockHash ? (
+    <>
+      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
+        <Hash hash={party.address ?? party.lockHash} copyable={false} className={text} />
+      </AppLink>
+      <Sub>{party.scriptName ?? 'lock not named'}</Sub>
+    </>
+  ) : (
+    <>
+      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-[12px]" />
+      <Sub>prefix · no uniquely resolved lock</Sub>
+    </>
+  );
+}
+
 export interface IdentityFactsInput {
   protocol: IdentityProtocol;
   term: IdentityTerm;
@@ -164,8 +211,20 @@ export function identityFacts({
         blockFact('Registered', Number(d.registeredAt) * 1000, createdAtBlock),
         {
           label: 'Records',
-          value: d.records.length ? d.records.length.toLocaleString('en-US') : 'none set',
+          value: (
+            <>
+              {d.records.length ? d.records.length.toLocaleString('en-US') : 'none set'}
+              {typeof d.lastEditRecordsAt === 'string' && (
+                <Sub>
+                  {d.lastEditRecordsAt === '0'
+                    ? 'never edited'
+                    : `last edited ${formatUtc8Date(Number(d.lastEditRecordsAt) * 1000)}`}
+                </Sub>
+              )}
+            </>
+          ),
         },
+        ...subAccountsFact(protocol),
         heldFact(protocol, isLive),
       ];
     }
@@ -217,22 +276,8 @@ export function identityFacts({
       const first = protocol.versions[0].cell;
       const children = dotcell.children.length;
       return [
-        {
-          label: 'Owner',
-          value: (
-            <dl>
-              <NamedParty party={dotcell.owner} label="named in the name's data" />
-            </dl>
-          ),
-        },
-        {
-          label: 'Manager',
-          value: (
-            <dl>
-              <NamedParty party={dotcell.manager} label="edits its records" />
-            </dl>
-          ),
-        },
+        { label: 'Owner', value: <PartyLine party={dotcell.owner} /> },
+        { label: 'Manager', value: <PartyLine party={dotcell.manager} /> },
         expiryFact(term, now, term.kind === 'term' ? term.graceEnd : undefined),
         blockFact('Registered', first.timestamp, createdAtBlock),
         {
@@ -285,12 +330,13 @@ export function IdentitySummary({
   isLive: boolean;
   subject: string;
 }) {
-  const termClause = (lead: ReactNode) => {
+  const termClause = (lead: ReactNode, whose = 'its') => {
     if (term.kind !== 'term') return null;
     const days = plural(termDays(term.expiresAt, now), 'day', 'days');
     return now >= term.expiresAt ? (
       <>
-        {lead}its term ended on <B>{formatUtc8Date(term.expiresAt)}</B>, <B>{days}</B> ago
+        {lead}
+        {whose} term ended on <B>{formatUtc8Date(term.expiresAt)}</B>, <B>{days}</B> ago
       </>
     ) : (
       <>
@@ -322,8 +368,11 @@ export function IdentitySummary({
             ? 'Its owner has never changed. '
             : `Its owner changed ${times(owners.changes)}, most recently on ${formatUtc8Date(owners.since.cell.timestamp)}. `}
           {d.records.length
-            ? `${plural(d.records.length, 'record is', 'records are')} set.`
-            : 'No records are set.'}
+            ? `${plural(d.records.length, 'record is', 'records are')} set`
+            : 'No records are set'}
+          {typeof d.enableSubAccount === 'number'
+            ? `; sub-accounts are ${d.enableSubAccount !== 0 ? 'on' : 'off'}.`
+            : '.'}
         </>
       );
       break;
@@ -350,7 +399,7 @@ export function IdentitySummary({
             <>
               {now >= term.expiresAt ? (
                 <>
-                  The name&apos;s {termClause('')}
+                  {termClause('', "The name's")}
                   {d.linkedAccount && !d.linkedAccount.isLive
                     ? '; the .bit account is no longer live, but this cell remains.'
                     : '.'}
