@@ -95,6 +95,17 @@ pub fn script_groups(
         }
         if let Some(index) = output {
             group.output_indices.push(index);
+            // A type group without inputs reads WitnessArgs through
+            // `Source::GroupOutput`: the witness at its first output index.
+            // Every input type is added before any output, so an empty input
+            // list here is final. A missing witness is cleared, and a
+            // content witness overrides it, in `attach_content_witnesses`.
+            if group.kind == "type"
+                && group.input_indices.is_empty()
+                && group.witness_index.is_none()
+            {
+                group.witness_index = Some(index);
+            }
         }
         Ok(())
     };
@@ -1208,5 +1219,40 @@ mod tests {
             super::super::transaction_cells::ckbfs_head_witness_index(&data).unwrap(),
             1
         );
+    }
+
+    /// Review #15: a type group with outputs only reads WitnessArgs through
+    /// `Source::GroupOutput` — the witness at its first output index.
+    #[test]
+    fn output_only_type_groups_read_witness_args_at_their_first_output() {
+        let lock = script(SECP, "type", &format!("0x{}", "11".repeat(20)));
+        let minted = script(
+            &format!("0x{}", "77".repeat(32)),
+            "type",
+            &format!("0x{}", "aa".repeat(32)),
+        );
+        let groups = script_groups(
+            &[input(&lock, None)],
+            &[
+                output(&lock, None),
+                output(&lock, Some(&minted)),
+                output(&lock, Some(&minted)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(type_group_witness(&groups, &minted), Some(1));
+        // The witness exists: the index stands.
+        let witnesses = vec![
+            "0x10000000100000001000000010000000".to_string(),
+            "0x10000000100000001000000010000000".to_string(),
+        ];
+        let data = [Vec::<u8>::new(), Vec::new(), Vec::new()];
+        let mut with_witness = groups.clone();
+        attach_content_witnesses(&mut with_witness, &witnesses, &data).unwrap();
+        assert_eq!(type_group_witness(&with_witness, &minted), Some(1));
+        // No witness at the first output index: none is read.
+        let mut without = groups;
+        attach_content_witnesses(&mut without, &witnesses[..1], &data).unwrap();
+        assert_eq!(type_group_witness(&without, &minted), None);
     }
 }
