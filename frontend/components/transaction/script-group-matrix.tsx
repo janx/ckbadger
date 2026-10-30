@@ -105,7 +105,12 @@ export function ScriptGroupMatrix({
                     dim(lit?.cells.has(c.id) ?? false) && 'opacity-25'
                   )}
                 >
-                  <span className="text-text-ghost text-[9.5px]">{c.top}</span>
+                  <span
+                    title={c.top}
+                    className="text-text-ghost max-w-[68px] truncate text-[9.5px]"
+                  >
+                    {c.top}
+                  </span>
                   <span>{c.label}</span>
                   <span className="text-text-dim text-[10px]">{c.cap ?? ''}</span>
                 </span>

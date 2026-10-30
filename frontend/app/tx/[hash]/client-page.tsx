@@ -16,6 +16,7 @@ import {
   activityClassMark,
   activityHeadline,
   formatStandard,
+  formatScriptRef,
   protocolActionNoteParts,
 } from '@/components/activity-event-row';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
@@ -40,6 +41,8 @@ import {
   type CellDep,
   type ItemDelta,
   type ParticipantInfo,
+  type TransactionFeePayer,
+  type ExactJson,
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import {
@@ -222,11 +225,64 @@ function ItemName({ item }: { item: ItemDelta }) {
  * The plain summary under the headline (TX-11): what moved from whom to whom, read off the
  * participants' signed changes, or the protocol action's own facts; then the fee.
  */
-function TxSummary({ activity, fee }: { activity: GlobalActivity; fee: string }) {
+/** `A`, `A and B`, `A, B and C`. */
+function listWords(words: readonly string[]): string {
+  return words.length <= 1
+    ? (words[0] ?? '')
+    : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+/** Who paid the fee, from the API's `feePaidBy`: the sender when it is the one party that sent. */
+function FeePayer({
+  payers,
+  sender,
+}: {
+  payers: readonly TransactionFeePayer[];
+  sender: ParticipantInfo | null;
+}) {
+  if (payers.length !== 1) return <>The transaction</>;
+  if (sender && sender.lockHash === payers[0].lockHash) return <>The sender</>;
+  return (
+    <ParticipantRefView
+      participant={{
+        address: payers[0].address,
+        lockHash: payers[0].lockHash,
+        lockHashPrefix: null,
+        roles: [],
+      }}
+      compact
+      quiet
+    />
+  );
+}
+
+function TxSummary({
+  activity,
+  fee,
+  feePaidBy,
+}: {
+  activity: GlobalActivity;
+  fee: string;
+  feePaidBy: readonly TransactionFeePayer[];
+}) {
   const moves = txMovements(activity);
   const feeShannons = exactUnsignedInteger(fee, `${activity.txHash}: fee`);
+  const mark = activityClassMark(activity);
+  const ran =
+    moves.length === 0 && activity.protocolActions.length === 0
+      ? [
+          ...new Set(
+            activity.typeCalls.map((sc) =>
+              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName })
+            )
+          ),
+        ]
+      : [];
+  const sender = moves.length > 0 && moves[0].from.length === 1 ? moves[0].from[0] : null;
   return (
     <p data-testid="tx-summary" className="text-text max-w-[80ch] text-[15px]">
+      {moves.length === 0 && mark && <ClassMark kind={mark} size={12} className="mr-1.5" />}
+      {ran.length > 0 && `It ran ${listWords(ran)}. `}
       {moves.map((m, i) => (
         <Fragment key={i}>
           {m.item ? <ItemName item={m.item} /> : 'CKB'}
@@ -267,8 +323,8 @@ function TxSummary({ activity, fee }: { activity: GlobalActivity; fee: string })
         ))}
       {feeShannons > BigInt(0) && (
         <>
-          The transaction paid a <ExactCkb shannons={feeShannons} signed={false} tone="plain" />{' '}
-          fee.
+          <FeePayer payers={feePaidBy} sender={sender} /> paid a{' '}
+          <ExactCkb shannons={feeShannons} signed={false} tone="plain" /> fee.
         </>
       )}
     </p>
@@ -371,6 +427,18 @@ function BalanceChanges({
   );
 }
 
+/** `pubkey hash 0x111111...1111`: the API's decoded lock args, as words. */
+function decodedArgsText(decoded: Record<string, ExactJson>): string {
+  return Object.entries(decoded)
+    .filter(([key]) => key !== 'lock')
+    .map(([key, value]) => {
+      const words = key.replace(/([A-Z])/g, ' $1').toLowerCase();
+      const text = typeof value === 'string' ? value : JSON.stringify(value);
+      return `${words} ${/^0x[0-9a-f]{16,}$/i.test(text) ? truncateHash(text, 8, 4) : text}`;
+    })
+    .join(' · ');
+}
+
 function witnessKindLabel(kind: TransactionWitness['kind']): string {
   switch (kind) {
     case 'witness_args':
@@ -388,17 +456,6 @@ function witnessKindLabel(kind: TransactionWitness['kind']): string {
   }
 }
 
-/** The printable start of a cellbase message (the client version) and how many bytes follow. */
-function cellbaseMessage(hex: string): { text: string; rest: number } {
-  const body = hex.startsWith('0x') ? hex.slice(2) : hex;
-  if (body.length % 2 !== 0 || /[^0-9a-f]/i.test(body))
-    throw new Error(`cellbase message ${hex} is not hex`);
-  const bytes = body.match(/../g)?.map((b) => parseInt(b, 16)) ?? [];
-  const end = bytes.findIndex((b) => b < 0x20 || b > 0x7e);
-  const printable = end === -1 ? bytes : bytes.slice(0, end);
-  return { text: String.fromCharCode(...printable), rest: bytes.length - printable.length };
-}
-
 const OVERHEAD_FIELD = /header|length|union|offset/i;
 
 /**
@@ -414,11 +471,14 @@ function WitnessRow({
   lit,
   lookup,
   groupNameByHash,
+  minerMessage,
   onSelect,
   onHover,
 }: {
   tx: TransactionDetail;
   w: TransactionWitness;
+  /** A cellbase's client message as the block's one decoder reads it; undefined while loading. */
+  minerMessage?: { raw: string | null; text: string | null };
   readers: string[];
   scale: number;
   selected: boolean;
@@ -430,22 +490,34 @@ function WitnessRow({
 }) {
   const on = lit?.witnesses.has(w.index) ?? false;
   const fields = w.fields.filter((f) => f.end > f.start);
-  const note = (() => {
+  const note = readable(tx.hash, () => {
     if (w.kind === 'cobuild' && w.actions && w.actions.length > 0) {
-      const names = w.actions.map(
-        (a) => groupNameByHash.get(a.scriptHash) ?? truncateHash(a.scriptHash, 8, 4)
-      );
+      const names = w.actions.map((a) => {
+        const script = groupNameByHash.get(a.scriptHash) ?? truncateHash(a.scriptHash, 8, 4);
+        return a.name
+          ? `${script}: ${a.name}`
+          : `${script} (script info ${truncateHash(a.scriptInfoHash, 8, 4)})`;
+      });
       return `message: ${formatCount(w.actions.length, 'action')} for ${[...new Set(names)].join(', ')}`;
     }
     if (w.kind === 'cellbase') {
       const witness = required(tx.cellbaseWitness, tx.hash, 'cellbaseWitness');
-      const message = cellbaseMessage(witness.message);
       const lock =
         registeredName(lookup, witness.lock.codeHash) ?? truncateHash(witness.lock.codeHash, 10, 6);
-      return `miner lock ${lock}(${truncateHash(witness.lock.args, 6, 4)}) · message “${message.text}”${message.rest ? ` + ${formatCount(message.rest, 'byte')}` : ''}`;
+      if (minerMessage && minerMessage.raw !== witness.message)
+        throw new Error(
+          `${tx.hash}: the block's miner message ${minerMessage.raw} is not its cellbase witness message ${witness.message}`
+        );
+      const message =
+        minerMessage === undefined
+          ? 'reading…'
+          : minerMessage.text === null
+            ? `${formatCount((witness.message.length - 2) / 2, 'byte')}, not text`
+            : `“${minerMessage.text}”`;
+      return `miner lock ${lock}(${truncateHash(witness.lock.args, 6, 4)}) · message ${message}`;
     }
     return fields.map((f) => `${f.name} ${formatCount(f.end - f.start, 'B', 'B')}`).join(' · ');
-  })();
+  });
   return (
     <button
       type="button"
@@ -557,6 +629,12 @@ function DepRow({
     ...new Set(hashes.flatMap((h) => (groupNameByHash.has(h) ? [groupNameByHash.get(h)!] : []))),
   ];
   const serves = names(dep.scriptHashes);
+  const attached = names(dep.outputLockScriptHashes);
+  const size = (bytes: number) => formatCount(bytes, 'B', 'B');
+  const codeSize =
+    dep.depType === 'code'
+      ? ` · ${size(required(dep.resolvedCells[0], dep.outPointTxHash, 'code dep cell').codeSize)}`
+      : '';
   return (
     <div
       id={`tx-dep-${index}`}
@@ -580,7 +658,12 @@ function DepRow({
       </Link>
       <span className="text-text-dim">{dep.depType === 'dep_group' ? 'dep group' : 'code'}</span>
       <span className="text-text-dim">
-        {serves.length > 0 ? `supplies code for ${serves.join(', ')}` : 'no script here runs it'}
+        {serves.length > 0
+          ? `supplies code for ${serves.join(', ')}`
+          : attached.length > 0
+            ? `code of ${attached.join(', ')}`
+            : 'no script here runs it'}
+        {codeSize}
       </span>
       <span className={serves.length > 0 ? 'text-text' : 'text-text-dim'}>
         {serves.length > 0 ? `for ${serves.join(', ')}` : 'not run here'}
@@ -588,15 +671,15 @@ function DepRow({
       {dep.depType === 'dep_group' && (
         <div className="col-span-2 space-y-1 pl-3 pt-1">
           {dep.resolvedCells.map((cell) => {
-            const memberServes = names(cell.scriptHashes);
+            const memberServes = names([...cell.scriptHashes, ...cell.outputLockScriptHashes]);
             return (
               <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
                 <Link href={`/cell/${cell.txHash}-${cell.index}`} className="hover:text-jade">
                   ↳ {truncateHash(cell.txHash, 10, 6)}:{cell.index}
                 </Link>
                 {memberServes.length > 0
-                  ? ` · code for ${memberServes.join(', ')}`
-                  : ' · no script here names it'}
+                  ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
+                  : ` · ${size(cell.codeSize)} no script here names`}
               </span>
             );
           })}
@@ -642,6 +725,11 @@ export default function TransactionDetailPage() {
     queryKey: ['txCellDeps', hash],
     queryFn: () => api.getTransactionCellDeps(hash),
     enabled: !!tx && !isProvisional,
+  });
+  const { data: cellbaseBlock } = useQuery({
+    queryKey: ['block', tx?.blockNumber],
+    queryFn: () => api.getBlock(tx!.blockNumber!),
+    enabled: !!tx && tx.isCellbase && !provisional(tx) && tx.blockNumber !== undefined,
   });
   const { data: lifecycle } = useQuery({
     queryKey: ['txLifecycle', hash],
@@ -775,7 +863,11 @@ export default function TransactionDetailPage() {
     witnessIndex: g.witnessIndex,
     scriptHash: g.scriptHash,
   }));
-  const linkDeps = (deps ?? []).map((d, index) => ({ index, scriptHashes: d.scriptHashes }));
+  const linkDeps = (deps ?? []).map((d, index) => ({
+    index,
+    scriptHashes: [...d.scriptHashes, ...d.outputLockScriptHashes],
+  }));
+  const feePaidBy = required(tx.feePaidBy, hash, 'feePaidBy');
   const focus: TxHover | null =
     hover ??
     (selectedGroup !== null
@@ -834,6 +926,9 @@ export default function TransactionDetailPage() {
     const codeDeps = (deps ?? []).flatMap((d, i) =>
       d.scriptHashes.includes(g.scriptHash) ? [{ d, i }] : []
     );
+    const attachedDeps = (deps ?? []).flatMap((d, i) =>
+      !g.ran && d.outputLockScriptHashes.includes(g.scriptHash) ? [{ d, i }] : []
+    );
     const w = g.witnessIndex === null ? null : witnesses.find((x) => x.index === g.witnessIndex);
     const firstCell = g.inputIndices.length
       ? tx.inputs?.[g.inputIndices[0]]
@@ -845,7 +940,10 @@ export default function TransactionDetailPage() {
       name: groupLabel(g, lookup),
       href: groupHref(g, lookup),
       mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
-      sub: `args ${truncateHash(g.script.args, 6, 4)}`,
+      sub: (() => {
+        const decoded = g.kind === 'lock' ? firstCell?.lockArgsDecoded : null;
+        return decoded ? decodedArgsText(decoded) : `args ${truncateHash(g.script.args, 6, 4)}`;
+      })(),
       ran: g.ran,
       cellIds: groupCells(g),
       cycles: g.cycles,
@@ -871,7 +969,15 @@ export default function TransactionDetailPage() {
           </button>
         ),
       code: !g.ran ? (
-        <span className="text-text-dim">—</span>
+        attachedDeps.length > 0 ? (
+          attachedDeps.map(({ d, i }) => (
+            <a key={i} href={`#tx-dep-${i}`} className="text-text-dim hover:text-jade block">
+              code {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex} · not run here
+            </a>
+          ))
+        ) : (
+          <span className="text-text-dim">—</span>
+        )
       ) : isProvisional ? (
         <span className="text-text-dim">read once committed</span>
       ) : depsError ? (
@@ -903,7 +1009,6 @@ export default function TransactionDetailPage() {
       : activity
         ? activityHeadline(activity)
         : 'Transaction';
-  const mark = activity ? activityClassMark(activity) : null;
   const summary = isProvisional ? (
     <p className="text-text-dim text-xs">
       Activity and canonical cell structure are available once this transaction is committed and
@@ -912,8 +1017,20 @@ export default function TransactionDetailPage() {
   ) : tx.isCellbase ? (
     <p data-testid="tx-summary" className="text-text max-w-[80ch] text-[15px]">
       The first transaction of block{' '}
-      {formatBlockNumber(required(tx.blockNumber, hash, 'blockNumber'))}. It consumes no cell and
-      creates the miner&rsquo;s reward,{' '}
+      {formatBlockNumber(required(tx.blockNumber, hash, 'blockNumber'))}. It consumes no cell and{' '}
+      {tx.pays === undefined ? (
+        <ActivityReadError txHash={hash} error={new Error('cellbase has no "pays" field')} />
+      ) : tx.pays === null ? (
+        'pays no block’s reward, as no block before it is final yet'
+      ) : (
+        <>
+          pays the reward of block{' '}
+          <Link href={`/blocks/${tx.pays.number}`} className="text-text-bright hover:text-jade">
+            {formatBlockNumber(tx.pays.number)}
+          </Link>
+        </>
+      )}
+      ,{' '}
       <ExactCkb
         shannons={exactUnsignedInteger(
           required(tx.outputsCapacity, hash, 'outputsCapacity'),
@@ -935,7 +1052,7 @@ export default function TransactionDetailPage() {
       Transaction {hash} has no indexed activity.
     </p>
   ) : (
-    readable(hash, () => <TxSummary activity={activity} fee={tx.fee} />)
+    readable(hash, () => <TxSummary activity={activity} fee={tx.fee} feePaidBy={feePaidBy} />)
   );
 
   // ---- capacity (TX-19, TX-33) ----
@@ -1118,10 +1235,7 @@ export default function TransactionDetailPage() {
         <div className="flex min-w-0 flex-[999_1_640px] flex-col gap-8">
           <header className="flex flex-col gap-2">
             <span className="text-text-dim text-xs">Transaction</span>
-            <h1 className="text-text-bright break-words text-[26px] font-medium">
-              {mark && <ClassMark kind={mark} className="mr-2.5 align-[-1px]" />}
-              {headline}
-            </h1>
+            <h1 className="text-text-bright break-words text-[26px] font-medium">{headline}</h1>
             {summary}
             <div className="flex min-w-0 items-center gap-0.5 text-xs">
               <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
@@ -1255,6 +1369,23 @@ export default function TransactionDetailPage() {
                   tone="plain"
                 />
               </dd>
+              {feePaidBy.length > 0 && (
+                <dd className="text-text-dim text-xs">
+                  paid by{' '}
+                  <ParticipantRefView
+                    participant={{
+                      address: feePaidBy[0].address,
+                      lockHash: feePaidBy[0].lockHash,
+                      lockHashPrefix: null,
+                      roles: [],
+                    }}
+                    compact
+                    quiet
+                  />
+                  {feePaidBy.length > 1 &&
+                    ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`}
+                </dd>
+              )}
             </div>
             {isProvisional && tx.pendingSince && (
               <div className="flex flex-col gap-0.5">
@@ -1342,6 +1473,14 @@ export default function TransactionDetailPage() {
                       lit={lit}
                       lookup={lookup}
                       groupNameByHash={groupNameByHash}
+                      minerMessage={
+                        cellbaseBlock
+                          ? {
+                              raw: cellbaseBlock.minerMessage,
+                              text: cellbaseBlock.minerMessageText,
+                            }
+                          : undefined
+                      }
                       onSelect={() =>
                         selectedWitness === w.index ? select(null, null) : select(w.index, null)
                       }
@@ -1398,6 +1537,8 @@ export default function TransactionDetailPage() {
                 <p role="alert" className="py-3">
                   {depsError.message}
                 </p>
+              ) : deps && deps.length === 0 ? (
+                <p className="text-text-dim py-3">none</p>
               ) : deps ? (
                 deps.map((dep, i) => (
                   <DepRow
