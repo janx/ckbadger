@@ -355,7 +355,19 @@ pub struct ResolvedDependencyCell {
     pub index: u32,
     pub data_hash: String,
     pub type_hash: Option<String>,
+    /// Scripts that ran in this transaction (input locks, input and output
+    /// types) whose code this cell supplies.
     pub script_hashes: Vec<String>,
+    /// Output locks whose code this cell supplies: attached here, run only
+    /// when that output is spent — "not run here" (TX-14). A lock that is
+    /// also an input lock ran, and is in `scriptHashes` instead.
+    pub output_lock_script_hashes: Vec<String>,
+    /// The cell's data length in bytes: the code's size (TX-15).
+    pub code_size: usize,
+    /// The script registry's names of the references this cell supplies in
+    /// this transaction (run or attached), distinct and sorted; empty when it
+    /// supplies none or none is registered (TX-15).
+    pub script_names: Vec<String>,
 }
 
 fn node_cell(
@@ -385,6 +397,7 @@ fn node_cell(
 pub fn resolved_dependencies(
     tx: &ckb_types::core::TransactionView,
     reader: &ckb_store_reader::CkbChainReader,
+    store: &ckbadger_store::CkbadgerStore,
 ) -> anyhow::Result<Vec<super::transactions::CellDepResponse>> {
     let mut scripts = BTreeMap::<String, packed::Script>::new();
     for input in tx
@@ -413,6 +426,29 @@ pub fn resolved_dependencies(
             );
         }
     }
+    // Output locks do not run in this transaction; one that is also a script
+    // that ran is listed only there.
+    let output_locks: BTreeMap<String, packed::Script> = tx
+        .outputs()
+        .into_iter()
+        .map(|output| {
+            let lock = output.lock();
+            (
+                format!("0x{}", hex::encode(lock.calc_script_hash().as_slice())),
+                lock,
+            )
+        })
+        .filter(|(hash, _)| !scripts.contains_key(hash))
+        .collect();
+    let supplies = |script: &packed::Script,
+                    data_hash: &packed::Byte32,
+                    type_hash: Option<&packed::Byte32>| {
+        if script.hash_type().as_slice()[0] == 1 {
+            type_hash.is_some_and(|hash| *hash == script.code_hash())
+        } else {
+            *data_hash == script.code_hash()
+        }
+    };
     tx.cell_deps()
         .into_iter()
         .map(|dep| {
@@ -437,19 +473,27 @@ pub fn resolved_dependencies(
                         .type_()
                         .to_opt()
                         .map(|script| script.calc_script_hash());
-                    let script_hashes = scripts
-                        .iter()
-                        .filter_map(|(hash, script)| {
-                            let matched = if script.hash_type().as_slice()[0] == 1 {
-                                type_hash
-                                    .as_ref()
-                                    .is_some_and(|hash| *hash == script.code_hash())
-                            } else {
-                                data_hash == script.code_hash()
-                            };
-                            matched.then(|| hash.clone())
-                        })
-                        .collect();
+                    let matching = |set: &BTreeMap<String, packed::Script>| -> Vec<String> {
+                        set.iter()
+                            .filter(|(_, script)| supplies(script, &data_hash, type_hash.as_ref()))
+                            .map(|(hash, _)| hash.clone())
+                            .collect()
+                    };
+                    let script_hashes = matching(&scripts);
+                    let output_lock_script_hashes = matching(&output_locks);
+                    let mut script_names = std::collections::BTreeSet::new();
+                    for hash in script_hashes.iter().chain(&output_lock_script_hashes) {
+                        let script = scripts
+                            .get(hash)
+                            .or_else(|| output_locks.get(hash))
+                            .expect("matched hash is a key of its set");
+                        if let Some(name) = crate::utils::script_resolution::registered_script_name(
+                            store,
+                            script.code_hash().as_slice(),
+                        )? {
+                            script_names.insert(name);
+                        }
+                    }
                     Ok(ResolvedDependencyCell {
                         tx_hash: format!("0x{}", hex::encode(point.tx_hash().as_slice())),
                         index: point.index().unpack(),
@@ -457,12 +501,21 @@ pub fn resolved_dependencies(
                         type_hash: type_hash
                             .map(|hash| format!("0x{}", hex::encode(hash.as_slice()))),
                         script_hashes,
+                        output_lock_script_hashes,
+                        code_size: data.len(),
+                        script_names: script_names.into_iter().collect(),
                     })
                 })
                 .collect::<anyhow::Result<_>>()?;
             let script_hashes = resolved_cells
                 .iter()
                 .flat_map(|cell| cell.script_hashes.iter().cloned())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let output_lock_script_hashes = resolved_cells
+                .iter()
+                .flat_map(|cell| cell.output_lock_script_hashes.iter().cloned())
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
@@ -478,6 +531,7 @@ pub fn resolved_dependencies(
                 .into(),
                 resolved_cells,
                 script_hashes,
+                output_lock_script_hashes,
             })
         })
         .collect()

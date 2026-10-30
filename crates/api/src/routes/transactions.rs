@@ -2350,6 +2350,8 @@ pub struct CellDepResponse {
     pub dep_type: String,
     pub resolved_cells: Vec<super::transaction_structure::ResolvedDependencyCell>,
     pub script_hashes: Vec<String>,
+    /// Union of the members' `outputLockScriptHashes` (TX-14).
+    pub output_lock_script_hashes: Vec<String>,
 }
 
 async fn get_cell_deps(
@@ -2383,10 +2385,12 @@ async fn get_cell_deps(
     };
 
     if let Some(tx_view) = store.get_transaction(&tx_hash) {
-        return ok(
-            super::transaction_structure::resolved_dependencies(&tx_view, store)
-                .map_err(|e| ApiError::internal(format!("cell deps for {hash}: {e}")))?,
-        );
+        return ok(super::transaction_structure::resolved_dependencies(
+            &tx_view,
+            store,
+            &state.store,
+        )
+        .map_err(|e| ApiError::internal(format!("cell deps for {hash}: {e}")))?);
     }
 
     if state
@@ -3141,6 +3145,7 @@ mod tests {
         let resp = CellDepResponse {
             resolved_cells: vec![],
             script_hashes: vec![],
+            output_lock_script_hashes: vec![],
             out_point_tx_hash: "0xabc".to_string(),
             out_point_index: 0,
             dep_type: "code".to_string(),
