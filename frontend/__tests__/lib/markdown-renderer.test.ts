@@ -50,6 +50,7 @@ describe('renderMarkdownPage', () => {
       closeTxHash: null,
       commitmentTxHash: null,
       delayEpoch: null,
+      delayEpochDecoded: null,
       settlementBlock: null,
       settlementTimestamp: null,
       settlementTxHash: null,

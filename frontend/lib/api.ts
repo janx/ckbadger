@@ -3031,7 +3031,8 @@ interface FiberChannel {
    * with BigInt, never Number.
    */
   delayEpoch: string | null;
-  delayEpochDecoded?: { relative: boolean; epochs: number; index: number; length: number } | null;
+  /** `delayEpoch` decoded; null exactly when `delayEpoch` is null. */
+  delayEpochDecoded: FiberEpochDelay | null;
   settlementBlock: number | null;
   settlementTimestamp: string | null;
   settlementTxHash: string | null;
@@ -3126,10 +3127,20 @@ interface FiberCellEvidence {
   consumedByTx: string | null;
 }
 
+/** A `since` epoch delay: relative or absolute, `epochs + index/length` epochs. */
+interface FiberEpochDelay {
+  relative: boolean;
+  epochs: number;
+  index: number;
+  length: number;
+}
+
 interface FiberCommitmentEvidence extends FiberCellEvidence {
   pubkeyHash: string;
+  /** The commitment lock's `since`-encoded delay as an exact u64 decimal string. */
   delayEpoch: string;
-  delayEpochDecoded?: { relative: boolean; epochs: number; index: number; length: number } | null;
+  /** `delayEpoch` decoded by the channel's one since-epoch decoder. */
+  delayEpochDecoded: FiberEpochDelay;
   version: string;
   settlementHash: string | null;
   settlementFlag: number | null;
@@ -3350,6 +3361,7 @@ export type {
   FiberPair,
   FiberParty,
   FiberChannelEvidence,
+  FiberEpochDelay,
   FiberChannelState,
   FiberChannelQueryParams,
 };
