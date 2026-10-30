@@ -2057,6 +2057,12 @@ pub struct CellDetailResponse {
     pub data_size: i32,
     pub created_at_block: i64,
     pub created_timestamp: String,
+    /// Epoch of the creating block, from its indexed header.
+    pub created_epoch: CellEpochResponse,
+    /// The data hash a script references for this cell's data (CKB's
+    /// `CellOutput::calc_data_hash`: 32 zero bytes for empty data); `None`
+    /// only when the cell's bytes are unavailable.
+    pub data_hash: Option<String>,
     pub status: String,
     pub consumed_at_block: Option<i64>,
     pub consumed_by_tx: Option<String>,
@@ -2086,6 +2092,14 @@ pub struct CellDetailResponse {
     pub current_spend_requirements: Vec<CellSpendRequirement>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dao_info: Option<DaoInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellEpochResponse {
+    pub number: i64,
+    pub index: i32,
+    pub length: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3956,7 +3970,7 @@ async fn get_cell(
         (None, None)
     };
 
-    let timestamp_at = |block: i64| -> Result<(i64, String), ApiRouteError> {
+    let timestamp_at = |block: i64| -> Result<(i64, String, CellEpochResponse), ApiRouteError> {
         let header = state
             .store
             .get_block_header(block)
@@ -3976,11 +3990,16 @@ async fn get_cell(
                 header.timestamp
             ))
         })?;
-        Ok((header.chain_time_ms, date.to_rfc3339()))
+        let epoch = CellEpochResponse {
+            number: header.epoch_number,
+            index: header.epoch_index,
+            length: header.epoch_length,
+        };
+        Ok((header.chain_time_ms, date.to_rfc3339(), epoch))
     };
-    let (created_ms, created_timestamp) = timestamp_at(info.created_at_block)?;
+    let (created_ms, created_timestamp, created_epoch) = timestamp_at(info.created_at_block)?;
     let (spent_timestamp, lifetime_ms) = if let Some(block) = consumed_at_block {
-        let (spent_ms, timestamp) = timestamp_at(block)?;
+        let (spent_ms, timestamp, _) = timestamp_at(block)?;
         let lifetime = spent_ms.checked_sub(created_ms).ok_or_else(|| {
             ApiError::internal(format!(
                 "cell {outpoint} lifetime overflow: created={created_ms} spent={spent_ms}"
@@ -4141,6 +4160,13 @@ async fn get_cell(
         data_size: info.data_size,
         created_at_block: info.created_at_block,
         created_timestamp,
+        created_epoch,
+        data_hash: cell_data.as_ref().map(|bytes| {
+            format!(
+                "0x{}",
+                hex::encode(ckb_types::packed::CellOutput::calc_data_hash(bytes).as_slice())
+            )
+        }),
         status: status_str.to_string(),
         consumed_at_block,
         consumed_by_tx,

@@ -44,6 +44,8 @@ use crate::AppState;
 /// Public so tests can hold `/pipeline` to its own bound.
 pub use address_holdings::DaoCapacityMemo;
 pub use dao::DaoEvidenceMemo;
+pub use fiber::FiberView;
+pub use forks::ForkView;
 pub use pipeline::{PipelinePaysCache, PIPELINE_TIP_WAIT};
 
 pub fn api_routes() -> Router<Arc<AppState>> {

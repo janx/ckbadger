@@ -446,6 +446,9 @@ pub struct CollectionItemResponse {
     /// `.cell` only: the 20-byte owner prefix its data names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_hash_prefix: Option<String>,
+    /// did:ckb rows and detail only: the item's DID (`did:ckb:<base32>`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub did: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
     pub expired_at: Option<u64>,
@@ -1803,11 +1806,13 @@ fn build_capacity_history_chart_with_initial(
         data,
         series: vec![
             StackedAreaSeries {
+                id: None,
                 key: "used".to_string(),
                 label: "Used".to_string(),
                 color: "#f59e0b".to_string(),
             },
             StackedAreaSeries {
+                id: None,
                 key: "unused".to_string(),
                 label: "Unused".to_string(),
                 color: "#00c389".to_string(),
@@ -3122,6 +3127,7 @@ pub(crate) fn list_identity_items_inner(
                 owner_lock_hash,
                 owner_address,
                 owner_hash_prefix: None,
+                did: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -3179,6 +3185,7 @@ pub(crate) fn list_identity_items_inner(
                 owner_lock_hash,
                 owner_address,
                 owner_hash_prefix: None,
+                did: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -3239,6 +3246,7 @@ pub(crate) fn list_identity_items_inner(
                 owner_lock_hash: owner.lock_hash,
                 owner_address: owner.address,
                 owner_hash_prefix: Some(owner.hash_prefix),
+                did: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -3259,6 +3267,9 @@ pub(crate) fn list_identity_items_inner(
             }
             let (owner_lock_hash, owner_address) =
                 item_owner(store, entry.owner_lock_hash.as_deref(), network)?;
+            let did = super::asset_protocol::did_ckb_string(nft_id).map_err(|e| {
+                ApiError::internal(format!("did:ckb item 0x{}: {e}", hex::encode(nft_id)))
+            })?;
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
@@ -3266,6 +3277,7 @@ pub(crate) fn list_identity_items_inner(
                 owner_lock_hash,
                 owner_address,
                 owner_hash_prefix: None,
+                did: Some(did),
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at: None,
@@ -3388,6 +3400,7 @@ fn list_spore_cluster_items(
                 owner_lock_hash,
                 owner_address,
                 owner_hash_prefix: None,
+                did: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at: None,
@@ -3620,6 +3633,7 @@ async fn list_object_collection_items(
             owner_lock_hash,
             owner_address,
             owner_hash_prefix: None,
+            did: None,
             is_live: entry.is_live,
             created_at_block: entry.created_at_block,
             expired_at: None,

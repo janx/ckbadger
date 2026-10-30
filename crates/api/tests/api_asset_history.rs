@@ -681,6 +681,31 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
     assert_eq!(next["data"][0]["index"], 1);
     assert_eq!(next["data"][0]["itemContext"]["action"], "mint");
     assert!(next["data"][0]["itemContext"]["consumedCell"].is_null());
+    // ID-C1: the facts behind "Updated by its owner" / "Transferred to the same
+    // owner", from the two versions the row joins; a mint has no previous version.
+    assert!(
+        next["data"][0]["itemContext"]["versionDiff"].is_null(),
+        "{next}"
+    );
+    let diff = &first["data"][0]["itemContext"]["versionDiff"];
+    let (created, consumed) = (
+        &first["data"][0]["itemContext"]["createdCell"],
+        &first["data"][0]["itemContext"]["consumedCell"],
+    );
+    assert_eq!(
+        diff["ownerChanged"],
+        created["ownerLockHash"] != consumed["ownerLockHash"],
+        "{first}"
+    );
+    assert_eq!(
+        diff["dataChanged"],
+        created["dataHash"] != consumed["dataHash"],
+        "{first}"
+    );
+    assert!(
+        diff["ownerChanged"].is_boolean() && diff["dataChanged"].is_boolean(),
+        "{diff}"
+    );
     let (status, error) = get_json(&app, &format!("{base}/activity-feed?cursor=100:3")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
 }
@@ -1212,14 +1237,14 @@ fn dotbit_witness(version: u32, id: &[u8], index: u32) -> (Vec<u8>, Vec<u8>) {
         fields.push(1_700_000_000u64.to_le_bytes().to_vec())
     } else {
         fields.extend([
-            0u64.to_le_bytes().to_vec(),
-            0u64.to_le_bytes().to_vec(),
-            0u64.to_le_bytes().to_vec(),
+            1_610_000_000u64.to_le_bytes().to_vec(),
+            1_620_000_000u64.to_le_bytes().to_vec(),
+            1_630_000_000u64.to_le_bytes().to_vec(),
         ])
     }
     fields.extend([vec![0], mol_table(&[record])]);
     if version >= 3 {
-        fields.extend([vec![0], 0u64.to_le_bytes().to_vec()]);
+        fields.extend([vec![1], 5_000_000_000u64.to_le_bytes().to_vec()]);
     }
     if version >= 4 {
         fields.push(mol_table(&[mol_bytes(b""), mol_bytes(b"")]))
@@ -1243,6 +1268,7 @@ async fn dotbit_protocol_reads_committed_records_and_parties_for_each_witness_ve
         raw.extend(&id);
         raw.extend([0x55; 20]);
         raw.extend(1_900_000_000u64.to_le_bytes());
+        raw.extend(b"alice.bit");
         let mut lock = vec![3];
         lock.extend([0x66; 20]);
         lock.push(6);
@@ -1278,6 +1304,50 @@ async fn dotbit_protocol_reads_committed_records_and_parties_for_each_witness_ve
         assert_eq!(d["records"][0]["value"], "0xabc");
         assert_eq!(d["owner"]["algorithm"], 3);
         assert_eq!(d["manager"]["algorithm"], 6);
+        // ID-B1: the witness's timing and sub-account fields, per layout version.
+        let (transfer, manager, records) = if version >= 2 {
+            (
+                serde_json::json!("1610000000"),
+                serde_json::json!("1620000000"),
+                serde_json::json!("1630000000"),
+            )
+        } else {
+            (
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+            )
+        };
+        assert_eq!(
+            d["lastTransferAccountAt"], transfer,
+            "version={version}: {d}"
+        );
+        assert_eq!(d["lastEditManagerAt"], manager, "version={version}");
+        assert_eq!(d["lastEditRecordsAt"], records, "version={version}");
+        assert_eq!(
+            d["updatedAt"],
+            if version == 1 {
+                serde_json::json!("1700000000")
+            } else {
+                serde_json::Value::Null
+            },
+            "version={version}"
+        );
+        if version >= 3 {
+            assert_eq!(d["enableSubAccount"], 1, "version={version}");
+            assert_eq!(d["renewSubAccountPrice"], "5000000000", "version={version}");
+        } else {
+            assert_eq!(d["enableSubAccount"], serde_json::Value::Null);
+            assert_eq!(d["renewSubAccountPrice"], serde_json::Value::Null);
+        }
+        // ID-B3: the account-name bytes after expiredAt have a field entry.
+        let fields = json["versions"][0]["fields"].as_array().unwrap();
+        let account = fields
+            .iter()
+            .find(|f| f["name"] == "account")
+            .unwrap_or_else(|| panic!("version={version}: no account field in {fields:?}"));
+        assert_eq!(account["start"], 80, "{account}");
+        assert_eq!(account["end"], 89, "{account}");
     }
 }
 

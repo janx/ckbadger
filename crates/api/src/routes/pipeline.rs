@@ -1546,6 +1546,7 @@ mod tests {
             max_block_bytes: 1_000,
             max_block_cycles: 1_000,
             max_block_proposals_limit,
+            epoch_duration_target_secs: 14_400,
         }
     }
 

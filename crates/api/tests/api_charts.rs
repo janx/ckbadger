@@ -740,6 +740,33 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
         capacity.contains(&("SecpFamily (data)".to_string(), "400".to_string())),
         "junk data form must be its own bucket, got {capacity:?}"
     );
+    // CH-29: every named series carries its stable identity, so the family and
+    // its same-named junk form can be told apart and linked; "others" has none.
+    let ids: Vec<(String, serde_json::Value)> = json["capacityShare"]["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| {
+            (
+                series["label"].as_str().unwrap().to_string(),
+                series["id"].clone(),
+            )
+        })
+        .collect();
+    let id_of = |label: &str| ids.iter().find(|(l, _)| l == label).unwrap().1.clone();
+    assert!(
+        id_of("SecpFamily")
+            .as_str()
+            .is_some_and(|id| id.starts_with("family:")),
+        "{ids:?}"
+    );
+    assert!(
+        id_of("SecpFamily (data)")
+            .as_str()
+            .is_some_and(|id| id.starts_with("ref:0x") && id.ends_with(":data")),
+        "{ids:?}"
+    );
+    assert_eq!(id_of("Others"), serde_json::Value::Null, "{ids:?}");
     let used = buckets(&json["usedShare"]);
     assert!(
         used.contains(&("SecpFamily".to_string(), "180".to_string())),

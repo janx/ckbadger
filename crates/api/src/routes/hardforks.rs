@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::consensus::{load_hardfork_features, HardforkFeature};
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::scripts::first_code_cell_deployment;
-use crate::utils::list_version_code_cells;
+use crate::utils::{hash_type_to_string, list_version_code_cells};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +142,28 @@ pub struct ScriptDeploymentMarkerResponse {
     pub block_number: i64,
     pub timestamp_ms: i64,
     pub epoch_number: i64,
+    /// The hash types the version is registered under (its registered
+    /// reference forms), in lane order `type`, `data1`, `data2`, `data` — the
+    /// lanes of `hashTypeLanes` this deployment belongs to.
+    pub hash_types: Vec<&'static str>,
+}
+
+/// A version's registered reference hash types, in [`HASH_TYPE_LANES`] order.
+fn registered_hash_types(
+    info: &ckbadger_store::ScriptVersionInfo,
+) -> anyhow::Result<Vec<&'static str>> {
+    HASH_TYPE_LANES
+        .iter()
+        .filter(|lane| {
+            info.registered_references
+                .iter()
+                .any(|(_, form)| form == *lane)
+        })
+        .map(|lane| {
+            hash_type_to_string(*lane)
+                .ok_or_else(|| anyhow::anyhow!("hash type lane {lane} has no label"))
+        })
+        .collect()
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -262,6 +284,7 @@ async fn list_hardforks(
             else {
                 continue;
             };
+            let hash_types = registered_hash_types(&info)?;
             script_deployments.push(ScriptDeploymentMarkerResponse {
                 family_name: family.name.clone(),
                 version_name: info.name.unwrap_or(family.name),
@@ -272,6 +295,7 @@ async fn list_hardforks(
                 block_number: first.block_number,
                 timestamp_ms: first.timestamp_ms,
                 epoch_number: first.epoch_number,
+                hash_types,
             });
         }
         script_deployments.sort_by(|left, right| {

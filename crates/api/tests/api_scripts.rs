@@ -319,6 +319,271 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
 }
 
 #[tokio::test]
+async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
+    let store = test_store();
+    let family_id = "class-evidence";
+    let version = vec![0x31; 32];
+    let type_ref = vec![0x42; 32];
+    let outpoint = vec![0x53; 32];
+    seed_block_headers_at(
+        &store,
+        &[
+            (9, utc_ms("2024-01-02T00:00:01Z")),
+            (10, utc_ms("2024-01-01T23:59:59Z")),
+        ],
+    );
+    set_script_fixture_block_tx_count(&store, 10, 2);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        family_id,
+        &ScriptFamilyInfo {
+            family_id: family_id.to_string(),
+            name: "Class Evidence".to_string(),
+            versions_count: 1,
+            lock_cells_count: 2,
+            live_cells_count: 2,
+            cells_count: 2,
+            owned_capacity_sum: 900,
+            owned_knowledge_sum: 100,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Class Evidence", family_id);
+    batch.put_script_version_by_family(family_id, &version);
+    batch.put_script_version(
+        &version,
+        &ScriptVersionInfo {
+            version_hash: version.clone(),
+            family_id: Some(family_id.to_string()),
+            registered_references: vec![(version.clone(), 2), (type_ref.clone(), 1)],
+            type_id_deployments: vec![(type_ref.clone(), 10)],
+            canonical_reference_hash: Some(type_ref.clone()),
+            canonical_hash_type: Some(1),
+            lock_cells_count: 2,
+            lock_live_cells_count: 2,
+            lock_owned_capacity_sum: 900,
+            lock_owned_knowledge_sum: 100,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_info(
+        2,
+        &version,
+        &ScriptReferenceInfo {
+            reference_hash: version.clone(),
+            hash_type: 2,
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_owned_capacity_sum: 500,
+            lock_owned_knowledge_sum: 50,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(2, &version, &version);
+    batch.put_script_reference_info(
+        1,
+        &type_ref,
+        &ScriptReferenceInfo {
+            reference_hash: type_ref.clone(),
+            hash_type: 1,
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_owned_capacity_sum: 400,
+            lock_owned_knowledge_sum: 50,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(1, &type_ref, &version);
+    batch.put_cell(
+        &outpoint,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x19; 32],
+            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            lock_hash_type: 1,
+            lock_args: vec![0x00; 20],
+            type_script_hash: Some(type_ref.clone()),
+            type_code_hash: Some(vec![0x61; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version.clone()),
+        },
+        10,
+    );
+    batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
+    put_canonical_script_tx(&mut batch, &outpoint, 10, 1, 1);
+    batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/scripts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list: serde_json::Value =
+        serde_json::from_slice(&list.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        list["data"][0]["codeClasses"],
+        serde_json::json!([
+            {"class":"fixed","lockCellsCount":1,"lockOwnedCapacitySum":"500","referenceCount":1},
+            {"class":"unspendable","lockCellsCount":1,"lockOwnedCapacitySum":"400","referenceCount":1}
+        ])
+    );
+
+    let (status, detail) = get_json(&app, "/scripts/Class%20Evidence").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let custody = &detail["versions"][0]["deployments"][0]["custody"];
+    // D6 / SC-L9: secp256k1 with no known key (20 zero bytes, the multisig v2
+    // Type ID code cell's lock) can never sign, so the code is effectively immutable.
+    assert_eq!(custody["class"], "unspendable", "{custody}");
+    assert_eq!(custody["witnessState"], "not_applicable", "{custody}");
+}
+
+#[tokio::test]
+async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_search() {
+    let store = test_store();
+    let family_id = "class-evidence";
+    let version = vec![0x31; 32];
+    let type_ref = vec![0x42; 32];
+    let outpoint = vec![0x53; 32];
+    seed_block_headers_at(
+        &store,
+        &[
+            (9, utc_ms("2024-01-02T00:00:01Z")),
+            (10, utc_ms("2024-01-01T23:59:59Z")),
+        ],
+    );
+    set_script_fixture_block_tx_count(&store, 10, 2);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        family_id,
+        &ScriptFamilyInfo {
+            family_id: family_id.to_string(),
+            name: "Class Evidence".to_string(),
+            versions_count: 1,
+            lock_cells_count: 2,
+            live_cells_count: 2,
+            cells_count: 2,
+            owned_capacity_sum: 900,
+            owned_knowledge_sum: 100,
+            ..Default::default()
+        },
+    );
+    batch.put_script_family_by_name("Class Evidence", family_id);
+    batch.put_script_version_by_family(family_id, &version);
+    batch.put_script_version(
+        &version,
+        &ScriptVersionInfo {
+            version_hash: version.clone(),
+            family_id: Some(family_id.to_string()),
+            registered_references: vec![(version.clone(), 2), (type_ref.clone(), 1)],
+            type_id_deployments: vec![(type_ref.clone(), 10)],
+            canonical_reference_hash: Some(type_ref.clone()),
+            canonical_hash_type: Some(1),
+            lock_cells_count: 2,
+            lock_live_cells_count: 2,
+            lock_owned_capacity_sum: 900,
+            lock_owned_knowledge_sum: 100,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_info(
+        2,
+        &version,
+        &ScriptReferenceInfo {
+            reference_hash: version.clone(),
+            hash_type: 2,
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_owned_capacity_sum: 500,
+            lock_owned_knowledge_sum: 50,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(2, &version, &version);
+    batch.put_script_reference_info(
+        1,
+        &type_ref,
+        &ScriptReferenceInfo {
+            reference_hash: type_ref.clone(),
+            hash_type: 1,
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_owned_capacity_sum: 400,
+            lock_owned_knowledge_sum: 50,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference_to_version(1, &type_ref, &version);
+    batch.put_cell(
+        &outpoint,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x19; 32],
+            lock_code_hash: hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            lock_hash_type: 1,
+            lock_args: vec![0x81; 20],
+            type_script_hash: Some(type_ref.clone()),
+            type_code_hash: Some(vec![0x61; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version.clone()),
+        },
+        10,
+    );
+    batch.put_cell_by_type(&type_ref, 10, &outpoint, 0);
+    put_canonical_script_tx(&mut batch, &outpoint, 10, 1, 1);
+    batch.put_cell_by_data_hash(&version, 10, &outpoint, 0);
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let (status, list) = get_json(&app, "/scripts").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    // SC-L4: the family's first code cell, on the list row.
+    assert_eq!(
+        list["data"][0]["firstDeployedAt"],
+        serde_json::json!({ "blockNumber": 10, "timestampMs": utc_ms("2024-01-01T23:59:59Z"),
+            "versionHash": format!("0x{}", hex::encode(&version)) }),
+        "{list}"
+    );
+    // SC-L3: each class says how many families it covers.
+    assert_eq!(
+        list["classSummary"],
+        serde_json::json!([
+            {"class":"fixed","lockCellsCount":1,"lockOwnedCapacitySum":"500","referenceCount":1,"familyCount":1},
+            {"class":"one_key","lockCellsCount":1,"lockOwnedCapacitySum":"400","referenceCount":1,"familyCount":1}
+        ])
+    );
+    // SC-L5: a code hash (version data hash or registered reference) finds its family.
+    for (query, total) in [
+        ("0x3131", 1),
+        (&*format!("0x{}", hex::encode(&type_ref)), 1),
+        ("0x4242", 1),
+        ("0xdead", 0),
+        ("class", 1),
+    ] {
+        let (status, found) = get_json(&app, &format!("/scripts?search={query}")).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {found}");
+        assert_eq!(found["total"], total, "{query}: {found}");
+    }
+}
+
+#[tokio::test]
 async fn test_script_family_exposes_exact_reference_classes_and_chain_history() {
     let store = test_store();
     let family_id = "class-evidence";
@@ -701,7 +966,8 @@ async fn test_scripts_list_supports_cursor_pagination() {
     assert_eq!(
         json["classSummary"],
         serde_json::json!([{
-            "class":"fixed", "lockCellsCount":3, "lockOwnedCapacitySum":"300", "referenceCount":3
+            "class":"fixed", "lockCellsCount":3, "lockOwnedCapacitySum":"300", "referenceCount":3,
+            "familyCount":3
         }])
     );
     let page_one_summary = json["classSummary"].clone();
@@ -3315,6 +3581,11 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     assert_eq!(data[2]["date"], "2024-01-17");
     assert_eq!(data[2]["values"]["used"], "85");
     assert_eq!(data[2]["values"]["unused"], "55");
+    // SC-S8: the peak of total CKB held (used + unused), the first greatest day.
+    assert_eq!(
+        json["totalPeak"],
+        serde_json::json!({ "date": "2024-01-15", "value": "150" })
+    );
 
     let request = Request::builder()
         .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/capacity-history?from=2024-01-16&to=2024-01-16")

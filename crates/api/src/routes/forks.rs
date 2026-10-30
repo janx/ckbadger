@@ -11,9 +11,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
+use crate::utils::script_to_address;
 use crate::utils::stats_bucket::ChainTime;
 use crate::utils::sync_status::deep_fork_info_if_consistent;
 use crate::AppState;
+use ckb_store_reader::CkbChainReader;
 use ckbadger_store::types::{CachedBlockHeader, ReorgEventKind, ReorgEventRecord};
 use ckbadger_store::CkbadgerStore;
 
@@ -33,8 +35,17 @@ pub struct ReorgEventResponse {
     /// Detection time in milliseconds; the stable id of the event.
     pub id: i64,
     pub detected_at: String,
-    pub reverted_by_event: Option<i64>,
-    pub reverses_events: Vec<i64>,
+    /// The later switch that restored this event's abandoned tip, by its D7
+    /// address; `None` when nothing reversed it.
+    pub reverted_by_event: Option<ForkEventRefResponse>,
+    /// The earlier switches this one reversed, by their D7 addresses.
+    pub reverses_events: Vec<ForkEventRefResponse>,
+    /// The first block this switch dropped (height `forkPointNumber + 1` on the
+    /// abandoned branch): the second half of the event's D7 address
+    /// `/forks/<forkPointNumber>/<first 8 hex digits>`. `None` exactly when
+    /// `firstOrphanStatus` is not `recorded` or `traced`.
+    pub first_orphan_hash: Option<String>,
+    pub first_orphan_status: &'static str,
     pub fork_point_number: i64,
     pub fork_point_hash: String,
     pub old_tip_number: i64,
@@ -60,7 +71,9 @@ pub struct ReorgEventResponse {
 pub struct ForkEventPreviewResponse {
     pub old_block_hash: String,
     pub old_miner_lock_hash: Option<String>,
+    pub old_miner_address: Option<String>,
     pub competing_miner_lock_hash: Option<String>,
+    pub competing_miner_address: Option<String>,
     pub fate: String,
     pub uncle_in_block: Option<i64>,
     pub timestamp_gap_ms: Option<i64>,
@@ -77,6 +90,8 @@ pub struct OrphanedBlockResponse {
     pub timestamp: String,
     pub transactions_count: i32,
     pub miner_lock_hash: Option<String>,
+    /// The miner lock's address, from the cellbase witness (as on the block page).
+    pub miner_address: Option<String>,
     /// Fate of this historical old-branch block in the current indexed chain.
     pub fate: String,
     pub uncle_in: Option<UncleInclusionResponse>,
@@ -101,6 +116,8 @@ pub struct CanonicalBranchBlockResponse {
     pub timestamp: String,
     pub transactions_count: i32,
     pub miner_lock_hash: Option<String>,
+    /// The miner lock's address, from the cellbase witness (as on the block page).
+    pub miner_address: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +213,104 @@ pub struct ForkOverviewResponse {
     pub uncles_in_window: i64,
     pub node_switches_in_window: i64,
     pub node_switches_all_time: i64,
+    /// Everything this node's persisted switch history says, over all events.
+    pub node_record: NodeSwitchRecordResponse,
+}
+
+/// A fork event named by its D7 address.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkEventRefResponse {
+    pub fork_point_number: i64,
+    pub first_orphan_hash: Option<String>,
+    pub first_orphan_status: &'static str,
+}
+
+/// The node's switch history as a whole (Forks overview, FF-L1 / FF-L3).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeSwitchRecordResponse {
+    /// When this indexer's live sync began (the bulk → live handoff): switches
+    /// are only observed from then on. `None` while no live sync has begun.
+    pub observed_since: Option<String>,
+    pub observed_since_block: Option<i64>,
+    /// Detection time of the oldest persisted automatic switch.
+    pub first_switch_detected_at: Option<String>,
+    /// Automatic switches that dropped more than one block.
+    pub switches_deeper_than_one_block: i64,
+    /// Deep-fork detections (sync paused, nothing rolled back).
+    pub deep_detections: i64,
+    /// Blocks rolled back by automatic switches (persisted per event).
+    pub orphaned_blocks: i64,
+    /// Transactions rolled back by automatic switches, each dropped block's
+    /// cellbase included (persisted per event).
+    pub orphaned_transactions: i64,
+    /// `available` when the node store is open; `node_reader_unavailable` otherwise.
+    pub evidence_status: &'static str,
+    /// What became of every dropped block and transaction, read from the
+    /// node's copy of each old branch. `None` without the node reader.
+    pub orphan_fates: Option<OrphanFateTotalsResponse>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanFateTotalsResponse {
+    /// Automatic switches whose old branch the node still has.
+    pub events_with_evidence: i64,
+    /// Automatic switches whose old branch the node no longer has (not counted below).
+    pub events_old_branch_unavailable: i64,
+    pub blocks: OrphanBlockFateTotalsResponse,
+    /// Non-cellbase transactions of the dropped blocks.
+    pub user_transactions: OrphanTxFateTotalsResponse,
+    pub competing: CompetingBlockTotalsResponse,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanBlockFateTotalsResponse {
+    pub total: i64,
+    pub included_as_uncle: i64,
+    /// Included uncles by distance (inclusion height − orphan height), ascending.
+    pub uncle_distances: Vec<UncleDistanceCountResponse>,
+    pub canonical_now: i64,
+    pub not_included_as_uncle: i64,
+    pub uncle_fate_pending: i64,
+    pub awaiting_canonical_tip: i64,
+    /// No indexed canonical chain to judge against yet.
+    pub canonical_evidence_unavailable: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncleDistanceCountResponse {
+    pub distance: i64,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanTxFateTotalsResponse {
+    pub total: i64,
+    pub committed_later: i64,
+    pub canonical_now: i64,
+    pub committed_on_canonical_branch: i64,
+    pub not_committed_as_of_tip: i64,
+    /// No indexed canonical chain to judge against yet.
+    pub canonical_evidence_unavailable: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompetingBlockTotalsResponse {
+    /// Dropped blocks with a different canonical block at their height.
+    pub compared: i64,
+    /// Of those, both miners known and the same lock ("one miner against itself").
+    pub same_miner: i64,
+    /// Of those, a miner unknown on either side (no cellbase witness).
+    pub miner_unknown: i64,
+    /// Exact median of |dropped − canonical header time| in ms over `compared`
+    /// (the mean of the two middle values when even, as an exact decimal).
+    pub gap_median_ms: Option<String>,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -203,7 +318,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/forks", get(list_forks))
         .route("/forks/overview", get(get_forks_overview))
         .route("/forks/recent", get(get_recent_reorg))
-        .route("/forks/{id}", get(get_fork_detail))
+        .route("/forks/{fork_point}/{orphan}", get(get_fork_at))
 }
 
 fn hex0x(bytes: &[u8]) -> String {
@@ -221,26 +336,168 @@ fn rfc3339_from_unix_seconds(seconds: i64, context: &str) -> Result<String, ApiR
         })
 }
 
+/// The first block a switch dropped: height `fork_point + 1` on the abandoned
+/// branch, i.e. the second half of the event's D7 address.
+///
+/// One rule: walk the recorded old branch from `old_tip_hash` down to
+/// `fork_point + 1`. A one-block switch needs no step — its old tip *is* the
+/// first orphan, which the event row records. A deeper switch needs one node
+/// read per step, so without the node reader it stays unresolved (the event row
+/// keeps only the old tip's hash; persisting the first orphan is lane W's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstOrphan {
+    Recorded([u8; 32]),
+    Traced([u8; 32]),
+    NotObserved,
+    NeedsNodeReader,
+    OldBranchUnavailable,
+}
+
+impl FirstOrphan {
+    fn hash(&self) -> Option<&[u8; 32]> {
+        match self {
+            FirstOrphan::Recorded(hash) | FirstOrphan::Traced(hash) => Some(hash),
+            _ => None,
+        }
+    }
+
+    fn status(&self) -> &'static str {
+        match self {
+            FirstOrphan::Recorded(_) => "recorded",
+            FirstOrphan::Traced(_) => "traced",
+            FirstOrphan::NotObserved => "not_observed",
+            FirstOrphan::NeedsNodeReader => "needs_node_reader",
+            FirstOrphan::OldBranchUnavailable => "old_branch_unavailable",
+        }
+    }
+}
+
+fn first_orphan(
+    record: &ReorgEventRecord,
+    reader: Option<&CkbChainReader>,
+) -> anyhow::Result<FirstOrphan> {
+    let event = &record.event;
+    if event.orphaned_blocks == 0 {
+        return Ok(FirstOrphan::NotObserved);
+    }
+    let span = event.old_tip.checked_sub(event.fork_point).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fork {}: old tip {} below fork point {}",
+            record.key,
+            event.old_tip,
+            event.fork_point
+        )
+    })?;
+    anyhow::ensure!(
+        event.orphaned_blocks == span,
+        "fork {} recorded {} orphaned blocks but its old branch spans {} heights (fork point {}, old tip {})",
+        record.key,
+        event.orphaned_blocks,
+        span,
+        event.fork_point,
+        event.old_tip
+    );
+    let old_tip: [u8; 32] = event.old_tip_hash.as_slice().try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "fork {}: old tip hash has {} bytes",
+            record.key,
+            event.old_tip_hash.len()
+        )
+    })?;
+    if span == 1 {
+        return Ok(FirstOrphan::Recorded(old_tip));
+    }
+    let Some(reader) = reader else {
+        return Ok(FirstOrphan::NeedsNodeReader);
+    };
+    match walk_recorded_branch(
+        reader,
+        "old",
+        event.old_tip,
+        &event.old_tip_hash,
+        event.fork_point,
+        &event.fork_point_hash,
+    ) {
+        Ok(branch) => {
+            let (hash, _) = branch.last().ok_or_else(|| {
+                anyhow::anyhow!("fork {}: empty old branch above fork point", record.key)
+            })?;
+            Ok(FirstOrphan::Traced(*hash))
+        }
+        Err(e) if is_old_branch_unavailable(&e) => Ok(FirstOrphan::OldBranchUnavailable),
+        Err(e) => Err(e.context(format!("tracing first orphan of fork {}", record.key))),
+    }
+}
+
+/// The whole persisted switch history of one request, with every event's
+/// first orphan resolved once, so rows can name each other by D7 address.
+struct ForkHistory {
+    records: Vec<ReorgEventRecord>,
+    first_orphans: HashMap<String, FirstOrphan>,
+}
+
+impl ForkHistory {
+    fn load(store: &CkbadgerStore, reader: Option<&CkbChainReader>) -> anyhow::Result<Self> {
+        let records = store.list_reorg_events(usize::MAX, None)?;
+        let mut first_orphans = HashMap::with_capacity(records.len());
+        for record in &records {
+            first_orphans.insert(record.key.clone(), first_orphan(record, reader)?);
+        }
+        Ok(Self {
+            records,
+            first_orphans,
+        })
+    }
+
+    fn first_orphan_of(&self, key: &str) -> anyhow::Result<FirstOrphan> {
+        self.first_orphans
+            .get(key)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("fork history has no event {key}"))
+    }
+
+    fn reference(&self, key: &str, context: &str) -> anyhow::Result<ForkEventRefResponse> {
+        let record = self
+            .records
+            .iter()
+            .find(|record| record.key == key)
+            .ok_or_else(|| anyhow::anyhow!("{context} names missing fork event {key}"))?;
+        let orphan = self.first_orphan_of(key)?;
+        Ok(ForkEventRefResponse {
+            fork_point_number: record.event.fork_point,
+            first_orphan_hash: orphan.hash().map(|hash| hex0x(hash)),
+            first_orphan_status: orphan.status(),
+        })
+    }
+}
+
 /// Render one persisted reorg event. Every field comes from the record the
 /// writer captured at detection time, so nothing here is re-derived from chain
 /// state that may have moved since.
-fn reorg_event_response(record: &ReorgEventRecord) -> Result<ReorgEventResponse, ApiRouteError> {
+fn reorg_event_response(
+    record: &ReorgEventRecord,
+    history: &ForkHistory,
+) -> Result<ReorgEventResponse, ApiRouteError> {
+    let internal = |e: anyhow::Error| ApiError::internal(format!("{e:#}"));
     let detected_at = rfc3339_from_unix_seconds(record.event.detected_at, &record.key)?;
+    let first_orphan = history.first_orphan_of(&record.key).map_err(internal)?;
     Ok(ReorgEventResponse {
         reverted_by_event: record
             .event
             .reverted_by_event
-            .as_ref()
-            .map(|key| ckbadger_store::keys::decode_reorg_event_key(key.as_bytes()))
+            .as_deref()
+            .map(|key| history.reference(key, &format!("fork {} revertedByEvent", record.key)))
             .transpose()
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+            .map_err(internal)?,
         reverses_events: record
             .event
             .reverses_events
             .iter()
-            .map(|key| ckbadger_store::keys::decode_reorg_event_key(key.as_bytes()))
+            .map(|key| history.reference(key, &format!("fork {} reversesEvents", record.key)))
             .collect::<Result<_, _>>()
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+            .map_err(internal)?,
+        first_orphan_hash: first_orphan.hash().map(|hash| hex0x(hash)),
+        first_orphan_status: first_orphan.status(),
         id: record.detected_at_ms,
         detected_at,
         fork_point_number: record.event.fork_point,
@@ -272,6 +529,28 @@ fn reorg_event_response(record: &ReorgEventRecord) -> Result<ReorgEventResponse,
     })
 }
 
+/// The miner a block's cellbase witness names: its lock hash and address,
+/// encoded exactly as the block page encodes its miner (`script_to_address`
+/// over the witness lock). `None` only for a block whose cellbase carries no
+/// witness.
+fn cellbase_miner(
+    reader: &CkbChainReader,
+    hash: &[u8; 32],
+    network: &str,
+) -> anyhow::Result<Option<(String, String)>> {
+    let Some((lock, _)) = reader.get_cellbase_witness(hash) else {
+        return Ok(None);
+    };
+    let address = script_to_address(
+        lock.code_hash().as_slice(),
+        i16::from(lock.hash_type().as_slice()[0]),
+        &lock.args().raw_data(),
+        network,
+    )
+    .map_err(|e| anyhow::anyhow!("block 0x{}: miner witness lock: {e}", hex::encode(hash)))?;
+    Ok(Some((hex0x(lock.calc_script_hash().as_slice()), address)))
+}
+
 /// Reject anything that is not a well-formed history key before it reaches the
 /// store, so a bad cursor is a 400 and never a silently shifted page.
 fn parse_forks_cursor(cursor: Option<&str>) -> Result<Option<Vec<u8>>, ApiRouteError> {
@@ -295,13 +574,15 @@ async fn get_forks_overview(
     if !(1..=90).contains(&days) {
         return Err(ApiError::bad_request("days must be between 1 and 90"));
     }
-    let store = state.store.clone();
     let response = tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
-        let chain = ChainTime::load(&store)?;
+        let store = state.store.as_ref();
+        let view = fork_view(&state).map_err(|e| ApiError::internal(format!("fork overview: {e:#}")))?;
+        let chain = ChainTime::load(store)?;
         let rows = store.list_daily_block_stats().map_err(|e| ApiError::internal(e.to_string()))?;
-        let events = store.list_reorg_events(usize::MAX, None).map_err(|e| ApiError::internal(e.to_string()))?;
+        let events = &view.history.records;
         let node_switches_all_time = i64::try_from(events.iter().filter(|record| record.event.kind == ReorgEventKind::Automatic).count())
             .map_err(|_| ApiError::internal("node switch count exceeds i64"))?;
+        let node_record = view.node_record.clone();
         let Some(chain) = chain else {
             if !rows.is_empty() || !events.is_empty() {
                 return Err(ApiError::internal("fork evidence exists without an indexed canonical chain"));
@@ -313,6 +594,7 @@ async fn get_forks_overview(
                 uncles_in_window: 0,
                 node_switches_in_window: 0,
                 node_switches_all_time: 0,
+                node_record,
             });
         };
         let genesis = store.get_block_header(0).map_err(|e| ApiError::internal(e.to_string()))?
@@ -328,6 +610,7 @@ async fn get_forks_overview(
                 uncles_in_window: 0,
                 node_switches_in_window: 0,
                 node_switches_all_time,
+                node_record,
             });
         }
         let requested_start = last_day - chrono::Duration::days(i64::from(days) - 1);
@@ -393,9 +676,187 @@ async fn get_forks_overview(
             uncles_in_window,
             node_switches_in_window,
             node_switches_all_time,
+            node_record,
         })
     }).await.map_err(|e| ApiError::internal(e.to_string()))??;
     ok(response)
+}
+
+fn count_i64(value: usize, what: &str) -> anyhow::Result<i64> {
+    i64::try_from(value).map_err(|_| anyhow::anyhow!("{what} count exceeds i64"))
+}
+
+fn add_one(counter: &mut i64, what: &str) -> anyhow::Result<()> {
+    *counter = counter
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("{what} count overflow"))?;
+    Ok(())
+}
+
+/// The node's switch history as a whole: persisted counts over every event,
+/// and — with the node reader — what became of every dropped block and
+/// transaction, from the same branch evidence the list previews read.
+fn node_switch_record(
+    status: &ckbadger_store::types::SyncStatus,
+    events: &[ReorgEventRecord],
+    evidence: Option<&HashMap<String, Option<BranchEvidence>>>,
+) -> anyhow::Result<NodeSwitchRecordResponse> {
+    let observed_since = status
+        .bulk_sync_completed_at
+        .map(|seconds| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+                .map(|at| at.to_rfc3339())
+                .ok_or_else(|| anyhow::anyhow!("invalid bulk sync completion time {seconds}"))
+        })
+        .transpose()?;
+    let automatic: Vec<&ReorgEventRecord> = events
+        .iter()
+        .filter(|record| record.event.kind == ReorgEventKind::Automatic)
+        .collect();
+    let first_switch_detected_at = automatic
+        .iter()
+        .map(|record| record.detected_at_ms)
+        .min()
+        .map(|ms| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+                .map(|at| at.to_rfc3339())
+                .ok_or_else(|| anyhow::anyhow!("invalid fork event time {ms}"))
+        })
+        .transpose()?;
+    let mut orphaned_blocks = 0i64;
+    let mut orphaned_transactions = 0i64;
+    for record in &automatic {
+        orphaned_blocks = orphaned_blocks
+            .checked_add(record.event.orphaned_blocks)
+            .ok_or_else(|| anyhow::anyhow!("orphaned block total overflow at {}", record.key))?;
+        orphaned_transactions = orphaned_transactions
+            .checked_add(record.event.orphaned_txs)
+            .ok_or_else(|| anyhow::anyhow!("orphaned tx total overflow at {}", record.key))?;
+    }
+    let switches_deeper_than_one_block = count_i64(
+        automatic
+            .iter()
+            .filter(|record| record.event.old_tip - record.event.fork_point > 1)
+            .count(),
+        "deeper switch",
+    )?;
+    let deep_detections = count_i64(
+        events
+            .iter()
+            .filter(|record| record.event.kind == ReorgEventKind::Deep)
+            .count(),
+        "deep detection",
+    )?;
+    let (evidence_status, orphan_fates) = match evidence {
+        None => ("node_reader_unavailable", None),
+        Some(evidence) => {
+            let mut totals = OrphanFateTotalsResponse::default();
+            let mut distances: std::collections::BTreeMap<i64, i64> = Default::default();
+            let mut gaps: Vec<i64> = Vec::new();
+            for record in automatic
+                .iter()
+                .filter(|record| record.event.orphaned_blocks > 0)
+            {
+                let Some((blocks, transactions)) = evidence
+                    .get(&record.key)
+                    .ok_or_else(|| anyhow::anyhow!("fork {} has no branch evidence", record.key))?
+                else {
+                    add_one(
+                        &mut totals.events_old_branch_unavailable,
+                        "unavailable event",
+                    )?;
+                    continue;
+                };
+                add_one(&mut totals.events_with_evidence, "evidence event")?;
+                for block in blocks.iter() {
+                    add_one(&mut totals.blocks.total, "orphan block")?;
+                    let counter = match block.fate.as_str() {
+                        "included_as_uncle" => {
+                            let uncle = block.uncle_in.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!("uncle fate without inclusion: {}", block.hash)
+                            })?;
+                            add_one(distances.entry(uncle.distance).or_insert(0), "distance")?;
+                            &mut totals.blocks.included_as_uncle
+                        }
+                        "canonical_now" => &mut totals.blocks.canonical_now,
+                        "not_included_as_uncle" => &mut totals.blocks.not_included_as_uncle,
+                        "uncle_fate_pending" => &mut totals.blocks.uncle_fate_pending,
+                        "awaiting_canonical_tip" => &mut totals.blocks.awaiting_canonical_tip,
+                        "canonical_evidence_unavailable" => {
+                            &mut totals.blocks.canonical_evidence_unavailable
+                        }
+                        other => anyhow::bail!("orphan {} has unexpected fate {other}", block.hash),
+                    };
+                    add_one(counter, "orphan fate")?;
+                    if let Some(competing) = &block.competing_block {
+                        add_one(&mut totals.competing.compared, "compared")?;
+                        match (&block.miner_lock_hash, &competing.miner_lock_hash) {
+                            (Some(old), Some(new)) => {
+                                if old == new {
+                                    add_one(&mut totals.competing.same_miner, "same miner")?;
+                                }
+                            }
+                            _ => add_one(&mut totals.competing.miner_unknown, "miner unknown")?,
+                        }
+                        let gap = block.timestamp_gap_ms.ok_or_else(|| {
+                            anyhow::anyhow!("competing block without gap: {}", block.hash)
+                        })?;
+                        gaps.push(
+                            gap.checked_abs()
+                                .ok_or_else(|| anyhow::anyhow!("gap overflow at {}", block.hash))?,
+                        );
+                    }
+                }
+                for tx in transactions.iter().filter(|tx| tx.tx_index > 0) {
+                    add_one(&mut totals.user_transactions.total, "orphan tx")?;
+                    let counter = match tx.fate.as_str() {
+                        "committed_later" => &mut totals.user_transactions.committed_later,
+                        "canonical_now" => &mut totals.user_transactions.canonical_now,
+                        "committed_on_canonical_branch" => {
+                            &mut totals.user_transactions.committed_on_canonical_branch
+                        }
+                        "not_committed_as_of_tip" => {
+                            &mut totals.user_transactions.not_committed_as_of_tip
+                        }
+                        "canonical_evidence_unavailable" => {
+                            &mut totals.user_transactions.canonical_evidence_unavailable
+                        }
+                        other => anyhow::bail!("orphan tx {} has unexpected fate {other}", tx.hash),
+                    };
+                    add_one(counter, "orphan tx fate")?;
+                }
+            }
+            totals.blocks.uncle_distances = distances
+                .into_iter()
+                .map(|(distance, count)| UncleDistanceCountResponse { distance, count })
+                .collect();
+            gaps.sort_unstable();
+            totals.competing.gap_median_ms = match gaps.len() {
+                0 => None,
+                n if n % 2 == 1 => Some(gaps[n / 2].to_string()),
+                n => {
+                    let sum = i128::from(gaps[n / 2 - 1]) + i128::from(gaps[n / 2]);
+                    Some(if sum % 2 == 0 {
+                        (sum / 2).to_string()
+                    } else {
+                        format!("{}.5", sum / 2)
+                    })
+                }
+            };
+            ("available", Some(totals))
+        }
+    };
+    Ok(NodeSwitchRecordResponse {
+        observed_since,
+        observed_since_block: status.bulk_sync_completed_block,
+        first_switch_detected_at,
+        switches_deeper_than_one_block,
+        deep_detections,
+        orphaned_blocks,
+        orphaned_transactions,
+        evidence_status,
+        orphan_fates,
+    })
 }
 
 /// List the persisted reorg-event history, newest first.
@@ -412,123 +873,42 @@ async fn list_forks(
         .clamp(1, MAX_FORKS_LIMIT);
     let cursor = parse_forks_cursor(params.cursor.as_deref())?;
 
-    let store = state.store.clone();
     let page_size = limit as usize;
-    let (mut records, total) = tokio::task::spawn_blocking(move || {
-        let records = store.list_reorg_events(page_size + 1, cursor.as_deref())?;
-        let total = store.count_reorg_events()?;
-        Ok::<_, anyhow::Error>((records, total))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let has_more = records.len() > page_size;
-    if has_more {
-        records.truncate(page_size);
-    }
-    let next_cursor = if has_more {
-        records.last().map(|record| record.key.clone())
-    } else {
-        None
-    };
-
-    let mut events = records
-        .iter()
-        .map(reorg_event_response)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    if let Some(reader) = state.ckb_store.clone() {
-        let store = state.store.clone();
-        let records_for_evidence = records.clone();
-        let previews = tokio::task::spawn_blocking(
-            move || -> anyhow::Result<Vec<(String, Option<ForkEventPreviewResponse>)>> {
-                records_for_evidence
-                    .iter()
-                    .map(|record| {
-                        if record.event.orphaned_blocks == 0 {
-                            return Ok(("no_old_branch".to_string(), None));
-                        }
-                        let (mut blocks, mut transactions) =
-                            match read_orphaned_branch(&reader, &record.event) {
-                                Ok(branch) => branch,
-                                Err(e) if is_old_branch_unavailable(&e) => {
-                                    return Ok(("old_branch_unavailable".to_string(), None));
-                                }
-                                Err(e) => return Err(e),
-                            };
-                        if let Err(e) = enrich_branch_fate(
-                            &store,
-                            &reader,
-                            &record.event,
-                            &mut blocks,
-                            &mut transactions,
-                        ) {
-                            if is_old_branch_unavailable(&e) {
-                                return Ok(("old_branch_unavailable".to_string(), None));
-                            }
-                            return Err(e);
-                        }
-                        let first = blocks.first().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "fork {} recorded old blocks but node branch is empty",
-                                record.key
-                            )
-                        })?;
-                        let noncellbase_transactions = i64::try_from(
-                            transactions
-                                .iter()
-                                .filter(|tx| tx.block_hash == first.hash && tx.tx_index > 0)
-                                .count(),
-                        )?;
-                        let committed_later_transactions = i64::try_from(
-                            transactions
-                                .iter()
-                                .filter(|tx| {
-                                    tx.block_hash == first.hash && tx.fate == "committed_later"
-                                })
-                                .count(),
-                        )?;
-                        Ok((
-                            "available".to_string(),
-                            Some(ForkEventPreviewResponse {
-                                old_block_hash: first.hash.clone(),
-                                old_miner_lock_hash: first.miner_lock_hash.clone(),
-                                competing_miner_lock_hash: first
-                                    .competing_block
-                                    .as_ref()
-                                    .and_then(|block| block.miner_lock_hash.clone()),
-                                fate: first.fate.clone(),
-                                uncle_in_block: first
-                                    .uncle_in
-                                    .as_ref()
-                                    .map(|uncle| uncle.block_number),
-                                timestamp_gap_ms: first.timestamp_gap_ms,
-                                noncellbase_transactions,
-                                committed_later_transactions,
-                            }),
-                        ))
-                    })
-                    .collect()
-            },
-        )
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(format!("fork list evidence: {e:#}")))?;
-        for (event, (status, preview)) in events.iter_mut().zip(previews) {
-            event.preview_status = status;
-            event.preview = preview;
-        }
-    } else {
-        for event in &mut events {
-            event.preview_status = if event.orphaned_blocks_count == 0 {
-                "no_old_branch"
-            } else {
-                "node_reader_unavailable"
+    let (events, total, next_cursor) =
+        tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
+            let view =
+                fork_view(&state).map_err(|e| ApiError::internal(format!("fork list: {e:#}")))?;
+            // Newest first; the cursor is the last row's key, exclusive.
+            let mut page: Vec<&ReorgEventRecord> = view
+                .history
+                .records
+                .iter()
+                .filter(|record| {
+                    cursor
+                        .as_deref()
+                        .is_none_or(|cursor| record.key.as_bytes() < cursor)
+                })
+                .take(page_size + 1)
+                .collect();
+            let has_more = page.len() > page_size;
+            if has_more {
+                page.truncate(page_size);
             }
-            .to_string();
-        }
-    }
+            let next_cursor = if has_more {
+                page.last().map(|record| record.key.clone())
+            } else {
+                None
+            };
+            let total = i64::try_from(view.history.records.len())
+                .map_err(|_| ApiError::internal("fork event count exceeds i64"))?;
+            let events = page
+                .into_iter()
+                .map(|record| view.row(record))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((events, total, next_cursor))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
 
     ok(CursorPaginatedResponse::new(
         events,
@@ -538,78 +918,340 @@ async fn list_forks(
     ))
 }
 
-/// Get one persisted reorg event by its id (its detection millisecond).
-async fn get_fork_detail(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> ApiResult<ReorgDetailResponse> {
-    let store = state.store.clone();
-    let record = tokio::task::spawn_blocking(move || store.get_reorg_event(id))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let Some(record) = record else {
-        return Err(ApiError::not_found("Reorg event not found"));
+/// One event's dropped branch with every block's and transaction's fate, read
+/// from the node's copy of it; `None` when the node no longer has the branch.
+fn read_branch_evidence(
+    store: &CkbadgerStore,
+    reader: &CkbChainReader,
+    network: &str,
+    event: &ckbadger_store::ReorgEvent,
+) -> anyhow::Result<Option<(Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>)>> {
+    let (mut blocks, mut transactions) = match read_orphaned_branch(reader, network, event) {
+        Ok(branch) => branch,
+        Err(e) if is_old_branch_unavailable(&e) => return Ok(None),
+        Err(e) => return Err(e),
     };
+    match enrich_branch_fate(
+        store,
+        reader,
+        network,
+        event,
+        &mut blocks,
+        &mut transactions,
+    ) {
+        Ok(_) => Ok(Some((blocks, transactions))),
+        Err(e) if is_old_branch_unavailable(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 
-    let (
-        orphaned_blocks,
-        orphaned_transactions,
-        adopted_branch,
-        canonical_branch,
-        canonical_tip_number,
-    ) = if record.event.orphaned_blocks == 0 {
-        let store = state.store.clone();
-        let tip = tokio::task::spawn_blocking(move || store.get_sync_tip_block())
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        (
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            tip.map(|(number, _)| number),
+/// One event's dropped branch with every block's and transaction's fate.
+type BranchEvidence = (Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>);
+
+/// The list row's preview: the first dropped block and its competitor.
+fn preview_from_evidence(
+    record: &ReorgEventRecord,
+    history: &ForkHistory,
+    (blocks, transactions): &BranchEvidence,
+) -> anyhow::Result<ForkEventPreviewResponse> {
+    let first = blocks.first().ok_or_else(|| {
+        anyhow::anyhow!(
+            "fork {} recorded old blocks but node branch is empty",
+            record.key
         )
-    } else {
-        let reader = state.ckb_store.clone().ok_or_else(|| {
-            ApiError::internal(format!(
-                "fork {} evidence unavailable: CKB RocksDB reader is not open",
-                id
-            ))
-        })?;
-        let event = record.event.clone();
-        let store = state.store.clone();
-        tokio::task::spawn_blocking(move || {
-            let (mut blocks, mut transactions) = read_orphaned_branch(&reader, &event)?;
-            let adopted_branch = read_adopted_branch(&reader, &event)?;
-            let (canonical_branch, canonical_tip_number) =
-                enrich_branch_fate(&store, &reader, &event, &mut blocks, &mut transactions)?;
-            Ok::<_, anyhow::Error>((
-                blocks,
-                transactions,
-                adopted_branch,
-                canonical_branch,
-                canonical_tip_number,
-            ))
-        })
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(format!("fork {id}: {e:#}")))?
-    };
-    ok(ReorgDetailResponse {
-        event: reorg_event_response(&record)?,
-        orphaned_blocks,
-        orphaned_transactions,
-        adopted_branch,
-        canonical_branch,
-        canonical_tip_number,
+    })?;
+    ensure_first_orphan_matches(record, history, &first.hash)?;
+    let noncellbase_transactions = i64::try_from(
+        transactions
+            .iter()
+            .filter(|tx| tx.block_hash == first.hash && tx.tx_index > 0)
+            .count(),
+    )?;
+    let committed_later_transactions = i64::try_from(
+        transactions
+            .iter()
+            .filter(|tx| tx.block_hash == first.hash && tx.fate == "committed_later")
+            .count(),
+    )?;
+    Ok(ForkEventPreviewResponse {
+        old_block_hash: first.hash.clone(),
+        old_miner_lock_hash: first.miner_lock_hash.clone(),
+        old_miner_address: first.miner_address.clone(),
+        competing_miner_lock_hash: first
+            .competing_block
+            .as_ref()
+            .and_then(|block| block.miner_lock_hash.clone()),
+        competing_miner_address: first
+            .competing_block
+            .as_ref()
+            .and_then(|block| block.miner_address.clone()),
+        fate: first.fate.clone(),
+        uncle_in_block: first.uncle_in.as_ref().map(|uncle| uncle.block_number),
+        timestamp_gap_ms: first.timestamp_gap_ms,
+        noncellbase_transactions,
+        committed_later_transactions,
     })
 }
 
+/// One canonical tip's fork history: every event with its first orphan, each
+/// list row's preview and the overview's node record. Built once inside one
+/// pinned read view and served from API memory (never written to a store)
+/// until the tip, the deep-fork flag or a pending reconcile says the event rows
+/// may have changed.
+pub struct ForkView {
+    deep_fork_detected: bool,
+    history: ForkHistory,
+    previews: HashMap<String, (&'static str, Option<ForkEventPreviewResponse>)>,
+    node_record: NodeSwitchRecordResponse,
+}
+
+impl ForkView {
+    fn build(
+        store: &CkbadgerStore,
+        reader: Option<&CkbChainReader>,
+        network: &str,
+        status: &ckbadger_store::types::SyncStatus,
+    ) -> anyhow::Result<Self> {
+        let history = ForkHistory::load(store, reader)?;
+        let evidence = match reader {
+            None => None,
+            Some(reader) => {
+                let mut evidence = HashMap::new();
+                for record in history
+                    .records
+                    .iter()
+                    .filter(|record| record.event.orphaned_blocks > 0)
+                {
+                    let branch = read_branch_evidence(store, reader, network, &record.event)
+                        .map_err(|e| e.context(format!("fork {}", record.key)))?;
+                    evidence.insert(record.key.clone(), branch);
+                }
+                Some(evidence)
+            }
+        };
+        let mut previews = HashMap::with_capacity(history.records.len());
+        for record in &history.records {
+            let preview = if record.event.orphaned_blocks == 0 {
+                ("no_old_branch", None)
+            } else {
+                match &evidence {
+                    None => ("node_reader_unavailable", None),
+                    Some(evidence) => match evidence.get(&record.key) {
+                        Some(Some(branch)) => (
+                            "available",
+                            Some(preview_from_evidence(record, &history, branch)?),
+                        ),
+                        Some(None) => ("old_branch_unavailable", None),
+                        None => anyhow::bail!("fork {} has no branch evidence", record.key),
+                    },
+                }
+            };
+            previews.insert(record.key.clone(), preview);
+        }
+        let node_record = node_switch_record(status, &history.records, evidence.as_ref())?;
+        Ok(Self {
+            deep_fork_detected: status.deep_fork_detected,
+            history,
+            previews,
+            node_record,
+        })
+    }
+
+    /// One list row: the persisted event with its D7 references and preview.
+    fn row(&self, record: &ReorgEventRecord) -> Result<ReorgEventResponse, ApiRouteError> {
+        let mut event = reorg_event_response(record, &self.history)?;
+        let (status, preview) = self.previews.get(&record.key).ok_or_else(|| {
+            ApiError::internal(format!("fork view has no preview for {}", record.key))
+        })?;
+        event.preview_status = status.to_string();
+        event.preview = preview.clone();
+        Ok(event)
+    }
+}
+
+/// The fork view for the request's pinned read view. Memoized per canonical
+/// tip (number and hash) and deep-fork flag; never memoized while a reconcile
+/// is pending, because reconciliation rewrites event rows at an unchanged tip.
+/// Call on a blocking thread.
+fn fork_view(state: &AppState) -> anyhow::Result<Arc<ForkView>> {
+    let store = &state.store;
+    let status = store.get_sync_status()?;
+    let pending = store.get_reorg_reconcile_pending()?.is_some();
+    let tip = store.get_sync_tip_block()?;
+    if !pending {
+        if let Some((number, header)) = &tip {
+            if let Some(view) = state.fork_view.get(*number, &header.hash) {
+                if view.deep_fork_detected == status.deep_fork_detected {
+                    return Ok(view);
+                }
+            }
+        }
+    }
+    let view = Arc::new(ForkView::build(
+        store,
+        state.ckb_store.as_deref(),
+        &state.ckb_network,
+        &status,
+    )?);
+    if !pending {
+        if let Some((number, header)) = tip {
+            state.fork_view.set(number, header.hash, view.clone());
+        }
+    }
+    Ok(view)
+}
+
+/// The node's branch must start at the block the event's D7 address names.
+fn ensure_first_orphan_matches(
+    record: &ReorgEventRecord,
+    history: &ForkHistory,
+    branch_first_hash: &str,
+) -> anyhow::Result<()> {
+    let orphan = history.first_orphan_of(&record.key)?;
+    let expected = orphan.hash().ok_or_else(|| {
+        anyhow::anyhow!(
+            "fork {}: node branch starts at {branch_first_hash} but the first orphan is {}",
+            record.key,
+            orphan.status()
+        )
+    })?;
+    anyhow::ensure!(
+        hex0x(expected) == branch_first_hash,
+        "fork {}: node branch starts at {branch_first_hash}, the event's first orphan is {}",
+        record.key,
+        hex0x(expected)
+    );
+    Ok(())
+}
+
+/// A D7 path segment: the fork point height in canonical decimal.
+fn parse_fork_point_segment(raw: &str) -> Result<i64, ApiRouteError> {
+    let canonical = raw == "0"
+        || (!raw.is_empty() && !raw.starts_with('0') && raw.bytes().all(|b| b.is_ascii_digit()));
+    if !canonical {
+        return Err(ApiError::bad_request(format!(
+            "Invalid fork point height: {raw}"
+        )));
+    }
+    raw.parse::<i64>()
+        .map_err(|_| ApiError::bad_request(format!("Invalid fork point height: {raw}")))
+}
+
+/// A D7 path segment: the first 8 lowercase hex digits of the first orphan.
+fn parse_orphan_prefix_segment(raw: &str) -> Result<String, ApiRouteError> {
+    if raw.len() != 8 || !raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(ApiError::bad_request(format!(
+            "Invalid orphan hash prefix (8 lowercase hex digits): {raw}"
+        )));
+    }
+    Ok(raw.to_string())
+}
+
+/// The one event a D7 address names. Exactly one event may match; a second
+/// match, or an event at the same fork point whose first orphan cannot be
+/// resolved, means the address cannot be proved unique and is an error.
+fn resolve_fork_address<'a>(
+    history: &'a ForkHistory,
+    height: i64,
+    prefix: &str,
+) -> Result<&'a ReorgEventRecord, ApiRouteError> {
+    let mut matches = Vec::new();
+    for record in history
+        .records
+        .iter()
+        .filter(|record| record.event.fork_point == height)
+    {
+        let orphan = history
+            .first_orphan_of(&record.key)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+        match orphan {
+            FirstOrphan::Recorded(hash) | FirstOrphan::Traced(hash) => {
+                if hex::encode(hash).starts_with(prefix) {
+                    matches.push(record);
+                }
+            }
+            FirstOrphan::NotObserved => {}
+            FirstOrphan::NeedsNodeReader | FirstOrphan::OldBranchUnavailable => {
+                return Err(ApiError::internal(format!(
+                    "/forks/{height}/{prefix}: event {} at this fork point has an unresolved first orphan ({}); the address cannot be proved to name one event",
+                    record.key,
+                    orphan.status()
+                )));
+            }
+        }
+    }
+    match matches.as_slice() {
+        [] => Err(ApiError::not_found(format!(
+            "No fork event at #{height} dropped a block starting 0x{prefix}"
+        ))),
+        [one] => Ok(one),
+        many => Err(ApiError::internal(format!(
+            "/forks/{height}/{prefix} names {} events (one fork event per fork point and first orphan is an invariant): {}",
+            many.len(),
+            many.iter()
+                .map(|record| record.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// D7: one fork event by its fork point and the first 8 hex digits of the
+/// first block it dropped (`/forks/<fork_point>/<orphan_hash_prefix8>`).
+async fn get_fork_at(
+    State(state): State<Arc<AppState>>,
+    Path((fork_point, orphan)): Path<(String, String)>,
+) -> ApiResult<ReorgDetailResponse> {
+    let height = parse_fork_point_segment(&fork_point)?;
+    let prefix = parse_orphan_prefix_segment(&orphan)?;
+    let response = tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
+        let internal =
+            |e: anyhow::Error| ApiError::internal(format!("fork /forks/{height}/{prefix}: {e:#}"));
+        let view = fork_view(&state).map_err(internal)?;
+        let history = &view.history;
+        let record = resolve_fork_address(history, height, &prefix)?;
+        let event = view.row(record)?;
+        let reader = state.ckb_store.clone().ok_or_else(|| {
+            ApiError::internal(format!(
+                "fork {} evidence unavailable: CKB RocksDB reader is not open",
+                record.key
+            ))
+        })?;
+        let network = &state.ckb_network;
+        let (mut blocks, mut transactions) =
+            read_orphaned_branch(&reader, network, &record.event).map_err(internal)?;
+        let adopted_branch =
+            read_adopted_branch(&reader, network, &record.event).map_err(internal)?;
+        let (canonical_branch, canonical_tip_number) = enrich_branch_fate(
+            &state.store,
+            &reader,
+            network,
+            &record.event,
+            &mut blocks,
+            &mut transactions,
+        )
+        .map_err(internal)?;
+        let first = blocks
+            .first()
+            .ok_or_else(|| internal(anyhow::anyhow!("node branch is empty")))?;
+        ensure_first_orphan_matches(record, history, &first.hash).map_err(internal)?;
+        Ok(ReorgDetailResponse {
+            event,
+            orphaned_blocks: blocks,
+            orphaned_transactions: transactions,
+            adopted_branch,
+            canonical_branch,
+            canonical_tip_number,
+        })
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
+    ok(response)
+}
+
 fn read_adopted_branch(
-    reader: &ckb_store_reader::CkbChainReader,
+    reader: &CkbChainReader,
+    network: &str,
     event: &ckbadger_store::ReorgEvent,
 ) -> anyhow::Result<Vec<CanonicalBranchBlockResponse>> {
     let mut branch = Vec::new();
@@ -625,15 +1267,14 @@ fn read_adopted_branch(
         let timestamp = chrono::DateTime::from_timestamp_millis(i64::try_from(block.timestamp())?)
             .ok_or_else(|| anyhow::anyhow!("invalid adopted timestamp at block {expected_number}"))?
             .to_rfc3339();
-        let miner_lock_hash = reader
-            .get_cellbase_witness(&hash)
-            .map(|(lock, _)| hex0x(lock.calc_script_hash().as_slice()));
+        let (miner_lock_hash, miner_address) = cellbase_miner(reader, &hash, network)?.unzip();
         branch.push(CanonicalBranchBlockResponse {
             number: expected_number,
             hash: hex0x(&hash),
             timestamp,
             transactions_count: i32::try_from(block.transactions().len())?,
             miner_lock_hash,
+            miner_address,
         });
     }
     branch.reverse();
@@ -686,7 +1327,8 @@ fn walk_recorded_branch(
 }
 
 fn read_orphaned_branch(
-    reader: &ckb_store_reader::CkbChainReader,
+    reader: &CkbChainReader,
+    network: &str,
     event: &ckbadger_store::ReorgEvent,
 ) -> anyhow::Result<(Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>)> {
     let mut blocks = Vec::new();
@@ -705,9 +1347,7 @@ fn read_orphaned_branch(
                 anyhow::anyhow!("invalid historical block timestamp at {}", expected_number)
             })?
             .to_rfc3339();
-        let miner_lock_hash = reader
-            .get_cellbase_witness(&hash)
-            .map(|(lock, _)| hex0x(lock.calc_script_hash().as_slice()));
+        let (miner_lock_hash, miner_address) = cellbase_miner(reader, &hash, network)?.unzip();
         blocks.push(OrphanedBlockResponse {
             number: expected_number,
             hash: hex0x(&hash),
@@ -715,6 +1355,7 @@ fn read_orphaned_branch(
             timestamp,
             transactions_count: i32::try_from(block.transactions().len())?,
             miner_lock_hash,
+            miner_address,
             fate: "canonical_evidence_unavailable".to_string(),
             uncle_in: None,
             competing_block: None,
@@ -751,7 +1392,12 @@ fn read_orphaned_branch(
     Ok((blocks, transactions))
 }
 
+/// A canonical block of the fork view. Its miner lock hash is the indexed
+/// header's; the address comes from the node's cellbase witness, which must
+/// name the same lock.
 fn canonical_block_response(
+    reader: &CkbChainReader,
+    network: &str,
     number: i64,
     header: &CachedBlockHeader,
 ) -> anyhow::Result<CanonicalBranchBlockResponse> {
@@ -767,12 +1413,34 @@ fn canonical_block_response(
         header.transactions_count >= 0,
         "negative tx count at canonical block {number}"
     );
+    let miner_lock_hash = header.miner_lock_hash.as_ref().map(|hash| hex0x(hash));
+    let miner_address = match &miner_lock_hash {
+        None => None,
+        Some(indexed) => {
+            let hash: [u8; 32] = header
+                .hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("invalid canonical hash at block {number}"))?;
+            let (witness_lock, address) = cellbase_miner(reader, &hash, network)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "canonical block {number} indexes miner {indexed} but the node has no cellbase witness"
+                )
+            })?;
+            anyhow::ensure!(
+                &witness_lock == indexed,
+                "canonical block {number}: indexed miner {indexed}, node cellbase witness names {witness_lock}"
+            );
+            Some(address)
+        }
+    };
     Ok(CanonicalBranchBlockResponse {
         number,
         hash: hex0x(&header.hash),
         timestamp,
         transactions_count: header.transactions_count,
-        miner_lock_hash: header.miner_lock_hash.as_ref().map(|hash| hex0x(hash)),
+        miner_lock_hash,
+        miner_address,
     })
 }
 
@@ -807,7 +1475,8 @@ fn is_old_branch_unavailable(err: &anyhow::Error) -> bool {
 /// the persisted event still records what this node dropped at that moment.
 fn enrich_branch_fate(
     store: &CkbadgerStore,
-    reader: &ckb_store_reader::CkbChainReader,
+    reader: &CkbChainReader,
+    network: &str,
     event: &ckbadger_store::ReorgEvent,
     blocks: &mut [OrphanedBlockResponse],
     transactions: &mut [OrphanedTransactionResponse],
@@ -827,7 +1496,7 @@ fn enrich_branch_fate(
             number,
             &format!("reading fork {} branch view at tip {tip}", event.fork_point),
         )?;
-        canonical_branch.push(canonical_block_response(number, &header)?);
+        canonical_branch.push(canonical_block_response(reader, network, number, &header)?);
     }
     let mut candidates = Vec::new();
     for (index, block) in blocks.iter_mut().enumerate() {
@@ -853,7 +1522,12 @@ fn enrich_branch_fate(
                     anyhow::anyhow!("timestamp gap overflow for old block {}", block.hash)
                 })?,
         );
-        block.competing_block = Some(canonical_block_response(block.number, &current)?);
+        block.competing_block = Some(canonical_block_response(
+            reader,
+            network,
+            block.number,
+            &current,
+        )?);
         let hash_bytes = hex::decode(
             block
                 .hash
@@ -1013,19 +1687,24 @@ fn enrich_branch_fate(
 }
 
 async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<RecentReorgResponse> {
-    let store = state.store.clone();
-    let (sync_status, latest) = tokio::task::spawn_blocking(move || {
-        let sync_status = store.get_sync_status()?;
-        let latest = store.get_latest_reorg_event()?;
-        Ok::<_, anyhow::Error>((sync_status, latest))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (sync_status, latest, reorg) =
+        tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
+            let internal = |e: anyhow::Error| ApiError::internal(format!("{e:#}"));
+            let sync_status = state.store.get_sync_status().map_err(internal)?;
+            let view = fork_view(&state).map_err(internal)?;
+            // Newest first: the history's first row is the latest event.
+            let latest = view.history.records.first().cloned();
+            let reorg = latest
+                .as_ref()
+                .map(|record| reorg_event_response(record, &view.history))
+                .transpose()?;
+            Ok((sync_status, latest, reorg))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
 
     let deep_fork_info = deep_fork_info_if_consistent(&sync_status)
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let reorg = latest.as_ref().map(reorg_event_response).transpose()?;
 
     let deep_fork = match deep_fork_info {
         Some(info) => {
@@ -1112,26 +1791,74 @@ mod tests {
         }
     }
 
+    fn history(records: &[ReorgEventRecord]) -> ForkHistory {
+        ForkHistory {
+            records: records.to_vec(),
+            first_orphans: records
+                .iter()
+                .map(|record| (record.key.clone(), first_orphan(record, None).unwrap()))
+                .collect(),
+        }
+    }
+
+    fn respond(record: &ReorgEventRecord) -> Result<ReorgEventResponse, ApiRouteError> {
+        reorg_event_response(record, &history(std::slice::from_ref(record)))
+    }
+
     #[test]
-    fn event_links_keep_exact_public_ids() {
+    fn event_links_name_the_other_events_by_d7_address() {
         let mut event = record(1_700_000_000_000, ReorgEventKind::Automatic);
-        event.event.reverted_by_event = Some(format!("reorg:1700000000123:{}", "ab".repeat(16)));
-        event.event.reverses_events = vec![format!("reorg:1699999999123:{}", "cd".repeat(16))];
-        let json = serde_json::to_value(reorg_event_response(&event).unwrap()).unwrap();
-        assert_eq!(json["revertedByEvent"], 1_700_000_000_123i64);
-        assert_eq!(
-            json["reversesEvents"],
-            serde_json::json!([1_699_999_999_123i64])
+        let mut later = record(1_700_000_000_123, ReorgEventKind::Automatic);
+        later.key = format!("reorg:1700000000123:{}", "ab".repeat(16));
+        later.event.old_tip = later.event.fork_point + 1;
+        later.event.orphaned_blocks = 1;
+        event.event.reverted_by_event = Some(later.key.clone());
+        event.event.reverses_events = vec![later.key.clone()];
+        let both = history(&[event.clone(), later.clone()]);
+        let json = serde_json::to_value(reorg_event_response(&event, &both).unwrap()).unwrap();
+        let reference = serde_json::json!({
+            "forkPointNumber": 17_100,
+            "firstOrphanHash": format!("0x{}", "02".repeat(32)),
+            "firstOrphanStatus": "recorded",
+        });
+        assert_eq!(json["revertedByEvent"], reference);
+        assert_eq!(json["reversesEvents"], serde_json::json!([reference]));
+        // The three-block event itself needs the node to trace its first orphan.
+        assert_eq!(json["firstOrphanStatus"], "needs_node_reader");
+        assert_eq!(json["firstOrphanHash"], serde_json::Value::Null);
+        event.event.reverted_by_event = Some("reorg:missing".into());
+        assert!(reorg_event_response(&event, &both).is_err());
+    }
+
+    #[test]
+    fn first_orphan_rejects_a_branch_span_the_event_did_not_roll_back() {
+        let mut event = record(1_700_000_000_000, ReorgEventKind::Automatic);
+        event.event.orphaned_blocks = 2;
+        let err = first_orphan(&event, None).unwrap_err().to_string();
+        assert!(
+            err.contains("recorded 2 orphaned blocks but its old branch spans 3"),
+            "{err}"
         );
-        event.event.reverted_by_event = Some("invalid".into());
-        assert!(reorg_event_response(&event).is_err());
+    }
+
+    #[test]
+    fn d7_segments_accept_only_canonical_height_and_lowercase_prefix() {
+        assert_eq!(parse_fork_point_segment("0").unwrap(), 0);
+        assert_eq!(parse_fork_point_segment("20617704").unwrap(), 20_617_704);
+        for bad in ["", "-1", "007", "1e3", "99999999999999999999"] {
+            assert!(parse_fork_point_segment(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_orphan_prefix_segment("1a2b3c4d").unwrap(), "1a2b3c4d");
+        for bad in ["1A2B3C4D", "1a2b3c4", "1a2b3c4d5", "0x1a2b3c", "1a2b3c4g"] {
+            assert!(parse_orphan_prefix_segment(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
     fn superseded_tip_hash_is_reported_from_persisted_event() {
         let mut event = record(1_700_000_000_000, ReorgEventKind::Automatic);
         event.event.superseded_by_tip_hash = Some(vec![0xdd; 32]);
-        let json = serde_json::to_value(reorg_event_response(&event).unwrap()).unwrap();
+        let json = serde_json::to_value(respond(&event).unwrap()).unwrap();
         assert_eq!(
             json["supersededByTipHash"],
             format!("0x{}", "dd".repeat(32))
@@ -1140,8 +1867,8 @@ mod tests {
 
     #[test]
     fn test_reorg_event_response_reports_persisted_context() {
-        let response = reorg_event_response(&record(1_700_000_000_000, ReorgEventKind::Automatic))
-            .expect("response");
+        let response =
+            respond(&record(1_700_000_000_000, ReorgEventKind::Automatic)).expect("response");
         assert_eq!(response.id, 1_700_000_000_000);
         assert_eq!(response.event_type, "reorg");
         assert_eq!(response.fork_point_number, 17_100);
@@ -1154,8 +1881,7 @@ mod tests {
 
     #[test]
     fn test_reorg_event_response_tags_deep_forks() {
-        let response =
-            reorg_event_response(&record(1_700_000_000_000, ReorgEventKind::Deep)).expect("resp");
+        let response = respond(&record(1_700_000_000_000, ReorgEventKind::Deep)).expect("resp");
         assert_eq!(response.event_type, "deep");
     }
 

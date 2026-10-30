@@ -17,9 +17,9 @@ use crate::response::{
     decode_cursor_single, default_limit, encode_cursor_single, ok, ApiError, ApiResult,
     ApiRouteError, CursorPaginatedResponse, ScriptCodeClassTotalResponse,
     ScriptCustodyOwnerResponse, ScriptCustodyResponse, ScriptFamiliesListResponse,
-    ScriptFamilyDetailResponse, ScriptFamilyListItemResponse, ScriptHistoryMarkerResponse,
-    ScriptObservedReferenceResponse, ScriptRoleCountsResponse, ScriptVersionDeploymentResponse,
-    ScriptVersionDetailResponse,
+    ScriptFamilyDetailResponse, ScriptFamilyListItemResponse, ScriptFirstDeploymentResponse,
+    ScriptHistoryMarkerResponse, ScriptObservedReferenceResponse, ScriptRoleCountsResponse,
+    ScriptVersionDeploymentResponse, ScriptVersionDetailResponse,
 };
 use crate::utils::script_resolution::{
     has_observed_type_id_lineage, observed_type_id_references_from_versions,
@@ -328,6 +328,16 @@ fn classify_code_cell_lock(
 ) -> Result<ScriptCustodyResponse, ApiRouteError> {
     let kind = match (cell.lock_code_hash.as_slice(), cell.lock_hash_type) {
         (hash, 0) if hash == [0u8; 32] => "unspendable",
+        // D6: secp256k1 over 20 zero bytes names no key anyone holds (the
+        // multisig v2 Type ID code cell's lock), so the cell can never be
+        // spent and its code is effectively immutable.
+        (hash, 1)
+            if hex::encode(hash) == SECP_TYPE_HASH
+                && cell.lock_args.len() == 20
+                && cell.lock_args.iter().all(|byte| *byte == 0) =>
+        {
+            "unspendable"
+        }
         (hash, 1) if hex::encode(hash) == SECP_TYPE_HASH && cell.lock_args.len() == 20 => "one_key",
         (hash, 1)
             if MULTISIG_TYPE_HASHES.contains(&hex::encode(hash).as_str())
@@ -1137,7 +1147,76 @@ fn script_family_to_response(
         owned_knowledge_sum: owned_knowledge.to_string(),
         versions_count: info.versions_count,
         code_classes,
+        first_deployed_at: None,
     })
+}
+
+/// A family's earliest code cell over all its versions: each version's first
+/// code cell from [`first_code_cell_deployment`] (the `/hardforks` marker's one
+/// path), earliest by block, transaction index and output index.
+fn family_first_deployment(
+    state: &AppState,
+    versions: &[&(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
+) -> anyhow::Result<Option<ScriptFirstDeploymentResponse>> {
+    let mut first: Option<(FirstCodeCellDeployment, Vec<u8>)> = None;
+    for (version_hash, _) in versions {
+        let code_cells =
+            list_version_code_cells(&state.store, &state.append_only_store, version_hash)?;
+        let Some(deployment) = first_code_cell_deployment(state, version_hash, &code_cells)? else {
+            continue;
+        };
+        let key = |d: &FirstCodeCellDeployment| (d.block_number, d.tx_index, d.output_index);
+        if first
+            .as_ref()
+            .is_none_or(|(best, _)| key(&deployment) < key(best))
+        {
+            first = Some((deployment, version_hash.clone()));
+        }
+    }
+    Ok(
+        first.map(|(deployment, version_hash)| ScriptFirstDeploymentResponse {
+            block_number: deployment.block_number,
+            timestamp_ms: deployment.timestamp_ms,
+            version_hash: format!("0x{}", hex::encode(version_hash)),
+        }),
+    )
+}
+
+/// A `/scripts?search=` term: `0x` + hex digits is a code-hash prefix (any
+/// version data hash or registered reference hash of the family); anything
+/// else is a case-insensitive name substring.
+enum ScriptSearch {
+    CodeHashPrefix(String),
+    Name(String),
+}
+
+impl ScriptSearch {
+    fn parse(raw: &str) -> Self {
+        let lower = raw.to_lowercase();
+        match lower.strip_prefix("0x") {
+            Some(hex) if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                ScriptSearch::CodeHashPrefix(hex.to_string())
+            }
+            _ => ScriptSearch::Name(lower),
+        }
+    }
+
+    fn matches(
+        &self,
+        info: &ckbadger_store::types::ScriptFamilyInfo,
+        versions: &[&(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
+    ) -> bool {
+        match self {
+            ScriptSearch::Name(pattern) => info.name.to_lowercase().contains(pattern),
+            ScriptSearch::CodeHashPrefix(prefix) => versions.iter().any(|(hash, version)| {
+                hex::encode(hash).starts_with(prefix)
+                    || version
+                        .registered_references
+                        .iter()
+                        .any(|(reference, _)| hex::encode(reference).starts_with(prefix))
+            }),
+        }
+    }
 }
 
 fn reference_totals(info: &ckbadger_store::types::ScriptReferenceInfo) -> (i64, i64, i128, i128) {
@@ -1235,6 +1314,7 @@ fn class_totals_for_members(
                 lock_cells_count,
                 lock_owned_capacity_sum: capacity.to_string(),
                 reference_count,
+                family_count: None,
             }
         })
         .collect())
@@ -1242,18 +1322,15 @@ fn class_totals_for_members(
 
 fn family_classes_for_list(
     state: &AppState,
+    versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
     included_families: &HashSet<String>,
 ) -> Result<HashMap<String, Vec<ScriptCodeClassTotalResponse>>, ApiRouteError> {
-    let versions = state
-        .store
-        .list_script_versions()
-        .map_err(|e| ApiError::internal(format!("list script versions for class summary: {e}")))?;
     let membership = ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
         .map_err(|e| ApiError::internal(format!("list script family membership: {e}")))?;
     let allowed_versions: HashSet<Vec<u8>> =
         versions.iter().map(|(hash, _)| hash.clone()).collect();
-    let registered = registered_reference_set(&versions);
-    let observed_type_ids = observed_type_id_references_from_versions(&versions);
+    let registered = registered_reference_set(versions);
+    let observed_type_ids = observed_type_id_references_from_versions(versions);
     let references = state.store.list_script_reference_infos().map_err(|e| {
         ApiError::internal(format!("list script references for class summary: {e}"))
     })?;
@@ -2609,19 +2686,36 @@ async fn list_scripts(
     let limit = params.limit.clamp(1, 100) as usize;
     let _network = params.network.as_deref().unwrap_or(&state.ckb_network);
     let all_families = load_script_families_cached(&state)?;
+    let versions = state
+        .store
+        .list_script_versions()
+        .map_err(|e| ApiError::internal(format!("list script versions for script list: {e}")))?;
+    let mut versions_by_family: HashMap<&str, Vec<&(Vec<u8>, _)>> = HashMap::new();
+    for version in &versions {
+        if let Some(family_id) = version.1.family_id.as_deref() {
+            versions_by_family
+                .entry(family_id)
+                .or_default()
+                .push(version);
+        }
+    }
 
-    let search_pattern = params.search.as_ref().map(|s| s.to_lowercase());
+    let search = params.search.as_deref().map(ScriptSearch::parse);
 
     let mut filtered: Vec<_> = all_families
         .into_iter()
-        .filter(|(_, info)| {
+        .filter(|(family_id, info)| {
             // Exclude families with zero versions (e.g. other-network-only scripts
             // that leaked through a prior label import).
             if info.versions_count <= 0 {
                 return false;
             }
-            if let Some(ref pattern) = search_pattern {
-                if !info.name.to_lowercase().contains(pattern) {
+            if let Some(search) = &search {
+                let family_versions = versions_by_family
+                    .get(family_id.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                if !search.matches(info, family_versions) {
                     return false;
                 }
             }
@@ -2673,7 +2767,7 @@ async fn list_scripts(
 
     let total = filtered.len() as i64;
     let included_families: HashSet<String> = filtered.iter().map(|(id, _)| id.clone()).collect();
-    let mut classes_by_family = family_classes_for_list(&state, &included_families)?;
+    let mut classes_by_family = family_classes_for_list(&state, &versions, &included_families)?;
     let all_items = filtered
         .iter()
         .map(|(family_id, info)| {
@@ -2685,7 +2779,7 @@ async fn list_scripts(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut class_totals: BTreeMap<String, (i64, i128, i64)> = BTreeMap::new();
+    let mut class_totals: BTreeMap<String, (i64, i128, i64, i64)> = BTreeMap::new();
     for item in &all_items {
         for class in &item.code_classes {
             let capacity: i128 = class.lock_owned_capacity_sum.parse().map_err(|e| {
@@ -2707,18 +2801,26 @@ async fn list_scripts(
                 .2
                 .checked_add(class.reference_count)
                 .ok_or_else(|| ApiError::internal("script list class reference count overflow"))?;
+            // One family lists each class at most once.
+            entry.3 = entry
+                .3
+                .checked_add(1)
+                .ok_or_else(|| ApiError::internal("script list class family count overflow"))?;
         }
     }
     let class_summary = class_totals
         .into_iter()
-        .map(|(class, (lock_cells_count, capacity, reference_count))| {
-            ScriptCodeClassTotalResponse {
-                class,
-                lock_cells_count,
-                lock_owned_capacity_sum: capacity.to_string(),
-                reference_count,
-            }
-        })
+        .map(
+            |(class, (lock_cells_count, capacity, reference_count, family_count))| {
+                ScriptCodeClassTotalResponse {
+                    class,
+                    lock_cells_count,
+                    lock_owned_capacity_sum: capacity.to_string(),
+                    reference_count,
+                    family_count: Some(family_count),
+                }
+            },
+        )
         .collect();
 
     // An offset cursor, not a key — but a malformed one silently collapsing to
@@ -2741,7 +2843,19 @@ async fn list_scripts(
         .take(limit + 1)
         .collect();
     let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    let mut page: Vec<_> = page.into_iter().take(limit).collect();
+    for item in &mut page {
+        // A family with no indexed version row has no code cell to date.
+        let Some(family_versions) = versions_by_family.get(item.family_id.as_str()) else {
+            continue;
+        };
+        item.first_deployed_at = family_first_deployment(&state, family_versions).map_err(|e| {
+            ApiError::internal(format!(
+                "first deployment of family {}: {e:#}",
+                item.family_id
+            ))
+        })?;
+    }
 
     let next_cursor = if has_more {
         Some(encode_cursor_single((start_idx + limit) as i64))
@@ -2993,11 +3107,13 @@ fn build_script_capacity_history_chart(
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let series = vec![
         StackedAreaSeries {
+            id: None,
             key: "used".to_string(),
             label: "Used".to_string(),
             color: "#f59e0b".to_string(),
         },
         StackedAreaSeries {
+            id: None,
             key: "unused".to_string(),
             label: "Unused".to_string(),
             color: "#00c389".to_string(),
@@ -3109,11 +3225,60 @@ fn build_script_capacity_history_chart(
     })
 }
 
+/// A script's capacity history plus the peak of the total it holds (SC-S8).
+/// The per-series `peaks` stay on the chart; the total is the stack's sum.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCapacityHistoryChartResponse {
+    #[serde(flatten)]
+    pub chart: StackedAreaChartResponse,
+    /// The FIRST day holding the greatest sum of all series (used + unused =
+    /// total CKB held), exact; `None` for an empty chart.
+    pub total_peak: Option<crate::response::ChartPeak>,
+}
+
+impl ScriptCapacityHistoryChartResponse {
+    fn new(chart: StackedAreaChartResponse) -> Result<Self, ApiRouteError> {
+        let mut totals = Vec::with_capacity(chart.data.len());
+        for point in &chart.data {
+            let mut total = 0i128;
+            for series in &chart.series {
+                let raw = point.values.get(&series.key).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "chart {:?} day {} has no {} value",
+                        chart.title, point.date, series.key
+                    ))
+                })?;
+                let value: i128 = raw.parse().map_err(|_| {
+                    ApiError::internal(format!(
+                        "chart {:?} day {} {} is not an integer: {raw}",
+                        chart.title, point.date, series.key
+                    ))
+                })?;
+                total = total.checked_add(value).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "chart {:?} day {} total overflow",
+                        chart.title, point.date
+                    ))
+                })?;
+            }
+            totals.push((point.date.clone(), total.to_string()));
+        }
+        let total_peak = crate::response::series_peak(
+            totals
+                .iter()
+                .map(|(date, value)| (date.as_str(), value.as_str())),
+        )
+        .map_err(|e| ApiError::internal(format!("chart {:?} total peak: {e}", chart.title)))?;
+        Ok(Self { chart, total_peak })
+    }
+}
+
 async fn get_script_capacity_history_chart(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Query(params): Query<ScriptCapacityHistoryQuery>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<ScriptCapacityHistoryChartResponse> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -3154,12 +3319,14 @@ async fn get_script_capacity_history_chart(
         }
     }
 
-    ok(build_script_capacity_history_chart(
-        &state,
-        targets,
-        format!("{name} Capacity History"),
-        from_date,
-        to_date,
+    ok(ScriptCapacityHistoryChartResponse::new(
+        build_script_capacity_history_chart(
+            &state,
+            targets,
+            format!("{name} Capacity History"),
+            from_date,
+            to_date,
+        )?,
     )?)
 }
 
@@ -3178,7 +3345,7 @@ async fn get_script_capacity_history_chart(
 async fn get_script_capacity_history_chart_by_code_hash(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScriptCapacityHistoryByCodeHashQuery>,
-) -> ApiResult<StackedAreaChartResponse> {
+) -> ApiResult<ScriptCapacityHistoryChartResponse> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -3194,8 +3361,8 @@ async fn get_script_capacity_history_chart_by_code_hash(
             .iter()
             .map(|is_type| (code_hash.clone(), hash_type, *is_type))
             .collect();
-        return ok(build_script_capacity_history_chart(
-            &state, targets, title, from_date, to_date,
+        return ok(ScriptCapacityHistoryChartResponse::new(
+            build_script_capacity_history_chart(&state, targets, title, from_date, to_date)?,
         )?);
     }
 
@@ -3250,8 +3417,8 @@ async fn get_script_capacity_history_chart_by_code_hash(
         }
     }
 
-    ok(build_script_capacity_history_chart(
-        &state, targets, title, from_date, to_date,
+    ok(ScriptCapacityHistoryChartResponse::new(
+        build_script_capacity_history_chart(&state, targets, title, from_date, to_date)?,
     )?)
 }
 

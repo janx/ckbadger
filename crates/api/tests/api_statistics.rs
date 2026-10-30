@@ -387,6 +387,8 @@ async fn hardforks_exposes_earliest_indexed_code_cell_per_named_script_version()
             version_hash: version_hash.clone(),
             family_id: Some(family_id.into()),
             name: Some("Known Lock v2".into()),
+            // Registered in two forms: by data1 hash and by Type ID.
+            registered_references: vec![(version_hash.clone(), 2), (vec![0x99; 32], 1)],
             ..Default::default()
         },
     );
@@ -496,6 +498,9 @@ async fn hardforks_exposes_earliest_indexed_code_cell_per_named_script_version()
     assert_eq!(marks[0]["blockNumber"], 10);
     assert_eq!(marks[0]["timestampMs"], 1_700_000_000_000i64);
     assert_eq!(marks[0]["epochNumber"], 42);
+    // CH-40 / CH-42: the hash types the version is registered under, VM lane order.
+    assert_eq!(marks[0]["hashTypes"], serde_json::json!(["type", "data1"]));
+    assert_eq!(marks[1]["hashTypes"], serde_json::json!([]));
     assert_eq!(marks[1]["versionName"], "Known Lock v3");
     assert_eq!(
         marks[1]["versionHash"],
@@ -1006,6 +1011,13 @@ async fn test_epoch_time_charts_read_from_derived_store() {
     let length_data = length_json["data"].as_array().unwrap();
     assert_eq!(length_data.len(), 1);
     assert_eq!(length_data[0]["value2"], "100");
+    // CH-12: the consensus epoch-duration target (get_consensus 0x3840 s), in the
+    // chart's own unit, for the reference line.
+    assert_eq!(
+        length_json["target"],
+        serde_json::json!({ "seconds": 14400, "hours": "4.00" }),
+        "{length_json}"
+    );
 }
 
 #[tokio::test]
@@ -3969,9 +3981,11 @@ async fn test_ckbytes_allocation_answers_right_after_a_rollback() {
 async fn redesign_fork_detail_fails_when_node_evidence_is_unavailable() {
     let store = test_store();
     let id = 1_754_000_000_000;
-    seed_reorg_event(&store, id, 17_100, 3, 0xA1);
+    // A one-block switch: its D7 address is recorded (the old tip 0x11…), but
+    // the node no longer has the block, so the detail fails naming the store.
+    seed_reorg_event(&store, id, 17_100, 1, 0xA1);
     let app = create_router(test_config(store)).await;
-    let (status, body) = get_json(&app, &format!("/forks/{id}")).await;
+    let (status, body) = get_json(&app, "/forks/17100/11111111").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(body["message"].as_str().unwrap().contains("CKB RocksDB"));
 }
@@ -4049,8 +4063,13 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
         Some(chain.cleanup.clone()),
     ))
     .await;
-    let (status, json) = get_json(&app, &format!("/forks/{id}")).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/forks/10/{}", &hex::encode(block_hash.as_slice())[..8]),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["event"]["id"], id);
     assert_eq!(
         json["orphanedBlocks"][0]["hash"],
         format!("0x{}", hex::encode(block_hash.as_slice()))

@@ -768,6 +768,14 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     assert_eq!(cell_json["consumedAtBlock"], serde_json::Value::from(456));
     assert_eq!(cell_json["consumingInputIndex"], 0);
     assert_eq!(cell_json["lifetimeMs"], 60_000);
+    // SC-C9: the epoch of the creating block, from its indexed header.
+    assert_eq!(
+        cell_json["createdEpoch"],
+        serde_json::json!({ "number": 1, "index": 0, "length": 1800 })
+    );
+    // SC-C6: the data hash a script would reference (CKB defines the empty
+    // data's hash as 32 zero bytes).
+    assert_eq!(cell_json["dataHash"], format!("0x{}", "00".repeat(32)));
     assert_eq!(
         cell_json["consumedByTx"],
         serde_json::Value::from(consumed_by_tx_hex.clone())

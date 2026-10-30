@@ -510,6 +510,7 @@ async fn get_dotbit_item_detail(
         owner_lock_hash,
         owner_address,
         owner_hash_prefix: None,
+        did: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at,
@@ -564,6 +565,10 @@ async fn get_did_ckb_item_detail(
         owner_lock_hash,
         owner_address,
         owner_hash_prefix: None,
+        did: Some(
+            super::asset_protocol::did_ckb_string(&identity_id_bytes)
+                .map_err(|e| ApiError::internal(format!("did:ckb item {identity_id}: {e}")))?,
+        ),
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at: None,
@@ -633,6 +638,7 @@ async fn get_bit_cell_item_detail(
         owner_lock_hash,
         owner_address,
         owner_hash_prefix: None,
+        did: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at,

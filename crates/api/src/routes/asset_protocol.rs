@@ -128,6 +128,20 @@ fn json_cbor(value: ciborium::Value) -> Result<Value> {
         _ => anyhow::bail!("unsupported CBOR value"),
     })
 }
+/// The DID of a did:ckb identity: `did:ckb:` + the lowercase unpadded base32
+/// of the first 20 bytes of its id — the one encoder of every DID the API shows.
+pub(crate) fn did_ckb_string(id: &[u8]) -> Result<String> {
+    let head = id
+        .get(..20)
+        .ok_or_else(|| anyhow::anyhow!("DID type args shorter than 20 bytes"))?;
+    Ok(format!(
+        "did:ckb:{}",
+        data_encoding::BASE32_NOPAD
+            .encode(head)
+            .to_ascii_lowercase()
+    ))
+}
+
 fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
     anyhow::ensure!(id.len() >= 20, "DID type args shorter than 20 bytes");
     anyhow::ensure!(data.len() >= 4, "DID union tag missing");
@@ -151,12 +165,7 @@ fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
     } else {
         Some(std::str::from_utf8(molecule_bytes(fields[1])?)?.to_string())
     };
-    let did = format!(
-        "did:ckb:{}",
-        data_encoding::BASE32_NOPAD
-            .encode(&id[..20])
-            .to_ascii_lowercase()
-    );
+    let did = did_ckb_string(id)?;
     let mut pds = Vec::new();
     if let Some(services) = document.get("services").and_then(Value::as_object) {
         for service in services.values() {
@@ -389,6 +398,47 @@ fn dotbit_lock(args: &[u8]) -> Result<(Value, Value)> {
     ))
 }
 
+/// What changed between an item's consumed version and the version the same
+/// transaction created (ID-C1), from the two versions alone:
+/// - `ownerChanged`: the owner each standard defines — the `.bit` das-lock
+///   owner part (algorithm + owner args; a manager change is not an owner
+///   change), the cell's lock for Spore / m-NFT / did:ckb / `.bit Cell`, and
+///   `null` for `.cell`, whose owner is a prefix inside the name's data (its
+///   moves are its `protocolActions`).
+/// - `dataChanged`: the cell data hash differs.
+pub(crate) fn version_diff(
+    standard: super::assets::NftLifecycleStandard,
+    old: &super::asset_history::CellVersion,
+    new: &super::asset_history::CellVersion,
+) -> Result<Value> {
+    use super::assets::NftLifecycleStandard as S;
+    let owner_changed = match standard {
+        S::DotBit => {
+            let owner = |version: &super::asset_history::CellVersion| -> Result<Value> {
+                let args = hex::decode(
+                    version
+                        .lock
+                        .args
+                        .strip_prefix("0x")
+                        .ok_or_else(|| anyhow::anyhow!(".bit lock args lack 0x"))?,
+                )?;
+                Ok(dotbit_lock(&args)
+                    .with_context(|| {
+                        format!(".bit cell {}:{}", version.tx_hash, version.output_index)
+                    })?
+                    .0)
+            };
+            Value::Bool(owner(old)? != owner(new)?)
+        }
+        S::DotCell => Value::Null,
+        _ => Value::Bool(old.owner_lock_hash != new.owner_lock_hash),
+    };
+    Ok(serde_json::json!({
+        "ownerChanged": owner_changed,
+        "dataChanged": old.data_hash != new.data_hash,
+    }))
+}
+
 fn dotbit_account_witness(
     tx: &ckbadger_indexer::rpc::TransactionView,
     index: usize,
@@ -463,8 +513,31 @@ fn dotbit_account_witness(
             anyhow::ensure!(f.len() == 5, ".bit Record field count invalid");
             records.push(serde_json::json!({"type":std::str::from_utf8(molecule_bytes(f[0])?)?,"key":std::str::from_utf8(molecule_bytes(f[1])?)?,"label":std::str::from_utf8(molecule_bytes(f[2])?)?,"value":std::str::from_utf8(molecule_bytes(f[3])?).ok(),"valueHex":format!("0x{}",hex::encode(molecule_bytes(f[3])?)),"ttl":u32le(f[4])?}));
         }
+        // AccountCellData v1: id, account, registered_at, updated_at, status,
+        // records. v2 replaces updated_at by last_transfer_account_at,
+        // last_edit_manager_at, last_edit_records_at; v3 appends
+        // enable_sub_account (Uint8) and renew_sub_account_price (Uint64); v4
+        // appends approval.
+        // Uint64 fields as exact decimal strings (seconds, or shannons).
+        let u64_text = |index: usize| -> Result<Value> {
+            Ok(Value::String(u64le(fields[index])?.to_string()))
+        };
+        let (updated_at, last_transfer, last_edit_manager, last_edit_records) = if version == 1 {
+            (u64_text(3)?, Value::Null, Value::Null, Value::Null)
+        } else {
+            (Value::Null, u64_text(3)?, u64_text(4)?, u64_text(5)?)
+        };
+        let (enable_sub_account, renew_sub_account_price) = if version >= 3 {
+            anyhow::ensure!(
+                fields[8].len() == 1,
+                ".bit enable_sub_account width invalid"
+            );
+            (Value::from(fields[8][0]), u64_text(9)?)
+        } else {
+            (Value::Null, Value::Null)
+        };
         found = Some(
-            serde_json::json!({"account":account,"witnessVersion":version,"registeredAt":u64le(fields[2])?.to_string(),"status":fields[status_index][0],"records":records}),
+            serde_json::json!({"account":account,"witnessVersion":version,"registeredAt":u64le(fields[2])?.to_string(),"updatedAt":updated_at,"lastTransferAccountAt":last_transfer,"lastEditManagerAt":last_edit_manager,"lastEditRecordsAt":last_edit_records,"enableSubAccount":enable_sub_account,"renewSubAccountPrice":renew_sub_account_price,"status":fields[status_index][0],"records":records}),
         );
     }
     found.ok_or_else(|| {
@@ -524,7 +597,9 @@ pub(crate) fn protocol(
                     let (owner,manager)=dotbit_lock(&args)?;
                     let map=value.as_object_mut().expect("decoded account object");map.insert("accountId".into(),Value::String(format!("0x{}",hex::encode(&id))));map.insert("nextAccountId".into(),serde_json::to_value(account.next_account_id.map(|n|format!("0x{}",hex::encode(n))))?);map.insert("nextAccountName".into(),serde_json::to_value(next_name)?);map.insert("expiredAt".into(),serde_json::to_value(account.expired_at.map(|n|n.to_string()))?);map.insert("owner".into(),owner);map.insert("manager".into(),manager);
                     fields.push(field(&data,"accountDataHash",0,32)?);fields.push(field(&data,"accountId",32,52)?);if data.len()>=72 {fields.push(field(&data,"nextAccountId",52,72)?)}
-                    if data.len()>=80{fields.push(field(&data,"expiredAt",72,80)?)}value
+                    if data.len()>=80{fields.push(field(&data,"expiredAt",72,80)?)}
+                    // ID-B3: the account name the cell carries after expiredAt.
+                    if data.len()>80{fields.push(field(&data,"account",80,data.len())?)}value
                 },
                 S::DotCell=>{
                     let name=ckbadger_indexer::parser::DotCellParser::parse_name_data(&data)?;anyhow::ensure!(name.id.as_slice()==id,".cell payload identity mismatch");
