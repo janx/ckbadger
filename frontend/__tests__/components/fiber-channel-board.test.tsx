@@ -107,6 +107,19 @@ describe('FiberChannelBoard', () => {
     expect(screen.getByText(/not a proven channel balance or payment/)).toBeInTheDocument();
   });
 
+  it('sets the lock evidence apart as tier 2: 72 px boundary, quiet 13 px heading (FF-C5)', () => {
+    const { container } = render(
+      <FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={evidence} />
+    );
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2).not.toBeNull();
+    expect(tier2).toHaveClass('mt-[72px]');
+    expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
+    const heading = screen.getByRole('heading', { name: 'Locks and commitment evidence' });
+    expect(tier2).toContainElement(heading);
+    expect(heading).toHaveClass('text-[13px]', 'text-[#a0a8be]');
+  });
+
   it('reads the commitment delay as its bytes plus the decoded meaning, no decimal u64 (FF-C1)', () => {
     render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={evidence} />);
     expect(screen.getByText('Delay · 8 bytes, LE').nextElementSibling).toHaveTextContent(
