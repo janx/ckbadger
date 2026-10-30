@@ -696,6 +696,32 @@ async fn fiber_force_close_evidence_serializes_decoded_commitment_delay() {
     assert_eq!(commitment["epochLock"], "firstSettlementDelay");
     assert_eq!(commitment["readyEpoch"], "7+0/1");
     assert_eq!(commitment["epochLockMetAtTip"], false);
+    // FF-C4 / FF-C5: each stage's epoch and exact accounting.
+    let stages = body["stages"].as_array().unwrap();
+    assert_eq!(stages.len(), 2, "{body}");
+    assert_eq!(stages[0]["stage"], "opening");
+    assert_eq!(stages[0]["epoch"], "1+0/1800", "{body}");
+    assert_eq!(stages[0]["fee"], "100000000", "{body}");
+    assert_eq!(stages[0]["channelInput"], serde_json::Value::Null);
+    assert_eq!(stages[0]["feeSource"], "outside_inputs");
+    assert_eq!(
+        stages[0]["partyFlows"],
+        serde_json::json!([{ "lockScriptHash": format!("0x{}", hex::encode(&owner_hash)),
+            "inputCapacity": "100000000000", "outputCapacity": "69900000000",
+            "netReceived": "-30100000000" }])
+    );
+    assert_eq!(stages[1]["stage"], "close");
+    assert_eq!(stages[1]["epoch"], "1+0/1800");
+    assert_eq!(stages[1]["fee"], "100000000");
+    assert_eq!(stages[1]["channelInput"], "30000000000");
+    // Only the channel cell went in: the fee came out of the channel balance,
+    // whose split between the parties is not on chain.
+    assert_eq!(stages[1]["feeSource"], "channel_only");
+    assert_eq!(
+        stages[1]["partyFlows"],
+        serde_json::json!([{ "lockScriptHash": format!("0x{}", hex::encode(&owner_hash)),
+            "inputCapacity": "0", "outputCapacity": "0", "netReceived": "0" }])
+    );
     export_fiber_fixture("fiber-evidence-force-closed", &body);
 }
 

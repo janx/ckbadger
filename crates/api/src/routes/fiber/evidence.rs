@@ -78,9 +78,34 @@ pub struct FiberStageEvidence {
     pub tx_hash: String,
     pub block_number: i64,
     pub timestamp: String,
+    /// The stage block's epoch, `number+index/length` (exact fraction).
+    pub epoch: String,
     pub inputs: usize,
     pub outputs: usize,
     pub witness_count: usize,
+    /// Σ input capacity − Σ output capacity, shannons.
+    pub fee: String,
+    /// Capacity of the channel cells (funding or commitment lock) this stage
+    /// consumed; `None` for the opening, which consumes none.
+    pub channel_input: Option<String>,
+    /// `channel_only`: every input was a channel cell, so the fee came out of
+    /// the channel balance (its split between the parties is an off-chain
+    /// agreement, not on chain). `outside_inputs`: at least one other input.
+    pub fee_source: String,
+    /// What each observed party put in and took out in this transaction.
+    pub party_flows: Vec<FiberStagePartyFlow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiberStagePartyFlow {
+    pub lock_script_hash: String,
+    /// Inputs locked by the party's lock.
+    pub input_capacity: String,
+    /// Outputs to the party's lock (payout and change alike).
+    pub output_capacity: String,
+    /// `outputCapacity − inputCapacity`.
+    pub net_received: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,22 +220,118 @@ fn cell_evidence(version: &super::super::asset_history::CanonicalCellVersion) ->
     }
 }
 
+/// An epoch as `number+index/length`, the one rendering for every Fiber epoch.
+fn epoch_label(header: &CachedBlockHeader) -> String {
+    format!(
+        "{}+{}/{}",
+        header.epoch_number, header.epoch_index, header.epoch_length
+    )
+}
+
+/// One stage transaction with its exact accounting: every input's capacity
+/// comes from the canonical cell it spends, every output's from the node bytes.
+/// The channel a stage belongs to: whose cells and which parties to account.
+struct StageChannel<'a> {
+    state: &'a AppState,
+    id: &'a [u8],
+    participants: &'a [Vec<u8>],
+}
+
 fn stage(
+    channel: &StageChannel<'_>,
     stage: &str,
     hash: &[u8],
     header: &CachedBlockHeader,
     block: i64,
     tx: &TransactionView,
-) -> FiberStageEvidence {
-    FiberStageEvidence {
+) -> Result<FiberStageEvidence> {
+    let StageChannel {
+        state,
+        id,
+        participants,
+    } = *channel;
+    use super::super::asset_history::canonical_version_at;
+    let mut total_in = 0u128;
+    let mut channel_in = 0u128;
+    let mut channel_inputs = 0usize;
+    let mut party_in = vec![0u128; participants.len()];
+    for input in &tx.inputs {
+        let prev_hash = parse_hex(&input.previous_output.tx_hash)?;
+        let prev_index = i16::try_from(parse_u64(&input.previous_output.index)?)?;
+        let previous = canonical_version_at(state, id, &prev_hash, prev_index)?;
+        let capacity = u128::try_from(previous.cell.capacity)?;
+        total_in = total_in
+            .checked_add(capacity)
+            .ok_or_else(|| anyhow!("Fiber {stage} input capacity overflow"))?;
+        if protocol::is_funding_lock(&previous.cell.lock_code_hash)
+            || protocol::is_commitment_lock(&previous.cell.lock_code_hash)
+        {
+            channel_inputs += 1;
+            channel_in = channel_in
+                .checked_add(capacity)
+                .ok_or_else(|| anyhow!("Fiber {stage} channel input overflow"))?;
+        }
+        for (party, sum) in participants.iter().zip(party_in.iter_mut()) {
+            if &previous.cell.lock_script_hash == party {
+                *sum = sum
+                    .checked_add(capacity)
+                    .ok_or_else(|| anyhow!("Fiber {stage} party input overflow"))?;
+            }
+        }
+    }
+    let mut total_out = 0u128;
+    let mut party_out = vec![0u128; participants.len()];
+    for output in &tx.outputs {
+        let capacity = u128::from(parse_u64(&output.capacity)?);
+        total_out = total_out
+            .checked_add(capacity)
+            .ok_or_else(|| anyhow!("Fiber {stage} output capacity overflow"))?;
+        let owner = output_lock_hash(output)?;
+        for (party, sum) in participants.iter().zip(party_out.iter_mut()) {
+            if &owner == party {
+                *sum = sum
+                    .checked_add(capacity)
+                    .ok_or_else(|| anyhow!("Fiber {stage} party output overflow"))?;
+            }
+        }
+    }
+    let fee = total_in.checked_sub(total_out).ok_or_else(|| {
+        anyhow!(
+            "Fiber {stage} 0x{} outputs {total_out} exceed inputs {total_in}",
+            hex::encode(hash)
+        )
+    })?;
+    let party_flows = participants
+        .iter()
+        .zip(party_in.iter().zip(party_out.iter()))
+        .map(|(party, (input, output))| {
+            Ok(FiberStagePartyFlow {
+                lock_script_hash: format_hex(party),
+                input_capacity: input.to_string(),
+                output_capacity: output.to_string(),
+                net_received: (i128::try_from(*output)? - i128::try_from(*input)?).to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(FiberStageEvidence {
         stage: stage.into(),
         tx_hash: format_hex(hash),
         block_number: block,
         timestamp: header.timestamp.to_string(),
+        epoch: epoch_label(header),
         inputs: tx.inputs.len(),
         outputs: tx.outputs.len(),
         witness_count: tx.witnesses.len(),
-    }
+        fee: fee.to_string(),
+        channel_input: (channel_inputs > 0).then(|| channel_in.to_string()),
+        fee_source: if channel_inputs == tx.inputs.len() {
+            "channel_only"
+        } else {
+            "outside_inputs"
+        }
+        .into(),
+        party_flows,
+    })
 }
 
 /// Add a relative epoch fraction to the tracked cell's creation epoch, using
@@ -335,14 +456,20 @@ fn build_evidence(
         hex::encode(id)
     );
     let opening_tx = raw_transaction(state, &funding)?;
+    let channel = StageChannel {
+        state,
+        id,
+        participants: &ch.participants,
+    };
     let opening_header = canonical_header(&state.store, ch.open_block)?;
     let mut stages = vec![stage(
+        &channel,
         "opening",
         &ch.funding_tx_hash,
         &opening_header,
         ch.open_block,
         &opening_tx,
-    )];
+    )?];
     let mut flows = Vec::new();
     for party in &ch.participants {
         let mut inputs = 0u128;
@@ -397,12 +524,13 @@ fn build_evidence(
             hex::encode(id)
         );
         stages.push(stage(
+            &channel,
             "close",
             close_hash,
             &canonical_header(&state.store, close_block)?,
             close_block,
             &tx,
-        ));
+        )?);
     }
     let current_commitment = if let Some(hash) = &ch.commitment_tx_hash {
         let output_index = ch
@@ -446,12 +574,13 @@ fn build_evidence(
             )?;
         if is_updated_commitment(ch.close_tx_hash.as_deref(), hash) {
             stages.push(stage(
+                &channel,
                 "currentCommitment",
                 hash,
                 &header,
                 version.response.block_number,
                 &tx,
-            ));
+            )?);
         }
         if ch.state == FiberChannelState::ForceClosed {
             ensure!(
@@ -489,10 +618,7 @@ fn build_evidence(
             epoch_lock,
             ready_epoch: ready,
             epoch_lock_met_at_tip: met,
-            tip_epoch: format!(
-                "{}+{}/{}",
-                tip.epoch_number, tip.epoch_index, tip.epoch_length
-            ),
+            tip_epoch: epoch_label(&tip),
         })
     } else {
         ensure!(
@@ -515,12 +641,13 @@ fn build_evidence(
             .ok_or_else(|| anyhow!("settled Fiber channel missing settlement block"))?;
         let tx = canonical_raw_tx(state, hash, block)?;
         stages.push(stage(
+            &channel,
             "settlement",
             hash,
             &canonical_header(&state.store, block)?,
             block,
             &tx,
-        ));
+        )?);
         for (index, output) in tx.outputs.iter().enumerate() {
             let owner = output_lock_hash(output)?;
             settlement_outputs.push(FiberSettlementOutput {
