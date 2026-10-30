@@ -114,6 +114,8 @@ async fn every_advertised_format_reaches_its_network_api() {
                     let value = match &path[start..=end] {
                         "{outpoint}" => "0xabc-0",
                         "{slug}" => "hash-rate",
+                        // D7 fork address: the first dropped block's 8-hex-digit hash prefix.
+                        "{orphan}" => "deadbeef",
                         _ => "42",
                     };
                     path.replace_range(start..=end, value);
