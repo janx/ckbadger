@@ -590,7 +590,6 @@ export default function BlockDetailPage() {
                         <ActivityRow
                           key={activity.txHash}
                           activity={activity}
-                          headline={activity.isCellbase ? 'Cellbase' : undefined}
                           evidence={
                             <>
                               #{activity.txIndex} ·{' '}
