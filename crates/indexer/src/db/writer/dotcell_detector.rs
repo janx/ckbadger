@@ -38,6 +38,10 @@ pub(crate) enum DotCellTransitionKind {
         manager20: [u8; 20],
         expired_at: u64,
         parent_id: Option<[u8; 20]>,
+        /// The ring predecessor this registration rewrote to point at the new
+        /// name (its `next` went to this id). `None` when the predecessor is
+        /// the ring root, which is infrastructure, not a name.
+        relinked: Option<[u8; 20]>,
     },
     /// The empty-label root of a namespace's uniqueness ring: protocol
     /// infrastructure, not an identity.
@@ -81,6 +85,9 @@ pub(crate) enum DotCellTransitionKind {
     },
     Recycle {
         owner20: [u8; 20],
+        /// The ring predecessor this removal rewrote past the recycled name
+        /// (its `next` left this id). `None` when it is the ring root.
+        relinked: Option<[u8; 20]>,
     },
     /// Re-created byte-identical.
     Touch,
@@ -187,6 +194,61 @@ pub(crate) fn is_expired_takeover(
     Ok(grace_end < block_seconds)
 }
 
+/// The ring neighbours a transaction rewrote, keyed both ways. A name
+/// registered between P and its old successor makes P point at the new id; a
+/// name recycled from after P makes P point past it. Each is the exact pointer
+/// change, so pairing a neighbour with the registration or removal that moved
+/// it is a lookup, never a guess. The ring root is infrastructure and never
+/// named as a relinked neighbour.
+struct RingRelinks {
+    /// New `next` → the neighbour that now points there.
+    into_new_next: HashMap<[u8; 20], [u8; 20]>,
+    /// Old `next` → the neighbour that no longer points there.
+    away_from_old_next: HashMap<[u8; 20], [u8; 20]>,
+}
+
+impl RingRelinks {
+    fn of(
+        prev: &BTreeMap<[u8; 20], &DotCellNameData>,
+        next: &BTreeMap<[u8; 20], DotCellNameData>,
+        tx_hash: &[u8],
+    ) -> Result<Self> {
+        let mut relinks = Self {
+            into_new_next: HashMap::new(),
+            away_from_old_next: HashMap::new(),
+        };
+        for (id, previous) in prev {
+            let Some(name) = next.get(id) else {
+                continue;
+            };
+            if previous.is_root() || name.is_root() || previous.next_id == name.next_id {
+                continue;
+            }
+            // In a ring every id has exactly one predecessor, so two names
+            // cannot take (or give up) the same successor in one transaction.
+            if let Some(other) = relinks.into_new_next.insert(name.next_id, *id) {
+                bail!(
+                    "dotcell ring: 0x{} and 0x{} both relinked to next 0x{} in tx 0x{}",
+                    hex::encode(other),
+                    hex::encode(id),
+                    hex::encode(name.next_id),
+                    hex::encode(tx_hash)
+                );
+            }
+            if let Some(other) = relinks.away_from_old_next.insert(previous.next_id, *id) {
+                bail!(
+                    "dotcell ring: 0x{} and 0x{} both relinked away from next 0x{} in tx 0x{}",
+                    hex::encode(other),
+                    hex::encode(id),
+                    hex::encode(previous.next_id),
+                    hex::encode(tx_hash)
+                );
+            }
+        }
+        Ok(relinks)
+    }
+}
+
 /// Diff the `.cell` names on both sides of a transaction.
 pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCellTransition>> {
     let mut prev: BTreeMap<[u8; 20], &DotCellNameData> = BTreeMap::new();
@@ -225,6 +287,7 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
     }
 
     let sales = sale_instances(tx)?;
+    let relinks = RingRelinks::of(&prev, &next, tx.tx_hash)?;
     let ids: BTreeSet<[u8; 20]> = prev.keys().chain(next.keys()).copied().collect();
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
@@ -252,6 +315,7 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
                     manager20: name.manager_hash20,
                     expired_at: name.expired_at,
                     parent_id: name.parent_id(),
+                    relinked: relinks.into_new_next.get(&id).copied(),
                 },
                 changes: vec!["created"],
                 // A registration assigns the manager, so the manager gained a
@@ -263,6 +327,7 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
                 label: previous.label.clone(),
                 kind: DotCellTransitionKind::Recycle {
                     owner20: previous.owner_hash20,
+                    relinked: relinks.away_from_old_next.get(&id).copied(),
                 },
                 changes: vec!["removed"],
                 manager_changed_to: None,
@@ -485,12 +550,16 @@ pub(crate) fn protocol_actions_for(transitions: &[DotCellTransition]) -> Vec<Pro
                     manager20,
                     expired_at,
                     parent_id,
+                    relinked,
                 } => {
                     fields.insert("to".into(), hex0x(owner20).into());
                     fields.insert("manager".into(), hex0x(manager20).into());
                     fields.insert("expiry".into(), (*expired_at).into());
                     if let Some(parent) = parent_id {
                         fields.insert("parentId".into(), hex0x(parent).into());
+                    }
+                    if let Some(neighbour) = relinked {
+                        fields.insert("relinked".into(), hex0x(neighbour).into());
                     }
                 }
                 List {
@@ -539,8 +608,11 @@ pub(crate) fn protocol_actions_for(transitions: &[DotCellTransition]) -> Vec<Pro
                     fields.insert("managerFrom".into(), hex0x(from20).into());
                     fields.insert("managerTo".into(), hex0x(to20).into());
                 }
-                Recycle { owner20 } => {
+                Recycle { owner20, relinked } => {
                     fields.insert("from".into(), hex0x(owner20).into());
+                    if let Some(neighbour) = relinked {
+                        fields.insert("relinked".into(), hex0x(neighbour).into());
+                    }
                 }
                 EditRecords | Touch => {}
                 RingRoot | RingLink => unreachable!("filtered out by action_name"),
@@ -604,7 +676,7 @@ pub(crate) fn named_participants_for(transitions: &[DotCellTransition]) -> Vec<N
                 push(*sale_hash20, vec![delta(&t.id, true)], OWNER_FROM);
                 push(*buyer20, vec![delta(&t.id, false)], OWNER_TO);
             }
-            Recycle { owner20 } => push(*owner20, vec![delta(&t.id, true)], OWNER_FROM),
+            Recycle { owner20, .. } => push(*owner20, vec![delta(&t.id, true)], OWNER_FROM),
             RingRoot | RingLink | Renew { .. } | EditRecords | EditManager { .. } | Touch => {}
         }
         if let Some(manager) = t.manager_changed_to {
@@ -990,6 +1062,17 @@ mod tests {
         );
         assert_eq!(actions[0].protocol, "dotcell");
         assert_eq!(actions[0].action, "register");
+        // The relink emits no action of its own; the registration names the
+        // neighbour it rewrote, so that neighbour's history can say why its
+        // cell changed.
+        let cellula = ts
+            .iter()
+            .find(|t| t.label == "cellula")
+            .expect("the ring predecessor has a transition");
+        assert_eq!(
+            actions[0].metadata.to_value().unwrap()["relinked"],
+            serde_json::json!(hex0x(&cellula.id))
+        );
 
         let support_id = hex20("0x62d71147ac82b83c8531126cacb0d2f072bfd94a");
         let registrant20 = hex20("0x57d926a44d83fc13b21ce037b1e31f4223e3c867");
@@ -1323,6 +1406,11 @@ mod tests {
             actions[0].metadata.to_value().unwrap()["parentId"],
             serde_json::json!("0x4144e782dfaadeeb07625e11e4b6de717893aacb")
         );
+        assert_eq!(
+            actions[0].metadata.to_value().unwrap()["relinked"],
+            serde_json::json!("0x4144e782dfaadeeb07625e11e4b6de717893aacb"),
+            "the sub-name's ring predecessor is its parent here"
+        );
     }
 
     #[test]
@@ -1439,7 +1527,10 @@ mod tests {
         assert_eq!(ts.len(), 1);
         assert_eq!(
             ts[0].kind,
-            DotCellTransitionKind::Recycle { owner20: owner }
+            DotCellTransitionKind::Recycle {
+                owner20: owner,
+                relinked: None
+            }
         );
         let named = named_participants_for(&ts);
         assert_eq!(named.len(), 1);
@@ -1450,6 +1541,128 @@ mod tests {
             vec![identity_minus(&DotCellParser::derive_id("gone"))]
         );
         assert_eq!(protocol_actions_for(&ts)[0].action, "recycle");
+    }
+
+    /// A name registered right after the ring root relinks the root, which is
+    /// infrastructure: the registration names no relinked neighbour.
+    #[test]
+    fn registration_after_the_ring_root_names_no_relinked_neighbour() {
+        let owner = [0x44u8; 20];
+        let fresh = DotCellParser::derive_id("fresh");
+        let old_successor = [0x99u8; 20];
+        let root = |next: [u8; 20], as_input: bool| {
+            synthetic_cell(name_data("", [0u8; 20], [0u8; 20], 0, next, [0u8; 32]), as_input)
+        };
+        let owned = synthetic_tx(
+            vec![root(old_successor, true)],
+            vec![
+                root(fresh, false),
+                synthetic_cell(
+                    name_data("fresh", owner, owner, 1_900_000_000, old_successor, [0u8; 32]),
+                    false,
+                ),
+            ],
+        );
+        let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+        let actions = protocol_actions_for(&ts);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action, "register");
+        assert!(
+            actions[0].metadata.to_value().unwrap().get("relinked").is_none(),
+            "the ring root is never a relinked neighbour: {:?}",
+            actions[0].metadata
+        );
+    }
+
+    /// Two names registered side by side: only the first rewrote an existing
+    /// neighbour; the second's predecessor is the first, which is new.
+    #[test]
+    fn adjacent_registrations_name_only_the_rewritten_neighbour() {
+        let owner = [0x44u8; 20];
+        let a = DotCellParser::derive_id("aaa");
+        let b = DotCellParser::derive_id("bbb");
+        let successor = [0xEEu8; 20];
+        let p = |next: [u8; 20], as_input: bool| {
+            synthetic_cell(
+                name_data("ppp", owner, owner, 1_900_000_000, next, [0u8; 32]),
+                as_input,
+            )
+        };
+        let owned = synthetic_tx(
+            vec![p(successor, true)],
+            vec![
+                p(a, false),
+                synthetic_cell(name_data("aaa", owner, owner, 1_900_000_000, b, [0u8; 32]), false),
+                synthetic_cell(
+                    name_data("bbb", owner, owner, 1_900_000_000, successor, [0u8; 32]),
+                    false,
+                ),
+            ],
+        );
+        let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+        let relinked = |id: [u8; 20]| match &ts.iter().find(|t| t.id == id).unwrap().kind {
+            DotCellTransitionKind::Register { relinked, .. } => *relinked,
+            other => panic!("not a registration: {other:?}"),
+        };
+        assert_eq!(relinked(a), Some(DotCellParser::derive_id("ppp")));
+        assert_eq!(relinked(b), None);
+    }
+
+    /// A recycle rewrites its predecessor past the removed name; the recycle
+    /// names that neighbour the same way a registration does.
+    #[test]
+    fn recycle_names_the_neighbour_it_relinked() {
+        let owner = [0x44u8; 20];
+        let gone = DotCellParser::derive_id("gone");
+        let after = [0x77u8; 20];
+        let p = |next: [u8; 20], as_input: bool| {
+            synthetic_cell(
+                name_data("prev", owner, owner, 1_900_000_000, next, [0u8; 32]),
+                as_input,
+            )
+        };
+        let owned = synthetic_tx(
+            vec![
+                p(gone, true),
+                synthetic_cell(
+                    name_data("gone", owner, owner, 1_700_000_000, after, [0u8; 32]),
+                    true,
+                ),
+            ],
+            vec![p(after, false)],
+        );
+        let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+        let actions = protocol_actions_for(&ts);
+        assert_eq!(actions.len(), 1, "the relink itself emits nothing: {actions:?}");
+        assert_eq!(actions[0].action, "recycle");
+        assert_eq!(
+            actions[0].metadata.to_value().unwrap()["relinked"],
+            serde_json::json!(hex0x(&DotCellParser::derive_id("prev")))
+        );
+    }
+
+    /// Two neighbours pointing at the same new successor cannot both be ring
+    /// predecessors of it: the classification fails naming both.
+    #[test]
+    fn two_neighbours_relinked_to_one_successor_is_an_error() {
+        let owner = [0x44u8; 20];
+        let target = DotCellParser::derive_id("target");
+        let cell = |label: &str, next: [u8; 20], as_input: bool| {
+            synthetic_cell(
+                name_data(label, owner, owner, 1_900_000_000, next, [0u8; 32]),
+                as_input,
+            )
+        };
+        let owned = synthetic_tx(
+            vec![cell("one", [0x01; 20], true), cell("two", [0x02; 20], true)],
+            vec![
+                cell("one", target, false),
+                cell("two", target, false),
+                cell("target", [0x03; 20], false),
+            ],
+        );
+        let err = classify_dotcell_transitions(&owned.view()).unwrap_err();
+        assert!(err.to_string().contains("both relinked to next"), "{err}");
     }
 
     #[test]
