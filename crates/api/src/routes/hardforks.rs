@@ -49,6 +49,85 @@ pub struct HardforkTimelineResponse {
     pub events: Vec<HardforkEventResponse>,
     pub consensus_features: Vec<HardforkFeature>,
     pub script_deployments: Vec<ScriptDeploymentMarkerResponse>,
+    /// One lane per reference `hash_type`, in VM order: `type`, `data1`,
+    /// `data2`, `data` (CH-41).
+    pub hash_type_lanes: Vec<HashTypeLaneResponse>,
+}
+
+/// How the registry's script versions are referenced with one `hash_type`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashTypeLaneResponse {
+    pub hash_type: &'static str,
+    /// Registered versions with at least one registered reference form of
+    /// this `hash_type`.
+    pub known_versions: i64,
+    /// Live cells whose lock or type references one of those forms (a cell
+    /// using a form as both lock and type counts twice), exact decimal.
+    pub live_references: String,
+}
+
+/// The lanes in VM order: `type` (resolved by type id), then the
+/// data-hash forms by the CKB-VM version they run on.
+const HASH_TYPE_LANES: [u8; 4] = [1, 2, 4, 0];
+
+/// Count, per `hash_type`, the registry's versions referenced that way and
+/// the live references of those registered forms, from each form's
+/// persisted per-form counter. A registered form with no counter row was
+/// never used on chain: it contributes no live reference.
+fn hash_type_lanes(
+    store: &ckbadger_store::CkbadgerStore,
+    versions: &[(Vec<u8>, ckbadger_store::ScriptVersionInfo)],
+) -> anyhow::Result<Vec<HashTypeLaneResponse>> {
+    let mut lanes = Vec::with_capacity(HASH_TYPE_LANES.len());
+    for hash_type in HASH_TYPE_LANES {
+        let mut known_versions = 0i64;
+        let mut forms = std::collections::BTreeSet::new();
+        for (version_hash, info) in versions {
+            if info.family_id.is_none() {
+                continue;
+            }
+            let mut referenced = false;
+            for (reference, form_type) in &info.registered_references {
+                if *form_type == hash_type {
+                    referenced = true;
+                    forms.insert(reference.clone());
+                }
+            }
+            if referenced {
+                known_versions = known_versions.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "known version count overflow at 0x{}",
+                        hex::encode(version_hash)
+                    )
+                })?;
+            }
+        }
+        let mut live_references = 0i128;
+        for reference in &forms {
+            let Some(counter) = store.get_script_reference_info(hash_type, reference)? else {
+                continue; // never referenced on chain
+            };
+            anyhow::ensure!(
+                counter.lock_live_cells_count >= 0 && counter.type_live_cells_count >= 0,
+                "negative live reference counter: hash_type={hash_type} reference=0x{} lock={} type={}",
+                hex::encode(reference),
+                counter.lock_live_cells_count,
+                counter.type_live_cells_count
+            );
+            live_references = live_references
+                .checked_add(i128::from(counter.lock_live_cells_count))
+                .and_then(|sum| sum.checked_add(i128::from(counter.type_live_cells_count)))
+                .ok_or_else(|| anyhow::anyhow!("live reference count overflow"))?;
+        }
+        lanes.push(HashTypeLaneResponse {
+            hash_type: ckbadger_common::hash_type_label(hash_type)
+                .ok_or_else(|| anyhow::anyhow!("no label for hash_type {hash_type}"))?,
+            known_versions,
+            live_references: live_references.to_string(),
+        });
+    }
+    Ok(lanes)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,8 +233,10 @@ async fn list_hardforks(
             });
         }
 
+        let versions = store.list_script_versions()?;
+        let hash_type_lanes = hash_type_lanes(&store, &versions)?;
         let mut script_deployments = Vec::new();
-        for (version_hash, info) in store.list_script_versions()? {
+        for (version_hash, info) in versions {
             let Some(family_id) = info.family_id.as_deref() else {
                 continue;
             };
@@ -211,6 +292,7 @@ async fn list_hardforks(
             events,
             consensus_features,
             script_deployments,
+            hash_type_lanes,
         })
     })
     .await

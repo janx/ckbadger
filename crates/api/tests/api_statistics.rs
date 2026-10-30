@@ -4053,3 +4053,77 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
     );
     assert_eq!(json["orphanedTransactions"][0]["totalCapacity"], "123456");
 }
+
+/// CH-41: the Hardforks page's VM lanes say, per reference hash_type
+/// (type / data1 / data2 / data), how many registered script versions are
+/// referenced that way and how many live cells reference them — from the
+/// registry's reference forms and their persisted per-form live counters.
+#[tokio::test]
+async fn hardforks_counts_live_references_and_known_versions_per_hash_type() {
+    use ckbadger_store::ScriptReferenceInfo;
+
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_family(
+        "lanes",
+        &ScriptFamilyInfo {
+            family_id: "lanes".into(),
+            name: "Lanes".into(),
+            versions_count: 2,
+            ..Default::default()
+        },
+    );
+    let (ref_a, ref_b, ref_c) = (vec![0xa1; 32], vec![0xb1; 32], vec![0xc1; 32]);
+    for (version, references) in [
+        (vec![0x01; 32], vec![(ref_a.clone(), 1u8)]),
+        (
+            vec![0x02; 32],
+            vec![(ref_b.clone(), 2u8), (ref_c.clone(), 1u8)],
+        ),
+    ] {
+        batch.put_script_version(
+            &version,
+            &ScriptVersionInfo {
+                version_hash: version.clone(),
+                family_id: Some("lanes".into()),
+                registered_references: references,
+                ..Default::default()
+            },
+        );
+    }
+    batch.commit().unwrap();
+    for (hash_type, reference, lock_live, type_live) in [(1u8, &ref_a, 5, 2), (2u8, &ref_b, 3, 0)] {
+        store
+            .put_script_reference_info_direct(
+                hash_type,
+                reference,
+                &ScriptReferenceInfo {
+                    reference_hash: reference.clone(),
+                    hash_type,
+                    lock_cells_count: lock_live,
+                    lock_live_cells_count: lock_live,
+                    type_cells_count: type_live,
+                    type_live_cells_count: type_live,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let mut config = test_config(store);
+    let rpc = MockServer::start().await;
+    mount_consensus_rpc(&rpc, mainnet_get_consensus_result()).await;
+    config.ckb_rpc_url = rpc.uri();
+    let app = create_router(config).await;
+    let (status, body) = get_json(&app, "/hardforks").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["hashTypeLanes"],
+        serde_json::json!([
+            {"hashType": "type", "knownVersions": 2, "liveReferences": "7"},
+            {"hashType": "data1", "knownVersions": 1, "liveReferences": "3"},
+            {"hashType": "data2", "knownVersions": 0, "liveReferences": "0"},
+            {"hashType": "data", "knownVersions": 0, "liveReferences": "0"},
+        ]),
+        "{body}"
+    );
+}
