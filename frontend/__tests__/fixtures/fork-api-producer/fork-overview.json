@@ -23,5 +23,48 @@
   "nodeSwitchesInWindow": 1,
   "scope": "complete UTC+8 days; uncles use indexed chain time, node switches use this indexer's detection wall time",
   "throughDate": "2026-10-22",
-  "unclesInWindow": 5
+  "unclesInWindow": 5,
+  "nodeRecord": {
+    "observedSince": "2025-07-31T20:00:00+00:00",
+    "observedSinceBlock": 9,
+    "firstSwitchDetectedAt": "2025-07-31T22:13:20+00:00",
+    "switchesDeeperThanOneBlock": 0,
+    "deepDetections": 0,
+    "orphanedBlocks": 1,
+    "orphanedTransactions": 2,
+    "evidenceStatus": "available",
+    "orphanFates": {
+      "eventsWithEvidence": 1,
+      "eventsOldBranchUnavailable": 0,
+      "blocks": {
+        "total": 1,
+        "includedAsUncle": 1,
+        "uncleDistances": [
+          {
+            "distance": 1,
+            "count": 1
+          }
+        ],
+        "canonicalNow": 0,
+        "notIncludedAsUncle": 0,
+        "uncleFatePending": 0,
+        "awaitingCanonicalTip": 0,
+        "canonicalEvidenceUnavailable": 0
+      },
+      "userTransactions": {
+        "total": 1,
+        "committedLater": 1,
+        "canonicalNow": 0,
+        "committedOnCanonicalBranch": 0,
+        "notCommittedAsOfTip": 0,
+        "canonicalEvidenceUnavailable": 0
+      },
+      "competing": {
+        "compared": 1,
+        "sameMiner": 0,
+        "minerUnknown": 1,
+        "gapMedianMs": "50"
+      }
+    }
+  }
 }

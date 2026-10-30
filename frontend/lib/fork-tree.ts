@@ -6,6 +6,8 @@ export interface ForkTreeTile {
   hash: string;
   timestamp: string | null;
   minerLockHash: string | null;
+  /** R2b-b: null exactly when `minerLockHash` is null. */
+  minerAddress: string | null;
   transactionsCount: number | null;
 }
 
@@ -33,6 +35,7 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
       hash: event.forkPointHash,
       timestamp: null,
       minerLockHash: null,
+      minerAddress: null,
       transactionsCount: null,
     },
     ...data.canonicalBranch,
@@ -63,6 +66,7 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
         hash: inclusion.blockHash,
         timestamp: null,
         minerLockHash: null,
+        minerAddress: null,
         transactionsCount: null,
       });
   }

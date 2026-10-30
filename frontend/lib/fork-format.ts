@@ -1,4 +1,10 @@
-import type { ForkOverview, OrphanedBlock, ReorgEvent } from '@/lib/api';
+import type {
+  ForkEventRef,
+  ForkFirstOrphanStatus,
+  ForkOverview,
+  OrphanedBlock,
+  ReorgEvent,
+} from '@/lib/api';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { formatUtc8DateTime } from '@/lib/utils';
 
@@ -14,9 +20,72 @@ export function forkDetailHref(forkPointNumber: number, orphanHash: string): str
   return `/forks/${forkPointNumber}/${orphanHash.slice(2, 10)}`;
 }
 
-/** The list row's link, from the API's first-orphan preview; null when it names no orphan. */
+/**
+ * A row's link (R2b-b): from the API's `firstOrphanHash`, never from the preview or the ms id;
+ * null when the event has no D7 address. A recorded / traced status without a hash is a broken
+ * contract.
+ */
 export function forkEventHref(event: ReorgEvent): string | null {
-  return event.preview ? forkDetailHref(event.forkPointNumber, event.preview.oldBlockHash) : null;
+  return forkRefHref(event);
+}
+
+/** Another event by its D7 address (`revertedByEvent`, `reversesEvents`). */
+export function forkRefHref(
+  ref: Pick<ForkEventRef, 'forkPointNumber' | 'firstOrphanHash' | 'firstOrphanStatus'>
+): string | null {
+  if (ref.firstOrphanHash === null) {
+    if (ref.firstOrphanStatus === 'recorded' || ref.firstOrphanStatus === 'traced')
+      throw new Error(
+        `fork #${ref.forkPointNumber} is ${ref.firstOrphanStatus} but has no first orphan hash`
+      );
+    return null;
+  }
+  return forkDetailHref(ref.forkPointNumber, ref.firstOrphanHash);
+}
+
+const MISSING_ADDRESS_WORDS: Record<
+  Exclude<ForkFirstOrphanStatus, 'recorded' | 'traced'>,
+  string
+> = {
+  not_observed: 'nothing was rolled back, so no detail page',
+  needs_node_reader: 'its first dropped block needs the node reader',
+  old_branch_unavailable: 'the node no longer has the dropped branch',
+};
+
+/** Why a switch has no D7 address, in plain words. */
+export function missingAddressWords(status: ForkFirstOrphanStatus): string {
+  if (status === 'recorded' || status === 'traced')
+    throw new Error(`fork first orphan status ${status} has an address`);
+  const words = MISSING_ADDRESS_WORDS[status];
+  if (!words) throw new Error(`Fork: unknown first orphan status ${status}`);
+  return words;
+}
+
+const NUMBER_WORDS = [
+  'zero',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+];
+
+/** "51 one block later, 215 two blocks later" (Forks V67 hero). */
+export function uncleDistanceWords(
+  distances: readonly { distance: number; count: number }[]
+): string {
+  return distances
+    .map(({ distance, count }) => {
+      if (!Number.isSafeInteger(distance) || distance < 1)
+        throw new Error(`Fork: invalid uncle distance ${distance}`);
+      const d = NUMBER_WORDS[distance] ?? distance.toLocaleString('en-US');
+      return `${count.toLocaleString('en-US')} ${d} block${distance === 1 ? '' : 's'} later`;
+    })
+    .join(', ');
 }
 
 export function parseForkRoute(

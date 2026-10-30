@@ -47,7 +47,7 @@ export function ForkTree({ model }: { model: ForkTreeModel }) {
             t.hash,
             t.timestamp && formatUtc8DateTime(t.timestamp),
             t.transactionsCount !== null && `${t.transactionsCount} tx`,
-            t.minerLockHash && `miner lock ${t.minerLockHash}`,
+            t.minerAddress && `miner ${t.minerAddress}`,
           ]
             .filter(Boolean)
             .join(' · ')}
@@ -75,9 +75,9 @@ export function ForkTree({ model }: { model: ForkTreeModel }) {
             {blockClock(t.timestamp)}
           </text>
         )}
-        {t.minerLockHash && (
+        {t.minerAddress && (
           <text x={tx + 8} y={y + 47} fontSize="10" fill={FORK_COLORS.tick}>
-            …{t.minerLockHash.slice(-6)}
+            …{t.minerAddress.slice(-6)}
           </text>
         )}
       </g>

@@ -31,7 +31,7 @@ import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/mar
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
 import { resolveBuildVersion } from '@/lib/runtime-config';
 import { resolveActiveNetwork } from '@/lib/active-network';
-import { parseForkRoute } from '@/lib/fork-format';
+import { forkEventHref, parseForkRoute } from '@/lib/fork-format';
 import { formatBlockNumber } from '@/lib/format-block';
 import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 
@@ -451,7 +451,8 @@ function renderForkDetail(detail: ReorgDetail): string {
     markdownTable(
       ['field', 'value'],
       [
-        ['id', detail.event.id],
+        ['firstOrphanHash', detail.event.firstOrphanHash ?? '-'],
+        ['firstOrphanStatus', detail.event.firstOrphanStatus],
         ['eventType', detail.event.eventType],
         ['depth', detail.event.depth],
         ['forkPointNumber', detail.event.forkPointNumber],
@@ -1919,7 +1920,7 @@ export async function renderMarkdownPage(
           ['field', 'value'],
           [
             ['hasRecentReorg', recent.hasRecentReorg],
-            ['reorgId', recent.reorg?.id ?? '-'],
+            ['reorgPage', recent.reorg ? (forkEventHref(recent.reorg) ?? '-') : '-'],
             ['reorgDepth', recent.reorg?.depth ?? '-'],
             ['deepForkDetected', recent.deepFork.detected],
             ['deepForkDepth', recent.deepFork.depth ?? '-'],
@@ -1929,9 +1930,19 @@ export async function renderMarkdownPage(
         '## Events',
         '',
         markdownTable(
-          ['id', 'eventType', 'depth', 'forkPointNumber', 'oldTip', 'newTip', 'detectedAt'],
+          [
+            'page',
+            'firstOrphanStatus',
+            'eventType',
+            'depth',
+            'forkPointNumber',
+            'oldTip',
+            'newTip',
+            'detectedAt',
+          ],
           forks.data.map((fork) => [
-            fork.id,
+            forkEventHref(fork) ?? '-',
+            fork.firstOrphanStatus,
             fork.eventType,
             fork.depth,
             fork.forkPointNumber,

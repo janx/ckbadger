@@ -12,183 +12,341 @@
     "typicalClosedLifetimeMs": "201578",
     "closedWithinHour": 290,
     "tipBlockNumber": 20835636,
-    "tipChainTimeMs": "1792983690852"
+    "tipChainTimeMs": "1792983690852",
+    "channelsByToken": [
+      {
+        "udtTypeHash": "0x7f3fba3fb8d6e000176f7e1ae22e8cd02841dec6a8341dc69aeef46387a20664",
+        "symbol": "USDI",
+        "channels": 1,
+        "openChannels": 0
+      }
+    ]
   },
   "parties": [
     {
       "lockScriptHash": "0x020484cd3e4933233835a209841729d1ff898f9eb0c35a635835281be3550374",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgvt5dyt7vlcyl0ewwt5y3kulayysndwes3meewy",
+      "lockScriptName": "Default Lock",
       "channels": 4,
       "openChannels": 3,
-      "openCapacity": "119700000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "119700000000",
+      "firstOpenBlock": 18672440,
+      "firstOpenTimestamp": "1771667197890"
     },
     {
       "lockScriptHash": "0x0d5f0165c76e9537e9b6dd925eb497eb315652e56fc3bb1221c0ca157dc28ba5",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdcw6z4px2juzp8rs7vjdhx5yjlpjcxfcgqh5m0j",
+      "lockScriptName": "Default Lock",
       "channels": 9,
       "openChannels": 9,
-      "openCapacity": "465100000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "465100000000",
+      "firstOpenBlock": 18414728,
+      "firstOpenTimestamp": "1768833271254"
     },
     {
       "lockScriptHash": "0x402b59b4fd7374c25d9c0048eb1245ec84fe85de1f74027f46bd7a6759dc663e",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0u4830mhgenf4emsn29w5gz6mnxhrl0fqypz3n8",
+      "lockScriptName": "Default Lock",
       "channels": 13,
       "openChannels": 10,
-      "openCapacity": "575000000000"
+      "cooperativelyClosedChannels": 3,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "575000000000",
+      "firstOpenBlock": 18414728,
+      "firstOpenTimestamp": "1768833271254"
     },
     {
       "lockScriptHash": "0x454a87570d184fc7603163025b0a1a1f72ca7a5fc43349291370c083ab075710",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqv47n6dc9ay34npwktvlpp5huzjvd07t4qhspqyz",
+      "lockScriptName": "Default Lock",
       "channels": 145,
       "openChannels": 12,
-      "openCapacity": "2749900000000"
+      "cooperativelyClosedChannels": 132,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "2749900000000",
+      "firstOpenBlock": 18709846,
+      "firstOpenTimestamp": "1772077642365"
     },
     {
       "lockScriptHash": "0x4553dfbfc363d340eca87f4bb841c674d75076c4cb766de6434db46d8577c42b",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdeawh5elszrlvsp3lp4yudefvqfpycz7cjx97rv",
+      "lockScriptName": "Default Lock",
       "channels": 1,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095482,
+      "firstOpenTimestamp": "1776358522420"
     },
     {
       "lockScriptHash": "0x49a0cc59e2ce5299ddc7ce8cc1dc0b8f17083b1b2263e42dd5de38b0112f188b",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvwy7mljqldg5fpukmrwqfl2d7cnngytvc298juj",
+      "lockScriptName": "Default Lock",
       "channels": 2,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095018,
+      "firstOpenTimestamp": "1776354576145"
     },
     {
       "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+      "lockScriptName": "Default Lock",
       "channels": 3,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 3,
+      "openCapacity": "0",
+      "firstOpenBlock": 15564812,
+      "firstOpenTimestamp": "1741228548404"
     },
     {
       "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y",
+      "lockScriptName": "Default Lock",
       "channels": 3,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 3,
+      "openCapacity": "0",
+      "firstOpenBlock": 15564812,
+      "firstOpenTimestamp": "1741228548404"
     },
     {
       "lockScriptHash": "0x731f749be7dd87cf0c1d901d7a20cab696f89c06efd72208a4f8a580cb79aaa9",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgvnfsz9pxgmqktf3cvvd0mwjwdyq80zespgpr97",
+      "lockScriptName": "Default Lock",
       "channels": 2,
       "openChannels": 2,
-      "openCapacity": "149800000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "149800000000",
+      "firstOpenBlock": 20344190,
+      "firstOpenTimestamp": "1788420461242"
     },
     {
       "lockScriptHash": "0x779048d1157e919214cff1983252eb75ece255549bd773648dbd11ac47ddc72c",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvsmlwn8pajct5a7lmz6ttngtk44l6k5ngze3p20",
+      "lockScriptName": "Default Lock",
       "channels": 2,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095035,
+      "firstOpenTimestamp": "1776354687618"
     },
     {
       "lockScriptHash": "0x78a795feddecfff470d723c30b1f00012418b892b525dfc87a1f8d1950696c28",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0luazk84m0y08lawz0u8586mwv8lt3yhcaq6mwh",
+      "lockScriptName": "Default Lock",
       "channels": 4,
       "openChannels": 3,
-      "openCapacity": "89700000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "89700000000",
+      "firstOpenBlock": 18745685,
+      "firstOpenTimestamp": "1772457470018"
     },
     {
       "lockScriptHash": "0x873714b3bd2fff952afa451aeff1f3df52d96da704e661777fd4b43fb8b89c4b",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd20u2djg6p64ts745qujddww8qexgtmws0plr37",
+      "lockScriptName": "Default Lock",
       "channels": 2,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 2,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18746356,
+      "firstOpenTimestamp": "1772465115701"
     },
     {
       "lockScriptHash": "0x87bd4cfbfdf9ca6b0c9533e108c30a73d0350a2d66ce0c530f5b50790e27be6e",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvepqc3qjtux4rptcg20c2culvjvhhga8cv5mlpl",
+      "lockScriptName": "Default Lock",
       "channels": 4,
       "openChannels": 4,
-      "openCapacity": "419800000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "419800000000",
+      "firstOpenBlock": 20613004,
+      "firstOpenTimestamp": "1790894735643"
     },
     {
       "lockScriptHash": "0x8ac9f88b828e21113b4966a3b4608a53bdf8e3ec6ddf9a397379925a899af68b",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdjsydf39sklhfvtfnk57vvd7d2vn4kxwqpr3prn",
+      "lockScriptName": "Default Lock",
       "channels": 139,
       "openChannels": 12,
-      "openCapacity": "2749900000000"
+      "cooperativelyClosedChannels": 126,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "2749900000000",
+      "firstOpenBlock": 18709846,
+      "firstOpenTimestamp": "1772077642365"
     },
     {
       "lockScriptHash": "0x91429acd9a56f5c91fc87a449d4155b764b6b6c37147981eac2f06601cd56bdf",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtssq3h6xsfft6qp5y39hq6t3ma9lrcd9qyut5sg",
+      "lockScriptName": "Default Lock",
       "channels": 5,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 5,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18821166,
+      "firstOpenTimestamp": "1773284230466"
     },
     {
       "lockScriptHash": "0x9a040b1fa0257fb0abe427dcec79441e4dc277a6eed602a290b75acaa2d059e2",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtlpgc29k57ufndd7gpm2jjvpwc2hqygjgtf54lg",
+      "lockScriptName": "Default Lock",
       "channels": 161,
       "openChannels": 6,
-      "openCapacity": "439800000000"
+      "cooperativelyClosedChannels": 153,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 1,
+      "openCapacity": "439800000000",
+      "firstOpenBlock": 15514817,
+      "firstOpenTimestamp": "1740748105975"
     },
     {
       "lockScriptHash": "0xa9eab1e5ff53bd03e409dab26f28d400d509ceba87caaf806b15573494a5b479",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgu7p5z42vne56g0hddzvsycy9emwzcj0q62nhrj",
+      "lockScriptName": "Default Lock",
       "channels": 7,
       "openChannels": 3,
-      "openCapacity": "209900000000"
+      "cooperativelyClosedChannels": 4,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "209900000000",
+      "firstOpenBlock": 19064773,
+      "firstOpenTimestamp": "1776016511765"
     },
     {
       "lockScriptHash": "0xc281bed43192de71ffdc38397919cfc4623463bb3e75e3a6a10aa96e90d1502a",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0z6h6nlju0mcdp0ny0sx77tmu6j2700lqkdeakp",
+      "lockScriptName": "Default Lock",
       "channels": 165,
       "openChannels": 6,
-      "openCapacity": "439800000000"
+      "cooperativelyClosedChannels": 157,
+      "forceClosedWaitingChannels": 1,
+      "forceClosedSettledChannels": 1,
+      "openCapacity": "439800000000",
+      "firstOpenBlock": 15514817,
+      "firstOpenTimestamp": "1740748105975"
     },
     {
       "lockScriptHash": "0xc6ef886de38dd007d7a4a406af275a3c156eab27face93e26d4880d7b240f800",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvx92zu7mhxzd87ruamc2tse0rlyzvcajsch8a7y",
+      "lockScriptName": "Default Lock",
       "channels": 1,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 19095454,
+      "firstOpenTimestamp": "1776358313689"
     },
     {
       "lockScriptHash": "0xc9136dcc71da01c54236575baa29e311f7597629f836e40a5519d24408334197",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq05cppwnzh50sa5mkdruajkl42cp8wzklszllj2j",
+      "lockScriptName": "Default Lock",
       "channels": 7,
       "openChannels": 2,
-      "openCapacity": "59800000000"
+      "cooperativelyClosedChannels": 5,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "59800000000",
+      "firstOpenBlock": 18673242,
+      "firstOpenTimestamp": "1771677243283"
     },
     {
       "lockScriptHash": "0xce99cdcedee09220b179a0c56c38dbc1b0b5d1b608ba9b6e253bc16f912973a2",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqg0dg5q5dpt0ww2exefvx4f68vffqa670gnhk9ej",
+      "lockScriptName": "Default Lock",
       "channels": 1,
       "openChannels": 1,
-      "openCapacity": "109900000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "109900000000",
+      "firstOpenBlock": 18744715,
+      "firstOpenTimestamp": "1772448055739"
     },
     {
       "lockScriptHash": "0xd3aedf3dd0dc4fe921fe759bf9fcfa6194e986a369e6bd5a59f188598a639884",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw5eu5zxupazu8eyd2fmrh7kdpxplq08ws0e6x4c",
+      "lockScriptName": "Default Lock",
       "channels": 3,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 3,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18745654,
+      "firstOpenTimestamp": "1772457080499"
     },
     {
       "lockScriptHash": "0xe04dfbd92e9925de9e1621ec58f66fc6d9df55e98b60a4c3804d77bf2b0bbdbd",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf4whwlp68h42h65myzm5gxxfrczjla0vggznz8u",
+      "lockScriptName": "Default Lock",
       "channels": 3,
       "openChannels": 2,
-      "openCapacity": "89800000000"
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "89800000000",
+      "firstOpenBlock": 18672440,
+      "firstOpenTimestamp": "1771667197890"
     },
     {
       "lockScriptHash": "0xe52680aa9742d30dc6ea2751b77a1b4e6300b2f86a5d66235cee49ffd7ed8519",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtj5ses5f88ggyeggrz7f9zh0kch40ctxsas20ze",
+      "lockScriptName": "Default Lock",
       "channels": 1,
       "openChannels": 1,
-      "openCapacity": "109900000000"
+      "cooperativelyClosedChannels": 0,
+      "forceClosedWaitingChannels": 0,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "109900000000",
+      "firstOpenBlock": 18744715,
+      "firstOpenTimestamp": "1772448055739"
     },
     {
       "lockScriptHash": "0xf05286101c6037ebc83ec3d04db11248ecd09f0b826adce9cefd432e6c5a5f3e",
       "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8a386xhjapx0cfmfr0094phczasz2ymqa7zte2",
+      "lockScriptName": "Default Lock",
       "channels": 3,
       "openChannels": 0,
-      "openCapacity": "0"
+      "cooperativelyClosedChannels": 1,
+      "forceClosedWaitingChannels": 2,
+      "forceClosedSettledChannels": 0,
+      "openCapacity": "0",
+      "firstOpenBlock": 18673242,
+      "firstOpenTimestamp": "1771677243283"
     }
   ],
   "pairs": [
@@ -203,6 +361,8 @@
       "openCapacity": "29900000000",
       "firstOpenBlock": 18745685,
       "lastOpenBlock": 18745685,
+      "firstOpenTimestamp": "1772457470018",
+      "lastOpenTimestamp": "1772457470018",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -216,6 +376,8 @@
       "openCapacity": "29900000000",
       "firstOpenBlock": 18745834,
       "lastOpenBlock": 18745834,
+      "firstOpenTimestamp": "1772459000758",
+      "lastOpenTimestamp": "1772459000758",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -229,6 +391,8 @@
       "openCapacity": "59900000000",
       "firstOpenBlock": 18672440,
       "lastOpenBlock": 18672440,
+      "firstOpenTimestamp": "1771667197890",
+      "lastOpenTimestamp": "1771667197890",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -242,6 +406,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18673425,
       "lastOpenBlock": 18673425,
+      "firstOpenTimestamp": "1771679458018",
+      "lastOpenTimestamp": "1771679458018",
       "typicalClosedLifetimeMs": "16736126724"
     },
     {
@@ -255,6 +421,8 @@
       "openCapacity": "405200000000",
       "firstOpenBlock": 18414728,
       "lastOpenBlock": 18414780,
+      "firstOpenTimestamp": "1768833271254",
+      "lastOpenTimestamp": "1768833806210",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -268,6 +436,8 @@
       "openCapacity": "59900000000",
       "firstOpenBlock": 20620314,
       "lastOpenBlock": 20620314,
+      "firstOpenTimestamp": "1790957038964",
+      "lastOpenTimestamp": "1790957038964",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -281,6 +451,8 @@
       "openCapacity": "109900000000",
       "firstOpenBlock": 20613004,
       "lastOpenBlock": 20613004,
+      "firstOpenTimestamp": "1790894735643",
+      "lastOpenTimestamp": "1790894735643",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -294,6 +466,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18821175,
       "lastOpenBlock": 18821175,
+      "firstOpenTimestamp": "1773284467580",
+      "lastOpenTimestamp": "1773284467580",
       "typicalClosedLifetimeMs": "2654140"
     },
     {
@@ -307,6 +481,8 @@
       "openCapacity": "59900000000",
       "firstOpenBlock": 19064773,
       "lastOpenBlock": 19154113,
+      "firstOpenTimestamp": "1776016511765",
+      "lastOpenTimestamp": "1777002370163",
       "typicalClosedLifetimeMs": "32312823"
     },
     {
@@ -320,6 +496,8 @@
       "openCapacity": "74900000000",
       "firstOpenBlock": 20344226,
       "lastOpenBlock": 20344226,
+      "firstOpenTimestamp": "1788420944314",
+      "lastOpenTimestamp": "1788420944314",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -333,6 +511,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 19095035,
       "lastOpenBlock": 19095261,
+      "firstOpenTimestamp": "1776354687618",
+      "lastOpenTimestamp": "1776356603271",
       "typicalClosedLifetimeMs": "615907"
     },
     {
@@ -346,6 +526,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18746356,
       "lastOpenBlock": 19041842,
+      "firstOpenTimestamp": "1772465115701",
+      "lastOpenTimestamp": "1775737220579",
       "typicalClosedLifetimeMs": "1256830"
     },
     {
@@ -359,6 +541,8 @@
       "openCapacity": "125000000000",
       "firstOpenBlock": 20613036,
       "lastOpenBlock": 20613036,
+      "firstOpenTimestamp": "1790895027901",
+      "lastOpenTimestamp": "1790895027901",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -372,6 +556,8 @@
       "openCapacity": "2175000000000",
       "firstOpenBlock": 18709846,
       "lastOpenBlock": 18716989,
+      "firstOpenTimestamp": "1772077642365",
+      "lastOpenTimestamp": "1772154717410",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -385,6 +571,8 @@
       "openCapacity": "75000000000",
       "firstOpenBlock": 19144968,
       "lastOpenBlock": 19153812,
+      "firstOpenTimestamp": "1776903656907",
+      "lastOpenTimestamp": "1777000092839",
       "typicalClosedLifetimeMs": "96127008"
     },
     {
@@ -398,6 +586,8 @@
       "openCapacity": "300000000000",
       "firstOpenBlock": 18719447,
       "lastOpenBlock": 20824379,
+      "firstOpenTimestamp": "1772178069971",
+      "lastOpenTimestamp": "1792888367224",
       "typicalClosedLifetimeMs": "249572"
     },
     {
@@ -411,6 +601,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 19095454,
       "lastOpenBlock": 19095454,
+      "firstOpenTimestamp": "1776358313689",
+      "lastOpenTimestamp": "1776358313689",
       "typicalClosedLifetimeMs": "59531875"
     },
     {
@@ -424,6 +616,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18746330,
       "lastOpenBlock": 18746330,
+      "firstOpenTimestamp": "1772464762536",
+      "lastOpenTimestamp": "1772464762536",
       "typicalClosedLifetimeMs": "225599"
     },
     {
@@ -437,6 +631,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 19095482,
       "lastOpenBlock": 19095482,
+      "firstOpenTimestamp": "1776358522420",
+      "lastOpenTimestamp": "1776358522420",
       "typicalClosedLifetimeMs": "58292979"
     },
     {
@@ -450,6 +646,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 19095018,
       "lastOpenBlock": 19095231,
+      "firstOpenTimestamp": "1776354576145",
+      "lastOpenTimestamp": "1776356364814",
       "typicalClosedLifetimeMs": "854364"
     },
     {
@@ -463,6 +661,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 15564812,
       "lastOpenBlock": 15907029,
+      "firstOpenTimestamp": "1741228548404",
+      "lastOpenTimestamp": "1744626407809",
       "typicalClosedLifetimeMs": "648071"
     },
     {
@@ -476,6 +676,8 @@
       "openCapacity": "74900000000",
       "firstOpenBlock": 20344190,
       "lastOpenBlock": 20344190,
+      "firstOpenTimestamp": "1788420461242",
+      "lastOpenTimestamp": "1788420461242",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -489,6 +691,8 @@
       "openCapacity": "29900000000",
       "firstOpenBlock": 18745774,
       "lastOpenBlock": 18745774,
+      "firstOpenTimestamp": "1772458251965",
+      "lastOpenTimestamp": "1772458251965",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -502,6 +706,8 @@
       "openCapacity": "29900000000",
       "firstOpenBlock": 18745730,
       "lastOpenBlock": 18745730,
+      "firstOpenTimestamp": "1772457868491",
+      "lastOpenTimestamp": "1772457868491",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -515,6 +721,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18745721,
       "lastOpenBlock": 18745721,
+      "firstOpenTimestamp": "1772457767763",
+      "lastOpenTimestamp": "1772457767763",
       "typicalClosedLifetimeMs": "15956928656"
     },
     {
@@ -528,6 +736,8 @@
       "openCapacity": "125000000000",
       "firstOpenBlock": 20613051,
       "lastOpenBlock": 20613051,
+      "firstOpenTimestamp": "1790895149956",
+      "lastOpenTimestamp": "1790895149956",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -541,6 +751,8 @@
       "openCapacity": "300000000000",
       "firstOpenBlock": 18719448,
       "lastOpenBlock": 20824379,
+      "firstOpenTimestamp": "1772178077574",
+      "lastOpenTimestamp": "1792888367224",
       "typicalClosedLifetimeMs": "157848"
     },
     {
@@ -554,6 +766,8 @@
       "openCapacity": "75000000000",
       "firstOpenBlock": 19154208,
       "lastOpenBlock": 19154208,
+      "firstOpenTimestamp": "1777003043293",
+      "lastOpenTimestamp": "1777003043293",
       "typicalClosedLifetimeMs": null
     },
     {
@@ -567,6 +781,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18745654,
       "lastOpenBlock": 19041800,
+      "firstOpenTimestamp": "1772457080499",
+      "lastOpenTimestamp": "1775736733527",
       "typicalClosedLifetimeMs": "1743882"
     },
     {
@@ -580,6 +796,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18821238,
       "lastOpenBlock": 19027834,
+      "firstOpenTimestamp": "1773285215064",
+      "lastOpenTimestamp": "1775563545817",
       "typicalClosedLifetimeMs": "1906656"
     },
     {
@@ -593,6 +811,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18821166,
       "lastOpenBlock": 18821166,
+      "firstOpenTimestamp": "1773284230466",
+      "lastOpenTimestamp": "1773284230466",
       "typicalClosedLifetimeMs": "2891254"
     },
     {
@@ -606,6 +826,8 @@
       "openCapacity": "139800000000",
       "firstOpenBlock": 15514817,
       "lastOpenBlock": 19042093,
+      "firstOpenTimestamp": "1740748105975",
+      "lastOpenTimestamp": "1775740755319",
       "typicalClosedLifetimeMs": "84617"
     },
     {
@@ -619,6 +841,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 19067846,
       "lastOpenBlock": 19067846,
+      "firstOpenTimestamp": "1776053775303",
+      "lastOpenTimestamp": "1776053775303",
       "typicalClosedLifetimeMs": "945951632"
     },
     {
@@ -632,6 +856,8 @@
       "openCapacity": "0",
       "firstOpenBlock": 18673242,
       "lastOpenBlock": 18673242,
+      "firstOpenTimestamp": "1771677243283",
+      "lastOpenTimestamp": "1771677243283",
       "typicalClosedLifetimeMs": "16729037292"
     },
     {
@@ -645,6 +871,8 @@
       "openCapacity": "109900000000",
       "firstOpenBlock": 18744715,
       "lastOpenBlock": 18744715,
+      "firstOpenTimestamp": "1772448055739",
+      "lastOpenTimestamp": "1772448055739",
       "typicalClosedLifetimeMs": null
     }
   ]

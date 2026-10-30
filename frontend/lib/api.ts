@@ -300,9 +300,14 @@ interface DeepForkStatus {
 }
 
 interface ReorgEvent {
-  revertedByEvent?: number | null;
-  reversesEvents?: number[];
+  /** R2b-b: the events this one relates to, by their D7 address (was a millisecond id). */
+  revertedByEvent: ForkEventRef | null;
+  reversesEvents: ForkEventRef[];
+  /** Row key only; never an address (D7). */
   id: number;
+  /** R2b-b: the first block this switch dropped (height forkPointNumber + 1); null without a D7 address. */
+  firstOrphanHash: string | null;
+  firstOrphanStatus: ForkFirstOrphanStatus;
   eventType: string;
   depth: number;
   oldTipNumber: number;
@@ -329,7 +334,10 @@ interface ReorgEvent {
   preview: {
     oldBlockHash: string;
     oldMinerLockHash: string | null;
+    /** R2b-b: null exactly when the lock hash is null. */
+    oldMinerAddress: string | null;
     competingMinerLockHash: string | null;
+    competingMinerAddress: string | null;
     fate: string;
     uncleInBlock: number | null;
     timestampGapMs: number | null;
@@ -345,6 +353,8 @@ interface OrphanedBlock {
   timestamp: string;
   transactionsCount: number;
   minerLockHash: string | null;
+  /** R2b-b: null exactly when `minerLockHash` is null. */
+  minerAddress: string | null;
   fate:
     | 'canonical_now'
     | 'included_as_uncle'
@@ -363,6 +373,8 @@ interface CanonicalBranchBlock {
   timestamp: string;
   transactionsCount: number;
   minerLockHash: string | null;
+  /** R2b-b: null exactly when `minerLockHash` is null. */
+  minerAddress: string | null;
 }
 
 interface OrphanedTransaction {
@@ -399,6 +411,8 @@ interface ForkOverview {
   unclesInWindow: number;
   nodeSwitchesInWindow: number;
   nodeSwitchesAllTime: number;
+  /** R2b-b: this node's switch history as a whole (FF-L1). */
+  nodeRecord: ForkNodeRecord;
 }
 
 interface RecentReorgResponse {
@@ -3083,7 +3097,11 @@ interface FiberChannel {
   settlementTxHash: string | null;
   /** Non-fiber owners of the funding tx; the fiber locks are never participants. */
   participants: string[];
-  observedParties: { lockScriptHash: string; address: string | null }[];
+  observedParties: {
+    lockScriptHash: string;
+    address: string | null;
+    lockScriptName: string | null;
+  }[];
   observedLifetimeMs: string | null;
   lifetimeAnchorBlock: number | null;
 }
@@ -3113,6 +3131,8 @@ interface FiberStatsApiResponse {
   closedWithinHour: number;
   tipBlockNumber: number;
   tipChainTimeMs: string;
+  /** R2b-b: token-funded channels per token ("1 in USDI"). */
+  channelsByToken: FiberTokenChannels[];
 }
 
 interface FiberStats {
@@ -3135,9 +3155,17 @@ interface FiberStats {
 interface FiberParty {
   lockScriptHash: string;
   address: string | null;
+  /** R2b-b: the script registry's name for the party's lock; null when unindexed or unregistered. */
+  lockScriptName: string | null;
   channels: number;
   openChannels: number;
+  cooperativelyClosedChannels: number;
+  forceClosedWaitingChannels: number;
+  forceClosedSettledChannels: number;
   openCapacity: string;
+  firstOpenBlock: number;
+  /** ms string. */
+  firstOpenTimestamp: string;
 }
 
 interface FiberPair {
@@ -3151,6 +3179,9 @@ interface FiberPair {
   openCapacity: string;
   firstOpenBlock: number;
   lastOpenBlock: number;
+  /** R2b-b: header times (ms strings) of firstOpenBlock / lastOpenBlock. */
+  firstOpenTimestamp: string;
+  lastOpenTimestamp: string;
   typicalClosedLifetimeMs: string | null;
 }
 
@@ -3217,6 +3248,21 @@ interface FiberChannelEvidence {
     inputs: number;
     outputs: number;
     witnessCount: number;
+    /** R2b-b: the stage block's epoch, `number+index/length`. */
+    epoch: string;
+    /** Σ inputs − Σ outputs, shannons. */
+    fee: string;
+    /** Capacity of the channel cells this stage consumed; null for the opening. */
+    channelInput: string | null;
+    /** `channel_only`: the fee came out of the channel balance (its split is not on chain). */
+    feeSource: 'channel_only' | 'outside_inputs';
+    partyFlows: {
+      lockScriptHash: string;
+      inputCapacity: string;
+      outputCapacity: string;
+      /** outputCapacity − inputCapacity, payout and change alike. */
+      netReceived: string;
+    }[];
   }[];
   settlementOutputs: {
     txHash: string;
@@ -3231,6 +3277,8 @@ interface FiberChannelQueryParams {
   limit?: number;
   cursor?: string;
   state?: FiberChannelState;
+  /** R2b-b: `capacity` = capacity desc, channel id asc among equals; default `id`. */
+  sort?: 'capacity' | 'id';
 }
 
 export type {
@@ -4841,6 +4889,7 @@ export const api = {
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.state) query.set('state', params.state);
+    if (params.sort) query.set('sort', params.sort);
     return fetchApi(`/fiber/channels?${query}`);
   },
 
@@ -4954,3 +5003,63 @@ export const api = {
   getForkAt: (forkPointNumber: number, orphanPrefix: string): Promise<ReorgDetail> =>
     fetchApi(`/forks/${forkPointNumber}/${orphanPrefix}`),
 };
+
+// ---- F2 group `fiber`: lane R2b-b fork contracts ----
+export type ForkFirstOrphanStatus =
+  | 'recorded'
+  | 'traced'
+  | 'not_observed'
+  | 'needs_node_reader'
+  | 'old_branch_unavailable';
+/** Another fork event by its D7 address; a null hash means that event has no address. */
+export interface ForkEventRef {
+  forkPointNumber: number;
+  firstOrphanHash: string | null;
+  firstOrphanStatus: ForkFirstOrphanStatus;
+}
+export interface ForkNodeRecord {
+  observedSince: string | null;
+  observedSinceBlock: number | null;
+  firstSwitchDetectedAt: string | null;
+  switchesDeeperThanOneBlock: number;
+  deepDetections: number;
+  orphanedBlocks: number;
+  orphanedTransactions: number;
+  evidenceStatus: 'available' | 'node_reader_unavailable';
+  orphanFates: {
+    eventsWithEvidence: number;
+    eventsOldBranchUnavailable: number;
+    blocks: {
+      total: number;
+      includedAsUncle: number;
+      uncleDistances: { distance: number; count: number }[];
+      canonicalNow: number;
+      notIncludedAsUncle: number;
+      uncleFatePending: number;
+      awaitingCanonicalTip: number;
+      canonicalEvidenceUnavailable: number;
+    };
+    userTransactions: {
+      total: number;
+      committedLater: number;
+      canonicalNow: number;
+      committedOnCanonicalBranch: number;
+      notCommittedAsOfTip: number;
+      canonicalEvidenceUnavailable: number;
+    };
+    competing: {
+      compared: number;
+      sameMiner: number;
+      minerUnknown: number;
+      /** Exact decimal ms; null when nothing was compared. */
+      gapMedianMs: string | null;
+    };
+  } | null;
+}
+/** R2b-b: token-funded Fiber channels per token. */
+export interface FiberTokenChannels {
+  udtTypeHash: string;
+  symbol: string | null;
+  channels: number;
+  openChannels: number;
+}

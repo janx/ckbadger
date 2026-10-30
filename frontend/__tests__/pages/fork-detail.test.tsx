@@ -152,6 +152,66 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
   });
 
+  it('names miners by address in the narrative, the tree, the blocks table and tier 2 (FF-D5)', async () => {
+    const lock = `0x${'ab'.repeat(32)}`;
+    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw93hhsj';
+    const withMiner = (block: Record<string, unknown>) => ({
+      ...block,
+      minerLockHash: lock,
+      minerAddress: address,
+    });
+    const orphan = uncleFixture.orphanedBlocks[0];
+    vi.mocked(api.getForkAt).mockResolvedValue(
+      fixture({
+        ...uncleFixture,
+        orphanedBlocks: [
+          { ...withMiner(orphan), competingBlock: withMiner(orphan.competingBlock) },
+        ],
+        canonicalBranch: uncleFixture.canonicalBranch.map(withMiner),
+        adoptedBranch: uncleFixture.adoptedBranch.map(withMiner),
+      })
+    );
+    const { container } = render(<ForkDetailPage />);
+    expect(await screen.findByTestId('fork-narrative')).toHaveTextContent(
+      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (…93hhsj).'
+    );
+    const table = screen.getByRole('table', { name: 'Blocks' });
+    expect(within(table).getAllByRole('link', { name: '…93hhsj' })).toHaveLength(3);
+    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('…93hhsj');
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(within(tier2).getByRole('link', { name: address })).toHaveAttribute(
+      'href',
+      `/mainnet/address/${address}`
+    );
+  });
+
+  it('links the switch that later reversed this one by its D7 address (R2b-b)', async () => {
+    at('10', '028ea506');
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(reentryFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByTestId('fork-narrative');
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(
+      within(tier2).getByRole('link', { name: 'a later switch on this node reversed it' })
+    ).toHaveAttribute(
+      'href',
+      `/mainnet/forks/10/${reentryFixture.adoptedBranch[0].hash.slice(2, 10)}`
+    );
+  });
+
+  it('refuses an event whose own firstOrphanHash is not its first dropped block', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(
+      fixture({
+        ...uncleFixture,
+        event: { ...uncleFixture.event, firstOrphanHash: `0x${'17404795'}${'0'.repeat(56)}` },
+      })
+    );
+    render(<ForkDetailPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'its event names first orphan 0x17404795000'
+    );
+  });
+
   it('refuses an answer that is not the fork the address names', async () => {
     at('10', 'deadbeef');
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));

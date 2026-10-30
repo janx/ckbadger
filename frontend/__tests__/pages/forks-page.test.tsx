@@ -33,16 +33,44 @@ describe('ForksPage', () => {
       'text-[26px]'
     );
     expect(screen.getByText(/aiming at one in 40 blocks/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(4));
     expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
       'Uncle rate · 3 days through 2026-10-22',
       'This node switched branch',
+      'Its orphans',
+      'Orphaned transactions',
     ]);
     expect(screen.getByText('250.00%')).toBeInTheDocument();
     expect(screen.getByText('5 uncles in 2 blocks · target 2.50%')).toBeInTheDocument();
     expect(screen.getByText('1 time')).toBeInTheDocument();
-    expect(screen.getByText('1 in these 3 days')).toBeInTheDocument();
+    // the node's own record from /forks/overview.nodeRecord (R2b-b)
+    expect(screen.getByText('since 2025-08-01')).toBeInTheDocument();
+    expect(screen.getByText('1 uncle')).toHaveClass('text-jade');
+    expect(screen.getByText('1 one block later')).toBeInTheDocument();
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
+    expect(screen.getByText('committed in a later block')).toBeInTheDocument();
     expect(api.getForkOverview).toHaveBeenCalledWith(30);
+  });
+
+  it('leaves out the orphan figures when the node reader is not open, and says so', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue({
+      ...overview(),
+      nodeRecord: {
+        ...overview().nodeRecord,
+        evidenceStatus: 'node_reader_unavailable',
+        orphanFates: null,
+        switchesDeeperThanOneBlock: 2,
+      },
+    });
+    render(<ForksPage />);
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(2));
+    expect(
+      screen.getByText('since 2025-08-01, 2 of them more than one block deep')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/what became of the dropped blocks needs the node reader/)
+    ).toBeInTheDocument();
   });
 
   it('draws the days as grey uncle bars with jade switches and says what they mean (FF-L2)', async () => {
@@ -83,6 +111,9 @@ describe('ForksPage', () => {
     ]);
     const seen = within(table()).getByRole('link', { name: '2025-08-01 06:13:20' });
     expect(seen).toHaveAttribute('href', '/mainnet/forks/10/17404795');
+    expect(
+      screen.getByText('0 of 1 were one miner against itself · median gap 50 ms')
+    ).toBeInTheDocument();
     expect(within(table()).getByText('depth 1')).toBeInTheDocument();
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
@@ -92,15 +123,22 @@ describe('ForksPage', () => {
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
   });
 
-  it('marks a fork one miner had against itself (FF-L3)', async () => {
+  it('names both miners by address tail and marks a fork one miner had against itself (FF-L3)', async () => {
     const miner = `0x${'ab'.repeat(32)}`;
+    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw93hhsj';
     const event = list().data[0];
     vi.mocked(api.getForks).mockResolvedValue({
       ...list(),
       data: [
         {
           ...event,
-          preview: { ...event.preview!, oldMinerLockHash: miner, competingMinerLockHash: miner },
+          preview: {
+            ...event.preview!,
+            oldMinerLockHash: miner,
+            oldMinerAddress: address,
+            competingMinerLockHash: miner,
+            competingMinerAddress: address,
+          },
         },
       ],
     });
@@ -108,7 +146,24 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(within(table()).getByText('same miner')).toBeInTheDocument();
-    expect(within(table()).getAllByText('0xababab…abab')).toHaveLength(2);
+    const miners = within(table()).getAllByRole('link', { name: '…93hhsj' });
+    expect(miners).toHaveLength(2);
+    expect(miners[0]).toHaveAttribute('href', `/mainnet/address/${address}`);
+  });
+
+  it('links a row from firstOrphanHash even without the node preview', async () => {
+    const event = list().data[0];
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: [{ ...event, preview: null, previewStatus: 'node_reader_unavailable' }],
+    });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(within(table()).getByRole('link', { name: '2025-08-01 06:13:20' })).toHaveAttribute(
+      'href',
+      '/mainnet/forks/10/17404795'
+    );
   });
 
   it('distinguishes no node switches from an overview load failure', async () => {
@@ -131,7 +186,7 @@ describe('ForksPage', () => {
     vi.mocked(api.getForks).mockResolvedValue({
       ...list(),
       data: [{ ...deepFixture.event, previewStatus: 'no_old_branch', preview: null }],
-    } as List);
+    } as unknown as List);
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
     await waitFor(() =>
@@ -139,5 +194,8 @@ describe('ForksPage', () => {
     );
     expect(within(table()).getByText('indexed #12 → node #13')).toBeInTheDocument();
     expect(within(table()).queryByRole('link', { name: /^20\d\d-/ })).toBeNull();
+    expect(
+      within(table()).getByText('nothing was rolled back, so no detail page')
+    ).toBeInTheDocument();
   });
 });

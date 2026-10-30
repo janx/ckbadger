@@ -29,7 +29,19 @@
       "stage": "opening",
       "timestamp": "1700000001000",
       "txHash": "0xee6c28c44431e0230b04c7ebfb5005eb3410a7bf46fcd2bd386e8e70418444b4",
-      "witnessCount": 0
+      "witnessCount": 0,
+      "epoch": "1+0/1800",
+      "fee": "100000000",
+      "channelInput": null,
+      "feeSource": "outside_inputs",
+      "partyFlows": [
+        {
+          "lockScriptHash": "0x81dc08f32082179afe569100d9b7d13498b1edd432f2936c651f4a0465f49932",
+          "inputCapacity": "100000000000",
+          "outputCapacity": "69900000000",
+          "netReceived": "-30100000000"
+        }
+      ]
     }
   ]
 }

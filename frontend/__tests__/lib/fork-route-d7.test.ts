@@ -49,3 +49,32 @@ describe('D7 fork address /forks/<fork_point_height>/<orphan_hash_prefix8>', () 
     getForkAt.mockRestore();
   });
 });
+
+describe('markdown forks list (R2b-b)', () => {
+  it('lists each switch by its D7 page, never by the millisecond id', async () => {
+    const list = (await import('@/__tests__/fixtures/fork-api-producer/fork-list.json')).default;
+    const getForks = vi.spyOn(api, 'getForks').mockResolvedValue(list as never);
+    const getRecent = vi.spyOn(api, 'getRecentReorg').mockResolvedValue({
+      hasRecentReorg: true,
+      reorg: list.data[0],
+      deepFork: {
+        detected: false,
+        detectedAt: null,
+        depth: null,
+        dbTip: null,
+        chainTip: null,
+        forkPoint: null,
+      },
+    } as never);
+    const page = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/forks'),
+      searchParams: new URLSearchParams(),
+      origin: 'https://explorer.example',
+    });
+    expect(page.body).toContain('/forks/10/17404795');
+    expect(page.body).toContain('recorded');
+    expect(page.body).not.toContain('1754000000000');
+    getForks.mockRestore();
+    getRecent.mockRestore();
+  });
+});
