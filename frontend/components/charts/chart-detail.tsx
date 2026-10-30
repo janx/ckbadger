@@ -258,6 +258,7 @@ function DetailBody({
             height={360}
             markers={markers}
             projectedAfter={range === 'all' ? model.projectedAfter : undefined}
+            reading={model.today}
             formatValue={(value) => formatChartHover(value, model.unit)}
           />
         )}

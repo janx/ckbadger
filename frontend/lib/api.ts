@@ -2290,6 +2290,11 @@ interface ChartResponse {
   title: string;
   yAxisLabel: string;
   y2AxisLabel?: string;
+  /**
+   * `/charts/nominal-apc` only (lane R8, CH-03): the model's value today, the detail chart's main
+   * reading. Until the API sends it the page shows no reading rather than the last sample.
+   */
+  today?: { date: string; value: string };
 }
 
 /**

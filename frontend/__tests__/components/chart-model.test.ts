@@ -265,6 +265,33 @@ describe('28 chart variants', () => {
     ).toThrow('out of timeline order');
   });
 
+  it("takes nominal APC's main reading from the API's today point, never the last sample (CH-03)", () => {
+    const definition = CHART_BY_SLUG.get('nominal-apc')!;
+    const payload = {
+      title: 'Nominal APC',
+      yAxisLabel: 'Nominal APC (%)',
+      y2AxisLabel: 'nominal-apc-timeline',
+      data: [
+        { date: '0', value: '4.2', value2: 'past' },
+        { date: '6.75', value: '2.3642', value2: 'current' },
+        { date: '20', value: '1.59', value2: 'future' },
+      ],
+    };
+    expect(
+      chartModel(definition, { ...payload, today: { date: '6.83', value: '2.3601' } }).today
+    ).toEqual({ label: 'year 6.83', values: { primary: '2.3601' } });
+    // Lane R8 has not shipped `today` yet: the gap stays visible (no reading), not the year-20 sample.
+    expect(chartModel(definition, payload).today).toBeNull();
+    // Other charts carry no model-timeline reading at all.
+    expect(
+      chartModel(CHART_BY_SLUG.get('total-deposit')!, {
+        title: 'Total Deposit',
+        yAxisLabel: 'CKB',
+        data: [{ date: '2024-01-01', value: '1' }],
+      }).today
+    ).toBeUndefined();
+  });
+
   it('prints exact chart values with every digit and thousands groups', () => {
     expect(formatChartExact('65053585849.85425816', 'CKB')).toBe('65,053,585,849.85425816');
     expect(formatChartExact('93.685105781336746', 'PH/s')).toBe('93.685105781336746');
