@@ -364,6 +364,81 @@ async fn token_live_cell_count_includes_zero_amount_and_rejects_stale_type_index
     );
 }
 
+/// IV-27: the token detail (and every `/tokens` row) counts the token's live
+/// cells from the type index and still validates every index row against its
+/// live marker and immutable payload — but in batches, not two point reads per
+/// cell. Live (2026-10-30 full-chain store) the per-cell reads cost USDI's 785
+/// cells 0.28–0.45 s, RGB++'s 19,632 cells 5.3 s, and `/tokens?limit=20` 18 s.
+#[tokio::test]
+async fn token_live_cell_count_reads_in_batches_not_per_cell() {
+    const CELLS: u16 = 1_500;
+    let store = fixture();
+    let cell = LiveCellInfo {
+        capacity: 100,
+        occupied_capacity: 80,
+        lock_script_hash: vec![0x32; 32],
+        lock_code_hash: vec![0x33; 32],
+        lock_hash_type: 1,
+        lock_args: vec![],
+        type_script_hash: Some(TOKEN.to_vec()),
+        type_code_hash: Some(vec![0x72; 32]),
+        type_hash_type: Some(1),
+        type_args: Some(vec![0x73; 32]),
+        data_size: 16,
+        udt_amount: Some(1),
+        data_hash: None,
+    };
+    let mut batch = StoreBatch::new(&store);
+    for i in 0..CELLS {
+        let mut tx = [0x90u8; 32];
+        tx[..2].copy_from_slice(&i.to_be_bytes());
+        batch.put_cell(&tx, 0, &cell, 2);
+        batch.put_cell_by_type(&TOKEN, 2, &tx, 0);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store.clone())).await;
+
+    let detail = format!("/tokens/0x{}", hex::encode(TOKEN));
+    store.reset_read_call_counters();
+    let (status, body) = response_json(&app, &detail).await;
+    let (get_cf, multi_get) = store.read_call_counts();
+    eprintln!("{detail}: get_cf={get_cf} multi_get={multi_get}");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cellsCount"], CELLS);
+    // Two point reads per cell would be >= 3,000.
+    assert!(
+        get_cf + multi_get <= 100,
+        "{detail}: {get_cf} get_cf + {multi_get} multi_get for {CELLS} cells"
+    );
+
+    store.reset_read_call_counters();
+    let (status, list) = response_json(&app, "/tokens").await;
+    let (get_cf, multi_get) = store.read_call_counts();
+    eprintln!("/tokens: get_cf={get_cf} multi_get={multi_get}");
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["data"][0]["cellsCount"], CELLS);
+    assert!(
+        get_cf + multi_get <= 100,
+        "/tokens: {get_cf} get_cf + {multi_get} multi_get for {CELLS} cells"
+    );
+
+    // An index row whose payload names another type is still a 500 naming
+    // the row, wherever it falls in a batch.
+    let mut stray = cell.clone();
+    stray.type_script_hash = Some(vec![0x55; 32]);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cell(&[0x92; 32], 1, &stray, 2);
+    batch.put_cell_by_type(&TOKEN, 2, &[0x92; 32], 1);
+    batch.commit().unwrap();
+    let (status, body) = response_json(&app, &detail).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains("index/payload mismatch") && message.contains(&"92".repeat(32)),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn token_history_rejects_missing_headers_and_supply_disagreement() {
     let store = fixture();
