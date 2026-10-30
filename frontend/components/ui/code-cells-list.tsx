@@ -8,6 +8,7 @@ import { Capacity } from '@/components/ui/capacity';
 import { Badge } from '@/components/ui/page-header';
 import { TerminalRow } from '@/components/ui/terminal-panel';
 import type { ScriptRefHashType } from '@/lib/script-ref';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface CodeCellsListProps {
   codeHash: string;
@@ -68,7 +69,7 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
                 href={`/blocks/${cell.createdAtBlock}`}
                 className="text-emphasis font-mono text-xs hover:underline"
               >
-                #{cell.createdAtBlock.toLocaleString()}
+                {formatBlockNumber(cell.createdAtBlock)}
               </Link>
             </div>
             <div className="flex-1 text-right">

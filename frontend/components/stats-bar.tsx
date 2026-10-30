@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { api, type NetworkStats } from '@/lib/api';
 import { parseEpoch, type EpochInfo } from '@/lib/epoch';
+import { formatBlockNumber } from '@/lib/format-block';
 
 /**
  * The chain vitals strip under the header, on every page: whether realtime updates are live (a dot
@@ -85,7 +86,7 @@ function Vitals({ stats, connected }: { stats: NetworkStats; connected: boolean 
     <>
       <Lead connected={connected}>
         <Vital label="Block" href={`/blocks/${stats.latestBlock}`}>
-          #{stats.latestBlock.toLocaleString('en-US')}
+          {formatBlockNumber(stats.latestBlock)}
         </Vital>
       </Lead>
       <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />

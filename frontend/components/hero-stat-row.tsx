@@ -3,6 +3,7 @@
 import Link from '@/components/ui/link';
 import type { NetworkStats } from '@/lib/api';
 import { formatScaledInteger } from '@/lib/exact-integer';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface HeroStatRowProps {
   stats: NetworkStats | null;
@@ -40,7 +41,7 @@ function formatCkbAmount(shannons: string): string {
 }
 
 function formatBlockHeight(block: number): string {
-  return `#${block.toLocaleString()}`;
+  return `${formatBlockNumber(block)}`;
 }
 
 function extractEpochNumber(epoch: string): string {

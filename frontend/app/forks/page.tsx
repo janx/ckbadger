@@ -12,6 +12,7 @@ import { api, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatObserverTimeUtc8 } from '@/lib/fork-time';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import { formatBlockNumber } from '@/lib/format-block';
 
 const eventLink = (event: ReorgEvent) => `/forks/${event.id}`;
 const hash = (value: string) => <span className="break-all font-mono">{value}</span>;
@@ -118,7 +119,7 @@ export default function ForksPage() {
                       minWidth: 115,
                       render: (event) => (
                         <Link href={`/blocks/${event.forkPointNumber}`}>
-                          #{event.forkPointNumber.toLocaleString()}
+                          {formatBlockNumber(event.forkPointNumber)}
                         </Link>
                       ),
                     },
@@ -128,7 +129,7 @@ export default function ForksPage() {
                       minWidth: 155,
                       render: (event) => (
                         <span>
-                          #{event.oldTipNumber.toLocaleString()} → #
+                          {formatBlockNumber(event.oldTipNumber)} → #
                           {event.newTipNumber.toLocaleString()}
                         </span>
                       ),
@@ -157,7 +158,7 @@ export default function ForksPage() {
                       render: (event) =>
                         event.preview?.uncleInBlock != null ? (
                           <Link href={`/blocks/${event.preview.uncleInBlock}`}>
-                            #{event.preview.uncleInBlock}
+                            {formatBlockNumber(event.preview.uncleInBlock)}
                           </Link>
                         ) : (
                           '—'
@@ -206,7 +207,7 @@ export default function ForksPage() {
                         </span>
                       </div>
                       <div>
-                        Fork #{event.forkPointNumber.toLocaleString()} ·{' '}
+                        Fork {formatBlockNumber(event.forkPointNumber)} ·{' '}
                         {event.eventType === 'deep' ? 'indexed' : 'old'} #
                         {event.oldTipNumber.toLocaleString()} →{' '}
                         {event.eventType === 'deep' ? 'node' : 'adopted'} #
@@ -229,7 +230,7 @@ export default function ForksPage() {
                             Uncle inclusion:{' '}
                             {event.preview.uncleInBlock == null
                               ? 'none observed'
-                              : `#${event.preview.uncleInBlock}`}{' '}
+                              : `${formatBlockNumber(event.preview.uncleInBlock)}`}{' '}
                             · later committed transactions:{' '}
                             {event.preview.committedLaterTransactions}
                           </div>

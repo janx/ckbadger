@@ -2,7 +2,7 @@ import Link from '@/components/ui/link';
 
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Badge } from '@/components/ui/page-header';
-import { formatNumber } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface ObjectActivityCardProps {
   txHash: string;
@@ -40,7 +40,7 @@ export function ObjectActivityCard({
         <div className="text-text-dim font-mono text-xs">
           Block{' '}
           <Link href={`/blocks/${blockNumber}`} className="text-gold hover:underline">
-            #{formatNumber(blockNumber)}
+            {formatBlockNumber(blockNumber)}
           </Link>
           {txIndex !== undefined && (
             <>

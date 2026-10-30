@@ -19,6 +19,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { formatBlockNumber } from '@/lib/format-block';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -198,7 +199,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             <>
               <span className="block text-[11px]">{formatUtc8Date(first.timestamp)} UTC+8</span>
               <AppLink href={`/blocks/${first.blockNumber}`}>
-                #<AssetCount value={first.blockNumber} />
+                {formatBlockNumber(first.blockNumber)}
               </AppLink>
             </>
           ) : (
@@ -210,7 +211,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           value: last ? (
             <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
               <span className="block text-[11px]">{formatUtc8Date(last.timestamp)} UTC+8</span>Block{' '}
-              <AssetCount value={last.blockNumber} /> · output {last.outputIndex}
+              {formatBlockNumber(last.blockNumber)} · output {last.outputIndex}
             </AppLink>
           ) : (
             evidenceState

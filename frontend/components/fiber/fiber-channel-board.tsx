@@ -4,6 +4,7 @@ import Link from '@/components/ui/link';
 import { TransactionEvidence } from '@/components/cell/cell-transactions';
 import type { FiberChannelDetail, FiberChannelEvidence, FiberEpochDelay } from '@/lib/api';
 import { ExactCkb } from '@/components/activity-event-row';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   channel: FiberChannelDetail;
@@ -11,6 +12,12 @@ interface Props {
   evidenceError?: string;
 }
 const short = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-8)}`;
+
+/** A stage tx that is on chain has a block; a missing one is an API contract violation. */
+function stageBlock(block: number | null, stage: string, txHash: string): number {
+  if (block === null) throw new Error(`Fiber channel ${stage} tx ${txHash} has no block number`);
+  return block;
+}
 /**
  * A decoded `since` epoch delay, e.g. "relative · 1 + 0/1 epochs". The decode comes from our API;
  * a fraction outside its epoch is a broken invariant there, reported with the raw u64.
@@ -181,7 +188,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                 {channel.fundingTxHash}
               </Link>
               <Link href={`/blocks/${channel.openBlock}`} className="text-text-dim text-[12px]">
-                block #{channel.openBlock}
+                block {formatBlockNumber(channel.openBlock)}
               </Link>
             </div>
             <TransactionEvidence
@@ -201,7 +208,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                   {channel.closeTxHash}
                 </Link>
                 <Link href={`/blocks/${channel.closeBlock}`} className="text-text-dim text-[12px]">
-                  block #{channel.closeBlock}
+                  block{' '}
+                  {formatBlockNumber(stageBlock(channel.closeBlock, 'close', channel.closeTxHash))}
                 </Link>
               </div>
               <TransactionEvidence hash={channel.closeTxHash} label="Close" />
@@ -227,7 +235,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                   href={`/blocks/${updatedCommitment.blockNumber}`}
                   className="text-text-dim text-[12px]"
                 >
-                  block #{updatedCommitment.blockNumber}
+                  block {formatBlockNumber(updatedCommitment.blockNumber)}
                 </Link>
               </div>
               <p className="text-text-dim mb-2 text-[11px]">
@@ -257,7 +265,10 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                   href={`/blocks/${channel.settlementBlock}`}
                   className="text-text-dim text-[12px]"
                 >
-                  block #{channel.settlementBlock}
+                  block{' '}
+                  {formatBlockNumber(
+                    stageBlock(channel.settlementBlock, 'settlement', channel.settlementTxHash)
+                  )}
                 </Link>
               </div>
               <TransactionEvidence hash={channel.settlementTxHash} label="Settlement" />

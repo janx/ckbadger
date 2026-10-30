@@ -23,6 +23,14 @@ import { api, isNotFoundApiError } from '@/lib/api';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+
+/** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
+function committedBlock(block: number | null, txHash: string): number {
+  if (block === null)
+    throw new Error(`Proposal committed by ${txHash} has no committed block number`);
+  return block;
+}
 
 export default function BlockDetailPage() {
   const { id } = useParams();
@@ -168,7 +176,7 @@ export default function BlockDetailPage() {
           </p>
         )}
         <DetailLayout
-          title={`Block #${block.number.toLocaleString('en-US')}`}
+          title={`Block ${formatBlockNumber(block.number)}`}
           identity={<Hash hash={block.hash} truncate={false} />}
           status={
             activation && (
@@ -277,7 +285,7 @@ export default function BlockDetailPage() {
                       href={`/blocks/${block.rewardPaidAtBlock}`}
                       className="text-text-dim text-xs"
                     >
-                      Paid in #{block.rewardPaidAtBlock.toLocaleString('en-US')}
+                      Paid in {formatBlockNumber(block.rewardPaidAtBlock)}
                     </Link>
                   )
                 }
@@ -324,7 +332,7 @@ export default function BlockDetailPage() {
                       className="border-base-border-subtle space-y-2 border-b py-3 text-xs"
                     >
                       <Link href={getUncleDetailHref(block.number, index)}>
-                        #{uncle.number.toLocaleString('en-US')} ·{' '}
+                        {formatBlockNumber(uncle.number)} ·{' '}
                         <Hash hash={uncle.hash} copyable={false} />
                       </Link>
                       <p className="text-text-dim">
@@ -368,11 +376,11 @@ export default function BlockDetailPage() {
                                 )}
                                 className="text-text-dim"
                               >
-                                uncle #{proposal.uncle.number.toLocaleString('en-US')}
+                                uncle {formatBlockNumber(proposal.uncle.number)}
                               </Link>
                             ) : (
                               <span className="text-text-dim">
-                                uncle #{proposal.uncle.number.toLocaleString('en-US')}
+                                uncle {formatBlockNumber(proposal.uncle.number)}
                               </span>
                             ))}
                         </p>
@@ -383,7 +391,12 @@ export default function BlockDetailPage() {
                             </Link>{' '}
                             in{' '}
                             <Link href={`/blocks/${proposal.committedBlockNumber}`}>
-                              #{proposal.committedBlockNumber?.toLocaleString('en-US')}
+                              {formatBlockNumber(
+                                committedBlock(
+                                  proposal.committedBlockNumber,
+                                  proposal.committedTxHash
+                                )
+                              )}
                             </Link>
                           </p>
                         ) : (
@@ -414,8 +427,14 @@ export default function BlockDetailPage() {
               {Object.entries(rawHeader).map(([key, value]) => (
                 <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                   <dt className="text-text-dim">{key}</dt>
-                  <dd className="break-all">
-                    {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
+                  <dd className="min-w-0">
+                    <span className="break-all">
+                      {key === 'parentHash' ? (
+                        <Link href={`/blocks/${value}`}>{value}</Link>
+                      ) : (
+                        value
+                      )}
+                    </span>
                     {key === 'dao' && <DaoHeaderFields dao={dao} />}
                   </dd>
                 </div>
@@ -567,7 +586,7 @@ export default function BlockDetailPage() {
                   {block.rewardPaidAtBlock !== null && (
                     <dd className="text-text-dim mt-1">
                       <Link href={`/blocks/${block.rewardPaidAtBlock}`}>
-                        Paid in #{block.rewardPaidAtBlock.toLocaleString('en-US')}
+                        Paid in {formatBlockNumber(block.rewardPaidAtBlock)}
                       </Link>
                     </dd>
                   )}

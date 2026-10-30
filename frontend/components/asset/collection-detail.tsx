@@ -20,6 +20,7 @@ import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface CollectionDetailProps {
   id: string;
   kind: 'spore' | 'object' | 'identity';
@@ -156,7 +157,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 'Not recorded'
               ) : (
                 <AppLink href={`/blocks/${cluster.data.createdAtBlock}`}>
-                  #{cluster.data.createdAtBlock.toLocaleString('en-US')}
+                  {formatBlockNumber(cluster.data.createdAtBlock)}
                 </AppLink>
               ),
           },

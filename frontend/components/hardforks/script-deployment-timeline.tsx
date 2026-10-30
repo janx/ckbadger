@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from '@/components/ui/link';
 import { formatUtcClock } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -57,7 +58,7 @@ export function ScriptDeploymentTimeline({ deployments }: Props) {
               onMouseEnter={() => setSelectedHash(mark.versionHash)}
               onFocus={() => setSelectedHash(mark.versionHash)}
               onClick={() => setSelectedHash(mark.versionHash)}
-              aria-label={`${mark.versionName}, first code cell at block #${mark.blockNumber}`}
+              aria-label={`${mark.versionName}, first code cell at block ${formatBlockNumber(mark.blockNumber)}`}
             >
               <span className="text-text-dim mr-3 tabular-nums">
                 {utcTimestamp(mark.timestampMs).slice(0, 10)}
@@ -98,7 +99,7 @@ export function ScriptDeploymentTimeline({ deployments }: Props) {
               Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
             </Link>
             <Link href={`/blocks/${selected.blockNumber}`} className="text-jade hover:underline">
-              Block #{selected.blockNumber.toLocaleString()}
+              Block {formatBlockNumber(selected.blockNumber)}
             </Link>
           </dd>
         </dl>

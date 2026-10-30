@@ -13,6 +13,7 @@ import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
 import { formatDurationMs, formatUtcClock } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -132,7 +133,7 @@ function CellIdentity({ cell }: { cell: Cell }) {
       <p>
         <span className="text-text-dim">Created </span>
         <Link href={`/blocks/${cell.createdAtBlock}`} className="text-text-bright">
-          block #{cell.createdAtBlock.toLocaleString()}
+          block {formatBlockNumber(cell.createdAtBlock)}
         </Link>
         {cell.createdTimestamp && (
           <>
@@ -146,7 +147,7 @@ function CellIdentity({ cell }: { cell: Cell }) {
           <span className="text-text-dim">Spent </span>
           {cell.consumedAtBlock && (
             <Link href={`/blocks/${cell.consumedAtBlock}`} className="text-text-bright">
-              block #{cell.consumedAtBlock.toLocaleString()}
+              block {formatBlockNumber(cell.consumedAtBlock)}
             </Link>
           )}
           {cell.spentTimestamp && (
@@ -163,7 +164,7 @@ function CellIdentity({ cell }: { cell: Cell }) {
         <p>
           <span className="text-text-dim">Age at indexed tip </span>
           {formatDurationMs(cell.liveAgeMs)}
-          {cell.liveAgeAtBlock != null && <> · block #{cell.liveAgeAtBlock.toLocaleString()}</>}
+          {cell.liveAgeAtBlock != null && <> · block {formatBlockNumber(cell.liveAgeAtBlock)}</>}
         </p>
       )}
     </div>
@@ -235,7 +236,8 @@ export default function CellDetailPage() {
       {query.data.daoInfo && (
         <DetailSection title="Nervos DAO">
           <p className="text-text-dim text-xs">
-            {query.data.daoInfo.daoStatus} · deposit block #{query.data.daoInfo.depositBlockNumber}
+            {query.data.daoInfo.daoStatus} · deposit block{' '}
+            {formatBlockNumber(query.data.daoInfo.depositBlockNumber)}
             {query.data.daoInfo.compensationCkb != null ? (
               <>
                 {' '}

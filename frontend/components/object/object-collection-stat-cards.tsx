@@ -5,6 +5,7 @@ import { formatNumber } from '@/lib/utils';
 import { formatCompositionTier } from '@/lib/asset-utils';
 import { formatDecimal } from '@/lib/exact-integer';
 import { CompositionTierTooltip, compositionTierCardStyle } from '@/components/object/storage-tier';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface ObjectCollectionStatCardsProps {
   totalCount: number;
@@ -84,7 +85,7 @@ export function ObjectCollectionStatCards({
               href={`/blocks/${createdAtBlock}`}
               className="text-gold font-mono text-lg hover:underline"
             >
-              #{formatNumber(createdAtBlock)}
+              {formatBlockNumber(createdAtBlock)}
             </Link>
             <div className="text-text-dim font-mono text-xs">Genesis block of this collection</div>
           </TerminalPanelContent>

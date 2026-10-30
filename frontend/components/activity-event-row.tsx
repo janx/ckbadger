@@ -26,6 +26,14 @@ import type {
   ActivityLockCall,
   ActivityProtocolAction,
 } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
+
+/** A row that is not a pool row sits in a block; an absent number is a contract violation. */
+function committedActivityBlock(activity: { blockNumber: number | null; txHash: string }): number {
+  if (activity.blockNumber === null)
+    throw new Error(`Activity ${activity.txHash} has neither a block nor a pool status`);
+  return activity.blockNumber;
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -535,7 +543,7 @@ export function ActivityEventGroup({
       <PoolStatusBadge status={activity.poolStatus} />
     ) : (
       <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
-        #{activity.blockNumber?.toLocaleString()}
+        {formatBlockNumber(committedActivityBlock(activity))}
       </Link>
     );
 
@@ -926,7 +934,7 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
     );
   }
   if (meta.depositBlock !== null) {
-    parts.push(`deposited at #${meta.depositBlock.toLocaleString('en-US')}`);
+    parts.push(`deposited at ${formatBlockNumber(meta.depositBlock)}`);
   }
   if (meta.compensation !== null) {
     parts.push(

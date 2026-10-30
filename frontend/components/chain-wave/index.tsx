@@ -18,6 +18,7 @@ import {
   Transaction,
 } from '@/lib/api';
 import { buildMetricDomain, mapTxToScatterPoint } from './flow-metrics';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface ChainWaveProps {
   initialBlocks?: Block[];
@@ -348,7 +349,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           <div className="text-text-dim text-xs">New blocks stream in as txns get packed</div>
         </div>
         <div className="border-gold/40 bg-gold/10 text-gold rounded-lg border px-2 py-1 text-xs">
-          head #{blocks[0].block.number.toLocaleString()}
+          head {formatBlockNumber(blocks[0].block.number)}
         </div>
       </div>
 
@@ -361,7 +362,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           >
             <div className="mb-2 flex items-center justify-between text-xs">
               <div className="text-text-bright font-medium">
-                #{entry.block.number.toLocaleString()}
+                {formatBlockNumber(entry.block.number)}
               </div>
               {index === 0 ? (
                 <span className="border-gold/40 bg-gold/20 text-gold rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">

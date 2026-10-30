@@ -16,6 +16,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { getIdentityCollectionHref } from '@/lib/detail-routes';
 import { formatUtc8Date } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface CanonicalIdentityDetailProps {
   kind: Extract<ItemKind, 'dotbit' | 'bit-cell' | 'did' | 'dotcell'>;
   id: string;
@@ -90,9 +91,7 @@ export function CanonicalIdentityDetail({
       label: 'Created',
       value: (
         <>
-          <AppLink href={`/blocks/${createdAtBlock}`}>
-            #{createdAtBlock.toLocaleString('en-US')}
-          </AppLink>
+          <AppLink href={`/blocks/${createdAtBlock}`}>{formatBlockNumber(createdAtBlock)}</AppLink>
           {first && (
             <span className="text-text-dim block text-[11px]">
               {formatUtc8Date(first.timestamp)} UTC+8
@@ -105,7 +104,7 @@ export function CanonicalIdentityDetail({
       label: 'Current / final cell',
       value: current ? (
         <AppLink href={`/cell/${current.txHash}-${current.outputIndex}`}>
-          Block #{current.blockNumber.toLocaleString('en-US')} · output {current.outputIndex}
+          Block {formatBlockNumber(current.blockNumber)} · output {current.outputIndex}
         </AppLink>
       ) : (
         'Loading cell history'

@@ -37,6 +37,7 @@ import {
 } from '@/lib/ckb-decimal';
 import { dailyDeltas, dayLabel } from '@/lib/daily-series';
 import { cn, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 /** Both change charts show the last 30 complete days. */
 const CHANGE_DAYS = 30;
@@ -112,7 +113,7 @@ export function allocationOf(a: CkbytesAllocation): AllocationView {
     daoCapacity: parseShannons(a.daoCapacity, 'daoCapacity'),
   };
   const g = (n: bigint) => n.toLocaleString('en-US');
-  const at = `The allocation at #${g(BigInt(v.blockNumber))}`;
+  const at = `The allocation at ${formatBlockNumber(v.blockNumber)}`;
   const negative = (['circulating', 'knowledge', 'daoFree', 'free', 'daoCapacity'] as const).find(
     (k) => v[k] < BigInt(0)
   );
@@ -216,7 +217,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
           data-testid="ckbytes-block"
           className="text-text-dim ml-3 align-middle text-xs font-normal"
         >
-          at #{view.blockNumber.toLocaleString('en-US')}
+          at {formatBlockNumber(view.blockNumber)}
         </span>
       </div>
       <div

@@ -9,6 +9,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { cn } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface CellVersionsProps {
   history: ItemCellVersions;
   subject: string;
@@ -73,7 +74,7 @@ export function CellVersions({ history, subject }: CellVersionsProps) {
                   {v.isLive ? ' · current' : ''}
                 </AppLink>
                 <AppLink href={`/blocks/${v.blockNumber}`} className="text-text-dim mt-1 block">
-                  #{v.blockNumber.toLocaleString('en-US')}
+                  {formatBlockNumber(v.blockNumber)}
                 </AppLink>
               </div>
               <div className="min-w-0">

@@ -11,6 +11,8 @@ import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { api, isNotFoundApiError, type BlockUncle } from '@/lib/api';
 import { decodeDaoHeader } from '@/lib/dao-header';
 import { formatTimeAgo, formatUtcClock } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+import { formatEpochPosition } from '@/lib/epoch';
 
 const INDEX = /^(0|[1-9]\d*)$/;
 
@@ -55,11 +57,11 @@ export default function UncleDetailPage() {
 }
 
 const blockLink = (number: number) => (
-  <Link href={`/blocks/${number}`}>#{number.toLocaleString('en-US')}</Link>
+  <Link href={`/blocks/${number}`}>{formatBlockNumber(number)}</Link>
 );
 
 function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; index: number }) {
-  const context = `Uncle ${index} of block #${uncle.includedBy.number}`;
+  const context = `Uncle ${index} of block ${formatBlockNumber(uncle.includedBy.number)}`;
   const requested = /^\d+$/.test(id)
     ? uncle.includedBy.number === Number(id)
     : uncle.includedBy.hash.toLowerCase() === id.toLowerCase();
@@ -68,11 +70,16 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
     throw new Error(`${context}: the API answered for uncle ${uncle.includedBy.index}`);
   if (uncle.canonicalAtHeight.number !== uncle.number)
     throw new Error(
-      `${context}: canonical block #${uncle.canonicalAtHeight.number} is not at its height`
+      `${context}: canonical block ${formatBlockNumber(uncle.canonicalAtHeight.number)} is not at its height`
     );
   if (uncle.canonicalAtHeight.hash.toLowerCase() === uncle.hash.toLowerCase())
     throw new Error(`${context}: the uncle hash is the canonical block at its height`);
   const dao = decodeDaoHeader(uncle.dao.raw, context);
+  const epoch = formatEpochPosition({
+    number: uncle.epochNumber,
+    index: uncle.epochIndex,
+    length: uncle.epochLength,
+  });
   const decoded = { c: dao.C, ar: dao.AR, s: dao.S, u: dao.U };
   for (const [field, value] of Object.entries(decoded))
     if (uncle.dao[field as keyof typeof decoded] !== value.toString())
@@ -87,7 +94,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
   ];
   return (
     <DetailLayout
-      title={`Uncle #${uncle.number.toLocaleString('en-US')}`}
+      title={`Uncle ${formatBlockNumber(uncle.number)}`}
       identity={<Hash hash={uncle.hash} truncate={false} />}
       facts={[
         {
@@ -100,7 +107,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
           ),
         },
         {
-          label: `Canonical #${uncle.number.toLocaleString('en-US')}`,
+          label: `Canonical ${formatBlockNumber(uncle.number)}`,
           value: (
             <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
               <Hash hash={uncle.canonicalAtHeight.hash} copyable={false} />
@@ -120,7 +127,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         },
         {
           label: 'Epoch',
-          value: `${uncle.epochNumber.toLocaleString('en-US')} · ${uncle.epochIndex.toLocaleString('en-US')} / ${uncle.epochLength.toLocaleString('en-US')}`,
+          value: epoch,
         },
       ]}
       tier2={
@@ -147,9 +154,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">epoch</dt>
-                <dd className="break-all">
-                  {uncle.epochNumber} · {uncle.epoch}
-                </dd>
+                <dd>{epoch}</dd>
               </div>
               {header.map(([key, value]) => (
                 <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
@@ -161,8 +166,8 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
               ))}
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">dao</dt>
-                <dd className="break-all">
-                  {uncle.dao.raw}
+                <dd className="min-w-0">
+                  <span className="break-all">{uncle.dao.raw}</span>
                   <DaoHeaderFields dao={dao} />
                 </dd>
               </div>
@@ -172,9 +177,9 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
       }
     >
       <p className="text-[13px] leading-relaxed">
-        Uncle at height #{uncle.number.toLocaleString('en-US')}, included by{' '}
-        {blockLink(uncle.includedBy.number)}; #{uncle.number.toLocaleString('en-US')} on the
-        canonical chain is{' '}
+        Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
+        {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
+        chain is{' '}
         <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
           <Hash hash={uncle.canonicalAtHeight.hash} copyable={false} />
         </Link>

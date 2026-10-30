@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import { formatUtcClock } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 function actionLabel(actions: GlobalActivity['protocolActions']): string {
   const dao = actions.find((action) => action.protocol === 'dao');
@@ -27,7 +28,7 @@ function ActivityRow({ row }: { row: GlobalActivity }) {
           href={`/blocks/${row.blockNumber}`}
           className="text-text-dim font-mono hover:underline"
         >
-          #{row.blockNumber.toLocaleString()}
+          {formatBlockNumber(row.blockNumber)}
         </Link>
       </td>
       <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
@@ -50,7 +51,7 @@ function TransactionRow({ row }: { row: Transaction }) {
           href={`/blocks/${row.blockNumber}`}
           className="text-text-dim font-mono hover:underline"
         >
-          #{row.blockNumber.toLocaleString()}
+          {formatBlockNumber(row.blockNumber)}
         </Link>
       </td>
       <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>

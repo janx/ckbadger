@@ -8,6 +8,7 @@ import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
 import type { Transaction } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   transactions: readonly Transaction[];
@@ -57,7 +58,7 @@ export function TransactionTable({
               href={`/blocks/${tx.blockNumber}`}
               className="text-text-dim hover:text-jade block text-[11px]"
             >
-              #{tx.blockNumber.toLocaleString('en-US')}
+              {formatBlockNumber(tx.blockNumber)}
             </Link>
           )}
           {tx.isCellbase ? (
@@ -87,7 +88,7 @@ export function TransactionTable({
               href={`/blocks/${tx.proposalOrigin!.blockNumber}`}
               className="text-gold hover:underline"
             >
-              #{tx.proposalOrigin!.blockNumber.toLocaleString('en-US')}
+              {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
             </Link>
             <span className="text-text-dim block text-[11px]">
               {tx.proposalOrigin!.distance} blocks back

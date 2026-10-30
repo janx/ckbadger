@@ -21,6 +21,7 @@ import type {
   ItemStatusFilter,
   CursorPaginatedResponse,
 } from '@/lib/api';
+import { formatBlockNumber } from '@/lib/format-block';
 
 /* ---------- Token index extraction ---------- */
 
@@ -171,7 +172,7 @@ function ObjectCard({
               href={`/blocks/${item.createdAtBlock}`}
               className="text-text-dim hover:text-emphasis shrink-0 font-mono text-[10px] hover:underline"
             >
-              #{formatNumber(item.createdAtBlock)}
+              {formatBlockNumber(item.createdAtBlock)}
             </Link>
           </div>
         </div>
@@ -267,7 +268,7 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
                 href={`/blocks/${spore.createdAtBlock}`}
                 className="text-text-dim hover:text-emphasis shrink-0 font-mono text-[10px] hover:underline"
               >
-                #{formatNumber(spore.createdAtBlock)}
+                {formatBlockNumber(spore.createdAtBlock)}
               </Link>
             )}
           </div>

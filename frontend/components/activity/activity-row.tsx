@@ -22,6 +22,7 @@ import type { GlobalActivity, ParticipantInfo, PoolStatus, PoolInterpretation } 
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import type { ActivityBody } from '@/lib/activity-classify';
 import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 transition-colors';
 /**
@@ -54,7 +55,7 @@ export function ActivityRowHead({
         <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-              #{blockNumber.toLocaleString('en-US')}
+              {formatBlockNumber(blockNumber)}
             </Link>
           ) : poolStatus ? (
             <PoolStatusBadge status={poolStatus} />

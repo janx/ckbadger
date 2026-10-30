@@ -12,6 +12,7 @@ import { ObjectCompositionLabel } from '@/components/address/address-holdings';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatStandard } from '@/components/activity-event-row';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface CollectionGalleryProps {
   id: string;
   traits: Record<string, string>;
@@ -64,7 +65,7 @@ export function CollectionGallery({ id, traits }: CollectionGalleryProps) {
                     {item.contentType} · {item.contentSize.toLocaleString('en-US')} bytes
                   </span>
                   <AppLink href={`/blocks/${item.createdAtBlock}`}>
-                    #{item.createdAtBlock.toLocaleString('en-US')}
+                    {formatBlockNumber(item.createdAtBlock)}
                   </AppLink>
                 </div>
                 {item.ownerLockHash ? (
@@ -196,7 +197,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
                   )}
                 </div>
                 <AppLink href={`/blocks/${item.createdAtBlock}`} className="text-[11px]">
-                  #{item.createdAtBlock.toLocaleString('en-US')}
+                  {formatBlockNumber(item.createdAtBlock)}
                 </AppLink>
               </article>
             ))}

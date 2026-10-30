@@ -20,6 +20,7 @@ import { splitTokenAmount } from '@/lib/format-asset';
 import { formatCompositionTier } from '@/lib/asset-utils';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -516,7 +517,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           </Link>{' '}
                           at{' '}
                           <Link href={`/blocks/${eventBlock}`}>
-                            #{eventBlock.toLocaleString('en-US')}
+                            {formatBlockNumber(eventBlock)}
                           </Link>{' '}
                           · {new Date(eventTimestamp).toISOString().slice(0, 10)}
                         </span>
@@ -750,7 +751,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           : `expires ${new Date(c.expiresAt * 1000).toISOString().slice(0, 10)}`}{' '}
                         · held since{' '}
                         <Link href={`/blocks/${c.heldSinceBlock!}`}>
-                          #{c.heldSinceBlock!.toLocaleString('en-US')}
+                          {formatBlockNumber(c.heldSinceBlock!)}
                         </Link>
                       </span>
                       <span>live</span>

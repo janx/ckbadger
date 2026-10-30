@@ -10,6 +10,7 @@ import { DaoSources } from '@/components/dao/dao-sources';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtcClock } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   statistics: DaoStatistics;
@@ -247,7 +248,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
   return (
     <Section
       title="Where secondary issuance goes"
-      note={`since genesis · exact shannons at block #${statistics.tipBlockNumber.toLocaleString()}`}
+      note={`since genesis · exact shannons at block ${formatBlockNumber(statistics.tipBlockNumber)}`}
     >
       <div className="mb-3 text-[13px]">
         Secondary issuance since genesis: <Amount value={total.toString()} /> CKB
@@ -296,7 +297,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
       </p>
       <div className="mt-4">
         <div className="text-text-dim mb-1 text-[12px]">
-          Current capacity use at statistics block #{statistics.tipBlockNumber.toLocaleString()}
+          Current capacity use at statistics block {formatBlockNumber(statistics.tipBlockNumber)}
         </div>
         <div className="flex h-3 w-full" aria-label="Current capacity use partition">
           {[
@@ -325,7 +326,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         href={`/blocks/${statistics.tipBlockNumber}`}
         className="mt-2 inline-block text-[11px] text-[#f2c55c] hover:underline"
       >
-        Verify statistics anchor block #{statistics.tipBlockNumber.toLocaleString()} →
+        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
       </Link>
     </Section>
   );
@@ -494,7 +495,7 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
   return (
     <div className="mt-[72px] space-y-8">
       <Section
-        title={`The DAO field in block #${evidence.header.blockNumber.toLocaleString()}`}
+        title={`The DAO field in block ${formatBlockNumber(evidence.header.blockNumber)}`}
         note="32 raw header bytes · four little-endian u64 fields"
       >
         <div className="grid gap-2 md:grid-cols-4">
@@ -572,7 +573,11 @@ export function DaoBoard({
           </Metric>
           <Metric
             label="Observed AR growth, ~365 days"
-            detail={`AR anchor: block #${evidence.ar.year365?.anchorBlockNumber ?? '—'}`}
+            detail={
+              evidence.ar.year365
+                ? `AR anchor: block ${formatBlockNumber(evidence.ar.year365.anchorBlockNumber)}`
+                : undefined
+            }
           >
             {evidence.ar.year365 ? `${evidence.ar.year365.observedGrowthPercent}%` : '—'}
           </Metric>
@@ -590,7 +595,7 @@ export function DaoBoard({
           ) : (
             '—'
           )}{' '}
-          CKB · indexed at block #{statistics.tipBlockNumber.toLocaleString()}
+          CKB · indexed at block {formatBlockNumber(statistics.tipBlockNumber)}
         </div>
       </div>
       <Section title="History" note="complete indexed days · current depositor count">
@@ -600,7 +605,7 @@ export function DaoBoard({
       <Section title="How a deposit grows" note="header AR · free capacity only">
         <p className="text-text-dim text-[13px]">
           AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)}{' '}
-          at block #{evidence.tipBlockNumber.toLocaleString()}: +
+          at block {formatBlockNumber(evidence.tipBlockNumber)}: +
           {evidence.ar.sinceGenesisGrowthPercent}% on a deposit’s free capacity since genesis.
           Compensation freezes at the withdrawal request AR. Estimated APC above models current
           issuance; the observed growth uses the last canonical block at or before the 365-day
@@ -610,7 +615,7 @@ export function DaoBoard({
           title="Accumulated rate"
           subtitle="Canonical yearly chain-time anchors and indexed tip"
           data={evidence.ar.milestones.map((row) => ({
-            label: `#${row.blockNumber.toLocaleString()}`,
+            label: `${formatBlockNumber(row.blockNumber)}`,
             values: { ar: row.arIndex },
           }))}
           series={[{ key: 'ar', label: 'AR', color: '#f2c55c' }]}
@@ -621,7 +626,7 @@ export function DaoBoard({
         />
         {evidence.ar.year365 && (
           <div className="text-text-dim mt-2 font-mono text-[11px]">
-            365-day anchor: block #{evidence.ar.year365.anchorBlockNumber.toLocaleString()} · chain
+            365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} · chain
             time {formatUtcClock(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
             {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
             {formatDurationMs(

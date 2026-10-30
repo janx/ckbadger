@@ -17,14 +17,15 @@ import { formatUtcClock } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
+import { formatBlockNumber } from '@/lib/format-block';
 
 const fullHash = (hash: string) => <span className="break-all font-mono text-xs">{hash}</span>;
 const blockAt = (number: number) => (
   <Link href={`/blocks/${number}`} className="text-emphasis hover:underline">
-    #{number.toLocaleString()}
+    {formatBlockNumber(number)}
   </Link>
 );
-const historicalHeight = (number: number) => <span>#{number.toLocaleString()}</span>;
+const historicalHeight = (number: number) => <span>{formatBlockNumber(number)}</span>;
 const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false) => (
   <ListTable
     label={label}
@@ -113,7 +114,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
           label: event.eventType === 'deep' ? 'Indexed → node tip' : 'Old → adopted tip',
           value: (
             <>
-              #{event.oldTipNumber.toLocaleString()} → #{event.newTipNumber.toLocaleString()}
+              {formatBlockNumber(event.oldTipNumber)} → {formatBlockNumber(event.newTipNumber)}
             </>
           ),
         },

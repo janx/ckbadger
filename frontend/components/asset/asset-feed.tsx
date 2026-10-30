@@ -24,6 +24,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 const NEIGHBOUR_HEADLINES: Record<ItemRingRelink['by'], string> = {
   register: 'Neighbour registered',
   register_subname: 'Neighbour registered a sub-name',
@@ -121,9 +122,7 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
       minWidth: 160,
       render: (r) => (
         <>
-          <AppLink href={`/blocks/${r.blockNumber}`}>
-            #{r.blockNumber.toLocaleString('en-US')}
-          </AppLink>
+          <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
           <span className="text-text-dim"> · {formatTimeAgo(r.timestamp)}</span>
           <span className="text-text-dim block text-[11px]">tx {r.index} in block</span>
         </>

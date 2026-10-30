@@ -3,6 +3,7 @@ import type { ItemProtocol, MnftProtocol, DotCellPartyRef } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { formatUtc8Date } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface IdentityDocumentProps {
   protocol: ItemProtocol;
 }
@@ -68,7 +69,7 @@ export function IdentityDocument({ protocol }: IdentityDocumentProps) {
           <li key={`${v.cell.txHash}:${v.cell.outputIndex}`} className="min-w-0">
             <div className="flex flex-wrap items-baseline gap-3">
               <AppLink href={`/blocks/${v.cell.blockNumber}`}>
-                Version {i + 1} · #{v.cell.blockNumber.toLocaleString('en-US')}
+                Version {i + 1} · {formatBlockNumber(v.cell.blockNumber)}
               </AppLink>
               <span className="text-text-dim text-[11px]">
                 {formatUtc8Date(v.cell.timestamp)} UTC+8{v.cell.isLive ? ' · current cell' : ''}
