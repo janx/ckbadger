@@ -28,6 +28,21 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { collectionFeedHeadline } from '@/lib/feed-headlines';
+import { readErrorText } from '@/lib/read-error';
+import { IdentityPositioning, type IdentityStandard } from '@/components/identity/identity-header';
+
+// ── F2 identities (round 2) ──
+const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
+  'dotbit',
+  'bit_cell',
+  'did_ckb',
+  'dotcell',
+];
+function identityStandard(standard: string): IdentityStandard {
+  if (!(IDENTITY_STANDARDS as readonly string[]).includes(standard))
+    throw new Error(`identity collection has no identity standard: ${JSON.stringify(standard)}`);
+  return standard as IdentityStandard;
+}
 export interface CollectionDetailProps {
   id: string;
   kind: 'spore' | 'object' | 'identity';
@@ -185,17 +200,27 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           href: `/inventory/${kind === 'identity' ? 'identities' : 'objects'}`,
         },
       ]}
-      identity={<Hash hash={id} truncate={false} className="text-[11px]" />}
+      // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
+      // has no description to record; it opens with what the standard is instead.
+      identity={
+        kind === 'identity' ? undefined : (
+          <Hash hash={id} truncate={false} className="text-[11px]" />
+        )
+      }
       facts={facts}
       intro={
-        <>
-          {object?.composition && <CompositionBadge tier={object.composition.tier} />}
-          <p className="text-text-dim mt-3 text-[13px]">
-            {description?.summary ??
-              object?.classDetail?.description ??
-              'No collection description recorded.'}
-          </p>
-        </>
+        kind === 'identity' ? (
+          <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
+        ) : (
+          <>
+            {object?.composition && <CompositionBadge tier={object.composition.tier} />}
+            <p className="text-text-dim mt-3 text-[13px]">
+              {description?.summary ??
+                object?.classDetail?.description ??
+                'No collection description recorded.'}
+            </p>
+          </>
+        )
       }
       feed={
         <AssetFeed
@@ -315,7 +340,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 ? insights.data.weeklyActivity
                 : {
                     unavailable: insights.error
-                      ? `Weekly transfers unavailable: ${insights.error.message}`
+                      ? `Weekly transfers unavailable: ${readErrorText(insights.error)}`
                       : 'Loading weekly transfers…',
                   }
             }

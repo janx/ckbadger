@@ -64,3 +64,16 @@ describe('identity header (ID-C5 / ID-C10 / ID-BC1)', () => {
     expect(screen.getByText('Recycled')).toHaveClass('text-text-dim');
   });
 });
+
+describe('IdentityPositioning for a whole collection (ID-COL-5)', () => {
+  it('speaks of every name in the standard, not one cell', () => {
+    const { rerender } = render(<IdentityPositioning standard="did_ckb" scope="collection" />);
+    expect(
+      screen.getByText('Each did:ckb identity keeps its DID document in a CKB cell.')
+    ).toBeInTheDocument();
+    rerender(<IdentityPositioning standard="dotbit" scope="collection" />);
+    expect(
+      screen.getByText('Each .bit name and everything about it live in one CKB cell.')
+    ).toBeInTheDocument();
+  });
+});

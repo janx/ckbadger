@@ -4,6 +4,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
 import { DetailTier2 } from '@/components/ui/detail-layout';
 import type { AssetClass } from '@/lib/design-tokens';
+import { readErrorText } from '@/lib/read-error';
 
 export interface AssetDetailShellProps {
   title: ReactNode;
@@ -99,9 +100,14 @@ export function AssetReadState({
 }) {
   if (retained && !error) return null;
   return (
-    <p role={error ? 'alert' : 'status'} className="text-text-dim py-3 text-xs">
+    // F2 identities (round 2, ID-COL-1): a gateway failure is stated by its status, never the
+    // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
+    <p
+      role={error ? 'alert' : 'status'}
+      className="text-text-dim py-3 text-xs [overflow-wrap:anywhere]"
+    >
       {error
-        ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${error.message}.${retained ? ' Showing previously loaded data.' : ''}`
+        ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${readErrorText(error)}.${retained ? ' Showing previously loaded data.' : ''}`
         : loading
           ? `Loading ${label}…`
           : `${label} unavailable.`}

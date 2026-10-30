@@ -31,11 +31,27 @@ const POSITIONING: Record<IdentityStandard, string> = {
   dotcell: 'The name lives in a CKB cell; its records ride in the witness beside it.',
 };
 
-export function IdentityPositioning({ standard }: { standard: IdentityStandard }) {
+/** The same, said of a whole standard on its collection page (ID-COL-5). */
+const COLLECTION_POSITIONING: Record<IdentityStandard, string> = {
+  dotbit: 'Each .bit name and everything about it live in one CKB cell.',
+  bit_cell: 'Each is a .bit name made into a cell of its own, held in an ordinary wallet.',
+  did_ckb: 'Each did:ckb identity keeps its DID document in a CKB cell.',
+  dotcell: 'Each .cell name lives in a CKB cell; its records ride in the witness beside it.',
+};
+
+export function IdentityPositioning({
+  standard,
+  scope = 'item',
+}: {
+  standard: IdentityStandard;
+  scope?: 'item' | 'collection';
+}) {
+  const text = (scope === 'item' ? POSITIONING : COLLECTION_POSITIONING)[standard];
+  if (!text) throw new Error(`No identity standard ${JSON.stringify(standard)}`);
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier="pure_ckb" />
-      <span className="text-text text-[12.5px]">{POSITIONING[standard]}</span>
+      <span className="text-text text-[12.5px]">{text}</span>
     </div>
   );
 }

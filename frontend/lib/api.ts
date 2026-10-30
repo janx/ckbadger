@@ -2121,6 +2121,11 @@ interface CollectionItem {
   name: string | null;
   standard: string;
   ownerLockHash: string | null;
+  // F2 identities (round 2) — R3 / R4 (contracts.md, ID-COL-2 / ID-COL-3):
+  /** The owner lock's address; null only when there is no owner or its script is not indexed. */
+  ownerAddress: string | null;
+  /** `.cell` rows only: the owner prefix in the name's data (`ownerLockHash` is what it resolves to). */
+  ownerHashPrefix?: string;
   isLive: boolean;
   createdAtBlock: number;
   expiredAt?: number | null;
