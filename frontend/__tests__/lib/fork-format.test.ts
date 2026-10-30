@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest';
+import {
+  forkDetailHref,
+  forkEventHref,
+  orphanFateWords,
+  parseForkRoute,
+  uncleRateFigure,
+} from '@/lib/fork-format';
+import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
+import type { ReorgEvent } from '@/lib/api';
+
+const event = listFixture.data[0] as unknown as ReorgEvent;
+
+describe('fork routes (D7)', () => {
+  it('addresses a fork by its fork point height and the first 8 hex of its first orphan', () => {
+    expect(forkDetailHref(20617704, `0x${'a9bc1b75'}${'0'.repeat(56)}`)).toBe(
+      '/forks/20617704/a9bc1b75'
+    );
+    expect(forkEventHref(event)).toBe('/forks/10/17404795');
+    expect(() => forkDetailHref(10, '0x1234')).toThrow('not a 32-byte hash');
+  });
+
+  it('has no address for an event without an orphaned block (deep detection, no preview)', () => {
+    expect(forkEventHref({ ...event, preview: null, previewStatus: 'no_old_branch' })).toBeNull();
+  });
+
+  it('parses only a canonical height and a lowercase 8-hex prefix', () => {
+    expect(parseForkRoute('20617704', 'a9bc1b75')).toEqual({
+      height: 20617704,
+      orphan: 'a9bc1b75',
+    });
+    for (const [h, o] of [
+      ['1754000000000x', 'a9bc1b75'],
+      ['020617704', 'a9bc1b75'],
+      ['20617704', 'A9BC1B75'],
+      ['20617704', 'a9bc1b7'],
+      ['20617704', '0xa9bc1b'],
+    ])
+      expect(parseForkRoute(h, o)).toBeNull();
+  });
+});
+
+describe('orphanFateWords', () => {
+  it('says what became of the dropped block in plain words', () => {
+    expect(orphanFateWords('included_as_uncle')).toBe('uncle');
+    expect(orphanFateWords('canonical_now')).toBe('back on the main chain');
+    expect(orphanFateWords('not_included_as_uncle')).toBe('not taken as an uncle');
+    expect(orphanFateWords('uncle_fate_pending')).toBe('uncle inclusion still possible');
+    expect(() => orphanFateWords('mystery' as never)).toThrow('unknown orphan fate mystery');
+  });
+});
+
+describe('uncleRateFigure', () => {
+  it('reads the window’s exact uncle rate from the per-day counts against the 2.5% target', () => {
+    expect(
+      uncleRateFigure({
+        days: [{ date: '2026-10-20', canonicalBlocks: 279_561, uncles: 7_178, nodeSwitches: 0 }],
+        unclesInWindow: 7_178,
+      })
+    ).toEqual({ rate: '2.57%', uncles: 7_178, blocks: 279_561 });
+    expect(() =>
+      uncleRateFigure({
+        days: [{ date: '2026-10-20', canonicalBlocks: 10, uncles: 1, nodeSwitches: 0 }],
+        unclesInWindow: 2,
+      })
+    ).toThrow('days hold 1 uncles but the window says 2');
+    expect(uncleRateFigure({ days: [], unclesInWindow: 0 })).toBeNull();
+  });
+});
