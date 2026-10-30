@@ -328,6 +328,16 @@ fn classify_code_cell_lock(
 ) -> Result<ScriptCustodyResponse, ApiRouteError> {
     let kind = match (cell.lock_code_hash.as_slice(), cell.lock_hash_type) {
         (hash, 0) if hash == [0u8; 32] => "unspendable",
+        // D6: secp256k1 over 20 zero bytes names no key anyone holds (the
+        // multisig v2 Type ID code cell's lock), so the cell can never be
+        // spent and its code is effectively immutable.
+        (hash, 1)
+            if hex::encode(hash) == SECP_TYPE_HASH
+                && cell.lock_args.len() == 20
+                && cell.lock_args.iter().all(|byte| *byte == 0) =>
+        {
+            "unspendable"
+        }
         (hash, 1) if hex::encode(hash) == SECP_TYPE_HASH && cell.lock_args.len() == 20 => "one_key",
         (hash, 1)
             if MULTISIG_TYPE_HASHES.contains(&hex::encode(hash).as_str())
