@@ -101,6 +101,13 @@ describe('DaoHistory (DAO-11, DAO-18)', () => {
     expect(container.querySelector('[data-role="clip-note"]')!.textContent).toBe(
       '\u00a0·\u00a01 week beyond the scale is cut and marked'
     );
+    // A tspan of the title itself, so it follows the title's real width (live pass: an estimated
+    // x put the dot against "week" in the site font).
+    const note = container.querySelector('[data-role="clip-note"]')!;
+    expect(note.tagName.toLowerCase()).toBe('tspan');
+    expect(note.parentElement!.textContent).toBe(
+      'Net change, per week\u00a0·\u00a01 week beyond the scale is cut and marked'
+    );
     const clipped = container.querySelectorAll('[data-week][data-clipped="true"]');
     expect(clipped).toHaveLength(1);
     expect(clipped[0]).toHaveAttribute('data-week', date(1 + 5 * 7));
