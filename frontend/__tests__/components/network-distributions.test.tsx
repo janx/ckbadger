@@ -133,6 +133,46 @@ describe('NetworkTrends', () => {
     expect(screen.queryByRole('list', { name: /missing days/i })).not.toBeInTheDocument();
   });
 
+  const observedVerified = (ts: number[]) => ({
+    metric: 'verifiedPeers',
+    granularity: 'day',
+    dailyCoverage: ts.map((t) => ({ ts: t, hasRetainedObservation: true, roundsPerDay: null })),
+    coverageFrom: ts[0],
+    coverageTo: ts.at(-1),
+    roundCountAvailability: 'notRecorded',
+    points: ts.map((t) => ({ ts: t, scalar: 80, buckets: [] })),
+  });
+
+  it('keeps the page up while the reachable history is still loading (#2)', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/history`, async ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric') ?? '';
+        if (metric === 'verifiedPeers') return HttpResponse.json(observedVerified([1751328000]));
+        if (metric === 'reachablePeers') return new Promise<never>(() => {});
+        return HttpResponse.json({ metric, granularity: 'day', points: [] });
+      })
+    );
+    render(<NetworkTrends />);
+    expect(await screen.findByText('Retained verification state (daily)')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText('Loading verified peer history…')).toBeInTheDocument()
+    );
+  });
+
+  it('reports a failed reachable history instead of crashing the page (#2)', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric') ?? '';
+        if (metric === 'verifiedPeers') return HttpResponse.json(observedVerified([1751328000]));
+        if (metric === 'reachablePeers')
+          return HttpResponse.json({ error: 'unavailable' }, { status: 500 });
+        return HttpResponse.json({ metric, granularity: 'day', points: [] });
+      })
+    );
+    render(<NetworkTrends />);
+    expect(await screen.findByText('Failed to load verified peer history.')).toBeInTheDocument();
+  });
+
   it('pairs verified and reachable histories day by day on one time axis', () => {
     const merged = mergePeerCounts(
       {

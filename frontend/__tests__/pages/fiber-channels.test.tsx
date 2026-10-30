@@ -52,7 +52,11 @@ describe('FiberChannelsPage', () => {
     expect(screen.getByRole('heading', { name: 'Fiber channels' })).toBeInTheDocument();
     expect(screen.getByText(/cannot reveal off-chain payments/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('On-chain party pairs')).toBeInTheDocument());
-    expect(screen.getAllByText(/3,000\.00000000/).length).toBeGreaterThan(0);
+    expect(
+      Array.from(document.querySelectorAll('[data-ckb-amount]')).some(
+        (el) => el.textContent === '3,000.00000000 CKB'
+      )
+    ).toBe(true);
     expect(screen.getByText('Unknown address · 0xaaaaaaaa…aaaaaaaa')).toBeInTheDocument();
     const open = screen.getByRole('button', { name: 'Open' });
     fireEvent.click(open);

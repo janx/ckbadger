@@ -3,7 +3,7 @@
 import Link from '@/components/ui/link';
 import { TransactionEvidence } from '@/components/cell/cell-transactions';
 import type { FiberChannelDetail, FiberChannelEvidence, FiberEpochDelay } from '@/lib/api';
-import { formatCkbAmount } from '@/lib/utils';
+import { ExactCkb } from '@/components/activity-event-row';
 
 interface Props {
   channel: FiberChannelDetail;
@@ -56,7 +56,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
         <div>
           <div className="text-text-dim text-[11px]">Funding cell capacity</div>
           <div className="text-text-bright mt-1 font-mono text-[18px]">
-            {formatCkbAmount(channel.capacity).full} <span className="text-[12px]">CKB</span>
+            <ExactCkb shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
           </div>
           <div className="text-text-dim text-[11px]">
             {channel.udtTypeHash
@@ -127,19 +127,27 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                     <div>
                       Opening inputs:{' '}
                       <span className="text-text-bright">
-                        {formatCkbAmount(flow.openingInputCapacity).full} CKB
+                        <ExactCkb
+                          shannons={BigInt(flow.openingInputCapacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                       </span>
                     </div>
                     <div>
                       Outputs to same lock:{' '}
                       <span className="text-text-bright">
-                        {formatCkbAmount(flow.openingOutputCapacity).full} CKB
+                        <ExactCkb
+                          shannons={BigInt(flow.openingOutputCapacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                       </span>
                     </div>
                     <div>
                       Observed net input:{' '}
                       <span className="text-text-bright">
-                        {formatCkbAmount(flow.observedNetInput).full} CKB
+                        <ExactCkb shannons={BigInt(flow.observedNetInput)} tone="plain" />
                       </span>
                     </div>
                   </div>
@@ -357,7 +365,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                       {short(output.ownerLockHash)}
                     </span>
                     <span className="text-text-bright font-mono sm:text-right">
-                      {formatCkbAmount(output.capacity).full} CKB
+                      <ExactCkb shannons={BigInt(output.capacity)} signed={false} tone="plain" />
                     </span>
                   </div>
                 ))}

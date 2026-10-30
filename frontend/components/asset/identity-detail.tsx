@@ -142,7 +142,9 @@ export function CanonicalIdentityDetail({
           key={`${kind}:${id}`}
           queryKey={`${kind}:${id}`}
           scope="This identity's whole life"
-          itemKind="identity"
+          item={
+            kind === 'dotcell' ? { kind: 'identity', protocolName: '.cell' } : { kind: 'identity' }
+          }
           initialActivityCursor={initialActivityCursor}
           onActivityCursorChange={cursorChanged}
           loadActivities={(p) => api.getItemActivityFeed(kind, id, p)}

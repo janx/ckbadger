@@ -372,6 +372,26 @@ describe('BlockDetailPage', () => {
     );
   });
 
+  it('names an uncle the block read does not list yet as text, without crashing (#6)', async () => {
+    // Block and proposals are two reads; a reorg between them is timing, not a broken invariant.
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 1, unclesCount: 0 });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([
+      {
+        proposalIndex: 0,
+        proposalId: '0xaabbccddeeff00112233',
+        committedTxHash: null,
+        committedBlockNumber: null,
+        uncle: { number: 8_775_637, hash: `0x${'ee'.repeat(32)}` },
+      },
+    ]);
+    render(<BlockDetailPage />);
+    const row = (await screen.findByText('0xaabbccddeeff00112233')).closest(
+      '[data-testid="block-proposal-row"]'
+    ) as HTMLElement;
+    expect(row).toHaveTextContent('uncle #8,775,637');
+    expect(within(row).queryByRole('link', { name: /uncle #8,775,637/ })).not.toBeInTheDocument();
+  });
+
   it('says there are no proposals when the block and its uncles proposed nothing', async () => {
     vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 0, unclesCount: 1 });
     vi.mocked(api.getBlockProposals).mockResolvedValue([]);

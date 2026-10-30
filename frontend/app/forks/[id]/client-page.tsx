@@ -13,7 +13,8 @@ import {
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { formatObserverTimeUtc8 } from '@/lib/fork-time';
-import { formatCkbAmount, formatUtcClock } from '@/lib/utils';
+import { formatUtcClock } from '@/lib/utils';
+import { ExactCkb } from '@/components/activity-event-row';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 
@@ -380,9 +381,11 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
                   label: 'Output capacity',
                   minWidth: 170,
                   render: (tx: OrphanedTransaction) =>
-                    tx.totalCapacity == null
-                      ? 'Unavailable'
-                      : `${formatCkbAmount(tx.totalCapacity).full} CKB`,
+                    tx.totalCapacity == null ? (
+                      'Unavailable'
+                    ) : (
+                      <ExactCkb shannons={BigInt(tx.totalCapacity)} signed={false} tone="plain" />
+                    ),
                 },
               ]}
               mobileRow={(tx: OrphanedTransaction) => (
@@ -403,9 +406,11 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
                   </div>
                   <div>
                     Output capacity:{' '}
-                    {tx.totalCapacity == null
-                      ? 'Unavailable'
-                      : `${formatCkbAmount(tx.totalCapacity).full} CKB`}
+                    {tx.totalCapacity == null ? (
+                      'Unavailable'
+                    ) : (
+                      <ExactCkb shannons={BigInt(tx.totalCapacity)} signed={false} tone="plain" />
+                    )}
                   </div>
                 </div>
               )}

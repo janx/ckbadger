@@ -78,12 +78,11 @@ export function mergePeerCounts(
 /**
  * Each run of days without a retained observation becomes one shaded gap, from the last observed
  * day before it to the first observed day after it (or the coverage edge), so lines never bridge it.
+ * Coverage and points are checked against each other within the one verified-peers response.
  */
-export function peerGaps(
-  coverage: NetworkHistory['dailyCoverage'],
-  points: readonly ChartPoint[]
-): ChartGap[] {
-  const observed = new Set(points.map((point) => point.x));
+export function peerGaps(history: NetworkHistory): ChartGap[] {
+  const coverage = history.dailyCoverage;
+  const observed = new Set(history.points.map((point) => point.ts));
   for (const day of coverage)
     if (day.hasRetainedObservation !== observed.has(day.ts))
       throw new Error(`peer coverage disagrees with its point at ${formatDay(day.ts)}`);
@@ -202,12 +201,15 @@ export function NetworkTrends() {
     { key: 'verified', label: 'Verified (retained)', color: '#dee2ec' },
   ];
   const peerCounts = mergePeerCounts(verifiedPeers.data, reachablePeers.data);
-  const coverage = verifiedPeers.data?.dailyCoverage ?? [];
-  const gaps = peerGaps(coverage, peerCounts.data);
   const peerHistoryError =
     verifiedPeers.isError || reachablePeers.isError
       ? 'Failed to load verified peer history.'
       : peerCounts.error;
+  const peerHistoryLoading = !peerHistoryError && (!verifiedPeers.data || !reachablePeers.data);
+  // Gaps and the time axis exist only for a loaded, consistent pair of histories (#2).
+  const peerHistory = !peerHistoryError && peerCounts.data.length ? verifiedPeers.data : undefined;
+  const coverage = peerHistory?.dailyCoverage ?? [];
+  const gaps = peerHistory ? peerGaps(peerHistory) : [];
 
   return (
     <section className="space-y-4">
@@ -226,7 +228,13 @@ export function NetworkTrends() {
 
       <TrendPanel title="Retained verification state (daily)">
         {peerHistoryError ? (
-          <p className="text-negative font-mono text-xs">{peerHistoryError}</p>
+          <p role="alert" className="text-negative font-mono text-xs">
+            {peerHistoryError}
+          </p>
+        ) : peerHistoryLoading ? (
+          <p role="status" className="text-text-dim font-mono text-xs">
+            Loading verified peer history…
+          </p>
         ) : peerCounts.data.length === 0 ? (
           <p className="text-text-dim font-mono text-xs">
             No completed daily crawler observations yet.

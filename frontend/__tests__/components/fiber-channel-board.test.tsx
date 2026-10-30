@@ -77,9 +77,13 @@ describe('FiberChannelBoard', () => {
       />
     );
     expect(screen.getByTestId('stage-Opening')).toHaveTextContent(producerDetail.fundingTxHash);
-    expect(screen.getByText('1,000.00000000 CKB')).toBeInTheDocument();
-    expect(screen.getByText('699.00000000 CKB')).toBeInTheDocument();
-    expect(screen.getByText('301.00000000 CKB')).toBeInTheDocument();
+    // Amounts use the site's one exact CKB form, trailing zeros ghosted (#11).
+    const amounts = Array.from(document.querySelectorAll('[data-ckb-amount]')).map(
+      (el) => el.textContent
+    );
+    expect(amounts).toEqual(
+      expect.arrayContaining(['1,000.00000000 CKB', '699.00000000 CKB', '+301.00000000 CKB'])
+    );
     expect(screen.getByText(/output-only lock did not necessarily sign/)).toBeInTheDocument();
   });
 

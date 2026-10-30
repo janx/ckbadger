@@ -9,7 +9,8 @@ export interface BtcfsInscription {
   index: number;
 }
 
-const BTCFS = /^btcfs:\/\/([0-9a-fA-F]{64})i(0|[1-9]\d*)$/;
+// Case-insensitive like the indexer, which lowercases media text before matching schemes.
+const BTCFS = /^btcfs:\/\/([0-9a-f]{64})i(0|[1-9]\d*)$/i;
 
 /**
  * Strict parse of exactly `btcfs://<64 hex txid>i<decimal index>`. The URI comes from spore
@@ -24,14 +25,24 @@ export function parseBtcfsUri(uri: string): BtcfsInscription | null {
   return { txid: match[1].toLowerCase(), index };
 }
 
-export function bitcoinTxHref(txid: string): string {
+/**
+ * The inscription's Bitcoin transaction on mempool.space, for mainnet objects. Which Bitcoin
+ * network testnet DOB inscriptions name is not established, so other networks get no link (null).
+ */
+export function bitcoinTxHref(txid: string, network: string): string | null {
   if (!/^[0-9a-f]{64}$/.test(txid)) throw new Error(`Invalid Bitcoin txid ${JSON.stringify(txid)}`);
-  return `https://mempool.space/tx/${txid}`;
+  return network === 'mainnet' ? `https://mempool.space/tx/${txid}` : null;
 }
 
-/** Omiga's page for a DOB, keyed by the spore cell's type script hash. */
-export function omigaDobHref(typeScriptHash: string): string {
+const OMIGA_HOSTS: Record<string, string> = {
+  mainnet: 'https://omiga.io',
+  testnet: 'https://test.omiga.io',
+};
+
+/** Omiga's page for a DOB on the page's network, keyed by the spore cell's type script hash. */
+export function omigaDobHref(typeScriptHash: string, network: string): string | null {
   if (!/^0x[0-9a-f]{64}$/.test(typeScriptHash))
     throw new Error(`Invalid spore type script hash ${JSON.stringify(typeScriptHash)}`);
-  return `https://omiga.io/info/dobs/${typeScriptHash}`;
+  const host = OMIGA_HOSTS[network];
+  return host ? `${host}/info/dobs/${typeScriptHash}` : null;
 }

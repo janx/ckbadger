@@ -88,6 +88,25 @@ it('reports failed m-NFT insights instead of drawing an empty weekly panel (#17)
     await screen.findByText('Weekly transfers unavailable: insights unavailable')
   ).toBeInTheDocument();
 });
+it('draws an identity collection its weekly transfers from the insights it is served (#9)', async () => {
+  vi.mocked(api.getCollectionInsights).mockResolvedValue({
+    ...mnftCollectionInsightsProducer,
+    weeklyActivity: [
+      {
+        weekStart: '2023-11-08',
+        mintTransactions: 0,
+        transferTransactions: 7,
+        burnTransactions: 0,
+      },
+    ],
+  });
+  render(<CollectionDetail id="dotbit" kind="identity" />);
+  expect(
+    await screen.findByText(/Week of 2023-11-08: 7 transfers/, {}, { timeout: 3000 })
+  ).toBeInTheDocument();
+  expect(api.getCollectionInsights).toHaveBeenCalledWith('dotbit', 'identity');
+  expect(screen.queryByText(/not indexed for identity collections/)).not.toBeInTheDocument();
+});
 it('separates physical cell ownership from protocol-named .cell parties', async () => {
   const p = dotcellProtocolProducer;
   render(

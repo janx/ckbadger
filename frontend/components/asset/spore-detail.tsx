@@ -142,7 +142,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           key={id}
           queryKey={`spore:${id}`}
           scope="This object's whole life"
-          itemKind="object"
+          item={{ kind: 'object' }}
           loadActivities={(p) => api.getItemActivityFeed('spore', id, p)}
           loadTransactions={(p) => api.getItemTransactions('spore', id, p)}
           context={{

@@ -150,6 +150,24 @@ describe('DaoBoard', () => {
     expect(amount).toHaveClass('whitespace-nowrap');
   });
 
+  it('reads the 365-day AR anchor as a rate, a UTC time and a span, not raw integers (#11)', () => {
+    const year365 = {
+      anchorBlockNumber: 3,
+      anchorChainTimeMs: '1761733970452',
+      anchorAr: '10100000000000000',
+      elapsedChainTimeMs: '31536000000',
+      observedGrowthPercent: '0.99',
+    };
+    render(
+      <DaoBoard statistics={stats} evidence={{ ...evidence, ar: { ...evidence.ar, year365 } }} />
+    );
+    const line = screen.getByText(/365-day anchor/);
+    expect(line).toHaveTextContent(
+      '365-day anchor: block #3 · chain time 2025-10-29 10:32:50 UTC · AR 1.0100000000000000 · observed span 365 d'
+    );
+    expect(line).not.toHaveTextContent(/ ms|10100000000000000/);
+  });
+
   it('fails fast when a complete deposit day lacks its depositor count (#17)', () => {
     const missing = {
       ...history,

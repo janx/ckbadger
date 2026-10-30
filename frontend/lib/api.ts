@@ -1479,9 +1479,20 @@ export interface GalleryObject extends SporeNft {
   traits: DobTrait[];
   decodeStatus: string;
 }
+/** Who rewrote this item's cell as a ring neighbour, when the tx had no action of its own. */
+export interface ItemRingRelink {
+  by: 'register' | 'register_subname' | 'recycle' | 'unattributed';
+  /** The neighbour name whose action rewrote this one; null when unattributed. */
+  byId: string | null;
+}
+/** What one transaction meant for this item, stated by the API (one derivation, #5). */
 export interface ItemFeedContext {
   itemId: string;
   action: string;
+  /** The item's own protocol actions in this tx, in order (e.g. `["buy", "list"]`); empty when none. */
+  protocolActions: string[];
+  /** Set only when the item's cell was rewritten as a ring neighbour with no own action. */
+  ringRelink: ItemRingRelink | null;
   createdCell: ItemCellVersion | null;
   consumedCell: ItemCellVersion | null;
 }
@@ -4007,13 +4018,15 @@ export const api = {
     fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
   getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
     fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),
+  /** Spore clusters have their own insights; m-NFT classes and identity collections (by alias)
+   * are served by the object-collection insights route. */
   getCollectionInsights: (
     id: string,
-    kind: 'spore' | 'object' = 'spore'
+    kind: 'spore' | 'object' | 'identity' = 'spore'
   ): Promise<CollectionInsights> =>
-    kind === 'object'
-      ? fetchApi(`/assets/objects/${encodeURIComponent(id)}/insights`)
-      : fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`),
+    kind === 'spore'
+      ? fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`)
+      : fetchApi(`/assets/objects/${encodeURIComponent(id)}/insights`),
   getCollectionGallery: (
     id: string,
     params: CursorQueryParams & { traits?: Record<string, string> } = {}
