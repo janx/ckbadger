@@ -22,6 +22,7 @@
 
 pub mod batch;
 pub mod dao_snapshot;
+pub mod global_bucket;
 pub mod keys;
 pub mod network_keys;
 pub mod network_types;
@@ -68,6 +69,7 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 
 pub use batch::{merge_write_batches, StoreBatch};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
+pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBucket};
 pub use network_types::*;
 pub use reorg_ops::RollbackResult;
 pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
@@ -92,7 +94,7 @@ pub use store::{
     CF_SCRIPT_VERSIONS_BY_FAMILY, CF_SCRIPT_VERSIONS_BY_LABEL, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA,
     CF_STATS_CHAIN, CF_STATS_DAO, CF_STATS_HODL, CF_STATS_MNFT, CF_STATS_SCRIPT, CF_STATS_SPORE,
     CF_STATS_TOKEN, CF_SYNC_META, CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,
-    CF_TX_ACTIONS, CF_TX_HASH_MAP, CF_TX_INDEX, DOMAIN_CFS, NETWORK_CFS,
+    CF_TX_ACTIONS, CF_TX_ACTIONS_BY_BUCKET, CF_TX_HASH_MAP, CF_TX_INDEX, DOMAIN_CFS, NETWORK_CFS,
 };
 pub use sync_ops::HeartbeatTick;
 pub use tx_ops::TxCyclesWrite;

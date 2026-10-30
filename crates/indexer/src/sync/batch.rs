@@ -11780,6 +11780,137 @@ mod tests {
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 
+        fn bucket_rows(store: &CkbadgerStore) -> Vec<Vec<u8>> {
+            store
+                .iterator_cf(
+                    store.cf_tx_actions_by_bucket(),
+                    rocksdb::IteratorMode::Start,
+                )
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    assert!(value.is_empty(), "bucket rows carry no value");
+                    key.to_vec()
+                })
+                .collect()
+        }
+
+        /// `CF_TX_ACTIONS_BY_BUCKET`: bulk materialization, a block-at-a-time
+        /// live sync, a multi-block live batch, and a rollback + replay of the
+        /// last two blocks must all hold byte-identical rows — one per
+        /// non-cellbase transaction, keyed by `classify_global_bucket` of that
+        /// transaction's own `TxActions` row — while the append-only store is
+        /// never touched by the rollback.
+        #[tokio::test]
+        async fn bulk_live_batch_shapes_and_replay_write_identical_bucket_rows() {
+            use ckbadger_store::GlobalBucket;
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_dao_token_and_name();
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+
+            // Expected rows straight from the TxActions rows bulk persisted.
+            let mut expected: Vec<Vec<u8>> = bulk
+                .tx_actions_map
+                .values()
+                .filter_map(|actions| {
+                    ckbadger_store::tx_actions_bucket_key(actions).map(|k| k.to_vec())
+                })
+                .collect();
+            expected.sort();
+            let non_cellbase = bulk
+                .tx_actions_map
+                .values()
+                .filter(|a| !a.is_cellbase)
+                .count();
+            assert_eq!(expected.len(), non_cellbase);
+            let buckets: std::collections::BTreeSet<GlobalBucket> = expected
+                .iter()
+                .map(|k| {
+                    ckbadger_store::keys::decode_tx_actions_by_bucket_key(k)
+                        .unwrap()
+                        .0
+                })
+                .collect();
+            for bucket in [
+                GlobalBucket::Dao,
+                GlobalBucket::Token,
+                GlobalBucket::Protocol,
+            ] {
+                assert!(
+                    buckets.contains(&bucket),
+                    "fixture covers {bucket:?}: {buckets:?}"
+                );
+            }
+            assert_eq!(bulk.tx_actions_by_bucket, expected, "bulk bucket rows");
+
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+            assert_eq!(bucket_rows(&single), expected, "bulk vs single live");
+            assert_eq!(bucket_rows(&multi), expected, "bulk vs multi live");
+
+            let immutable_before = cell_payload_rows(&multi);
+            multi_indexer
+                .writer
+                .cleanup_batch_range(multi.as_ref(), 2, 3)
+                .unwrap();
+            let surviving: Vec<Vec<u8>> = expected
+                .iter()
+                .filter(|k| {
+                    ckbadger_store::keys::decode_tx_actions_by_bucket_key(k)
+                        .unwrap()
+                        .1
+                        < 2
+                })
+                .cloned()
+                .collect();
+            assert!(surviving.len() < expected.len());
+            assert_eq!(
+                bucket_rows(&multi),
+                surviving,
+                "rollback to block 1 deletes exactly the bucket rows of blocks 2 and 3"
+            );
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+            multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(1)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[2..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_eq!(bucket_rows(&multi), expected, "bulk vs rollback/replay");
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+        }
+
         #[tokio::test]
         async fn orphan_first_seen_at_month_end_replays_into_new_month_like_fresh_sync() {
             let _detectors =

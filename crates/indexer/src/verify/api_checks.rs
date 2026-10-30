@@ -7,7 +7,7 @@ use super::checks::*;
 use super::report::format_number;
 use super::sampling::LcgSampler;
 use ckbadger_common::TokenBalance;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
 const SHANNONS_PER_CKB: i128 = 100_000_000;
@@ -4576,6 +4576,165 @@ impl Check for ParticipantRowsConsistency {
     }
 }
 
+// ── Global activity bucket index ───────────────────────────────────────────
+
+/// `CF_TX_ACTIONS_BY_BUCKET` agrees with the classification of the
+/// transactions it indexes.
+///
+/// For each sampled block and each bucket, two API reads must name the same
+/// transactions: the block listing filtered by the bucket (which classifies
+/// every canonical transaction of the block from its own `TxActions` row) and
+/// the bucket listing positioned at that block (which reads the index). A
+/// transaction only in the first has no bucket row; one only in the second is
+/// an index row for a transaction that does not classify there. An index row
+/// whose `TxActions` row is missing makes the bucket listing itself fail with
+/// its position, which this check reports as an error.
+pub struct GlobalActivityBucketIndexConsistency;
+
+/// How many distinct recent blocks the check walks, at most.
+const GLOBAL_BUCKET_SAMPLE_BLOCK_CAP: usize = 20;
+const GLOBAL_BUCKET_PAGE_LIMIT: usize = 100;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BucketActivityRecord {
+    tx_hash: String,
+    block_number: i64,
+    tx_index: i32,
+}
+
+/// The `(tx_index, tx_hash)` rows of `block` that the bucket listing (the
+/// index) serves for `filter`, paging from just above the block until the
+/// listing moves below it.
+fn bucket_index_rows_for_block(
+    ctx: &CheckContext,
+    filter: &str,
+    block: i64,
+) -> anyhow::Result<BTreeSet<(i32, String)>> {
+    let mut rows = BTreeSet::new();
+    let mut cursor = format!("{}:0", block + 1);
+    loop {
+        let page: CursorPage<BucketActivityRecord> = api_get(
+            ctx,
+            &format!("activities?filter={filter}&limit={GLOBAL_BUCKET_PAGE_LIMIT}&cursor={cursor}"),
+        )?;
+        for row in &page.data {
+            if row.block_number > block {
+                anyhow::bail!(
+                    "bucket listing filter={filter} returned block {} above its cursor {cursor}",
+                    row.block_number
+                );
+            }
+            if row.block_number < block {
+                return Ok(rows);
+            }
+            rows.insert((row.tx_index, row.tx_hash.clone()));
+        }
+        match page.next_cursor {
+            Some(next) if !page.data.is_empty() => cursor = next,
+            _ => return Ok(rows),
+        }
+    }
+}
+
+impl Check for GlobalActivityBucketIndexConsistency {
+    fn name(&self) -> &'static str {
+        "global_activity_bucket_index_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Every sampled block's transactions sit in exactly the global activity buckets they classify into"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    /// The recent-activity sample that picks the blocks is sized by
+    /// `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(GLOBAL_BUCKET_SAMPLE_BLOCK_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "global_activity_bucket_index_consistency was run with --sample-count 0: an \
+                 empty sample verifies nothing"
+            );
+        }
+        let recent: CursorPage<BucketActivityRecord> = api_get(
+            ctx,
+            &format!("activities?limit={}", ctx.sample_count.min(100)),
+        )?;
+        let mut blocks: Vec<i64> = Vec::new();
+        for row in &recent.data {
+            if !blocks.contains(&row.block_number) {
+                blocks.push(row.block_number);
+            }
+        }
+        blocks.truncate(ctx.sample_count.min(GLOBAL_BUCKET_SAMPLE_BLOCK_CAP));
+        if blocks.is_empty() {
+            anyhow::bail!(
+                "global_activity_bucket_index_consistency found no recent activity to sample"
+            );
+        }
+
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for &block in &blocks {
+            for bucket in ckbadger_store::GlobalBucket::ALL {
+                let filter = bucket.as_filter();
+                let classified: Vec<BucketActivityRecord> = all_cursor_pages(
+                    ctx,
+                    &format!(
+                        "activities?blockNumber={block}&filter={filter}&limit={GLOBAL_BUCKET_PAGE_LIMIT}"
+                    ),
+                )?;
+                let mut by_classification = BTreeSet::new();
+                for row in classified {
+                    if row.block_number != block {
+                        anyhow::bail!(
+                            "block listing blockNumber={block} filter={filter} returned a row of block {}",
+                            row.block_number
+                        );
+                    }
+                    by_classification.insert((row.tx_index, row.tx_hash));
+                }
+                let by_index = bucket_index_rows_for_block(ctx, filter, block)?;
+
+                let mut details = vec![];
+                for (tx_index, tx_hash) in by_classification.difference(&by_index) {
+                    details.push(format!(
+                        "tx={tx_hash} (index {tx_index}) classifies as {filter} but has no {filter} bucket row"
+                    ));
+                }
+                for (tx_index, tx_hash) in by_index.difference(&by_classification) {
+                    details.push(format!(
+                        "{filter} bucket row at index {tx_index} names tx={tx_hash}, which does not classify as {filter} in this block"
+                    ));
+                }
+                if !details.is_empty() {
+                    findings.push(Finding {
+                        entity: format!("block={block} bucket={filter}"),
+                        details,
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ── `.cell` (DotCell) names ────────────────────────────────────────────────
 
 /// How many `.cell` names a records-parity sample may read back from the node.
@@ -5103,6 +5262,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(IdentityCollectionHolderConsistency),
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
+        Box::new(GlobalActivityBucketIndexConsistency),
         Box::new(DotCellRingIntegrity),
         Box::new(DotCellIdIsLabelHash),
         Box::new(DotCellOwnerIndexConsistency),
@@ -5305,7 +5465,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 36);
+        assert_eq!(checks.len(), 37);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -5329,6 +5489,7 @@ mod tests {
         assert!(names.contains(&"identity_collection_holder_consistency"));
         assert!(names.contains(&"dao_status_index_matches_deposits"));
         assert!(names.contains(&"participant_rows_consistency"));
+        assert!(names.contains(&"global_activity_bucket_index_consistency"));
         assert!(names.contains(&"dotcell_ring_integrity"));
         assert!(names.contains(&"dotcell_id_is_label_hash"));
         assert!(names.contains(&"dotcell_owner_index_consistency"));
@@ -5390,7 +5551,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 29);
+        assert_eq!(sampling_count, 30);
     }
 
     #[test]
@@ -7855,5 +8016,157 @@ mod tests {
                 assert!(completed.status_reason.unwrap().contains("identityId"));
             }
         }
+    }
+
+    // ── global_activity_bucket_index_consistency ──────────────────────────
+
+    /// One transaction of the fake chain: where the API's block listing
+    /// classifies it, and which bucket row (if any) the index holds for it.
+    #[derive(Clone)]
+    struct FakeBucketTx {
+        block: i64,
+        index: i32,
+        hash: String,
+        classified: &'static str,
+        indexed: Option<&'static str>,
+    }
+
+    /// Serves `/activities` the way the API does: the recent feed, the block
+    /// listing filtered by classification, and the bucket listing from the
+    /// index (newest first, strictly older than `block:index` cursors).
+    struct FakeBucketApi {
+        txs: Vec<FakeBucketTx>,
+    }
+
+    fn fake_bucket_row(tx: &FakeBucketTx) -> serde_json::Value {
+        json!({ "txHash": tx.hash, "blockNumber": tx.block, "txIndex": tx.index,
+                "participants": [] })
+    }
+
+    impl Respond for FakeBucketApi {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let query: HashMap<String, String> = request.url.query_pairs().into_owned().collect();
+            let limit: usize = query["limit"].parse().unwrap();
+            let cursor = query.get("cursor").map(|c| {
+                let (b, i) = c.split_once(':').unwrap();
+                (b.parse::<i64>().unwrap(), i.parse::<i32>().unwrap())
+            });
+            let mut txs = self.txs.clone();
+            txs.sort_by_key(|t| std::cmp::Reverse((t.block, t.index)));
+            let selected: Vec<&FakeBucketTx> = match (query.get("blockNumber"), query.get("filter"))
+            {
+                (Some(block), Some(filter)) => {
+                    let block: i64 = block.parse().unwrap();
+                    txs.iter()
+                        .filter(|t| t.block == block && t.classified == filter)
+                        .collect()
+                }
+                (None, Some(filter)) => txs
+                    .iter()
+                    .filter(|t| t.indexed == Some(filter.as_str()))
+                    .filter(|t| cursor.is_none_or(|c| (t.block, t.index) < c))
+                    .collect(),
+                (None, None) => txs.iter().collect(),
+                (Some(_), None) => panic!("unfiltered block listing is not used"),
+            };
+            let page: Vec<serde_json::Value> = selected
+                .iter()
+                .take(limit)
+                .map(|t| fake_bucket_row(t))
+                .collect();
+            let next = (selected.len() > limit).then(|| {
+                let last = selected[limit - 1];
+                format!("{}:{}", last.block, last.index)
+            });
+            ResponseTemplate::new(200).set_body_json(json!({ "data": page, "nextCursor": next }))
+        }
+    }
+
+    fn fake_bucket_chain() -> Vec<FakeBucketTx> {
+        let tx = |block, index, classified, indexed| FakeBucketTx {
+            block,
+            index,
+            hash: format!("0x{:064x}", block * 100 + i64::from(index)),
+            classified,
+            indexed,
+        };
+        let mut chain = vec![
+            tx(900, 1, "dao", Some("dao")),
+            tx(900, 2, "token", Some("token")),
+            tx(899, 1, "ckb", Some("ckb")),
+            tx(898, 3, "object", Some("object")),
+            tx(898, 4, "identity", Some("identity")),
+        ];
+        // A long token run below the sampled blocks: the bucket listing must
+        // stop at the first row of an older block, not page through them.
+        for block in 700..760 {
+            chain.push(tx(block, 1, "token", Some("token")));
+        }
+        chain
+    }
+
+    fn run_bucket_check(chain: Vec<FakeBucketTx>, sample_count: usize) -> CompletedCheck {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(
+            Mock::given(method("GET"))
+                .and(path("/api/v1/activities"))
+                .respond_with(FakeBucketApi { txs: chain })
+                .mount(&server),
+        );
+        let ctx = CheckContext {
+            sample_count,
+            ..mock_ctx(&server)
+        };
+        execute_check(
+            registered_check("global_activity_bucket_index_consistency").as_ref(),
+            &ctx,
+            &ProgressReporter::new(None),
+        )
+    }
+
+    #[test]
+    fn global_bucket_index_check_passes_when_the_index_matches_classification() {
+        // The 5 most recent transactions span blocks 900, 899 and 898.
+        let completed = run_bucket_check(fake_bucket_chain(), 5);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 3, "blocks 900, 899, 898");
+    }
+
+    #[test]
+    fn global_bucket_index_check_fails_with_block_tx_context_on_a_missing_or_stray_row() {
+        let mut chain = fake_bucket_chain();
+        // 898:3 classifies as object but its bucket row is missing; 899:1 has
+        // a stray token row though it classifies as ckb.
+        chain[3].indexed = None;
+        chain[2].indexed = Some("token");
+        let completed = run_bucket_check(chain, 10);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.expect("result").findings;
+        let rendered: Vec<String> = findings
+            .iter()
+            .map(|f| format!("{}: {}", f.entity, f.details.join("; ")))
+            .collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|f| f.starts_with("block=898 bucket=object: tx=0x")
+                    && f.contains("(index 3) classifies as object but has no object bucket row")),
+            "{rendered:#?}"
+        );
+        assert!(
+            rendered.iter().any(|f| f
+                .starts_with("block=899 bucket=token: token bucket row at index 1")
+                && f.contains("does not classify as token in this block")),
+            "{rendered:#?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|f| f.starts_with("block=899 bucket=ckb: tx=0x")),
+            "{rendered:#?}"
+        );
+        assert_eq!(findings.len(), 3, "{rendered:#?}");
     }
 }

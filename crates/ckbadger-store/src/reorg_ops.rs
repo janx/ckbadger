@@ -3741,6 +3741,9 @@ impl CkbadgerStore {
         // there is no full-CF cost. Cellbase transactions have no CF_TX_ACTIONS
         // row and never name parties, so cells remain their only source.
         let mut prefix_participants: HashMap<Vec<u8>, Vec<[u8; 20]>> = HashMap::new();
+        // Non-cellbase `TxActions` rows deleted here; each owns exactly one
+        // `CF_TX_ACTIONS_BY_BUCKET` row, which stage 8b' deletes and counts.
+        let mut indexed_tx_actions_removed = 0u64;
         {
             let mut activities_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_activities");
@@ -3782,11 +3785,61 @@ impl CkbadgerStore {
                 }
                 batch.delete_cf(self.cf_tx_actions(), &key);
                 activities_removed += 1;
+                if !tx_actions.is_cellbase {
+                    indexed_tx_actions_removed += 1;
+                }
                 stage.tick(activities_removed);
             }
             stage.finish(activities_removed);
             if activities_removed > 0 {
                 info!(activities_removed, "rollback: deleted tx activity bundles");
+            }
+        }
+
+        // 8b'. Delete the global activity bucket index above the fork point.
+        //
+        // Each bucket is keyed `bucket + block_num_desc + tx_idx_desc`, so its
+        // rolled-back rows are the leading range of that bucket: seek to the
+        // bucket and delete until the first surviving block. The forward writer
+        // puts a bucket row in the same batch as every non-cellbase `TxActions`
+        // row (`StoreBatch::put_tx_actions`, bulk materialization), so the two
+        // counts must agree; a difference is a write-path bug and aborts the
+        // rollback before anything commits.
+        {
+            let mut bucket_rows_removed = 0u64;
+            for bucket in crate::global_bucket::GlobalBucket::ALL {
+                let start = [bucket.as_byte()];
+                let iter = self.iterator_cf(
+                    self.cf_tx_actions_by_bucket(),
+                    IteratorMode::From(&start, rocksdb::Direction::Forward),
+                );
+                for item in iter {
+                    let (key, _) = item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate tx_actions_by_bucket in rollback: bucket={}, rollback_to={}: {}",
+                            bucket.as_filter(),
+                            rollback_to,
+                            e
+                        )
+                    })?;
+                    if key.first() != Some(&bucket.as_byte()) {
+                        break;
+                    }
+                    let (_, block_num, _) = keys::decode_tx_actions_by_bucket_key(&key)?;
+                    if block_num <= rollback_to {
+                        break;
+                    }
+                    batch.delete_cf(self.cf_tx_actions_by_bucket(), &key);
+                    bucket_rows_removed += 1;
+                }
+            }
+            if bucket_rows_removed != indexed_tx_actions_removed {
+                anyhow::bail!(
+                    "tx_actions_by_bucket rows removed ({}) != tx actions rows removed ({}) above the fork point: rollback_to={} (a bucket row was written without its TxActions row or the reverse)",
+                    bucket_rows_removed,
+                    indexed_tx_actions_removed,
+                    rollback_to
+                );
             }
         }
 
@@ -7623,6 +7676,118 @@ mod tests {
         let prev = read_epoch_row(&store, 5).expect("completed prior epoch must be untouched");
         assert!(prev.end_timestamp.is_some());
         assert_eq!(prev.transactions_count, 60);
+    }
+
+    fn bucket_rollback_header(block_num: i64) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![0x60 | block_num as u8; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000 + block_num * 1_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 2,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000 + block_num * 1_000,
+        }
+    }
+
+    fn bucket_rows(store: &CkbadgerStore) -> Vec<(crate::GlobalBucket, i64, i32)> {
+        store
+            .iterator_cf(store.cf_tx_actions_by_bucket(), IteratorMode::Start)
+            .map(|item| keys::decode_tx_actions_by_bucket_key(&item.unwrap().0).unwrap())
+            .collect()
+    }
+
+    /// Seeds blocks 1..=3 with one transaction per bucket position below and
+    /// returns the store. Bucket rows come from `put_tx_actions`, the live
+    /// writer's own call.
+    fn seed_bucket_rollback_fixture(store: &CkbadgerStore) {
+        use crate::types::{TAG_DAO, TAG_OBJECT, TAG_TOKEN};
+        let mut batch = StoreBatch::new(store);
+        for (block_num, tx_idx, tags) in [
+            (1, 1, TAG_TOKEN),
+            (1, 2, 0),
+            (2, 1, TAG_OBJECT),
+            (2, 2, TAG_TOKEN),
+            (3, 1, TAG_DAO),
+            (3, 2, 0),
+        ] {
+            let tx_hash = vec![(block_num as u8) << 4 | tx_idx as u8; 32];
+            let mut actions = make_tx_actions(&tx_hash, block_num, tx_idx);
+            actions.participants[0].tags = tags;
+            put_canonical_tx(&mut batch, block_num, tx_idx, &tx_hash);
+            batch.put_tx_actions(&actions);
+        }
+        for block_num in 1..=3 {
+            batch.put_block_header(block_num, &bucket_rollback_header(block_num));
+        }
+        batch.commit().unwrap();
+        seed_sync_status(store, 3, &bucket_rollback_header(3).hash, 6, 6, 6);
+    }
+
+    #[test]
+    fn test_rollback_deletes_bucket_rows_above_target_in_every_bucket() {
+        use crate::GlobalBucket::{Ckb, Dao, Object, Token};
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        seed_bucket_rollback_fixture(&store);
+        assert_eq!(
+            bucket_rows(&store),
+            vec![
+                (Dao, 3, 1),
+                (Token, 2, 2),
+                (Token, 1, 1),
+                (Object, 2, 1),
+                (Ckb, 3, 2),
+                (Ckb, 1, 2),
+            ]
+        );
+
+        rollback_fixture(&store, 1).unwrap();
+
+        assert_eq!(
+            bucket_rows(&store),
+            vec![(Token, 1, 1), (Ckb, 1, 2)],
+            "rows above the fork point are gone from every bucket, block 1 stays"
+        );
+        assert_eq!(
+            store
+                .list_tx_actions_page_by_bucket(Token, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// A bucket row above the fork point that no rolled-back `TxActions` row
+    /// owns means the write path put one without the other. Rollback refuses
+    /// rather than deleting it quietly.
+    #[test]
+    fn test_rollback_fails_on_a_bucket_row_without_its_tx_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        seed_bucket_rollback_fixture(&store);
+        store
+            .put_cf(
+                store.cf_tx_actions_by_bucket(),
+                &keys::encode_tx_actions_by_bucket_key(crate::GlobalBucket::Identity, 3, 7),
+                &[],
+            )
+            .unwrap();
+
+        let err = format!("{:#}", rollback_fixture(&store, 1).unwrap_err());
+        assert!(
+            err.contains("tx_actions_by_bucket rows removed (5) != tx actions rows removed (4)"),
+            "{err}"
+        );
+        assert!(err.contains("rollback_to=1"), "{err}");
+        assert_eq!(bucket_rows(&store).len(), 7, "nothing commits");
     }
 
     #[test]

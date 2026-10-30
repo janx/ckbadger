@@ -432,6 +432,9 @@ pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
 pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
 pub const CF_TX_ACTIONS: &str = "activities";
+/// Global activity bucket index: bucket(1) + block_num_desc(8) + tx_idx_desc(4)
+/// -> empty. One row per non-cellbase `CF_TX_ACTIONS` row.
+pub const CF_TX_ACTIONS_BY_BUCKET: &str = "tx_actions_by_bucket";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_MNFT_COLLECTION_AGG: &str = "mnft_collection_agg";
 pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities";
@@ -477,6 +480,7 @@ const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
     CF_ADDR_TXS_BY_PREFIX,
     CF_TOKEN_TRANSFERS,
     CF_TX_ACTIONS,
+    CF_TX_ACTIONS_BY_BUCKET,
     CF_OBJECT_COLLECTION_ACTIVITIES,
     CF_IDENTITY_COLLECTION_ACTIVITIES,
     CF_LOCK_SCRIPTS,
@@ -649,6 +653,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_ADDR_PREFIX_STATS,
     CF_DOTCELL_NAME_BY_OWNER,
     CF_DOTCELL_RING,
+    CF_TX_ACTIONS_BY_BUCKET,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -717,6 +722,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_ADDR_PREFIX_STATS,
     CF_DOTCELL_NAME_BY_OWNER,
     CF_DOTCELL_RING,
+    CF_TX_ACTIONS_BY_BUCKET,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1742,6 +1748,9 @@ impl CkbadgerStore {
     }
     pub fn cf_dotcell_ring(&self) -> &ColumnFamily {
         self.cf(CF_DOTCELL_RING)
+    }
+    pub fn cf_tx_actions_by_bucket(&self) -> &ColumnFamily {
+        self.cf(CF_TX_ACTIONS_BY_BUCKET)
     }
 
     // ---- Raw DB operations ----
@@ -3220,7 +3229,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 63);
+        assert_eq!(DOMAIN_CFS.len(), 64);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
