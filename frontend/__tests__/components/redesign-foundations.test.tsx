@@ -407,6 +407,7 @@ describe('one chart grammar', () => {
         series={[{ key: 'rate', label: 'Rate' }]}
         unit="PH/s"
         markers={[{ index: 0, label: 'Mirana', href: '/hardforks' }]}
+        formatValue={(v) => v}
       />
     );
     const chart = screen.getByRole('img', { name: 'Hash rate, PH/s' });
@@ -427,6 +428,7 @@ describe('one chart grammar', () => {
         data={[{ label: 'Today', values: { v: '9007199254740993.12345678' } }]}
         series={[{ key: 'v', label: 'Capacity' }]}
         unit="CKB"
+        formatValue={(v) => v}
       />
     );
     expect(screen.getByText('9007199254740993.12345678')).toBeInTheDocument();
@@ -443,6 +445,7 @@ describe('one chart grammar', () => {
         ]}
         kind="stacked"
         unit="CKB"
+        formatValue={(v) => v}
       />
     );
     expect(container.querySelector(`path[fill="${CLASS_COLORS.tokens}"]`)).not.toBeNull();
@@ -464,6 +467,7 @@ describe('one chart grammar', () => {
         activeIndex={0}
         onActiveIndexChange={onActive}
         hideCaption
+        formatValue={(v) => v}
       />
     );
     expect(container.querySelector('[aria-live]')).toHaveTextContent(
@@ -481,6 +485,7 @@ describe('one chart grammar', () => {
           data={[{ label: 'Oct 25', values: {} }]}
           series={[{ key: 'v', label: 'Capacity' }]}
           unit="CKB"
+          formatValue={(v) => v}
         />
       )
     ).toThrow('Capacity: missing v at Oct 25');

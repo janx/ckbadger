@@ -609,6 +609,7 @@ export function DaoBoard({
           unit="×"
           kind="line"
           height={165}
+          formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
         />
         {evidence.ar.year365 && (
           <div className="text-text-dim mt-2 font-mono text-[11px]">

@@ -21,6 +21,7 @@ describe('shared Chart logarithmic geometry', () => {
         series={series}
         unit="CKB"
         yScale="log"
+        formatValue={(v) => v}
       />
     );
     const svg = screen.getByRole('img', { name: 'Capacity, CKB' });
@@ -43,6 +44,7 @@ describe('shared Chart logarithmic geometry', () => {
           series={series}
           unit="CKB"
           yScale="log"
+          formatValue={(v) => v}
         />
       )
     ).toThrow(/Bad log: logarithmic scale requires a positive line series/);
@@ -56,6 +58,7 @@ describe('shared Chart logarithmic geometry', () => {
           unit="CKB"
           kind="stacked"
           yScale="log"
+          formatValue={(v) => v}
         />
       )
     ).toThrow(/Bad stack: logarithmic scale requires a positive line series/);

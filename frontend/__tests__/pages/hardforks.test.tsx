@@ -112,7 +112,8 @@ describe('HardforksPage', () => {
         screen.getByRole('complementary', { name: 'Selected script deployment evidence' })
       ).getByText(/earliest indexed code-cell creation/i)
     ).toBeInTheDocument();
-    expect(screen.getByText('2023-11-14T22:13:20.000Z')).toBeInTheDocument();
+    // Header time in the site's one UTC clock form, not a raw ISO string (#16).
+    expect(screen.getByText('2023-11-14 22:13:20 UTC')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Known Lock family' })).toHaveAttribute(
       'href',
       '/mainnet/scripts/Known%20Lock'

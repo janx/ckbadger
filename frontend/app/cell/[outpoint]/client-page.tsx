@@ -8,10 +8,11 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellBar } from '@/components/ui/cell-bar';
 import { ExactCkb } from '@/components/activity-event-row';
+import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
-import { formatDurationMs } from '@/lib/utils';
+import { formatDurationMs, formatUtcClock } from '@/lib/utils';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -136,7 +137,7 @@ function CellIdentity({ cell }: { cell: Cell }) {
         {cell.createdTimestamp && (
           <>
             {' '}
-            · <time dateTime={cell.createdTimestamp}>{cell.createdTimestamp}</time>
+            · <time dateTime={cell.createdTimestamp}>{formatUtcClock(cell.createdTimestamp)}</time>
           </>
         )}
       </p>
@@ -151,7 +152,7 @@ function CellIdentity({ cell }: { cell: Cell }) {
           {cell.spentTimestamp && (
             <>
               {' '}
-              · <time dateTime={cell.spentTimestamp}>{cell.spentTimestamp}</time>
+              · <time dateTime={cell.spentTimestamp}>{formatUtcClock(cell.spentTimestamp)}</time>
             </>
           )}
           {cell.consumingInputIndex != null && <> · input #{cell.consumingInputIndex}</>}
@@ -235,15 +236,23 @@ export default function CellDetailPage() {
         <DetailSection title="Nervos DAO">
           <p className="text-text-dim text-xs">
             {query.data.daoInfo.daoStatus} · deposit block #{query.data.daoInfo.depositBlockNumber}
-            {query.data.daoInfo.compensationCkb != null
-              ? ` · compensation ${query.data.daoInfo.compensationCkb} CKB`
-              : query.data.daoInfo.compensation != null
-                ? (() => {
-                    throw new Error(
-                      `DAO cell ${query.data.txHash}:${query.data.outputIndex} has compensation shannons without compensationCkb`
-                    );
-                  })()
-                : null}
+            {query.data.daoInfo.compensationCkb != null ? (
+              <>
+                {' '}
+                · compensation{' '}
+                <ExactCkb
+                  shannons={parseCkbDecimal(query.data.daoInfo.compensationCkb)}
+                  signed={false}
+                  tone="plain"
+                />
+              </>
+            ) : query.data.daoInfo.compensation != null ? (
+              (() => {
+                throw new Error(
+                  `DAO cell ${query.data.txHash}:${query.data.outputIndex} has compensation shannons without compensationCkb`
+                );
+              })()
+            ) : null}
           </p>
         </DetailSection>
       )}

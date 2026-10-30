@@ -37,8 +37,11 @@ export interface ChartProps {
   yScale?: 'linear' | 'log';
   height?: number;
   markers?: readonly ChartMarker[];
-  /** Receives the original exact decimal, never geometry converted through Number. */
-  formatValue?: (value: string) => ReactNode;
+  /**
+   * Receives the original exact decimal, never geometry converted through Number. Required: every
+   * chart states how its unit is read (S2), there is no raw pass-through default.
+   */
+  formatValue: (value: string) => ReactNode;
   formatAxis?: (value: number, step: number) => string;
   activeIndex?: number | null;
   onActiveIndexChange?: (index: number | null) => void;
@@ -58,7 +61,7 @@ export function Chart({
   yScale = 'linear',
   height = 220,
   markers = [],
-  formatValue = (v) => v,
+  formatValue,
   formatAxis = formatTick,
   activeIndex: controlledActive,
   onActiveIndexChange,

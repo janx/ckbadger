@@ -9,7 +9,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenHistory } from '@/lib/api';
 const DAY = 86400000;
@@ -256,6 +256,7 @@ export function AssetHistory({
             unit="CKB"
             kind="stacked"
             height={token ? 150 : 200}
+            formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
             plotLeft={100}
             xDomain={domain}
             activeIndex={active}
@@ -275,6 +276,7 @@ export function AssetHistory({
               }))}
               series={[{ key: 'supply', label: 'Supply', assetClass: 'tokens' }]}
               unit={token.decimals === null ? 'raw' : (token.symbol ?? 'tokens')}
+              formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
               plotLeft={100}
               xDomain={domain}
@@ -299,6 +301,7 @@ export function AssetHistory({
               ]}
               unit="transfers"
               kind="bars"
+              formatValue={(value) => formatExactDecimal(value, 'weekly transfers')}
               height={120}
               plotLeft={100}
               xDomain={domain}

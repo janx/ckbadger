@@ -5,6 +5,7 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
+import { formatUtcClock } from '@/lib/utils';
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
 
@@ -98,7 +99,7 @@ export function TransactionEvidence({
         </Link>
         {tx.timestamp && (
           <time dateTime={tx.timestamp} className="text-text-dim">
-            {tx.timestamp}
+            {formatUtcClock(tx.timestamp)}
           </time>
         )}
       </div>
