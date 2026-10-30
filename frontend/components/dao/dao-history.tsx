@@ -190,7 +190,7 @@ export function DaoHistory({
     const x = (i: number) => LEFT + (i / last) * plotW;
     const ckb = (v: bigint) => Number(v) / 1e8;
     const aMax = Math.max(...days.map((d) => ckb(d.shannons)));
-    const aTicks = niceTicks(0, aMax, 3);
+    const aTicks = niceTicks(0, aMax, 4);
     const aTop = aTicks.values[aTicks.values.length - 1];
     const ay = (v: number) => A_Y + A_H - (v / aTop) * A_H;
     const shares = days.map((d) => Number(d.ratio.replace(/,/g, '')));
@@ -209,6 +209,22 @@ export function DaoHistory({
     const path = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${ay(ckb(d.shannons))}`).join(' ');
     const sharePath = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${by(shares[i])}`).join(' ');
     const ticks = timeTicks(days, range, x);
+    // Monospace advance is 0.6 em: what fits is decided by character counts, before drawing.
+    const TITLE = 'Net change, per week';
+    const clipNote =
+      clipped.length === 0
+        ? null
+        : clipped.length === 1
+          ? '1 week beyond the scale is cut and marked'
+          : `${clipped.length} weeks beyond the scale are cut and marked`;
+    const noteInline = clipNote !== null && (TITLE.length + 3 + clipNote.length) * 6.6 <= plotW;
+    const largest = biggest
+      ? `${formatSignedCkbInteger(biggest.net)} · week of ${days[biggest.start].date}`
+      : null;
+    const largestFitsRight =
+      biggest !== null &&
+      largest !== null &&
+      x(biggest.start) + bw + 6 + largest.length * 6.3 <= LEFT + plotW;
     figure = (
       <div className="relative">
         <svg
@@ -318,27 +334,37 @@ export function DaoHistory({
                 </g>
               );
             })}
-            {biggest && (
+            {biggest && largest && (
               <text
-                x={x(biggest.start) + bw + 6}
+                data-role="largest-week"
+                x={largestFitsRight ? x(biggest.start) + bw + 6 : x(biggest.start) - 6}
                 y={biggest.net > 0 ? C_Y + 10 : C_Y + C_H - 2}
+                textAnchor={largestFitsRight ? 'start' : 'end'}
                 fontSize="10.5"
                 className="fill-text"
               >
-                {formatSignedCkbInteger(biggest.net)} · week of {days[biggest.start].date}
+                {largest}
               </text>
             )}
-            <text x={LEFT} y={C_Y - 6} fontSize="11" className="fill-text">
-              Net change, per week
-              {clipped.length > 0 && (
-                <tspan className="fill-text-dim">
-                  {' · '}
-                  {clipped.length === 1
-                    ? '1 week beyond the scale is cut and marked'
-                    : `${clipped.length} weeks beyond the scale are cut and marked`}
-                </tspan>
-              )}
+            <text
+              x={LEFT}
+              y={clipNote !== null && !noteInline ? C_Y - 20 : C_Y - 6}
+              fontSize="11"
+              className="fill-text"
+            >
+              {TITLE}
             </text>
+            {clipNote !== null && (
+              <text
+                data-role="clip-note"
+                x={noteInline ? LEFT + TITLE.length * 6.6 : LEFT}
+                y={C_Y - 6}
+                fontSize="11"
+                className="fill-text-dim"
+              >
+                {noteInline ? ` · ${clipNote}` : clipNote}
+              </text>
+            )}
           </g>
           {ticks.map((t) => (
             <g key={t.i}>

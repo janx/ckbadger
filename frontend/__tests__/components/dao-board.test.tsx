@@ -569,3 +569,44 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     );
   });
 });
+
+describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('places the page intro in the hero beside the metrics (board grid)', () => {
+    stubCalculator();
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        intro={<h1>Nervos DAO</h1>}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
+    expect(within(hero).getByRole('heading', { name: 'Nervos DAO' })).toBeInTheDocument();
+  });
+
+  it('sizes the deposited amount so 22 digits fit a 358 px column (390 px overflow)', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const amount = screen.getByText((_, el) => el?.getAttribute('data-role') === 'deposited');
+    expect(amount).toHaveClass('text-[24px]', 'sm:text-[30px]');
+  });
+
+  it('draws AR around its own range, not from zero', () => {
+    stubChartWidth(600);
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = within(screen.getByRole('region', { name: 'How a deposit grows' })).getByRole(
+      'img',
+      { name: /^AR by date/ }
+    );
+    const ticks = Array.from(chart.querySelectorAll('text[text-anchor="end"]')).map((t) =>
+      t.textContent!.trim()
+    );
+    expect(ticks[0]).not.toBe('0');
+    expect(ticks).toContain('1.01');
+  });
+});

@@ -114,3 +114,37 @@ describe('DaoHistory (DAO-11, DAO-18)', () => {
     );
   });
 });
+
+describe('DaoHistory at phone width (DAO-22)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('puts the clipping note on its own line and keeps the largest-week label inside the plot', () => {
+    stubChartWidth(358);
+    const { deposited, ratio } = series();
+    // Move the outlier into the last week, next to the right edge.
+    const values = deposited.data.map((p, i) => ({
+      ...p,
+      value: i === 154 ? String(Number(p.value) + 5000) : p.value,
+    }));
+    const { container } = render(
+      <DaoHistory deposited={{ ...deposited, data: values }} ratio={ratio} />
+    );
+    const note = container.querySelector('[data-role="clip-note"]')!;
+    expect(note.tagName.toLowerCase()).toBe('text');
+    expect(note).toHaveTextContent('1 week beyond the scale is cut and marked');
+    const label = container.querySelector('[data-role="largest-week"]')!;
+    expect(label).toHaveAttribute('text-anchor', 'end');
+    expect(Number(label.getAttribute('x'))).toBeLessThanOrEqual(358 - 8);
+  });
+
+  it('starts the deposited axis at a round top near the peak, not twice it', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
+    const ticks = Array.from(
+      container.querySelectorAll('[data-panel="deposited"] text[text-anchor="end"]')
+    ).map((t) => t.textContent);
+    // 101,190 CKB at most: four round ticks up to 150k, not 0 / 100k / 200k.
+    expect(ticks).toEqual(['0', '50k', '100k', '150k']);
+  });
+});

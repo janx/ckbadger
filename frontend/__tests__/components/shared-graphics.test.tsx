@@ -173,7 +173,8 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
       <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} />
     );
     const svg = container.querySelector('svg')!;
-    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 156');
+    // The root's words sit inside it, so row 1 follows 16 px below it, not a label band.
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 116');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(box('total').getAttribute('fill')).toBe('#4b5266');
     expect(box('c').getAttribute('x')).toBe('120');
@@ -188,7 +189,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     expect(label('c').getAttribute('x')).toBe('350');
     expect(container.querySelector('[data-note="c"]')).toHaveTextContent('20.00% · via AR');
     expect(label('m').getAttribute('text-anchor')).toBe('start');
-    expect(label('b').getAttribute('y')).toBe(String(84 + 19));
+    expect(label('b').getAttribute('y')).toBe(String(44 + 19));
   });
   it('can leave every word to an HTML legend at narrow widths', () => {
     const { container } = render(

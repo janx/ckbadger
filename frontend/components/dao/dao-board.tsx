@@ -33,6 +33,8 @@ interface Props {
   depositedHistory?: DaoDepositHistory;
   circulationHistory?: ChartResponse;
   historyError?: boolean;
+  /** The page's title and summary, set at the top of the hero's left column (board grid). */
+  intro?: ReactNode;
 }
 
 function Amount({ value, signed = false }: { value: string; signed?: boolean }) {
@@ -109,11 +111,13 @@ function Hero({
   evidence,
   deposited,
   ratio,
+  intro,
 }: {
   statistics: DaoStatistics;
   evidence: DaoEvidence;
   deposited?: DaoDepositHistory;
   ratio?: ChartResponse;
+  intro?: ReactNode;
 }) {
   if (deposited && deposited.peak === undefined)
     throw new Error('/dao/charts/total-deposit has no peak (R8 chart contract)');
@@ -128,8 +132,12 @@ function Hero({
       className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_460px] lg:items-end lg:gap-12"
     >
       <div className="flex min-w-0 flex-col gap-1">
+        {intro && <div className="mb-5">{intro}</div>}
         <span className="text-text-dim text-xs">deposited</span>
-        <span className="text-text-bright text-[30px] font-medium leading-tight">
+        <span
+          data-role="deposited"
+          className="text-text-bright text-[24px] font-medium leading-tight sm:text-[30px]"
+        >
           <Amount value={evidence.phase0.capacity} />{' '}
           <span className="text-text-dim text-[14px]">CKB</span>
         </span>
@@ -934,6 +942,7 @@ export function DaoBoard({
   depositedHistory,
   circulationHistory,
   historyError,
+  intro,
 }: Props) {
   if (
     evidence.phase0.capacity !== statistics.totalDeposited &&
@@ -951,6 +960,7 @@ export function DaoBoard({
           evidence={evidence}
           deposited={depositedHistory}
           ratio={circulationHistory}
+          intro={intro}
         />
         <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
         <Issuance statistics={statistics} />

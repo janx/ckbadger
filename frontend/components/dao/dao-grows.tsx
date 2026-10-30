@@ -126,7 +126,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
           }))}
           series={[{ key: 'ar', label: 'AR', assetClass: 'dao' }]}
           unit=""
-          kind="area"
+          kind="line"
           height={170}
           xDomain={[times[0], times[times.length - 1]]}
           activeIndex={active}

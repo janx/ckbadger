@@ -71,8 +71,15 @@ export function IciclePartition({
   const placed: Placed[] = [];
   place(root, 0, 0, total, placed);
   const depth = Math.max(...placed.map((p) => p.depth));
-  const row = hideLabels ? BOX + 8 : ROW;
-  const height = depth * row + BOX + (hideLabels ? 0 : LABELS);
+  // Row tops: a row whose words all sit inside its boxes needs no label band below it (F2 dao);
+  // otherwise rows stay ROW apart, the original drawing.
+  const rowY = [0];
+  for (let d = 0; d < depth; d++) {
+    const labelsBelow = placed.some((p) => p.depth === d && p.node.align !== 'inside');
+    rowY.push(rowY[d] + (hideLabels ? BOX + 8 : labelsBelow ? ROW : BOX + 16));
+  }
+  const lastBelow = placed.some((p) => p.depth === depth && p.node.align !== 'inside');
+  const height = rowY[depth] + BOX + (hideLabels || !lastBelow ? 0 : LABELS);
   return (
     <svg
       role="img"
@@ -92,7 +99,7 @@ export function IciclePartition({
             <rect
               data-node={node.key}
               x={x}
-              y={d * row}
+              y={rowY[d]}
               width={width}
               height={BOX}
               rx="3"
@@ -103,7 +110,7 @@ export function IciclePartition({
               <text
                 data-label={node.key}
                 x={x + 8}
-                y={d * row + 19}
+                y={rowY[d] + 19}
                 fontSize="12"
                 fill={inkFill}
                 className={ink}
@@ -122,7 +129,7 @@ export function IciclePartition({
                 <text
                   data-label={node.key}
                   x={tx}
-                  y={d * row + BOX + 15}
+                  y={rowY[d] + BOX + 15}
                   textAnchor={anchor}
                   fontSize="11"
                   fill={inkFill}
@@ -132,7 +139,7 @@ export function IciclePartition({
                 </text>
                 <text
                   x={tx}
-                  y={d * row + BOX + 30}
+                  y={rowY[d] + BOX + 30}
                   textAnchor={anchor}
                   fontSize="11.5"
                   className="fill-text-bright"
@@ -143,7 +150,7 @@ export function IciclePartition({
                   <text
                     data-note={node.key}
                     x={tx}
-                    y={d * row + BOX + 44}
+                    y={rowY[d] + BOX + 44}
                     textAnchor={anchor}
                     fontSize="10.5"
                     className="fill-text-dim"
@@ -157,7 +164,7 @@ export function IciclePartition({
               <g data-placeholder={node.key}>
                 <rect
                   x={x + 1}
-                  y={(d + 1) * row}
+                  y={rowY[d + 1]}
                   width={Math.max(width - 2, 0)}
                   height={BOX}
                   rx="3"
@@ -166,7 +173,7 @@ export function IciclePartition({
                   strokeDasharray="2 3"
                 />
                 {!hideLabels && (
-                  <text x={x + 8} y={(d + 1) * row + 19} fontSize="10.5" className="fill-text-dim">
+                  <text x={x + 8} y={rowY[d + 1] + 19} fontSize="10.5" className="fill-text-dim">
                     {node.placeholder}
                   </text>
                 )}
