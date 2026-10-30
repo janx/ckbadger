@@ -349,12 +349,14 @@ fn ar_evidence(
     })
 }
 
-fn build_evidence(store: &CkbadgerStore, network: &str) -> anyhow::Result<DaoEvidenceResponse> {
-    let (tip_number, tip) = store
-        .get_sync_tip_block()?
-        .ok_or_else(|| anyhow::anyhow!("no DAO sync tip yet"))?;
-    let tip_epoch = epoch(&tip, tip_number)?;
-    let fields = dao_fields(&tip, tip_number)?;
+fn build_evidence(
+    store: &CkbadgerStore,
+    network: &str,
+    tip_number: i64,
+    tip: &CachedBlockHeader,
+) -> anyhow::Result<DaoEvidenceResponse> {
+    let tip_epoch = epoch(tip, tip_number)?;
+    let fields = dao_fields(tip, tip_number)?;
     let mut epoch_cache = HashMap::new();
     let mut phase0 = AmountCount::default();
     let mut phase1 = AmountCount::default();
@@ -534,7 +536,7 @@ fn build_evidence(store: &CkbadgerStore, network: &str) -> anyhow::Result<DaoEvi
             count: amount.count,
         })
         .collect();
-    let ar = ar_evidence(store, tip_number, &tip, fields[1])?;
+    let ar = ar_evidence(store, tip_number, tip, fields[1])?;
     Ok(DaoEvidenceResponse {
         tip_block_number: tip_number,
         tip_epoch: tip_epoch.into(),
@@ -556,14 +558,33 @@ fn build_evidence(store: &CkbadgerStore, network: &str) -> anyhow::Result<DaoEvi
     })
 }
 
+/// `/dao/evidence`, computed once per canonical tip (number and hash) inside
+/// the request's pinned read view and then served from API memory until the
+/// tip moves (DAO-17). Nothing is written to any store.
 pub(super) async fn get_evidence(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<DaoEvidenceResponse> {
-    let store = state.store.clone();
-    let network = state.ckb_network.clone();
-    let evidence = tokio::task::spawn_blocking(move || build_evidence(&store, &network))
-        .await
-        .map_err(|error| ApiError::internal(format!("DAO evidence task failed: {error}")))?
-        .map_err(|error| ApiError::internal(format!("DAO evidence read failed: {error:#}")))?;
-    ok(evidence)
+) -> ApiResult<serde_json::Value> {
+    let evidence = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (tip_number, tip) = state
+            .store
+            .get_sync_tip_block()?
+            .ok_or_else(|| anyhow::anyhow!("no DAO sync tip yet"))?;
+        if let Some(evidence) = state.dao_evidence.get(tip_number, &tip.hash) {
+            return Ok(evidence);
+        }
+        let evidence = Arc::new(serde_json::to_value(build_evidence(
+            &state.store,
+            &state.ckb_network,
+            tip_number,
+            &tip,
+        )?)?);
+        state
+            .dao_evidence
+            .set(tip_number, tip.hash.clone(), evidence.clone());
+        Ok(evidence)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("DAO evidence task failed: {error}")))?
+    .map_err(|error| ApiError::internal(format!("DAO evidence read failed: {error:#}")))?;
+    ok(evidence.as_ref().clone())
 }

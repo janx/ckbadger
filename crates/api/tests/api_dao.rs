@@ -141,8 +141,7 @@ fn dao_evidence_entry(capacity: i64, deposit_block: i64, lock: u8) -> DaoDeposit
 
 /// The producer fixture covers exact phase boundaries, changed epoch lengths,
 /// a raw timestamp rollback, both readiness states, owner denominator and AR.
-#[tokio::test]
-async fn dao_evidence_partitions_all_live_cells_and_exports_contract() {
+fn dao_evidence_fixture() -> Arc<CkbadgerStore> {
     use ckbadger_store::LockScriptEntry;
 
     let store = test_store();
@@ -221,7 +220,12 @@ async fn dao_evidence_partitions_all_live_cells_and_exports_contract() {
     store
         .update_sync_status(|status| status.tip_block_number = 5)
         .unwrap();
-    let app = create_router(test_config(store)).await;
+    store
+}
+
+#[tokio::test]
+async fn dao_evidence_partitions_all_live_cells_and_exports_contract() {
+    let app = create_router(test_config(dao_evidence_fixture())).await;
     let (status, json) = get_json(&app, "/dao/evidence").await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["tipEpoch"]["display"], "185+2/4");
@@ -237,6 +241,43 @@ async fn dao_evidence_partitions_all_live_cells_and_exports_contract() {
     assert_eq!(json["ar"]["year365"]["anchorBlockNumber"], 2);
     assert_eq!(json["header"]["ar"], "10200000000000000");
     write_dao_fixture("dao-evidence", &json);
+}
+
+/// DAO-17: `/dao/evidence` scanned every live DAO row on every request
+/// (2.7–4.8 s). It is computed once per canonical tip (number and hash) and
+/// served from API memory until the tip moves; nothing is written.
+#[tokio::test]
+async fn dao_evidence_is_memoized_by_tip() {
+    let store = dao_evidence_fixture();
+    let app = router_from_state(test_app_state(test_config(store.clone())));
+    store.reset_read_call_counters();
+    let (status, cold) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{cold}");
+    let cold_reads = store.read_call_counts();
+    store.reset_read_call_counters();
+    let (_, warm) = get_json(&app, "/dao/evidence").await;
+    let warm_reads = store.read_call_counts();
+    assert_eq!(cold, warm);
+    assert_ne!(cold_reads, (0, 0));
+    assert_eq!(
+        warm_reads,
+        (0, 0),
+        "the same tip must be served from memory: cold={cold_reads:?}"
+    );
+
+    // A new tip is a miss: the evidence is recomputed for it.
+    let mut header = store.get_block_header(5).unwrap().unwrap();
+    header.hash = vec![0x66; 32];
+    header.timestamp += 1_000;
+    header.chain_time_ms += 1_000;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(6, &header);
+    batch.commit().unwrap();
+    store.reset_read_call_counters();
+    let (status, next) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["tipBlockNumber"], 6);
+    assert_ne!(store.read_call_counts(), (0, 0));
 }
 
 #[tokio::test]

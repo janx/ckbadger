@@ -348,6 +348,7 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
             config.pool_mirror_enabled,
         )),
         pool_max_tracked_txs: config.pool_max_tracked_txs,
+        dao_evidence: Arc::new(ckbadger_api::cache::TipMemo::new()),
     })
 }
 

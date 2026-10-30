@@ -2,9 +2,11 @@ mod activity_window;
 pub use activity_window::ActivityWindowCache;
 mod bounded;
 mod mem_cache;
+mod tip_memo;
 
 pub use bounded::BoundedCache;
 pub use mem_cache::InMemoryCache;
+pub use tip_memo::TipMemo;
 
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
