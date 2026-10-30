@@ -1193,6 +1193,43 @@ pub fn seed_committed_activity(
         .unwrap();
 }
 
+/// Write the `collection_activity_daily` rows the forward writers keep for
+/// `collection_id`, from the collection activity rows a fixture seeded (object
+/// and identity CFs alike): each row folded into the UTC+8 day of its block's
+/// chain time by the store's own rule. Call it after committing the rows and
+/// their headers, so the insights calendar agrees with them as after sync.
+pub fn sync_collection_activity_daily(store: &CkbadgerStore, collection_id: &[u8]) {
+    let prefix = ckbadger_store::keys::pad_id_32(collection_id);
+    let mut daily = ckbadger_store::CollectionActivityDailyDeltas::new();
+    for cf in [
+        store.cf_object_collection_activities(),
+        store.cf_identity_collection_activities(),
+    ] {
+        for item in store.prefix_iterator_cf(cf, &prefix) {
+            let (key, value) = item.unwrap();
+            let (_, block, _, _, _) =
+                ckbadger_store::keys::decode_object_collection_activity_key(&key);
+            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value).unwrap();
+            let header = store
+                .get_block_header(block)
+                .unwrap()
+                .unwrap_or_else(|| panic!("fixture collection row of block {block} has no header"));
+            daily
+                .add_row(
+                    collection_id,
+                    ckbadger_store::keys::stats_day_yyyymmdd(header.chain_time_ms).unwrap(),
+                    &entry.actions,
+                )
+                .unwrap();
+        }
+    }
+    let mut batch = StoreBatch::new(store);
+    for ((collection, day), counts) in daily.iter() {
+        batch.put_collection_activity_daily(collection, *day, counts);
+    }
+    batch.commit().unwrap();
+}
+
 /// Write the transaction counters the forward writers keep for `lock_hash`,
 /// from the rows a fixture seeded: `AddressBalance.txs_count` = its `addr_txs`
 /// rows, `cellbase_txs_count` = those whose `tx_index` entry is a cellbase, and
@@ -1776,12 +1813,15 @@ pub fn commit_token_daily_blocks(
     // Each entry is one transaction touching the token's cells.
     let mut changes = TokenDailyChanges::<EntityDateKey>::new();
     for (block, type_hash, capacity, knowledge) in blocks {
+        // One member cell per transaction: created when the capacity rises,
+        // consumed when it falls.
         changes
             .add_tx(
                 *block,
                 (type_hash.to_vec(), WRITER_FIXTURE_DATE),
                 *capacity,
                 *knowledge,
+                i64::try_from(capacity.signum()).unwrap(),
             )
             .unwrap();
     }

@@ -586,7 +586,54 @@ pub struct CollectionActivityResponse {
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: String,
+    /// The block's indexed running-maximum chain time (ms): the clock whose
+    /// UTC+8 day files this row in the collection's daily counts and weekly
+    /// calendar (the raw `timestamp` can fall a day earlier).
+    pub chain_time: String,
     pub actions: Vec<String>,
+}
+
+/// The wire rows of one page of a collection's activity rows: each row's
+/// actions and its block's chain time (one header `multi_get` per page). The
+/// one projection of the object and identity collection `/activities` lists.
+pub(crate) fn collection_activity_responses(
+    store: &CkbadgerStore,
+    rows: Vec<(i64, i32, ObjectCollectionActivityEntry)>,
+) -> anyhow::Result<Vec<CollectionActivityResponse>> {
+    let mut blocks: Vec<i64> = rows.iter().map(|(block, _, _)| *block).collect();
+    blocks.sort_unstable();
+    blocks.dedup();
+    let headers = store.get_block_headers_batch(&blocks)?;
+    rows.into_iter()
+        .map(|(block_number, tx_index, entry)| {
+            let header = headers.get(&block_number).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "collection activity row of block {block_number} (tx=0x{}) has no header",
+                    hex::encode(&entry.tx_hash)
+                )
+            })?;
+            let actions = entry
+                .actions
+                .iter()
+                .map(|a| match a {
+                    ckbadger_store::AssetAction::Mint => "mint".to_string(),
+                    ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
+                    ckbadger_store::AssetAction::Burn => "burn".to_string(),
+                    ckbadger_store::AssetAction::Recycle => "recycle".to_string(),
+                    ckbadger_store::AssetAction::Renew => "renew".to_string(),
+                    ckbadger_store::AssetAction::Update => "update".to_string(),
+                })
+                .collect();
+            Ok(CollectionActivityResponse {
+                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                block_number,
+                tx_index,
+                timestamp: entry.timestamp_ms.to_string(),
+                chain_time: header.chain_time_ms.to_string(),
+                actions,
+            })
+        })
+        .collect()
 }
 
 async fn list_assets(
@@ -1251,30 +1298,55 @@ pub(crate) fn normalize_identity_activity_action_filter(
     }
 }
 
-type CanonicalNftActivityLocation = (i64, i32, Vec<u8>);
-type CanonicalNftActivityLocationMap = HashMap<Vec<u8>, CanonicalNftActivityLocation>;
+/// A transaction's canonical `(block, tx index, block hash)`.
+type CanonicalTxLocation = (i64, i32, Vec<u8>);
 
-fn canonical_nft_collection_activity_locations(
+/// Every collection activity row must name a canonical transaction at the
+/// row's own position: `docs/prompts/REORG_HANDLING.md` has rollback delete a
+/// rolled-back block's collection rows directly, so a row whose transaction is
+/// unknown, or sits elsewhere, or in a block whose canonical hash differs, is
+/// a rollback bug. It is an error naming the row, never a row skipped.
+fn ensure_canonical_collection_activity_rows(
     store: &CkbadgerStore,
+    collection_id: &[u8],
     rows: &[(i64, i32, ObjectCollectionActivityEntry)],
-) -> anyhow::Result<CanonicalNftActivityLocationMap> {
+) -> anyhow::Result<()> {
     if rows.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(());
     }
     let tx_hashes: Vec<Vec<u8>> = rows
         .iter()
         .map(|(_, _, entry)| entry.tx_hash.clone())
         .collect();
-    let tx_batch = store.get_canonical_tx_identities_by_hash_batch(&tx_hashes)?;
-    let mut out = HashMap::with_capacity(tx_batch.len());
-    for (tx_hash, tx_row_opt) in tx_batch {
-        if let Some((block_number, tx_index, block_hash)) = tx_row_opt {
-            out.insert(tx_hash, (block_number, tx_index, block_hash));
+    let canonical: HashMap<Vec<u8>, Option<CanonicalTxLocation>> = store
+        .get_canonical_tx_identities_by_hash_batch(&tx_hashes)?
+        .into_iter()
+        .collect();
+    for (block_number, tx_index, entry) in rows {
+        let location = canonical.get(&entry.tx_hash).cloned().flatten();
+        if location.as_ref() != Some(&(*block_number, *tx_index, entry.block_hash.clone())) {
+            anyhow::bail!(
+                "collection activity row is not canonical: collection=0x{} block={} tx_index={} tx=0x{} block_hash=0x{}; canonical location of the tx: {}; rollback must delete a rolled-back block's collection rows (REORG_HANDLING.md) — fix the rollback, then purge and re-sync",
+                hex::encode(collection_id),
+                block_number,
+                tx_index,
+                hex::encode(&entry.tx_hash),
+                hex::encode(&entry.block_hash),
+                match location {
+                    Some((block, index, hash)) => format!(
+                        "block={block} tx_index={index} block_hash=0x{}",
+                        hex::encode(hash)
+                    ),
+                    None => "none".to_string(),
+                }
+            );
         }
     }
-    Ok(out)
+    Ok(())
 }
 
+/// One page of a collection's activity rows, newest first, after `cursor`.
+/// Every row is checked canonical ([`ensure_canonical_collection_activity_rows`]).
 pub(crate) fn list_canonical_nft_collection_activities_page(
     store: &CkbadgerStore,
     _append_only_store: &CkbadgerStore,
@@ -1286,55 +1358,13 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     if limit == 0 {
         return Ok(Vec::new());
     }
-
-    let scan_limit = NFT_ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
-    let mut out = Vec::with_capacity(limit);
-    let mut scan_cursor = cursor;
-    let identity = is_identity_sentinel(collection_id);
-
-    loop {
-        let rows = if identity {
-            store.list_identity_collection_activities(
-                collection_id,
-                scan_limit,
-                scan_cursor,
-                action_filter,
-            )?
-        } else {
-            store.list_object_collection_activities(
-                collection_id,
-                scan_limit,
-                scan_cursor,
-                action_filter,
-            )?
-        };
-        if rows.is_empty() {
-            break;
-        }
-        let rows_len = rows.len();
-        let canonical_locations = canonical_nft_collection_activity_locations(store, &rows)?;
-        let mut last_seen = None;
-        for (block_number, tx_index, entry) in rows {
-            last_seen = Some((block_number, tx_index));
-            if canonical_locations.get(&entry.tx_hash)
-                == Some(&(block_number, tx_index, entry.block_hash.clone()))
-            {
-                out.push((block_number, tx_index, entry));
-                if out.len() >= limit {
-                    return Ok(out);
-                }
-            }
-        }
-        if rows_len < scan_limit {
-            break;
-        }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        scan_cursor = Some(last_seen_cursor);
-    }
-
-    Ok(out)
+    let rows = if is_identity_sentinel(collection_id) {
+        store.list_identity_collection_activities(collection_id, limit, cursor, action_filter)?
+    } else {
+        store.list_object_collection_activities(collection_id, limit, cursor, action_filter)?
+    };
+    ensure_canonical_collection_activity_rows(store, collection_id, &rows)?;
+    Ok(rows)
 }
 
 /// Holder buckets of a collection's live items: how many holders own 1, 2,
@@ -1409,14 +1439,14 @@ fn collection_weekly_cache_key(
     .map_err(|(_, error)| anyhow::anyhow!(error.0.message))
 }
 
-/// Exact completed-week mint/transfer/burn counts from the collection activity
-/// CF — the one weekly calendar of Spore cluster insights and object-collection
-/// insights (OB-K2): both handlers call this function. A calendar computed by
+/// Exact completed-week mint/transfer/burn counts from the collection's
+/// persisted `collection_activity_daily` rows — the one weekly calendar of
+/// Spore cluster insights and object-collection insights (OB-K2): both
+/// handlers call this function. A calendar computed by
 /// [`completed_week_calendar`] is reused for every request with the same
 /// complete-day key; `calendarAnchor`, the tip the request read, is per request.
 pub(crate) fn nft_collection_weekly_activity(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
     mem_cache: &InMemoryCache,
     collection_id: &[u8],
 ) -> anyhow::Result<(
@@ -1444,7 +1474,7 @@ pub(crate) fn nft_collection_weekly_activity(
     let calendar = match mem_cache.get::<CompletedWeekCalendar>(&key) {
         Some(calendar) => calendar,
         None => {
-            let calendar = completed_week_calendar(store, append_only_store, collection_id, chain)?;
+            let calendar = completed_week_calendar(store, collection_id, chain)?;
             mem_cache.set(&key, &calendar, COLLECTION_WEEKLY_CACHE_TTL);
             calendar
         }
@@ -1452,57 +1482,46 @@ pub(crate) fn nft_collection_weekly_activity(
     Ok((calendar.weekly, calendar.complete_through, anchor))
 }
 
-/// Scan a collection's canonical activity rows into completed weeks (Monday
-/// starts, UTC+8 stats days) ending before the week of `chain`'s tip, with
-/// quiet weeks filled as zero rows.
+/// Fold a collection's `collection_activity_daily` rows (UTC+8 stats days,
+/// written by the indexer beside its activity rows) into completed weeks
+/// (Monday starts) ending before the week of `chain`'s tip, with quiet weeks
+/// filled as zero rows. Reads O(days the collection was active) rows and no
+/// activity row, transaction or header.
 fn completed_week_calendar(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
     collection_id: &[u8],
     chain: Option<crate::utils::stats_bucket::ChainTime>,
 ) -> anyhow::Result<CompletedWeekCalendar> {
     use chrono::Datelike;
     let mut weeks: BTreeMap<String, [u64; 3]> = BTreeMap::new();
-    // Rows arrive grouped by block, and one block often carries several
-    // collection transactions: read each block header once per scan.
-    let mut week_of_block: HashMap<i64, chrono::NaiveDate> = HashMap::new();
-    let mut cursor = None;
-    loop {
-        let rows = list_canonical_nft_collection_activities_page(
-            store,
-            append_only_store,
-            collection_id,
-            1024,
-            cursor,
-            None,
-        )?;
-        if rows.is_empty() {
-            break;
-        }
-        cursor = rows.last().map(|(b, i, _)| (*b, *i));
-        for (block, _, activity) in rows {
-            let monday = match week_of_block.entry(block) {
-                std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let header = store.get_block_header(block)?.ok_or_else(|| {
-                        anyhow::anyhow!("collection activity block {block} missing")
-                    })?;
-                    let date = ckbadger_common::stats_bucket::stats_day(header.chain_time_ms)?;
-                    *entry.insert(
-                        date - chrono::Duration::days(date.weekday().num_days_from_monday() as i64),
-                    )
-                }
-            };
-            let counts = weeks.entry(monday.to_string()).or_default();
-            for (action, slot) in [
-                (ckbadger_store::AssetAction::Mint, 0),
-                (ckbadger_store::AssetAction::Transfer, 1),
-                (ckbadger_store::AssetAction::Burn, 2),
-            ] {
-                if activity.actions.contains(&action) {
-                    counts[slot] += 1;
-                }
-            }
+    for (day, counts) in store.list_collection_activity_daily(collection_id)? {
+        let date = chrono::NaiveDate::from_ymd_opt(
+            i32::try_from(day / 10_000)?,
+            day / 100 % 100,
+            day % 100,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "collection_activity_daily row names no date: collection=0x{} day={day}",
+                hex::encode(collection_id)
+            )
+        })?;
+        let monday = date - chrono::Duration::days(date.weekday().num_days_from_monday() as i64);
+        let week = weeks.entry(monday.to_string()).or_default();
+        for (slot, count) in [
+            counts.mint_transactions,
+            counts.transfer_transactions,
+            counts.burn_transactions,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            week[slot] = week[slot].checked_add(count).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "collection weekly count overflow: collection=0x{} week={monday}",
+                    hex::encode(collection_id)
+                )
+            })?;
         }
     }
     let complete_through = match chain {
@@ -1551,57 +1570,35 @@ fn completed_week_calendar(
 
 pub(crate) fn count_canonical_nft_collection_activities(
     store: &CkbadgerStore,
-    _append_only_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
     collection_id: &[u8],
 ) -> anyhow::Result<i64> {
     let mut total = 0i64;
     let mut cursor = None;
-    let identity = is_identity_sentinel(collection_id);
-
     loop {
-        let rows = if identity {
-            store.list_identity_collection_activities(
-                collection_id,
-                NFT_ACTIVITY_SCAN_CHUNK_SIZE,
-                cursor,
-                None,
-            )?
-        } else {
-            store.list_object_collection_activities(
-                collection_id,
-                NFT_ACTIVITY_SCAN_CHUNK_SIZE,
-                cursor,
-                None,
-            )?
-        };
-        if rows.is_empty() {
-            break;
-        }
+        let rows = list_canonical_nft_collection_activities_page(
+            store,
+            append_only_store,
+            collection_id,
+            NFT_ACTIVITY_SCAN_CHUNK_SIZE,
+            cursor,
+            None,
+        )?;
         let rows_len = rows.len();
-        let canonical_locations = canonical_nft_collection_activity_locations(store, &rows)?;
-        let mut last_seen = None;
-        for (block_number, tx_index, entry) in rows {
-            last_seen = Some((block_number, tx_index));
-            if canonical_locations.get(&entry.tx_hash)
-                == Some(&(block_number, tx_index, entry.block_hash.clone()))
-            {
-                total = total.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "canonical object collection activity count overflow: collection_id=0x{}",
-                        hex::encode(collection_id)
-                    )
-                })?;
-            }
-        }
+        total = total.checked_add(i64::try_from(rows_len)?).ok_or_else(|| {
+            anyhow::anyhow!(
+                "canonical object collection activity count overflow: collection_id=0x{}",
+                hex::encode(collection_id)
+            )
+        })?;
+        let Some((block, index, _)) = rows.last() else {
+            break;
+        };
         if rows_len < NFT_ACTIVITY_SCAN_CHUNK_SIZE {
             break;
         }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        cursor = Some(last_seen_cursor);
+        cursor = Some((*block, *index));
     }
-
     Ok(total)
 }
 
@@ -3830,31 +3827,11 @@ async fn list_object_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
-    let page: Vec<CollectionActivityResponse> = results
-        .into_iter()
-        .take(limit as usize)
-        .map(|(block_number, tx_index, entry)| {
-            let actions: Vec<String> = entry
-                .actions
-                .iter()
-                .map(|a| match a {
-                    ckbadger_store::AssetAction::Mint => "mint".to_string(),
-                    ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
-                    ckbadger_store::AssetAction::Burn => "burn".to_string(),
-                    ckbadger_store::AssetAction::Recycle => "recycle".to_string(),
-                    ckbadger_store::AssetAction::Renew => "renew".to_string(),
-                    ckbadger_store::AssetAction::Update => "update".to_string(),
-                })
-                .collect();
-            CollectionActivityResponse {
-                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-                block_number,
-                tx_index,
-                timestamp: entry.timestamp_ms.to_string(),
-                actions,
-            }
-        })
-        .collect();
+    let page = collection_activity_responses(
+        state.store.as_ref(),
+        results.into_iter().take(limit as usize).collect(),
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let next_cursor = if has_more {
         page.last()
@@ -3943,12 +3920,8 @@ fn non_dob_collection_insights(
         aggregate.live_count
     );
     let holders = collection_holder_distribution(item_counts)?;
-    let (weekly, complete_through, calendar_anchor) = nft_collection_weekly_activity(
-        state.store.as_ref(),
-        state.append_only_store.as_ref(),
-        &state.mem_cache,
-        collection_id,
-    )?;
+    let (weekly, complete_through, calendar_anchor) =
+        nft_collection_weekly_activity(state.store.as_ref(), &state.mem_cache, collection_id)?;
     Ok(serde_json::json!({
         "holderDistribution": holders,
         "weeklyActivity": weekly,
@@ -4565,7 +4538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_activity_helpers_filter_orphaned_append_history() {
+    fn test_collection_activity_helpers_fail_on_a_row_whose_tx_is_not_canonical() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xAB; 32];
@@ -4642,6 +4615,47 @@ mod tests {
         domain_batch.put_block_header(10, &make_header(0x10));
         domain_batch.commit().unwrap();
 
+        // Per REORG_HANDLING.md rollback deletes a rolled-back block's
+        // collection rows, so a row whose transaction is not canonical is a
+        // rollback bug: the feed and the count name it instead of hiding it.
+        for error in [
+            list_canonical_nft_collection_activities_page(
+                &domain,
+                &domain,
+                &collection_id,
+                3,
+                None,
+                None,
+            )
+            .map(|_| ())
+            .unwrap_err(),
+            count_canonical_nft_collection_activities(&domain, &domain, &collection_id)
+                .map(|_| ())
+                .unwrap_err(),
+        ] {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
+                    && message.contains("block=30")
+                    && message.contains(&format!("tx=0x{}", hex::encode(&stale_tx)))
+                    && message.contains("not canonical"),
+                "{message}"
+            );
+        }
+
+        // The rows that are canonical list and count as before.
+        domain
+            .delete_cf(
+                domain.cf_object_collection_activities(),
+                &ckbadger_store::keys::encode_object_collection_activity_key(
+                    &collection_id,
+                    30,
+                    0,
+                    &[0x30; 32],
+                    &stale_tx,
+                ),
+            )
+            .unwrap();
         let listed = list_canonical_nft_collection_activities_page(
             &domain,
             &domain,
@@ -4687,7 +4701,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_activity_helpers_filter_competing_block_hash_history() {
+    fn test_collection_activity_helpers_fail_on_a_competing_block_hash_row() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xAC; 32];
@@ -4732,22 +4746,32 @@ mod tests {
         domain_batch.put_block_header(20, &make_header(0xBB));
         domain_batch.commit().unwrap();
 
-        let listed = list_canonical_nft_collection_activities_page(
-            &domain,
-            &domain,
-            &collection_id,
-            10,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].2.tx_hash, tx_hash);
-        assert_eq!(listed[0].2.block_hash, vec![0xBB; 32]);
-
-        let count =
-            count_canonical_nft_collection_activities(&domain, &domain, &collection_id).unwrap();
-        assert_eq!(count, 1);
+        // The 0xAA row names a block hash that is not the canonical header at
+        // block 20: an abandoned branch's row that rollback should have deleted.
+        for error in [
+            list_canonical_nft_collection_activities_page(
+                &domain,
+                &domain,
+                &collection_id,
+                10,
+                None,
+                None,
+            )
+            .map(|_| ())
+            .unwrap_err(),
+            count_canonical_nft_collection_activities(&domain, &domain, &collection_id)
+                .map(|_| ())
+                .unwrap_err(),
+        ] {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
+                    && message.contains("block=20")
+                    && message.contains(&format!("tx=0x{}", hex::encode(&tx_hash)))
+                    && message.contains(&format!("block_hash=0x{}", hex::encode([0xAA; 32]))),
+                "{message}"
+            );
+        }
     }
 
     #[test]
@@ -4896,6 +4920,18 @@ mod tests {
                     actions: vec![action],
                 },
             );
+            // The row's day count, as the indexer stages it beside the row.
+            let mut daily = ckbadger_store::CollectionActivityDailyDeltas::new();
+            daily
+                .add_row(
+                    collection,
+                    ckbadger_store::keys::stats_day_yyyymmdd(ms).unwrap(),
+                    &[action],
+                )
+                .unwrap();
+            store
+                .stage_collection_activity_daily(&daily, &mut batch)
+                .unwrap();
         }
         batch.commit().unwrap();
     }
@@ -4928,10 +4964,10 @@ mod tests {
         let cache = InMemoryCache::new();
 
         let (weekly, through, anchor) =
-            nft_collection_weekly_activity(&store, &store, &cache, &collection).unwrap();
+            nft_collection_weekly_activity(&store, &cache, &collection).unwrap();
         let chain = ChainTime::load(&store).unwrap();
         let key = collection_weekly_cache_key(&collection, chain).unwrap();
-        let fresh = completed_week_calendar(&store, &store, &collection, chain).unwrap();
+        let fresh = completed_week_calendar(&store, &collection, chain).unwrap();
         let served = CompletedWeekCalendar {
             weekly,
             complete_through: through,
@@ -4956,7 +4992,7 @@ mod tests {
             "2026-10-13T02:00:00Z",
             Some((3, AssetAction::Burn)),
         );
-        let rescanned = completed_week_calendar(&store, &store, &collection, chain).unwrap();
+        let rescanned = completed_week_calendar(&store, &collection, chain).unwrap();
         assert_eq!(rescanned.weekly[1].burn_transactions, 1);
 
         // Another block on the tip's day: same complete days, same key.
@@ -4967,7 +5003,7 @@ mod tests {
             key
         );
         let (weekly, through, anchor) =
-            nft_collection_weekly_activity(&store, &store, &cache, &collection).unwrap();
+            nft_collection_weekly_activity(&store, &cache, &collection).unwrap();
         assert_eq!(weekly, fresh.weekly);
         assert_eq!(through, fresh.complete_through);
         assert_eq!(anchor["blockNumber"], 4);
@@ -4980,8 +5016,8 @@ mod tests {
             key
         );
         let (weekly, through, anchor) =
-            nft_collection_weekly_activity(&store, &store, &cache, &collection).unwrap();
-        let fresh = completed_week_calendar(&store, &store, &collection, chain).unwrap();
+            nft_collection_weekly_activity(&store, &cache, &collection).unwrap();
+        let fresh = completed_week_calendar(&store, &collection, chain).unwrap();
         assert_eq!(weekly, fresh.weekly);
         assert_eq!(through, fresh.complete_through);
         assert_eq!(weekly[1].burn_transactions, 1);

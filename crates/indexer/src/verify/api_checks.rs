@@ -4576,6 +4576,401 @@ impl Check for ParticipantRowsConsistency {
     }
 }
 
+// ── Token live cell count ──────────────────────────────────────────────────
+
+/// A token's persisted live cell count (`cellsCount`: the running sum of its
+/// `TokenDailyDelta.live_cells_delta` rows, IV-27) equals the live cells the
+/// API lists behind the token's type index (`/cells/live?type_script_hash=`,
+/// each listed row checked to carry that type script).
+///
+/// The API no longer walks a token's cells per request; this check is where
+/// the persisted count and the type index meet. A live cell missing from the
+/// index, or a count that drifted from the cells, is a finding naming the
+/// token. Tokens whose count exceeds the per-token budget are named in the
+/// pass detail as not sampled, never counted as verified.
+pub struct TokenLiveCellsConsistency;
+
+const TOKEN_LIVE_CELLS_SAMPLE_CAP: usize = 20;
+const TOKEN_LIVE_CELLS_MAX_PER_TOKEN: i64 = 25_000;
+const TOKEN_LIVE_CELLS_MAX_TOTAL: i64 = 60_000;
+const TOKEN_LIVE_CELLS_PAGE_LIMIT: usize = 100;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenCellsCountRecord {
+    type_script_hash: String,
+    cells_count: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TypedCellRecord {
+    tx_hash: String,
+    output_index: i32,
+    type_script_hash: Option<String>,
+}
+
+/// The token's live cells as `/cells/live` lists them by its type index, or
+/// the details of every listed row that does not carry the token's type.
+fn token_listed_live_cells(ctx: &CheckContext, token: &str) -> anyhow::Result<(i64, Vec<String>)> {
+    let rows: Vec<TypedCellRecord> = all_cursor_pages(
+        ctx,
+        &format!("cells/live?type_script_hash={token}&limit={TOKEN_LIVE_CELLS_PAGE_LIMIT}"),
+    )?;
+    let mut details = vec![];
+    for row in &rows {
+        if row.type_script_hash.as_deref().map(normalize_hex_key) != Some(normalize_hex_key(token))
+        {
+            details.push(format!(
+                "type index lists cell {}:{} whose type script hash is {:?}",
+                row.tx_hash, row.output_index, row.type_script_hash
+            ));
+        }
+    }
+    let count = i64::try_from(rows.len())
+        .map_err(|_| anyhow::anyhow!("listed live cell count overflow: token={token}"))?;
+    Ok((count, details))
+}
+
+impl Check for TokenLiveCellsConsistency {
+    fn name(&self) -> &'static str {
+        "token_live_cells_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Each sampled token's persisted live cell count equals the live cells behind its type index"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(TOKEN_LIVE_CELLS_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "token_live_cells_consistency was run with --sample-count 0: an empty sample \
+                 verifies nothing"
+            );
+        }
+        let tokens: CursorPage<TokenCellsCountRecord> = api_get(ctx, "tokens?limit=100")?;
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        let mut scanned_cells = 0i64;
+        let mut not_sampled = vec![];
+        for token in &tokens.data {
+            if checked as usize >= ctx.sample_count.min(TOKEN_LIVE_CELLS_SAMPLE_CAP) {
+                break;
+            }
+            let hash = token.type_script_hash.as_str();
+            let listed_count = token
+                .cells_count
+                .ok_or_else(|| anyhow::anyhow!("/tokens row {hash} has no cellsCount"))?;
+            let detail: TokenCellsCountRecord = api_get(ctx, &format!("tokens/{hash}"))?;
+            let stored = detail
+                .cells_count
+                .ok_or_else(|| anyhow::anyhow!("/tokens/{hash} has no cellsCount"))?;
+            let mut details = vec![];
+            if stored != listed_count {
+                details.push(format!(
+                    "detail cellsCount={stored} != /tokens row cellsCount={listed_count}"
+                ));
+            }
+            if stored > TOKEN_LIVE_CELLS_MAX_PER_TOKEN
+                || scanned_cells + stored > TOKEN_LIVE_CELLS_MAX_TOTAL
+            {
+                not_sampled.push(format!("{hash} ({stored} cells)"));
+                if !details.is_empty() {
+                    findings.push(Finding {
+                        entity: format!("token={hash}"),
+                        details,
+                    });
+                }
+                continue;
+            }
+            let (indexed, mut row_details) = token_listed_live_cells(ctx, hash)?;
+            scanned_cells += indexed;
+            details.append(&mut row_details);
+            if indexed != stored {
+                details.push(format!(
+                    "persisted cellsCount={stored} != live cells behind the type index={indexed}"
+                ));
+            }
+            if !details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("token={hash}"),
+                    details,
+                });
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if checked == 0 && not_sampled.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no tokens to sample".to_string(),
+            ));
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled tokens, {scanned_cells} live cells listed");
+        if !not_sampled.is_empty() {
+            detail.push_str(&format!(
+                "; over the {TOKEN_LIVE_CELLS_MAX_PER_TOKEN}-cell / {TOKEN_LIVE_CELLS_MAX_TOTAL}-total budget, not sampled: {}",
+                not_sampled.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
+// ── Collection daily activity counts ────────────────────────────────────────
+
+/// A collection's persisted `collection_activity_daily` rows — served folded
+/// into completed weeks as the insights `weeklyActivity` — equal its activity
+/// rows folded by the same rule (`CollectionActivityDailyCounts::of_actions`)
+/// into the UTC+8 week of each row's `chainTime`; and the rows the activity
+/// list pages equal the collection's `activitiesCount`.
+///
+/// The API no longer walks a collection's activity rows for its calendar;
+/// this check is where the daily rows meet them. Weeks after `completeThrough`
+/// are on neither side. Collections above the row budget are named in the pass
+/// detail as not sampled, never counted as verified.
+pub struct CollectionDailyActivityConsistency;
+
+const COLLECTION_DAILY_SAMPLE_CAP: usize = 10;
+const COLLECTION_DAILY_MAX_ROWS_PER_COLLECTION: i64 = 5_000;
+const COLLECTION_DAILY_MAX_ROWS_TOTAL: i64 = 20_000;
+const COLLECTION_DAILY_PAGE_LIMIT: usize = 100;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionCountRecord {
+    id: String,
+    activities_count: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionDetailCountRecord {
+    activities_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionWeekRecord {
+    week_start: String,
+    mint_transactions: u64,
+    transfer_transactions: u64,
+    burn_transactions: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionCalendarRecord {
+    weekly_activity: Vec<CollectionWeekRecord>,
+    complete_through: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionActivityRowRecord {
+    tx_hash: String,
+    chain_time: String,
+    actions: Vec<String>,
+}
+
+fn parse_collection_action(action: &str) -> anyhow::Result<ckbadger_store::AssetAction> {
+    use ckbadger_store::AssetAction;
+    Ok(match action {
+        "mint" => AssetAction::Mint,
+        "transfer" => AssetAction::Transfer,
+        "burn" => AssetAction::Burn,
+        "recycle" => AssetAction::Recycle,
+        "renew" => AssetAction::Renew,
+        "update" => AssetAction::Update,
+        other => anyhow::bail!("unknown collection activity action {other:?}"),
+    })
+}
+
+/// The Monday (UTC+8) of the stats day of `chain_time_ms`.
+fn utc8_week_start(chain_time_ms: i64) -> anyhow::Result<chrono::NaiveDate> {
+    use chrono::Datelike;
+    let day = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
+    Ok(day - chrono::Duration::days(i64::from(day.weekday().num_days_from_monday())))
+}
+
+/// Per completed week, the collection's rows folded by the daily-count rule,
+/// and the number of rows listed (every week).
+fn collection_weeks_from_rows(
+    ctx: &CheckContext,
+    id: &str,
+    complete_through: Option<chrono::NaiveDate>,
+) -> anyhow::Result<(std::collections::BTreeMap<chrono::NaiveDate, [u64; 3]>, i64)> {
+    let rows: Vec<CollectionActivityRowRecord> = all_cursor_pages(
+        ctx,
+        &format!("assets/objects/{id}/activities?limit={COLLECTION_DAILY_PAGE_LIMIT}"),
+    )?;
+    let mut weeks = std::collections::BTreeMap::new();
+    for row in &rows {
+        let chain_time: i64 = row.chain_time.parse().map_err(|e| {
+            anyhow::anyhow!(
+                "collection {id} row {} has chainTime {:?}: {e}",
+                row.tx_hash,
+                row.chain_time
+            )
+        })?;
+        let day = ckbadger_common::stats_bucket::stats_day(chain_time)?;
+        if complete_through.is_none_or(|through| day > through) {
+            continue;
+        }
+        let actions = row
+            .actions
+            .iter()
+            .map(|action| parse_collection_action(action))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let counts = ckbadger_store::CollectionActivityDailyCounts::of_actions(&actions);
+        let week: &mut [u64; 3] = weeks.entry(utc8_week_start(chain_time)?).or_default();
+        week[0] += counts.mint_transactions;
+        week[1] += counts.transfer_transactions;
+        week[2] += counts.burn_transactions;
+    }
+    let listed = i64::try_from(rows.len())
+        .map_err(|_| anyhow::anyhow!("collection {id} row count overflow"))?;
+    Ok((weeks, listed))
+}
+
+impl Check for CollectionDailyActivityConsistency {
+    fn name(&self) -> &'static str {
+        "collection_daily_activity_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Each sampled collection's weekly calendar (persisted daily counts) equals its activity rows folded by chain-time week"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(COLLECTION_DAILY_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "collection_daily_activity_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let mut candidates: Vec<CollectionCountRecord> = Vec::new();
+        for kind in ["object", "identity"] {
+            let page: CursorPage<CollectionCountRecord> =
+                api_get(ctx, &format!("assets?type={kind}&limit=100"))?;
+            candidates.extend(page.data);
+        }
+        let cap = ctx.sample_count.min(COLLECTION_DAILY_SAMPLE_CAP);
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        let mut listed_rows = 0i64;
+        let mut not_sampled = vec![];
+        for collection in &candidates {
+            if checked as usize >= cap {
+                break;
+            }
+            let id = collection.id.as_str();
+            let count = collection
+                .activities_count
+                .ok_or_else(|| anyhow::anyhow!("/assets row {id} has no activitiesCount"))?;
+            if count > COLLECTION_DAILY_MAX_ROWS_PER_COLLECTION
+                || listed_rows + count > COLLECTION_DAILY_MAX_ROWS_TOTAL
+            {
+                not_sampled.push(format!("{id} ({count} rows)"));
+                continue;
+            }
+            let calendar: CollectionCalendarRecord =
+                api_get(ctx, &format!("assets/objects/{id}/insights"))?;
+            let complete_through = calendar
+                .complete_through
+                .as_deref()
+                .map(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d"))
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("collection {id} completeThrough: {e}"))?;
+            let (from_rows, listed) = collection_weeks_from_rows(ctx, id, complete_through)?;
+            listed_rows += listed;
+            let mut served = std::collections::BTreeMap::new();
+            for week in &calendar.weekly_activity {
+                let start = chrono::NaiveDate::parse_from_str(&week.week_start, "%Y-%m-%d")
+                    .map_err(|e| anyhow::anyhow!("collection {id} weekStart: {e}"))?;
+                served.insert(
+                    start,
+                    [
+                        week.mint_transactions,
+                        week.transfer_transactions,
+                        week.burn_transactions,
+                    ],
+                );
+            }
+            let mut details = vec![];
+            let weeks: BTreeSet<_> = served.keys().chain(from_rows.keys()).copied().collect();
+            for week in weeks {
+                let served_counts = served.get(&week).copied().unwrap_or_default();
+                let row_counts = from_rows.get(&week).copied().unwrap_or_default();
+                if served_counts != row_counts {
+                    details.push(format!(
+                        "week {week}: daily counts [mint, transfer, burn] = {served_counts:?}, activity rows = {row_counts:?}"
+                    ));
+                }
+            }
+            if listed != count {
+                // The tip may have moved while paging: only a count that the
+                // detail confirms after the walk is a finding.
+                let detail: CollectionDetailCountRecord =
+                    api_get(ctx, &format!("assets/objects/{id}"))?;
+                if detail.activities_count == count {
+                    details.push(format!(
+                        "activitiesCount={count} != activity rows listed={listed}"
+                    ));
+                }
+            }
+            if !details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("collection={id}"),
+                    details,
+                });
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if checked == 0 && not_sampled.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no collections to sample".to_string(),
+            ));
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled collections, {listed_rows} activity rows");
+        if !not_sampled.is_empty() {
+            detail.push_str(&format!(
+                "; over the {COLLECTION_DAILY_MAX_ROWS_PER_COLLECTION}-row / {COLLECTION_DAILY_MAX_ROWS_TOTAL}-total budget, not sampled: {}",
+                not_sampled.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 // ── Global activity bucket index ───────────────────────────────────────────
 
 /// `CF_TX_ACTIONS_BY_BUCKET` agrees with the classification of the
@@ -5531,6 +5926,8 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
         Box::new(GlobalActivityBucketIndexConsistency),
+        Box::new(TokenLiveCellsConsistency),
+        Box::new(CollectionDailyActivityConsistency),
         Box::new(AddressCellbaseCountConsistency),
         Box::new(DotCellRingIntegrity),
         Box::new(DotCellIdIsLabelHash),
@@ -5734,7 +6131,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 38);
+        assert_eq!(checks.len(), 40);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -5759,6 +6156,8 @@ mod tests {
         assert!(names.contains(&"dao_status_index_matches_deposits"));
         assert!(names.contains(&"participant_rows_consistency"));
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
+        assert!(names.contains(&"token_live_cells_consistency"));
+        assert!(names.contains(&"collection_daily_activity_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
         assert!(names.contains(&"dotcell_ring_integrity"));
         assert!(names.contains(&"dotcell_id_is_label_hash"));
@@ -5821,7 +6220,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 31);
+        assert_eq!(sampling_count, 33);
     }
 
     #[test]
@@ -8458,6 +8857,262 @@ mod tests {
             calls.load(Ordering::SeqCst),
             0,
             "a miner above the bound is never paged in full"
+        );
+    }
+
+    // ── token_live_cells_consistency ──────────────────────────────────────
+
+    /// Serves `/cells/live?type_script_hash=…` for one token: `cells` rows of
+    /// `(tx byte, type script hash)`, paged by `limit` with an index cursor.
+    struct FakeTypeIndex {
+        cells: Vec<(u8, String)>,
+    }
+
+    impl Respond for FakeTypeIndex {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let query: HashMap<String, String> = request.url.query_pairs().into_owned().collect();
+            let limit: usize = query["limit"].parse().unwrap();
+            let start: usize = query.get("cursor").map_or(0, |c| c.parse().unwrap());
+            let page: Vec<serde_json::Value> = self
+                .cells
+                .iter()
+                .skip(start)
+                .take(limit)
+                .map(|(tx, type_hash)| {
+                    json!({ "txHash": format!("0x{}", hex::encode([*tx; 32])), "outputIndex": 0,
+                            "capacity": "100", "typeScriptHash": type_hash })
+                })
+                .collect();
+            let next = (start + limit < self.cells.len()).then(|| (start + limit).to_string());
+            ResponseTemplate::new(200).set_body_json(json!({ "data": page, "nextCursor": next }))
+        }
+    }
+
+    /// One token whose persisted count is `stored` and whose type index lists
+    /// `cells` (count, then any row whose type differs).
+    fn run_token_live_cells_check(stored: i64, cells: Vec<(u8, String)>) -> CompletedCheck {
+        let token = format!("0x{}", "71".repeat(32));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/tokens"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "typeScriptHash": token, "cellsCount": stored }],
+                    "nextCursor": null
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{token}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "typeScriptHash": token, "cellsCount": stored })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("type_script_hash", token.as_str()))
+                .respond_with(FakeTypeIndex { cells })
+                .mount(&server)
+                .await;
+        });
+        execute_check(
+            registered_check("token_live_cells_consistency").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    fn token_cells(count: u8) -> Vec<(u8, String)> {
+        (0..count)
+            .map(|tx| (tx, format!("0x{}", "71".repeat(32))))
+            .collect()
+    }
+
+    #[test]
+    fn token_live_cells_check_passes_when_the_count_matches_the_type_index() {
+        // 250 cells span three pages of the listing.
+        let completed = run_token_live_cells_check(250, token_cells(250));
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    #[test]
+    fn token_live_cells_check_fails_naming_the_token_on_a_drifted_count_or_a_foreign_row() {
+        let token = format!("0x{}", "71".repeat(32));
+        // The persisted count says 3; the index lists two of the token's cells.
+        let completed = run_token_live_cells_check(3, token_cells(2));
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.expect("result").findings;
+        assert_eq!(findings[0].entity, format!("token={token}"));
+        assert!(
+            findings[0]
+                .details
+                .iter()
+                .any(|d| d == "persisted cellsCount=3 != live cells behind the type index=2"),
+            "{:?}",
+            findings[0].details
+        );
+
+        // A listed row whose payload carries another type script.
+        let mut cells = token_cells(2);
+        cells[1].1 = format!("0x{}", "55".repeat(32));
+        let completed = run_token_live_cells_check(2, cells);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.expect("result").findings;
+        assert!(
+            findings[0]
+                .details
+                .iter()
+                .any(|d| d.starts_with("type index lists cell 0x0101") && d.contains("5555")),
+            "{:?}",
+            findings[0].details
+        );
+    }
+
+    // ── collection_daily_activity_consistency ─────────────────────────────
+
+    /// Serves `/assets/objects/{id}/activities` for one collection: rows of
+    /// `(chainTime ms, actions)`, newest first, paged by `limit`.
+    struct FakeCollectionRows {
+        rows: Vec<(i64, Vec<&'static str>)>,
+    }
+
+    impl Respond for FakeCollectionRows {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let query: HashMap<String, String> = request.url.query_pairs().into_owned().collect();
+            let limit: usize = query["limit"].parse().unwrap();
+            let start: usize = query.get("cursor").map_or(0, |c| c.parse().unwrap());
+            let page: Vec<serde_json::Value> = self
+                .rows
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(limit)
+                .map(|(index, (chain_time, actions))| {
+                    json!({ "txHash": format!("0x{index:064x}"), "blockNumber": index,
+                            "txIndex": 0, "timestamp": chain_time.to_string(),
+                            "chainTime": chain_time.to_string(), "actions": actions })
+                })
+                .collect();
+            let next = (start + limit < self.rows.len()).then(|| (start + limit).to_string());
+            ResponseTemplate::new(200).set_body_json(json!({ "data": page, "nextCursor": next }))
+        }
+    }
+
+    /// UTC midnight of `day` plus 4 h: well inside that UTC+8 stats day.
+    fn utc8_noonish(day: &str) -> i64 {
+        chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(4, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
+    }
+
+    /// One m-NFT class whose calendar serves `weekly` through 2026-10-25 and
+    /// whose activity list holds `rows`; `activities_count` on the list row
+    /// and the detail.
+    fn run_collection_daily_check(
+        weekly: serde_json::Value,
+        rows: Vec<(i64, Vec<&'static str>)>,
+        activities_count: i64,
+    ) -> CompletedCheck {
+        let id = format!("0x{}", "3c".repeat(24));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .and(query_param("type", "object"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "id": id, "activitiesCount": activities_count }],
+                    "nextCursor": null
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .and(query_param("type", "identity"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "data": [], "nextCursor": null })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/assets/objects/{id}/insights")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "weeklyActivity": weekly, "completeThrough": "2026-10-25"
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/assets/objects/{id}/activities")))
+                .respond_with(FakeCollectionRows { rows })
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/assets/objects/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    json!({ "collectionId": id, "activitiesCount": activities_count }),
+                ))
+                .mount(&server)
+                .await;
+        });
+        execute_check(
+            registered_check("collection_daily_activity_consistency").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    /// 150 rows (two pages): a mint + burn on 10-06, 149 transfers on 10-13,
+    /// one update-only row (counts nowhere), and a row in the tip's
+    /// incomplete week (after `completeThrough`, on neither side).
+    fn collection_rows() -> Vec<(i64, Vec<&'static str>)> {
+        let mut rows = vec![(utc8_noonish("2026-10-27"), vec!["mint"])];
+        rows.extend((0..147).map(|_| (utc8_noonish("2026-10-13"), vec!["transfer"])));
+        rows.push((utc8_noonish("2026-10-12"), vec!["update"]));
+        rows.push((utc8_noonish("2026-10-06"), vec!["mint", "burn"]));
+        rows
+    }
+
+    fn collection_weekly(transfers: u64) -> serde_json::Value {
+        json!([
+            {"weekStart": "2026-10-05", "mintTransactions": 1, "transferTransactions": 0, "burnTransactions": 1},
+            {"weekStart": "2026-10-12", "mintTransactions": 0, "transferTransactions": transfers, "burnTransactions": 0},
+            {"weekStart": "2026-10-19", "mintTransactions": 0, "transferTransactions": 0, "burnTransactions": 0},
+        ])
+    }
+
+    #[test]
+    fn collection_daily_check_passes_when_the_calendar_folds_the_rows() {
+        let completed = run_collection_daily_check(collection_weekly(147), collection_rows(), 150);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    #[test]
+    fn collection_daily_check_fails_naming_the_week_and_the_count() {
+        let id = format!("0x{}", "3c".repeat(24));
+        // The daily rows lost one transfer of week 10-12; the list row
+        // claims a row more than the activity list holds.
+        let completed = run_collection_daily_check(collection_weekly(146), collection_rows(), 151);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.expect("result").findings;
+        assert_eq!(findings[0].entity, format!("collection={id}"));
+        assert_eq!(
+            findings[0].details,
+            vec![
+                "week 2026-10-12: daily counts [mint, transfer, burn] = [0, 146, 0], activity rows = [0, 147, 0]"
+                    .to_string(),
+                "activitiesCount=151 != activity rows listed=150".to_string(),
+            ]
         );
     }
 

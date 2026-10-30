@@ -376,8 +376,13 @@ async fn list_tokens(
         let mut response = serve_tokens_from_cache(cached_tokens, &params, limit)?;
         for row in &mut response.0.data {
             let hash = parse_hash32(&row.type_script_hash, "type_hash")?;
+            // The persisted count (Σ daily `live_cells_delta`): O(days) rows
+            // per token, never a cell. Index consistency is
+            // `ckbadger verify`'s `token_live_cells_consistency`.
             row.cells_count = Some(
-                super::token_history::live_cells_count(&state, &hash)
+                state
+                    .store
+                    .token_live_cells_count(&hash)
                     .map_err(|error| ApiError::internal(error.to_string()))?,
             );
         }
@@ -552,6 +557,10 @@ async fn get_token(
 
     match result {
         Some((info, total_supply, holders_count, transfers_count, transfers_24h, deltas)) => {
+            // The persisted live cell count, folded from the daily rows this
+            // handler already read (`token_live_cells_from_daily`).
+            let cells_count = ckbadger_store::token_live_cells_from_daily(&hash, &deltas)
+                .map_err(|error| ApiError::internal(error.to_string()))?;
             let (owned_capacity, owned_knowledge) = if deltas.is_empty() {
                 (None, None)
             } else {
@@ -581,10 +590,7 @@ async fn get_token(
                     owned_knowledge,
                 },
             )?;
-            response.cells_count = Some(
-                super::token_history::live_cells_count(&state, &hash)
-                    .map_err(|error| ApiError::internal(error.to_string()))?,
-            );
+            response.cells_count = Some(cells_count);
             response.metadata = Some(token_metadata_response(&hash, &info)?);
             // Same-symbol warning: any symbol either token answers to — its
             // stored one or its Unique Cell's (IV-26: a label that renamed a

@@ -203,6 +203,16 @@ with deleted rows but no counter row aborts the rollback. This is the same contr
 many blocks, so a pre-image recorded on one block of the batch is not replayed when the fork point
 lands on a later block of that same batch, while the rows written after it are still deleted.
 
+### Collection Daily Activity Counts (reversed by deleted rows)
+
+`collection_activity_daily` (a collection's mint / transfer / burn transactions per UTC+8 day)
+carries **no** undo pre-image either. Stage 8e' takes the contribution of every collection
+activity row stages 8d/8e delete off its day (the deleted block's header gives the day): a day
+reaching zero is deleted, and a day that would go below zero — or that has no row — aborts the
+rollback naming the collection and the day. Same reason as the prefix counters: a live batch
+writes each `(collection, day)` once, so a per-block pre-image could not restore a fork point
+inside the batch.
+
 ### Entity Statistics (undo-log owned, never swept)
 
 The eight per-entity daily/hourly stats families are restored **only** by undo replay. They are

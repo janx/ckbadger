@@ -1558,6 +1558,13 @@ pub struct TokenDailyDelta {
     /// A subset of `tx_count`, which also counts transactions that only
     /// rewrite cells without moving an amount between locks.
     pub transfer_tx_count: u64,
+    /// Net live cells of this token that day: every member cell (the same
+    /// set as the capacity deltas, `token_daily_member`) a transaction
+    /// created adds one, every one it consumed subtracts one. The token's
+    /// live cell count is the running sum through the tip
+    /// ([`token_live_cells_from_daily`](crate::token_live_cells_from_daily)),
+    /// the one source `/tokens` and `/tokens/{hash}` serve as `cellsCount`.
+    pub live_cells_delta: i64,
 }
 
 /// One token transfer record's supply facts: `(is_mint, is_burn, amount)`.
@@ -1634,6 +1641,10 @@ impl TokenDailyDelta {
             .transfer_tx_count
             .checked_add(other.transfer_tx_count)
             .ok_or_else(|| overflow("transfer_tx_count"))?;
+        self.live_cells_delta = self
+            .live_cells_delta
+            .checked_add(other.live_cells_delta)
+            .ok_or_else(|| overflow("live_cells_delta"))?;
         Ok(())
     }
 
@@ -2691,6 +2702,151 @@ pub struct ObjectCollectionActivityEntry {
     pub block_hash: Vec<u8>,
     pub timestamp_ms: i64,
     pub actions: Vec<AssetAction>,
+}
+
+/// One collection's mint / transfer / burn transactions on one UTC+8 stats
+/// day — the value of a `collection_activity_daily` row. The collection's
+/// completed-week calendar folds these rows instead of walking its activity
+/// rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionActivityDailyCounts {
+    pub mint_transactions: u64,
+    pub transfer_transactions: u64,
+    pub burn_transactions: u64,
+}
+
+impl CollectionActivityDailyCounts {
+    /// What ONE collection activity row contributes: 1 to each of Mint /
+    /// Transfer / Burn its `actions` contain (a row can add to several);
+    /// Recycle / Renew / Update add nothing. The only rule — both sync paths,
+    /// rollback and verify fold rows through it.
+    pub fn of_actions(actions: &[AssetAction]) -> Self {
+        let has = |action: AssetAction| u64::from(actions.contains(&action));
+        Self {
+            mint_transactions: has(AssetAction::Mint),
+            transfer_transactions: has(AssetAction::Transfer),
+            burn_transactions: has(AssetAction::Burn),
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        Some(Self {
+            mint_transactions: self
+                .mint_transactions
+                .checked_add(other.mint_transactions)?,
+            transfer_transactions: self
+                .transfer_transactions
+                .checked_add(other.transfer_transactions)?,
+            burn_transactions: self
+                .burn_transactions
+                .checked_add(other.burn_transactions)?,
+        })
+    }
+
+    /// `None` when any counter would go below zero.
+    pub fn checked_sub(&self, other: &Self) -> Option<Self> {
+        Some(Self {
+            mint_transactions: self
+                .mint_transactions
+                .checked_sub(other.mint_transactions)?,
+            transfer_transactions: self
+                .transfer_transactions
+                .checked_sub(other.transfer_transactions)?,
+            burn_transactions: self
+                .burn_transactions
+                .checked_sub(other.burn_transactions)?,
+        })
+    }
+}
+
+/// Collection activity rows folded per `(collection id (32-byte padded),
+/// UTC+8 day YYYYMMDD)` through [`CollectionActivityDailyCounts::of_actions`]:
+/// a live batch's contributions, a bulk block's, the rows a rollback deletes,
+/// or the rows verify reads. A row that contributes nothing adds no key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollectionActivityDailyDeltas {
+    days: BTreeMap<([u8; 32], u32), CollectionActivityDailyCounts>,
+}
+
+impl CollectionActivityDailyDeltas {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fold one collection activity row of `collection_id` on `day`.
+    pub fn add_row(
+        &mut self,
+        collection_id: &[u8],
+        day: u32,
+        actions: &[AssetAction],
+    ) -> anyhow::Result<()> {
+        self.add(
+            crate::keys::pad_id_32(collection_id),
+            day,
+            &CollectionActivityDailyCounts::of_actions(actions),
+        )
+    }
+
+    fn add(
+        &mut self,
+        collection_id: [u8; 32],
+        day: u32,
+        counts: &CollectionActivityDailyCounts,
+    ) -> anyhow::Result<()> {
+        if counts.is_zero() {
+            return Ok(());
+        }
+        let entry = self.days.entry((collection_id, day)).or_default();
+        *entry = entry.checked_add(counts).ok_or_else(|| {
+            anyhow::anyhow!(
+                "collection activity daily count overflow: collection=0x{} day={day}",
+                crate::bytes_to_hex(&collection_id)
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Add every `(collection, day)` of `other`.
+    pub fn merge(&mut self, other: &Self) -> anyhow::Result<()> {
+        for ((collection_id, day), counts) in &other.days {
+            self.add(*collection_id, *day, counts)?;
+        }
+        Ok(())
+    }
+
+    /// Remove and return the days before `first_open_day` (YYYYMMDD), in key
+    /// order: the rows a bulk build seals once their day is complete.
+    pub fn split_before(
+        &mut self,
+        first_open_day: u32,
+    ) -> Vec<(([u8; 32], u32), CollectionActivityDailyCounts)> {
+        let sealed: Vec<_> = self
+            .days
+            .iter()
+            .filter(|((_, day), _)| *day < first_open_day)
+            .map(|(key, counts)| (*key, *counts))
+            .collect();
+        for (key, _) in &sealed {
+            self.days.remove(key);
+        }
+        sealed
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&([u8; 32], u32), &CollectionActivityDailyCounts)> {
+        self.days.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.days.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.days.len()
+    }
 }
 
 // ============================================

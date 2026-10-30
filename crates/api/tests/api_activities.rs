@@ -2521,7 +2521,8 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         12,
     );
     batch.commit().unwrap();
-    // The address feed's `total` reads the counters a synced store keeps.
+    // The address counters the forward writers keep beside its `addr_txs`
+    // rows (W5): the unfiltered address feed checks its `total` against them.
     sync_address_tx_counters(&store, &lock_hash);
     let app = create_router(test_config(store)).await;
 

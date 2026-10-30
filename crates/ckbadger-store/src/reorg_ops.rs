@@ -2105,6 +2105,45 @@ fn normalize_dao_entry_for_rollback(
 }
 
 impl CkbadgerStore {
+    /// Rollback stage 8e': take the deleted collection activity rows'
+    /// contributions (`removed`) off their `collection_activity_daily` days.
+    /// A day reaching zero is deleted; a day that would go below zero, or
+    /// has no row at all, is an error naming the collection and the day —
+    /// the forward writer and this rollback disagree, so nothing is clamped.
+    fn subtract_collection_activity_daily(
+        &self,
+        removed: &CollectionActivityDailyDeltas,
+        batch: &mut WriteBatch,
+        rollback_to: i64,
+    ) -> anyhow::Result<()> {
+        let days: Vec<([u8; 32], u32)> = removed.iter().map(|(key, _)| *key).collect();
+        let stored = self.get_collection_activity_daily_batch(&days)?;
+        for (((collection_id, day), removing), current) in removed.iter().zip(stored) {
+            let next = current
+                .as_ref()
+                .and_then(|current| current.checked_sub(removing))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "collection_activity_daily underflow during rollback: collection=0x{} day={day} stored={current:?} removing={removing:?} rollback_to={rollback_to}",
+                        bytes_to_hex(collection_id)
+                    )
+                })?;
+            let key = keys::encode_collection_activity_daily_key(collection_id, *day);
+            if next.is_zero() {
+                batch.delete_cf(self.cf_collection_activity_daily(), key);
+            } else {
+                batch.put_cf(
+                    self.cf_collection_activity_daily(),
+                    key,
+                    bincode::serialize(&next).expect("serialize CollectionActivityDailyCounts"),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
     ///
@@ -4106,14 +4145,31 @@ impl CkbadgerStore {
 
         // 8d. Delete object_collection_activities entries for rolled-back blocks.
         // Also count surviving entries per collection to avoid a duplicate scan in stage 10.
+        // Every deleted row's contribution to its `collection_activity_daily` day
+        // is collected (8d + 8e) and subtracted in 8e'.
         let mut object_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut removed_daily = crate::types::CollectionActivityDailyDeltas::new();
+        let mut rolled_back_days: HashMap<i64, u32> = HashMap::new();
+        let mut rolled_back_day = |block_num: i64| -> anyhow::Result<u32> {
+            if let Some(day) = rolled_back_days.get(&block_num) {
+                return Ok(*day);
+            }
+            let header = self.get_block_header(block_num)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rolled-back collection activity row names block {block_num}, which has no header (rollback_to={rollback_to})"
+                )
+            })?;
+            let day = keys::stats_day_yyyymmdd(header.chain_time_ms)?;
+            rolled_back_days.insert(block_num, day);
+            Ok(day)
+        };
         {
             let mut removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_object_collection_activities");
             let iter =
                 self.iterator_cf(self.cf_object_collection_activities(), IteratorMode::Start);
             for item in iter {
-                let (key, _) = item.map_err(|e| {
+                let (key, value) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate object_collection_activities in rollback_to_block cleanup: {}",
                         e
@@ -4137,6 +4193,18 @@ impl CkbadgerStore {
                     stage.tick(removed);
                     continue;
                 }
+                let entry: crate::types::ObjectCollectionActivityEntry =
+                    bincode::deserialize(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid object_collection_activities value in rollback: collection=0x{} block={block_num}: {e}",
+                            bytes_to_hex(&collection_id)
+                        )
+                    })?;
+                removed_daily.add_row(
+                    &collection_id,
+                    rolled_back_day(block_num)?,
+                    &entry.actions,
+                )?;
                 batch.delete_cf(self.cf_object_collection_activities(), &key);
                 removed += 1;
                 stage.tick(removed);
@@ -4161,7 +4229,7 @@ impl CkbadgerStore {
                 IteratorMode::Start,
             );
             for item in iter {
-                let (key, _) = item.map_err(|e| {
+                let (key, value) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate identity_collection_activities in rollback_to_block cleanup: {}",
                         e
@@ -4185,6 +4253,18 @@ impl CkbadgerStore {
                     stage.tick(removed);
                     continue;
                 }
+                let entry: crate::types::ObjectCollectionActivityEntry =
+                    bincode::deserialize(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid identity_collection_activities value in rollback: collection=0x{} block={block_num}: {e}",
+                            bytes_to_hex(&collection_id)
+                        )
+                    })?;
+                removed_daily.add_row(
+                    &collection_id,
+                    rolled_back_day(block_num)?,
+                    &entry.actions,
+                )?;
                 batch.delete_cf(self.cf_identity_collection_activities(), &key);
                 removed += 1;
                 stage.tick(removed);
@@ -4197,6 +4277,13 @@ impl CkbadgerStore {
                 );
             }
         }
+
+        // 8e'. `collection_activity_daily` carries no undo pre-image: like
+        // `addr_prefix_stats` it is reversed by the rows rollback deletes. Each
+        // deleted collection activity row's contribution comes off its day; a
+        // day reaching zero is deleted, and a day that would go below zero (or
+        // that has no row) is an error naming the collection and the day.
+        self.subtract_collection_activity_daily(&removed_daily, &mut batch, rollback_to)?;
 
         // 8f. Delete Fiber channel data for rolled-back blocks.
         // Simplest approach for dev: wipe all Fiber CFs and let resync rebuild.
@@ -5856,7 +5943,47 @@ mod tests {
     fn rollback_fixture(store: &CkbadgerStore, rollback_to: i64) -> anyhow::Result<RollbackResult> {
         seed_forward_chain_histogram(store)?;
         seed_fixture_script_creation_totals(store)?;
+        seed_fixture_collection_activity_days(store)?;
         store.rollback_to_block(rollback_to)
+    }
+
+    /// Hand-built fixtures seed collection activity rows without the
+    /// `collection_activity_daily` days the forward writers stage beside them.
+    /// Establish those days from the rows by the store's one rule (the day of
+    /// each row's block header) before the production rollback subtracts the
+    /// rows it deletes.
+    fn seed_fixture_collection_activity_days(store: &CkbadgerStore) -> anyhow::Result<()> {
+        if !store.has_cf(CF_COLLECTION_ACTIVITY_DAILY) {
+            return Ok(());
+        }
+        let mut days = CollectionActivityDailyDeltas::new();
+        for cf in [
+            store.cf_object_collection_activities(),
+            store.cf_identity_collection_activities(),
+        ] {
+            for item in store.iterator_cf(cf, IteratorMode::Start) {
+                let (key, value) = item?;
+                if key.len() != keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE {
+                    continue;
+                }
+                let (collection_id, block, _, _, _) =
+                    keys::decode_object_collection_activity_key(&key);
+                let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
+                let header = store.get_block_header(block)?.ok_or_else(|| {
+                    anyhow::anyhow!("fixture collection row of block {block} has no header")
+                })?;
+                days.add_row(
+                    &collection_id,
+                    keys::stats_day_yyyymmdd(header.chain_time_ms)?,
+                    &entry.actions,
+                )?;
+            }
+        }
+        let mut batch = crate::batch::StoreBatch::new(store);
+        for ((collection_id, day), counts) in days.iter() {
+            batch.put_collection_activity_daily(collection_id, *day, counts);
+        }
+        batch.commit()
     }
 
     /// Older hand-built rollback fixtures seeded only live script metrics.

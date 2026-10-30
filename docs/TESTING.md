@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 66 checks, minutes
+ckbadger verify --depth sampling          # 68 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **Sampling** (S1-S33) | 33     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                             |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Sampling** (S1-S35) | 35     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -85,7 +85,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 66 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 68 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
@@ -233,6 +233,38 @@ whose reward is not yet paid is skipped. For each other block:
 A miner above the bound is never paged in full. A failing sample is re-read
 once; if it still fails and the tip moved meanwhile, it is reported as skipped
 rather than as a finding. It needs no RPC.
+
+### Token Live Cell Counts (S34)
+
+`token_live_cells_consistency` proves the persisted token live cell count —
+`cellsCount` on `/tokens` and `/tokens/{hash}`, the running sum of the token's
+`TokenDailyDelta.live_cells_delta` rows — against the type index. The API reads
+only the daily rows; this check is where they meet the cells. For up to 20
+tokens of the first `/tokens` page (`--sample-count`), in list order:
+
+| Assertion                                                                                  | Finding names |
+| ------------------------------------------------------------------------------------------ | ------------- |
+| the detail's `cellsCount` equals the list row's                                            | the token     |
+| every row `cells/live?type_script_hash=<token>` lists carries the token's type script hash | the cell      |
+| the number of those rows (all pages) equals `cellsCount`                                   | the token     |
+
+A token above 25,000 cells, or one that would take the run past 60,000 listed
+cells, is not paged; the pass detail names it as not sampled. It needs no RPC.
+
+### Collection Daily Activity Counts (S35)
+
+`collection_daily_activity_consistency` proves `collection_activity_daily` — what the insights
+`weeklyActivity` folds — against the collection activity rows. For up to 10 collections of the
+first `/assets?type=object` and `/assets?type=identity` pages (`--sample-count`), in list order:
+
+| Assertion                                                                                                                                                                                                                            | Finding names               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
+| every completed week of `assets/objects/{id}/insights` equals the collection's `assets/objects/{id}/activities` rows (all pages) folded by `CollectionActivityDailyCounts::of_actions` into the UTC+8 week of each row's `chainTime` | the collection and the week |
+| the rows listed equal the collection's `activitiesCount` (re-read from the detail after the walk, so a tip that moved is not a finding)                                                                                              | the collection              |
+
+Rows after `completeThrough` (the tip's incomplete week) are on neither side. A collection above
+5,000 rows, or one that would take the run past 20,000 listed rows, is not paged; the pass detail
+names it as not sampled. It needs no RPC.
 
 ### DAO Lifecycle vs Live DAO Cells (S31)
 

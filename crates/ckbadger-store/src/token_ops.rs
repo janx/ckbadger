@@ -42,6 +42,33 @@ fn decode_token_holder_entry(
     Ok((key[32..64].to_vec(), balance))
 }
 
+/// A token's live cell count from its daily rows (date order): the running
+/// sum of `live_cells_delta`. The ONE count every reader uses (the token
+/// detail and list rows). A running count below zero means a day consumed
+/// cells the token never had — a write-path bug, reported with the token and
+/// the day, never clamped.
+pub fn token_live_cells_from_daily(
+    type_hash: &[u8],
+    deltas: &[(u32, TokenDailyDelta)],
+) -> anyhow::Result<i64> {
+    let mut live_cells = 0i64;
+    for (date, delta) in deltas {
+        live_cells = live_cells
+            .checked_add(delta.live_cells_delta)
+            .filter(|count| *count >= 0)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token live cell count leaves 0..=i64::MAX: type_hash=0x{}, date={}, before={}, delta={}",
+                    bytes_to_hex(type_hash),
+                    date,
+                    live_cells,
+                    delta.live_cells_delta
+                )
+            })?;
+    }
+    Ok(live_cells)
+}
+
 #[derive(Debug, Clone)]
 pub struct TokenDailyValidationError {
     pub type_hash: Vec<u8>,
@@ -55,6 +82,9 @@ pub struct TokenDailyValidationError {
     /// The token's supply after this row (`Σ minted - burned` through it);
     /// `None` when this row's burns exceed the supply before it.
     pub supply_after: Option<ckbadger_common::TokenBalance>,
+    /// The token's live cell count after this row (`Σ live_cells_delta`);
+    /// `None` when it overflows. A negative count is invalid.
+    pub live_cells_after: Option<i64>,
 }
 
 impl CkbadgerStore {
@@ -226,6 +256,12 @@ impl CkbadgerStore {
         self.list_token_daily_deltas_in_range(type_hash, None, None)
     }
 
+    /// The token's live cell count: its persisted daily rows folded by
+    /// [`token_live_cells_from_daily`]. Reads O(days) rows, never a cell.
+    pub fn token_live_cells_count(&self, type_hash: &[u8]) -> anyhow::Result<i64> {
+        token_live_cells_from_daily(type_hash, &self.list_token_daily_deltas(type_hash)?)
+    }
+
     pub fn list_token_daily_deltas_in_range(
         &self,
         type_hash: &[u8],
@@ -294,6 +330,7 @@ impl CkbadgerStore {
         let mut owned_capacity: i128 = 0;
         let mut owned_knowledge: i128 = 0;
         let mut supply = ckbadger_common::TokenBalance::zero();
+        let mut live_cells: i64 = 0;
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -328,7 +365,9 @@ impl CkbadgerStore {
                 owned_capacity = 0;
                 owned_knowledge = 0;
                 supply = ckbadger_common::TokenBalance::zero();
+                live_cells = 0;
             }
+            let live_cells_after = live_cells.checked_add(delta.live_cells_delta);
 
             owned_capacity = owned_capacity
                 .checked_add(delta.owned_capacity_delta)
@@ -369,6 +408,7 @@ impl CkbadgerStore {
                 || (delta.burn_count == 0) != delta.burned.is_zero()
                 || delta.transfer_tx_count > delta.tx_count
                 || (delta.transfer_tx_count == 0 && (delta.mint_count > 0 || delta.burn_count > 0))
+                || live_cells_after.is_none_or(|count| count < 0)
             {
                 return Ok(Some(TokenDailyValidationError {
                     type_hash,
@@ -379,9 +419,11 @@ impl CkbadgerStore {
                     used_delta: delta.owned_knowledge_delta,
                     tx_count: delta.tx_count,
                     supply_after,
+                    live_cells_after,
                 }));
             }
             supply = supply_after.expect("checked above");
+            live_cells = live_cells_after.expect("checked above");
         }
 
         Ok(None)
@@ -1220,7 +1262,58 @@ mod tests {
             mint_count,
             burn_count,
             transfer_tx_count: tx_count,
+            live_cells_delta: 0,
         }
+    }
+
+    /// IV-27: a token's live cell count is the running sum of its days'
+    /// `live_cells_delta` — read from the daily rows, never from a cell — and
+    /// a day that consumes cells the token never had is a write-path bug
+    /// named with the token and the day, never a clamped zero.
+    #[test]
+    fn test_token_live_cells_count_folds_daily_rows_and_rejects_a_negative_day() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x0cu8; 32];
+        let day = |tx_count, live_cells_delta| TokenDailyDelta {
+            tx_count,
+            live_cells_delta,
+            ..Default::default()
+        };
+        assert_eq!(store.token_live_cells_count(&type_hash).unwrap(), 0);
+        for (date, row) in [
+            (20261001, day(2, 3)),
+            (20261002, day(1, -1)),
+            (20261005, day(4, 7)),
+        ] {
+            store.put_token_daily_delta(&type_hash, date, &row).unwrap();
+        }
+        assert_eq!(store.token_live_cells_count(&type_hash).unwrap(), 9);
+        assert!(store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none());
+
+        store
+            .put_token_daily_delta(&type_hash, 20261003, &day(1, -3))
+            .unwrap();
+        let error = store
+            .token_live_cells_count(&type_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!("type_hash=0x{}", hex::encode(type_hash)))
+                && error.contains("date=20261003")
+                && error.contains("before=2, delta=-3"),
+            "{error}"
+        );
+        let invalid = store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .expect("a negative running live cell count is invalid");
+        assert_eq!(
+            (invalid.date_yyyymmdd, invalid.live_cells_after),
+            (20261003, Some(-1))
+        );
     }
 
     /// I4: a token's supply is the running sum of its days' `minted - burned`

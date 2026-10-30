@@ -265,6 +265,7 @@ impl BulkReducer for TokenOwner {
                     date,
                     -i128::from(input.capacity),
                     -i128::from(input.occupied_capacity),
+                    -1,
                     tx,
                 )?;
             }
@@ -285,6 +286,7 @@ impl BulkReducer for TokenOwner {
                     date,
                     i128::from(cell.capacity),
                     i128::from(cell.occupied_capacity),
+                    1,
                     tx,
                 )?;
             }
@@ -481,17 +483,19 @@ impl TokenOwner {
         Ok(())
     }
 
+    /// Fold one member cell into its token day: its signed capacity and
+    /// occupied capacity, and `live_cells_delta` (`+1` created, `-1`
+    /// consumed) — the same per-cell facts the live parser folds through
+    /// `pipeline::add_token_daily_tx`, on the entry this loop already updates.
     fn record_daily_delta(
         &mut self,
         type_hash: Vec<u8>,
         date_yyyymmdd: u32,
         owned_capacity_delta: i128,
         owned_knowledge_delta: i128,
+        live_cells_delta: i64,
         tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
-        if owned_capacity_delta == 0 && owned_knowledge_delta == 0 {
-            return Ok(());
-        }
         let entry = self
             .daily_deltas
             .entry(type_hash.clone())
@@ -512,6 +516,18 @@ impl TokenOwner {
             &type_hash,
             tx,
         )?;
+        entry.live_cells_delta = entry
+            .live_cells_delta
+            .checked_add(live_cells_delta)
+            .ok_or_else(|| {
+                anyhow!(
+                    "token daily live_cells_delta overflow: type_hash=0x{} block={} tx=0x{} tx_index={}",
+                    hex::encode(&type_hash),
+                    tx.block_number,
+                    hex::encode(tx.tx_hash),
+                    tx.tx_index
+                )
+            })?;
         Ok(())
     }
 

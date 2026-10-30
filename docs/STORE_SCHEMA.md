@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (68 total: 64 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (69 total: 65 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 64 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 65 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -61,6 +61,7 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 | `identity_by_collection`         | collection_id + identity_id                                                   | empty                                                                          | Identity index by collection. A `.cell` sub-name is indexed twice: once under the `.cell` sentinel, once under its parent's padded 20-byte id, which is what lists a name's children (see [below](#identity_by_collection-cell-parentchild-rows))          |
 | `identity_agg`                   | collection_id (sentinel 32B)                                                  | IdentityCollectionAgg                                                          | Per-standard identity aggregates; .bit AccountCell and .bit Cell use different sentinels                                                                                                                                                                   |
 | `identity_collection_activities` | collection_id + block + tx                                                    | ObjectCollectionActivityEntry                                                  | Pre-computed identity collection activity feed (domain)                                                                                                                                                                                                    |
+| `collection_activity_daily`      | collection_id (32B padded) + day YYYYMMDD (4B BE) = 36B                       | CollectionActivityDailyCounts                                                  | A collection's mint / transfer / burn transactions per UTC+8 day: the insights weekly calendar folds these rows; see the note below                                                                                                                        |
 | `stats_identity`                 | collection_id + owner segment (32B)                                           | i64 (owner count)                                                              | Per-owner identity counts by collection. The owner segment is a lock hash for every standard but `.cell`, whose chain-level owner is a 20-byte prefix written as an explicit `owner20 ‖ 0^12` and decoded back by collection — never served as a lock hash |
 | `dotcell_name_by_owner`          | owner_hash20 (20B) + name_id (20B) = 40B                                      | empty                                                                          | The `.cell` names a 20-byte owner prefix holds: address pages, holder counts, and the sale-state join                                                                                                                                                      |
 | `dotcell_ring`                   | namespace_args (20B)                                                          | DotCellRingRoot                                                                | One row per `.cell` namespace: the uniqueness ring's root cell, so verify can walk the ring without scanning. A network runs exactly one namespace                                                                                                         |
@@ -158,6 +159,35 @@ script calls → Script, else Ckb. Cellbase has no row (it has no `activities` r
   the count to equal the non-cellbase `activities` rows stage 8b deleted; a difference aborts the
   rollback. No undo pre-image.
 - **Verify.** `global_activity_bucket_index_consistency` (S32, `docs/TESTING.md`).
+
+### `collection_activity_daily`: a collection's activity per day
+
+One row per (collection, UTC+8 stats day of the block's chain time) on which the collection's
+activity rows (`object_collection_activities` / `identity_collection_activities`, the same
+32-byte padded collection id) carry a mint, transfer or burn. Value: `CollectionActivityDailyCounts
+{ mint_transactions, transfer_transactions, burn_transactions }` (bincode, 24 B). Spore clusters
+(and the sole-Spores sentinel), m-NFT classes and the four identity sentinels alike.
+
+- **Rule.** `CollectionActivityDailyCounts::of_actions`: each activity row adds 1 to each of Mint /
+  Transfer / Burn its `actions` contain (a row can add to more than one); Recycle / Renew / Update
+  add nothing, and a day whose rows add nothing has no row. `CollectionActivityDailyDeltas::add_row`
+  folds a row into its `(collection, day)`; both sync paths, rollback and the API test fixtures
+  call it.
+- **Write.** Live: every site that writes a collection activity row folds it in the same place
+  (`ObjectCollectionActivityAccumulator::flush` / `flush_identity`, `resolve_dotbit_tx_activity`,
+  the `.cell` row in the activity loop); `stage_collection_activity_daily` then reads each touched
+  `(collection, day)` once (one `multi_get`) and writes it once into the batch's atomic domain
+  commit. Bulk: `build_history_rows_for_block` folds each row it pushes into the block's day;
+  `ActivityStatsAccumulator` keeps the open days and writes a day once, when the chain-time
+  watermark passes its UTC+8 end (Class C, like `ACTIVITY_DAILY`), the rest at finalize.
+- **Rollback.** No undo pre-image: like `addr_prefix_stats`, stage 8e' subtracts the contributions
+  of the collection activity rows stages 8d/8e delete (their day from the deleted block's header);
+  a day reaching zero is deleted, one that would go below zero or has no row aborts the rollback
+  naming the collection and day.
+- **Read.** The insights `weeklyActivity` (`completed_week_calendar`) folds the collection's rows
+  into Monday weeks: O(days), no activity, transaction or header read. `/assets/objects/{id}/activities`
+  rows carry `chainTime`, the clock their day is taken from.
+- **Verify.** `collection_daily_activity_consistency` (S35, `docs/TESTING.md`).
 
 ### `addr_txs` value: a closed transaction type
 
@@ -461,7 +491,7 @@ inline as Class C sealed aggregates:
   `TOKEN_HOURLY` and the token row — need an amount. Bulk (via `CellSemanticTag::{Sudt, Xudt}`)
   and live (`pipeline::token_daily_member`) apply the same rule (POSTMORTEM STATS-011).
   `TokenDailyDelta` (`owned_capacity_delta`, `owned_knowledge_delta`, `tx_count`, `minted`,
-  `burned`, `mint_count`, `burn_count`, `transfer_tx_count`; 128 bytes): `tx_count` is the number of transactions that day that
+  `burned`, `mint_count`, `burn_count`, `transfer_tx_count`, `live_cells_delta`; 136 bytes): `tx_count` is the number of transactions that day that
   created or consumed at least one such cell, one per transaction however many of its cells moved
   (live: `pipeline::add_token_daily_tx` → `TokenDailyChanges::add_tx`; bulk: `TokenOwner::apply_tx`).
   `transfer_tx_count` is the number of those transactions with at least one `token_transfers`
@@ -472,7 +502,15 @@ inline as Class C sealed aggregates:
   `TokenDailyDelta::add_transfer_tx` on both paths (live: the writer folds the records it persists
   into the parser's contributions before `update_token_daily_deltas_batch`; bulk:
   `TokenOwner::apply_tx`'s transfer loop); the day's signed supply change is `minted - burned`
-  (`TokenDailyDelta::apply_supply`). A day with a transaction keeps its row even when its capacity
+  (`TokenDailyDelta::apply_supply`). `live_cells_delta` is the day's net live cells of the token
+  (every member cell created `+1`, consumed `-1`, the same membership as the capacity deltas): live
+  `pipeline::add_token_daily_tx` folds it from the parser's per-cell members
+  (`token_daily_created` / `token_daily_consumed`), bulk `TokenOwner::record_daily_delta` on the
+  day entry it already updates for capacity. Its running sum (`token_live_cells_from_daily`) is the
+  token's live cell count, the one `cellsCount` `/tokens` and `/tokens/{hash}` serve — neither
+  reads the token's cells; `ckbadger verify` (`token_live_cells_consistency`) compares it with the
+  live cells behind `cell_by_type`. A running count below zero is an error naming the token and
+  the day. A day with a transaction keeps its row even when its capacity
   nets to zero, and `find_first_invalid_token_daily_delta` rejects a row with `tx_count == 0`, a
   running supply that a day's burns would take below zero, a record count without its amount (or the
   reverse), and a `transfer_tx_count` above `tx_count` or zero beside mint / burn records. Live rollback restores the whole row from its undo pre-image. The script,

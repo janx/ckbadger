@@ -265,7 +265,12 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
             script.add(b.block, k.clone(), *cap, *know).unwrap();
         }
         for (k, cap, know) in &b.token {
-            token.add_tx(b.block, k.clone(), *cap, *know).unwrap();
+            // One member cell per contribution: created when the capacity
+            // rises, consumed when it falls (the parser's `add_token_daily_tx`).
+            let live_cells = i64::try_from(cap.signum()).unwrap();
+            token
+                .add_tx(b.block, k.clone(), *cap, *know, live_cells)
+                .unwrap();
         }
         for (k, cap, know) in &b.cluster {
             cluster.add(b.block, k.clone(), *cap, *know).unwrap();

@@ -1316,6 +1316,25 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Identity collection activities ----
 
+    /// Write one `collection_activity_daily` row (a collection's final
+    /// counts for one UTC+8 day).
+    pub fn put_collection_activity_daily(
+        &mut self,
+        collection_id: &[u8],
+        day_yyyymmdd: u32,
+        counts: &crate::types::CollectionActivityDailyCounts,
+    ) {
+        let key = keys::encode_collection_activity_daily_key(collection_id, day_yyyymmdd);
+        let value = bincode::serialize(counts).expect("serialize CollectionActivityDailyCounts");
+        self.put_cf(self.store.cf_collection_activity_daily(), key, &value);
+    }
+
+    /// Delete a `collection_activity_daily` row whose counts reached zero.
+    pub fn delete_collection_activity_daily(&mut self, collection_id: &[u8], day_yyyymmdd: u32) {
+        let key = keys::encode_collection_activity_daily_key(collection_id, day_yyyymmdd);
+        self.delete_cf(self.store.cf_collection_activity_daily(), key);
+    }
+
     pub fn put_identity_collection_activity(
         &mut self,
         collection_id: &[u8],

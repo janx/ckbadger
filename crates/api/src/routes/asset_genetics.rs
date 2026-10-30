@@ -360,12 +360,7 @@ pub(crate) fn cluster_insights(state: &AppState, id: &[u8]) -> Result<Value, Api
             Vec::new()
         };
         let (weekly, complete_through, calendar_anchor) =
-            super::assets::nft_collection_weekly_activity(
-                &state.store,
-                &state.append_only_store,
-                &state.mem_cache,
-                id,
-            )?;
+            super::assets::nft_collection_weekly_activity(&state.store, &state.mem_cache, id)?;
         Ok(
             json!({"holderDistribution":holders,"weeklyActivity":weekly,"calendarSource":"indexedChainTimeUtc8","completeThrough":complete_through,"calendarAnchor":calendar_anchor,"genetics":{"liveItems":live,"eligibleItems":live-non_dob,"nonDobItems":non_dob,"decodedItems":decoded,"pendingItems":pending,"failedItems":failed,"complete":pending==0&&failed==0,"traits":traits},"currentPattern":current_pattern(state,cluster.as_ref(),None)?}),
         )

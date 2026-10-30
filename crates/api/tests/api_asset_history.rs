@@ -1470,7 +1470,7 @@ async fn did_pds_groups_count_each_live_identity_once_per_endpoint() {
 }
 
 #[tokio::test]
-async fn collection_full_feeds_exclude_orphan_activity_rows_and_share_pagination() {
+async fn collection_full_feeds_fail_on_an_orphan_activity_row_and_share_pagination() {
     let (store, _) = history_fixture();
     seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
     let header = store.get_block_header(100).unwrap().unwrap();
@@ -1533,7 +1533,36 @@ async fn collection_full_feeds_exclude_orphan_activity_rows_and_share_pagination
         },
     );
     batch.commit().unwrap();
-    let app = create_router(test_config(store)).await;
+    let app = create_router(test_config(store.clone())).await;
+    // Rollback deletes a rolled-back block's collection rows
+    // (REORG_HANDLING.md): a row naming a transaction that is not canonical is
+    // a rollback bug the feed names, never a row it skips.
+    for path in [
+        "/assets/identities/did:ckb/activity-feed?limit=10",
+        "/assets/identities/did:ckb/transactions?limit=10",
+    ] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains("not canonical")
+                && message.contains("block=101")
+                && message.contains(&format!("tx=0x{}", hex::encode([0xfe; 32]))),
+            "{path}: {json}"
+        );
+    }
+    store
+        .delete_cf(
+            store.cf_identity_collection_activities(),
+            &ckbadger_store::keys::encode_object_collection_activity_key(
+                collection,
+                101,
+                0,
+                &[0xff; 32],
+                &[0xfe; 32],
+            ),
+        )
+        .unwrap();
     let (status, activities) =
         get_json(&app, "/assets/identities/did:ckb/activity-feed?limit=1").await;
     assert_eq!(status, StatusCode::OK, "{activities}");
@@ -1714,6 +1743,10 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
         );
     }
     batch.commit().unwrap();
+    // The day rows the indexer stages beside these rows: block 4's raw
+    // timestamp is 10-18, but its chain time (10-26) puts it in the tip's
+    // incomplete week.
+    sync_collection_activity_daily(&store, &cluster);
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(
         &app,
@@ -1728,6 +1761,19 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
         serde_json::json!([{"weekStart":"2026-10-12","mintTransactions":1,"transferTransactions":1,"burnTransactions":0},{"weekStart":"2026-10-19","mintTransactions":0,"transferTransactions":0,"burnTransactions":0}])
     );
     capture_producer("collection-complete-week-history", &json);
+
+    // Each collection activity row names its block's chain time: block 4's
+    // raw timestamp is 10-18, its chain time (the day it is counted on) 10-26.
+    let (status, rows) = get_json(
+        &app,
+        &format!("/assets/objects/0x{}/activities", hex::encode(cluster)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    let row = &rows["data"][0];
+    assert_eq!(row["blockNumber"], 4, "{rows}");
+    assert_eq!(row["timestamp"], utc_ms("2026-10-18T00:00:00Z").to_string());
+    assert_eq!(row["chainTime"], utc_ms("2026-10-26T00:00:00Z").to_string());
 }
 
 #[tokio::test]

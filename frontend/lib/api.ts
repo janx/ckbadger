@@ -2433,6 +2433,8 @@ interface CollectionActivity {
   blockNumber: number;
   txIndex: number;
   timestamp: string;
+  /** The block's indexed chain time (ms): the clock of the daily counts and weekly calendar. */
+  chainTime: string;
   actions: string[];
 }
 
