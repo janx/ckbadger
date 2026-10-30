@@ -434,7 +434,11 @@ During fresh-db bulk sync, the indexer writes `stats_dao`, `stats_script`, and `
 inline as Class C sealed aggregates:
 
 - `stats_dao` stores DAO daily snapshots keyed by date, then refreshes the latest/top summary rows
-  after sync tip metadata is finalized.
+  after sync tip metadata is finalized. The latest row (`DaoLatestStatistics`) records the block it
+  was computed at by number and hash (`tip_block_number`, `tip_block_hash`, both from the sync-tip
+  header its single writer `refresh_latest_dao_statistics` reads, on bulk and live alike);
+  `/dao/statistics` serves them as `anchor` and fails when that hash is no longer the canonical
+  header at that height. The bincode layout changed (W5) and requires a genesis re-sync.
 - `stats_script` stores `ScriptDailyDelta` rows keyed by
   `code_hash + hash_type + kind(lock/type) + YYYYMMDD` — the hash_type byte keeps
   references that share code_hash bytes but differ in hash_type (data/type/data1/data2)

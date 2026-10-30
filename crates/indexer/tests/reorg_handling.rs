@@ -1984,6 +1984,7 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
 
     let latest = DaoLatestStatistics {
         tip_block_number: 10,
+        tip_block_hash: make_header(10).hash.try_into().unwrap(),
         total_deposited: 10_200_000_000,
         total_depositors: 1,
         active_deposits: 1,

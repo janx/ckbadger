@@ -549,6 +549,11 @@ pub struct GenesisBaseline {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaoLatestStatistics {
     pub tip_block_number: i64,
+    /// Hash of the canonical block at `tip_block_number` when this row was
+    /// computed (the sync-tip header the refresh reads). Readers prove the row
+    /// still describes the canonical chain by comparing it with the header at
+    /// that height; after a rollback, until the next refresh, it does not.
+    pub tip_block_hash: [u8; 32],
     pub total_deposited: i128,
     pub total_depositors: i32,
     /// Legacy total live DAO cells (phase 0 plus phase 1).

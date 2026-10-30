@@ -3810,8 +3810,17 @@ fn seed_dao_latest(
         11 => BLOCK_11_CSU,
         other => panic!("no C/S/U fixture for block {other}"),
     };
+    // The indexer computes the row at its sync-tip header: the caller seeds it.
+    let tip_block_hash: [u8; 32] = store
+        .get_block_header(tip_block_number)
+        .unwrap()
+        .expect("seed the tip header before the DAO singleton")
+        .hash
+        .try_into()
+        .unwrap();
     let latest = ckbadger_store::DaoLatestStatistics {
         tip_block_number,
+        tip_block_hash,
         total_deposited: dao_capacity,
         total_depositors: 1,
         active_deposits: 1,
